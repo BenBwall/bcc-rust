@@ -255,6 +255,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         return Err(MainError::Reported(1));
     }
     let mut common = vec![invocation.program.clone()];
+    common.push("--compiler-feature-tests".into());
     common.push(
         match personality {
             | Personality::Gcc => "--compiler-identity=gcc",

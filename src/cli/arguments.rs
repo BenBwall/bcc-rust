@@ -357,6 +357,7 @@ impl Cli {
             .with_optimization(self.code_generation.optimization_macros())
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
+            .with_compiler_feature_tests(self.compiler_feature_tests)
             .with_compiler_identity(self.compiler_identity.into())
             .with_default_math_errno()
             .with_diagnostic_format(self.diagnostic_format.into())

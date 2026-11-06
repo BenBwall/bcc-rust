@@ -840,6 +840,28 @@ impl CompilerConfiguration {
         self.fatal_errors && self.identity == super::CompilerIdentity::Gcc
     }
 
+    pub(crate) const fn with_compiler_feature_tests(mut self, enabled: bool) -> Self {
+        self.compiler_feature_tests = enabled;
+        self
+    }
+
+    /// Whether `feature` is an operator that tests for features, which GCC
+    /// and Clang define in every language mode and neither reports under
+    /// `-pedantic`: code uses them to find out what it may use. GCC has no
+    /// `__has_embed` until its version 15. GCC manual, "`__has_attribute`" and
+    /// "`__has_include`"; Clang Language Extensions, "Feature Checking Macros".
+    pub(crate) fn always_tests_feature(self, feature: Feature) -> bool {
+        self.compiler_feature_tests
+            && match feature {
+                | Feature::HasInclude
+                | Feature::HasCAttribute
+                | Feature::HasAttribute
+                | Feature::HasBuiltin => true,
+                | Feature::HasEmbed => self.identity.rules() == super::RuleSet::Clang,
+                | _ => false,
+            }
+    }
+
     pub(crate) const fn with_suppress_warnings(mut self, enabled: bool) -> Self {
         self.suppress_warnings = enabled;
         self
@@ -986,6 +1008,7 @@ impl CompilerConfiguration {
             general_regs_only: false,
             user_interrupts: false,
             suppress_warnings: false,
+            compiler_feature_tests: false,
             permissive: None,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,

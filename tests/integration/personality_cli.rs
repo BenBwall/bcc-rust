@@ -2787,6 +2787,52 @@ mod tests {
         }
     }
 
+    /// GCC and Clang have their feature-test operators in every language mode,
+    /// and neither calls them extensions under `-pedantic`.
+    #[test]
+    fn gnu_feature_tests_exist_in_every_language_mode() {
+        let directory = Directory::new();
+        directory.write(
+            "q.c",
+            "#ifndef __has_include\n#error include\n#endif\n#ifndef __has_c_attribute\n#error \
+             attribute\n#endif\n#if !__has_include(<stddef.h>) || \
+             __has_include(\"missing.h\")\n#error found\n#endif\n#if \
+             !__has_c_attribute(nodiscard)\n#error nodiscard\n#endif\n#if \
+             !__has_attribute(unused) || !__has_builtin(__builtin_expect)\n#error \
+             gnu\n#endif\nint x;\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for standard in ["-std=c89", "-std=c99", "-std=c11", "-std=gnu17", "-std=c23"] {
+                let output = directory.bcc(
+                    mode,
+                    &[
+                        standard,
+                        "-pedantic-errors",
+                        "-Wall",
+                        "-c",
+                        "q.c",
+                        "-o",
+                        "q.o",
+                    ],
+                );
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {standard}");
+            }
+        }
+        // GCC 14 has no `__has_embed`, and Clang does.
+        directory.write(
+            "e.c",
+            "#ifdef __has_embed\nint has;\n#else\nint has_not;\n#endif\n",
+        );
+        let text = |mode: &str| {
+            let output = directory.bcc(mode, &["-std=c99", "-E", "-P", "e.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(text("--gcc-mode").trim(), "int has_not;");
+        assert_eq!(text("--clang-mode").trim(), "int has;");
+    }
+
     /// The options around GCC 14's permerrors and Clang's default errors,
     /// as each compiler orders them: `-Werror` does not reach into a system
     /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`
@@ -7688,8 +7734,9 @@ mod tests {
         succeeds(&output);
         assert!(
             stderr(&output).ends_with(&line(&format!(
-                "\"--compiler-identity=clang\" \"--diagnostic-format=clang\" \
-                 \"--target={triple}\" \"--driver-name=clang\" \"a.c\" \"-c\""
+                "\"--compiler-feature-tests\" \"--compiler-identity=clang\" \
+                 \"--diagnostic-format=clang\" \"--target={triple}\" \"--driver-name=clang\" \
+                 \"a.c\" \"-c\""
             ))),
             "{}",
             stderr(&output)
@@ -7705,8 +7752,8 @@ mod tests {
         // GCC's `-v` quotes nothing, its `-###` only what the shell needs.
         assert!(
             text.contains(&format!(
-                " {exe} -v --compiler-identity=gcc --diagnostic-format=gcc --target={triple} \
-                 --driver-name=gcc a.c -c\n"
+                " {exe} -v --compiler-feature-tests --compiler-identity=gcc \
+                 --diagnostic-format=gcc --target={triple} --driver-name=gcc a.c -c\n"
             )),
             "{text}"
         );
@@ -8360,8 +8407,9 @@ mod tests {
         let text = stderr(&output);
         assert!(
             text.ends_with(&format!(
-                " \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \"--target={}\" \
-                 \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n",
+                " --compiler-feature-tests \"--compiler-identity=gcc\" \
+                 \"--diagnostic-format=gcc\" \"--target={}\" \"--driver-name=gcc\" \"a b.c\" -D \
+                 \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n",
                 HOST_TARGET.0
             )),
             "{text}"

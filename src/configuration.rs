@@ -174,6 +174,10 @@ pub(crate) struct CompilerConfiguration {
     /// none.
     default_pack: u32,
     suppress_warnings: bool,
+    /// Feature-test operators exist in every language mode and are never an
+    /// extension, as under GCC's and Clang's drivers. See
+    /// [`CompilerConfiguration::always_tests_feature`].
+    compiler_feature_tests: bool,
     /// The last of `-fpermissive` (GCC's permerrors are warnings) and
     /// `-fno-permissive` (GCC's C89 permerror warnings are errors too), if
     /// either was given ([`CompilerConfiguration::permerror_default`]).
