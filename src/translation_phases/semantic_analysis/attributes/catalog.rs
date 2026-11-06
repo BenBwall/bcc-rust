@@ -65,6 +65,14 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     /// GNU `always_inline`: the inliner expands every direct call it can,
     /// and a GNU inline body is kept as a private definition.
     AlwaysInline,
+    /// x86 `interrupt`, on the targets whose entry bcc models: an interrupt
+    /// or exception handler (`machine_entry.rs`).
+    Interrupt,
+    /// x86 `no_caller_saved_registers`, on the same targets.
+    NoCallerSaved,
+    /// GNU `naked`, on the same targets and under GCC's identity; Clang's
+    /// stays refused.
+    Naked,
     /// GNU `returns_twice`: an entity fact that lowering projects onto the
     /// IR function, as the external-symbol contract does for `setjmp`.
     ReturnsTwice,
@@ -112,7 +120,13 @@ pub(in crate::translation_phases::semantic_analysis) fn rule(
     target: Target,
 ) -> Option<Rule> {
     let clang = spellings::clang(name, target);
-    let meaning = gnu(name);
+    // Handlers and naked bodies are modeled on the System V targets alone.
+    let linux = matches!(target, Target::LinuxGnu | Target::LinuxMusl);
+    let meaning = gnu(name).map(|rule| match rule {
+        | Rule::Interrupt | Rule::NoCallerSaved if !linux => Rule::Convention(Convention::Other),
+        | Rule::Naked if !linux => Rule::Unsupported(UnsupportedAttribute::Naked),
+        | rule => rule,
+    });
     // A name Clang lists in this spelling takes bcc's rule for it, or has
     // nothing to honor. A GCC attribute Clang lacks keeps GCC's spellings,
     // unless Clang knows the name for another target only.
@@ -238,13 +252,13 @@ fn gnu(name: &str) -> Option<Rule> {
         | "aarch64_vector_pcs"
         | "aarch64_sve_pcs"
         | "riscv_vector_cc"
-        | "no_caller_saved_registers"
-        | "no_callee_saved_registers"
-        | "interrupt" => Rule::Convention(Convention::Other),
+        | "no_callee_saved_registers" => Rule::Convention(Convention::Other),
+        | "interrupt" => Rule::Interrupt,
+        | "no_caller_saved_registers" => Rule::NoCallerSaved,
         | "ms_struct" | "gcc_struct" => Rule::RecordLayout,
         | "ifunc" => Rule::Unsupported(U::Ifunc),
         | "weakref" => Rule::Unsupported(U::Weakref),
-        | "naked" => Rule::Unsupported(U::Naked),
+        | "naked" => Rule::Naked,
         | "returns_twice" => Rule::ReturnsTwice,
         | "nonnull" => Rule::Nonnull,
         | "cpu_dispatch" | "cpu_specific" | "target_version" =>

@@ -516,6 +516,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // C99 §6.5.1p5: parentheses preserve the callee designation.
                 // GNU vector builtins retain constraints through parentheses.
                 let vector_callee = self.selected_designator(function_expression);
+                let callee = self.expression_info(vector_callee).binding;
+                self.check_machine_entry_call(e, callee);
                 let intrinsic = self
                     .expression_info(vector_callee)
                     .binding

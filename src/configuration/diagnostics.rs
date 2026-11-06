@@ -459,6 +459,8 @@ diagnostic_groups! {
     UnknownAttributes => Some("unknown-attributes"), Warning, false;
     /// A recognized attribute whose effect bcc drops.
     IgnoredAttributes => Some("ignored-attributes"), Warning, false;
+    /// A handler calls a function that may change registers it must save.
+    ExcessiveRegsave => Some("excessive-regsave"), Warning, false;
     /// A surviving direct call carries a GNU `warning` attribute.
     AttributeWarning => Some("attribute-warning"), Warning, false;
     /// A redeclaration that adds `dllimport` or `dllexport`.

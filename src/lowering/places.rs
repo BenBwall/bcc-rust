@@ -54,6 +54,7 @@ use crate::{
             Conversion,
             Duration,
             ExpressionInfo,
+            RegisterVariable,
             TypeId,
             TypeKind,
         },
@@ -91,6 +92,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 },
                 | _ => match self.locals.get(&binding).copied() {
                     | Some(Local::Variable(var)) => Place::Variable(var),
+                    | Some(Local::StackPointer) => Place::StackPointer,
                     | Some(Local::Slot(slot)) =>
                         Place::Memory(self.inst(InstData::StackAddr { slot }, Type::Ptr)),
                     | Some(Local::Address(address)) => Place::Memory(address),
@@ -133,7 +135,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Err(LoweringError::unanalyzed(&self.unit.sema.types, ty, source));
         }
         let representation = self.repr(ty, source)?;
+        let stack_pointer = matches!(
+            self.unit.sema.entities.register_variable(binding),
+            Some(RegisterVariable::General(4))
+        ) && matches!(representation.value_type(), Some(Type::Ptr | Type::I64));
         let local = match representation.value_type() {
+            | _ if stack_pointer => Local::StackPointer,
             | Some(value_type)
                 if !types::is_volatile(ty)
                     && !matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_))
@@ -178,7 +185,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             let address = match local {
                 | Local::Slot(slot) => Some(self.inst(InstData::StackAddr { slot }, Type::Ptr)),
                 | Local::Address(address) => Some(address),
-                | Local::Variable(_) => None,
+                | Local::Variable(_) | Local::StackPointer => None,
             };
             if let Some(address) = address {
                 self.escape_for_setjmp(address, ty);
@@ -280,6 +287,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Aggregate(address)
             },
             | (Place::Variable(var), _) => Operand::Value(self.draft.use_var(var)),
+            | (Place::StackPointer, _) => {
+                let pointer = self.nullary(Opcode::StackSave);
+                Operand::Value(if self.repr(ty, source)?.value_type() == Some(Type::I64) {
+                    self.convert(Opcode::Ptrtoint, Type::I64, pointer)
+                } else {
+                    pointer
+                })
+            },
             // `*pv` with `pv` a `void *` designates no object, so its value
             // is a void expression and nothing is accessed (DR 106).
             // C99 §6.3.2.2p1, p. 47; PDF p. 59.
@@ -374,6 +389,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.release_wide(value);
                 Operand::Aggregate(address)
             },
+            | (Place::StackPointer, _) =>
+                return Err(LoweringError::unsupported(
+                    Construct::StackPointerVariableWrite,
+                    source,
+                )),
             | (Place::Variable(var), _) => {
                 let value = self.value(value, source)?;
                 self.draft.def_var(var, value);

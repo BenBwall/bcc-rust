@@ -24,6 +24,7 @@ use crate::{
     ir::{
         DllStorage,
         Entity,
+        EntryConvention,
         InitKind,
         Linkage as IrLinkage,
         Module,
@@ -91,6 +92,7 @@ pub(super) fn declare<'id, 'a, 'm>(
             math_without_errno(api, value, module, function.name);
         }
         sections(api, value, function.attributes);
+        machine_entry(api, value, module, function);
         functions.push(value);
     }
     // A private inline copy becomes its external function's
@@ -342,6 +344,62 @@ fn null_pointer_validity<'id>(api: &Session<'id>, function: Val<'id>, module: &M
         );
     }
 }
+
+/// Gives a function its entry convention, and a defined function its
+/// general-register code. A handler is `x86_intrcc`, whose first parameter
+/// LLVM requires to be `byval`, though it takes the frame the processor pushed
+/// as it is. LLVM saves every register the handler changes, clears the
+/// direction flag, and returns past the error code with `iretq`, or with
+/// `uiret` if the function has the `uintr` feature. No tail call may leave
+/// a handler, as Clang marks them, and a handler nested on the interrupted
+/// stack keeps out of the red zone. A naked body makes room for its frame
+/// itself (`function.rs`).
+/// GNU extension: GCC manual, "x86 Function Attributes"; LLVM Language
+/// Reference, "Calling Conventions".
+fn machine_entry<'id>(
+    api: &Session<'id>,
+    function: Val<'id>,
+    module: &Module<'_>,
+    data: &crate::ir::Function<'_>,
+) {
+    let defined = data.body.is_some();
+    match data.entry {
+        | EntryConvention::C => {},
+        | EntryConvention::Interrupt => {
+            api.call_conv(function, X86_INTERRUPT);
+            api.add_attributes(
+                function,
+                &[api.indexed_attribute(1, "byval", 0, Some(api.ty(Type::I8)))],
+                false,
+            );
+            if defined {
+                api.string_attribute(function, "disable-tail-calls", "true");
+                api.attribute(function, FUNCTION_INDEX, "noredzone", 0, None, false);
+            }
+        },
+        | EntryConvention::PreserveRegisters =>
+            if defined {
+                api.string_attribute(function, "no_caller_saved_registers", "");
+            },
+        | EntryConvention::Naked =>
+            if defined {
+                api.attribute(function, FUNCTION_INDEX, "naked", 0, None, false);
+            },
+    }
+    if defined {
+        let uintr = data.entry == EntryConvention::Interrupt && module.user_interrupts();
+        match (module.general_regs_only(), uintr) {
+            | (true, true) =>
+                api.string_attribute(function, "target-features", "-x87,-mmx,-sse,+uintr"),
+            | (true, false) => api.string_attribute(function, "target-features", "-x87,-mmx,-sse"),
+            | (false, true) => api.string_attribute(function, "target-features", "+uintr"),
+            | (false, false) => {},
+        }
+    }
+}
+
+/// LLVM's `x86_intrcc` calling convention, `CallingConv::X86_INTR`.
+const X86_INTERRUPT: u32 = 83;
 
 /// Marks a function whose floating operations keep their exceptions, as
 /// Clang marks every function under `-ffp-exception-behavior=strict`; its
