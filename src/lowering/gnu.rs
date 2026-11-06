@@ -144,6 +144,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 statement.source_vectors,
             )
         })?;
+        if items
+            .iter()
+            .any(|item| matches!(item, BlockItem::Declaration(_)))
+        {
+            self.enter_debug_block(statement);
+        }
         // GNU: a value of variable size is snapshotted on the stack above
         // the block's arrays, which stay until an enclosing scope or the
         // function releases them.
