@@ -44,6 +44,7 @@ use crate::{
     cli::{
         arguments::{
             implements_language_option,
+            is_diagnostic_presentation,
             is_hardening_option,
         },
         driver::{
@@ -1572,6 +1573,14 @@ impl State<'_> {
             )
         {
             self.error(format_args!("unknown argument: '{text}'"));
+            return;
+        }
+        // Each compiler has its own spellings of these.
+        if is_diagnostic_presentation(text) && !knows(self.compiler, text) {
+            match self.compiler {
+                | Compiler::Gcc => self.unrecognized.push(text.into()),
+                | Compiler::Clang => self.error(format_args!("unknown argument: '{text}'")),
+            }
             return;
         }
         // A later `-O` option takes the `-Ofast`s back, unless another

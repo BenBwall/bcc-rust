@@ -1550,6 +1550,20 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         ],
         2,
     ),
+    // GCC's `void __builtin_clear_padding(T *)`, typed from its operand.
+    descriptor(
+        Id::ClearPadding,
+        "__builtin_clear_padding",
+        B::ClearPadding,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    ),
     descriptor(
         Id::UaddOverflow,
         "__builtin_uadd_overflow",
@@ -2337,6 +2351,12 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
+        | B::ClearPadding => (
+            TypeRule::ClearPadding,
+            BuiltinEffectClass::Write,
+            Some(crate::configuration::Feature::GnuBuiltins),
+            SyntaxForm::OrdinaryCall,
+        ),
         | B::Alloca | B::AllocaAligned => (
             TypeRule::Fixed,
             BuiltinEffectClass::Allocate,
@@ -2400,9 +2420,8 @@ const fn descriptor(
 /// GCC builtins this compiler knows exist but does not implement: lowering
 /// refuses a call by name rather than as a type it could not analyze.
 /// `__builtin_apply`, `__builtin_apply_args` and `__builtin_return` forward
-/// a call's argument registers; `__builtin_call_with_static_chain` (which
-/// Clang has) calls through a nested function's chain; and
-/// `__builtin_clear_padding` needs every padding bit of a type.
+/// a call's argument registers; and `__builtin_call_with_static_chain` (which
+/// Clang has) calls through a nested function's chain.
 /// GNU extension: GCC manual, "Constructing Calls" and "Other Builtins".
 /// <https://gcc.gnu.org/onlinedocs/gcc/Constructing-Calls.html>
 pub(crate) fn unimplemented(name: &str) -> Option<&'static str> {
@@ -2410,7 +2429,6 @@ pub(crate) fn unimplemented(name: &str) -> Option<&'static str> {
         "__builtin_apply",
         "__builtin_apply_args",
         "__builtin_call_with_static_chain",
-        "__builtin_clear_padding",
         "__builtin_powi",
         "__builtin_powif",
         "__builtin_powil",

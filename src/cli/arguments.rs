@@ -31,8 +31,10 @@ use crate::{
     configuration::{
         CompilerConfiguration,
         CompilerIdentity,
+        DiagnosticColor,
         DiagnosticFormat,
         DiagnosticGroup,
+        DiagnosticPresentation,
         ExtensionPolicy,
         LanguageMode,
         MsvcFeature,
@@ -362,6 +364,7 @@ impl Cli {
             .with_compiler_identity(self.compiler_identity.into())
             .with_default_math_errno()
             .with_diagnostic_format(self.diagnostic_format.into())
+            .with_diagnostic_presentation(self.diagnostic_presentation())
             .with_max_nesting_depth(self.max_nesting_depth)
     }
 
@@ -454,6 +457,40 @@ impl Cli {
             }
         }
         hardening
+    }
+
+    /// What GCC's and Clang's diagnostic formats write, from each option in
+    /// order. `-fdiagnostics-plain-output` stands for the options it means, so
+    /// a later one can take any of them back. GCC manual, "Diagnostic Message
+    /// Formatting Options".
+    fn diagnostic_presentation(&self) -> DiagnosticPresentation {
+        let mut presentation = DiagnosticPresentation::default();
+        for option in &self.language_option {
+            match option.as_str() {
+                | "-fdiagnostics-show-caret" | "-fcaret-diagnostics" => presentation.caret = true,
+                | "-fno-diagnostics-show-caret" | "-fno-caret-diagnostics" =>
+                    presentation.caret = false,
+                | "-fshow-column" => presentation.column = true,
+                | "-fno-show-column" => presentation.column = false,
+                | "-fdiagnostics-show-line-numbers" => presentation.line_numbers = true,
+                | "-fno-diagnostics-show-line-numbers" => presentation.line_numbers = false,
+                | "-fdiagnostics-show-option" => presentation.option_names = true,
+                | "-fno-diagnostics-show-option" => presentation.option_names = false,
+                | "-fdiagnostics-color" | "-fdiagnostics-color=always" | "-fcolor-diagnostics" =>
+                    presentation.color = DiagnosticColor::Always,
+                | "-fno-diagnostics-color"
+                | "-fdiagnostics-color=never"
+                | "-fno-color-diagnostics" => presentation.color = DiagnosticColor::Never,
+                | "-fdiagnostics-color=auto" => presentation.color = DiagnosticColor::Auto,
+                | "-fdiagnostics-plain-output" => {
+                    presentation.caret = false;
+                    presentation.line_numbers = false;
+                    presentation.color = DiagnosticColor::Never;
+                },
+                | _ => {},
+            }
+        }
+        presentation
     }
 
     /// Whether `on` came after the last `off`, and at all.
@@ -601,6 +638,32 @@ pub(super) fn is_hardening_option(text: &str) -> bool {
             | "-fcf-protection=none"
             | "-fstack-clash-protection"
             | "-fno-stack-clash-protection"
+    )
+}
+
+/// Whether `text` chooses what GCC's or Clang's format writes. Each compiler
+/// knows only some of these, and its personality checks which.
+pub(super) fn is_diagnostic_presentation(text: &str) -> bool {
+    matches!(
+        text,
+        "-fdiagnostics-show-caret"
+            | "-fno-diagnostics-show-caret"
+            | "-fcaret-diagnostics"
+            | "-fno-caret-diagnostics"
+            | "-fshow-column"
+            | "-fno-show-column"
+            | "-fdiagnostics-show-line-numbers"
+            | "-fno-diagnostics-show-line-numbers"
+            | "-fdiagnostics-show-option"
+            | "-fno-diagnostics-show-option"
+            | "-fdiagnostics-color"
+            | "-fno-diagnostics-color"
+            | "-fdiagnostics-color=always"
+            | "-fdiagnostics-color=never"
+            | "-fdiagnostics-color=auto"
+            | "-fcolor-diagnostics"
+            | "-fno-color-diagnostics"
+            | "-fdiagnostics-plain-output"
     )
 }
 
@@ -755,6 +818,8 @@ enum LanguageFlag {
     /// `-f[no-]strict-volatile-bitfields`, `-f[no-]function-sections` or
     /// `-f[no-]data-sections`, which [`Cli::code_options`] does.
     Code,
+    /// An option [`Cli::diagnostic_presentation`] reads.
+    Presentation,
 }
 
 /// An option that gives up or restores several [`RelaxedFloatingPoint`]
@@ -929,6 +994,7 @@ impl LanguageFlag {
             | "-fno-omit-frame-pointer"
             | "-fomit-frame-pointer" => return Some(Self::Code),
             | _ if is_hardening_option(text) => return Some(Self::Code),
+            | _ if is_diagnostic_presentation(text) => return Some(Self::Presentation),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpermissive" => return Some(Self::Permissive(true)),
             | "-fno-permissive" => return Some(Self::Permissive(false)),
@@ -1004,6 +1070,7 @@ impl LanguageFlag {
             | Self::ExtraWarnings
             | Self::Relocation
             | Self::Code
+            | Self::Presentation
             | Self::Builtins => configuration,
             // GCC's and Clang's `-Wall` hold `-Wimplicit` and
             // `-Wreturn-mismatch`, each in its own way.

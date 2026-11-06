@@ -46,10 +46,77 @@ pub(crate) enum DiagnosticFormat {
     Tcc,
 }
 
+/// What the options ask of color in diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiagnosticColor {
+    /// No option: the terminal and bcc's environment variables decide.
+    Unset,
+    /// `-fdiagnostics-color=auto`: the terminal alone decides.
+    Auto,
+    Always,
+    Never,
+}
+
+/// What GCC's and Clang's formats write of a diagnostic, each from the last
+/// option that sets it. The other formats have their own rules.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each is a separate option's on or off, in any combination."
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DiagnosticPresentation {
+    /// The quoted source and its caret: `-f[no-]diagnostics-show-caret`,
+    /// `-f[no-]caret-diagnostics`.
+    pub(crate) caret:        bool,
+    /// The column after the line: `-f[no-]show-column`.
+    pub(crate) column:       bool,
+    /// The line numbers beside quoted source:
+    /// `-f[no-]diagnostics-show-line-numbers`.
+    pub(crate) line_numbers: bool,
+    /// The `[-Wname]` after a message: `-f[no-]diagnostics-show-option`.
+    pub(crate) option_names: bool,
+    /// What an option says about color: `-fdiagnostics-color=`,
+    /// `-f[no-]color-diagnostics`.
+    pub(crate) color:        DiagnosticColor,
+}
+
+impl Default for DiagnosticPresentation {
+    fn default() -> Self {
+        Self {
+            caret:        true,
+            column:       true,
+            line_numbers: true,
+            option_names: true,
+            color:        DiagnosticColor::Unset,
+        }
+    }
+}
+
 impl CompilerConfiguration {
     pub(crate) const fn with_diagnostic_format(mut self, format: DiagnosticFormat) -> Self {
         self.diagnostic_format = format;
         self
+    }
+
+    pub(crate) const fn with_diagnostic_presentation(
+        mut self,
+        presentation: DiagnosticPresentation,
+    ) -> Self {
+        self.diagnostic_presentation = presentation;
+        self
+    }
+
+    pub(crate) const fn diagnostic_presentation(self) -> DiagnosticPresentation {
+        self.diagnostic_presentation
+    }
+
+    /// What the options ask of color: nothing, in the formats that do not
+    /// read them.
+    pub(crate) const fn diagnostic_color(self) -> DiagnosticColor {
+        match self.diagnostic_format {
+            | DiagnosticFormat::Gcc | DiagnosticFormat::Clang => self.diagnostic_presentation.color,
+            | _ => DiagnosticColor::Unset,
+        }
     }
 
     pub(crate) const fn diagnostic_format(self) -> DiagnosticFormat {
