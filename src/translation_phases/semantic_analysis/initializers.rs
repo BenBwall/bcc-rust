@@ -352,14 +352,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             // enclosed in braces (§6.7.8p14-15). A string that
                             // does not fit the array, as `{ "x" }` for an array
                             // of pointers, initializes its first element like
-                            // any other list (§6.7.8p17), as in Clang.
-                            if let [element] = list.elements.as_slice()
-                                && element.designation.is_none()
-                                && let InitializerType::AssignmentExpression(e) =
-                                    element.initializer.kind
-                                && self.braced_string_fits(target, e)
-                                && let Some(extent) = self.initialize_string(target, e)
-                            {
+                            // any other list (§6.7.8p17), as in Clang. What
+                            // follows the string in the braces is excess.
+                            if let Some((e, extent)) = self.braced_string(target, list) {
                                 plan.string(e, destination, completion);
                                 if std::ptr::eq(init, initializer) {
                                     count = count.max(extent);
@@ -666,6 +661,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     // initialize the complete current subobject or a scalar
                     // leaf.
                     if let InitializerType::AssignmentExpression(e) = element.initializer.kind {
+                        if self.gcc_drops_element(target, e, element.source_vectors) {
+                            let next = self.advance_current(cursor);
+                            work.push(next_task(self.scratch.alloc(next), repeats));
+                            continue;
+                        }
                         while self.aggregate(target) && !self.whole_object_expression(target, e) {
                             #[cfg(test)]
                             self.review_step(3);
@@ -2008,7 +2008,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .is_some()
     }
 
-    /// Whether the sole element `e` of a braced list initializes the whole
+    /// The string that initializes the whole array `target` from its first
+    /// element in braces, with the array's extent, reporting what follows it.
+    /// C99: §6.7.8 paragraphs 14-15, pp. 126-127; PDF pp. 138-139.
+    fn braced_string(
+        &mut self,
+        target: TypeId,
+        list: &BracedInitializerList<'tu>,
+    ) -> Option<(&'tu Expression<'tu>, u64)> {
+        let [element, rest @ ..] = list.elements.as_slice() else {
+            return None;
+        };
+        if element.designation.is_some() || rest.iter().any(|next| next.designation.is_some()) {
+            return None;
+        }
+        let InitializerType::AssignmentExpression(e) = element.initializer.kind else {
+            return None;
+        };
+        if !self.braced_string_fits(target, e) {
+            return None;
+        }
+        let extent = self.initialize_string(target, e)?;
+        self.excess_after_string(rest);
+        Some((e, extent))
+    }
+
+    /// Whether the first element `e` of a braced list initializes the whole
     /// array `target` as a string: a string literal of the array's own
     /// character or wide kind. Any other expression, or a string that does
     /// not fit, initializes the first element instead.
@@ -2085,6 +2110,67 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             );
         }
         Some(count)
+    }
+
+    /// Whether brace elision takes `e` down to an aggregate with no subobjects,
+    /// under GCC, which reports it as excess and goes on to the next member.
+    /// Clang requires braces there, which the caller's checks report.
+    /// C99: §6.7.8 paragraphs 2 and 20, pp. 125-127; PDF pp. 137-139.
+    fn gcc_drops_element(
+        &mut self,
+        mut target: TypeId,
+        e: &'tu Expression<'tu>,
+        source: SourceVectors,
+    ) -> bool {
+        if self.context.configuration.compiler_identity()
+            != crate::configuration::CompilerIdentity::Gcc
+        {
+            return false;
+        }
+        while self.aggregate(target) && !self.whole_object_expression(target, e) {
+            let next_index = self.first_subobject(target);
+            let Some(child) = self.subobject(target, next_index) else {
+                _ = self.excess_element(target, source);
+                return true;
+            };
+            target = child;
+        }
+        false
+    }
+
+    /// Reports the elements that follow a string in the braces of the array it
+    /// initializes. GCC refuses each. Clang warns once, by default, and drops
+    /// them unevaluated. TCC and `cl` refuse the first.
+    /// C99: §6.7.8 paragraph 2, p. 125; PDF p. 137.
+    fn excess_after_string(&mut self, rest: &[InitializerElement<'tu>]) {
+        use crate::configuration::CompilerIdentity as Identity;
+        let Some(first) = rest.first() else {
+            return;
+        };
+        match self.context.configuration.compiler_identity() {
+            | Identity::Clang | Identity::ClangCl => self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::ExcessInitializers,
+                SemanticErrorKind::ExcessCharArray,
+                first.source_vectors,
+                None,
+                None,
+            ),
+            | Identity::Gcc =>
+                for next in rest {
+                    self.error(
+                        SemanticErrorKind::ExcessCharArray,
+                        next.source_vectors,
+                        None,
+                        None,
+                    );
+                },
+            | Identity::Tcc | Identity::Msvc => self.error(
+                SemanticErrorKind::ExcessInitializer,
+                first.source_vectors,
+                None,
+                None,
+            ),
+        }
     }
 
     /// Reports a list's element with no subobject of `container` left for it.

@@ -1279,6 +1279,68 @@ mod tests {
         }
     }
 
+    /// What follows a string in its array's braces is excess: a warning from
+    /// Clang, which drops it, and an error from GCC and TCC.
+    #[test]
+    fn excess_elements_after_a_braced_string() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "char w[] = {\"ab\", \"c\", \"d\"};\nint n[sizeof w == 3 ? 1 : -1];\n",
+        );
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "a.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output)
+                .matches("warning: excess elements in char array initializer")
+                .count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-fsyntax-only", "-Wno-excess-initializers", "a.c"],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output)
+                .matches("error: excess elements in char array initializer")
+                .count(),
+            2,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "a.c"]);
+        assert!(!output.status.success());
+    }
+
+    /// GCC reads an element for an aggregate with no subobjects as excess and
+    /// goes on to the next member, where Clang requires braces.
+    #[test]
+    fn excess_element_for_a_zero_length_array_member() {
+        let directory = Directory::new();
+        directory.write(
+            "z.c",
+            "struct { int a; int z[0]; int y; } t = {1, 2, 3};\nint n[sizeof t == 8 ? 1 : -1];\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "z.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output)
+                .matches("warning: excess elements in array initializer")
+                .count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "z.c"]);
+        assert_eq!(output.status.code(), Some(1));
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]
