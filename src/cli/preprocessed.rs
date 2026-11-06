@@ -106,7 +106,11 @@ pub(super) fn print_preprocessed<'tu>(
         },
     );
     let reporter_arena = Bump::new();
-    let mut reporter = DiagnosticReporter::new(&reporter_arena, tu, RenderColor::for_stderr());
+    let mut reporter = DiagnosticReporter::new(
+        &reporter_arena,
+        tu,
+        RenderColor::for_stderr(context.configuration.diagnostic_color()),
+    );
     let stderr = &mut io::stderr();
     let mut diagnosed = 0;
     let mut written = 0;
