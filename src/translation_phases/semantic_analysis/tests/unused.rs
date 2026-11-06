@@ -642,6 +642,60 @@ fn clang_runs_a_simple_assignments_right_operand_first() {
     check("x += (h(), 0); 42;", &[]);
 }
 
+#[test]
+fn an_atomic_type_name_carries_unused_for_gcc() {
+    macro_rules! u {
+        ($source:literal) => {
+            concat!("typedef int U __attribute__((unused)); ", $source)
+        };
+    }
+    let variable = &[U::Variable][..];
+    for (source, in_gcc, in_clang) in [
+        // The finding, and its file-scope sibling.
+        (u!("void f(void) { _Atomic(U) x; }"), &[][..], variable),
+        (u!("static _Atomic(U) x;"), &[][..], variable),
+        // Through a typedef of it, a typeof of it, and with qualifiers.
+        (
+            u!("typedef _Atomic(U) A; void f(void) { A x; }"),
+            &[][..],
+            variable,
+        ),
+        (
+            u!("void f(void) { __typeof__(_Atomic(U)) x; }"),
+            &[][..],
+            variable,
+        ),
+        (
+            u!("void f(void) { const _Atomic(U) x; }"),
+            &[][..],
+            variable,
+        ),
+        // The qualifier is the same type: Clang's is no longer the typedef.
+        (u!("void f(void) { _Atomic U x; }"), &[][..], variable),
+        (u!("void f(void) { U _Atomic x; }"), &[][..], variable),
+        // A tag: GCC reads it, and Clang's type is the atomic one.
+        (
+            "struct __attribute__((unused)) T { int a; }; void f(void) { _Atomic(struct T) x; }",
+            &[][..],
+            variable,
+        ),
+        // What derives from it warns.
+        (u!("void f(void) { _Atomic(U *) x; }"), variable, variable),
+        (u!("void f(void) { _Atomic(U) *x; }"), variable, variable),
+        (u!("void f(void) { _Atomic(U) x[2]; }"), variable, variable),
+        // No mark at all.
+        (
+            "typedef int N; void f(void) { _Atomic(N) x; }",
+            variable,
+            variable,
+        ),
+        ("void f(void) { _Atomic(int) x; }", variable, variable),
+    ] {
+        assert_eq!(rules(source, gcc()), in_gcc, "GCC: {source}");
+        assert_eq!(rules(source, clang()), in_clang, "Clang: {source}");
+    }
+}
+
 /// Clang keeps its value warnings, comparisons aside, out of code it can tell
 /// is unreachable; GCC does not look.
 #[test]

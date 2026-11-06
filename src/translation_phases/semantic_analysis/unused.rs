@@ -534,9 +534,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn type_mark(&mut self, spec: DeclarationSpecifiers<'tu>) -> bool {
         let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
         match spec.type_specifiers {
-            | TypeSpecifiers::TypedefName(typedef) => self
-                .lookup(Namespace::Ordinary, typedef.name)
-                .is_some_and(|entry| self.is_marked(entry.binding)),
+            | TypeSpecifiers::TypedefName(typedef) =>
+                (gcc || !spec.type_qualifiers.contains(TypeQualifiers::ATOMIC))
+                    && self
+                        .lookup(Namespace::Ordinary, typedef.name)
+                        .is_some_and(|entry| self.is_marked(entry.binding)),
             | TypeSpecifiers::StructOrUnion(record) if gcc => self.tag_carries_unused(
                 record.identifier,
                 record.struct_declaration_list.is_some(),
@@ -547,6 +549,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 enumeration.enumeration_list.is_some(),
                 enumeration.attributes,
             ),
+            // `_Atomic(T)` is a qualified variant of `T`, which copies its
+            // `TREE_USED`. Clang's type is no longer the typedef.
+            // C11: §6.7.2.4p4, p. 121; PDF p. 139.
+            | TypeSpecifiers::Extended(ExtendedType::Atomic(name)) if gcc =>
+                Self::derives_nothing(name.declarator)
+                    && self.type_mark(name.declaration_specifiers),
             | TypeSpecifiers::Extended(ExtendedType::Typeof { operand, .. }) => match *operand {
                 | SyntaxOperand::Type(name) =>
                     Self::derives_nothing(name.declarator)
