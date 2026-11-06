@@ -83,7 +83,9 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                 .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
         }
         for &(name, feature) in language_features::LANGUAGE_BUILTINS {
-            if context.configuration.accepts(feature) {
+            if context.configuration.accepts(feature)
+                || context.configuration.always_tests_feature(feature)
+            {
                 _ = macro_definitions
                     .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
             }

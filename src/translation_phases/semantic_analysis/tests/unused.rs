@@ -613,6 +613,161 @@ fn clang_skips_a_macro_body() {
     assert_eq!(rules(argument, clang()), [U::ClangResult]);
 }
 
+#[test]
+fn an_atomic_type_name_carries_unused_for_gcc() {
+    macro_rules! u {
+        ($source:literal) => {
+            concat!("typedef int U __attribute__((unused)); ", $source)
+        };
+    }
+    let variable = &[U::Variable][..];
+    for (source, in_gcc, in_clang) in [
+        // The finding, and its file-scope sibling.
+        (u!("void f(void) { _Atomic(U) x; }"), &[][..], variable),
+        (u!("static _Atomic(U) x;"), &[][..], variable),
+        // Through a typedef of it, a typeof of it, and with qualifiers.
+        (
+            u!("typedef _Atomic(U) A; void f(void) { A x; }"),
+            &[][..],
+            variable,
+        ),
+        (
+            u!("void f(void) { __typeof__(_Atomic(U)) x; }"),
+            &[][..],
+            variable,
+        ),
+        (
+            u!("void f(void) { const _Atomic(U) x; }"),
+            &[][..],
+            variable,
+        ),
+        // The qualifier is the same type: Clang's is no longer the typedef.
+        (u!("void f(void) { _Atomic U x; }"), &[][..], variable),
+        (u!("void f(void) { U _Atomic x; }"), &[][..], variable),
+        // A tag: GCC reads it, and Clang's type is the atomic one.
+        (
+            "struct __attribute__((unused)) T { int a; }; void f(void) { _Atomic(struct T) x; }",
+            &[][..],
+            variable,
+        ),
+        // What derives from it warns.
+        (u!("void f(void) { _Atomic(U *) x; }"), variable, variable),
+        (u!("void f(void) { _Atomic(U) *x; }"), variable, variable),
+        (u!("void f(void) { _Atomic(U) x[2]; }"), variable, variable),
+        // No mark at all.
+        (
+            "typedef int N; void f(void) { _Atomic(N) x; }",
+            variable,
+            variable,
+        ),
+        ("void f(void) { _Atomic(int) x; }", variable, variable),
+    ] {
+        assert_eq!(rules(source, gcc()), in_gcc, "GCC: {source}");
+        assert_eq!(rules(source, clang()), in_clang, "Clang: {source}");
+    }
+}
+
+#[test]
+fn gcc_counts_an_atomic_read_as_an_effect() {
+    const DECLARATIONS: &str = "_Atomic int x; _Atomic int a[2]; _Atomic int *p; volatile int v; \
+                                struct S { _Atomic int m; } s; struct S *q; int i; int g(void); ";
+    let check = |body: &str, in_gcc: &[U]| {
+        let source = format!("{DECLARATIONS} void f(void) {{ {body} }}");
+        assert_eq!(rules(&source, gcc()), in_gcc, "GCC: {source}");
+    };
+    // Reading it, which is a call to `__atomic_load`, however it is reached.
+    for body in [
+        "x;",
+        "(x);",
+        "+x;",
+        "*p;",
+        "p[0];",
+        "a[0];",
+        "s.m;",
+        "q->m;",
+        "(long)x;",
+        "(int)(long)x;",
+        "(void)x;",
+        "x ? 1 : 2;",
+        "i ? x : 1;",
+        "g(), x;",
+        "x, g();",
+        "for (;; x) break;",
+    ] {
+        check(body, &[]);
+    }
+    // What is computed from it is not used. The read is an effect, so this is
+    // not "statement with no effect".
+    for body in [
+        "x + 1;",
+        "-x;",
+        "!x;",
+        "x == 1;",
+        "(char)x;",
+        "(long)(x + 1);",
+    ] {
+        check(body, &[U::GccValueComputed]);
+    }
+    // A comma's left operand goes the same way, whatever gave it the effect.
+    for body in [
+        "x + 1, g();",
+        "g() + 1, g();",
+        "v + 1, g();",
+        "(char)g(), g();",
+    ] {
+        check(body, &[U::GccValueComputed]);
+    }
+    check("g(), x + 1;", &[]);
+    check("x, 1;", &[U::GccCommaRight]);
+    // Nothing reads these: `&`, `sizeof`, and a `register` object, whose
+    // address cannot be taken.
+    for body in [
+        "&x;",
+        "&a[0];",
+        "&*p;",
+        "&s.m;",
+        "sizeof x;",
+        "register _Atomic int r; r;",
+    ] {
+        check(body, &[U::GccNoEffect]);
+    }
+    check("register _Atomic int r; r, g();", &[U::GccCommaLeft]);
+    // Clang does not count it.
+    for body in ["_Atomic int x; x;", "_Atomic int x; (x);"] {
+        let source = format!("void f(void) {{ {body} }}");
+        assert_eq!(rules(&source, clang()), [U::ClangResult], "Clang: {source}");
+    }
+}
+
+#[test]
+fn clang_runs_a_simple_assignments_right_operand_first() {
+    const DECLARATIONS: &str = "int x; int *q; void h(void) __attribute__((noreturn)); ";
+    let check = |body: &str, in_clang: &[U]| {
+        let source = format!("{DECLARATIONS} void f(void) {{ {body} }}");
+        assert_eq!(rules(&source, clang()), in_clang, "Clang: {source}");
+    };
+    // The finding: the trapping right operand makes the left unreachable.
+    check("*({42; &x;}) = (__builtin_trap(), 0);", &[]);
+    check("*({42; q;}) = (h(), 0);", &[]);
+    check("*({42; q;}) = ({ h(); 0; });", &[]);
+    check("*({42; q;}) = ({ return; 0; });", &[]);
+    check("*({42; q;}) = x = (h(), 0);", &[]);
+    check("q[({42; 0;})] = (h(), 0);", &[]);
+    // And so the left operand's call does not hide the right.
+    check("*({ h(); q; }) = ({42; 0;});", &[U::ClangResult]);
+    // A compound assignment is another class of statement to the CFG, whose
+    // children go in order.
+    check("*({42; q;}) += (h(), 0);", &[U::ClangResult]);
+    check("*({ h(); q; }) += ({42; 0;});", &[]);
+    check("*({ h(); q; }) |= ({42; 0;});", &[]);
+    // Other operators too.
+    check("*({42; q;}) + (h(), 0);", &[U::ClangResult]);
+    check("(h(), 0) + *({42; q;});", &[]);
+    // After the statement, either way.
+    check("x = (h(), 0); 42;", &[]);
+    check("x += (h(), 0); 42;", &[]);
+}
+
 /// Clang keeps its value warnings, comparisons aside, out of code it can tell
 /// is unreachable; GCC does not look.
 #[test]

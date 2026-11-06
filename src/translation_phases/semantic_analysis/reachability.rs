@@ -813,6 +813,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let (yes, no) = self.flow_branch(flow, e, live);
                 yes || no
             },
+            // `CFGBuilder::VisitBinaryOperator` lays out a simple assignment's
+            // right operand first; a compound one is another class of statement
+            // and its children go in order. C leaves the order unspecified.
+            // C99: §6.5.16p4, p. 91; PDF p. 103.
+            | E::Binary {
+                operator: B::Assignment,
+                left_expression,
+                right_expression,
+            } => {
+                let live = self.flow_expression(flow, right_expression, live);
+                self.flow_expression(flow, left_expression, live)
+            },
             | E::Binary {
                 left_expression,
                 right_expression,

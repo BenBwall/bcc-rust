@@ -101,7 +101,12 @@ impl Lexer<'_, '_, '_, '_> {
             | b' ' | b'\t' | b'\x0b' | b'\x0c' => self.lex_whitespace(start + 1),
             | b'/' => match self.peek(start + 1) {
                 | Some(b'=') => self.spelled(start, start + 2, T::ForwardSlashEquals),
-                | Some(b'/') if self.context.configuration.accepts(Feature::LineComments) => {
+                | Some(b'/')
+                    if self
+                        .context
+                        .configuration
+                        .line_comment_before(self.peek(start + 2)) =>
+                {
                     self.record_spliced_extension(Feature::LineComments, "//", start, start + 2);
                     let end = self.skip_line_comment(start + 2);
                     self.lex_whitespace(end)
