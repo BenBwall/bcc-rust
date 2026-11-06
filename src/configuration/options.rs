@@ -844,6 +844,14 @@ impl CompilerConfiguration {
         self.fatal_errors && self.identity == super::CompilerIdentity::Gcc
     }
 
+    /// Whether `//` starts a comment when `next` follows it. Clang takes it for
+    /// one even in C89, but not before `*`: in `a //**/ b`, C89 has a division.
+    /// C89 had no such comment; C99 §6.4.9p2, p. 66; PDF p. 78.
+    pub(crate) const fn line_comment_before(self, next: Option<u8>) -> bool {
+        self.accepts(Feature::LineComments)
+            && (self.is_native(Feature::LineComments) || self.gnu || !matches!(next, Some(b'*')))
+    }
+
     /// GCC's and Clang's `-std=c99` selects a language rather than turning off
     /// what that language leaves free, so a conforming program means the same
     /// and these extensions stay: the feature tests, a `void` expression in a

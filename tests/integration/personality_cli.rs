@@ -6305,6 +6305,12 @@ mod tests {
                 }
             }
         }
+        // Before `*`, C89 keeps its division, in Clang too.
+        directory.write("d.c", "int main(void) { return 4//**/2\n; }\n");
+        let args = ["-std=c89", "d.c", "-o", "d"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        let status = Command::new(directory.path("d")).status().unwrap();
+        assert_eq!(status.code(), Some(2));
         // `//` in C89 is Clang's alone.
         directory.write("c.c", "// comment\nint x;\n");
         let args = ["-std=c89", "-c", "c.c", "-o", "c.o"];
