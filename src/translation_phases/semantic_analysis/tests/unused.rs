@@ -613,6 +613,35 @@ fn clang_skips_a_macro_body() {
     assert_eq!(rules(argument, clang()), [U::ClangResult]);
 }
 
+#[test]
+fn clang_runs_a_simple_assignments_right_operand_first() {
+    const DECLARATIONS: &str = "int x; int *q; void h(void) __attribute__((noreturn)); ";
+    let check = |body: &str, in_clang: &[U]| {
+        let source = format!("{DECLARATIONS} void f(void) {{ {body} }}");
+        assert_eq!(rules(&source, clang()), in_clang, "Clang: {source}");
+    };
+    // The finding: the trapping right operand makes the left unreachable.
+    check("*({42; &x;}) = (__builtin_trap(), 0);", &[]);
+    check("*({42; q;}) = (h(), 0);", &[]);
+    check("*({42; q;}) = ({ h(); 0; });", &[]);
+    check("*({42; q;}) = ({ return; 0; });", &[]);
+    check("*({42; q;}) = x = (h(), 0);", &[]);
+    check("q[({42; 0;})] = (h(), 0);", &[]);
+    // And so the left operand's call does not hide the right.
+    check("*({ h(); q; }) = ({42; 0;});", &[U::ClangResult]);
+    // A compound assignment is another class of statement to the CFG, whose
+    // children go in order.
+    check("*({42; q;}) += (h(), 0);", &[U::ClangResult]);
+    check("*({ h(); q; }) += ({42; 0;});", &[]);
+    check("*({ h(); q; }) |= ({42; 0;});", &[]);
+    // Other operators too.
+    check("*({42; q;}) + (h(), 0);", &[U::ClangResult]);
+    check("(h(), 0) + *({42; q;});", &[]);
+    // After the statement, either way.
+    check("x = (h(), 0); 42;", &[]);
+    check("x += (h(), 0); 42;", &[]);
+}
+
 /// Clang keeps its value warnings, comparisons aside, out of code it can tell
 /// is unreachable; GCC does not look.
 #[test]
