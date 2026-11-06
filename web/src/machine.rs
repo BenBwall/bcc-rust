@@ -90,7 +90,10 @@ impl Machine {
                 self.session = Some(session);
                 snapshot
             },
-            | Err(diagnostic) => rejected(&diagnostic, &self.source),
+            | Err(diagnostic) => match first_directive(&self.source) {
+                | Some(directive) => before_the_machine(directive, &self.source),
+                | None => rejected(&diagnostic, &self.source),
+            },
         }
     }
 
@@ -102,6 +105,73 @@ impl Machine {
             .ok_or("Load a program before stepping.")?;
         let state = session.step().clone();
         Ok(snapshot(&state, session.program(), &self.source))
+    }
+}
+
+/// The byte range of the first line of `source` that is a preprocessing
+/// directive, `#` being its first character other than white space.
+///
+/// C99: §6.10 paragraph 2, p. 146; PDF p. 158.
+fn first_directive(source: &str) -> Option<SourceRange> {
+    let mut start = 0;
+    source.split_inclusive('\n').find_map(|line| {
+        let at = start;
+        start += line.len();
+        line.trim_start().starts_with('#').then(|| SourceRange {
+            start: at,
+            end: at + line.trim_end().len(),
+            ..SourceRange::default()
+        })
+    })
+}
+
+/// The snapshot for a program with preprocessing directives. The machine reads
+/// source as written, so it never gets to run one, but nothing is wrong with
+/// the program: directives are executed in translation phase 4, long before
+/// any evaluation.
+///
+/// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
+fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
+    let location = range(directive, source);
+    Snapshot {
+        step: 0,
+        status: "error".to_owned(),
+        location,
+        event: StepEvent {
+            kind:           "fault".to_owned(),
+            category:       "fault".to_owned(),
+            title:          "The machine starts after the preprocessor".to_owned(),
+            summary:        "Lines starting with # are handled before the program runs, and this \
+                             machine reads source only as it is written, so it stops here. \
+                             Nothing is wrong with the program."
+                .to_owned(),
+            explanation:    "C processes a file in translation phases: directives are executed \
+                             and macros expanded in phase 4, and evaluation only happens once the \
+                             program runs. To see what these lines become, open the compiler \
+                             pipeline's Preprocessor stage. To step through the code here, remove \
+                             the # lines and write out what they stood for."
+                .to_owned(),
+            note:           String::new(),
+            flow:           Vec::new(),
+            access:         Vec::new(),
+            clauses:        vec![Clause {
+                id:       "5.1.1.2p1".to_owned(),
+                title:    "Translation phases".to_owned(),
+                gloss:    "Phase 4 executes preprocessing directives and expands macro \
+                           invocations."
+                    .to_owned(),
+                citation: "C99 §5.1.1.2p1, p. 10; PDF p. 22".to_owned(),
+            }],
+            range:          location,
+            objects:        Vec::new(),
+            sequence_point: false,
+        },
+        tree: None,
+        stack: Vec::new(),
+        objects: Vec::new(),
+        effects: Vec::new(),
+        diagnostic: None,
+        return_value: None,
     }
 }
 
@@ -490,6 +560,31 @@ mod tests {
         states
     }
 
+    #[test]
+    fn a_directive_stops_the_machine_without_blaming_the_program() {
+        let mut machine = Machine::default();
+        let state =
+            machine.load("// note\n  #define X 1\nint main(void) { return X; }\n".to_owned());
+        assert_eq!(
+            state.event.title,
+            "The machine starts after the preprocessor"
+        );
+        assert!(state.diagnostic.is_none());
+        assert!(!state.can_step());
+        assert_eq!(state.location.map(|range| range.start.line), Some(2));
+        assert_eq!(
+            machine.step(),
+            Err("Load a program before stepping.".into())
+        );
+
+        let state = machine.load("int main(void) { return 1.5; }\n".to_owned());
+        assert_eq!(
+            state.event.title,
+            "This program is outside the supported subset"
+        );
+        assert!(state.diagnostic.is_some());
+    }
+
     fn integer(value: Option<&Value>) -> Option<&str> {
         match value {
             | Some(Value::Integer { text }) => Some(text),
@@ -748,7 +843,6 @@ mod tests {
             Err("Load a program before stepping.".into())
         );
         for source in [
-            "#include <stdio.h>\nint main(void) { return 0; }\n",
             "int main(void) { int a[2] = {3, 7}; int *p = a; *p++; return a[0]; }",
             "int main(void) { return later(); } int later(void) { return 7; }",
         ] {
