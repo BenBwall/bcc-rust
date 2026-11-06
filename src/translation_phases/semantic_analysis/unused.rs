@@ -136,6 +136,8 @@ pub(super) struct UnusedState<'s> {
     pub(super) sign_compare:   bool,
     /// Whether `-Wmissing-field-initializers` is on.
     pub(super) missing_fields: bool,
+    /// Where GCC's `input_location` last moved to a tag.
+    pub(super) last_tag:       Option<SourceVectors>,
     variables:                 ArenaVec<'s, Usage>,
     file_scope:                ArenaMap<'s, StringCacheId, Usage>,
     writes:                    ArenaMap<'s, usize, WriteSite>,
@@ -172,6 +174,7 @@ impl<'s> UnusedState<'s> {
             values,
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
+            last_tag: None,
             variables: ArenaVec::new_in(scratch),
             file_scope: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             writes: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -878,7 +881,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let Some(comparison) = comparison {
                 self.unused_rule(comparison, site, None);
             } else {
-                self.warn_if_reachable(e, rule.group(), SemanticErrorKind::Unused(rule), site);
+                self.warn_if_reachable(
+                    e,
+                    rule.group(),
+                    SemanticErrorKind::Unused(rule),
+                    site,
+                    None,
+                );
             }
         }
     }
@@ -1018,6 +1027,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     rule.group(),
                     SemanticErrorKind::Unused(rule),
                     Self::operator_site(left),
+                    None,
                 );
             }
         } else if !self.is_void_or_unknown(left) && !self.computes_more(left, true) {

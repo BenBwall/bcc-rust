@@ -108,12 +108,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(name) = self.sign_compare_wording(left.ty, right.ty) else {
             return;
         };
-        self.spelled_group_diagnostic(
-            DiagnosticGroup::SignCompare,
-            SemanticErrorKind::SignCompare,
-            e.operator_source_vectors.unwrap_or(e.source_vectors),
-            Some(name),
-        );
+        let site = e.operator_source_vectors.unwrap_or(e.source_vectors);
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+            self.spelled_group_diagnostic(
+                DiagnosticGroup::SignCompare,
+                SemanticErrorKind::SignCompare,
+                site,
+                Some(name),
+            );
+        } else {
+            // Clang's `DiagRuntimeBehavior`.
+            self.warn_if_reachable(
+                e,
+                DiagnosticGroup::SignCompare,
+                SemanticErrorKind::SignCompare,
+                site,
+                Some(name),
+            );
+        }
     }
 
     /// GCC's `warn_for_sign_compare`, and `shorten_compare`, which settles a
@@ -223,9 +235,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(found)
     }
 
-    /// Clang's `AnalyzeComparison`, which ranges both operands, leaves alone
-    /// a comparison whose result is a constant, and warns through
-    /// `DiagRuntimeBehavior`, so never in code it can tell is unreachable.
+    /// Clang's `AnalyzeComparison`, which ranges both operands and leaves
+    /// alone a comparison whose result is a constant.
     fn clang_comparison_is_quiet(&mut self, comparison: &Comparison<'tu>) -> bool {
         let Comparison {
             operator,
@@ -235,7 +246,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             unsigned,
             bits,
         } = *comparison;
-        if self.functions.dead || (left.ice && right.ice) {
+        if left.ice && right.ice {
             return true;
         }
         if left.ice != right.ice

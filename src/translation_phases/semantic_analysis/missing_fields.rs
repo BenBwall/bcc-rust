@@ -26,16 +26,20 @@ use crate::{
         DiagnosticGroup,
     },
     diagnostics::format_in,
-    translation_phases::parsing::{
-        declaration_syntax::{
-            BracedInitializerList,
-            DesignatorType,
-            InitializerElement,
-            InitializerType,
-        },
-        syntax::{
-            Expression,
-            ExpressionType as E,
+    translation_phases::{
+        SourceVectors,
+        parsing::{
+            declaration_syntax::{
+                BracedInitializerList,
+                DesignatorType,
+                InitializerElement,
+                InitializerType,
+                TypeSpecifiers,
+            },
+            syntax::{
+                Expression,
+                ExpressionType as E,
+            },
         },
     },
     util::bump::ArenaVec,
@@ -155,15 +159,54 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let closing = list
             .closing_brace_source_vectors
             .or(list.opening_brace_source_vectors);
-        if let Some(place) = closing {
+        if let Some(place) = closing
+            && !(gcc && self.tag_location_in_system_header(place))
+        {
             let name = self.missing_field_wording(ty, &member);
-            self.spelled_group_diagnostic(
+            self.group_diagnostic(
                 DiagnosticGroup::MissingFieldInitializers,
                 SemanticErrorKind::MissingFieldInitializer,
                 place,
                 Some(name),
+                None,
             );
         }
+    }
+
+    /// Records the token after a structure, union or enumeration specifier's
+    /// keyword: see [`Self::tag_location_in_system_header`].
+    /// C99: §6.7.2.1, pp. 101-102; PDF pp. 113-114; §6.7.2.2, p. 105;
+    /// PDF p. 117.
+    pub(super) fn note_tag_specifier(&mut self, specifier: TypeSpecifiers<'tu>) {
+        let site = match specifier {
+            | TypeSpecifiers::StructOrUnion(record) => record
+                .identifier
+                .map_or(record.source_vectors, |name| name.source_vectors),
+            | TypeSpecifiers::Enum(enumeration) => enumeration
+                .name
+                .map_or(enumeration.source_vectors, |name| name.source_vectors),
+            | _ => return,
+        };
+        self.unused.last_tag = Some(site);
+    }
+
+    /// Whether GCC's warning, at the closing brace `place`, lands in a system
+    /// header. GCC warns at `input_location`, which only two things move: the
+    /// first token of each line, as lexed, so a macro's invocation and not its
+    /// body, and the token after a tag's keyword
+    /// (`c_parser_struct_or_union_specifier`), wherever a macro spelled it. A
+    /// tag a system header's macro spells therefore hides the warning for the
+    /// rest of its line, and nothing else about the initializer's spelling
+    /// matters.
+    fn tag_location_in_system_header(&self, place: SourceVectors) -> bool {
+        self.unused.last_tag.is_some_and(|tag| {
+            if !self.context.spelled_in_system_header(tag) || place.length() == 0 {
+                return false;
+            }
+            let tag = self.context.expansion_location(tag);
+            let closing = self.context.expansion_location(place);
+            tag.source_file_index == closing.source_file_index && tag.line == closing.line
+        })
     }
 
     /// The member a lone `.name` designator names, `Some(None)` for any other

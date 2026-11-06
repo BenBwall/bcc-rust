@@ -495,3 +495,166 @@ fn an_elided_list_stays_silent() {
     assert_eq!(reports(source, CompilerIdentity::Gcc, kind), 0);
     assert_eq!(reports(source, CompilerIdentity::Clang, kind), 0);
 }
+
+/// Clang's `DiagRuntimeBehavior` asks its CFG, as `reachability.rs` reads it;
+/// GCC warns wherever the comparison is evaluated.
+#[test]
+fn sign_compare_follows_clang_reachability() {
+    for (source, gcc, clang) in [
+        (
+            "int f(int a, unsigned b) { while (0) { if (a < b) return 1; } return 0; }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { for (; 0;) { if (a < b) return 1; } return 0; }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { __builtin_trap(); return a < b; }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return 0; return a < b; }", 1, 0),
+        (
+            "int f(int a, unsigned b) { if (0) return a < b; return 0; }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return 0 ? a < b : 0; }", 0, 0),
+        (
+            "int f(int a, unsigned b) { return a && 0 ? a < b : 0; }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return 0 && a < b; }", 0, 0),
+        (
+            "int f(int a, unsigned b) { return a < (__builtin_trap(), b); }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { if (a & 0) return a < b; return 0; }",
+            1,
+            0,
+        ),
+        (
+            "enum E { X, Y }; int f(enum E e, int a, unsigned b) { switch (e) { case X: return 1; \
+             case Y: return 2; } return a < b; }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { return 0; x: return a < b; }",
+            1,
+            0,
+        ),
+        // What it does reach.
+        (
+            "int f(int a, unsigned b) { while (1) { if (a < b) return 1; } }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { while (a) { if (a < b) return 1; } return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { while (a) {} return a < b; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { while (1) { break; } return a < b; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { if (a) __builtin_trap(); return a < b; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { if (1) return a < b; return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { while (a < b) {} return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { do {} while (a < b); return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { for (; a < b;) {} return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { int c = a < b; return c; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { int c[] = {a < b}; return c[0]; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { goto x; x: return a < b; }",
+            1,
+            1,
+        ),
+        ("int f(int a, unsigned b) { return a ? a < b : 0; }", 1, 1),
+        ("int f(int a, unsigned b) { return 1 ? a < b : 0; }", 1, 1),
+        ("int f(int a, unsigned b) { return ({ a < b; }); }", 1, 1),
+        (
+            "int g(int); int f(int a, unsigned b) { return g(a < b); }",
+            1,
+            1,
+        ),
+    ] {
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::SignCompare
+            ),
+            gcc,
+            "GCC: {source}"
+        );
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Clang,
+                SemanticErrorKind::SignCompare
+            ),
+            clang,
+            "Clang: {source}"
+        );
+    }
+}
+
+/// Neither compiler asks whether an initializer's braces run.
+#[test]
+fn missing_fields_do_not_follow_reachability() {
+    for source in [
+        "struct S { int a, b; }; void f(void) { while (0) { struct S s = {1}; (void)s; } }",
+        "struct S { int a, b; }; void f(void) { __builtin_trap(); struct S s = {1}; (void)s; }",
+        "struct S { int a, b; }; void f(void) { return; struct S s = {1}; (void)s; }",
+    ] {
+        for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+            assert_eq!(
+                reports(source, identity, SemanticErrorKind::MissingFieldInitializer),
+                1,
+                "{source}"
+            );
+        }
+    }
+}

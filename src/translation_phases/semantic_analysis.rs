@@ -817,6 +817,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 {
                     self.note_record_specifier(record);
                 }
+                if self.unused.missing_fields {
+                    self.note_tag_specifier(s);
+                }
                 self.check_extension_chain(attributes);
                 self.attribute_chain_operands(attributes);
             },

@@ -1247,9 +1247,13 @@ each has its own reading: `cannot_be_negative` follows GCC's nonnegative test on
 its folded tree (clamps that fold to `MAX_EXPR`, masks moved through casts and
 shifts, the bit-counting builtins), with `shorten_compare`'s constant results,
 and `clang_range` ports Clang's `TryGetExprRange` for both operands, with its
-tautology check. Neither warns in an operand that is not evaluated, Clang not in
-code the `dead` flag calls unreachable either. GCC withholds both warnings when
-a system header spells the operator or closing brace.
+tautology check. Neither warns in an operand that is not evaluated, and Clang not
+in what `reachability.rs` finds unreachable either, where GCC warns. GCC withholds
+the sign warning when a system header spells the operator. It reports a missing
+field at `input_location`, which only the first token of a line and the token
+after a tag's keyword move, so a system header's macro that spells the tag hides
+the warning for the rest of that line, and the initializer's own spelling does
+not matter.
 
 #### Remaining backend and quality work
 
