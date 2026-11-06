@@ -129,6 +129,27 @@ fn gcc_rules_match_each_form() {
         ),
         ("int main(int a, volatile char **b) { return 0; }", &[]),
         (
+            "int main(int a, char *const *volatile b) { return 0; }",
+            &[],
+        ),
+        // GCC checks a nested definition too, which is not public.
+        (
+            "void f(void) { int main(void) { return 0; } (void)main; }",
+            &[M::GccStatic],
+        ),
+        (
+            "void f(void) { int main(int a) { return a; } (void)main; }",
+            &[M::GccParameterCount, M::GccStatic],
+        ),
+        (
+            "void f(void) { void main(void) {} (void)main; }",
+            &[M::GccReturnType, M::GccStatic],
+        ),
+        (
+            "void f(void) { int main(a) int a; { return a; } (void)main; }",
+            &[M::GccStatic],
+        ),
+        (
             "int main(int a, char **b, int c) { return 0; }",
             &[M::GccThirdParameter],
         ),
@@ -183,6 +204,50 @@ fn clang_rules_match_each_form() {
         (
             "int main(int a, volatile char **b) { return 0; }",
             &[M::ClangSecondParameter],
+        ),
+        // Only the qualifiers a declaration writes count: outer ones, not
+        // those on an array's brackets or inside a typedef name.
+        ("int main(int a, char **volatile b) { return 0; }", &[]),
+        ("int main(int a, char *const *const b) { return 0; }", &[]),
+        (
+            "int main(int a, char *const b[volatile]) { return 0; }",
+            &[],
+        ),
+        (
+            "typedef char *const *volatile T; int main(int a, T b) { return 0; }",
+            &[],
+        ),
+        (
+            "typedef char *volatile P; int main(int a, P *b) { return 0; }",
+            &[],
+        ),
+        (
+            "int main(int a, char *const *volatile b) { return 0; }",
+            &[M::ClangSecondParameter],
+        ),
+        (
+            "int main(int a, char *const *restrict b);",
+            &[M::ClangSecondParameter],
+        ),
+        (
+            "int main(int a, char *volatile b[]) { return 0; }",
+            &[M::ClangSecondParameter],
+        ),
+        (
+            "typedef char *const *T; int main(int a, volatile T b) { return 0; }",
+            &[M::ClangSecondParameter],
+        ),
+        (
+            "typedef const char C; int main(int a, C **b) { return 0; }",
+            &[M::ClangSecondParameter],
+        ),
+        (
+            "int main(a, b) int a; char *const *volatile b; { return 0; }",
+            &[M::ClangSecondParameter],
+        ),
+        (
+            "int main(int a, char **b, char *const *volatile c) { return 0; }",
+            &[M::ClangThirdParameter],
         ),
         (
             "int main(int a, char **b, int c) { return 0; }",

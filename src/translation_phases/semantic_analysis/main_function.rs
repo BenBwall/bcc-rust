@@ -21,6 +21,7 @@ use super::{
     BindingKind,
     Linkage,
     SemanticErrorKind,
+    functions::function_derivation,
     scopes::Namespace,
     types::{
         Scalar,
@@ -38,7 +39,11 @@ use crate::{
         parsing::{
             declaration_syntax::{
                 DeclarationSpecifiers,
+                Declarator,
+                DirectDeclarator,
+                ParameterDeclaration,
                 TypeQualifiers,
+                TypeSpecifiers,
             },
             syntax::{
                 FunctionDefinition,
@@ -47,6 +52,7 @@ use crate::{
             },
         },
     },
+    util::bump::ArenaVec,
 };
 
 /// One complaint about `main`, in GCC's or Clang's terms: a compiler's rules
@@ -80,6 +86,18 @@ pub(crate) enum MainRule {
     ClangSecondParameter,
     ClangThirdParameter,
     ClangObject,
+}
+
+/// A parameter as Clang's rules read it. They look at the qualifiers a
+/// declaration writes, which the function type has already dropped from the
+/// parameter itself and a typedef name's or an adjusted array's sugar hides.
+#[derive(Clone, Copy)]
+struct WrittenParameter {
+    /// The type before an array adjusts to a pointer.
+    original: TypeId,
+    /// The pointer level a typedef name supplies, the parameter itself being
+    /// level 0, and the qualifiers written beside the name.
+    typedef:  Option<(usize, TypeQualifiers)>,
 }
 
 impl MainRule {
@@ -148,7 +166,7 @@ impl MainRule {
     }
 }
 
-impl<'tu> Analyzer<'_, 'tu, '_> {
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Checks a declaration that binds the ordinary identifier `name`, which
     /// Clang's rules read on each declaration of `main` and GCC's only for
     /// its specifiers and for an object.
@@ -156,6 +174,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn check_main_declaration(
         &mut self,
         name: Identifier,
+        declarator: Declarator<'tu>,
         spec: DeclarationSpecifiers<'tu>,
         ty: TypeId,
         kind: BindingKind,
@@ -185,7 +204,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.main_rule(MainRule::ClangObject, specifiers),
             | (CompilerIdentity::Clang | CompilerIdentity::ClangCl, BindingKind::Function)
                 if hosted =>
-                self.clang_main_declaration(name, spec, ty),
+                self.clang_main_declaration(name, declarator, spec, ty),
             | _ => {},
         }
     }
@@ -194,6 +213,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn clang_main_declaration(
         &mut self,
         name: Identifier,
+        declarator: Declarator<'tu>,
         spec: DeclarationSpecifiers<'tu>,
         ty: TypeId,
     ) {
@@ -223,13 +243,61 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.main_rule(MainRule::ClangMustReturnInt, specifiers);
             invalid = true;
         }
-        self.clang_main_parameters(name.source_vectors, ty, invalid);
+        let written = self.written_parameters(declarator);
+        self.clang_main_parameters(name.source_vectors, ty, &written, invalid);
+    }
+
+    /// How the function declarator of `declarator` writes its parameters; a
+    /// function typedef writes none.
+    fn written_parameters(&self, declarator: Declarator<'tu>) -> ArenaVec<'s, WrittenParameter> {
+        let mut written = ArenaVec::new_in(self.scratch);
+        if let Some(direct @ DirectDeclarator::Function { parameter_list, .. }) =
+            function_derivation(declarator, self.scratch)
+            && let Some(&(parameters, _)) = self.parameters.get(&std::ptr::from_ref(direct).addr())
+        {
+            for (syntax, parameter) in parameter_list.as_slice().iter().zip(parameters) {
+                written.push(WrittenParameter {
+                    original: parameter.original,
+                    typedef:  Self::typedef_level(syntax),
+                });
+            }
+        }
+        written
+    }
+
+    /// The pointer level of a parameter's typedef name, if its specifiers
+    /// have one: below the declarator's pointers and arrays.
+    fn typedef_level(syntax: &ParameterDeclaration<'tu>) -> Option<(usize, TypeQualifiers)> {
+        let spec = syntax.declaration_specifiers;
+        if !matches!(spec.type_specifiers, TypeSpecifiers::TypedefName(_)) {
+            return None;
+        }
+        let mut level = 0;
+        let mut next = syntax.declarator;
+        while let Some(declarator) = next {
+            level += declarator.pointer.levels.len();
+            next = None;
+            for direct in declarator.kind.as_slice() {
+                match direct {
+                    | DirectDeclarator::Array { .. } => level += 1,
+                    | DirectDeclarator::Parenthesized(inner) => next = Some(inner.declarator),
+                    | _ => {},
+                }
+            }
+        }
+        Some((level, spec.type_qualifiers))
     }
 
     /// The parameter half of Clang's rules, which an old-style definition
     /// also runs once its parameters have types. A declaration with no
     /// prototype counts as having no parameters.
-    fn clang_main_parameters(&mut self, site: SourceVectors, ty: TypeId, mut invalid: bool) {
+    fn clang_main_parameters(
+        &mut self,
+        site: SourceVectors,
+        ty: TypeId,
+        written: &[WrittenParameter],
+        mut invalid: bool,
+    ) {
         let TypeKind::Function {
             parameters,
             prototype,
@@ -254,12 +322,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let int = self.types.scalar(Scalar::Int);
         for (position, &parameter) in parameters[..count].iter().enumerate() {
+            let as_written = written.get(position).copied().unwrap_or(WrittenParameter {
+                original: parameter,
+                typedef:  None,
+            });
             let fault = match position {
                 | 0 if parameter.unqualified() == int => None,
                 | 0 => Some(MainRule::ClangFirstParameter),
-                | 1 if self.clang_argument_array(parameter) => None,
+                | 1 if self.clang_argument_array(as_written) => None,
                 | 1 => Some(MainRule::ClangSecondParameter),
-                | _ if self.clang_argument_array(parameter) => None,
+                | _ if self.clang_argument_array(as_written) => None,
                 | _ => Some(MainRule::ClangThirdParameter),
             };
             if let Some(fault) = fault {
@@ -272,13 +344,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether Clang takes `ty` for `char **`: `const` may qualify any level,
-    /// while another qualifier may only be on the parameter itself, and only
-    /// when the rest is exactly `char **`.
-    fn clang_argument_array(&mut self, ty: TypeId) -> bool {
+    /// Whether Clang takes a parameter for `char **`: any qualifier may be on
+    /// the parameter itself when the rest is exactly `char **`, and otherwise
+    /// only `const`, at any level. Qualifiers inside a typedef name or on an
+    /// array's brackets do not count, except that a typedef for the `char`
+    /// itself is no `char` if it adds any.
+    /// Clang: `Sema::CheckMain`, whose `QualifierCollector` reads local
+    /// qualifiers only.
+    fn clang_argument_array(&mut self, written: WrittenParameter) -> bool {
         let char = self.types.scalar(Scalar::Char);
-        let TypeKind::Pointer(pointer) = self.types.nodes[ty.index] else {
-            return false;
+        let original = written.original;
+        let local = |level: usize, ty: TypeId| match written.typedef {
+            | Some((at, qualifiers)) if at == level => qualifiers,
+            | _ => ty.qualifiers,
+        };
+        let (outer, pointer) = match self.types.nodes[original.index] {
+            | TypeKind::Array(element, _) => (TypeQualifiers::empty(), element),
+            | TypeKind::Pointer(pointer) => (local(0, original), pointer),
+            | _ => return false,
         };
         let TypeKind::Pointer(target) = self.types.nodes[pointer.index] else {
             return false;
@@ -286,8 +369,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if target.unqualified() != char {
             return false;
         }
-        let inner = pointer.qualifiers | target.qualifiers;
-        (inner.is_empty()) || ((inner | ty.qualifiers) & !TypeQualifiers::CONST).is_empty()
+        if (pointer.qualifiers | target.qualifiers).is_empty() {
+            return true;
+        }
+        local(2, target) == target.qualifiers
+            && ((outer | local(1, pointer) | target.qualifiers) & !TypeQualifiers::CONST).is_empty()
     }
 
     /// Clang's parameter rules for the old-style definition `ty`, whose
@@ -296,6 +382,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         function: &'tu FunctionDefinition<'tu>,
         ty: TypeId,
+        originals: &[TypeId],
     ) {
         if matches!(
             self.context.configuration.compiler_identity(),
@@ -305,7 +392,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && self.is_file_scope_main(name)
             && !self.types.unanalyzed(ty)
         {
-            self.clang_main_parameters(name.source_vectors, ty, false);
+            let mut written = ArenaVec::new_in(self.scratch);
+            written.extend(originals.iter().map(|&original| WrittenParameter {
+                original,
+                typedef: None,
+            }));
+            self.clang_main_parameters(name.source_vectors, ty, &written, false);
         }
     }
 
@@ -321,7 +413,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(name) = f.declarator.identifier() else {
             return;
         };
-        if !self.is_file_scope_main(name) || self.types.unanalyzed(ty) {
+        if !self.is_main(name) || self.types.unanalyzed(ty) {
             return;
         }
         let TypeKind::Function {
@@ -368,9 +460,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if variadic {
             self.main_rule(MainRule::GccVariadic, site);
         }
-        if self
-            .lookup(Namespace::Ordinary, name.name)
-            .is_some_and(|entry| self.bindings[entry.binding].linkage != Linkage::External)
+        if !self.defined_at_file_scope()
+            || self
+                .lookup(Namespace::Ordinary, name.name)
+                .is_some_and(|entry| self.bindings[entry.binding].linkage != Linkage::External)
         {
             self.main_rule(MainRule::GccStatic, site);
         }
@@ -433,13 +526,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether `name` is `main` in a definition at file scope: `self.scope`
-    /// is the definition's own scope. A GNU nested function named `main` is
-    /// no program's entry point.
+    /// is the definition's own scope. Clang refuses a GNU nested function.
     fn is_file_scope_main(&self, name: Identifier) -> bool {
-        self.is_main(name)
-            && !self.scopes[self.scope]
-                .parent
-                .is_some_and(|scope| self.scopes[scope].kind != super::ScopeKind::File)
+        self.is_main(name) && self.defined_at_file_scope()
+    }
+
+    /// Whether the function whose scope `self.scope` is, is not a GNU nested
+    /// function, which GCC checks too and takes for a non-public one.
+    fn defined_at_file_scope(&self) -> bool {
+        !self.scopes[self.scope]
+            .parent
+            .is_some_and(|scope| self.scopes[scope].kind != super::ScopeKind::File)
     }
 
     fn main_rule(&mut self, rule: MainRule, site: SourceVectors) {

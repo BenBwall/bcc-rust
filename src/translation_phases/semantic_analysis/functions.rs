@@ -1476,7 +1476,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && let Some(composite) = self.types.composite(binding.ty, defined)
         {
             self.bindings[index].ty = composite;
-            self.check_main_old_parameters(function, composite);
+            self.check_main_old_parameters(function, composite, &original_types);
         } else {
             let previous = self
                 .functions

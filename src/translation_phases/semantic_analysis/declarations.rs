@@ -862,7 +862,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             Linkage::None
         };
-        self.check_main_declaration(name, spec, ty, kind, linkage);
+        self.check_main_declaration(name, declarator, spec, ty, kind, linkage);
         let thread = self.thread_storage(spec.extensions);
         if thread && function && !typedef {
             self.error(
