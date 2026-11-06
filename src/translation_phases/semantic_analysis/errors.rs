@@ -4,6 +4,7 @@
 use std::fmt;
 
 use super::unused::UnusedRule;
+use super::main_function::MainRule;
 use crate::{
     diagnostics::{
         Diagnostic,
@@ -109,7 +110,7 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.7.5.2p4, pp. 116-117; PDF pp. 128-129.
     DefinitionStarArray,
     /// C99: §5.1.2.2.1p1, p. 12; PDF p. 24.
-    MainSignature,
+    Main(MainRule),
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
     Unused(UnusedRule),
     /// C99: §6.9.2p3, p. 143; PDF p. 155.
@@ -1059,8 +1060,8 @@ impl SemanticErrorKind {
             | Self::UnnamedDefinitionParameter => "parameter has no name",
             | Self::IncompleteDefinitionParameter => "incomplete parameter type",
             | Self::DefinitionStarArray => "`[*]` is not allowed in a definition",
-            | Self::MainSignature => "nonportable signature for main",
             | Self::Unused(rule) => rule.label(),
+            | Self::Main(_) => "nonportable declaration of main",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
                 "still incomplete at the end of the translation unit",
@@ -1265,6 +1266,10 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnusedLabel
                     | crate::configuration::DiagnosticGroup::UnusedValue
                     | crate::configuration::DiagnosticGroup::UnusedComparison
+                    | crate::configuration::DiagnosticGroup::Main
+                    | crate::configuration::DiagnosticGroup::MainExtension
+                    | crate::configuration::DiagnosticGroup::MainReturnType
+                    | crate::configuration::DiagnosticGroup::MainSpecifier
                     | crate::configuration::DiagnosticGroup::LiteralConversion
                     | crate::configuration::DiagnosticGroup::ExcessInitializers
                     | crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration
@@ -1635,8 +1640,8 @@ impl SemanticErrorKind {
                 "C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code \
                  that likely does not do what was meant",
             ),
-            | Self::MainSignature => (
-                "main has a nonportable signature",
+            | Self::Main(rule) => (
+                rule.words(),
                 "C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and \
                  char **, or an implementation-defined form",
             ),
@@ -2450,6 +2455,7 @@ impl SemanticErrorKind {
             | Self::PointerConstraint(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),
+            | Self::Main(rule) => rule.group(),
             | Self::ImplicitFunctionDeclaration => Some(G::ImplicitFunctionDeclaration),
             | Self::ImplicitLibraryFunction(_) => Some(G::ImplicitLibraryFunction),
             | Self::ImplicitInt
@@ -2573,6 +2579,27 @@ impl SemanticError {
             | _ => return None,
         };
         Some((message, if format == F::Tcc { None } else { group }))
+    }
+
+    /// The option GCC or Clang names on a warning that `-Werror` made an
+    /// error: `-Werror=X` and `-Werror,-WX`. A group that is an error by
+    /// default, or GCC's pedantic warning under `-pedantic-errors`, names
+    /// only itself.
+    fn promoted_option<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
+        use crate::configuration::DiagnosticFormat as F;
+        let group = self.kind.group()?;
+        let name = group.name()?;
+        if self.severity() != ErrorSeverity::Error
+            || group.default_severity() != ErrorSeverity::Warning
+        {
+            return None;
+        }
+        match context.configuration.diagnostic_format() {
+            | F::Gcc if !context.configuration.pedantic_error(group) =>
+                Some(format_in!(arena, "-Werror={name}")),
+            | F::Clang => Some(format_in!(arena, "-Werror,-W{name}")),
+            | _ => None,
+        }
     }
 
     /// `cl`'s code and words for the diagnostics its users meet most, under
@@ -2713,6 +2740,16 @@ impl ToDiagnostic for SemanticError {
                 | Some(name) => format_in!(arena, "{before} '{name}' {after}"),
                 | None => before,
             }
+        } else if let SemanticErrorKind::Main(MainRule::ClangSurplusParameters(count)) = self.kind {
+            format_in!(
+                arena,
+                "too many parameters ({count}) for 'main': must be 0, 2, or 3"
+            )
+        } else if let SemanticErrorKind::Main(MainRule::GccAtomicParameter) = self.kind {
+            self.name.map_or(message, |name| {
+                let ty = context.string_cache.at(name);
+                format_in!(arena, "'_Atomic'-qualified parameter type '{ty}' of 'main'")
+            })
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")
         } else if matches!(
@@ -2750,14 +2787,32 @@ impl ToDiagnostic for SemanticError {
                 } else {
                     ""
                 };
-                format_in!(arena, "{message} [-W{group}{level}]")
+                match self.promoted_option(context, arena) {
+                    | Some(option) => format_in!(arena, "{message} [{option}{level}]"),
+                    | None => format_in!(arena, "{message} [-W{group}{level}]"),
+                }
+            } else if self.severity() == ErrorSeverity::Error
+                && group == Some(crate::configuration::DiagnosticGroup::MainSpecifier)
+                && context.configuration.diagnostic_format()
+                    == crate::configuration::DiagnosticFormat::Gcc
+                && !context
+                    .configuration
+                    .pedantic_error(crate::configuration::DiagnosticGroup::MainSpecifier)
+            {
+                suffixed = true;
+                format_in!(arena, "{message} [-Werror]")
             } else {
                 message
             };
         let msvc = self.msvc_message(context, arena);
         let (message, suffixed) = match (msvc, self.compiler_message(context, arena)) {
             | (Some((_, text)), _) | (None, Some((text, None))) => (text, false),
-            | (None, Some((text, Some(group)))) => (format_in!(arena, "{text} [-W{group}]"), true),
+            | (None, Some((text, Some(group)))) => {
+                let option = self
+                    .promoted_option(context, arena)
+                    .unwrap_or_else(|| format_in!(arena, "-W{group}"));
+                (format_in!(arena, "{text} [{option}]"), true)
+            },
             | (None, None) => match self.tcc_message(context, arena) {
                 | Some(tcc) => (tcc, false),
                 | None => (message, suffixed),
@@ -2825,7 +2880,6 @@ impl GetSeverity for SemanticError {
             self.kind,
             SemanticErrorKind::ImplicitLibraryFunction(_)
                 | SemanticErrorKind::QualifiedFunction
-                | SemanticErrorKind::MainSignature
                 | SemanticErrorKind::TentativeArrayAssumedOne
                 | SemanticErrorKind::UnusedStaticFunction
                 | SemanticErrorKind::PragmaPackMalformed

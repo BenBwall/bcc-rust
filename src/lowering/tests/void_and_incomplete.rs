@@ -59,7 +59,11 @@ fn function_pointer_arithmetic_steps_by_bytes() {
 fn main_with_a_non_int_result_has_no_implicit_zero() {
     // C99 §5.1.2.2.3p1, p. 13; PDF p. 25: only an int-compatible main
     // returns 0 at its closing brace; the status is otherwise unspecified.
-    let ir = functions(&lowered("const char *main(void) {}"));
+    // Clang accepts another result only in a GNU mode.
+    let gnu = crate::configuration::CompilerConfiguration::default()
+        .with_target(Target::LinuxGnu)
+        .with_gnu_extensions(true);
+    let ir = functions(&lower_with("const char *main(void) {}", gnu).unwrap());
     assert!(ir.contains("poison.ptr"), "{ir}");
     let ir = functions(&lowered("int main(void) {}"));
     assert!(ir.contains("iconst.i32 0"), "{ir}");

@@ -711,7 +711,7 @@ pinned by the `.args` sidecars.
 | `UnnamedDefinitionParameter` | [parameter-name](sema3-parameter-name.c), [parameter typedef warning](sema3-parameter-typedef-warn.c) |
 | `IncompleteDefinitionParameter` | [parameter-complete](sema3-parameter-complete.c) |
 | `DefinitionStarArray` | [parameter-star](sema3-parameter-star.c) |
-| `MainSignature` | [main](sema3-main.c) |
+| `Main` | [bcc's format](sema3-main.c); GCC's rules under `-Wall`: [return type](sema-main-gcc-return.c), [first](sema-main-gcc-first.c) and [third](sema-main-gcc-third.c) parameter, [count](sema-main-gcc-count.c), [static](sema-main-gcc-static.c), [variadic](sema-main-gcc-variadic.c), [object](sema-main-gcc-object.c), [`-Werror`](sema-main-gcc-werror.c); Clang's rules: [return type](sema-main-clang-return.c) and [its strict error](sema-main-clang-strict.c), [first](sema-main-clang-first.c) and [third](sema-main-clang-third.c) parameter, [one parameter](sema-main-clang-one.c), [too many](sema-main-clang-count.c), [static](sema-main-clang-static.c), [variadic](sema-main-clang-variadic.c), [object](sema-main-clang-object.c) |
 | `IncompleteInternalTentative` | [internal-tentative](sema3-internal-tentative.c) |
 | `DuplicateDefinition` | [definition](sema3-definition.c) |
 | `TentativeArrayAssumedOne` | [array-completion](sema3-array-completion.c) |

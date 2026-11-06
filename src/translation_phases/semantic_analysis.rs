@@ -74,6 +74,7 @@ mod functions;
 mod implicit;
 mod inference;
 mod initializers;
+mod main_function;
 mod predefined;
 mod statements;
 mod traversal;
