@@ -1489,7 +1489,7 @@ mod tests {
                 "--gcc-mode",
                 &["-print-file-name=x", "-print-libgcc-file-name"]
             ),
-            file("libgcc.a")
+            answer("--gcc-mode", &["-print-file-name=libgcc.a"])
         );
         assert_eq!(
             answer(
