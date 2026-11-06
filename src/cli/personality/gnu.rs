@@ -5,15 +5,22 @@
 //! diagnose unknown ones as the compiler does, and add the
 //! compiler's defaults: its identity and diagnostic format, the host's
 //! target and system headers, and `-o a.out` when the command links.
+//! `@FILE` arguments are read first (`gnu/response_files.rs`).
+
+mod response_files;
 
 use std::{
     ffi::{
         OsStr,
         OsString,
     },
-    path::Path,
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
+use self::response_files::ResponseFileError;
 use super::{
     Invocation,
     MainError,
@@ -80,13 +87,44 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         positions: Vec::new(),
         linker_words: Vec::new(),
         queries: Vec::new(),
+        save_temps: None,
         dependency_mode: None,
         dependency_file: None,
         preprocessor_dependency_file: false,
         unrecognized: Vec::new(),
         bad_standard: None,
     };
-    let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
+    let expanded = match response_files::expand(&invocation.arguments, compiler) {
+        | Ok(arguments) => arguments,
+        | Err(ResponseFileError::TooMany) => {
+            invocation.error(format_args!("too many @-files encountered"));
+            return Err(MainError::Reported(1));
+        },
+        | Err(ResponseFileError::GccDirectory) => {
+            invocation.error(format_args!("@-file refers to a directory"));
+            return Err(MainError::Reported(1));
+        },
+        | Err(ResponseFileError::ClangDirectory(file)) => {
+            // LLVM's own words, misprint included.
+            super::print(
+                &format!(
+                    "cannot not open file '{}': Is a directory\n",
+                    file.display()
+                ),
+                true,
+            );
+            return Err(MainError::Reported(1));
+        },
+        | Err(ResponseFileError::Recursive(file)) => {
+            // LLVM's own words, before the driver exists to name itself.
+            super::print(
+                &format!("recursive expansion of: '{}'\n", file.display()),
+                true,
+            );
+            return Err(MainError::Reported(1));
+        },
+    };
+    let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         state.position += 1;
         if let Some(query) = state.argument(argument, &mut arguments) {
@@ -343,6 +381,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         steps.push(bcc);
     }
+    let saved_temporaries = state.saved_temporaries(&common, links);
     // Under `-fsyntax-only` the C and assembly inputs form separate jobs,
     // and each runs whether the other fails, as in the compilers.
     let mut plan = Plan {
@@ -394,6 +433,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         plan.steps.push(Step::Bcc(bcc));
     }
+    // Only once the program has compiled, so that no diagnostic prints twice.
+    plan.steps
+        .extend(saved_temporaries.into_iter().map(Step::Link));
     Ok(plan)
 }
 
@@ -468,6 +510,8 @@ struct MachineOptions {
 struct State<'a> {
     invocation: &'a Invocation,
     compiler: Compiler,
+    /// `-save-temps`.
+    save_temps: Option<SaveTemps>,
     /// bcc's options and inputs, in order.
     out: Vec<OsString>,
     errors: usize,
@@ -572,6 +616,16 @@ enum Query {
     Multiarch,
     /// GCC's `-print-sysroot`.
     Sysroot,
+    /// `-print-multi-lib`: bcc builds one library layout.
+    MultiLib,
+    /// `-print-multi-directory`.
+    MultiDirectory,
+    /// GCC's `-print-multi-os-directory`.
+    MultiOsDirectory,
+    /// Clang's `-print-resource-dir`, answered by the bundled clang.
+    ResourceDirectory,
+    /// Clang's `-print-runtime-dir`, answered by the bundled clang.
+    RuntimeDirectory,
 }
 
 impl Query {
@@ -585,23 +639,30 @@ impl Query {
                 | Self::SearchDirectories => 0,
                 | Self::FileName(_) | Self::LibgccFileName => 1,
                 | Self::ProgramName(_) => 2,
-                | Self::Multiarch => 3,
-                | Self::Sysroot => 4,
-                | Self::Help => 5,
-                | Self::Version => 6,
-                | _ => 7,
+                | Self::MultiLib => 3,
+                | Self::MultiDirectory => 4,
+                | Self::Multiarch => 5,
+                | Self::Sysroot => 6,
+                | Self::MultiOsDirectory => 7,
+                | Self::Help => 8,
+                | Self::Version => 9,
+                | _ => 10,
             },
             | Compiler::Clang => match self {
                 | Self::DumpMachine => 0,
                 | Self::DumpVersion => 1,
                 | Self::Help => 2,
                 | Self::Version => 3,
-                | Self::SearchDirectories => 4,
-                | Self::FileName(_) => 5,
-                | Self::ProgramName(_) => 6,
-                | Self::LibgccFileName => 7,
-                | Self::Triple => 8,
-                | _ => 9,
+                | Self::ResourceDirectory => 4,
+                | Self::SearchDirectories => 5,
+                | Self::RuntimeDirectory => 6,
+                | Self::FileName(_) => 7,
+                | Self::ProgramName(_) => 8,
+                | Self::LibgccFileName => 9,
+                | Self::MultiLib => 10,
+                | Self::MultiDirectory => 11,
+                | Self::Triple => 12,
+                | _ => 13,
             },
         }
     }
@@ -707,9 +768,155 @@ const LINK_ONLY_OPTIONS: [&str; 8] = [
 /// builds: driver conveniences and reports.
 /// `-g*` (debug information, which bcc does not emit) and the `-f` and `-m`
 /// options in `unimplemented.rs` are ignored too.
-const IGNORED_OPTIONS: [&str; 4] = ["-pipe", "-save-temps", "-Q", "-time"];
+const IGNORED_OPTIONS: [&str; 3] = ["-pipe", "-Q", "-time"];
+
+/// Which `-save-temps` the command line gives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SaveTemps {
+    /// `-save-temps`: beside the output for GCC, the working directory for
+    /// Clang.
+    Plain,
+    /// `-save-temps=cwd`: the working directory.
+    WorkingDirectory,
+    /// `-save-temps=obj`: beside the output.
+    OutputDirectory,
+}
 
 impl State<'_> {
+    /// The bcc command lines that write what `-save-temps` keeps of each C
+    /// source: its preprocessed text, its assembly unless `-S` already asks
+    /// for that, and its object when the command links, so that the program
+    /// is otherwise built as without the option. As in the compilers, each
+    /// stage reads the text the first one saved, not the source, whose headers
+    /// that text may just have overwritten. A file the command's output is
+    /// named after is never overwritten. These runs only repeat what the real
+    /// compile did, so they report no warnings, and leave dependency files to
+    /// it. Standard input names no file to save after.
+    fn saved_temporaries(&self, common: &[OsString], links: bool) -> Vec<Vec<OsString>> {
+        let Some(save_temps) = self.save_temps else {
+            return Vec::new();
+        };
+        let compiles = links
+            || self
+                .stages
+                .iter()
+                .any(|stage| matches!(*stage, "-c" | "-S"));
+        if !compiles || self.syntax_only {
+            return Vec::new();
+        }
+        let stops_at_assembly = self.stages.contains(&"-S");
+        let mut steps = Vec::new();
+        for input in &self.inputs {
+            if input.dropped || input.kind != InputKind::C || input.path == "-" {
+                continue;
+            }
+            let path = Path::new(&input.path);
+            let base = self.saved_temporary_base(path, save_temps, links);
+            let named = |extension: &str| {
+                let mut name = base.clone();
+                name.push(".");
+                name.push(extension);
+                name
+            };
+            let kept = |name: &OsString| {
+                let name = resolved_output(Path::new(name));
+                !self
+                    .outputs
+                    .iter()
+                    .map(Path::new)
+                    .chain(self.inputs.iter().map(|input| Path::new(&input.path)))
+                    .any(|taken| resolved_output(taken) == name)
+            };
+            let text = named("i");
+            let mut read = input.path.clone();
+            let arguments = |read: &OsStr| {
+                let mut step = common.to_vec();
+                for argument in
+                    without_dependency_options(self.arguments(Inputs::One(input.at), false))
+                {
+                    if argument == input.path {
+                        // A later `-x c` must not preprocess the saved text
+                        // again, which would apply `-include` twice.
+                        if read != input.path {
+                            step.extend(["-x".into(), "cpp-output".into()]);
+                        }
+                        step.push(read.to_owned());
+                    } else {
+                        step.push(argument);
+                    }
+                }
+                step.push("-w".into());
+                step
+            };
+            let output = |name: &OsString| {
+                let mut option = OsString::from("--output=");
+                option.push(name);
+                option
+            };
+            let preprocessed = path.extension().is_some_and(|extension| extension == "i");
+            if !preprocessed && kept(&text) {
+                let mut step = arguments(&read);
+                step.push("-E".into());
+                step.push(output(&text));
+                steps.push(step);
+                read = text;
+            }
+            let mut stages = Vec::new();
+            if !stops_at_assembly {
+                stages.push(("-S", named("s")));
+            }
+            if links {
+                stages.push(("-c", named("o")));
+            }
+            for (stage, name) in stages {
+                if kept(&name) {
+                    let mut step = arguments(&read);
+                    step.push(stage.into());
+                    step.push(output(&name));
+                    steps.push(step);
+                }
+            }
+        }
+        steps
+    }
+
+    /// The name, without its extension, `-save-temps` gives what it keeps of
+    /// `input`. GCC follows the output: `o/x.i` for `-c g.c -o o/x.o`, and
+    /// `o/p.v1-g.i` for a program `o/p.v1`, or `a-g.i` when it has no name, and
+    /// `-save-temps=cwd` leaves the directory out. Clang follows the input:
+    /// `g.i`, in the output's directory under `-save-temps=obj`.
+    fn saved_temporary_base(&self, input: &Path, save_temps: SaveTemps, links: bool) -> OsString {
+        let stem = input.file_stem().unwrap_or(input.as_os_str());
+        let output = self
+            .outputs
+            .first()
+            .map(Path::new)
+            .filter(|output| *output != Path::new("-"));
+        if self.compiler == Compiler::Clang {
+            return match (save_temps, output.and_then(Path::parent)) {
+                | (SaveTemps::OutputDirectory, Some(directory)) =>
+                    directory.join(stem).into_os_string(),
+                | _ => stem.to_owned(),
+            };
+        }
+        let base = match (links, output) {
+            | (false, Some(output)) => output.with_extension(""),
+            | (false, None) => PathBuf::from(stem),
+            | (true, output) => {
+                let program = output.unwrap_or(Path::new("a"));
+                let mut name = program.file_name().unwrap_or_default().to_owned();
+                name.push("-");
+                name.push(stem);
+                program.with_file_name(name)
+            },
+        };
+        if save_temps == SaveTemps::WorkingDirectory {
+            base.file_name().unwrap_or_default().to_owned()
+        } else {
+            base.into_os_string()
+        }
+    }
+
     /// Translates one argument, reading its operand from `rest`. Returns
     /// the plan of a query that ends the command line, such as
     /// `--version`.
@@ -731,17 +938,22 @@ impl State<'_> {
             return self.argument(OsStr::new("-Wextra"), rest);
         }
         let clang = self.compiler == Compiler::Clang;
+        // Both compilers take `--print-` for `-print-`.
+        let queried = text
+            .strip_prefix('-')
+            .filter(|rest| rest.starts_with("-print-"))
+            .unwrap_or(text);
         // `-print-file-name=NAME`: the library or start file the link would
         // use. `-print-prog-name=NAME`: the bundled tool bcc would run.
-        if let Some(name) = text.strip_prefix("-print-file-name=") {
+        if let Some(name) = queried.strip_prefix("-print-file-name=") {
             self.queries.push(Query::FileName(name.into()));
             return None;
         }
-        if let Some(name) = text.strip_prefix("-print-prog-name=") {
+        if let Some(name) = queried.strip_prefix("-print-prog-name=") {
             self.queries.push(Query::ProgramName(name.into()));
             return None;
         }
-        let query = match text {
+        let query = match queried {
             | "-dumpmachine" => Some(Query::DumpMachine),
             | "-dumpversion" => Some(Query::DumpVersion),
             | "-dumpfullversion" if !clang => Some(Query::DumpFullVersion),
@@ -752,6 +964,11 @@ impl State<'_> {
             | "-print-target-triple" | "-print-effective-triple" if clang => Some(Query::Triple),
             | "-print-multiarch" if !clang => Some(Query::Multiarch),
             | "-print-sysroot" if !clang => Some(Query::Sysroot),
+            | "-print-multi-lib" => Some(Query::MultiLib),
+            | "-print-multi-directory" => Some(Query::MultiDirectory),
+            | "-print-multi-os-directory" if !clang => Some(Query::MultiOsDirectory),
+            | "-print-resource-dir" if clang => Some(Query::ResourceDirectory),
+            | "-print-runtime-dir" if clang => Some(Query::RuntimeDirectory),
             | _ => None,
         };
         if let Some(query) = query {
@@ -767,10 +984,11 @@ impl State<'_> {
             self.queries.push(query);
             return None;
         }
-        match text {
+        match queried {
             // Clang knows GCC's query and refuses it; it does not know
             // `-print-sysroot` at all.
-            | "-print-multiarch" => self.error(format_args!("unsupported option '{text}'")),
+            | "-print-multiarch" | "-print-multi-os-directory" =>
+                self.error(format_args!("unsupported option '{text}'")),
             // Clang ignores GCC's full version, unused.
             | "-dumpfullversion" => self
                 .positions
@@ -1423,10 +1641,19 @@ impl State<'_> {
             self.out.push(text.into());
             return;
         }
-        if IGNORED_OPTIONS.contains(&text)
-            || text.starts_with("-g")
-            || text.starts_with("-save-temps")
-        {
+        if text == "-save-temps" {
+            self.save_temps = Some(SaveTemps::Plain);
+            return;
+        }
+        if text == "-save-temps=cwd" {
+            self.save_temps = Some(SaveTemps::WorkingDirectory);
+            return;
+        }
+        if text == "-save-temps=obj" {
+            self.save_temps = Some(SaveTemps::OutputDirectory);
+            return;
+        }
+        if IGNORED_OPTIONS.contains(&text) || text.starts_with("-g") {
             return;
         }
         if text.starts_with("-Wa,") {
@@ -1577,17 +1804,24 @@ impl State<'_> {
             | Query::DumpFullVersion => format!("{}\n", version::GCC_VERSION),
             | Query::Help => help(personality, &self.invocation.name),
             | Query::Version => version::banner(personality, &self.invocation.name, target),
-            | Query::SearchDirectories => format!(
-                "install: {}\nprograms: ={}\nlibraries: =/usr/local/lib:/usr/lib/{}:/usr/lib\n",
-                version::program_name("bcc"),
-                version::program_name("ld"),
-                version::gcc_machine(target)
-            ),
+            | Query::SearchDirectories => self.search_directories(personality, target),
             // GCC and Clang print a file they do not find as named.
             | Query::FileName(name) => format!("{}\n", self.library_file(name, target)),
-            | Query::LibgccFileName => "libgcc.a\n".into(),
+            | Query::LibgccFileName => format!("{}\n", self.library_file("libgcc.a", target)),
             | Query::ProgramName(name) => format!("{}\n", version::program_name(name)),
             | Query::Multiarch => format!("{}\n", version::gcc_machine(target)),
+            | Query::MultiLib if personality == Personality::Gcc => ".;\n".into(),
+            | Query::MultiLib => ".;@m64\n".into(),
+            | Query::MultiDirectory => ".\n".into(),
+            | Query::MultiOsDirectory => "../lib\n".into(),
+            | Query::ResourceDirectory => format!(
+                "{}\n",
+                bundled_clang_answer("-print-resource-dir", target).unwrap_or_default()
+            ),
+            | Query::RuntimeDirectory => format!(
+                "{}\n",
+                bundled_clang_answer("-print-runtime-dir", target).unwrap_or_default()
+            ),
             // GCC prints nothing when no root is selected.
             | Query::Sysroot => self
                 .sysroot
@@ -1595,6 +1829,38 @@ impl State<'_> {
                 .map(|sysroot| format!("{}\n", sysroot.to_string_lossy()))
                 .unwrap_or_default(),
         }
+    }
+
+    /// What `-print-search-dirs` prints: GCC's `install:` line, which Clang
+    /// has not, then where the programs and libraries are found, starting
+    /// with the directory holding libgcc when the system has one.
+    fn search_directories(&self, personality: Personality, target: Target) -> String {
+        let directory_of = |file: &str| {
+            Path::new(file)
+                .parent()
+                .map(|directory| directory.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let install = (personality == Personality::Gcc).then(|| {
+            let directory = std::env::current_exe()
+                .ok()
+                .and_then(|program| program.parent().map(Path::to_path_buf))
+                .map(|directory| directory.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!("install: {directory}/\n")
+        });
+        let libgcc = self.library_file("libgcc.a", target);
+        let libgcc = if libgcc == "libgcc.a" {
+            String::new()
+        } else {
+            format!("{}:", directory_of(&libgcc))
+        };
+        format!(
+            "{}programs: ={}\nlibraries: ={libgcc}/usr/local/lib:/usr/lib/{}:/usr/lib\n",
+            install.unwrap_or_default(),
+            directory_of(&version::program_name("ld")),
+            version::gcc_machine(target)
+        )
     }
 
     /// The path the bundled clang finds for the library or start file
@@ -1624,6 +1890,51 @@ impl State<'_> {
         self.errors += 1;
         self.invocation.error(message);
     }
+}
+
+/// What the bundled Clang prints for `query`, when it runs and succeeds.
+fn bundled_clang_answer(query: &str, target: Target) -> Option<String> {
+    let output = std::process::Command::new(version::program_name("clang"))
+        .arg(format!("--target={}", target.triple()))
+        .arg(query)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_owned(),
+    )
+}
+
+/// `path` as the file it names, however it is spelled: from the root, through
+/// its directory when the file does not exist yet.
+fn resolved_output(path: &Path) -> PathBuf {
+    if let Ok(full) = std::fs::canonicalize(path) {
+        return full;
+    }
+    let directory = match path.parent() {
+        | Some(parent) if !parent.as_os_str().is_empty() => parent,
+        | _ => Path::new("."),
+    };
+    match (std::fs::canonicalize(directory), path.file_name()) {
+        | (Ok(directory), Some(name)) => directory.join(name),
+        | _ => path.to_path_buf(),
+    }
+}
+
+/// `arguments` without the options that write a dependency file.
+fn without_dependency_options(arguments: Vec<OsString>) -> Vec<OsString> {
+    let mut kept = Vec::with_capacity(arguments.len());
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        match argument.to_str() {
+            | Some("-MD" | "-MMD") => (),
+            | Some("-MF" | "-MT" | "-MQ") => drop(arguments.next()),
+            | _ => kept.push(argument),
+        }
+    }
+    kept
 }
 
 /// `--help`.

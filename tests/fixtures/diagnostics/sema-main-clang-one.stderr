@@ -1,8 +1,4 @@
 sema-main-clang-one.c:1:5: warning: only one parameter on 'main' declaration [-Wmain]
-  |
-1 | int main(int argc) { return 0; }
-  |     ^^^^ nonportable declaration of main
-  |
-  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
-
+    1 | int main(int argc) { return 0; }
+      |     ^~~~
 1 warning generated.

@@ -47,11 +47,14 @@ use crate::{
     translation_phases::{
         SourceVectors,
         parsing::{
+            ExtendedType,
             SpecifierExtension,
             SpecifierExtensionKind,
+            SyntaxOperand,
             declaration_syntax::{
                 DeclarationSpecifiers,
-                StructOrUnionSpecifier,
+                Declarator,
+                DirectDeclarator,
                 TypeQualifiers,
                 TypeSpecifiers,
             },
@@ -100,6 +103,8 @@ struct Usage {
     inline:     bool,
     /// A function declared GCC's `weakref`, which is defined elsewhere.
     weakref:    bool,
+    /// What the name's type says, as [`Analyzer::type_mark`] reads it.
+    marked:     bool,
 }
 
 /// How a discarded assignment writes the identifier expression it names.
@@ -146,8 +151,10 @@ pub(super) struct UnusedState<'s> {
     /// The commas that separate an attribute's arguments, which bcc parses as
     /// one expression: their left operands are arguments, not discarded.
     separators: ArenaMap<'s, usize, ()>,
-    /// Tags declared `unused`, whose variables both compilers exempt.
-    exempt_tags: ArenaMap<'s, StringCacheId, ()>,
+    /// Tags declared `unused`: true for a definition that says so, which is
+    /// the only one GCC's type carries; false for a forward declaration, which
+    /// Clang's definition inherits.
+    unused_tags: ArenaMap<'s, usize, bool>,
     /// Where each scope that can hold a variable ends, kept only under GCC's
     /// rules in a unit with diagnostic pragmas: see
     /// [`Analyzer::note_scope_end`].
@@ -193,7 +200,7 @@ impl<'s> UnusedState<'s> {
             writes: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             statement_expression_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             separators: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            exempt_tags: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            unused_tags: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             scope_ends: (pragmas && configuration.compiler_identity() == CompilerIdentity::Gcc)
                 .then(|| ArenaMap::with_hasher_in(FxBuildHasher, scratch)),
         }
@@ -466,32 +473,107 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Exempts the declaration of `binding` when its specifiers name a type
-    /// whose typedef is `unused`, as both compilers do.
+    /// Records what the declaration of `binding` takes from its type, when the
+    /// declarator derives nothing from what its specifiers name: `U x` and
+    /// `U (x)`, not `U *x` or `U x[2]`.
+    ///
+    /// GCC keeps `unused` on the type (`TREE_USED`), which a typedef or a tag's
+    /// definition sets, a later typedef and `__typeof__` copy, and a variable
+    /// takes as being used and read, at file scope too. No parameter does.
+    /// GCC: `set_underlying_type` in `c-common.cc`, `grokdeclarator` in
+    /// `c-decl.cc`.
+    ///
+    /// Clang looks at a local variable when it reports one, in
+    /// [`Self::report_unused_variable`]: at the typedef its type names, the
+    /// last one and no other, and at a tag. Clang: `ShouldDiagnoseUnusedDecl`.
     pub(super) fn note_declared_type(
         &mut self,
         binding: usize,
         spec: DeclarationSpecifiers<'tu>,
-        kind: BindingKind,
+        declarator: Declarator<'tu>,
+        (kind, linkage): (BindingKind, Linkage),
         name: Identifier,
     ) {
         if kind == BindingKind::Function && spec.function_specifiers.is_inline {
             self.unused.file_scope.entry(name.name).or_default().inline = true;
         }
-        if let TypeSpecifiers::StructOrUnion(record) = spec.type_specifiers
-            && self.attribute_chain_exempts(record.attributes)
-        {
-            self.unused.variable(binding).exempt = true;
+        let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
+        let marked = match kind {
+            // C99 §6.7.7p3: a typedef declares no new type, and GCC merges a
+            // redeclared one into the first.
+            | BindingKind::Typedef =>
+                self.lookup(Namespace::Ordinary, name.name)
+                    .is_some_and(|prior| prior.scope == self.scope && self.is_marked(prior.binding))
+                    || (gcc && Self::derives_nothing(Some(declarator)) && self.type_mark(spec)),
+            | BindingKind::Object =>
+                Self::derives_nothing(Some(declarator)) && self.type_mark(spec),
+            | _ => false,
+        };
+        if !marked {
+            return;
         }
-        if let TypeSpecifiers::TypedefName(typedef) = spec.type_specifiers
-            && let Some(entry) = self.lookup(Namespace::Ordinary, typedef.name)
-            && self
-                .unused
-                .variables
-                .get(entry.binding)
-                .is_some_and(|usage| usage.exempt)
-        {
-            self.unused.variable(binding).exempt = true;
+        let usage = self.unused.variable(binding);
+        usage.marked = true;
+        if gcc && kind == BindingKind::Object {
+            usage.exempt = true;
+            if linkage == Linkage::Internal {
+                self.unused.file_scope.entry(name.name).or_default().exempt = true;
+            }
+        }
+    }
+
+    /// Whether `declarator`'s type is the one its specifiers give.
+    /// C99: §6.7.5p4-p6, p. 115; PDF p. 127.
+    fn derives_nothing(declarator: Option<Declarator<'tu>>) -> bool {
+        let Some(declarator) = declarator else {
+            return true;
+        };
+        declarator.pointer.levels.is_empty()
+            && declarator.kind.iter().all(|direct| match *direct {
+                | DirectDeclarator::Parenthesized(inner) =>
+                    Self::derives_nothing(Some(inner.declarator)),
+                | DirectDeclarator::Identifier(_)
+                | DirectDeclarator::Attributes(_)
+                | DirectDeclarator::AsmLabel(_)
+                | DirectDeclarator::MsModifier(..) => true,
+                | _ => false,
+            })
+    }
+
+    /// Whether the type `spec` names carries `unused`: for GCC, by `TREE_USED`
+    /// at this point of the unit, and for Clang by its typedef's own attribute.
+    /// `__typeof__` names what its operand does. Of an expression's type only
+    /// a plain name is read.
+    /// C23: §6.7.3.6, p. 117; PDF p. 130.
+    fn type_mark(&mut self, spec: DeclarationSpecifiers<'tu>) -> bool {
+        let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
+        match spec.type_specifiers {
+            | TypeSpecifiers::TypedefName(typedef) => self
+                .lookup(Namespace::Ordinary, typedef.name)
+                .is_some_and(|entry| self.is_marked(entry.binding)),
+            | TypeSpecifiers::StructOrUnion(record) if gcc => self.tag_carries_unused(
+                record.identifier,
+                record.struct_declaration_list.is_some(),
+                record.attributes,
+            ),
+            | TypeSpecifiers::Enum(enumeration) if gcc => self.tag_carries_unused(
+                enumeration.name,
+                enumeration.enumeration_list.is_some(),
+                enumeration.attributes,
+            ),
+            | TypeSpecifiers::Extended(ExtendedType::Typeof { operand, .. }) => match *operand {
+                | SyntaxOperand::Type(name) =>
+                    Self::derives_nothing(name.declarator)
+                        && self.type_mark(name.declaration_specifiers),
+                | SyntaxOperand::Expression(e) => {
+                    let E::Identifier(name) = Self::without_parentheses(e).kind else {
+                        return false;
+                    };
+                    self.lookup(Namespace::Ordinary, name.name)
+                        .is_some_and(|entry| self.is_marked(entry.binding))
+                },
+            },
+            | _ => false,
         }
     }
 
@@ -529,14 +611,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some_and(|usage| usage.weakref)
     }
 
-    /// A structure or union type specifier: one declared `unused` exempts
-    /// its variables, which name it however they like.
-    pub(super) fn note_record_specifier(&mut self, record: &StructOrUnionSpecifier<'tu>) {
-        if let Some(name) = record.identifier
-            && self.attribute_chain_exempts(record.attributes)
-        {
-            _ = self.unused.exempt_tags.insert(name.name, ());
+    /// A tag's specifier: a definition that says `unused` gives its type the
+    /// attribute, and Clang's definition inherits it from a forward
+    /// declaration, which GCC's does not. Once the type is complete, neither
+    /// compiler reads the attribute on a mention of the tag.
+    pub(in crate::translation_phases::semantic_analysis) fn note_tag_attributes(
+        &mut self,
+        tag: usize,
+        attributes: Option<&SpecifierExtension<'tu>>,
+        define: bool,
+    ) {
+        if !self.unused.tracking || !self.attribute_chain_exempts(attributes) {
+            return;
         }
+        if define {
+            _ = self.unused.unused_tags.insert(tag, true);
+        } else if !self.types.tags[tag].complete.get() {
+            _ = self.unused.unused_tags.entry(tag).or_insert(false);
+        }
+    }
+
+    /// `unused` on a typedef, which GCC's type carries by that spelling alone
+    /// (`set_underlying_type` looks for it), and Clang by any.
+    pub(in crate::translation_phases::semantic_analysis) fn note_typedef_attribute(
+        &mut self,
+        binding: usize,
+        name: &str,
+    ) {
+        if name == "unused"
+            || (name == "maybe_unused"
+                && self.context.configuration.compiler_identity() != CompilerIdentity::Gcc)
+        {
+            self.unused.variable(binding).marked = true;
+        }
+    }
+
+    fn is_marked(&self, binding: usize) -> bool {
+        self.unused
+            .variables
+            .get(binding)
+            .is_some_and(|usage| usage.marked)
+    }
+
+    /// Whether GCC's type for a tag's specifier carries `unused` by now.
+    fn tag_carries_unused(
+        &self,
+        name: Option<Identifier>,
+        body: bool,
+        attributes: Option<&SpecifierExtension<'tu>>,
+    ) -> bool {
+        if body {
+            return self.attribute_chain_exempts(attributes);
+        }
+        name.and_then(|name| self.lookup(Namespace::Tag, name.name))
+            .is_some_and(|entry| self.unused.unused_tags.get(&entry.binding) == Some(&true))
     }
 
     fn attribute_chain_exempts(&self, mut chain: Option<&SpecifierExtension<'tu>>) -> bool {
@@ -552,17 +680,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         false
     }
 
-    /// Whether `ty`, or its elements, is a tag declared `unused`.
-    fn type_is_exempt(&self, mut ty: TypeId) -> bool {
+    /// Whether `ty`, or its elements, is a tag Clang's `Tag->hasAttr` finds
+    /// `unused`, however the declaration names it.
+    fn clang_tag_is_unused(&self, mut ty: TypeId) -> bool {
         while let TypeKind::Array(element, _) = self.types.nodes[ty.index] {
             ty = element;
         }
-        match self.types.nodes[ty.index] {
-            | TypeKind::Tag(id) => self.types.tags[id]
-                .name
-                .is_some_and(|name| self.unused.exempt_tags.contains_key(&name)),
-            | _ => false,
-        }
+        matches!(
+            self.types.nodes[ty.index],
+            TypeKind::Tag(id) if self.unused.unused_tags.contains_key(&id)
+        )
     }
 
     /// A parameter's definition binding continues its prototype binding,
@@ -595,10 +722,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | BindingKind::Object => false,
             | _ => return,
         };
-        if data.linkage == Linkage::Internal
-            || self.types.unanalyzed(data.ty)
-            || self.type_is_exempt(data.ty)
-        {
+        if self.types.unanalyzed(data.ty) {
+            return;
+        }
+        if data.linkage == Linkage::Internal {
+            self.report_block_extern(data.kind, name);
             return;
         }
         let usage = *self.unused.variable(binding);
@@ -614,7 +742,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
         // Clang leaves a block-scope `extern` to its own definition, and
         // has nothing to say about an incomplete type.
-        if !gcc && data.linkage == Linkage::External {
+        if !gcc
+            && (data.linkage == Linkage::External
+                || (!parameter && self.clang_tag_is_unused(data.ty)))
+        {
             return;
         }
         let set_only = if gcc {
@@ -625,6 +756,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let rule = if !usage.referenced {
             if parameter {
                 UnusedRule::Parameter
+            } else if usage.marked {
+                // Clang's typedef answers whether it is unused, not whether
+                // it is only set; GCC's has made it used and read by now.
+                return;
             } else {
                 UnusedRule::Variable
             }
@@ -643,6 +778,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             name.source_vectors
         };
         self.unused_rule_read_at(rule, name.source_vectors, Some(name.name), settings_at);
+    }
+
+    /// A block-scope `extern` naming a file-scope `static`: GCC's `pop_scope`
+    /// reports it as it does a local variable, and it stands for the name's
+    /// other reports. Clang reports only the file-scope declaration.
+    /// C99: §6.2.2p4, p. 30; PDF p. 42.
+    fn report_block_extern(&mut self, kind: BindingKind, name: Identifier) {
+        if kind != BindingKind::Object
+            || self.context.configuration.compiler_identity() != CompilerIdentity::Gcc
+        {
+            return;
+        }
+        let usage = self.unused.file_scope.entry(name.name).or_default();
+        if usage.exempt || usage.referenced {
+            return;
+        }
+        usage.referenced = true;
+        let settings_at = self.scope_end_or(self.scope, name.source_vectors);
+        self.unused_rule_read_at(
+            UnusedRule::Variable,
+            name.source_vectors,
+            Some(name.name),
+            settings_at,
+        );
     }
 
     /// Notes that `source`, a compound or `for` statement, ends the scope just
@@ -688,13 +847,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         scope
     }
 
+    /// Whether the end of the unit reports what it left unused. GCC does that
+    /// as it compiles the unit (`check_global_declaration` in `cgraphunit.cc`),
+    /// so not under `-fsyntax-only`. Clang does under either, unless an error
+    /// has been reported (`ActOnEndOfTranslationUnitFragment`).
+    pub(super) fn reports_unused_at_unit_end(&self) -> bool {
+        self.unused.tracking
+            && if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+                !self.context.configuration.syntax_only()
+            } else {
+                self.context.error_count() == 0
+            }
+    }
+
     /// Reports file-scope objects with internal linkage: GCC at the last
     /// declaration, Clang at the first.
     /// C99: §6.2.2p3, p. 30; PDF p. 42.
     pub(super) fn report_unused_file_scope(&mut self) {
-        if !self.unused.tracking {
-            return;
-        }
         let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
         let mut sites: ArenaMap<'_, StringCacheId, usize> =
             ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
@@ -727,7 +896,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .get(&data.name.name)
                 .copied()
                 .unwrap_or_default();
-            if usage.exempt || self.types.unanalyzed(data.ty) || self.type_is_exempt(data.ty) {
+            if usage.exempt || self.types.unanalyzed(data.ty) {
                 continue;
             }
             let site = data.name.source_vectors;
@@ -767,9 +936,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `inline` one alone and counts no reference from its own body, and
     /// Clang leaves one alone only outside the main file.
     pub(super) fn report_unused_function(&mut self, name: Identifier, site: SourceVectors) {
-        if !self.unused.tracking {
-            return;
-        }
         let usage = self
             .unused
             .file_scope

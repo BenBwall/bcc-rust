@@ -63,6 +63,8 @@ pub(crate) struct EntityAttributes<'tu> {
     /// GNU `weak`: a definition yields to a strong one at link time; an
     /// undefined declaration may stay undefined, with a null address.
     pub(crate) weak:               bool,
+    /// GCC's `weakref`, whose target may be missing at run time.
+    pub(crate) weak_reference:     bool,
     /// GNU `section("name")`, from the declaration that wrote it.
     pub(crate) section:            Option<&'tu str>,
     /// GNU `used`: emit the definition even if nothing references it.

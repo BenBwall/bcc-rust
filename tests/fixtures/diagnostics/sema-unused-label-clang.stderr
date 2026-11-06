@@ -1,8 +1,4 @@
 sema-unused-label-clang.c:2:5: warning: unused label 'unused' [-Wunused-label]
-  |
-2 |     unused:
-  |     ^^^^^^ never jumped to
-  |
-  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+    2 |     unused:
+      |     ^~~~~~
 1 warning generated.

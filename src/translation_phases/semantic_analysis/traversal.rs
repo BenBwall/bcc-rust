@@ -459,7 +459,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(condition) = condition {
                     self.dead_statement_arm(s, condition, true, Some(then_statement));
                 }
-                self.work.push(Work::Condition(condition_expression, false));
+                self.work.push(Work::Condition(
+                    condition_expression,
+                    false,
+                    s.source_vectors,
+                ));
                 if let Some(condition) = condition {
                     self.begin_condition_references(condition);
                     self.branch_condition(condition);
@@ -499,7 +503,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )));
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
-                self.work.push(Work::Condition(condition_expression, true));
+                self.work.push(Work::Condition(
+                    condition_expression,
+                    true,
+                    s.source_vectors,
+                ));
                 if let Some(condition) = super::statements::slot_expression(condition_expression) {
                     self.begin_condition_references(condition);
                 }
@@ -525,14 +533,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.functions.dead,
                 )));
                 if matches!(s.kind, S::DoWhile { .. }) {
-                    self.work.push(Work::Condition(condition_expression, false));
+                    self.work.push(Work::Condition(
+                        condition_expression,
+                        false,
+                        s.source_vectors,
+                    ));
                     self.expression_slot(condition_expression);
                     self.work
                         .push(Work::StatementWork(W::LoopBody(s, body_statement)));
                 } else {
                     self.work
                         .push(Work::StatementWork(W::LoopBody(s, body_statement)));
-                    self.work.push(Work::Condition(condition_expression, false));
+                    self.work.push(Work::Condition(
+                        condition_expression,
+                        false,
+                        s.source_vectors,
+                    ));
                     self.expression_slot(condition_expression);
                 }
             },
@@ -559,7 +575,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.expression_slot(e);
                 }
                 if let Some(e) = f.condition_expression {
-                    self.work.push(Work::Condition(e, false));
+                    self.work.push(Work::Condition(e, false, s.source_vectors));
                     self.expression_slot(e);
                 }
                 if let Some(initializer) = f.initializer {

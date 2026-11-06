@@ -314,6 +314,14 @@ impl Context<'_> {
             .unwrap_or_else(|| self.first_source_vector(source))
     }
 
+    /// Whether a macro expansion produced the first token of `source`, from
+    /// its replacement list or from an argument: GCC's
+    /// `from_macro_expansion_at`. `source` must not be empty.
+    pub(crate) fn from_macro_expansion(&self, source: SourceVectors) -> bool {
+        let (arena, start) = SourceArena::decode(source);
+        self.expansion_starts[arena as usize].get(start).is_some()
+    }
+
     /// Whether a macro's replacement list, not its argument or the file,
     /// wrote the first token of `source`. `source` must not be empty.
     pub(crate) fn written_by_macro_body(&self, source: SourceVectors) -> bool {

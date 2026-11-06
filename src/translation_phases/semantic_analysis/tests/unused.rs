@@ -381,6 +381,236 @@ fn each_compiler_counts_uses_its_own_way() {
     }
 }
 
+/// `unused` on a type, against GCC 14.2 and Clang 23.1.1: GCC's variable takes
+/// it from the type (`TREE_USED`), at file scope too, as long as its declarator
+/// derives nothing. Clang looks only at a local variable, at its last typedef
+/// or its tag, whose array it looks through. A parameter gets nothing from
+/// either.
+#[test]
+fn unused_on_a_type_reaches_the_variable() {
+    const U: &str = "typedef int U __attribute__((unused)); ";
+    const T: &str = "struct __attribute__((unused)) T { int a; }; ";
+    let (file, constant) = (&[U::GccFileObject][..], &[U::GccFileConstant][..]);
+    let local = &[U::Variable][..];
+    for (source, in_gcc, in_clang) in
+        [
+            // The finding: the file-scope record, by typedef and by anonymous
+            // tag.
+            (format!("{U}static U x;"), &[][..], local),
+            (
+                "static struct __attribute__((unused)) { int a; } x;".to_owned(),
+                &[],
+                local,
+            ),
+            // Every spelling of the typedef and every path from it.
+            (
+                "typedef int __attribute__((unused)) U; static U x;".to_owned(),
+                &[],
+                local,
+            ),
+            (
+                "__attribute__((unused)) typedef int U; static U x;".to_owned(),
+                &[],
+                local,
+            ),
+            (format!("{U}typedef U V; static V x;"), &[], local),
+            (
+                format!("{U}static const U x = 1;"),
+                &[],
+                &[U::ClangFileConstant],
+            ),
+            (format!("{U}static U (x);"), &[], local),
+            (format!("{U}static __typeof__(U) x;"), &[], local),
+            (format!("{U}U y; static __typeof__(y) x;"), &[], local),
+            (format!("{U}static U x; static int x;"), &[], local),
+            (format!("{U}static int x; static U x;"), &[], local),
+            (format!("{U}typedef int U; static U x;"), &[], local),
+            (
+                "typedef int *V __attribute__((unused)); static V x;".to_owned(),
+                &[],
+                local,
+            ),
+            // What a declarator derives no longer carries it.
+            (format!("{U}static U *x;"), file, local),
+            (format!("{U}static U x[2];"), file, local),
+            (format!("{U}typedef U *V; static V x;"), file, local),
+            (
+                "static struct __attribute__((unused)) { int a; } *x;".to_owned(),
+                file,
+                local,
+            ),
+            (
+                "static struct __attribute__((unused)) { int a; } x[2];".to_owned(),
+                file,
+                local,
+            ),
+            // Tags and enumerations, whose definition alone gives it to GCC's
+            // type.
+            (format!("{T}static struct T x;"), &[], local),
+            (
+                format!("{T}static const struct T x = {{1}};"),
+                &[],
+                &[U::ClangFileConstant],
+            ),
+            (
+                "enum __attribute__((unused)) E { A }; static enum E x;".to_owned(),
+                &[],
+                local,
+            ),
+            (
+                "static enum __attribute__((unused)) { A } x;".to_owned(),
+                &[],
+                local,
+            ),
+            (
+                "struct __attribute__((unused)) T; struct T { int a; }; static struct T x;"
+                    .to_owned(),
+                file,
+                local,
+            ),
+            (
+                "struct T { int a; }; static struct __attribute__((unused)) T x;".to_owned(),
+                file,
+                local,
+            ),
+            (
+                "typedef struct T T; struct T { int a; } __attribute__((unused)); static T x;"
+                    .to_owned(),
+                file,
+                local,
+            ),
+            // A tag of the same name elsewhere is another type.
+            (
+                format!("{T}void f(void) {{ struct T {{ int b; }} x; }}"),
+                local,
+                local,
+            ),
+            (
+                "void f(void) { struct __attribute__((unused)) T { int a; } y; } static struct T \
+                 {              int b; } x;"
+                    .to_owned(),
+                file,
+                local,
+            ),
+            // A spelling GCC's typedef does not read.
+            (
+                "[[maybe_unused]] typedef int U; static U x;".to_owned(),
+                file,
+                local,
+            ),
+            (
+                "[[maybe_unused]] typedef int U; void f(void) { U x; }".to_owned(),
+                local,
+                &[],
+            ),
+            // Locals.
+            (format!("{U}void f(void) {{ U x; }}"), &[], &[]),
+            (format!("{U}void f(void) {{ U *x; }}"), local, local),
+            (format!("{U}void f(void) {{ U x[2]; }}"), local, local),
+            (
+                format!("{U}typedef U V; void f(void) {{ V x; }}"),
+                &[],
+                local,
+            ),
+            (
+                format!("{U}void f(void) {{ U x; x = 1; }}"),
+                &[],
+                &[U::ButSetVariable],
+            ),
+            (format!("{T}void f(void) {{ struct T x[2]; }}"), local, &[]),
+            (format!("{T}void f(void) {{ struct T *x; }}"), local, local),
+            (
+                format!("{T}void f(void) {{ struct T x[2]; x[0].a = 1; }}"),
+                &[U::ButSetVariable],
+                &[],
+            ),
+            (
+                "enum __attribute__((unused)) E { A }; void f(void) { enum E x; x = A; }"
+                    .to_owned(),
+                &[],
+                &[],
+            ),
+            (
+                "struct __attribute__((unused)) T; struct T { int a; }; void f(void) { struct T \
+                 x; }"
+                    .to_owned(),
+                local,
+                &[],
+            ),
+            // Parameters.
+            (
+                format!("{U}void f(U a) {{}}"),
+                &[U::Parameter],
+                &[U::Parameter],
+            ),
+            (
+                format!("{T}void f(struct T a) {{}}"),
+                &[U::Parameter],
+                &[U::Parameter],
+            ),
+        ]
+    {
+        assert_eq!(rules(&source, gcc()), in_gcc, "GCC: {source}");
+        assert_eq!(rules(&source, clang()), in_clang, "Clang: {source}");
+    }
+    assert_eq!(rules("static const int x = 1;", gcc()), constant);
+}
+
+/// GCC reports what the end of a unit leaves unused as it compiles the unit,
+/// and Clang whenever no error has been reported; each of them also reports
+/// `static void f(void);` as it pops the file scope, and GCC a local `extern`.
+#[test]
+fn end_of_unit_reports_follow_each_compiler() {
+    let syntax_only = || gcc().with_syntax_only(true);
+    for source in [
+        "static int x;",
+        "static const int x = 1;",
+        "static void f(void) {}",
+        "static int x; static int g(void) { return x; }",
+    ] {
+        assert_ne!(rules(source, gcc()), [], "{source}");
+        assert_eq!(rules(source, syntax_only()), [], "{source}");
+        assert_ne!(rules(source, clang()), [], "{source}");
+        assert_ne!(
+            rules(source, clang().with_syntax_only(true)),
+            [],
+            "{source}"
+        );
+    }
+    // Local reports stay, and a label's, value's or parameter's.
+    for (source, expected) in [
+        ("void f(void) { int a; }", U::Variable),
+        ("void f(void) { static int a; }", U::Variable),
+        ("void f(void) { int a; a = 1; }", U::ButSetVariable),
+        ("void f(int a) {}", U::Parameter),
+        ("static int x; void f(void) { extern int x; }", U::Variable),
+    ] {
+        assert_eq!(rules(source, syntax_only()), [expected], "{source}");
+    }
+    // A block-scope `extern` stands for the name's other reports, once.
+    for source in [
+        "static int x; void f(void) { extern int x; }",
+        "static int x; void f(void) { extern int x; } void g(void) { extern int x; }",
+        "static int x; void f(void) { extern int x; } int g(void) { return x; }",
+    ] {
+        assert_eq!(rules(source, gcc()), [U::Variable], "{source}");
+    }
+    assert_eq!(
+        rules("static int x; void f(void) { extern int x; }", clang()),
+        [U::Variable]
+    );
+    // Clang drops the end of the unit after an error, which a warning made an
+    // error counts as; GCC's is the same either way.
+    for source in [
+        "static int x; int f(void) { return y; }",
+        "static void g(void) {} int f(void) { return y; }",
+    ] {
+        assert_eq!(rules(source, clang()), [], "{source}");
+        assert_ne!(rules(source, gcc()), [], "{source}");
+        assert_eq!(rules(source, syntax_only()), [], "{source}");
+    }
+}
+
 /// Clang leaves an expression a macro's body wrote alone; its argument is the
 /// user's own.
 #[test]

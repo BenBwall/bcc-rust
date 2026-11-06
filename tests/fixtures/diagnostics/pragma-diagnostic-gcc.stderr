@@ -1,76 +1,33 @@
 pragma-diagnostic-gcc.c:7:5: warning: `LOUD` is not defined; it evaluates to 0
-  |
-7 | #if LOUD
-  |     ^^^^ not a macro
-  |
-  = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
-  = help: use `defined(LOUD)` to test whether it is defined
-
+    7 | #if LOUD
+      |     ^~~~
 pragma-diagnostic-gcc.c:11:5: error: `PROMOTED` is not defined; it evaluates to 0
-   |
-11 | #if PROMOTED
-   |     ^^^^^^^^ not a macro
-   |
-   = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
-   = help: use `defined(PROMOTED)` to test whether it is defined
-
+   11 | #if PROMOTED
+      |     ^~~~~~~~
 pragma-diagnostic-gcc.c:14:5: warning: `RESTORED` is not defined; it evaluates to 0
-   |
-14 | #if RESTORED
-   |     ^^^^^^^^ not a macro
-   |
-   = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
-   = help: use `defined(RESTORED)` to test whether it is defined
-
+   14 | #if RESTORED
+      |     ^~~~~~~~
 pragma-diagnostic-gcc.c:36:32: warning: unknown option after `#pragma GCC diagnostic` kind [-Wpragmas]
-   |
-36 | #pragma GCC diagnostic ignored "-Wunknown-escape-sequence"
-   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no such warning option
-
+   36 | #pragma GCC diagnostic ignored "-Wunknown-escape-sequence"
+      |                                ^~~~~~~~~~~~~~~~~~~~~~~~~~~
 pragma-diagnostic-gcc.c:37:29: warning: unknown escape sequence `\q` [-Wunknown-escape-sequence]
-   |
-37 | const char quiet_escape[] = "\q";
-   |                             ^^^^ contains an escape C99 does not define
-   |
-   = note: C99 §6.4.4.4: the escapes are `\'`, `\"`, `\?`, `\\`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, octal `\ooo`, hexadecimal `\xhh`, and universal `\uXXXX` or `\UXXXXXXXX`
-   = help: it stands for `q`; write `\\` for a backslash
-
+   37 | const char quiet_escape[] = "\q";
+      |                             ^~~~
 pragma-diagnostic-gcc.c:38:32: warning: unknown option after `#pragma GCC diagnostic` kind [-Wpragmas]
-   |
-38 | #pragma GCC diagnostic warning "-Wunknown-escape-sequence"
-   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no such warning option
-
+   38 | #pragma GCC diagnostic warning "-Wunknown-escape-sequence"
+      |                                ^~~~~~~~~~~~~~~~~~~~~~~~~~~
 pragma-diagnostic-gcc.c:39:28: warning: unknown escape sequence `\q` [-Wunknown-escape-sequence]
-   |
-39 | const char loud_escape[] = "\q";
-   |                            ^^^^ contains an escape C99 does not define
-   |
-   = note: C99 §6.4.4.4: the escapes are `\'`, `\"`, `\?`, `\\`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, octal `\ooo`, hexadecimal `\xhh`, and universal `\uXXXX` or `\UXXXXXXXX`
-   = help: it stands for `q`; write `\\` for a backslash
-
+   39 | const char loud_escape[] = "\q";
+      |                            ^~~~
 pragma-diagnostic-gcc.c:43:2: error: #warning promoted
-   |
-43 | #warning promoted
-   |  ^^^^^^^ `#warning` directive
-
+   43 | #warning promoted
+      |  ^~~~~~~
 pragma-diagnostic-gcc.c:24:1: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
-   |
-24 | DEFINED_QUIET
-   | ^^^^^^^^^^^^^ pointer constraint violation
-   |
-   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
-
+   24 | DEFINED_QUIET
+      | ^~~~~~~~~~~~~
 pragma-diagnostic-gcc.c:32:23: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
-   |
-32 | char *after_wrapped = 4;
-   |                       ^ pointer constraint violation
-   |
-   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
-
+   32 | char *after_wrapped = 4;
+      |                       ^
 pragma-diagnostic-twice.h:1:15: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
-  |
-1 | char *twice = 1;
-  |               ^ pointer constraint violation
-  |
-  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
-
+    1 | char *twice = 1;
+      |               ^

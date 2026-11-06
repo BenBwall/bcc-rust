@@ -243,3 +243,206 @@ fn string_literals_are_not_known_addresses() {
         assert_eq!(pointer_bool_warnings(source, I::Gcc, true), 1, "{source}");
     }
 }
+
+/// GCC's `-Waddress` on a truth value against GCC 14.2 and Clang 23.1.1, from
+/// `maybe_warn_for_null_address`: a member or element of an object whose base
+/// is a constant pointer folds to a constant (`fold_offsetof`), so `offsetof`'s
+/// idiom is silent however it is spelled, and any other address is known.
+#[test]
+fn gcc_address_warning_folds_a_constant_base() {
+    use crate::configuration::CompilerIdentity as I;
+    const S: &str = "struct I { int y; int b[2]; }; struct S { int x; int a[2]; struct I i; \
+                     struct I j[2]; int *q; }; struct S s; struct S *p; int g; int ga[2]; int \
+                     gm[2][2]; void fn(void); int *r; int (*pia)[2]; extern struct S ws \
+                     __attribute__((weak)); _Complex int z; ";
+    let truth = |e: &str| format!("{S}int f(void) {{ return !!({e}); }}");
+    for e in [
+        // The finding, and the arrow it should have matched.
+        "&(*(struct S *)0).x",
+        "&((struct S *)0)->x",
+        // A nested member, an element, an array member that decays.
+        "&(*(struct S *)0).i.y",
+        "&((struct S *)0)->i.y",
+        "&((struct S *)0)->j[1].y",
+        "&(*(struct S *)0).a[1]",
+        "((struct S *)0)->a",
+        "(*(struct S *)0).a",
+        "((struct S *)0)->j[1].b",
+        "&((struct S *)0)[1].x",
+        "((struct S *)0)[0].a",
+        // Any constant, not only null.
+        "&((struct S *)100)->x",
+        "&(*(struct S *)100).x",
+        "&((struct S *)(0 + 0))->x",
+        "&(*(struct S (*)[2])0)[1].x",
+        "&(*(int (*)[2])0)[1]",
+        "*(int (*)[2])0",
+        "&((int *)0)[1]",
+        "&*(int *)0",
+        // A pointer's value.
+        "p",
+        "&*p",
+        "*&p",
+        "&p[0]",
+        "p + 0",
+        "(void *)r",
+        "(*p).q",
+        "&p->q[0]",
+        "pia[0]",
+        "*pia",
+        // A `void *` sum, and an integer.
+        "(void *)(ga + 1)",
+        "(void *)r + 1",
+        "(long)&g",
+        "(long)ga",
+        // No decl: a comma's value, a statement expression.
+        "(0, ga)",
+        "({ ga; })",
+    ] {
+        assert_eq!(pointer_bool_warnings(&truth(e), I::Gcc, true), 0, "{e}");
+    }
+    for e in [
+        // A base that is an object, or a pointer's value.
+        "&s.x",
+        "&s.i.y",
+        "s.a",
+        "&(*p).x",
+        "&p->x",
+        "p->a",
+        "&p->i.y",
+        "&p[1].x",
+        "&((struct S *)&s)->x",
+        "&(*(struct S *)&s).x",
+        "(struct S){0}.a",
+        // Weakness asks about a declaration's own address.
+        "&ws.x",
+        "ws.a",
+        // Elements and sums.
+        "&ga[0]",
+        "&ga[1]",
+        "&ga[g]",
+        "gm[0]",
+        "*gm",
+        "&gm[0][0]",
+        "&(*pia)[0]",
+        "ga + 0",
+        "ga + 1",
+        "&g + 1",
+        "p + 1",
+        "1 + p",
+        "p - 1",
+        "&p[1]",
+        "&p[g]",
+        "(char *)r + 1",
+        "(void *)(r + 1)",
+        // Casts, and what reaches a declaration.
+        "(void *)&g",
+        "(int *)ga",
+        "(void *)fn",
+        "(void *)&ga[1]",
+        "*fn",
+        "**fn",
+        "&*fn",
+        "&*ga",
+        "*&ga",
+        "&__real__ z",
+        "&__imag__ z",
+        "__func__",
+        "&__func__",
+    ] {
+        assert_eq!(pointer_bool_warnings(&truth(e), I::Gcc, true), 1, "{e}");
+    }
+    // Each arm of a conditional.
+    assert_eq!(
+        pointer_bool_warnings(&truth("g ? ga : ga"), I::Gcc, true),
+        2
+    );
+    assert_eq!(pointer_bool_warnings(&truth("g ? ga : r"), I::Gcc, true), 1);
+    // A weak reference's address can be null, and either compiler knows.
+    for source in [
+        "static void h(void) __attribute__((weakref(\"q\"))); int f(void) { return !!h; }",
+        "static void h(void) __attribute__((weakref(\"q\"))); int f(void) { return !!&h; }",
+        "static int z __attribute__((weakref(\"q\"))); int f(void) { return !!&z; }",
+    ] {
+        assert_eq!(pointer_bool_warnings(source, I::Gcc, true), 0, "{source}");
+        assert_eq!(pointer_bool_warnings(source, I::Clang, true), 0, "{source}");
+    }
+    // A label's address, and a cast's truth value.
+    for source in [
+        "int f(void) { L: return !!&&L; }",
+        "int g; int f(void) { return (_Bool)&g; }",
+    ] {
+        assert_eq!(pointer_bool_warnings(source, I::Gcc, true), 1, "{source}");
+        assert_eq!(pointer_bool_warnings(source, I::Clang, true), 0, "{source}");
+    }
+}
+
+/// A macro: GCC's declaration path does not look, and the rest of its warning
+/// asks about the conversion's location. Clang stays out of a macro's body and
+/// away from an argument the body converts.
+#[test]
+fn address_warnings_look_at_macros() {
+    use crate::configuration::CompilerIdentity as I;
+    const P: &str = "struct S { int x; int a[2]; } s, *p; int g; int ga[2]; void \
+                     fn(void);\n#define M(x) (!!(x))\n#define I(x) x\n#define IF(x) if (x) return \
+                     1\n#define D (&s.x)\n#define G (&g)\n";
+    for (body, in_gcc, in_clang) in [
+        // Beside `!!` in a macro's body.
+        ("return M(&s.x);", 0, 0),
+        ("return M(p->a);", 0, 0),
+        ("return M(ga + 1);", 0, 0),
+        ("return M(&g);", 1, 0),
+        ("return M(ga);", 1, 0),
+        ("return M(fn);", 1, 0),
+        // The condition's first token, against the keyword.
+        ("if (D) return 1; return 0;", 0, 0),
+        ("if (G) return 1; return 0;", 1, 0),
+        ("if (!D) return 1; return 0;", 1, 0),
+        ("if (!G) return 1; return 0;", 1, 0),
+        ("IF(&s.x); return 0;", 0, 0),
+        ("IF(&g); return 0;", 1, 0),
+        // An argument the user wrote and nothing in a body converts.
+        ("if (I(&s.x)) return 1; return 0;", 0, 1),
+        ("if (I(&g)) return 1; return 0;", 1, 1),
+    ] {
+        let source = format!("{P}int f(void) {{ {body} }}");
+        assert_eq!(
+            pointer_bool_warnings(&source, I::Gcc, true),
+            in_gcc,
+            "GCC: {body}"
+        );
+        assert_eq!(
+            pointer_bool_warnings(&source, I::Clang, true),
+            in_clang,
+            "Clang: {body}"
+        );
+    }
+}
+
+/// Clang's warning names what is written after `&`, not what is in parentheses
+/// there, and leaves a GNU `?:`'s condition alone.
+#[test]
+fn clang_address_warning_reads_the_operand_as_written() {
+    use crate::configuration::CompilerIdentity as I;
+    const P: &str = "struct S { int x; } s, *p; int g; ";
+    for (e, in_clang) in [
+        ("&g", 1),
+        ("&(g)", 0),
+        ("&s.x", 1),
+        ("&(s.x)", 0),
+        ("&(s).x", 1),
+        ("&p->x", 1),
+        ("&(p->x)", 0),
+    ] {
+        let source = format!("{P}int f(void) {{ return !!{e}; }}");
+        assert_eq!(
+            pointer_bool_warnings(&source, I::Clang, true),
+            in_clang,
+            "{e}"
+        );
+        assert_eq!(pointer_bool_warnings(&source, I::Gcc, true), 1, "{e}");
+    }
+    let source = "int g; int *f(void) { return &g ?: 0; }";
+    assert_eq!(pointer_bool_warnings(source, I::Clang, true), 0);
+    assert_eq!(pointer_bool_warnings(source, I::Gcc, true), 1);
+}

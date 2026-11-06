@@ -174,6 +174,8 @@ pub(crate) struct CompilerConfiguration {
     /// none.
     default_pack: u32,
     suppress_warnings: bool,
+    /// Under `-fsyntax-only`, no code will be generated.
+    syntax_only: bool,
     /// The last of `-fpermissive` (GCC's permerrors are warnings) and
     /// `-fno-permissive` (GCC's C89 permerror warnings are errors too), if
     /// either was given ([`CompilerConfiguration::permerror_default`]).

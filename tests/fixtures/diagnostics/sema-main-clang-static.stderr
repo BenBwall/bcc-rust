@@ -1,8 +1,4 @@
 sema-main-clang-static.c:1:1: warning: 'main' should not be declared static [-Wmain]
-  |
-1 | static int main(void) { return 0; }
-  | ^^^^^^^^^^ nonportable declaration of main
-  |
-  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
-
+    1 | static int main(void) { return 0; }
+      | ^~~~~~~~~~
 1 warning generated.

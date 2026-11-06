@@ -217,6 +217,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     false,
                     s.source_vectors,
                 );
+                self.note_tag_attributes(tag, s.attributes, define);
                 let ty = self.types.intern(TypeKind::Tag(tag));
                 self.values.push(ty);
                 if define {
@@ -281,6 +282,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     s.underlying_type.is_some(),
                     s.source_vectors,
                 );
+                self.note_tag_attributes(tag, s.attributes, define);
                 let ty = self.types.intern(TypeKind::Tag(tag));
                 self.values.push(ty);
                 if define {
@@ -870,7 +872,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         self.check_main_declaration(name, declarator, spec, ty, kind, linkage);
         if self.unused.tracking {
-            self.note_declared_type(self.bindings.len(), spec, kind, name);
+            self.note_declared_type(self.bindings.len(), spec, declarator, (kind, linkage), name);
         }
         let thread = self.thread_storage(spec.extensions);
         if thread && function && !typedef {

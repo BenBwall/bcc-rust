@@ -137,13 +137,23 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     || matches!(attribute.name, "unused" | "maybe_unused"))
                 && let Subject::Function { binding, .. }
                 | Subject::Object { binding, .. }
-                | Subject::Parameter(Some(binding))
-                | Subject::Typedef(Some(binding)) = subject
+                | Subject::Parameter(Some(binding)) = subject
             {
                 self.exempt_from_unused(binding);
             }
+            if self.unused.tracking
+                && let Subject::Typedef(Some(binding)) = subject
+            {
+                self.note_typedef_attribute(binding, attribute.name);
+            }
             if ignored {
                 continue;
+            }
+            if attribute.name == "weakref"
+                && let Subject::Function { binding, .. } | Subject::Object { binding, .. } = subject
+            {
+                let entity = self.entity_of(binding);
+                self.attributes.entity(entity).weak_reference = true;
             }
             match rule {
                 | Rule::CallDiagnostic => self.apply_call_diagnostic(subject, specifier, attribute),
@@ -368,7 +378,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.attributes
             .entities
             .get(&entity)
-            .is_some_and(|attributes| attributes.weak)
+            .is_some_and(|attributes| attributes.weak || attributes.weak_reference)
     }
 
     /// GCC `weak`: external entities only; Clang rejects internal and
@@ -1333,7 +1343,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 );
                 continue;
             }
-            if !request.emitted {
+            // Both compilers resolve an alias as they generate code.
+            if !request.emitted || self.context.configuration.syntax_only() {
                 continue;
             }
             let target = match names.resolve(request.target) {

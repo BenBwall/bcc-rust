@@ -244,6 +244,9 @@ pub(crate) enum SemanticErrorKind {
     UnknownTypedef,
     /// C99: §6.5.1p2, p. 69; PDF p. 81.
     UndeclaredIdentifier,
+    /// [`Self::UndeclaredIdentifier`] outside any function, which GCC words
+    /// differently.
+    UndeclaredOutsideFunction,
     /// Clang-compatible extension, `-Wpredefined-identifier-outside-function`;
     /// C99: §6.4.2.2p1, p. 52; PDF p. 64.
     PredefinedOutsideFunction,
@@ -967,7 +970,7 @@ impl SemanticErrorKind {
             | Self::DllImportDataDefinition => "imported data defined here",
             | Self::DllExportHidden | Self::DllImportVisibility => "visibility conflicts",
             | Self::UnknownTypedef => "not a typedef name in this scope",
-            | Self::UndeclaredIdentifier => "not declared",
+            | Self::UndeclaredIdentifier | Self::UndeclaredOutsideFunction => "not declared",
             | Self::PredefinedOutsideFunction => "used outside a function",
             | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
@@ -1861,7 +1864,7 @@ impl SemanticErrorKind {
                 "C99 §6.8.4.2p3: case constants are converted to the promoted switch type and no \
                  two case values may be equal",
             ),
-            | Self::UndeclaredIdentifier => (
+            | Self::UndeclaredIdentifier | Self::UndeclaredOutsideFunction => (
                 "identifier has no visible declaration",
                 "C99 §6.5.1p2: an identifier expression designates a declared object, function or \
                  enumeration constant",
@@ -2665,7 +2668,8 @@ impl SemanticError {
         }
         let name = context.string_cache.at(self.name?);
         Some(match self.kind {
-            | SemanticErrorKind::UndeclaredIdentifier => (
+            | SemanticErrorKind::UndeclaredIdentifier
+            | SemanticErrorKind::UndeclaredOutsideFunction => (
                 "C2065",
                 format_in!(arena, "'{name}': undeclared identifier"),
             ),
@@ -2691,6 +2695,29 @@ impl SemanticError {
         })
     }
 
+    /// GCC's and Clang's words for an undeclared identifier, in their
+    /// diagnostic formats.
+    fn gnu_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
+        use crate::configuration::DiagnosticFormat as Format;
+        let name = context.string_cache.at(self.name?);
+        match (context.configuration.diagnostic_format(), self.kind) {
+            | (Format::Gcc, SemanticErrorKind::UndeclaredIdentifier) => Some(format_in!(
+                arena,
+                "'{name}' undeclared (first use in this function)"
+            )),
+            | (Format::Gcc, SemanticErrorKind::UndeclaredOutsideFunction) => Some(format_in!(
+                arena,
+                "'{name}' undeclared here (not in a function)"
+            )),
+            | (
+                Format::Clang,
+                SemanticErrorKind::UndeclaredIdentifier
+                | SemanticErrorKind::UndeclaredOutsideFunction,
+            ) => Some(format_in!(arena, "use of undeclared identifier '{name}'")),
+            | _ => None,
+        }
+    }
+
     /// TCC's own words for the diagnostics its users meet most, in TCC's
     /// diagnostic format (TCC mob, `tccgen.c` and `tccpp.c`); other
     /// diagnostics keep bcc's.
@@ -2701,8 +2728,11 @@ impl SemanticError {
         }
         let name = self.name.map(|name| context.string_cache.at(name));
         Some(match (self.kind, name) {
-            | (SemanticErrorKind::UndeclaredIdentifier, Some(name)) =>
-                format_in!(arena, "'{name}' undeclared"),
+            | (
+                SemanticErrorKind::UndeclaredIdentifier
+                | SemanticErrorKind::UndeclaredOutsideFunction,
+                Some(name),
+            ) => format_in!(arena, "'{name}' undeclared"),
             | (SemanticErrorKind::DuplicateDeclaration, Some(name)) =>
                 format_in!(arena, "redeclaration of '{name}'"),
             | (SemanticErrorKind::TypedefRedeclaration, Some(name)) =>
@@ -2863,8 +2893,11 @@ impl ToDiagnostic for SemanticError {
                     .unwrap_or_else(|| format_in!(arena, "-W{group}"));
                 (format_in!(arena, "{text} [{option}]"), true)
             },
-            | (None, None) => match self.tcc_message(context, arena) {
-                | Some(tcc) => (tcc, false),
+            | (None, None) => match self
+                .tcc_message(context, arena)
+                .or_else(|| self.gnu_message(context, arena))
+            {
+                | Some(words) => (words, false),
                 | None => (message, suffixed),
             },
         };

@@ -1040,15 +1040,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut entities = ArenaVec::new_in(self.scratch);
         entities.extend(self.functions.entities.values().copied());
         entities.sort_unstable_by_key(|entity| entity.latest);
+        // These read the errors so far, not those this loop adds.
+        let unit_end_reports = self.reports_unused_at_unit_end();
+        let clang_after_error = self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang
+            && self.context.error_count() != 0;
         for entity in entities {
             let b = self.bindings[entity.latest];
-            if let Some(definition) = entity.definition
+            if unit_end_reports
+                && let Some(definition) = entity.definition
                 && b.linkage == Linkage::Internal
                 && b.kind == BindingKind::Function
             {
                 self.report_unused_function(b.name, definition);
             }
-            if b.linkage == Linkage::Internal
+            if !clang_after_error
+                && b.linkage == Linkage::Internal
                 && entity.definition.is_none()
                 && !self.types.unanalyzed(b.ty)
             {
@@ -1070,7 +1077,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
-        self.report_unused_file_scope();
+        if unit_end_reports {
+            self.report_unused_file_scope();
+        }
         for i in 0..self.definitions.len() {
             let definition = self.definitions[i];
             if matches!(
