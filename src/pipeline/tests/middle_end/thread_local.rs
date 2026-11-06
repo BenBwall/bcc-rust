@@ -754,11 +754,12 @@ fn code_options(flags: &[&str]) -> CodeOptions {
             .iter()
             .filter_map(|flag| Relocation::parse(flag))
             .next_back(),
-        tls_model:  flags
+        tls_model: flags
             .iter()
             .filter_map(|flag| TlsModel::parse(flag.strip_prefix("-ftls-model=")?))
             .next_back()
             .unwrap_or_default(),
+        ..CodeOptions::default()
     }
 }
 
