@@ -772,7 +772,7 @@ impl State<'_> {
                 !self
                     .outputs
                     .iter()
-                    .map(|output| Path::new(output))
+                    .map(Path::new)
                     .chain(self.inputs.iter().map(|input| Path::new(&input.path)))
                     .any(|taken| resolved_output(taken) == name)
             };
