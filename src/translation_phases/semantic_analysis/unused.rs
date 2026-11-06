@@ -1512,7 +1512,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// access, or for GCC `really_atomic_lvalue`, whose read is a call to
     /// `__atomic_load` unless a `register` object's address cannot be taken.
     /// C99: §6.7.3p6, p. 109; PDF p. 121; C11: §6.2.6.1p9, p. 45; PDF p. 63.
-    fn is_effectful_read(&self, e: &'tu Expression<'tu>) -> bool {
+    pub(super) fn is_effectful_read(&self, e: &'tu Expression<'tu>) -> bool {
         let info = self.expression_info(e);
         if matches!(info.category, ValueCategory::Rvalue) {
             return false;

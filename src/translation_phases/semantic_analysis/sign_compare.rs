@@ -16,6 +16,7 @@ use super::{
     Integer,
     SemanticErrorKind,
     types::{
+        Scalar,
         TypeId,
         TypeKind,
     },
@@ -582,77 +583,209 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// GCC's `tree_expr_nonnegative_warnv_p` after `fold_for_warn`: whether
-    /// `e`'s value is known not to be negative. A clamp folds to `MAX_EXPR`,
-    /// and a mask moves through a cast or a shift. Unknown forms answer false.
-    /// C99: §6.5.3.3p5, p. 79; PDF p. 91; §6.5.8p6, p. 86; PDF p. 98;
-    /// §6.5.9p3, p. 87; PDF p. 99; §6.5.10-§6.5.14, pp. 87-89; PDF pp. 99-101.
+    /// `e`'s value is known not to be negative.
     fn cannot_be_negative(&self, e: &'tu Expression<'tu>) -> bool {
+        self.folded_sign(e).nonnegative
+    }
+
+    /// What `fold` and then the proof know of `e`, from its operands, once for
+    /// each node. `fold` reduces what has no bearing on the value, and a form
+    /// it does not reduce answers by its code: a clamp folds to `MAX_EXPR`, a
+    /// mask moves through a cast or a shift, and an unknown form is not known.
+    /// C99: §6.5.3.3p5, p. 79; PDF p. 91; §6.5.8p6, p. 86; PDF p. 98;
+    /// §6.5.9p3, p. 87; PDF p. 99; §6.5.10-§6.5.14, pp. 87-89; PDF pp. 99-101;
+    /// §6.5.15p4, p. 90; PDF p. 102.
+    fn folded_sign(&self, e: &'tu Expression<'tu>) -> FoldedSign {
+        let e = Self::without_parentheses(e);
         let info = self.expression_info(e);
-        if info.ice {
-            return info
-                .integer
-                .and_then(Integer::to_i128)
-                .is_some_and(|value| value >= 0);
-        }
-        if self
-            .integer_type(info.ty)
-            .is_some_and(|(_, signed)| !signed)
+        // A constant with no value here (`1 / 0`, `1 << -1`, a wide `_BitInt`)
+        // answers by its form.
+        if info.ice
+            && let Some(value) = info.integer.and_then(Integer::to_i128)
         {
-            return true;
+            return FoldedSign::constant(value);
         }
-        match e.kind {
-            | E::Parenthesized { expression } => self.cannot_be_negative(expression),
+        let folded = match e.kind {
             | E::Unary {
-                operator: U::LogicalNot,
-                ..
-            } => true,
+                operator,
+                operand_expression,
+            } => self.unary_sign(info.ty, operator, operand_expression),
             | E::Binary {
                 operator,
                 left_expression,
                 right_expression,
-            } => self.binary_cannot_be_negative(operator, left_expression, right_expression),
-            | E::Conditional(c) =>
-                self.clamp_cannot_be_negative(c)
-                    || (self.cannot_be_negative(c.then_expression)
-                        && self.cannot_be_negative(c.else_expression)),
+            } => self.binary_sign(operator, left_expression, right_expression),
+            | E::Conditional(c) => {
+                let condition = self.folded_sign(c.condition_expression);
+                match condition.value {
+                    | Some(0) => self.folded_sign(c.else_expression),
+                    | Some(_) => self.folded_sign(c.then_expression),
+                    | None => {
+                        let then_sign = self.folded_sign(c.then_expression);
+                        FoldedSign::proved(
+                            self.clamp_cannot_be_negative(c)
+                                // `a ? 1 : a` is either that constant or zero.
+                                || (then_sign.value.is_some()
+                                    && then_sign.nonnegative
+                                    && self.same_operand(c.condition_expression, c.else_expression))
+                                || (then_sign.nonnegative
+                                    && self.cannot_be_negative(c.else_expression)),
+                        )
+                    },
+                }
+            },
+            // `a ?: b` is `a ? a : b`, with `a` once.
+            | E::OmittedConditional(c) => {
+                let condition = self.folded_sign(c.condition_expression);
+                match condition.value {
+                    | Some(0) => self.folded_sign(c.else_expression),
+                    | Some(_) => condition,
+                    | None => FoldedSign::proved(
+                        condition.nonnegative && self.cannot_be_negative(c.else_expression),
+                    ),
+                }
+            },
             | E::Cast {
                 operand_expression, ..
-            } => self.cast_cannot_be_negative(info.ty, operand_expression),
+            } => self.cast_sign(info.ty, operand_expression),
             | E::Call {
                 function_expression,
                 ..
-            } => self.call_cannot_be_negative(function_expression),
+            } => FoldedSign::proved(self.call_cannot_be_negative(function_expression)),
             | E::StatementExpression(block) => self
                 .statement_expression_tail(block)
-                .is_some_and(|(_, tail)| self.cannot_be_negative(tail)),
-            | _ => false,
+                .map_or(FoldedSign::UNKNOWN, |(_, tail)| self.folded_sign(tail)),
+            | _ => FoldedSign::UNKNOWN,
+        };
+        match (folded.value, self.integer_type(info.ty)) {
+            | (Some(value), _) => self.converted_constant(info.ty, value),
+            | (None, Some((_, false))) => FoldedSign::proved(true),
+            | _ => folded,
         }
     }
 
-    fn binary_cannot_be_negative(
+    /// `value` as a constant of the integer type `ty`, which a type wider than
+    /// the host's range leaves unknown unless it is unsigned.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.3.1.3p1-3, p. 43; PDF p. 55.
+    fn converted_constant(&self, ty: TypeId, value: i128) -> FoldedSign {
+        if self.types.nodes[self.types.non_atomic(ty).index] == TypeKind::Scalar(Scalar::Bool) {
+            return FoldedSign::constant(i128::from(value != 0));
+        }
+        let Some((bits, signed)) = self.integer_type(ty) else {
+            return FoldedSign::constant(value);
+        };
+        if bits >= MAX_MODELED_BITS {
+            return if signed {
+                FoldedSign::constant(value)
+            } else {
+                FoldedSign::proved(true)
+            };
+        }
+        let low = truncated(value, bits);
+        let negative = signed && low >> (bits - 1) == 1;
+        let extended = if negative {
+            low | u128::MAX << bits
+        } else {
+            low
+        };
+        FoldedSign::constant(extended.cast_signed())
+    }
+
+    fn unary_sign(&self, ty: TypeId, operator: U, operand: &'tu Expression<'tu>) -> FoldedSign {
+        match operator {
+            // A `NON_LVALUE_EXPR` of the promoted operand.
+            | U::Plus => self.cast_sign(ty, operand),
+            | U::Extension => self.folded_sign(operand),
+            | U::Minus | U::BitwiseNot => {
+                // `- -a` and `~~a` are `a`.
+                if let E::Unary {
+                    operator: inner,
+                    operand_expression,
+                } = Self::without_parentheses(operand).kind
+                    && inner == operator
+                {
+                    return self.folded_sign(operand_expression);
+                }
+                self.folded_sign(operand)
+                    .value
+                    .and_then(|value| match operator {
+                        | U::Minus => value.checked_neg(),
+                        | _ => Some(!value),
+                    })
+                    .map_or(FoldedSign::UNKNOWN, FoldedSign::constant)
+            },
+            | U::LogicalNot => self
+                .folded_sign(operand)
+                .value
+                .map_or(FoldedSign::proved(true), |value| {
+                    FoldedSign::constant(i128::from(value == 0))
+                }),
+            | _ => FoldedSign::UNKNOWN,
+        }
+    }
+
+    /// `match.pd`'s reductions of an integer operation, and otherwise
+    /// `tree_binary_nonnegative_warnv_p`. A reduction applies to an operand
+    /// with side effects too, which stays as a comma's left operand, but to
+    /// no floating operand, whose NaNs and signed zeros survive it.
+    fn binary_sign(
         &self,
         operator: B,
         left: &'tu Expression<'tu>,
         right: &'tu Expression<'tu>,
-    ) -> bool {
+    ) -> FoldedSign {
+        let (first, second) = (self.folded_sign(left), self.folded_sign(right));
         match operator {
-            | B::LessThan
-            | B::LessThanOrEqual
-            | B::GreaterThan
-            | B::GreaterThanOrEqual
-            | B::Equal
-            | B::NotEqual
-            | B::LogicalAnd
-            | B::LogicalOr => true,
-            | B::BitwiseAnd => self.cannot_be_negative(left) || self.cannot_be_negative(right),
+            // Neither a `COMPOUND_EXPR` nor a `MODIFY_EXPR` is a constant,
+            // whatever it ends with.
+            | B::Comma => return FoldedSign::proved(second.nonnegative),
+            | B::Assignment => {
+                let stored = second.value.map_or(second, |value| {
+                    self.converted_constant(self.expression_info(left).ty, value)
+                });
+                return FoldedSign::proved(stored.nonnegative);
+            },
+            | _ => {},
+        }
+        if let Some(base) = Self::compound_base(operator) {
+            return FoldedSign::proved(self.binary_sign(base, left, right).nonnegative);
+        }
+        if matches!(
+            operator,
+            B::LessThan
+                | B::LessThanOrEqual
+                | B::GreaterThan
+                | B::GreaterThanOrEqual
+                | B::Equal
+                | B::NotEqual
+                | B::LogicalAnd
+                | B::LogicalOr
+        ) {
+            return FoldedSign::proved(true);
+        }
+        let integers = self.integer_type(self.expression_info(left).ty).is_some()
+            && self.integer_type(self.expression_info(right).ty).is_some();
+        if let Some(folded) = integers
+            .then(|| self.reduced_sign(operator, (left, first), (right, second)))
+            .flatten()
+        {
+            return folded;
+        }
+        FoldedSign::proved(match operator {
+            | B::BitwiseAnd => first.nonnegative || second.nonnegative,
             | B::Multiplication if self.same_operand(left, right) => true,
-            // GCC folds `a * 0`, `a % 1` and `a % -1` to zero.
-            | B::Multiplication if self.constant_is(right, |value| value == 0) => true,
-            | B::Modulo if self.constant_is(right, |value| value.abs_diff(0) == 1) => true,
-            | B::BitwiseOr | B::BitwiseXor | B::Addition | B::Multiplication | B::Division =>
-                self.cannot_be_negative(left) && self.cannot_be_negative(right),
-            | B::Modulo => self.cannot_be_negative(left),
-            | B::RightShift => self.expression_info(right).ice && self.cannot_be_negative(left),
+            | B::BitwiseOr | B::BitwiseXor | B::Multiplication | B::Division =>
+                first.nonnegative && second.nonnegative,
+            // `a + a` folds to `a * 2`.
+            | B::Addition if integers && self.same_operand(left, right) => first.nonnegative,
+            | B::Addition =>
+                self.zero_extended_sum_fits(left, right)
+                    || self.disjoint_masks(left, right)
+                    || (Self::is_truth_value(left) && second.value.is_some_and(|value| value >= 0))
+                    || (Self::is_truth_value(right) && first.value.is_some_and(|value| value >= 0))
+                    || (!integers && first.nonnegative && second.nonnegative),
+            | B::Modulo => first.nonnegative,
+            | B::RightShift => second.value.is_some_and(|shift| shift >= 0) && first.nonnegative,
             // `(a & m) << n` folds to `(a << n) & (m << n)`.
             | B::LeftShift => {
                 let bits = self.integer_type(self.expression_info(left).ty);
@@ -671,19 +804,215 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => false,
                 }
             },
-            | B::Comma | B::Assignment => self.cannot_be_negative(right),
             | _ => false,
+        })
+    }
+
+    /// What `fold` leaves of an operation whose result one operand decides,
+    /// or that leaves the other as it was, if it leaves less.
+    /// C99: §6.5.5p4-6, p. 82; PDF p. 94; §6.5.6p5-6, p. 83; PDF p. 95;
+    /// §6.5.7p3, p. 84; PDF p. 96; §6.5.10-§6.5.12, pp. 87-88; PDF pp. 99-100.
+    fn reduced_sign(
+        &self,
+        operator: B,
+        (left, first): (&'tu Expression<'tu>, FoldedSign),
+        (right, second): (&'tu Expression<'tu>, FoldedSign),
+    ) -> Option<FoldedSign> {
+        let constant = |value| Some(FoldedSign::constant(value));
+        if let (Some(a), Some(b)) = (first.value, second.value)
+            && let Some(value) = Self::constant_operation(operator, a, b)
+        {
+            return constant(value);
+        }
+        let same =
+            || first.value.is_none() && second.value.is_none() && self.same_operand(left, right);
+        match operator {
+            | B::Multiplication => match (first.value, second.value) {
+                | (Some(0), _) => constant(0),
+                | (_, Some(0)) => constant(0),
+                | (Some(1), _) => Some(second),
+                | (_, Some(1)) => Some(first),
+                | _ => None,
+            },
+            | B::BitwiseXor if same() => constant(0),
+            | B::BitwiseOr | B::BitwiseAnd if same() => Some(first),
+            | B::Addition | B::BitwiseXor | B::BitwiseOr => match (first.value, second.value) {
+                | (Some(0), _) => Some(second),
+                | (_, Some(0)) => Some(first),
+                | (Some(-1), _) if operator == B::BitwiseOr => constant(-1),
+                | (_, Some(-1)) if operator == B::BitwiseOr => constant(-1),
+                | _ => None,
+            },
+            | B::BitwiseAnd if self.complements(left, right) => constant(0),
+            | B::BitwiseAnd => match (first.value, second.value) {
+                | (Some(0), _) => constant(0),
+                | (_, Some(0)) => constant(0),
+                | (Some(-1), _) => Some(second),
+                | (_, Some(-1)) => Some(first),
+                | _ => None,
+            },
+            | B::Subtraction if same() => constant(0),
+            | B::Subtraction => (second.value == Some(0)).then_some(first),
+            | B::Division if same() => constant(1),
+            | B::Division => match (first.value, second.value) {
+                | (Some(0), None) => constant(0),
+                | (_, Some(1)) => Some(first),
+                | _ => None,
+            },
+            | B::Modulo if same() => constant(0),
+            | B::Modulo => match (first.value, second.value) {
+                | (Some(0), None) => constant(0),
+                | (_, Some(1 | -1)) => constant(0),
+                | _ => None,
+            },
+            | B::RightShift if same() => constant(0),
+            | B::LeftShift | B::RightShift => match (first.value, second.value) {
+                | (Some(0), _) => constant(0),
+                | (_, Some(0)) => Some(first),
+                | _ => None,
+            },
+            | _ => None,
         }
     }
 
-    fn constant_is(&self, e: &'tu Expression<'tu>, test: impl Fn(i128) -> bool) -> bool {
-        let info = self.expression_info(e);
-        info.ice && info.integer.and_then(Integer::to_i128).is_some_and(test)
+    /// `a` and `~a`, in either order.
+    fn complements(&self, left: &'tu Expression<'tu>, right: &'tu Expression<'tu>) -> bool {
+        let complement_of = |e: &'tu Expression<'tu>, other: &'tu Expression<'tu>| {
+            matches!(Self::without_parentheses(e).kind, E::Unary {
+                operator: U::BitwiseNot,
+                operand_expression,
+            } if self.same_operand(operand_expression, other))
+        };
+        complement_of(left, right) || complement_of(right, left)
+    }
+
+    /// `(a & m) + (b & n)` with no bit in common folds to a bitwise or.
+    fn disjoint_masks(&self, left: &'tu Expression<'tu>, right: &'tu Expression<'tu>) -> bool {
+        self.positive_mask(left)
+            .zip(self.positive_mask(right))
+            .is_some_and(|(m, n)| m & n == 0)
+    }
+
+    /// A value of zero or one, with which `fold` distributes an operation over
+    /// the two cases.
+    /// C99: §6.5.3.3p5, p. 79; PDF p. 91; §6.5.8p6, p. 86; PDF p. 98.
+    fn is_truth_value(e: &'tu Expression<'tu>) -> bool {
+        matches!(
+            Self::without_parentheses(e).kind,
+            E::Unary {
+                operator: U::LogicalNot,
+                ..
+            } | E::Binary {
+                operator: B::LessThan
+                    | B::LessThanOrEqual
+                    | B::GreaterThan
+                    | B::GreaterThanOrEqual
+                    | B::Equal
+                    | B::NotEqual
+                    | B::LogicalAnd
+                    | B::LogicalOr,
+                ..
+            }
+        )
+    }
+
+    /// The value of an operation on two folded values, within the host's
+    /// range. A shift or a divisor it does not define stays unfolded.
+    fn constant_operation(operator: B, a: i128, b: i128) -> Option<i128> {
+        match operator {
+            | B::Multiplication => a.checked_mul(b),
+            | B::Addition => a.checked_add(b),
+            | B::Subtraction => a.checked_sub(b),
+            | B::Division => a.checked_div(b),
+            | B::Modulo => a.checked_rem(b),
+            | B::BitwiseAnd => Some(a & b),
+            | B::BitwiseOr => Some(a | b),
+            | B::BitwiseXor => Some(a ^ b),
+            | _ => None,
+        }
+    }
+
+    /// The operation a compound assignment stores the result of.
+    /// C99: §6.5.16.2p3, p. 93; PDF p. 105.
+    const fn compound_base(operator: B) -> Option<B> {
+        Some(match operator {
+            | B::MultiplicationAssignment => B::Multiplication,
+            | B::DivisionAssignment => B::Division,
+            | B::ModuloAssignment => B::Modulo,
+            | B::AdditionAssignment => B::Addition,
+            | B::SubtractionAssignment => B::Subtraction,
+            | B::LeftShiftAssignment => B::LeftShift,
+            | B::RightShiftAssignment => B::RightShift,
+            | B::BitwiseAndAssignment => B::BitwiseAnd,
+            | B::BitwiseXorAssignment => B::BitwiseXor,
+            | B::BitwiseOrAssignment => B::BitwiseOr,
+            | _ => return None,
+        })
+    }
+
+    /// `PLUS_EXPR`: the sum of two zero extensions is nonnegative if both are
+    /// at least two bits narrower than the result. Nothing else about a sum
+    /// is proved, a sum with a constant included.
+    /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55; §6.5.6p5, p. 83; PDF p. 95.
+    fn zero_extended_sum_fits(
+        &self,
+        left: &'tu Expression<'tu>,
+        right: &'tu Expression<'tu>,
+    ) -> bool {
+        let extended = |e: &'tu Expression<'tu>| {
+            let mut e = Self::without_parentheses(e);
+            while let E::Cast {
+                operand_expression, ..
+            } = e.kind
+            {
+                let inner = Self::without_parentheses(operand_expression);
+                let (Some((to, _)), Some((from, _))) = (
+                    self.integer_type(self.expression_info(e).ty),
+                    self.integer_type(self.expression_info(inner).ty),
+                ) else {
+                    return None;
+                };
+                if to <= from {
+                    break;
+                }
+                e = inner;
+            }
+            let info = self.expression_info(e);
+            if info.ice {
+                return None;
+            }
+            // An `INTEGER_TYPE`: neither `_Bool` nor an enumeration.
+            let plain = match self.types.nodes[self.types.non_atomic(info.ty).index] {
+                | TypeKind::Scalar(scalar) => scalar != Scalar::Bool,
+                | TypeKind::BitInt { .. } => true,
+                | _ => false,
+            };
+            self.integer_type(info.ty)
+                .filter(|&(_, signed)| plain && !signed)
+                .map(|(bits, _)| info.bit_field.unwrap_or(bits))
+        };
+        let Some((result, _)) = self
+            .integer_type(self.expression_info(left).ty)
+            .zip(self.integer_type(self.expression_info(right).ty))
+            .map(|(a, b)| if a.0 >= b.0 { a } else { b })
+        else {
+            return false;
+        };
+        extended(left)
+            .zip(extended(right))
+            .is_some_and(|(a, b)| a.max(b) + 1 < result.max(32))
     }
 
     /// The nonnegative constant `e` masks with, if it is such a bitwise and.
     fn positive_mask(&self, e: &'tu Expression<'tu>) -> Option<i128> {
-        let e = Self::without_parentheses(e);
+        let mut e = Self::without_parentheses(e);
+        while let E::Unary {
+            operator: U::Plus,
+            operand_expression,
+        } = e.kind
+        {
+            e = Self::without_parentheses(operand_expression);
+        }
         let E::Binary {
             operator: B::BitwiseAnd,
             left_expression,
@@ -835,9 +1164,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GCC's `operand_equal_p`, for operands without side effects.
     fn same_operand(&self, a: &'tu Expression<'tu>, b: &'tu Expression<'tu>) -> bool {
-        let (a, b) = (Self::without_parentheses(a), Self::without_parentheses(b));
+        let (a, b) = (self.without_value_casts(a), self.without_value_casts(b));
         let (left, right) = (self.expression_info(a), self.expression_info(b));
-        if left.ty.is_volatile() || right.ty.is_volatile() {
+        // Reading either again is another effect, which `operand_equal_p` does
+        // not compare away.
+        if self.is_effectful_read(a) || self.is_effectful_read(b) {
             return false;
         }
         if left.ice && right.ice {
@@ -861,8 +1192,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ) =>
                 first == second
                     && !Self::is_assignment(first)
-                    && self.same_operand(first_left, second_left)
-                    && self.same_operand(first_right, second_right),
+                    && ((self.same_operand(first_left, second_left)
+                        && self.same_operand(first_right, second_right))
+                        || (matches!(
+                            first,
+                            B::Addition
+                                | B::Multiplication
+                                | B::BitwiseAnd
+                                | B::BitwiseOr
+                                | B::BitwiseXor
+                                | B::Equal
+                                | B::NotEqual
+                        ) && self.same_operand(first_left, second_right)
+                            && self.same_operand(first_right, second_left))),
+            | (
+                E::Cast {
+                    operand_expression: first,
+                    ..
+                },
+                E::Cast {
+                    operand_expression: second,
+                    ..
+                },
+            ) =>
+                left.ty.unqualified() == right.ty.unqualified() && self.same_operand(first, second),
             | (
                 E::Unary {
                     operator: first,
@@ -903,25 +1256,63 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// `e` without parentheses or a cast that keeps every value: to the same
+    /// signedness and at least the same width.
+    /// C99: §6.3.1.3p1, p. 43; PDF p. 55.
+    fn without_value_casts(&self, e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+        let mut e = Self::without_parentheses(e);
+        while let E::Cast {
+            operand_expression, ..
+        } = e.kind
+        {
+            let inner = Self::without_parentheses(operand_expression);
+            match (
+                self.integer_type(self.expression_info(e).ty),
+                self.integer_type(self.expression_info(inner).ty),
+            ) {
+                | (Some((to, to_signed)), Some((from, from_signed)))
+                    if to >= from && to_signed == from_signed =>
+                    e = inner,
+                | _ => break,
+            }
+        }
+        e
+    }
+
     /// A conversion keeps a value nonnegative if the type is wider than an
     /// unsigned source, or holds a nonnegative signed one; a mask that fits
-    /// moves through a narrowing one.
-    fn cast_cannot_be_negative(&self, ty: TypeId, operand: &'tu Expression<'tu>) -> bool {
-        let source = self.expression_info(operand).ty;
-        let (Some((to, _)), Some((from, signed))) =
-            (self.integer_type(ty), self.integer_type(source))
-        else {
-            return false;
+    /// moves through a narrowing one. A folded value converts as a constant.
+    /// C99: §6.3.1.3p1-3, p. 43; PDF p. 55.
+    fn cast_sign(&self, ty: TypeId, operand: &'tu Expression<'tu>) -> FoldedSign {
+        let source = self.expression_info(operand);
+        let folded = self.folded_sign(operand);
+        let Some((to, _)) = self.integer_type(ty) else {
+            return FoldedSign::UNKNOWN;
         };
+        let Some((from, signed)) = self.integer_type(source.ty) else {
+            // `FIX_TRUNC_EXPR` truncates toward zero.
+            // C99: §6.3.1.4p1, p. 43; PDF p. 55.
+            let floating = matches!(
+                self.types.nodes[self.types.non_atomic(source.ty).index],
+                TypeKind::Scalar(scalar) if scalar.floating()
+            );
+            return FoldedSign::proved(floating && folded.nonnegative);
+        };
+        let from = source.bit_field.unwrap_or(from);
+        if let Some(value) = folded.value {
+            return self.converted_constant(ty, value);
+        }
         if signed {
-            if to >= from && self.cannot_be_negative(operand) {
-                return true;
+            if to >= from && folded.nonnegative {
+                return FoldedSign::proved(true);
             }
         } else if to > from {
-            return true;
+            return FoldedSign::proved(true);
         }
-        self.positive_mask(operand)
-            .is_some_and(|mask| to >= 128 || mask < 1i128 << (to - 1))
+        FoldedSign::proved(
+            self.positive_mask(operand)
+                .is_some_and(|mask| to >= 128 || mask < 1i128 << (to - 1)),
+        )
     }
 
     /// GCC folds `abs` and knows the results of the bit-counting builtins.
@@ -988,6 +1379,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )
         };
         Some(self.context.string_cache.intern(text))
+    }
+}
+
+/// What folding says of an expression's sign: its value, if it folds to one,
+/// and whether the proof knows it is not negative.
+#[derive(Clone, Copy)]
+struct FoldedSign {
+    value:       Option<i128>,
+    nonnegative: bool,
+}
+
+impl FoldedSign {
+    const UNKNOWN: Self = Self::proved(false);
+
+    const fn constant(value: i128) -> Self {
+        Self {
+            value:       Some(value),
+            nonnegative: value >= 0,
+        }
+    }
+
+    const fn proved(nonnegative: bool) -> Self {
+        Self {
+            value: None,
+            nonnegative,
+        }
     }
 }
 

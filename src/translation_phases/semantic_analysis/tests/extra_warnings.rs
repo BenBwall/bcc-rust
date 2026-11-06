@@ -862,6 +862,241 @@ int f(__int128 a,unsigned __int128 b){return ((a & 1) << 126) < b;}",
     }
 }
 
+/// One expression compared with an unsigned `b`, in GCC mode: whether it warns.
+fn gcc_warns(operand: &str) -> bool {
+    let source = format!(
+        "int g(void); volatile int v; _Atomic int t; struct S {{ int x, y; unsigned u : 3; }}; \
+         int f(int a, unsigned b, signed char c, unsigned char uc, unsigned char ud, unsigned \
+         short us, long l, double d, int *p, struct S s) {{ return ({operand}) < b; }}"
+    );
+    reports(
+        &source,
+        CompilerIdentity::Gcc,
+        SemanticErrorKind::SignCompare,
+    ) == 1
+}
+
+/// Expectations from GCC 14.2, with `tree_expr_nonnegative_warnv_p` asked of
+/// what `fold` leaves.
+#[track_caller]
+fn assert_gcc_warns(operands: &[&str], warns: bool) {
+    for operand in operands {
+        assert_eq!(gcc_warns(operand), warns, "{operand}");
+    }
+}
+
+#[test]
+fn gcc_keeps_the_proof_through_unary_plus() {
+    assert_gcc_warns(
+        &[
+            "+(a & 1)",
+            "+(a % 1)",
+            "+ +(a & 1)",
+            "+uc",
+            "+s.u",
+            "+!a",
+            "+(a < 1)",
+            "+(a, a & 1)",
+            "+(a = 1)",
+            "+(long)(a & 1)",
+            "+(signed char)(a & 1)",
+            "(signed char)+(a & 1)",
+            "(short)+(a & 1)",
+        ],
+        false,
+    );
+    assert_gcc_warns(&["+a", "+c", "+(a = -1)", "+(signed char)a"], true);
+}
+
+#[test]
+fn gcc_folds_a_constant_condition_first() {
+    assert_gcc_warns(
+        &[
+            "1 ? (a & 1) : a",
+            "0 ? a : (a & 1)",
+            "!0 ? (a & 1) : a",
+            "sizeof(a) ? (a & 1) : a",
+            "1 ? 1 : a",
+            "0 ? -1 : 1",
+            // The condition folds, though it is no constant expression.
+            "a * 0 ? a : (a & 1)",
+            "a - a ? a : (a & 1)",
+            "a ^ a ? a : 1",
+            // Without one both arms count.
+            "a ? (a & 1) : (a & 2)",
+            // `a ? 1 : a` is either that constant or zero.
+            "a ? 1 : a",
+            "a ? 0 : a",
+            // `a ?: b` is `a ? a : b`.
+            "(a & 1) ?: 2",
+            "1 ?: a",
+            "0 ?: 1",
+        ],
+        false,
+    );
+    assert_gcc_warns(
+        &[
+            "1 ? a : (a & 1)",
+            "0 ? (a & 1) : a",
+            "1 ? -1 : 1",
+            "a * 0 ? (a & 1) : a",
+            "a ? (a & 1) : a",
+            "a ? -1 : a",
+            "g() ? (a & 1) : a",
+            "a ?: 1",
+            "0 ?: a",
+        ],
+        true,
+    );
+}
+
+#[test]
+fn gcc_folds_a_zero_product_either_way() {
+    assert_gcc_warns(
+        &[
+            "0 * a",
+            "a * 0",
+            "(a & 1) * 0",
+            "0 * (a + 1)",
+            "c * 0",
+            "l * 0",
+            "(int)(l * 0)",
+            "(signed char)(a * 0)",
+            // An operand with side effects stays beside the zero.
+            "g() * 0",
+            "0 * g()",
+            "v * 0",
+            "0 * v",
+            "t * 0",
+            "0 * t",
+            "a++ * 0",
+            "(a * 0) + (a & 1)",
+            "-(0 * a)",
+            "~(a * 0) & 1",
+            "+(0 * a)",
+            // What else one operand decides.
+            "a & 0",
+            "0 / a",
+            "0 % a",
+            "0 << a",
+            "0 >> a",
+        ],
+        false,
+    );
+    assert_gcc_warns(
+        &[
+            "1 * a",
+            "a * 1",
+            "a * 2",
+            "(a * 0) + a",
+            "(a * 0) - 1",
+            "~(a * 0)",
+            // No reduction applies to a floating operand.
+            "(int)(d * 0)",
+            "(int)(0 * d)",
+        ],
+        true,
+    );
+}
+
+#[test]
+fn gcc_cancels_identical_operands() {
+    assert_gcc_warns(
+        &[
+            "a - a",
+            "a ^ a",
+            "a % a",
+            "a / a",
+            "a >> a",
+            "c - c",
+            "l - l",
+            "l ^ l",
+            "(int)(l - l)",
+            "(short)(a - a)",
+            "(long)(a - a)",
+            "*p - *p",
+            "p[1] - p[1]",
+            "s.x - s.x",
+            "s.x ^ s.x",
+            "(a + 1) - (a + 1)",
+            "(a * 2) ^ (a * 2)",
+            "(a + 1) - (1 + a)",
+            "(a + 1) ^ (1 + a)",
+            "a - (int)a",
+            "(long)a - a",
+            "(int)l - (int)l",
+            "-(a - a)",
+            "+(a - a)",
+            "(a - a) + (a & 1)",
+            "(a - a) | (a & 1)",
+            "a & ~a",
+            "~a & a",
+            // What the two leave of each other.
+            "(a & 1) | (a & 1)",
+            "(a & 1) & (a & 1)",
+            "(a & 1) + (a & 1)",
+            "a * a",
+        ],
+        false,
+    );
+    assert_gcc_warns(
+        &[
+            // Reading these again is another value.
+            "g() - g()",
+            "g() ^ g()",
+            "v - v",
+            "v ^ v",
+            "t - t",
+            "t ^ t",
+            "t * t",
+            "a++ - a++",
+            // Other operands.
+            "s.x - s.y",
+            "p[0] - p[1]",
+            "a - 1",
+            "(int)(d - d)",
+            "(a - a) + a",
+            "~(a - a)",
+            "a | a",
+            "a & a",
+            "a + a",
+            "~a ^ a",
+            "a | ~a",
+        ],
+        true,
+    );
+}
+
+/// `PLUS_EXPR` proves zero extensions at least two bits narrower, and what
+/// folds to another form, and not the sum of two nonnegative values.
+#[test]
+fn gcc_proves_a_sum_only_of_zero_extensions() {
+    assert_gcc_warns(
+        &[
+            "uc + ud",
+            "us + uc",
+            "(int)uc + (int)ud",
+            "s.u + s.u",
+            "(a & 1) + (a & 2)",
+            "!a + 1",
+            "(a < 1) + 1",
+            "(a & 1) + 0",
+            "0 + (a & 1)",
+        ],
+        false,
+    );
+    assert_gcc_warns(
+        &[
+            "(a & 1) + 1",
+            "1 + (a & 1)",
+            "uc + 1",
+            "(a & 1) + (a & 3)",
+            "!a + -1",
+        ],
+        true,
+    );
+}
+
 /// What GCC folds to zero whatever the operand: `a % 1`, `a % -1` and `a * 0`.
 #[test]
 fn gcc_folds_an_operation_with_no_sign() {
