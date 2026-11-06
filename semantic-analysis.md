@@ -1212,14 +1212,32 @@ reports nothing, as are `const`/`pure` calls under `-Wunused-value`,
 `-Wunused-result`, and a value in a statement expression's last statement,
 which Clang reads.
 
+An attribute's identifier arguments count as references, so a `cleanup` or
+`malloc` function is used; a string names its target for `ifunc` and, in GCC,
+`alias` and `weakref`. GCC also withholds these warnings when a system header
+spells the token they point at, as a system macro's body does, its label warning
+aside; Clang goes by the invocation. A `sizeof` of a variable length array and a
+cast to a variably modified type have an effect for GCC. Clang's discarded-value
+warnings, comparisons aside, stay out of what `Analyzer::evaluation_inhibited`
+and the `dead` flag say does not run; a loop that never runs and a switch's
+statements before a case are not modeled, so those still warn.
+
 #### Comparisons and initializers under `-Wextra`
 
 `sign_compare.rs` implements `-Wsign-compare` and GCC's word for the same
 conversion in a conditional's operand. `missing_fields.rs` implements
 `-Wmissing-field-initializers`, walking a braced list against the types without
 modeling brace elision, so a list that elides braces reports nothing at its
-level. Both are designed to stay silent where a compiler's range analysis might
-be; a typedef name is spelled from its canonical type, as everywhere in bcc.
+level. A typedef name is spelled from its canonical type, as everywhere in bcc.
+
+The compilers decide whether a signed operand can be negative differently, so
+each has its own reading: `cannot_be_negative` follows GCC's nonnegative test on
+its folded tree (clamps that fold to `MAX_EXPR`, masks moved through casts and
+shifts, the bit-counting builtins), with `shorten_compare`'s constant results,
+and `clang_range` ports Clang's `TryGetExprRange` for both operands, with its
+tautology check. Neither warns in an operand that is not evaluated, Clang not in
+code the `dead` flag calls unreachable either. GCC withholds both warnings when
+a system header spells the operator or closing brace.
 
 #### Remaining backend and quality work
 
