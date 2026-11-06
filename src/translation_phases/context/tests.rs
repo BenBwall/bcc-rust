@@ -304,9 +304,15 @@ fn macro_locations_survive_compaction_without_retaining_temporary_metadata() {
 
 #[test]
 fn diagnostic_pragmas_govern_retained_copies_of_tokens_by_output_order() {
-    use crate::configuration::{
-        DiagnosticGroup,
-        PragmaClass,
+    use crate::{
+        configuration::{
+            DiagnosticGroup,
+            PragmaClass,
+        },
+        translation_phases::{
+            ErrorSeverity,
+            SourceVectors,
+        },
     };
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
@@ -315,7 +321,7 @@ fn diagnostic_pragmas_govern_retained_copies_of_tokens_by_output_order() {
         length: 1,
         ..SourceVector::default()
     };
-    let mut token = |context: &mut Context<'_>| {
+    let token = |context: &mut Context<'_>| {
         let source = context.push_source_vectors(std::slice::from_ref(&spelled));
         context.retain_token_source(source)
     };

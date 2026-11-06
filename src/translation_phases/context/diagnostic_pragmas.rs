@@ -129,9 +129,9 @@ impl<'tu> Context<'tu> {
             let error = self.tu.alloc(error);
             self.pending_errors
                 .push_back(TranslationError::Classified(ClassifiedError {
+                    error,
                     severity: ErrorSeverity::Warning,
                     fatal: false,
-                    error,
                 }));
         } else {
             self.classified_error(source, error);
@@ -191,9 +191,9 @@ impl<'tu> Context<'tu> {
         let error = self.tu.alloc(error);
         self.pending_errors
             .push_back(TranslationError::Classified(ClassifiedError {
+                error,
                 severity,
                 fatal,
-                error,
             }));
     }
 
@@ -232,10 +232,13 @@ impl<'tu> Context<'tu> {
             | WarningSpecifier::Disable => PragmaClass::Ignored,
             | WarningSpecifier::Error => PragmaClass::Error,
             | WarningSpecifier::Enable => PragmaClass::Warning,
-            | WarningSpecifier::Default
-                if self.configuration.diagnostic_severity(group).is_some() =>
-                PragmaClass::Warning,
-            | WarningSpecifier::Default => PragmaClass::Ignored,
+            | WarningSpecifier::Default => {
+                if self.configuration.diagnostic_severity(group).is_some() {
+                    PragmaClass::Warning
+                } else {
+                    PragmaClass::Ignored
+                }
+            },
             | WarningSpecifier::Suppress => return,
         };
         let mut state = self.current_pragma_state();

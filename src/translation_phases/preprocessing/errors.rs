@@ -1719,6 +1719,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashHashAtVaOptBoundary
             | PreprocessorErrorType::ErrorDirective(..)
             | PreprocessorErrorType::PragmaMessage { error: true, .. }
+            | PreprocessorErrorType::PragmaDiagnostic(PragmaDiagnosticProblem::ExpectedString)
             | PreprocessorErrorType::HashMustBeFirstCharacterOnLine
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(severity)
@@ -1737,8 +1738,6 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_, policy) =>
                 crate::translation_phases::policy_severity(policy, crate::translation_phases::DiagnosticPolicy::Warning)
                     .unwrap_or(ErrorSeverity::Warning),
-            | PreprocessorErrorType::PragmaDiagnostic(PragmaDiagnosticProblem::ExpectedString) =>
-                ErrorSeverity::Error,
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
@@ -1841,7 +1840,7 @@ impl PragmaDiagnosticProblem<'_> {
         }
     }
 
-    fn message<'d>(self, arena: &'d Bump) -> &'d str {
+    fn message(self, arena: &Bump) -> &str {
         match self {
             | Self::GccMissingKind =>
                 "missing `error`, `warning`, `ignored`, `push`, `pop`, or `ignored_attributes` \

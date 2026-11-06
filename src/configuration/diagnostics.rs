@@ -204,7 +204,10 @@ impl CompilerConfiguration {
     /// option `name` reaches, parents' children included.
     pub(crate) fn pragma_group_mask(self, name: &str) -> u128 {
         const {
-            assert!(DiagnosticGroup::COUNT <= u128::BITS as usize);
+            assert!(
+                DiagnosticGroup::COUNT <= u128::BITS as usize,
+                "a mask holds one bit per group"
+            );
         }
         let mut cleared = self;
         cleared.warning_options = [WarningSettings::DEFAULT; DiagnosticGroup::COUNT];
