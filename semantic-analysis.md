@@ -1212,6 +1212,16 @@ reports nothing, as are `const`/`pure` calls under `-Wunused-value`,
 `-Wunused-result`, and a value in a statement expression's last statement,
 which Clang reads.
 
+An attribute's identifier arguments count as references, so a `cleanup` or
+`malloc` function is used; a string names its target for `ifunc` and, in GCC,
+`alias` and `weakref`. GCC also withholds these warnings when a system header
+spells the token they point at, as a system macro's body does, its label warning
+aside; Clang goes by the invocation. A `sizeof` of a variable length array and a
+cast to a variably modified type have an effect for GCC. Clang's discarded-value
+warnings, comparisons aside, stay out of what `Analyzer::evaluation_inhibited`
+and the `dead` flag say does not run; a loop that never runs and a switch's
+statements before a case are not modeled, so those still warn.
+
 #### Remaining backend and quality work
 
 - Optional fallthrough/missing-return warnings are
