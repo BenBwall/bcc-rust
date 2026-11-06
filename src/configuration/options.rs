@@ -222,6 +222,16 @@ impl CompilerConfiguration {
         self.optimization
     }
 
+    pub(crate) const fn with_debug_info(mut self, debug_info: Option<super::DebugOptions>) -> Self {
+        self.debug_info = debug_info;
+        self
+    }
+
+    /// What `-g` asks for, where the selected back end writes it.
+    pub(crate) const fn debug_info(self) -> Option<super::DebugOptions> {
+        self.debug_info
+    }
+
     pub(crate) const fn with_hosted(mut self, hosted: bool) -> Self {
         self.hosted = hosted;
         self
@@ -948,6 +958,7 @@ impl CompilerConfiguration {
             code_options: crate::target::CodeOptions {
                 relocation:                 None,
                 tls_model:                  crate::target::TlsModel::GlobalDynamic,
+                debug_info:                 false,
                 strict_volatile_bit_fields: false,
                 function_sections:          false,
                 data_sections:              false,
@@ -968,6 +979,7 @@ impl CompilerConfiguration {
             source_date_epoch: None,
             hosted: true,
             optimization: (false, false),
+            debug_info: None,
             gnu89_inline: None,
             char_signed: None,
             interchange_float_types: None,

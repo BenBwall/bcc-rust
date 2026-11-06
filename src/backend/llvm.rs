@@ -6,12 +6,14 @@
 //!
 //! Read `function.rs` for instruction mapping, `global.rs` for relocations,
 //! `symbols.rs` for linkage, aliases and the constructor/destructor arrays,
-//! `api.rs` for scoped LLVM ownership and `driver.rs` for object/link output.
+//! `debug_info.rs` for what `-g` adds, `api.rs` for scoped LLVM ownership and
+//! `driver.rs` for object/link output.
 //! LLVM allocates its own C++ storage; all Rust compilation scratch is arena
 //! allocated. Owners live on the stack and are never placed in an arena.
 
 // LLVM construction
 mod api;
+mod debug_info;
 mod function;
 mod global;
 mod symbols;
@@ -180,6 +182,10 @@ fn build_module<'m>(
     let strict = function::strict(module);
     let (functions, globals) = symbols::declare(module, api, target, strict, arena)?;
     symbols::special_arrays(module, api, target, arena, &functions, &globals);
+    let debug_builder = debug_info::builder(module, api, target);
+    let debug = debug_builder
+        .as_ref()
+        .and_then(|builder| debug_info::DebugEmitter::new(module, builder, arena));
     let emitter = Emitter {
         module,
         api,
@@ -187,6 +193,7 @@ fn build_module<'m>(
         target,
         functions: &functions,
         globals: &globals,
+        debug: debug.as_ref(),
         labels: &[],
         indirect_returns_twice: module.returns_twice_escapes(),
         strict,
@@ -204,6 +211,9 @@ fn build_module<'m>(
     for (id, _) in module.globals() {
         emitter.global(id)?;
     }
+    if let Some(debug) = &debug {
+        debug.finalize();
+    }
     api.verify()?;
     Ok(())
 }
@@ -215,6 +225,8 @@ struct Emitter<'a, 'id, 'm, 'ir> {
     target:                 Target,
     functions:              &'a [Val<'id>],
     globals:                &'a [Val<'id>],
+    /// The module's debug information, if it has any.
+    debug:                  Option<&'a debug_info::DebugEmitter<'a, 'id, 'm, 'ir>>,
     /// The LLVM block of each label of each function, by `FuncId`.
     labels:                 &'a [&'a [api::Block<'id>]],
     /// A returns-twice function's address escapes, so every indirect call

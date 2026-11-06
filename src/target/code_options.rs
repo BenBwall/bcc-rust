@@ -48,6 +48,10 @@ pub(crate) struct CodeOptions {
     pub(crate) function_sections:          bool,
     /// Each data object has a section of its own: `-fdata-sections`.
     pub(crate) data_sections:              bool,
+    /// Objects hold debug information. Only the link of an MSVC target reads
+    /// this, because its linker drops the information unless asked to keep
+    /// it; no code generation does.
+    pub(crate) debug_info:                 bool,
 }
 
 /// What code generation may assume where C leaves the behaviour

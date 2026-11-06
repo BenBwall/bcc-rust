@@ -87,7 +87,11 @@ pub(super) fn prepare<'ir>(
     let output = match (options.emit, &options.output_path) {
         | (Some(Emit::Ir | Emit::IrAbi), _) => {
             let mut text = ArenaString::new_in(arena);
-            _ = fmt::write(&mut text, format_args!("{module}"));
+            _ = if options.ir_debug_locations {
+                fmt::write(&mut text, format_args!("{}", module.display_located()))
+            } else {
+                fmt::write(&mut text, format_args!("{module}"))
+            };
             Output::Text(text.into_str())
         },
         | (Some(Emit::Wasm | Emit::Wat), _) =>
