@@ -30,7 +30,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 22] = [
+pub static TERMS: [Term; 26] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -101,6 +101,16 @@ pub static TERMS: [Term; 22] = [
         page:       143,
     },
     Term {
+        id:         "static-storage",
+        name:       "Static storage duration",
+        phrases:    &["static storage duration", "static storage"],
+        definition: "How long objects declared outside every function, or with static, last: \
+                     the whole run of the program. They are initialized once, before main is \
+                     called, to their constant initializer or to zero.",
+        clause:     "6.2.4p3",
+        page:       44,
+    },
+    Term {
         id:         "storage-duration",
         name:       "Automatic storage duration",
         phrases:    &["automatic storage duration", "storage duration"],
@@ -147,6 +157,35 @@ pub static TERMS: [Term; 22] = [
                      a copy of the argument's value.",
         clause:     "6.5.2.2p4",
         page:       83,
+    },
+    Term {
+        id:         "structure",
+        name:       "Structure",
+        phrases:    &["structures", "structure"],
+        definition: "A type made of named member objects, each with its own type, laid out one \
+                     after another in declaration order. Unlike an array, a structure is copied \
+                     whole by =, by a call and by a return.",
+        clause:     "6.2.5p20",
+        page:       47,
+    },
+    Term {
+        id:         "member",
+        name:       "Member",
+        phrases:    &["members", "member"],
+        definition: "One named object inside a structure, at a fixed offset from its start. s.m \
+                     and p->m designate member m of the structure s, or of the one p points to.",
+        clause:     "6.5.2.3p3",
+        page:       85,
+    },
+    Term {
+        id:         "padding",
+        name:       "Padding",
+        phrases:    &["padding"],
+        definition: "Unnamed bytes the compiler leaves inside or at the end of a structure so \
+                     that each member is aligned for its type. They belong to no member and hold \
+                     unspecified values.",
+        clause:     "6.7.2.1p13",
+        page:       115,
     },
     Term {
         id:         "indeterminate",

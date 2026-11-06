@@ -22,8 +22,10 @@
 //! and replay.
 //!
 //! This independent subset does not invoke bcc's syntax/semantic frontend.
-//! It uses a signed 32-bit int model, a signed 8-bit plain char, and
-//! element-based pointer offsets.
+//! It uses a signed 32-bit int model, a signed 8-bit plain char, structures
+//! laid out as bcc lays them out for x86-64 (`layout.rs`), and scalar-based
+//! pointer offsets. File-scope and `static` objects are created and
+//! initialized one per step before `main` runs.
 //! Operand evaluation is left-to-right; nested side effects are rejected.
 //! It is an educational execution model, not a C conformance checker.
 //!
@@ -31,6 +33,8 @@
 //! C99: §6.2.4 paragraph 2, p. 32; PDF p. 44 (object lifetime).
 //! C99: §6.5 paragraph 5, p. 67; PDF p. 79 (arithmetic exceptions).
 //! C99: §6.5.6 paragraph 8, p. 83; PDF p. 95 (pointer bounds).
+//! C99: §5.1.2 paragraph 1, p. 11; PDF p. 23 (static initialization before
+//! startup).
 
 // Standalone session storage, independent of the compiler's native arenas.
 #![expect(
@@ -48,6 +52,7 @@ mod parser;
 
 // Execution and observations
 mod json;
+mod layout;
 mod machine;
 mod memory;
 mod model;
@@ -65,11 +70,13 @@ pub use model::{
     EventKind,
     ExpressionNode,
     Frame,
+    Member,
     Object,
     Operand,
     Program,
     SourceRange,
     State,
+    Structure,
     Undefined,
     Value,
 };
@@ -144,7 +151,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 2.
+    /// Encodes the current observation using schema version 3.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()
@@ -176,6 +183,28 @@ impl Program {
     #[must_use]
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// The program's structure types; [`Value::Struct`] and
+    /// [`Operand::Address`] refer to them by index.
+    #[must_use]
+    pub fn structures(&self) -> &[Structure] {
+        &self.structures
+    }
+
+    /// How the source names the subobject of `object` at scalar `offset`,
+    /// or the whole structure `structure` there: `x`, `values[1]`, `p.x`,
+    /// `line.end.y`, `x+1` one past a scalar.
+    #[must_use]
+    pub fn path(&self, object: &Object, offset: i32, structure: Option<usize>) -> String {
+        let mut text = object.name.clone();
+        text.push_str(&layout::path(
+            &object.value,
+            offset,
+            structure,
+            &self.structures,
+        ));
+        text
     }
 
     /// The name of function `function`, in definition order.

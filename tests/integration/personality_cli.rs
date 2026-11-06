@@ -2202,7 +2202,7 @@ mod tests {
             } else {
                 "127"
             };
-            format!("(- {max} - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED")
+            format!("(-{max} - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED")
         };
         let unsigned = "0 (char)-1 < 0 1 _CHAR_UNSIGNED";
         for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
@@ -2224,7 +2224,7 @@ mod tests {
         }
         // `cl /J` defines `_CHAR_UNSIGNED`, as clang-cl's does; bcc keeps
         // Clang's `__CHAR_UNSIGNED__` beside it, as clang-cl does.
-        let signed_cl = "(- 127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED";
+        let signed_cl = "(-127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED";
         let unsigned_cl = "0 (char)-1 < 0 1 1";
         for mode in ["--msvc-mode", "--clang-cl-mode"] {
             assert_eq!(expand(mode, &[]), signed_cl, "{mode}");

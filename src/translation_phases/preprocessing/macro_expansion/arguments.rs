@@ -19,6 +19,7 @@ use crate::{
         TranslationPhase,
         preprocessing::{
             Expander,
+            macro_expansion::SpacingState,
             runtime::{
                 TokenizerFrame,
                 TokenizerFrameType,
@@ -28,6 +29,7 @@ use crate::{
             PreprocessorToken,
             PreprocessorTokenType,
             TokenSource,
+            TokenSpacing,
         },
     },
     util::{
@@ -77,9 +79,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .expanded
             .get()
             .expect("the argument was prescanned")
+            .tokens
             .clone();
+        let end = self.pad_substitution(argument);
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan { argument: true },
+            frame_type: TokenizerFrameType::Rescan {
+                argument: true,
+                end,
+            },
             tokenizer,
         });
     }
@@ -148,13 +155,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         token: PreprocessorToken,
         argument: &'x FunctionLikeMacroArgument<'x>,
-    ) -> TokenSource<'x> {
+    ) -> &'x Prescan<'x> {
         self.prescan_argument(token, argument);
         argument
             .expanded
             .get()
             .expect("the argument was prescanned")
-            .clone()
     }
 
     /// Prescans `argument` for its parameter, here `token`, unless that was
@@ -188,8 +194,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         tokens: &[PreprocessorToken],
     ) {
         let location = self.context.first_source_vector_or_default(source_vectors);
-        let tokenizer = TokenSource::replay(self.context, self.scratch, &[tokens], location);
-        drop(argument.expanded.set(tokenizer));
+        let tokens = TokenSource::replay(self.context, self.scratch, &[tokens], location);
+        drop(argument.expanded.set(Prescan {
+            tokens,
+            end: self.prescan_end(),
+        }));
     }
 
     fn raw_macro_argument_frame(&mut self, token: PreprocessorToken) -> Option<TokenizerFrame<'x>> {
@@ -203,6 +212,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     has_generated_token: false,
                     released:            false,
                     operand:             false,
+                    end:                 TokenSpacing::NONE,
                 },
                 tokenizer:  arg.tokenizer.clone(),
             };
@@ -294,6 +304,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let hash_hash_stack = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let generate_placeholders = self.generate_placeholders;
         let newlines = (self.last_was_newline, self.current_is_newline);
+        let spacing = replace(&mut self.spacing, SpacingState::new());
         self.push_argument_frame(argument);
         let depth = self.tokenizer_stack.len();
         let fence = replace(&mut self.operand_fence, if expand { 0 } else { depth });
@@ -315,6 +326,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         (self.last_was_newline, self.current_is_newline) = newlines;
         self.generate_placeholders = generate_placeholders;
         self.hash_hash_stack = hash_hash_stack;
+        let end = replace(&mut self.spacing, spacing).pending();
+        self.spacing.argument_end = end;
 
         let is_whitespace = |token: &PreprocessorToken| {
             matches!(
@@ -364,6 +377,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 has_generated_token: false,
                 released: false,
                 operand: false,
+                end: TokenSpacing::NONE,
             },
             tokenizer:  argument.tokenizer.clone(),
         });
@@ -375,6 +389,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// C99: §6.10.3.3 paragraph 2 and footnote 151, p. 154; PDF p. 166.
     pub(super) fn placeholder(context: &mut Context<'_>) -> PreprocessorToken {
         PreprocessorToken {
+            spacing:        TokenSpacing::NONE,
             kind:           PreprocessorTokenType::Placeholder,
             contents:       context.string_cache.intern(""),
             source_vectors: SourceVectors::default(),
@@ -440,7 +455,19 @@ pub(crate) struct FunctionLikeMacroArgument<'x> {
         Option<MacroArguments<'x>>,
     pub(in crate::translation_phases::preprocessing) disabled_macros:     &'x [StringCacheId],
     /// Shared once-only argument prescan; raw #/## operands bypass it.
-    pub(in crate::translation_phases::preprocessing) expanded: &'x OnceCell<TokenSource<'x>>,
+    pub(in crate::translation_phases::preprocessing) expanded:            &'x OnceCell<Prescan<'x>>,
+}
+
+/// An argument completely macro-replaced, kept for each use of its parameter.
+///
+/// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct Prescan<'x> {
+    /// Its tokens.
+    pub(in crate::translation_phases::preprocessing) tokens: TokenSource<'x>,
+    /// For a text of phase 4, the padding that comes after them where the
+    /// parameter is substituted.
+    pub(in crate::translation_phases::preprocessing) end:    TokenSpacing,
 }
 
 /// The arguments of one invocation, each under its parameter's name.

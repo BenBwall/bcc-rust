@@ -24,6 +24,8 @@
 //!   `macro_expansion/arguments.rs`, `macro_expansion/variadic.rs`.
 //! - Replacement operators: `macro_expansion/stringification.rs`,
 //!   `macro_expansion/paste.rs`.
+//! - For a text of phase 4: `macro_expansion/spacing.rs` records where
+//!   replacement separates tokens.
 //!
 //! C99: macro replacement, §6.10.3, pp. 151-153; PDF pp. 163-165.
 //!
@@ -49,6 +51,9 @@ mod variadic;
 mod paste;
 mod stringification;
 
+// What a text of phase 4 records of the expansions.
+mod spacing;
+
 use std::fmt::Debug;
 
 pub(crate) use arguments::{
@@ -56,6 +61,7 @@ pub(crate) use arguments::{
     MacroArguments,
 };
 pub(crate) use definitions::MacroDefinition;
+pub(in crate::translation_phases::preprocessing) use spacing::SpacingState;
 
 use super::{
     Expander,
@@ -96,6 +102,7 @@ impl Expander<'_, '_, '_, '_> {
                     if token.kind == PreprocessorTokenType::Whitespace
                         && SHOULD_IGNORE_WHITESPACE =>
                 {
+                    self.spacing.dropped_white();
                     continue 'base;
                 },
                 | Some(mut token) => {
@@ -107,6 +114,7 @@ impl Expander<'_, '_, '_, '_> {
                             ..
                         } => match token.kind {
                             | PreprocessorTokenType::Newline => {
+                                self.note_frame_end();
                                 self.pop_tokenizer_frame();
                                 continue 'base;
                             },
@@ -159,6 +167,7 @@ impl Expander<'_, '_, '_, '_> {
                                         | PreprocessorTokenType::Newline
                                 );
                             } else {
+                                self.note_frame_end();
                                 self.pop_tokenizer_frame();
                                 if self.generate_placeholders && !has_generated_token {
                                     break 'base Some(Self::placeholder(self.context));
@@ -167,6 +176,7 @@ impl Expander<'_, '_, '_, '_> {
                             }
                             if token.kind == PreprocessorTokenType::Newline {
                                 if SHOULD_IGNORE_WHITESPACE {
+                                    self.spacing.dropped_white();
                                     continue 'base;
                                 }
                                 token.kind = PreprocessorTokenType::Whitespace;
@@ -193,6 +203,9 @@ impl Expander<'_, '_, '_, '_> {
                             ..
                         } => (),
                     }
+                    if let Some(spacing) = self.text_spacing() {
+                        spacing.read(&token);
+                    }
                     break Some(token);
                 },
                 | None => {
@@ -209,6 +222,7 @@ impl Expander<'_, '_, '_, '_> {
                             ..
                         })
                     );
+                    self.note_frame_end();
                     self.pop_tokenizer_frame();
                     if self.generate_placeholders && is_empty_replay {
                         break 'base Some(Self::placeholder(self.context));

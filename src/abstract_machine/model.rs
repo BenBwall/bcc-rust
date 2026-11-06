@@ -1,13 +1,60 @@
 //! Public observations and compact internal operations for the subset engine.
 
+use std::sync::Arc;
+
 use super::clauses::Clause;
 
 /// A compiled bounded-subset program, independent of native compiler storage.
 #[derive(Debug, Clone)]
 pub struct Program {
-    pub(super) source:    String,
-    pub(super) functions: Vec<Function>,
-    pub(super) entry:     usize,
+    pub(super) source:     String,
+    pub(super) functions:  Vec<Function>,
+    pub(super) entry:      usize,
+    /// Structure types, in definition order; [`Value::Struct`] and
+    /// [`Operand::Address`] refer to them by index.
+    pub(super) structures: Arc<[Structure]>,
+    /// Objects with static storage duration, in declaration order: file-scope
+    /// objects and block-scope `static` ones. They are initialized before
+    /// `main` runs and take the first object IDs.
+    pub(super) statics:    Vec<Static>,
+}
+
+/// A structure type and its layout on x86-64: each member at an offset
+/// aligned for its type, with padding where the next member needs it and at
+/// the end, so that an array of the structure keeps every member aligned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Structure {
+    /// The tag: `point` in `struct point`.
+    pub name:    String,
+    /// Size in bytes, including padding.
+    pub size:    usize,
+    /// Alignment in bytes: that of its most aligned member.
+    pub align:   usize,
+    /// Members, in declaration order.
+    pub members: Vec<Member>,
+}
+
+/// One member of a [`Structure`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "The page reads the layout; the type is the engine's own."
+)]
+pub struct Member {
+    /// The member's identifier.
+    pub name:      String,
+    /// Its declared type, spelled as in C (`int`, `int[3]`, `struct point`).
+    pub r#type:    String,
+    /// Byte offset from the start of the structure.
+    pub offset:    usize,
+    /// Size in bytes.
+    pub size:      usize,
+    /// Unnamed padding bytes after it, before the next member or the end.
+    pub padding:   usize,
+    /// The member's first scalar (leaf) within the structure, the unit the
+    /// machine addresses: [`Operand::Address`] offsets count leaves.
+    pub first:     usize,
+    pub(super) ty: Type,
 }
 
 /// An immutable observation at an execution boundary.
@@ -97,6 +144,12 @@ impl Event {
 pub enum EventKind {
     /// The initial state: `main` is about to run.
     Start,
+    /// Before `main`, an object with static storage duration received its
+    /// initial value: zero, or its constant initializer's.
+    StaticStorage,
+    /// Execution reached the declaration of a block-scope `static` object,
+    /// which already exists and does nothing here.
+    StaticLocal,
     /// Execution entered a block.
     EnterBlock,
     /// A block finished, ending its objects' lifetimes.
@@ -119,6 +172,8 @@ pub enum EventKind {
     Dereference,
     /// `a[i]` designated an array element.
     Subscript,
+    /// `s.m` or `p->m` designated a structure member.
+    Member,
     /// A unary `+`, `-` or `!` produced its value.
     Unary,
     /// An integer `+`, `-`, `*`, `/` or `%` produced its value.
@@ -153,6 +208,8 @@ impl EventKind {
     pub const fn name(self) -> &'static str {
         match self {
             | Self::Start => "start",
+            | Self::StaticStorage => "static_storage",
+            | Self::StaticLocal => "static_local",
             | Self::EnterBlock => "enter_block",
             | Self::LeaveBlock => "leave_block",
             | Self::Declare => "declare",
@@ -164,6 +221,7 @@ impl EventKind {
             | Self::AddressOf => "address_of",
             | Self::Dereference => "dereference",
             | Self::Subscript => "subscript",
+            | Self::Member => "member",
             | Self::Unary => "unary",
             | Self::Arithmetic => "arithmetic",
             | Self::PointerArithmetic => "pointer_arithmetic",
@@ -195,10 +253,15 @@ impl EventKind {
             | Self::AddressOf
             | Self::Dereference
             | Self::Subscript
+            | Self::Member
             | Self::Initialize
             | Self::Assign
             | Self::Increment => "memory",
-            | Self::EnterBlock | Self::LeaveBlock | Self::Declare => "lifetime",
+            | Self::EnterBlock
+            | Self::LeaveBlock
+            | Self::Declare
+            | Self::StaticStorage
+            | Self::StaticLocal => "lifetime",
             | Self::Start | Self::Discard | Self::Jump | Self::Branch => "control",
             | Self::Call | Self::Return => "call",
             | Self::Fault => "fault",
@@ -212,12 +275,17 @@ impl EventKind {
 pub enum Operand {
     /// An rvalue.
     Value(Value),
-    /// An lvalue designating element `offset` of object `target`.
+    /// An lvalue designating the subobject at scalar `offset` of object
+    /// `target`.
     Address {
         /// The designated object's ID.
-        target: usize,
-        /// The element within it (0 for a scalar).
-        offset: i32,
+        target:    usize,
+        /// The scalar (leaf) where the designated subobject starts: an array
+        /// element's index, a member's first leaf, 0 for a whole object.
+        offset:    i32,
+        /// The structure type, when the lvalue designates a whole structure
+        /// rather than one scalar.
+        structure: Option<usize>,
     },
 }
 
@@ -284,7 +352,8 @@ pub struct Frame {
     pub waiting:  Option<SourceRange>,
 }
 
-/// One automatic C object. Array elements share their enclosing object ID.
+/// One C object. Array elements and structure members share their enclosing
+/// object ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Object {
     /// Stable allocation identity, independent of host addresses.
@@ -293,10 +362,14 @@ pub struct Object {
     pub name:             String,
     /// Declared subset type spelling.
     pub r#type:           String,
-    /// Owning activation.
+    /// Owning activation, or 0 for an object with static storage duration,
+    /// which belongs to no call.
     pub frame_id:         usize,
-    /// Always `automatic` in this subset.
+    /// `automatic` or `static`.
     pub storage_duration: &'static str,
+    /// The function a block-scope `static` object is declared in; `None` for
+    /// every other object.
+    pub function:         Option<String>,
     /// `alive` or `ended`.
     pub lifetime:         &'static str,
     /// Whether this object is a function parameter.
@@ -312,15 +385,68 @@ pub enum Value {
     Indeterminate,
     /// Signed 32-bit `int`, or a `char` value in -128..=127.
     Integer(i32),
-    /// An `int *`, with offset measured in int elements; `None` means null.
+    /// An `int *` or a pointer to a structure; a `None` target means null.
     Pointer {
         /// Target object ID.
-        target: Option<usize>,
-        /// Element offset (one-past is representable).
-        offset: i32,
+        target:    Option<usize>,
+        /// The scalar (leaf) it points at (one past the end is
+        /// representable).
+        offset:    i32,
+        /// The array the pointer moves in, as the leaf of its element 0: an
+        /// object that is not an array element counts as an array of one
+        /// (C99 §6.5.6p7).
+        first:     i32,
+        /// That array's length in elements.
+        length:    i32,
+        /// The structure type a pointer to a structure points to.
+        structure: Option<usize>,
     },
     /// Fixed-size int array contents.
     Array(Vec<Value>),
+    /// A structure's members' values, in declaration order.
+    Struct {
+        /// Index of its type in the program's structures.
+        structure: usize,
+        /// Member values, in declaration order.
+        members:   Vec<Value>,
+    },
+}
+
+impl Value {
+    /// The null pointer.
+    pub(super) const fn null() -> Self {
+        Self::Pointer {
+            target:    None,
+            offset:    0,
+            first:     0,
+            length:    0,
+            structure: None,
+        }
+    }
+
+    /// A pointer to the scalar `offset` of `target`, moving in the array of
+    /// `length` elements whose element 0 is the scalar `first`.
+    pub(super) const fn pointer(target: usize, offset: i32, first: i32, length: i32) -> Self {
+        Self::Pointer {
+            target: Some(target),
+            offset,
+            first,
+            length,
+            structure: None,
+        }
+    }
+
+    /// Whether `self` and `other` are pointers to the same place, or both
+    /// null: what `==` compares, whatever array each moves in.
+    pub(super) fn same_address(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (
+                Self::Pointer { target: a, offset: x, .. },
+                Self::Pointer { target: b, offset: y, .. },
+            ) if a == b && (a.is_none() || x == y)
+        )
+    }
 }
 
 /// A structured diagnostic. Unsupported features and limits never claim UB.
@@ -411,6 +537,8 @@ impl Diagnostic {
 #[derive(Debug, Clone)]
 pub(super) struct Function {
     pub name:       String,
+    /// `int` or a structure.
+    pub returns:    Type,
     pub parameters: Vec<(String, Type)>,
     pub code:       Vec<Instruction>,
     pub nodes:      Vec<ExpressionNode>,
@@ -429,16 +557,38 @@ pub(super) enum Op {
     Enter,
     Leave,
     Declare(String, Type),
+    /// Reaching the declaration of block-scope static `index`: nothing to do.
+    StaticLocal(usize),
     Push(i32),
-    /// The implicit zero of an array element without an initializer.
+    /// The implicit zero of an array element or member without an
+    /// initializer.
     Zero,
-    Address(String),
-    /// Element `index` of the array being initialized.
-    Element(String, i32),
+    Address(Place),
+    /// The subobject at scalar `offset` of the object `name` being
+    /// initialized (`values[2]`, `p.x`); `structure` when it is a whole
+    /// structure.
+    Element {
+        name:      String,
+        offset:    i32,
+        structure: Option<usize>,
+    },
     Load,
+    /// Lvalue conversion of a whole structure: a copy of every member.
+    LoadStruct(usize),
+    /// `.m` (or `->m` when `arrow`) selecting the member that starts at
+    /// scalar `offset` of the structure; `structure` when the member is a
+    /// structure itself, `array` (its length) when it is an int array, which
+    /// decays to a pointer to its first element at once.
+    Member {
+        name:      String,
+        offset:    i32,
+        arrow:     bool,
+        structure: Option<usize>,
+        array:     Option<usize>,
+    },
     /// The integer promotion of a loaded `char` to `int`.
     Promote,
-    Decay(String),
+    Decay(Place),
     AddressOf,
     Dereference,
     Index,
@@ -454,6 +604,8 @@ pub(super) enum Op {
         /// Whether the stored value is a char's, not an int's, so storing it
         /// in a char converts nothing.
         char_value:      bool,
+        /// The structure type, for a store that copies a whole structure.
+        structure:       Option<usize>,
     },
     Increment {
         delta:  i32,
@@ -468,14 +620,45 @@ pub(super) enum Op {
     Fallthrough,
 }
 
+/// Where a name's object is found when it is evaluated.
+#[derive(Debug, Clone)]
+pub(super) enum Place {
+    /// An automatic object of the current call, by name.
+    Local(String),
+    /// Static object `index` of [`Program::statics`].
+    Static(usize),
+}
+
+/// An object with static storage duration and its initial value, fixed
+/// before the program starts.
+#[derive(Debug, Clone)]
+pub(super) struct Static {
+    pub name:     String,
+    pub ty:       Type,
+    /// The function a block-scope static is declared in.
+    pub function: Option<String>,
+    /// Its value before `main` runs: the constant initializer's, with zero
+    /// for every scalar it does not cover.
+    pub value:    Value,
+    /// Whether the declaration has an initializer.
+    pub explicit: bool,
+    pub range:    SourceRange,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Type {
     Int,
     /// Plain `char`, signed with 8 bits as on x86-64 (implementation-defined;
     /// C99 §6.2.5p15).
     Char,
+    /// `int *`.
     Pointer,
+    /// `int[n]`.
     Array(usize),
+    /// A structure, by index into [`Program::structures`].
+    Struct(usize),
+    /// A pointer to a structure.
+    StructPointer(usize),
 }
 
 pub(super) const MAX_SOURCE: usize = 32 * 1024;
@@ -484,6 +667,8 @@ pub(super) const MAX_CODE: usize = 8192;
 pub(super) const MAX_STEPS: usize = 2048;
 pub(super) const MAX_FRAMES: usize = 32;
 pub(super) const MAX_OBJECTS: usize = 128;
+pub(super) const MAX_STRUCTURES: usize = 32;
+pub(super) const MAX_MEMBERS: usize = 32;
 pub(super) const MAX_CELLS: usize = 512;
 pub(super) const MAX_OPERANDS: usize = 1024;
 pub(super) const MAX_TRACE_BYTES: usize = 8 * 1024 * 1024;

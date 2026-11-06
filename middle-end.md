@@ -171,7 +171,13 @@ shl that overflows, an `exact` division that is inexact, and an `inbounds`
 pointer offset that leaves its object all produce *poison*. Poison propagates
 through arithmetic; branching on poison, dividing by it, or using it as an
 address is undefined behaviour. `freeze` turns poison into an arbitrary but
-fixed value. Reading an uninitialized local yields `poison`. A `volatile` load
+fixed value. An uninitialized local read in memory yields `poison`. Promotion
+to SSA refines a read on a path without a store to one `freeze` of `poison`, so
+masking it clears bits and testing them decides nothing about the rest of the
+function, which is how GCC and Clang read such a program; an edge that carries
+no store still passes `poison`, which a merge folds away, as LLVM folds a `phi`
+with an `undef` operand. `--interpret` therefore no longer reports a plain read
+of an uninitialized scalar: it runs on the frozen value. A `volatile` load
 never produces poison: it reads the bytes as they are in memory, where a byte
 never written or written with poison is arbitrary and the others keep their
 values, since what a volatile load returns is beyond the program's control and
