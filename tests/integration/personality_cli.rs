@@ -1489,6 +1489,34 @@ mod tests {
         }
     }
 
+    /// Only Clang reads `#pragma clang deprecated`. GCC keeps it in its `-E`
+    /// text, where the macro it names no longer exists, and compiles that.
+    #[test]
+    fn gcc_ignores_clang_macro_pragmas() {
+        let directory = Directory::new();
+        directory.write("m.c", "#pragma clang deprecated(GONE)\nint x;\n");
+        directory.write(
+            "t.c",
+            "#define OLD 1\n#pragma clang deprecated(OLD)\nint x = OLD;\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-Werror", "-c", "m.c"]);
+        succeeds(&output);
+        let output = directory.bcc("--gcc-mode", &["-Werror", "-c", "t.c"]);
+        succeeds(&output);
+        assert!(
+            !directory
+                .bcc("--clang-mode", &["-c", "m.c"])
+                .status
+                .success()
+        );
+        assert!(
+            !directory
+                .bcc("--clang-mode", &["-Werror", "-c", "t.c"])
+                .status
+                .success()
+        );
+    }
+
     /// `-E` marks every change of file, with the compiler's flags, and the
     /// tokens of two files never join: two includes of a one-line header
     /// used to print `xx`.
@@ -1873,31 +1901,19 @@ mod tests {
         }
     }
 
-    /// Only Clang reads `#pragma clang deprecated`. GCC keeps it in its `-E`
-    /// text, where the macro it names no longer exists, and compiles that.
+    /// GCC compiles a computed goto in a function that takes no label's
+    /// address, and Clang refuses it.
     #[test]
-    fn gcc_ignores_clang_macro_pragmas() {
+    fn computed_goto_without_label_addresses_follows_each_compiler() {
         let directory = Directory::new();
-        directory.write("m.c", "#pragma clang deprecated(GONE)\nint x;\n");
-        directory.write(
-            "t.c",
-            "#define OLD 1\n#pragma clang deprecated(OLD)\nint x = OLD;\n",
-        );
-        let output = directory.bcc("--gcc-mode", &["-Werror", "-c", "m.c"]);
-        succeeds(&output);
-        let output = directory.bcc("--gcc-mode", &["-Werror", "-c", "t.c"]);
-        succeeds(&output);
+        directory.write("g.c", "void go(void *p) { goto *p; }\n");
+        succeeds(&directory.bcc("--gcc-mode", &["-c", "g.c"]));
+        let output = directory.bcc("--clang-mode", &["-c", "g.c"]);
+        assert_eq!(output.status.code(), Some(1));
         assert!(
-            !directory
-                .bcc("--clang-mode", &["-c", "m.c"])
-                .status
-                .success()
-        );
-        assert!(
-            !directory
-                .bcc("--clang-mode", &["-Werror", "-c", "t.c"])
-                .status
-                .success()
+            stderr(&output).contains("computed goto in a function without label addresses"),
+            "{}",
+            stderr(&output)
         );
     }
 
