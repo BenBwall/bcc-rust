@@ -159,8 +159,10 @@ impl CompilerConfiguration {
             // GCC's `ignored "-Wall"` silences nothing it holds, as it says
             // nothing about the options `-Wall` enabled.
             | "all" if class == PragmaClass::Ignored && !clang => self,
+            // GCC's `-Wall` holds `-Wmain`; Clang's does not.
             | "all" => DiagnosticGroup::UNDER_ALL
                 .iter()
+                .chain((!clang).then_some(&DiagnosticGroup::Main))
                 .fold(self, |configuration, &group| {
                     configuration.with_pragma_group(group, class)
                 }),

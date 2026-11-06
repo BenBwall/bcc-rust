@@ -331,6 +331,24 @@ int x;
         }
     }
 
+    /// GCC's `-Wall` holds `-Wmain`, which `error` and `warning` reach, while
+    /// its `ignored "-Wall"` changes nothing; Clang's does not hold it.
+    #[test]
+    fn a_pragma_naming_wall_reaches_main_under_gcc() {
+        let source = |kind: &str| {
+            format!("#pragma GCC diagnostic {kind} \"-Wall\"\nchar main(void) {{ return 0; }}\n")
+        };
+        let gcc = |flags: &[&str], kind: &str| compile("wall", "--gcc-mode", flags, &source(kind));
+        assert_eq!(gcc(&[], "error"), ["2 error"]);
+        assert_eq!(gcc(&[], "warning"), ["2 warning"]);
+        assert_eq!(gcc(&[], "ignored"), [""; 0]);
+        assert_eq!(gcc(&["-Wall"], "ignored"), ["2 warning"]);
+        assert_eq!(
+            compile("wall", "--clang-mode", &[], &source("error")),
+            ["2 warning"]
+        );
+    }
+
     /// A warning lowering reports, after the whole unit is analyzed, reads
     /// the settings where the call is.
     #[test]
