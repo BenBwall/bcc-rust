@@ -2014,6 +2014,72 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[],
         0,
     ),
+    // GCC's and Clang's spelling of the same counter read.
+    descriptor(
+        Id::X86Rdtsc,
+        "__builtin_ia32_rdtsc",
+        B::ReadTimestamp,
+        Signature {
+            result:     T::Scalar(S::UnsignedLongLong),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    descriptor(
+        Id::X86Pause,
+        "__builtin_ia32_pause",
+        B::X86Instruction("pause"),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    descriptor(
+        Id::X86Lfence,
+        "__builtin_ia32_lfence",
+        B::X86Instruction("lfence"),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    descriptor(
+        Id::X86Sfence,
+        "__builtin_ia32_sfence",
+        B::X86Instruction("sfence"),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    descriptor(
+        Id::X86Mfence,
+        "__builtin_ia32_mfence",
+        B::X86Instruction("mfence"),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
     // Microsoft's `void __va_start(va_list *, ...)`, with Microsoft
     // extensions: `<vadefs.h>`'s `va_start` on x64.
     descriptor(
@@ -2283,7 +2349,7 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
-        | B::ReadTimestamp | B::DebugTrap | B::ClearCache => (
+        | B::ReadTimestamp | B::X86Instruction(_) | B::DebugTrap | B::ClearCache => (
             TypeRule::Fixed,
             BuiltinEffectClass::Write,
             None,

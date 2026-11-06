@@ -451,8 +451,8 @@ mod tests {
         "#,
         );
         assert_runs_like_clang(
-            "int g; static void helper(void){g=__builtin_ia32_rdtsc();} void f(void){static void \
-             (*p)(void)=helper;}int main(void){f();return 0;}",
+            "int g; static void helper(void){__builtin_ia32_clflush(&g);} void f(void){static \
+             void (*p)(void)=helper;}int main(void){f();return 0;}",
         );
         assert_runs_like_clang(
             "int rt(void) __attribute__((returns_twice));int rt(void){return 0;} static int \
@@ -474,8 +474,8 @@ mod tests {
         );
         assert!(text(&used_native_helper.stdout).contains("callq\trt"));
         let used_helper = bcc(
-            "int g; static void helper(void){g=__builtin_ia32_rdtsc();} void f(void){static void \
-             (*p)(void) __attribute__((used))=helper;} int main(void){f();return 0;}",
+            "int g; static void helper(void){__builtin_ia32_clflush(&g);} void f(void){static \
+             void (*p)(void) __attribute__((used))=helper;} int main(void){f();return 0;}",
             &["--emit=llvm"],
         );
         assert!(!used_helper.status.success());

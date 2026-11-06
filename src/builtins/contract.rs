@@ -45,6 +45,26 @@ impl Availability {
     }
 }
 
+impl BuiltinDescriptor {
+    /// Whether the builtin exists under the configuration: its feature is
+    /// accepted, and an x86 instruction's target is x86, so that
+    /// `__has_builtin` sends a WebAssembly build to its fallback, as Clang's
+    /// does.
+    pub(crate) fn accepted(
+        &self,
+        configuration: crate::configuration::CompilerConfiguration,
+    ) -> bool {
+        self.availability.accepted(configuration)
+            && !(matches!(
+                self.operation,
+                BuiltinOperation::ReadTimestamp | BuiltinOperation::X86Instruction(_)
+            ) && matches!(
+                configuration.target(),
+                crate::target::Target::Wasm32Unknown | crate::target::Target::Wasm32Wasi
+            ))
+    }
+}
+
 /// Every entry applies to all four current x86-64 targets. Reserved aliases
 /// keep their contracts in freestanding mode; ordinary library lookup is
 /// hosted.
@@ -352,6 +372,10 @@ pub(crate) enum BuiltinOperation {
     /// x86 `__rdtsc`: the processor's time-stamp counter.
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-readcyclecounter>
     ReadTimestamp,
+    /// An x86 instruction with no operands, ordered against memory accesses
+    /// (`__builtin_ia32_pause` and the fences): the instruction's text. GCC
+    /// manual, "x86 Built-in Functions".
+    X86Instruction(&'static str),
     /// Microsoft `__debugbreak`: a breakpoint trap after which execution
     /// may continue. MSVC extension: Microsoft Learn, "__debugbreak".
     /// <https://learn.microsoft.com/en-us/cpp/intrinsics/debugbreak>

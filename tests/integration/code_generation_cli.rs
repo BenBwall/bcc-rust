@@ -919,6 +919,81 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
         }
     }
 
+    /// `__has_builtin` sends a WebAssembly build to its fallback, as Clang's
+    /// does, rather than to an instruction no back end there can emit.
+    #[test]
+    fn x86_instruction_builtins_exist_only_on_x86() {
+        let source = "int main(void) {\n#if __has_builtin(__builtin_ia32_pause)\n  \
+                      __builtin_ia32_pause();\n#endif\n#if __has_builtin(__rdtsc) || \
+                      __has_builtin(__builtin_ia32_rdtsc) || \
+                      __has_builtin(__builtin_ia32_mfence)\n  return 1;\n#endif\n  return 0;\n}\n";
+        let output = bcc(source, &["--target=wasm32-unknown-unknown", "--emit=asm"]);
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let output = bcc(source, &["--target=wasm32-unknown-unknown", "-E", "-P"]);
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let preprocessed = text(&output.stdout);
+        assert!(preprocessed.contains("return 0"), "{preprocessed}");
+        assert!(!preprocessed.contains("return 1"), "{preprocessed}");
+        assert!(!preprocessed.contains("pause"), "{preprocessed}");
+    }
+
+    /// curl's spin lock calls `__builtin_ia32_pause`. Each of these runs one
+    /// instruction with no operands, and an optimizer must keep it. The native
+    /// back end refuses the time-stamp counter, under either spelling.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x86_instruction_builtins_reach_every_back_end() {
+        let fences = "__builtin_ia32_pause();\n  __builtin_ia32_lfence();\n  \
+                      __builtin_ia32_sfence();\n  __builtin_ia32_mfence();\n";
+        let source = format!("int main(void) {{\n  {fences}  return 42;\n}}\n");
+        let counter = format!(
+            "int main(void) {{\n  {fences}  return __builtin_ia32_rdtsc() != 0 ? 42 : 42;\n}}\n"
+        );
+        let executable = temporary("x86-instructions.exe");
+        for (source, options, listed) in [
+            (
+                &counter,
+                &["--opt=none"][..],
+                &["pause", "mfence", "rdtsc"][..],
+            ),
+            (
+                &counter,
+                &["--opt=bcc"][..],
+                &["pause", "mfence", "rdtsc"][..],
+            ),
+            (
+                &source,
+                &["--opt=none", "--backend=native"][..],
+                &["pause", "mfence"][..],
+            ),
+            (
+                &source,
+                &["--opt=bcc", "--backend=native"][..],
+                &["pause", "mfence"][..],
+            ),
+        ] {
+            let assembly = bcc(source, &[options, &["--emit=asm"]].concat());
+            let listing = text(&assembly.stdout);
+            for instruction in listed {
+                assert!(
+                    listing.contains(instruction),
+                    "{options:?} {instruction}: {listing}"
+                );
+            }
+            let built = bcc(
+                source,
+                &[options, &["-o", executable.to_str().unwrap()]].concat(),
+            );
+            assert!(
+                built.status.success(),
+                "{options:?}: {}",
+                text(&built.stderr)
+            );
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(42), "{options:?}");
+        }
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [
