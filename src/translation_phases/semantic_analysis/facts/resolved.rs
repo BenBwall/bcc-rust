@@ -440,6 +440,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .flatten()
     }
 
+    /// The item whose value a statement expression's block yields, and the
+    /// items before it: the last one, except that GCC looks past null
+    /// statements after it, so `({ 7;; })` is 7. Clang gives that block no
+    /// value. GCC manual, "Statements and Declarations in Expressions".
+    pub(in crate::translation_phases::semantic_analysis) fn statement_expression_value_item<'a>(
+        &self,
+        items: &'a [BlockItem<'tu>],
+    ) -> Option<(&'a BlockItem<'tu>, &'a [BlockItem<'tu>])> {
+        let mut end = items.len();
+        if self.gcc_identity() {
+            while end > 1
+                && matches!(
+                    items[end - 1],
+                    BlockItem::Statement(Statement {
+                        kind: StatementType::Null,
+                        ..
+                    })
+                )
+            {
+                end -= 1;
+            }
+        }
+        items[..end].split_last()
+    }
+
     /// Block completion reads one immediate tail identity, regardless of
     /// labels.
     pub(in crate::translation_phases::semantic_analysis) fn statement_expression_tail(
@@ -449,7 +474,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let StatementType::Compound { items } = block.kind else {
             return None;
         };
-        let BlockItem::Statement(outer) = *items.last()? else {
+        let (&BlockItem::Statement(outer), _) =
+            self.statement_expression_value_item(items.as_slice())?
+        else {
             return None;
         };
         self.statement_tail(outer)
@@ -463,9 +490,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         result_type: TypeId,
     ) {
         let tail = self.statement_expression_tail(block);
-        let count = match block.kind {
-            | StatementType::Compound { items } => items.len(),
-            | _ => 0,
+        let (count, before_value) = match block.kind {
+            | StatementType::Compound { items } => (
+                items.len(),
+                self.statement_expression_value_item(items.as_slice())
+                    .map_or(0, |(_, before)| before.len()),
+            ),
+            | _ => (0, 0),
         };
         _ = self.resolved.statement_expressions.insert(
             identity(expression),
@@ -473,7 +504,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 block,
                 outer_tail: tail.map(|(outer, _)| outer),
                 value_tail: tail.map(|(_, value)| value),
-                prefix: count - usize::from(tail.is_some()),
+                prefix: if tail.is_some() { before_value } else { count },
                 result_type,
             },
         );

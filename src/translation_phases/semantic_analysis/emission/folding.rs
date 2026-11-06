@@ -425,7 +425,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let StatementType::Compound { items } = block.kind else {
                     return None;
                 };
-                let (last, rest) = items.as_slice().split_last()?;
+                let (last, rest) = self.statement_expression_value_item(items.as_slice())?;
                 for item in rest {
                     match *item {
                         | BlockItem::Statement(statement) => match statement.kind {
