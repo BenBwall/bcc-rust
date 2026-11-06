@@ -1316,9 +1316,21 @@ keeps a warning from `-Werror` and `-Werror=X`, `error` makes one an error
 despite `-Wno-X` and `-Wno-error=X`, and only `-w` silences both. A pragma does
 not bring a warning out of a system header. `-Wall` in a pragma reaches the
 groups bcc models under it, except that GCC's `ignored "-Wall"` changes nothing;
-`-Wpedantic` covers extension diagnostics, and Clang's `-Weverything` every
-group. `-E` keeps each pragma, a `_Pragma` as a line, so compiling its text has
-the same effect.
+`-Wpedantic` covers extension diagnostics of every phase, and Clang's
+`-Weverything` every group. It stops at what the option holds: a macro
+redefinition or a member that declares nothing stays what `-pedantic-errors` made
+it. GCC's plain `_Complex` is under it and Clang's has no group; so is Clang's
+`#line 0`, where GCC's pragma can only turn the check on, and the warning stays
+the command line's. `__extension__` silences what a pragma made a warning. `-E`
+keeps each pragma, a `_Pragma` as a line, so compiling its text has the same
+effect.
+
+bcc files every extension under `-Wpedantic`, including those each compiler gives
+a group of its own: GCC's `-Wlong-long` and `-Wdeclaration-after-statement`, and
+Clang's `-Wc23-extensions`. A pragma naming `-Wpedantic` therefore reaches these
+in bcc alone. The lexer runs when a file is opened, before any pragma in it, so
+what `-pedantic-errors` decides there (an unterminated quote's wording, say) does
+not follow a pragma.
 
 Bad pragmas warn as each compiler does: GCC under `-Wpragmas`, which its `-E`
 does not report, and Clang under `-Wunknown-pragmas` or, for an unknown group,

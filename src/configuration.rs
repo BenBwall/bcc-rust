@@ -107,6 +107,9 @@ pub(crate) struct CompilerConfiguration {
     /// keeps them warnings, `None` without it. Only the diagnostics bcc
     /// files under `-Wpedantic` for GCC read it.
     werror_pedantic: Option<bool>,
+    /// Whether the command line made pedantic warnings errors, kept once a
+    /// pragma naming `-Wpedantic` has changed `extension_policy`.
+    command_line_pedantic_deny: Option<bool>,
     /// Whether the last of `-Wpedantic`, `-Wno-pedantic` and
     /// `-Werror=pedantic` was `-Wno-pedantic`, which stops the diagnostics
     /// but leaves their error state for a later `-Wpedantic`, as in GCC.

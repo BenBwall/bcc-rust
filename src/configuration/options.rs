@@ -957,6 +957,7 @@ impl CompilerConfiguration {
             pedantic_errors: false,
             pedantic_as_error: false,
             werror_pedantic: None,
+            command_line_pedantic_deny: None,
             pedantic_disabled: false,
             fatal_errors: false,
             accepted: 0,

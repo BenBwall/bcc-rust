@@ -66,12 +66,30 @@ pub(crate) struct ClassifiedError<'tu> {
 }
 
 impl TranslationError<'_> {
+    /// The diagnostic itself, without a pragma's classification around it.
+    /// Whoever asks what a queued diagnostic is reads it through this.
+    pub(crate) fn unclassified(&self) -> &Self {
+        match self {
+            | Self::Classified(classified) => classified.error,
+            | error => error,
+        }
+    }
+
+    /// Whether `__extension__` or a withdrawal has taken this diagnostic back.
+    pub(crate) fn is_suppressed(&self) -> bool {
+        matches!(self.unclassified(), Self::Extension(extension) if extension.suppressed.get())
+    }
+
     /// A warning-group diagnostic takes its group's configured severity,
     /// which already includes global -Werror and the group's own overrides.
     /// Other warnings from every phase share the global -Werror control.
     pub(crate) fn configured_severity(&self, context: &Context<'_>) -> ErrorSeverity {
         if let Self::Classified(classified) = self {
             classified.severity
+        } else if let Self::Parsing(error) = self
+            && error.severity_is_final
+        {
+            error.severity
         } else if let Some(group) = self.group() {
             context
                 .configuration

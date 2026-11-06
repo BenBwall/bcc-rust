@@ -171,9 +171,7 @@ impl<'tu> Context<'tu> {
             ),
             "only preprocessing and extension diagnostics are withdrawn"
         );
-        if let TranslationError::Extension(extension) = slot
-            && extension.suppressed.get()
-        {
+        if slot.is_suppressed() {
             return;
         }
         *slot = TranslationError::Extension(ExtensionDiagnostic {

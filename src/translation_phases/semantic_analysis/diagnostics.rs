@@ -62,7 +62,8 @@ impl Analyzer<'_, '_, '_> {
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
-        self.context.classified_error(
+        self.context.classified_group_error(
+            group,
             at,
             TranslationError::Semantic(SemanticError {
                 extension_severity: Some(severity),

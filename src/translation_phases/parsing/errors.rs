@@ -136,18 +136,21 @@ impl<'tu> Parser<'_, 'tu, '_> {
         {
             return;
         }
-        // Clang's warning is an error wherever `-pedantic-errors` appeared;
-        // GCC's is a `-Wpedantic` diagnostic, which its pedantic options
-        // enable and make errors.
+        // Clang's warning has no group, so the command line decides it and no
+        // pragma reaches it: an error wherever `-pedantic-errors` appeared.
+        // GCC's is a `-Wpedantic` diagnostic, which its pedantic options enable
+        // and make errors, and a pragma naming that option governs it.
+        let clang_rules = self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang;
         let plain_complex_severity = plain_complex.then(|| {
-            let configuration = self.context.configuration;
-            if configuration.compiler_identity().rules() == crate::configuration::RuleSet::Clang {
-                Some(if configuration.pedantic_errors() {
+            if clang_rules {
+                Some(if self.context.configuration.pedantic_errors() {
                     ErrorSeverity::Error
                 } else {
                     ErrorSeverity::Warning
                 })
             } else {
+                let configuration = self.context.configuration_at(source_vectors);
                 // `-Werror=pedantic` enables it as an error, or as a warning
                 // after `-Wno-error=pedantic`; `-w` silenced it above.
                 let policy = crate::translation_phases::policy_severity(
@@ -173,11 +176,11 @@ impl<'tu> Parser<'_, 'tu, '_> {
         };
         let error = ParserError {
             code: error_type.code(),
+            // Neither compiler files this one under `-Wpedantic`, so a pragma
+            // naming that option does not reach what `-pedantic-errors` did.
             severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing) {
                 crate::translation_phases::policy_severity(
-                    self.context
-                        .configuration_at(source_vectors)
-                        .extension_policy(),
+                    self.context.configuration.extension_policy(),
                     crate::translation_phases::DiagnosticPolicy::Warning,
                 )
                 .unwrap_or(ErrorSeverity::Warning)
@@ -194,6 +197,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
             } else {
                 error_type.severity()
             },
+            severity_is_final: false,
             warning_group,
             production: self.active_production,
             expected: error_type.expected_syntax(),
@@ -219,7 +223,17 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 |severity| TranslationError::Parsing(ParserError { severity, ..error }),
             );
         } else {
-            self.context.parser_error(error);
+            // These two take their severity from the settings here, which
+            // `-Werror` must not then overrule when they are reported.
+            let pedantic = matches!(error.error_type, ParserErrorType::EmptyTranslationUnit)
+                || (plain_complex && !clang_rules);
+            let severity_is_final = pedantic
+                && error.severity == ErrorSeverity::Warning
+                && self.context.pedantic_warning_at(source_vectors);
+            self.context.parser_error(ParserError {
+                severity_is_final,
+                ..error
+            });
         }
     }
 
@@ -266,7 +280,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
     #[cold]
     #[inline(never)]
     pub(super) fn missing_syntax_source(&mut self) -> SourceVectors {
-        if let Some(token) = self.cursor.current()
+        let token = self.cursor.current();
+        let anchor = if let Some(token) = token
             && let Some(first) = self
                 .context
                 .get_source_vectors(token.source_vectors)
@@ -274,12 +289,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
         {
             let (position, source_file_index) =
                 (first.position(self.context), first.source_file_index);
-            return self
-                .context
-                .create_retained_source_vectors(position, source_file_index, 0);
-        }
+            self.context
+                .create_retained_source_vectors(position, source_file_index, 0)
+        } else {
+            self.context.create_retained_source_vectors(
+                self.position(),
+                self.source_file_index(),
+                0,
+            )
+        };
         self.context
-            .create_retained_source_vectors(self.position(), self.source_file_index(), 0)
+            .record_retained_pragma_anchor(anchor, token.map(|token| token.source_vectors));
+        anchor
     }
 
     /// Adds a token's provenance to an optional accumulated source range.
@@ -307,6 +328,9 @@ pub(crate) struct ParserError<'tu> {
     )]
     pub(crate) code:              ParserDiagnosticCode,
     pub(crate) severity:          ErrorSeverity,
+    /// `warning "-Wpedantic"` set `severity` where this arose, so `-Werror`
+    /// does not promote it when it is reported.
+    pub(crate) severity_is_final: bool,
     pub(crate) warning_group:     Option<ParserWarningGroup>,
     #[cfg_attr(
         not(test),

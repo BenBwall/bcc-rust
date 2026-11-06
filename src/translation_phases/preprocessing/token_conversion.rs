@@ -1099,31 +1099,28 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             | RuleSet::Gcc if wide => PreprocessorErrorType::UnconvertibleSourceCharacter,
             | RuleSet::Gcc => return,
         };
-        let warning = context
-            .pending_errors
-            .iter_mut()
-            .rev()
-            .find_map(|error| match error {
-                | TranslationError::Preprocessing(PreprocessorError {
-                    error_type:
-                        error_type @ PreprocessorErrorType::IllegalCharacterEncoding {
-                            prefixed: false,
-                            ..
-                        },
+        // The warning may wear a pragma's classification, which the error it
+        // becomes does not keep.
+        let warning = context.pending_errors.iter_mut().rev().find(|error| {
+            matches!(
+                error.unclassified(),
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::IllegalCharacterEncoding {
+                        prefixed: false,
+                        ..
+                    },
                     source_vectors: warned,
-                }) if *warned == source_vectors => Some(error_type),
-                | _ => None,
-            });
+                }) if *warned == source_vectors
+            )
+        });
+        let error = PreprocessorError {
+            error_type,
+            source_vectors,
+        };
         if let Some(warning) = warning {
-            *warning = error_type;
+            *warning = TranslationError::Preprocessing(error);
         } else {
-            Context::raw_preprocessor_error(
-                &mut context.pending_errors,
-                PreprocessorError {
-                    error_type,
-                    source_vectors,
-                },
-            );
+            Context::raw_preprocessor_error(&mut context.pending_errors, error);
         }
     }
 

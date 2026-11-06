@@ -63,6 +63,20 @@ impl<'tu> Context<'tu> {
         self.classified_error(source, error);
     }
 
+    /// A preprocessor diagnostic of `-Wpedantic` that its caller gave the
+    /// severity the settings at its place ask for.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn pedantic_preprocessor_error(&mut self, error: PreprocessorError<'tu>) {
+        if !self.withholds(
+            error.severity(),
+            error.error_type.is_extension(),
+            error.source_vectors,
+        ) {
+            self.classified_extension(error.source_vectors, TranslationError::Preprocessing(error));
+        }
+    }
+
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
@@ -89,7 +103,7 @@ impl<'tu> Context<'tu> {
         loop {
             let error = self.pending_errors.pop_front()?;
             self.relocated_errors = self.relocated_errors.saturating_sub(1);
-            if matches!(&error, TranslationError::Extension(x) if x.suppressed.get()) {
+            if error.is_suppressed() {
                 self.suppressed_errors -= 1;
             } else {
                 self.drained_errors +=
@@ -163,7 +177,7 @@ impl<'tu> Context<'tu> {
     /// as the header delimiter, even though phase 3 lexed it as an escape.
     pub(crate) fn withdraw_quoted_header_lexer_error(&mut self, source: &SourceVector) {
         self.pending_errors.retain(|error| {
-            !matches!(error, TranslationError::PreprocessorTokenizining(error) if error.is_unclosed_header_string_at(source))
+            !matches!(error.unclassified(), TranslationError::PreprocessorTokenizining(error) if error.is_unclosed_header_string_at(source))
         });
         // Retaining can remove a diagnostic from the relocated prefix.
         // Rechecking already-retained ranges during the next compaction is
@@ -183,7 +197,7 @@ impl<'tu> Context<'tu> {
                 .pending_errors
                 .iter()
                 .filter(|error| {
-                    !matches!(error, TranslationError::Extension(x) if x.suppressed.get())
+                    !error.is_suppressed()
                         && error.configured_severity(self) == ErrorSeverity::Error
                 })
                 .count()

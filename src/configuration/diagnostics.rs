@@ -196,7 +196,8 @@ impl CompilerConfiguration {
     /// `-Wpedantic` named by a pragma: an `error` is `-Werror=pedantic`
     /// with the diagnostics on, and `-w` silences it as it does that option.
     fn with_pragma_pedantic(self, class: PragmaClass) -> Self {
-        match class {
+        let command_line_pedantic_deny = Some(self.command_line_pedantic_deny());
+        let configuration = match class {
             | PragmaClass::Ignored => self.with_pedantic(false),
             | PragmaClass::Warning => self.with_pedantic_as_error(false).with_pedantic(true),
             | PragmaClass::Error if self.suppress_warnings => self.with_pedantic(false),
@@ -204,7 +205,25 @@ impl CompilerConfiguration {
                 .with_pedantic_as_error(true)
                 .with_werror_pedantic()
                 .with_pedantic(true),
+        };
+        // What the option holds besides the extension policy, whatever the
+        // command line said of each.
+        let configuration = DiagnosticGroup::ALL
+            .iter()
+            .filter(|group| group.default() == GroupDefault::Extension)
+            .fold(configuration, |configuration, &group| {
+                configuration.with_pragma_group(group, class)
+            });
+        Self {
+            command_line_pedantic_deny,
+            ..configuration
         }
+    }
+
+    /// Whether the command line made pedantic warnings errors.
+    fn command_line_pedantic_deny(self) -> bool {
+        self.command_line_pedantic_deny
+            .unwrap_or(self.extension_policy == ExtensionPolicy::Deny)
     }
 
     /// One bit per [`DiagnosticGroup`] that a pragma naming the warning
@@ -377,8 +396,16 @@ impl CompilerConfiguration {
                     self.identity.rules() == super::RuleSet::Clang,
                 | _ => false,
             };
+        // A pragma naming `-Wpedantic` reaches that option's own groups. The
+        // rest are errors under `-pedantic-errors` whatever it says, in both
+        // compilers: GCC's `pedwarn` and Clang's ExtWarn stay so.
+        let deny = if group.default() == GroupDefault::Extension {
+            self.extension_policy == ExtensionPolicy::Deny
+        } else {
+            self.command_line_pedantic_deny()
+        };
         promoted
-            && self.extension_policy == ExtensionPolicy::Deny
+            && deny
             && !(self.identity == super::CompilerIdentity::Gcc
                 && group.default() == GroupDefault::Permerror
                 && self.permissive == Some(true))

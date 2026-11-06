@@ -15,7 +15,11 @@ use super::super::{
     macro_expansion::MacroDefinition,
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        ExtensionPolicy,
+        Feature,
+        RuleSet,
+    },
     translation_phases::{
         Context,
         TranslationPhase,
@@ -523,22 +527,43 @@ impl Expander<'_, '_, '_, '_> {
         token: PreprocessorToken,
     ) {
         if token.kind.is_identifier() {
-            let policy = self.context.configuration.extension_policy();
-            let error_type = match self
+            let spelling = self
                 .context
                 .string_cache
-                .at(token.identifier_id(self.context))
-            {
-                // Clang reports this constraint only under -pedantic.
-                | "__VA_ARGS__" if policy == crate::configuration::ExtensionPolicy::Allow => return,
-                | "__VA_ARGS__" => PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy),
-                | "__VA_OPT__" => PreprocessorErrorType::VaOptOutsideVariadicMacro(policy),
-                | _ => return,
-            };
-            self.context.preprocessor_error(PreprocessorError {
-                error_type,
-                source_vectors: token.source_vectors,
-            });
+                .at(token.identifier_id(self.context));
+            let global = self.context.configuration.extension_policy();
+            let source_vectors = token.source_vectors;
+            match spelling {
+                // Clang reports this constraint only under -pedantic, and
+                // files it under `-Wpedantic`, so a pragma naming that governs
+                // it. GCC's has no option for a pragma to name.
+                | "__VA_ARGS__"
+                    if self.context.configuration.compiler_identity().rules() == RuleSet::Clang =>
+                {
+                    let policy = self
+                        .context
+                        .configuration_at(source_vectors)
+                        .extension_policy();
+                    if policy != ExtensionPolicy::Allow {
+                        self.context.pedantic_preprocessor_error(PreprocessorError {
+                            error_type: PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy),
+                            source_vectors,
+                        });
+                    }
+                },
+                | "__VA_ARGS__" if global == ExtensionPolicy::Allow => {},
+                | "__VA_ARGS__" => self.context.preprocessor_error(PreprocessorError {
+                    error_type: PreprocessorErrorType::VaArgsOutsideVariadicMacro(global),
+                    source_vectors,
+                }),
+                // Clang's `-Wvariadic-macros`, which is no part of
+                // `-Wpedantic`.
+                | "__VA_OPT__" => self.context.preprocessor_error(PreprocessorError {
+                    error_type: PreprocessorErrorType::VaOptOutsideVariadicMacro(global),
+                    source_vectors,
+                }),
+                | _ => {},
+            }
         }
     }
 }

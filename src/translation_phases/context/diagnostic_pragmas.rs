@@ -112,20 +112,43 @@ impl<'tu> Context<'tu> {
         }
     }
 
-    /// Queues an extension diagnostic, which `warning "-Wpedantic"` keeps from
-    /// `-Werror`. A parser diagnostic stays itself for the reporter to fold,
-    /// so `-Werror` still promotes one.
-    pub(crate) fn classified_extension(
+    /// Queues a diagnostic of `group` that the caller has already asked is on,
+    /// for one whose kind [`TranslationError::group`] does not name.
+    #[inline]
+    pub(crate) fn classified_group_error(
         &mut self,
+        group: DiagnosticGroup,
         source: SourceVectors,
         error: TranslationError<'tu>,
     ) {
-        if !matches!(error, TranslationError::Parsing(_))
-            && error.severity() == ErrorSeverity::Warning
-            && self
-                .pragma_state_at(source)
-                .is_some_and(|state| state.pedantic_warning)
-        {
+        if self.diagnostic_pragmas.changes.is_empty() {
+            self.pending_errors.push_back(error);
+        } else {
+            self.classify_in_group(Some(group), source, error);
+        }
+    }
+
+    /// Whether `warning "-Wpedantic"` governs `source`, which keeps a
+    /// `-Wpedantic` diagnostic there from `-Werror` and `-pedantic-errors`.
+    pub(crate) fn pedantic_warning_at(&self, source: SourceVectors) -> bool {
+        self.pragma_state_at(source)
+            .is_some_and(|state| state.pedantic_warning)
+    }
+
+    /// Queues an extension diagnostic, which `warning "-Wpedantic"` keeps from
+    /// `-Werror`. A parser diagnostic records that itself, since the parser
+    /// edits it after queueing it and the reporter folds it by its variant.
+    pub(crate) fn classified_extension(
+        &mut self,
+        source: SourceVectors,
+        mut error: TranslationError<'tu>,
+    ) {
+        if error.severity() == ErrorSeverity::Warning && self.pedantic_warning_at(source) {
+            if let TranslationError::Parsing(parsing) = &mut error {
+                parsing.severity_is_final = true;
+                self.pending_errors.push_back(error);
+                return;
+            }
             let error = self.tu.alloc(error);
             self.pending_errors
                 .push_back(TranslationError::Classified(ClassifiedError {
@@ -175,11 +198,20 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     fn classify_with_pragmas(&mut self, source: SourceVectors, error: TranslationError<'tu>) {
+        self.classify_in_group(error.group(), source, error);
+    }
+
+    fn classify_in_group(
+        &mut self,
+        group: Option<DiagnosticGroup>,
+        source: SourceVectors,
+        error: TranslationError<'tu>,
+    ) {
         let Some(state) = self.pragma_state_at(source).copied() else {
             self.pending_errors.push_back(error);
             return;
         };
-        let (severity, fatal) = if let Some(group) = error.group() {
+        let (severity, fatal) = if let Some(group) = group {
             let Some(severity) = state.configuration.diagnostic_severity(group) else {
                 return;
             };
@@ -281,6 +313,33 @@ impl<'tu> Context<'tu> {
             return;
         };
         self.diagnostic_pragmas.retained.push((start, token));
+    }
+
+    /// Notes that `anchor`, a zero-width location just made for syntax the
+    /// input left out, stands where `token` is, or at the end of the output.
+    /// It copies no provenance, so nothing else says which settings hold there.
+    #[inline]
+    pub(crate) fn record_retained_pragma_anchor(
+        &mut self,
+        anchor: SourceVectors,
+        token: Option<SourceVectors>,
+    ) {
+        if self.records_retained_pragma_copies() {
+            self.record_anchor_place(anchor, token);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn record_anchor_place(&mut self, anchor: SourceVectors, token: Option<SourceVectors>) {
+        let (_, start) = SourceArena::decode(anchor);
+        let place = match token {
+            | Some(token) => self.pragma_token_of(token),
+            | None => u32::try_from(self.parser_token_vectors.len()).ok(),
+        };
+        if let Some(place) = place {
+            self.diagnostic_pragmas.retained.push((start, place));
+        }
     }
 
     /// Whether retained copies of parser-token provenance need recording.
