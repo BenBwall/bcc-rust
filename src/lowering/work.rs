@@ -301,31 +301,37 @@ pub(super) struct BitFieldBits {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct BitField {
     /// The number of bytes the field touches.
-    pub(super) span:          u32,
+    pub(super) span:            u32,
     /// The field's lowest bit within the first byte.
-    pub(super) shift:         u32,
-    pub(super) width:         u32,
+    pub(super) shift:           u32,
+    pub(super) width:           u32,
     /// Whether the field is read with sign extension.
-    pub(super) signed:        bool,
+    pub(super) signed:          bool,
     /// The alignment of the place's address.
-    pub(super) align:         Align,
-    /// The access unit of a `volatile` field under
-    /// `-fstrict-volatile-bitfields`, when GCC's rule gives it one.
-    pub(super) volatile_unit: Option<VolatileUnit>,
+    pub(super) align:           Align,
+    /// What GCC's access to a `volatile` field depends on, under
+    /// `-fstrict-volatile-bitfields`.
+    pub(super) volatile_access: Option<VolatileAccess>,
 }
 
-/// The storage unit that one access reads or writes for a `volatile`
-/// bit-field under `-fstrict-volatile-bitfields`: an aligned object of the
-/// declared type's size that holds the whole field.
+/// What GCC's accesses to a `volatile` bit-field depend on under
+/// `-fstrict-volatile-bitfields`: `bit_fields/volatile_access.rs` makes a plan
+/// of loads and stores from it. Bits count from the start of the object the
+/// place is a part of, as far as constant offsets reach.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct VolatileUnit {
-    /// How many bytes before the place's address the unit begins.
-    pub(super) before: u32,
-    /// The declared type's size in bytes, at most a machine word.
-    pub(super) size:   u32,
-    /// Whether a write may use the unit too, which stays within the memory
-    /// location of the field.
-    pub(super) writes: bool,
+pub(super) struct VolatileAccess {
+    /// The field's first bit.
+    pub(super) position:     u64,
+    /// The field's width in bits.
+    pub(super) width:        u32,
+    /// The width in bits of the field's declared type.
+    pub(super) declared:     u32,
+    /// The bits the object is known to be aligned to, at most a word's.
+    pub(super) align:        u32,
+    /// The first bit of the region a write may touch.
+    pub(super) region_start: u64,
+    /// The bit after the region a write may touch.
+    pub(super) region_end:   u64,
 }
 
 /// An automatic object an initializer fills: a declared one, or the

@@ -540,9 +540,11 @@ offset and width. A read loads exactly the field's bytes, a write loads (and
 `freeze`s) only the bytes it covers in part, and a `volatile` field is accessed
 with volatile loads and stores. The accesses stay inside the field's own bytes
 because a load of bytes never written is poison as a whole. Only under
-`-fstrict-volatile-bitfields` does a `volatile` field get a wider access, one
-load or store of its declared type's width, which a volatile load's freedom from
-poison makes sound.
+`-fstrict-volatile-bitfields` does a `volatile` field get wider accesses: the
+ones GCC performs, one of its declared type's width where that works and GCC's
+ordinary access otherwise, or a refusal of the shapes it cannot match
+(`lowering/bit_fields/volatile_access.rs`). A volatile load's freedom from poison
+makes them sound.
 
 ### Module
 

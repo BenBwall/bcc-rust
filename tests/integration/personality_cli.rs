@@ -6944,6 +6944,57 @@ mod tests {
         }
     }
 
+    /// The memory accesses `function` makes through a pointer, in AT&T syntax,
+    /// as `l` or `s` and a width: not those of its own frame.
+    fn memory_accesses(assembly: &str, function: &str) -> Vec<String> {
+        let label = format!("{function}:");
+        let mut accesses = Vec::new();
+        for line in assembly
+            .lines()
+            .skip_while(|line| *line != label)
+            .skip(1)
+            .take_while(|line| !line.contains(".cfi_endproc") && !line.contains(".size"))
+        {
+            let mut words = line.split_whitespace();
+            let (Some(mnemonic), operands) = (words.next(), words.collect::<Vec<_>>().join(" "))
+            else {
+                continue;
+            };
+            let frame = operands.contains("(%rbp") || operands.contains("(%rsp");
+            if !operands.contains('(') || frame || mnemonic.starts_with("lea") {
+                continue;
+            }
+            let width = if let Some(extending) = mnemonic
+                .strip_prefix("movz")
+                .or_else(|| mnemonic.strip_prefix("movs"))
+            {
+                extending.chars().next()
+            } else {
+                mnemonic.chars().last()
+            };
+            let width = match width {
+                | Some('b') => 8,
+                | Some('w') => 16,
+                | Some('l') => 32,
+                | Some('q') => 64,
+                | _ => panic!("{line}"),
+            };
+            let destination = operands
+                .rsplit(' ')
+                .next()
+                .is_some_and(|last| last.contains('('));
+            if !destination {
+                accesses.push(format!("l{width}"));
+            } else if mnemonic.starts_with("mov") {
+                accesses.push(format!("s{width}"));
+            } else {
+                accesses.push(format!("l{width}"));
+                accesses.push(format!("s{width}"));
+            }
+        }
+        accesses
+    }
+
     /// `-fstrict-volatile-bitfields` makes each back end read and write a
     /// `volatile` bit-field with one access of its declared type: GCC's
     /// option, off by default and the last of the pair winning, which Clang
@@ -7020,6 +7071,82 @@ mod tests {
             "{}",
             stderr(&clang_cl)
         );
+    }
+
+    /// Where the option's single access does not apply, each back end and
+    /// level performs the accesses GCC 13.3 and 14.2 do, which a device sees:
+    /// a memory-destination instruction is one read and one write.
+    #[test]
+    fn strict_volatile_bitfields_fall_back_on_gccs_accesses() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "f.c",
+            "struct A { volatile unsigned a : 12; };\nvoid a(struct A *p) { p->a = 3; }\nunsigned \
+             ra(struct A *p) { return p->a; }\nvoid ca(struct A *p) { p->a += 1; }\nstruct B { \
+             char c; volatile unsigned a : 12; };\nvoid b(struct B *p) { p->a = 3; }\nstruct C { \
+             volatile unsigned a : 17; char c; };\nvoid c(struct C *p) { p->a = 3; }\nstruct D { \
+             volatile unsigned a : 12; } __attribute__((packed));\nunsigned rd(struct D *p) { \
+             return p->a; }\nstruct E { char x : 7; volatile unsigned y : 26; } \
+             __attribute__((packed, aligned(4)));\nunsigned re(struct E *p) { return p->y; \
+             }\nvoid e(struct E *p) { p->y = 3; }\nstruct F { volatile __int128 a : 70; };\nvoid \
+             f(struct F *p) { p->a = 3; }\nstruct G { unsigned char b : 8; volatile unsigned a : \
+             8; } __attribute__((packed));\nvoid g(struct G *p) { p->a = 3; }\n",
+        );
+        const WANTED: &[(&str, &[&str])] = &[
+            ("a", &["l16", "s16"]),
+            ("ra", &["l32"]),
+            ("ca", &["l32", "l16", "s16"]),
+            ("b", &["l8", "s8", "l8", "s8"]),
+            ("c", &["l16", "s16", "l8", "s8"]),
+            ("rd", &["l8", "l8"]),
+            ("re", &["l32", "l32"]),
+            ("e", &["l32", "s32", "l32", "s32"]),
+            ("f", &["s64", "l64", "s64"]),
+            ("g", &["l16", "s16"]),
+        ];
+        for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+            for level in ["-O0", "-O2"] {
+                let mut args = vec!["-fstrict-volatile-bitfields", level, "-S", "-o", "-", "f.c"];
+                args.extend(backend);
+                let output = directory.bcc("--gcc-mode", &args);
+                succeeds(&output);
+                let assembly = stdout(&output);
+                for (function, wanted) in WANTED {
+                    assert_eq!(
+                        &memory_accesses(&assembly, function),
+                        wanted,
+                        "{function} {level} {backend:?}\n{assembly}"
+                    );
+                }
+            }
+        }
+        // Without the option the same writes stay in the field's own bytes.
+        let output = directory.bcc("--gcc-mode", &["-O2", "-S", "-o", "-", "f.c"]);
+        succeeds(&output);
+        assert_eq!(memory_accesses(&stdout(&output), "ra"), ["l16"]);
+    }
+
+    /// What the back ends cannot make GCC's accesses is a clear error under
+    /// the option and compiles without it.
+    #[test]
+    fn strict_volatile_bitfields_refuse_what_they_cannot_match() {
+        let directory = Directory::new();
+        directory.write(
+            "r.c",
+            "struct S { volatile __int128 a : 128; };\nvoid w(struct S *p) { p->a = 3; }\n",
+        );
+        let strict = directory.bcc("--gcc-mode", &["-fstrict-volatile-bitfields", "-c", "r.c"]);
+        assert!(!strict.status.success());
+        assert!(
+            stderr(&strict).contains("r.c:2:")
+                && stderr(&strict).contains("volatile bit-field under -fstrict-volatile-bitfields"),
+            "{}",
+            stderr(&strict)
+        );
+        succeeds(&directory.bcc("--gcc-mode", &["-c", "r.c", "-o", "plain.o"]));
     }
 
     /// A wider access keeps the neighbors' bits and the field's value on

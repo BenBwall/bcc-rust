@@ -15,8 +15,8 @@
 //! forces position-independent code on x86-64 Windows, so the options do
 //! not change code for the Windows targets.
 //!
-//! [`CodeOptions::strict_volatile_bit_fields`] sets the width of the memory
-//! accesses to a `volatile` bit-field, for memory-mapped registers.
+//! [`CodeOptions::strict_volatile_bit_fields`] sets the number and width of
+//! the memory accesses to a `volatile` bit-field, for memory-mapped registers.
 //!
 //! These options are not part of C, which only gives a thread-local object
 //! one instance per thread. [`CodeAssumptions`] beside them defines what C
@@ -38,9 +38,10 @@ pub(crate) struct CodeOptions {
     pub(crate) tls_model:                  TlsModel,
     /// A `volatile` bit-field is accessed at the width of its declared
     /// type: GCC's `-fstrict-volatile-bitfields`, which is off by default
-    /// on x86-64. Clang has no such option. `lowering/bit_fields.rs` holds
-    /// the rule. Extension: C99 §6.7.3 paragraph 6, p. 109; PDF p. 121 leaves
-    /// what makes up an access to a volatile object implementation-defined.
+    /// on x86-64. Clang has no such option.
+    /// `lowering/bit_fields/volatile_access.rs` holds the rule. Extension: C99
+    /// §6.7.3 paragraph 6, p. 109; PDF p. 121 leaves what makes up an access
+    /// to a volatile object implementation-defined.
     pub(crate) strict_volatile_bit_fields: bool,
 }
 
