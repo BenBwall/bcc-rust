@@ -77,6 +77,7 @@ mod initializers;
 mod main_function;
 mod missing_fields;
 mod predefined;
+mod reachability;
 mod sign_compare;
 mod statements;
 mod traversal;
@@ -1722,6 +1723,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     Duration::None,
                     retained,
                 );
+                self.note_enumerator(tag, item.name, retained);
                 self.work.push(Work::EnumMembers(
                     tag,
                     list,
@@ -2178,6 +2180,7 @@ struct Analyzer<'a, 'tu, 's> {
     va_list_type:            Option<TypeId>,
     statements:              statements::State<'tu, 's>,
     unused:                  unused::UnusedState<'s>,
+    reachability:            reachability::ReachabilityState<'s>,
     control:                 builder::Builder<'tu, 's>,
     function_extensions:     FunctionExtensions<'tu>,
     /// Checked statement-level `asm` facts, by statement identity.

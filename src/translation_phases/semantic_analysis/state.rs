@@ -110,6 +110,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             va_list_type: None,
             statements: statements::State::new(scratch),
             unused: super::unused::UnusedState::new(scratch, configuration),
+            reachability: super::reachability::ReachabilityState::new(scratch),
             control: super::facts::builder::Builder::new(scratch),
             function_extensions: super::FunctionExtensions::new(tu),
             assembly: ArenaMap::with_hasher_in(FxBuildHasher, tu),

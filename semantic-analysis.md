@@ -1219,8 +1219,20 @@ spells the token they point at, as a system macro's body does, its label warning
 aside; Clang goes by the invocation. A `sizeof` of a variable length array and a
 cast to a variably modified type have an effect for GCC. Clang's discarded-value
 warnings, comparisons aside, stay out of what `Analyzer::evaluation_inhibited`
-and the `dead` flag say does not run; a loop that never runs and a switch's
-statements before a case are not modeled, so those still warn.
+says is not evaluated and of what `reachability.rs` finds unreachable.
+
+`reachability.rs` answers `DiagIfReachable` and `DiagRuntimeBehavior`: a warning
+that asks waits until its function is analyzed, and then a walk in execution
+order reports it if it reaches the warning's expression. The walk follows what
+Clang's CFG builder does. `reachability/known_conditions.rs` holds
+`tryEvaluateBool`, with the evaluator ignoring side effects (`(g(), 0)`, `x && 0`)
+and the tautologies it recognizes (`x & 0`, `(x & 8) == 1`, `x == 1 && x == 2`). A
+constant switch reaches only its matching case, a switch whose labels cover its
+enumeration leaves `default` and its end no edge, an unreferenced label starts
+nothing, and `__builtin_trap` and `__builtin_assume(0)` end the path. The `dead`
+flag does not serve here: it reports code generation's insertion point, which
+stays after `__builtin_trap` and exists in a loop that never runs. What the walk
+does not read stays silent. Local labels are told apart by their declaration.
 
 #### Comparisons and initializers under `-Wextra`
 

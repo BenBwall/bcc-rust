@@ -914,11 +914,16 @@ impl LanguageFlag {
             } else {
                 (text, WarningOption::Enable(true))
             };
-            return Some(
-                DiagnosticGroup::parse(name).map_or(Self::UnknownWarning, |group| {
-                    Self::WarningGroup(group, option)
-                }),
-            );
+            // GCC's `-Waddress` and Clang's group around
+            // `-Wpointer-bool-conversion`, the part of them bcc reports.
+            let group = if name == "address" {
+                Some(DiagnosticGroup::PointerBoolConversion)
+            } else {
+                DiagnosticGroup::parse(name)
+            };
+            return Some(group.map_or(Self::UnknownWarning, |group| {
+                Self::WarningGroup(group, option)
+            }));
         }
         let (name, enabled) = text
             .strip_prefix("-fms-")
