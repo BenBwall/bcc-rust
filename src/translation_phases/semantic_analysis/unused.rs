@@ -733,18 +733,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if self.unused.values {
             self.work.push(super::Work::StatementWork(
-                super::statements::StatementWork::DiscardedValue(expression, self.semantic_errors),
+                super::statements::StatementWork::DiscardedValue(
+                    expression,
+                    self.semantic_errors,
+                    self.functions.dead,
+                ),
             ));
         }
     }
 
     /// Checks the expression whose value a statement discards, now analyzed
     /// without an error: neither compiler has anything to say about the value
-    /// of an invalid expression.
+    /// of an invalid expression. `dead` says code generation would skip the
+    /// statement, which Clang takes for unreachable.
     /// C99: §6.8.3p2, p. 132; PDF p. 144.
-    pub(super) fn check_discarded_value(&mut self, e: &'tu Expression<'tu>) {
+    pub(super) fn check_discarded_value(&mut self, e: &'tu Expression<'tu>, dead: bool) {
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
-            self.clang_discarded_value(e);
+            self.clang_discarded_value(e, dead);
         } else {
             self.gcc_discarded_value(e);
         }
@@ -834,8 +839,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's `DiagnoseUnusedExprResult`, which says nothing about an
-    /// expression a macro's body wrote.
-    fn clang_discarded_value(&mut self, e: &'tu Expression<'tu>) {
+    /// expression a macro's body wrote and, comparisons aside
+    /// (`DiagIfReachable`), about one in unreachable code.
+    fn clang_discarded_value(&mut self, e: &'tu Expression<'tu>, dead: bool) {
+        if dead
+            && !matches!(
+                Self::without_parentheses(e).kind,
+                E::Binary {
+                    operator: B::Equal
+                        | B::NotEqual
+                        | B::LessThan
+                        | B::GreaterThan
+                        | B::LessThanOrEqual
+                        | B::GreaterThanOrEqual,
+                    ..
+                }
+            )
+        {
+            return;
+        }
         if let Some((rule, site)) = self.clang_unused_result(e)
             && !self
                 .context
@@ -983,7 +1005,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
-            if self.clang_unused_result(left).is_some()
+            if !self.functions.dead
+                && self.clang_unused_result(left).is_some()
                 && !self
                     .context
                     .written_by_macro_body(Self::operator_site(Self::without_parentheses(left)))

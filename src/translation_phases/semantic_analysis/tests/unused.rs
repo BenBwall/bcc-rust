@@ -392,6 +392,41 @@ fn clang_skips_a_macro_body() {
     assert_eq!(rules(argument, clang()), [U::ClangResult]);
 }
 
+/// Clang keeps its value warnings, comparisons aside, out of code it can tell
+/// is unreachable; GCC does not look.
+#[test]
+fn clang_skips_unreachable_values() {
+    for source in [
+        "void f(int x) { return; x + 1; }",
+        "void f(int x) { if (0) x + 1; }",
+        "void f(int x) { if (1) return; x + 1; }",
+        "void f(int x) { for (;;) {} x + 1; }",
+        "void g(void) __attribute__((noreturn)); void f(int x) { g(); x + 1; }",
+        "void f(int x) { __builtin_unreachable(); x + 1; }",
+        "void f(int x) { __builtin_abort(); x + 1; }",
+        "void f(int x) { goto l; x + 1; l:; }",
+    ] {
+        assert_eq!(rules(source, clang()), [], "Clang: {source}");
+        assert_eq!(rules(source, gcc()), [U::GccNoEffect], "GCC: {source}");
+    }
+    assert_eq!(
+        rules("void f(int x) { return; x == 1; }", clang()),
+        [U::ClangEquality]
+    );
+    assert_eq!(
+        rules(
+            "int g(void); void f(int x) { return; int y = (x + 1, g()); (void)y; }",
+            clang()
+        ),
+        []
+    );
+    // A label makes the code reachable again.
+    assert_eq!(
+        rules("void f(int x) { if (0) { l: x + 1; } goto l; }", clang()),
+        [U::ClangResult]
+    );
+}
+
 /// A variable length array's `sizeof` evaluates its bound and so has an
 /// effect for GCC, which keeps quiet about it however it is used; Clang warns.
 /// C99: §6.5.3.4p2, p. 80; PDF p. 92.
