@@ -109,8 +109,7 @@ impl<'tu> Context<'tu> {
     ) -> Option<ErrorSeverity> {
         let configuration = self.configuration_at(source);
         let severity = configuration.diagnostic_severity(group)?;
-        (configuration
-            .reported_in_system_headers(group, severity)
+        (configuration.reported_in_system_headers(group, severity)
             || !self.withholds(severity, true, source))
         .then_some(severity)
     }
@@ -135,7 +134,9 @@ impl<'tu> Context<'tu> {
         {
             self.classified_error(
                 SourceVectors::default(),
-                TranslationError::InitialProcessing(InitialProcessorError::MissingFinalNewline(vector)),
+                TranslationError::InitialProcessing(InitialProcessorError::MissingFinalNewline(
+                    vector,
+                )),
             );
         }
     }
@@ -151,7 +152,9 @@ impl<'tu> Context<'tu> {
         {
             self.classified_error(
                 SourceVectors::default(),
-                TranslationError::InitialProcessing(InitialProcessorError::EscapedFinalNewline(vector)),
+                TranslationError::InitialProcessing(InitialProcessorError::EscapedFinalNewline(
+                    vector,
+                )),
             );
         }
     }

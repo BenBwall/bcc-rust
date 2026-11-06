@@ -1272,6 +1272,77 @@ the cap, bit-field placement and explicit-alignment interaction; see
 [GCC's pragma documentation](https://gcc.gnu.org/onlinedocs/gcc/Structure-Layout-Pragmas.html),
 and [MSVC pack](https://learn.microsoft.com/en-us/cpp/preprocessor/pack).
 
+## Diagnostic pragmas
+
+`#pragma GCC diagnostic` and `#pragma clang diagnostic` set a warning option to
+`ignored`, `warning` or `error`, Clang's spelling also to `fatal`, and `push`
+and `pop` save and restore the settings, as
+[GCC](https://gcc.gnu.org/onlinedocs/gcc/Diagnostic-Pragmas.html) and
+[Clang](https://clang.llvm.org/docs/UsersManual.html#controlling-diagnostics-via-pragmas)
+document. `_Pragma` of each works too, in a macro's expansion included. They
+are implementation-defined pragmas (C99 §6.10.6p1 and §6.10.9p1), and their
+operands are not macro-replaced.
+
+| Identity | `GCC diagnostic` | `clang diagnostic` | `warning(...)` |
+| --- | --- | --- | --- |
+| GCC | Read | Unknown pragma | Unknown pragma |
+| Clang | Read, as Clang's own | Read, with `fatal` | With `-fms-extensions`: `push` and `pop` only |
+| clang-cl | Read, as Clang's own | Read, with `fatal` | `push` and `pop` only: its warnings have no numbers |
+| `cl` | Unknown pragma | Unknown pragma | `disable`, `error`, `default`, levels and `once` for the numbers bcc gives a warning; `suppress` does nothing |
+| TCC | Unknown pragma | Unknown pragma | Unknown pragma |
+
+A pragma covers the warnings of every phase by where they arise, by output-token
+order, though later phases run once the whole unit is preprocessed
+(`translation_phases/context/diagnostic_pragmas.rs`): a header read twice has
+each setting in turn, a pragma in a header outlasts it, a macro's tokens count
+where they are produced rather than where its body was written, and a `_Pragma`
+in an expansion governs the tokens after it there, so `QUIET(x)` that wraps `x`
+in `push`, `ignored` and `pop` silences `x` in both compilers. A diagnostic reads
+the settings at its first token. A pragma outranks the command line: `warning`
+keeps a warning from `-Werror` and `-Werror=X`, `error` makes one an error
+despite `-Wno-X` and `-Wno-error=X`, and only `-w` silences both. A pragma does
+not bring a warning out of a system header. `-Wall` in a pragma reaches the
+groups bcc models under it, except that GCC's `ignored "-Wall"` changes nothing;
+`-Wpedantic` covers extension diagnostics, and Clang's `-Weverything` every
+group. `-E` keeps each pragma, a `_Pragma` as a line, so compiling its text has
+the same effect.
+
+Bad pragmas warn as each compiler does: GCC under `-Wpragmas`, which its `-E`
+does not report, and Clang under `-Wunknown-pragmas` or, for an unknown group,
+`-Wunknown-warning-option`, with a missing string an error. An option the
+compiler knows and bcc has no group for is quiet and changes nothing; the lists
+are the driver's (`src/cli/personality/options/`). GCC's `pop` without `push`
+goes back to the command line silently and Clang's keeps the settings and warns.
+Clang's `fatal` reports `fatal error` and ends the compilation, and GCC's
+`-Wfatal-errors`, which Clang accepts and ignores, stops at the first error.
+
+These warnings gained a group for the pragmas to name, which the command line
+now controls too: `cpp` (`#warnings` in Clang) for `#warning`, Clang's
+`#pragma-messages` for `#pragma GCC warning`, GCC's `pragmas`, and Clang's
+`extra-tokens`, `deprecated-pragma`, `pragma-once-outside-header`,
+`pragma-system-header-outside-header`, `include-next-outside-header`,
+`include-next-absolute-path`, `invalid-pp-token` and `macro-redefined`.
+
+Differences that remain:
+
+- A `#pragma` directive inside macro arguments governs the tokens after it. GCC
+  applies it only past the invocation's start, and Clang rejects the directive.
+- A problem in a `_Pragma` is located in its string (`<pragma string>`), not at
+  the operator or the macro invocation, as for other pragma diagnostics.
+- A warning bcc has no group for, such as a repeated `const` or a semantic
+  warning without one, or a specific extension group such as Clang's
+  `-Wzero-length-array`, takes no pragma; extensions answer to `-Wpedantic`.
+- GCC's "declared `static` but never defined" reads the settings at the end of
+  the unit; bcc reads them at the declaration, as for "defined but not used".
+- `#pragma GCC diagnostic ignored_attributes` is accepted and has no effect, and
+  `-Wsystem-headers` is accepted and does not bring out a system header's
+  warnings.
+- Clang's fatal error stops its compilation where it arises. bcc reports in
+  phases, so a semantic warning on an earlier line than a preprocessor's fatal
+  error goes unreported.
+- `cl` warns about a bad `#pragma warning` line (C4081 and others); bcc ignores
+  it. clang-cl's words are reproduced.
+
 ## System headers
 
 A header is a **system header** when it was found through a system directory,
@@ -2527,7 +2598,7 @@ enables it, `-Werror=GROUP` included, and a system header withholds it:
 | --- | --- | --- |
 | Missing or escaped final newline | `newline-eof` | Off; Clang has no escaped-newline warning. |
 | Identifier evaluated as 0 in `#if` | `undef` | Off. |
-| Unknown `#pragma` | `unknown-pragmas` | Off (an unknown `STDC` pragma keeps its own diagnostic). |
+| Unknown `#pragma` | `unknown-pragmas` | Off (an unknown `STDC` pragma and a malformed diagnostic pragma keep their own diagnostics). |
 | Unused undefined `static` function | `unused-function` | Off. |
 | Constant that takes a wider type of its list | `constant-promotion` (bcc only) | Not diagnosed. |
 

@@ -1371,8 +1371,9 @@ impl PreprocessorErrorType<'_> {
             | Self::SystemHeaderPragmaInMainFile =>
                 new("`#pragma GCC system_header` ignored in main file")
                     .label("only a header can be a system header"),
-            | Self::PragmaDiagnostic(problem) =>
-                new(problem.message(arena)).option_suffix().label(problem.label()),
+            | Self::PragmaDiagnostic(problem) => new(problem.message(arena))
+                .option_suffix()
+                .label(problem.label()),
             | Self::StorageOrderPragmaOperand { missing } => new(if *missing {
                 "missing `big-endian`, `little-endian`, or `default` after `#pragma \
                  scalar_storage_order` [-Wpragmas]"
@@ -1846,8 +1847,8 @@ impl PragmaDiagnosticProblem<'_> {
                 "missing `error`, `warning`, `ignored`, `push`, `pop`, or `ignored_attributes` \
                  after `#pragma GCC diagnostic` [-Wpragmas]",
             | Self::GccExpectedKind =>
-                "expected `error`, `warning`, `ignored`, `push`, `pop`, `ignored_attributes` \
-                 after `#pragma GCC diagnostic` [-Wpragmas]",
+                "expected `error`, `warning`, `ignored`, `push`, `pop`, `ignored_attributes` after \
+                 `#pragma GCC diagnostic` [-Wpragmas]",
             | Self::GccMissingOption =>
                 "missing option after `#pragma GCC diagnostic` kind [-Wpragmas]",
             | Self::GccUnknownOption =>
@@ -1872,8 +1873,7 @@ impl PragmaDiagnosticProblem<'_> {
                 arena,
                 "unknown warning group `{option}`, ignored [-Wunknown-warning-option]"
             ),
-            | Self::ClangWarning(expected) =>
-                format_in!(arena, "{expected} [-Wunknown-pragmas]"),
+            | Self::ClangWarning(expected) => format_in!(arena, "{expected} [-Wunknown-pragmas]"),
             | Self::ClangWarningExtraTokens =>
                 "extra tokens at end of #pragma warning directive [-Wextra-tokens]",
             | Self::ExpectedString => "expected string literal in pragma diagnostic",
@@ -1888,8 +1888,9 @@ impl PragmaDiagnosticProblem<'_> {
             | Self::GccUnknownOption | Self::ClangUnknownGroup(_) => "no such warning option",
             | Self::GccNotWarningOption(_) | Self::ClangInvalidOption => "no warning option",
             | Self::GccMissingAttribute => "expected an attribute name",
-            | Self::ClangUnexpectedToken | Self::ClangWarning(_) | Self::ClangWarningExtraTokens =>
-                "unexpected token",
+            | Self::ClangUnexpectedToken
+            | Self::ClangWarning(_)
+            | Self::ClangWarningExtraTokens => "unexpected token",
             | Self::ClangCouldNotPop => "no matching `push`",
         }
     }

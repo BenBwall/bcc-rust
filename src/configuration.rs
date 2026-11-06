@@ -31,8 +31,8 @@ mod language;
 
 // Feature policy
 mod diagnostics;
-mod warning_names;
 mod features;
+mod warning_names;
 
 // Construction and accessors
 mod options;
@@ -48,11 +48,6 @@ pub(crate) use features::{
     FeatureOrigin,
 };
 pub(crate) use identity::RuleSet;
-pub(crate) use warning_names::{
-    clang_knows_warning,
-    gcc_knows_flag,
-    gcc_knows_warning,
-};
 pub(crate) use language::{
     CStandard,
     CompilerIdentity,
@@ -64,6 +59,12 @@ pub(crate) use language::{
     MsvcFeature,
     PreprocessingOption,
     RelaxedFloatingPoint,
+};
+pub(crate) use warning_names::{
+    CL_CODED_WARNINGS,
+    clang_knows_warning,
+    gcc_knows_flag,
+    gcc_knows_warning,
 };
 
 impl CompilerConfiguration {

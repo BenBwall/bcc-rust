@@ -169,18 +169,29 @@ int x;
         let cases: [(&str, &[&str], &str, &[&str]); 11] = [
             ("--gcc-mode", &["-Wno-pragmas"], bad_kind, &[]),
             ("--gcc-mode", &["-Wno-pragmas"], unknown, &[]),
-            ("--gcc-mode", &["-Wno-unknown-pragmas"], bad_kind, &[
-                "1 warning",
-            ]),
+            (
+                "--gcc-mode",
+                &["-Wno-unknown-pragmas"],
+                bad_kind,
+                &["1 warning"],
+            ),
             ("--gcc-mode", &["-Werror=pragmas"], unknown, &["1 error"]),
             ("--gcc-mode", &["-Werror"], bad_kind, &["1 error"]),
             ("--clang-mode", &["-Wno-pragmas"], bad_kind, &[]),
             ("--clang-mode", &["-Wno-pragmas"], unknown, &["1 warning"]),
             ("--clang-mode", &["-Wno-unknown-pragmas"], bad_kind, &[]),
-            ("--clang-mode", &["-Wno-unknown-warning-option"], unknown, &[]),
-            ("--clang-mode", &["-Werror=unknown-pragmas"], bad_kind, &[
-                "1 error",
-            ]),
+            (
+                "--clang-mode",
+                &["-Wno-unknown-warning-option"],
+                unknown,
+                &[],
+            ),
+            (
+                "--clang-mode",
+                &["-Werror=unknown-pragmas"],
+                bad_kind,
+                &["1 error"],
+            ),
             ("--clang-mode", &["-Werror"], unknown, &["1 error"]),
         ];
         for (mode, flags, source, expected) in cases {
@@ -212,7 +223,10 @@ int d[0];
             (&[], &["5 warning", "7 error"]),
             (&["-pedantic"], &["1 warning", "5 warning", "7 error"]),
             (&["-pedantic-errors"], &["1 error", "5 warning", "7 error"]),
-            (&["-pedantic", "-Werror"], &["1 error", "5 warning", "7 error"]),
+            (
+                &["-pedantic", "-Werror"],
+                &["1 error", "5 warning", "7 error"],
+            ),
         ];
         for mode in MODES {
             for (flags, expected) in cases {
@@ -239,14 +253,17 @@ int x;
 ";
         let root = directory("fatal");
         fs::write(root.join("input.c"), source).unwrap();
-        let gcc = run(&root, &[
-            "--gcc-mode",
-            "-Wfatal-errors",
-            "-c",
-            "-o",
-            "output.o",
-            "input.c",
-        ]);
+        let gcc = run(
+            &root,
+            &[
+                "--gcc-mode",
+                "-Wfatal-errors",
+                "-c",
+                "-o",
+                "output.o",
+                "input.c",
+            ],
+        );
         assert_eq!(lines(&gcc), ["2 error"]);
         assert!(String::from_utf8_lossy(&gcc.stderr).contains("compilation terminated."));
         assert_eq!(
@@ -260,8 +277,8 @@ int x;
     #[test]
     fn preprocessed_text_keeps_the_pragmas_and_their_effect() {
         let source = "\
-#define QUIET(x) _Pragma(\"GCC diagnostic push\") \
-    _Pragma(\"GCC diagnostic ignored \\\"-Wint-conversion\\\"\") x _Pragma(\"GCC diagnostic pop\")
+#define QUIET(x) _Pragma(\"GCC diagnostic push\") _Pragma(\"GCC diagnostic ignored \
+                      \\\"-Wint-conversion\\\"\") x _Pragma(\"GCC diagnostic pop\")
 QUIET(char *a = 1;)
 #pragma GCC diagnostic warning \"-Wint-conversion\"
 char *b = 2;
@@ -279,7 +296,10 @@ char *c = 3;
                 written.contains("#pragma GCC diagnostic ignored \"-Wint-conversion\""),
                 "{mode}: {written}"
             );
-            assert!(written.contains("#pragma GCC diagnostic pop"), "{mode}: {written}");
+            assert!(
+                written.contains("#pragma GCC diagnostic pop"),
+                "{mode}: {written}"
+            );
             let round_trip = run(&root, &[mode, "-c", "-o", "output.o", "input.i"]);
             assert_eq!(lines(&direct), lines(&round_trip), "{mode}: {written}");
             assert_eq!(lines(&direct).len(), 1, "{mode}");

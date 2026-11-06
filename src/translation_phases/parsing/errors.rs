@@ -175,7 +175,9 @@ impl<'tu> Parser<'_, 'tu, '_> {
             code: error_type.code(),
             severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing) {
                 crate::translation_phases::policy_severity(
-                    self.context.configuration_at(source_vectors).extension_policy(),
+                    self.context
+                        .configuration_at(source_vectors)
+                        .extension_policy(),
                     crate::translation_phases::DiagnosticPolicy::Warning,
                 )
                 .unwrap_or(ErrorSeverity::Warning)
@@ -183,7 +185,9 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 severity
             } else if matches!(error_type, ParserErrorType::EmptyTranslationUnit) {
                 crate::translation_phases::policy_severity(
-                    self.context.configuration_at(source_vectors).extension_policy(),
+                    self.context
+                        .configuration_at(source_vectors)
+                        .extension_policy(),
                     crate::translation_phases::DiagnosticPolicy::Extension,
                 )
                 .unwrap_or(ErrorSeverity::Warning)

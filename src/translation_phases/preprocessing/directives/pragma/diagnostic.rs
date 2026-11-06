@@ -235,7 +235,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         let Some(name) = text.strip_prefix("-W") else {
             return;
         };
-        // The list holds each group's `no-` form too, which a pragma cannot use.
+        // The list holds each group's `no-` form too, which a pragma cannot
+        // use.
         let known = name == "everything"
             || (!name.starts_with("no-") && clang_knows_warning(&text))
             || is_bcc_warning(name);

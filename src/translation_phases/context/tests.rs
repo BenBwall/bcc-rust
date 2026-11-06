@@ -325,9 +325,8 @@ fn diagnostic_pragmas_govern_retained_copies_of_tokens_by_output_order() {
     let next = token(&mut context);
     context.pragma_diagnostic_class("initializer-overrides", PragmaClass::Error, false);
     let promoted = token(&mut context);
-    let severity = |context: &Context<'_>, source| {
-        context.configuration_at(source).diagnostic_severity(group)
-    };
+    let severity =
+        |context: &Context<'_>, source| context.configuration_at(source).diagnostic_severity(group);
     // Directly, by the token's place in the output.
     assert_eq!(severity(&context, before), Some(ErrorSeverity::Warning));
     assert_eq!(severity(&context, quiet), None);

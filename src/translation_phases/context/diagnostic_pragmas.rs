@@ -24,6 +24,7 @@
 use super::Context;
 use crate::{
     configuration::{
+        CL_CODED_WARNINGS,
         CompilerConfiguration,
         DiagnosticGroup,
         PragmaClass,
@@ -71,9 +72,9 @@ struct Change<'tu> {
 /// The warning settings in force at some point of a translation unit.
 #[derive(Clone, Copy)]
 struct PragmaState {
-    configuration: CompilerConfiguration,
+    configuration:    CompilerConfiguration,
     /// One bit per group Clang's `fatal` made fatal.
-    fatal: u128,
+    fatal:            u128,
     /// `warning "-Wpedantic"`: `-Werror` no longer promotes extension
     /// diagnostics.
     pedantic_warning: bool,
@@ -103,11 +104,7 @@ impl<'tu> Context<'tu> {
     /// Queues a diagnostic of a warning group as the settings at `source`
     /// classify it, which may be not at all.
     #[inline]
-    pub(crate) fn classified_error(
-        &mut self,
-        source: SourceVectors,
-        error: TranslationError<'tu>,
-    ) {
+    pub(crate) fn classified_error(&mut self, source: SourceVectors, error: TranslationError<'tu>) {
         if self.diagnostic_pragmas.changes.is_empty() {
             self.pending_errors.push_back(error);
         } else {
@@ -140,12 +137,11 @@ impl<'tu> Context<'tu> {
     ) {
         let error = TranslationError::Preprocessing(error);
         pending_errors.push_back(match classified {
-            | Some((tu, severity, fatal)) =>
-                TranslationError::Classified(ClassifiedError {
-                    severity,
-                    fatal,
-                    error: tu.alloc(error),
-                }),
+            | Some((tu, severity, fatal)) => TranslationError::Classified(ClassifiedError {
+                severity,
+                fatal,
+                error: tu.alloc(error),
+            }),
             | None => error,
         });
     }
@@ -183,12 +179,7 @@ impl<'tu> Context<'tu> {
     /// `#pragma ... diagnostic <class> "-W<name>"`, with Clang's `fatal`.
     #[cold]
     #[inline(never)]
-    pub(crate) fn pragma_diagnostic_class(
-        &mut self,
-        name: &str,
-        class: PragmaClass,
-        fatal: bool,
-    ) {
+    pub(crate) fn pragma_diagnostic_class(&mut self, name: &str, class: PragmaClass, fatal: bool) {
         let mut state = self.current_pragma_state();
         state.configuration = state.configuration.with_pragma_class(name, class);
         let mask = self.configuration.pragma_group_mask(name);
@@ -205,26 +196,23 @@ impl<'tu> Context<'tu> {
 
     /// One number of `#pragma warning(<specifier>: <number>)` under the `cl`
     /// identity, for the warnings bcc gives `cl`'s code. Microsoft Learn:
-    /// "warning pragma", "Compiler Warning (level 3) C4013", "Compiler
-    /// Warning (level 1) C4047", "Compiler Warning (level 1 and level 3)
-    /// C4133", "Compiler Warning (level 1) C4311", "Compiler Warning (level
-    /// 1) C4312".
+    /// "warning pragma".
     #[cold]
     #[inline(never)]
     pub(crate) fn pragma_warning_number(&mut self, number: u32, specifier: WarningSpecifier) {
-        let group = match number {
-            | 4013 => DiagnosticGroup::ImplicitFunctionDeclaration,
-            | 4047 => DiagnosticGroup::IntConversion,
-            | 4133 => DiagnosticGroup::IncompatiblePointerTypes,
-            | 4311 => DiagnosticGroup::PointerToIntCast,
-            | 4312 => DiagnosticGroup::IntToPointerCast,
-            | _ => return,
+        let group = CL_CODED_WARNINGS
+            .iter()
+            .find(|&&(code, ..)| u32::from(code) == number)
+            .and_then(|&(_, _, name)| DiagnosticGroup::parse(name));
+        let Some(group) = group else {
+            return;
         };
         let class = match specifier {
             | WarningSpecifier::Disable => PragmaClass::Ignored,
             | WarningSpecifier::Error => PragmaClass::Error,
             | WarningSpecifier::Enable => PragmaClass::Warning,
-            | WarningSpecifier::Default if self.configuration.diagnostic_severity(group).is_some() =>
+            | WarningSpecifier::Default
+                if self.configuration.diagnostic_severity(group).is_some() =>
                 PragmaClass::Warning,
             | WarningSpecifier::Default => PragmaClass::Ignored,
             | WarningSpecifier::Suppress => return,
@@ -281,7 +269,9 @@ impl<'tu> Context<'tu> {
         let token = u32::try_from(self.parser_token_vectors.len())
             .expect("parser provenance fits its 32-bit source ranges");
         let state = &*self.tu.alloc(state);
-        self.diagnostic_pragmas.changes.push(Change { token, state });
+        self.diagnostic_pragmas
+            .changes
+            .push(Change { token, state });
     }
 
     fn current_pragma_state(&self) -> PragmaState {

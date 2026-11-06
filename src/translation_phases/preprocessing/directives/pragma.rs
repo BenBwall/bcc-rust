@@ -6,9 +6,9 @@
 
 mod diagnostic;
 
-pub(crate) use diagnostic::WarningSpecifier;
-
 use std::fmt::Write as _;
+
+pub(crate) use diagnostic::WarningSpecifier;
 
 use super::super::{
     Expander,

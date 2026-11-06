@@ -164,9 +164,8 @@ impl CompilerConfiguration {
                 .fold(self.with_pragma_pedantic(class), |configuration, &group| {
                     configuration.with_pragma_group(group, class)
                 }),
-            | _ => DiagnosticGroup::parse(name).map_or(self, |group| {
-                self.with_pragma_group(group, class)
-            }),
+            | _ => DiagnosticGroup::parse(name)
+                .map_or(self, |group| self.with_pragma_group(group, class)),
         }
     }
 
@@ -647,6 +646,17 @@ enum GroupDefault {
 }
 
 impl DiagnosticGroup {
+    /// The groups bcc models under `-Wall`, as a pragma naming it reaches
+    /// them.
+    const UNDER_ALL: &[Self] = &[
+        Self::UnusedFunction,
+        Self::ImplicitFunctionDeclaration,
+        Self::ImplicitLibraryFunction,
+        Self::ImplicitInt,
+        Self::ReturnMismatch,
+        Self::VoidReturnMismatch,
+    ];
+
     /// Whether Clang's `-Wconversion` holds this group.
     const fn converts(self) -> bool {
         matches!(
@@ -664,17 +674,6 @@ impl DiagnosticGroup {
     pub(crate) const fn gcc_only(self) -> bool {
         matches!(self, Self::Normalized | Self::PedanticNormalized)
     }
-
-    /// The groups bcc models under `-Wall`, as a pragma naming it reaches
-    /// them.
-    const UNDER_ALL: &[Self] = &[
-        Self::UnusedFunction,
-        Self::ImplicitFunctionDeclaration,
-        Self::ImplicitLibraryFunction,
-        Self::ImplicitInt,
-        Self::ReturnMismatch,
-        Self::VoidReturnMismatch,
-    ];
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
         if name == "#warnings" {

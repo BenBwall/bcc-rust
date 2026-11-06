@@ -448,11 +448,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Clang folds any other integer constant here, in every mode, as
             // a GNU extension (`1 ? 8 : n`, `(int){8}`); GCC folds none.
             if !self.tainted
-                && (self.context.configuration_at(width.source_vectors).extension_policy()
+                && (self
+                    .context
+                    .configuration_at(width.source_vectors)
+                    .extension_policy()
                     != crate::configuration::ExtensionPolicy::Allow
-                    || self.context.configuration_at(width.source_vectors).diagnostic_requested(
-                        crate::configuration::DiagnosticGroup::GnuFoldingConstant,
-                    ))
+                    || self
+                        .context
+                        .configuration_at(width.source_vectors)
+                        .diagnostic_requested(
+                            crate::configuration::DiagnosticGroup::GnuFoldingConstant,
+                        ))
             {
                 self.error(
                     SemanticErrorKind::FoldedIntegerConstant,
