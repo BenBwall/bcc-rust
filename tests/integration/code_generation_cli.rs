@@ -2378,8 +2378,8 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
 
     #[test]
     fn noundef_scalar_argument_reports_ub_with_status_70() {
-        let source =
-            "static int ignore(int x) { return 0; } int main(void) { int x; return ignore(x); }";
+        let source = "static int ignore(int x) { return 0; } int main(void) { int big = \
+                      2147483647; return ignore(big + 1); }";
         for target in [
             "--target=x86_64-unknown-linux-gnu",
             "--target=x86_64-w64-windows-gnu",
@@ -2538,7 +2538,10 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     #[test]
     fn poison_return_from_main_traps_like_exit() {
         for ending in ["return x;", "exit(x);"] {
-            let source = format!("void exit(int); int main(void) {{ int x; {ending} }}\n");
+            let source = format!(
+                "void exit(int); int main(void) {{ int big = 2147483647; int x = big + 1; \
+                 {ending} }}\n"
+            );
             for flags in [["--interpret", "--opt=none"], ["--interpret", "--opt=bcc"]] {
                 let output = bcc(&source, &flags);
                 assert_eq!(

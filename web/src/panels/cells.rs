@@ -99,6 +99,9 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
                         let kind = access(object.id, if element { index } else { None });
                         let text = value_text(&value, &snapshot.objects);
                         let indeterminate = text.is_none();
+                        // A pointer's name is set smaller than a number, so
+                        // its cell stays narrow enough for a phone's strip.
+                        let long = text.as_deref().is_some_and(|text| text.chars().count() > 5);
                         let marks = pointed(object.id, index.unwrap_or(0));
                         let description = format!(
                             "{name}, {ty}: {}{}",
@@ -109,6 +112,7 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
                             <li
                                 class=format!("cell {}", palette::class(&object.name))
                                 class:is-indeterminate=indeterminate
+                                class:is-long=long
                                 data-access=kind
                                 aria-label=description
                             >

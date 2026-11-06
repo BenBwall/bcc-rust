@@ -27,11 +27,21 @@
 //! 3. **Renaming.** In reverse post-order, so a block's immediate dominator
 //!    comes first, the value at a block's entry is its new parameter if it got
 //!    one, else the value at its immediate dominator's exit, else (in the
-//!    entry) `poison`, because the slot is uninitialized there. A load is
-//!    replaced by the current value, a store makes its operand current, and
-//!    both are removed, along with the `stack_addr`s.
+//!    entry) none, because the slot is uninitialized there. A load is replaced
+//!    by the current value, or where there is none by a `freeze` of `poison`, a
+//!    store makes its operand current, and both are removed, along with the
+//!    `stack_addr`s.
 //! 4. **Edges.** Every edge into a block with a new parameter passes the value
-//!    at its source's exit.
+//!    at its source's exit, or `poison` where there is none.
+//!
+//! The two uninitialized cases differ on purpose. A read on a path without a
+//! store is a fixed if arbitrary value, so `x &= 0xff` leaves the upper bits
+//! clear and a test of them decides nothing about the rest of the function, as
+//! GCC and Clang read it (gcc.c-torture/execute/pr43629.c). An edge can stay
+//! `poison`: a parameter it reaches holds the value the other edges pass, as
+//! LLVM folds a `phi` with an `undef` operand, so `int x; if (c) x = f();`
+//! costs no merge. Reading the local on the path that did not store it is what
+//! C leaves undefined.
 //!
 //! For a counter kept in `slot0`,
 //!
@@ -58,11 +68,12 @@
 //! first, so it gets the parameter `v2`.
 //!
 //! Blocks the entry cannot reach get no parameters; their loads read
-//! `poison` or the value stored before them in the block, which is never
-//! observed. Each promoted slot is one rewrite for bisecting.
+//! `freeze poison` or the value stored before them in the block, which is
+//! never observed. Each promoted slot is one rewrite for bisecting.
 //!
 //! C99: §6.2.4 paragraph 5, p. 32; PDF p. 44 (an automatic object's initial
-//! value is indeterminate, so a load before any store reads `poison`);
+//! value is indeterminate); C11: §6.3.2.1 paragraph 2, p. 54; PDF p. 72 makes
+//! reading it undefined, which this refines; C99:
 //! §6.7.3 paragraph 6, p. 109; PDF p. 121 (volatile accesses are kept as the
 //! abstract machine performs them).
 
@@ -83,6 +94,7 @@ use crate::{
         Inst,
         InstData,
         InstFlags,
+        Opcode,
         StackSlot,
         Type,
         Value,
@@ -304,6 +316,8 @@ struct Promoter<'a, 's> {
     worklist:    ArenaVec<'s, Block>,
     /// The `poison` constant of each type, once added.
     poison:      [Option<Value>; Type::ALL.len()],
+    /// The `freeze` of that constant, once added.
+    frozen:      [Option<Value>; Type::ALL.len()],
 }
 
 impl<'a, 's> Promoter<'a, 's> {
@@ -339,6 +353,7 @@ impl<'a, 's> Promoter<'a, 's> {
             exits: values(),
             worklist: ArenaVec::new_in(draft.scratch),
             poison: [None; Type::ALL.len()],
+            frozen: [None; Type::ALL.len()],
         }
     }
 
@@ -472,7 +487,7 @@ impl<'a, 's> Promoter<'a, 's> {
         for &(_, inst, access) in &rows[start as usize..end as usize] {
             match access {
                 | Access::Load => {
-                    let value = self.materialize(draft, current, ty);
+                    let value = current.unwrap_or_else(|| self.frozen_poison(draft, ty));
                     let result = draft.inst_result(inst).expect("a load has a result");
                     draft.replace(result, value);
                 },
@@ -513,6 +528,33 @@ impl<'a, 's> Promoter<'a, 's> {
                 }
             }
         }
+    }
+
+    /// The value a load reads from the uninitialized slot: one `freeze` of
+    /// `poison` of `ty` for the function, in its entry so that it dominates
+    /// every read, as the constants are.
+    fn frozen_poison(&mut self, draft: &mut Draft<'_, 's>, ty: Type) -> Value {
+        if let Some(frozen) = self.frozen[ty as usize] {
+            return frozen;
+        }
+        let arg = self.materialize(draft, None, ty);
+        let entry = Block::new(0);
+        let position = draft
+            .block(entry)
+            .insts
+            .iter()
+            .position(|&inst| draft.inst_result(inst) == Some(arg))
+            .map_or(0, |position| position + 1);
+        let data = InstData::Unary {
+            opcode: Opcode::Freeze,
+            ty,
+            arg,
+        };
+        let frozen = draft
+            .add_inst(entry, position, data, Some(ty))
+            .expect("a freeze defines a value");
+        self.frozen[ty as usize] = Some(frozen);
+        frozen
     }
 
     /// `value`, or the `poison` of `ty` for `None`.
