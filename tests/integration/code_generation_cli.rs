@@ -811,9 +811,7 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
     /// A transparent union's parameter matches its members' types when function
     /// types meet, as GCC and Clang have it: glibc's `getsockname` converts
     /// to a pointer taking `struct sockaddr *`, and a declaration can precede
-    /// a definition written with the member's type. The call passes the first
-    /// member's registers, so the interpreter, which runs before the calling
-    /// convention, is left out.
+    /// a definition written with the member's type.
     #[cfg(target_os = "linux")]
     #[test]
     fn transparent_union_parameters_match_their_members_on_every_back_end() {
@@ -853,6 +851,10 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
             );
             let output = run_native(&mut Command::new(&executable)).unwrap();
             assert_eq!(output.status.code(), Some(7), "{options:?}");
+        }
+        for options in ["--opt=none", "--opt=bcc"] {
+            let output = bcc(source, &["--interpret", options]);
+            assert_eq!(output.status.code(), Some(7), "{}", text(&output.stderr));
         }
         for source in [
             "typedef union { int *p; } __attribute__((transparent_union)) U;\nint f(U);\nint \

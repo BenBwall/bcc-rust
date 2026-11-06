@@ -360,9 +360,7 @@ passes the whole union.
 Where function types meet (a conversion, a redeclaration, `?:`,
 `__builtin_types_compatible_p`), a transparent union's parameter matches any of
 its members' types and the composite keeps the union, as in GCC and Clang.
-glibc declares `getsockname` this way under `_GNU_SOURCE`. `--interpret` runs
-before the calling convention, so it reports an indirect call through a
-member-typed pointer as a wrong signature; the back ends run it correctly.
+glibc declares `getsockname` this way under `_GNU_SOURCE`.
 
 Startup preprocessing uses `PreprocessingOption::{Define,Undefine,Include}`
 in `src/configuration.rs`, borrowed by `Context.preprocessing_options`; the
