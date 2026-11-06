@@ -665,7 +665,7 @@ below; implicit functions are reported under `-Wimplicit-function-declaration`
 | `InvalidSwitchExpression` | [switch](sema2-switch.c) | Integer switch operand. |
 | `FailedAssertion` | [assertion](sema2-assertion.c) | Evaluated supported static assertion and its message (C11 mode). |
 | `InvalidInitializer` | [initializer](sema2-initializer.c) | Scalar assignment conversion and valid object initialization. |
-| `ExcessInitializer` | [excess](sema2-excess.c) | Scalar/aggregate/array current-object exhaustion. |
+| `ExcessElements` | [excess](sema2-excess.c) | Scalar/aggregate/array current-object exhaustion; GCC and Clang warn. `ExcessInitializer` is the error TCC and `cl` give. |
 | `InvalidDesignator` | [designator](sema2-designator.c) | Existing members and in-range nonnegative ICE array indices. |
 | `NonConstantInitializer` | [static-initializer](sema2-static-initializer.c) | Static arithmetic/address constant eligibility. |
 | `NonConstantInitializer`, `FoldedIntegerConstant`, `Extension(ConstantCompoundLiteral)` | [GCC](sema-static-compound-literal-gcc.c), [Clang](sema-static-compound-literal-clang.c) | Compound literals in static initializers and integer constants under each identity: GCC's whole-literal wrappers and their pedantic report, Clang's folded literal values, and the forms both reject. |

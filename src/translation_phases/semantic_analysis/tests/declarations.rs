@@ -491,7 +491,7 @@ fn anonymous_members_have_layout_names_and_initializers() {
             c11()
         ),
         [
-            SemanticErrorKind::ExcessInitializer,
+            SemanticErrorKind::ExcessElements(errors::InitializedObject::Struct),
             SemanticErrorKind::ExpectedModifiableLvalue,
             SemanticErrorKind::InvalidMemberAccess,
         ]

@@ -380,8 +380,6 @@ fn initializer_current_object_designators_and_extent_inference() {
             }
         },
     );
-    rejects("int a[2]={1,2,3};", SemanticErrorKind::ExcessInitializer);
-    rejects("int x={1,2};", SemanticErrorKind::ExcessInitializer);
     rejects("int a[2]={[2]=1};", SemanticErrorKind::InvalidDesignator);
     rejects(
         "struct S {int x;}; struct S s={.y=1};",

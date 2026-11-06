@@ -747,6 +747,53 @@ mod tests {
         );
     }
 
+    /// An element beyond the object is a warning in GCC and Clang, each with
+    /// its own count, and is dropped without being evaluated. TCC and `cl`
+    /// refuse it. C99 §6.7.8p2.
+    #[test]
+    fn excess_initializer_elements_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "m.c",
+            "int a[2] = {1, 2, 3, 4};\nstruct S { int x; } s = {5, 6};\nunion U { int i; } u = \
+             {7, 8};\nint v = {9, 10};\n",
+        );
+        for (mode, first) in [("--gcc-mode", 4), ("--clang-mode", 3)] {
+            let output = directory.bcc(mode, &["-fsyntax-only", "m.c"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            assert_eq!(
+                text.matches("warning: excess elements").count(),
+                first + 1,
+                "{mode}: {text}"
+            );
+            for object in ["array", "struct", "union", "scalar"] {
+                assert!(
+                    text.contains(&format!("excess elements in {object} initializer")),
+                    "{text}"
+                );
+            }
+            let silent = directory.bcc(mode, &["-w", "-fsyntax-only", "m.c"]);
+            succeeds(&silent);
+            assert!(stderr(&silent).is_empty(), "{mode}: {}", stderr(&silent));
+            let strict = directory.bcc(mode, &["-pedantic-errors", "-fsyntax-only", "m.c"]);
+            assert_eq!(strict.status.code(), Some(1), "{mode}: {}", stderr(&strict));
+        }
+        directory.write(
+            "run.c",
+            "int f(void) { __builtin_trap(); }\nint main(void) { int d[1] = {1, f()}; return d[0] \
+             - 1; }\n",
+        );
+        for opt in ["--opt=none", "--opt=bcc"] {
+            let output = directory.bcc("", &["--interpret", opt, "run.c"]);
+            assert_eq!(output.status.code(), Some(0), "{opt}: {}", stderr(&output));
+        }
+        let output = directory.bcc("--tcc-mode", &["-c", "m.c"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        let output = directory.bcc("--msvc-mode", &["/c", "m.c"]);
+        assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    }
+
     /// `__BASE_FILE__` names the main source file as the command line
     /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
     #[test]

@@ -37,6 +37,16 @@ pub(crate) struct SemanticError {
     pub(crate) previous:           Option<SourceVectors>,
 }
 
+/// What an excess initializer element lies beyond, as GCC and Clang word it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InitializedObject {
+    Array,
+    Struct,
+    Union,
+    Vector,
+    Scalar,
+}
+
 /// Symbolic semantic diagnostic, independent of rendered text.
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,6 +373,9 @@ pub(crate) enum SemanticErrorKind {
     NonConstantArrayInitializer,
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessInitializer,
+    /// An element beyond the object, which GCC and Clang warn about and drop.
+    /// C99: §6.7.8p2, p. 125; PDF p. 137.
+    ExcessElements(InitializedObject),
     /// A flexible array member given elements outside a static object's own
     /// structure; GNU C allows only that case, and Clang an empty list too.
     /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p2, p. 125; PDF p. 137.
@@ -829,7 +842,8 @@ impl SemanticErrorKind {
             | Self::FloatOverflow(_) => Some(DiagnosticGroup::Overflow),
             | Self::PedanticOverflow => Some(DiagnosticGroup::PedanticOverflow),
             | Self::LiteralConversion(_) => Some(DiagnosticGroup::LiteralConversion),
-            | Self::ExcessString => Some(DiagnosticGroup::ExcessInitializers),
+            | Self::ExcessString | Self::ExcessElements(_) =>
+                Some(DiagnosticGroup::ExcessInitializers),
             | _ => None,
         }
     }
@@ -971,7 +985,8 @@ impl SemanticErrorKind {
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
             | Self::NonConstantArrayInitializer => "not a constant array",
-            | Self::ExcessInitializer => "no subobject is left to initialize",
+            | Self::ExcessInitializer | Self::ExcessElements(_) =>
+                "no subobject is left to initialize",
             | Self::FlexibleArrayInitializer => "initializes a flexible array member",
             | Self::FlexibleArrayBraces => "not a brace-enclosed list",
             | Self::FlexibleArrayDesignator => "designates inside a flexible array member",
@@ -1911,6 +1926,17 @@ impl SemanticErrorKind {
                 "excess initializer for the current object",
                 "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
                  initialized entity",
+            ),
+            | Self::ExcessElements(object) => (
+                match object {
+                    | InitializedObject::Array => "excess elements in array initializer",
+                    | InitializedObject::Struct => "excess elements in struct initializer",
+                    | InitializedObject::Union => "excess elements in union initializer",
+                    | InitializedObject::Vector => "excess elements in vector initializer",
+                    | InitializedObject::Scalar => "excess elements in scalar initializer",
+                },
+                "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
+                 initialized entity; the element is dropped without being evaluated",
             ),
             | Self::FlexibleArrayInitializer => (
                 "initialization of flexible array member is not allowed",
