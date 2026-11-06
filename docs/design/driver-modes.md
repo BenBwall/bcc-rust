@@ -142,18 +142,31 @@ bcc's own `-ffloatn-types` and `-fno-floatn-types`, which the GCC, Clang,
 TCC and clang-cl personalities pass on, override either default.
 
 GCC and Clang share a snippet: the source line under a gutter five wide, the
-caret and tildes under it, and nothing around them; bcc's labels and the C99
-notes and help it adds to its own format are left out. What a diagnostic relates
-to, such as an earlier declaration, is a `note:` of its own with its own snippet.
+caret and tildes under it, and nothing around them. bcc's labels, notes and help
+are left out; `-Xbcc --diagnostic-format=bcc` shows them, including the C99
+citations, the directories searched for a missing header and the advice naming
+`--max-nesting-depth`. What a diagnostic relates to, such as an earlier
+declaration, is a `note:` of its own with its own snippet.
+
 Most messages keep bcc's wording. The wording is each compiler's for an
 undeclared identifier, a missing expression, and the conversions in
-`semantic_analysis/compiler_wording.rs`. The differences left: GCC's `In
-function 'f':` header and its `each undeclared identifier` note are not written;
-GCC's labels under an operand are not written; every caret is a caret and tildes,
-where Clang marks a single token with the caret alone and each side of an operator
-with tildes; and because the whole unit is parsed before semantic analysis, syntax
-errors come before semantic ones, and recovery can find different errors after
-the first.
+`semantic_analysis/compiler_wording.rs`. The differences left:
+
+- GCC's `In function 'f':` header and `each undeclared identifier` note, its
+  labels under an operand, and both compilers' `In file included from` lines
+  and macro expansion notes are not written.
+- Every range is a caret and tildes, where Clang marks a single token with the
+  caret alone and each side of an operator with tildes, and a range over several
+  lines starts each line with a caret.
+- A snippet's line number is the physical line, where Clang shows the one `#line`
+  gave. Tabs print as four spaces and each Unicode scalar counts as one cell, and
+  a column counts scalars, where GCC's counts display cells and Clang's bytes.
+- `-fdiagnostics-plain-output`, `-fno-diagnostics-show-caret`,
+  `-fno-caret-diagnostics` and `-fno-show-column` are accepted and change nothing,
+  and `-fdiagnostics-color=always` does not force color through a pipe;
+  `CLICOLOR_FORCE` does.
+- The whole unit is parsed before semantic analysis, so syntax errors come before
+  semantic ones, and recovery can find different errors after the first.
 
 ## Options a compiler knows and bcc does not implement
 

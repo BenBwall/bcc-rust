@@ -1366,6 +1366,21 @@ mod tests {
             related.contains("d.c:1:5: note: ") && related.contains("    1 | int y;\n"),
             "{related}"
         );
+        // A note reports where `#line` says the place is, and keeps every
+        // line of its range.
+        directory.write("l.c", "#line 44\nint x;\nchar x;\n");
+        assert!(text("--gcc-mode", "l.c").contains("l.c:44:5: note: "));
+        directory.write("r.c", "int first extra\njunk\nmiddle\nlast;\nint after;\n");
+        let recovery = text("--gcc-mode", "r.c");
+        for line in ["junk", "middle", "last;"] {
+            assert!(
+                recovery.contains(&format!("| {line}\n")),
+                "{line}: {recovery}"
+            );
+        }
+        // GCC spells the operator, not the digraph written for it.
+        directory.write("t.c", "int f(void) { return 1 + :>; }\n");
+        assert!(text("--gcc-mode", "t.c").contains("expected expression before ']' token"));
         // bcc's own format keeps its labels and notes.
         let own = text("", "a.c");
         assert!(

@@ -18,6 +18,7 @@ use super::{
     ColorChoice,
     Diagnostic,
     Renderer,
+    model::Label,
 };
 use crate::{
     configuration::DiagnosticFormat,
@@ -109,28 +110,24 @@ impl Renderer {
             return out.into_str();
         }
 
-        let mut marks = Self::marks(diagnostic, context, scratch);
-        let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
         // GCC and Clang share one snippet: a gutter five wide, nothing around
         // the source line and its caret, and what relates to the message in
         // `note:` lines of its own.
         let compiler_snippet = matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang);
-        let related = if compiler_snippet {
-            let mut related = ArenaVec::new_in(scratch);
-            related.extend(
-                marks
-                    .iter()
-                    .filter(|mark| !mark.primary && mark.label.is_some())
-                    .cloned(),
-            );
-            marks.retain(|mark| mark.primary);
+        let mut marks = ArenaVec::new_in(scratch);
+        for label in diagnostic
+            .labels
+            .iter()
+            .filter(|label| !compiler_snippet || label.primary)
+        {
+            Self::push_label_marks(label, context, &mut marks);
+        }
+        if compiler_snippet {
             for mark in &mut marks {
                 mark.label = None;
             }
-            related
-        } else {
-            ArenaVec::new_in(scratch)
-        };
+        }
+        let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
         let gutter_width = if max_line == 0 {
             1
         } else {
@@ -209,14 +206,12 @@ impl Renderer {
             );
         }
         if compiler_snippet {
-            for mark in &related {
-                self.render_related_note(
-                    &mut out,
-                    mark,
-                    context,
-                    (gutter_width, pad.as_str()),
-                    scratch,
-                );
+            for label in diagnostic
+                .labels
+                .iter()
+                .filter(|label| !label.primary && label.message.is_some())
+            {
+                self.render_related_note(&mut out, label, context, scratch);
             }
             return out.into_str();
         }
@@ -248,41 +243,59 @@ impl Renderer {
         out.into_str()
     }
 
-    /// Writes `mark`, a secondary place in a diagnostic, as GCC and Clang do:
-    /// a `note:` of its own, located there, over its source line.
+    /// Writes `label`, a secondary place in a diagnostic, as GCC and Clang do:
+    /// a `note:` of its own, at the place's reported location, over its source
+    /// lines when there are any to quote.
     fn render_related_note(
         &self,
         out: &mut ArenaString<'_>,
-        mark: &Mark<'_>,
+        label: &Label<'_>,
         context: &Context<'_>,
-        (gutter_width, pad): (usize, &str),
         scratch: &Bump,
     ) {
-        let text = context.source_text(mark.file).unwrap_or_default();
-        let starts = context.source_line_starts(mark.file).unwrap_or(&[0]);
-        let line_start = starts.get(mark.line - 1).copied().unwrap_or(0);
+        let Some(vector) = label.source.vectors(context).first() else {
+            return;
+        };
+        let file = vector.source_file_index;
         let _ = writeln!(
             out,
             "{}:{}:{}: {} {}",
-            context.get_source_file(mark.file).display(),
-            mark.line,
-            mark.start.saturating_sub(line_start) + 1,
+            context.get_source_file(file).display(),
+            vector.line,
+            vector.column,
             self.paint("note:", Style::new().bold()),
-            mark.label.unwrap_or_default(),
+            label.message.unwrap_or_default(),
         );
-        let marks = [Mark {
-            primary: true,
-            label: None,
-            ..mark.clone()
-        }];
-        self.render_file_lines(
-            out,
-            &marks,
-            (marks[0].file, text, starts),
-            ErrorSeverity::Warning,
-            (gutter_width, pad, true),
-            scratch,
-        );
+        let mut marks = ArenaVec::new_in(scratch);
+        Self::push_label_marks(label, context, &mut marks);
+        for mark in &mut marks {
+            mark.primary = true;
+            mark.label = None;
+        }
+        let mut files = ArenaVec::new_in(scratch);
+        for mark in &marks {
+            if !files.contains(&mark.file) {
+                files.push(mark.file);
+            }
+        }
+        let last_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(1);
+        let gutter_width = (last_line.ilog10() as usize + 1).max(5);
+        let mut pad = ArenaString::new_in(scratch);
+        for _ in 0..gutter_width {
+            pad.push(' ');
+        }
+        for file in files {
+            let text = context.source_text(file).unwrap_or_default();
+            let starts = context.source_line_starts(file).unwrap_or(&[0]);
+            self.render_file_lines(
+                out,
+                &marks,
+                (file, text, starts),
+                ErrorSeverity::Warning,
+                (gutter_width, pad.as_str(), true),
+                scratch,
+            );
+        }
     }
 
     fn render_file_lines(
@@ -447,49 +460,47 @@ impl Renderer {
         );
     }
 
-    fn marks<'a, 'scratch>(
-        diagnostic: &'a Diagnostic<'_>,
+    /// Adds the marks of `label`: one on each physical line it covers, the
+    /// first holding its message.
+    fn push_label_marks<'a>(
+        label: &'a Label<'_>,
         context: &Context<'_>,
-        scratch: &'scratch Bump,
-    ) -> ArenaVec<'scratch, Mark<'a>> {
-        let mut marks: ArenaVec<'_, Mark<'a>> = ArenaVec::new_in(scratch);
-        for label in &diagnostic.labels {
-            let mut label_text = label.message;
-            for vector in label.source.vectors(context) {
-                let file = vector.source_file_index;
-                let Some(text) = context.source_text(file) else {
-                    continue;
-                };
-                let starts = context
-                    .source_line_starts(file)
-                    .expect("recorded source text has a line index");
-                let offset = (vector.index as usize).min(text.len());
-                let (line, line_start, line_end) = Self::locate(starts, text, offset);
-                let start = offset.max(line_start);
-                let end = vector.end().clamp(start, line_end);
-                // Adjacent segments of one range on one line form one mark.
-                if let Some(last) = marks.last_mut()
-                    && last.file == file
-                    && last.line == line
-                    && last.primary == label.primary
-                    && label_text.is_none()
-                {
-                    last.start = last.start.min(start);
-                    last.end = last.end.max(end);
-                    continue;
-                }
-                marks.push(Mark {
-                    file,
-                    line,
-                    start,
-                    end,
-                    primary: label.primary,
-                    label: label_text.take(),
-                    order: marks.len(),
-                });
+        marks: &mut ArenaVec<'_, Mark<'a>>,
+    ) {
+        let mut label_text = label.message;
+        for vector in label.source.vectors(context) {
+            let file = vector.source_file_index;
+            let Some(text) = context.source_text(file) else {
+                continue;
+            };
+            let starts = context
+                .source_line_starts(file)
+                .expect("recorded source text has a line index");
+            let offset = (vector.index as usize).min(text.len());
+            let (line, line_start, line_end) = Self::locate(starts, text, offset);
+            let start = offset.max(line_start);
+            let end = vector.end().clamp(start, line_end);
+            // Adjacent segments of one range on one line form one mark.
+            if let Some(last) = marks.last_mut()
+                && last.file == file
+                && last.line == line
+                && last.primary == label.primary
+                && label_text.is_none()
+            {
+                last.start = last.start.min(start);
+                last.end = last.end.max(end);
+                continue;
             }
+            marks.push(Mark {
+                file,
+                line,
+                start,
+                end,
+                primary: label.primary,
+                label: label_text.take(),
+                order: marks.len(),
+            });
         }
-        marks
     }
 
     /// Returns the 1-based physical line containing `offset` and the byte

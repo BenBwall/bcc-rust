@@ -1781,8 +1781,12 @@ impl ParserError<'_> {
                 | (Some(TokenType::String(_)), _) => "expected expression before string constant",
                 | (Some(TokenType::Character(_)), _) =>
                     "expected expression before character constant",
-                | (Some(TokenType::Operator(_)), Some(spelling)) =>
-                    format_in!(arena, "expected expression before '{spelling}' token"),
+                // The operator as C spells it, whatever digraph was written.
+                | (Some(token @ TokenType::Operator(_)), spelling) => {
+                    let found = format_in!(arena, "{}", token.found(spelling));
+                    let found = found.trim_matches('`');
+                    format_in!(arena, "expected expression before '{found}' token")
+                },
             }),
             | _ => None,
         }
