@@ -414,6 +414,226 @@ long use(int n)
         assert!(!columns.contains("column 3"), "{columns}");
     }
 
+    /// A program with the data a debugger shows: a struct, a union, an array,
+    /// a pointer, a bit-field, an enum, typedefs, qualifiers, a static local,
+    /// a nested block that shadows a name, and a recursive call.
+    const DATA: &str = "\
+typedef unsigned long my_size;
+typedef struct point { int x; int y; } point_t;
+struct bits { unsigned a : 3; unsigned b : 5; int c; };
+union u { int i; float f; };
+enum color { RED, GREEN = 5, BLUE };
+const int table[3] = { 1, 2, 3 };
+volatile int vol;
+int sum(point_t *p, my_size n)
+{
+  int total = 0;
+  for (my_size i = 0; i < n; i++) {
+    int total2 = p[i].x + p[i].y;
+    {
+      int total = total2 * 2;
+      total2 = total;
+    }
+    total += total2;
+  }
+  return total;
+}
+int fact(int n)
+{
+  if (n <= 1)
+    return 1;
+  return n * fact(n - 1);
+}
+int main(void)
+{
+  point_t pts[2] = { { 1, 2 }, { 3, 4 } };
+  struct bits b = { 1, 2, 3 };
+  union u un;
+  enum color c = GREEN;
+  static int counter = 7;
+  un.i = 9;
+  int s = sum(pts, 2);
+  int f = fact(3);
+  return s + f + b.a + un.i + c + counter + table[0] + vol != 49;
+}
+";
+
+    #[test]
+    fn variables_and_types_read_back() {
+        let directory = Directory::new();
+        std::fs::write(directory.path("data.c"), DATA).unwrap();
+        drop(directory.built(&["--gcc-mode", LINUX, "-g", "-c", "data.c", "-o", "data.o"]));
+        let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
+            return;
+        };
+        for tag in [
+            "DW_TAG_variable",
+            "DW_TAG_formal_parameter",
+            "DW_TAG_lexical_block",
+            "DW_TAG_structure_type",
+            "DW_TAG_union_type",
+            "DW_TAG_enumeration_type",
+            "DW_TAG_enumerator",
+            "DW_TAG_typedef",
+            "DW_TAG_array_type",
+            "DW_TAG_subrange_type",
+            "DW_TAG_pointer_type",
+            "DW_TAG_const_type",
+            "DW_TAG_volatile_type",
+            "DW_AT_bit_size",
+        ] {
+            assert!(info.contains(tag), "{tag}: {info}");
+        }
+        for name in [
+            "pts", "total2", "counter", "my_size", "point_t", "GREEN", "table",
+        ] {
+            assert!(info.contains(name), "{name}: {info}");
+        }
+    }
+
+    /// `-g1` is line tables, without the data, as Clang's line-tables-only.
+    #[test]
+    fn level_one_describes_no_data() {
+        let directory = Directory::new();
+        std::fs::write(directory.path("data.c"), DATA).unwrap();
+        drop(directory.built(&["--gcc-mode", LINUX, "-g1", "-c", "data.c", "-o", "data.o"]));
+        let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
+            return;
+        };
+        assert!(!info.contains("DW_TAG_variable"), "{info}");
+        assert!(!info.contains("DW_TAG_base_type"), "{info}");
+        let table = directory
+            .tool("readelf", &["--debug-dump=decodedline"], "data.o")
+            .unwrap();
+        assert!(rows(&table).iter().any(|row| row.0 == "data.c"), "{table}");
+    }
+
+    /// At `-O0` locals live in memory with or without `-g`, as GCC and Clang
+    /// keep them, so a line that only initializes one has a row and no reload
+    /// between statements appears as line 0.
+    #[test]
+    fn unoptimized_locals_have_their_lines() {
+        let directory = Directory::new();
+        drop(directory.built(&["--gcc-mode", LINUX, "-g", "-c", "a.c", "-o", "a.o"]));
+        let Some(table) = directory.tool("readelf", &["--debug-dump=decodedline"], "a.o") else {
+            return;
+        };
+        let rows = rows(&table);
+        // `int s = 0;` in `main`, which is on line 21 of the logical file.
+        assert!(
+            rows.iter().any(|row| row.0 == "a.c" && row.1 == 21),
+            "{table}"
+        );
+        assert!(rows.iter().all(|row| row.1 != 0), "{table}");
+    }
+
+    /// The session the brief asks for, with `gdb`, where one can run a program.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gdb_shows_the_program() {
+        let directory = Directory::new();
+        std::fs::write(directory.path("data.c"), DATA).unwrap();
+        drop(directory.built(&["--gcc-mode", "-g", "data.c", "-o", "data"]));
+        assert!(
+            Command::new(directory.path("data"))
+                .status()
+                .unwrap()
+                .success(),
+            "the program checks its own values"
+        );
+        let session = Command::new("gdb")
+            .current_dir(&directory.0)
+            .args(["-q", "-nx", "-batch"])
+            .args(["-ex", "break data.c:15", "-ex", "run", "-ex", "bt"])
+            .args(["-ex", "info locals", "-ex", "print p->y", "-ex", "ptype p"])
+            .args(["-ex", "up", "-ex", "print pts", "-ex", "print b"])
+            .args([
+                "-ex",
+                "print un.i",
+                "-ex",
+                "print c",
+                "-ex",
+                "print counter",
+            ])
+            .args([
+                "-ex",
+                "whatis table",
+                "-ex",
+                "whatis vol",
+                "-ex",
+                "ptype sum",
+            ])
+            .args([
+                "-ex",
+                "delete",
+                "-ex",
+                "break fact if n == 1",
+                "-ex",
+                "continue",
+            ])
+            .args(["-ex", "bt", "-ex", "finish", "-ex", "next"])
+            .arg("./data")
+            .output();
+        let Ok(session) = session else {
+            return;
+        };
+        let text = String::from_utf8_lossy(&session.stdout);
+        if !text.contains("Breakpoint 1,") {
+            // No gdb that can run a program here, under a sandbox for one.
+            return;
+        }
+        for expected in [
+            "sum (p=",
+            "n=2) at data.c:15",
+            // The inner `total` first: a nested block shadows the outer.
+            "total = 6\ntotal2 = 3\ni = 0\ntotal = 0\n",
+            "= 2\n",
+            "type = struct point {\n    int x;\n    int y;\n} *",
+            "{{x = 1, y = 2}, {x = 3, y = 4}}",
+            "{a = 1, b = 2, c = 3}",
+            "= 9\n",
+            "= GREEN\n",
+            "= 7\n",
+            "type = const int [3]",
+            "type = volatile int",
+            "type = int (point_t *, my_size)",
+            "#0  fact (n=1) at data.c:23",
+            "#1  ",
+            "fact (n=2) at data.c:25",
+            "#2  ",
+            "fact (n=3) at data.c:25",
+            "main () at data.c:37",
+            "Value returned is ",
+        ] {
+            assert!(text.contains(expected), "{expected}: {text}");
+        }
+    }
+
+    /// An optimized program still answers with its functions and files. A local
+    /// the optimizer placed in registers is out of a debugger's reach here, as
+    /// `middle-end.md` records, and its description stays.
+    #[test]
+    fn optimized_programs_keep_their_variables_described() {
+        let directory = Directory::new();
+        std::fs::write(directory.path("data.c"), DATA).unwrap();
+        drop(directory.built(&[
+            "--gcc-mode",
+            LINUX,
+            "-g",
+            "-O2",
+            "-c",
+            "data.c",
+            "-o",
+            "data.o",
+        ]));
+        let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
+            return;
+        };
+        for name in ["total2", "my_size", "point_t"] {
+            assert!(info.contains(name), "{name}: {info}");
+        }
+    }
+
     /// An assembly input is described too, as GCC and Clang pass `-g` on.
     #[test]
     fn an_assembly_input_gets_a_line_table() {
