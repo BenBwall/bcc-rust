@@ -767,7 +767,15 @@ impl State<'_> {
                 name.push(extension);
                 name
             };
-            let kept = |name: &OsString| !self.outputs.contains(name);
+            let kept = |name: &OsString| {
+                let name = resolved_output(Path::new(name));
+                !self
+                    .outputs
+                    .iter()
+                    .map(|output| Path::new(output))
+                    .chain(self.inputs.iter().map(|input| Path::new(&input.path)))
+                    .any(|taken| resolved_output(taken) == name)
+            };
             let text = named("i");
             let mut read = input.path.clone();
             let arguments = |read: &OsStr| {
@@ -776,6 +784,11 @@ impl State<'_> {
                     without_dependency_options(self.arguments(Inputs::One(input.at), false))
                 {
                     if argument == input.path {
+                        // A later `-x c` must not preprocess the saved text
+                        // again, which would apply `-include` twice.
+                        if read != input.path {
+                            step.extend(["-x".into(), "cpp-output".into()]);
+                        }
                         step.push(read.to_owned());
                     } else {
                         step.push(argument);
@@ -1779,6 +1792,22 @@ impl State<'_> {
 }
 
 /// `--help`.
+/// `path` as the file it names, however it is spelled: from the root, through
+/// its directory when the file does not exist yet.
+fn resolved_output(path: &Path) -> PathBuf {
+    if let Ok(full) = std::fs::canonicalize(path) {
+        return full;
+    }
+    let directory = match path.parent() {
+        | Some(parent) if !parent.as_os_str().is_empty() => parent,
+        | _ => Path::new("."),
+    };
+    match (std::fs::canonicalize(directory), path.file_name()) {
+        | (Ok(directory), Some(name)) => directory.join(name),
+        | _ => path.to_path_buf(),
+    }
+}
+
 /// `arguments` without the options that write a dependency file.
 fn without_dependency_options(arguments: Vec<OsString>) -> Vec<OsString> {
     let mut kept = Vec::with_capacity(arguments.len());

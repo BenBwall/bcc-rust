@@ -1372,6 +1372,47 @@ mod tests {
         }
     }
 
+    /// A saved stage never replaces the output however that output is spelled,
+    /// and reads the saved text as preprocessed whatever `-x` says.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_compares_files_and_reads_preprocessed_text() {
+        for (mode, flag, output) in [
+            ("--clang-mode", "-save-temps", "./g.i"),
+            ("--clang-mode", "-save-temps", "./g.s"),
+            ("--gcc-mode", "-save-temps=cwd", "./g.i"),
+            ("--gcc-mode", "-save-temps=cwd", "o/../g.i"),
+        ] {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "int main(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &[flag, "-c", "g.c", "-o", output]));
+            let object = std::fs::read(directory.path(output)).unwrap();
+            assert_eq!(&object[..4], b"\x7fELF", "{mode} {flag} {output}");
+        }
+
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let directory = Directory::new();
+            directory.write("h.h", "struct T { int x; };\n");
+            directory.write("g.c", "struct T t = {7};\nint main(void) { return t.x; }\n");
+            succeeds(&directory.bcc(
+                mode,
+                &[
+                    "-save-temps",
+                    "-x",
+                    "c",
+                    "-include",
+                    "h.h",
+                    "g.c",
+                    "-o",
+                    "saved",
+                ],
+            ));
+            let run = Command::new(directory.path("saved")).status().unwrap();
+            assert_eq!(run.code(), Some(7), "{mode}");
+        }
+    }
+
     /// GCC's names follow the output, with `=cwd` leaving out its directory.
     #[cfg(target_os = "linux")]
     #[test]
