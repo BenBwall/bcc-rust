@@ -40,6 +40,7 @@ mod options;
 pub(crate) use diagnostics::{
     DiagnosticFormat,
     DiagnosticGroup,
+    DiagnosticPresentation,
     PragmaClass,
     WarningOption,
 };
@@ -184,6 +185,7 @@ pub(crate) struct CompilerConfiguration {
     /// The compiler the identity macros claim.
     identity: CompilerIdentity,
     diagnostic_format: DiagnosticFormat,
+    diagnostic_presentation: DiagnosticPresentation,
     /// Most recursive grammar productions active at once; see
     /// [`DEFAULT_MAX_NESTING_DEPTH`].
     max_nesting_depth: u32,

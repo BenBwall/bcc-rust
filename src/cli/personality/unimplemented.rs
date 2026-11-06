@@ -1015,8 +1015,7 @@ mod tests {
             assert!(matches!(linux(refused), Treatment::Reject(_)), "{refused}");
         }
         for ignored in [
-            "-fdiagnostics-color=always",
-            "-fno-diagnostics-show-caret",
+            "-fdiagnostics-urls=never",
             "-fmessage-length=0",
             "-fdebug-prefix-map=/a=/b",
             "-fno-omit-frame-pointer",

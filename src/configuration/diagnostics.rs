@@ -46,10 +46,57 @@ pub(crate) enum DiagnosticFormat {
     Tcc,
 }
 
+/// What GCC's and Clang's formats write of a diagnostic, each from the last
+/// option that sets it. The other formats have their own rules.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each is a separate option's on or off, in any combination."
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DiagnosticPresentation {
+    /// The quoted source and its caret: `-f[no-]diagnostics-show-caret`,
+    /// `-f[no-]caret-diagnostics`.
+    pub(crate) caret:        bool,
+    /// The column after the line: `-f[no-]show-column`.
+    pub(crate) column:       bool,
+    /// The line numbers beside quoted source:
+    /// `-f[no-]diagnostics-show-line-numbers`.
+    pub(crate) line_numbers: bool,
+    /// The `[-Wname]` after a message: `-f[no-]diagnostics-show-option`.
+    pub(crate) option_names: bool,
+    /// Whether to color, when an option says: `-fdiagnostics-color=`,
+    /// `-f[no-]color-diagnostics`. `None` leaves it to the terminal.
+    pub(crate) color:        Option<bool>,
+}
+
+impl Default for DiagnosticPresentation {
+    fn default() -> Self {
+        Self {
+            caret:        true,
+            column:       true,
+            line_numbers: true,
+            option_names: true,
+            color:        None,
+        }
+    }
+}
+
 impl CompilerConfiguration {
     pub(crate) const fn with_diagnostic_format(mut self, format: DiagnosticFormat) -> Self {
         self.diagnostic_format = format;
         self
+    }
+
+    pub(crate) const fn with_diagnostic_presentation(
+        mut self,
+        presentation: DiagnosticPresentation,
+    ) -> Self {
+        self.diagnostic_presentation = presentation;
+        self
+    }
+
+    pub(crate) const fn diagnostic_presentation(self) -> DiagnosticPresentation {
+        self.diagnostic_presentation
     }
 
     pub(crate) const fn diagnostic_format(self) -> DiagnosticFormat {
