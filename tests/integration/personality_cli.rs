@@ -1538,6 +1538,67 @@ mod tests {
         }
     }
 
+    /// GCC's and Clang's snippet and their words for the commonest errors, and
+    /// a related place as a note of its own.
+    #[test]
+    fn gnu_diagnostics_have_the_compilers_shape() {
+        let directory = Directory::new();
+        directory.write("a.c", "int f(void) { return x; }\n");
+        directory.write("b.c", "int outside = y;\n");
+        directory.write("c.c", "int f(void) { return 1 +; }\n");
+        directory.write("d.c", "int y;\nchar y;\n");
+        let text = |mode: &str, file: &str| {
+            let output = directory.bcc(mode, &["-fsyntax-only", file]);
+            assert_eq!(output.status.code(), Some(1), "{mode} {file}");
+            stderr(&output)
+        };
+        assert_eq!(
+            text("--gcc-mode", "a.c"),
+            "a.c:1:22: error: 'x' undeclared (first use in this function)\n\x20   1 | int f(void) \
+             { return x; }\n\x20     |                      ^\n"
+        );
+        assert_eq!(
+            text("--clang-mode", "a.c"),
+            "a.c:1:22: error: use of undeclared identifier 'x'\n\x20   1 | int f(void) { return \
+             x; }\n\x20     |                      ^\n1 error generated.\n"
+        );
+        assert!(
+            text("--gcc-mode", "b.c")
+                .starts_with("b.c:1:15: error: 'y' undeclared here (not in a function)\n")
+        );
+        assert!(
+            text("--gcc-mode", "c.c")
+                .starts_with("c.c:1:25: error: expected expression before ';' token\n")
+        );
+        assert!(text("--clang-mode", "c.c").starts_with("c.c:1:25: error: expected expression\n"));
+        let related = text("--clang-mode", "d.c");
+        assert!(
+            related.contains("d.c:1:5: note: ") && related.contains("    1 | int y;\n"),
+            "{related}"
+        );
+        // A note reports where `#line` says the place is, and keeps every
+        // line of its range.
+        directory.write("l.c", "#line 44\nint x;\nchar x;\n");
+        assert!(text("--gcc-mode", "l.c").contains("l.c:44:5: note: "));
+        directory.write("r.c", "int first extra\njunk\nmiddle\nlast;\nint after;\n");
+        let recovery = text("--gcc-mode", "r.c");
+        for line in ["junk", "middle", "last;"] {
+            assert!(
+                recovery.contains(&format!("| {line}\n")),
+                "{line}: {recovery}"
+            );
+        }
+        // GCC spells the operator, not the digraph written for it.
+        directory.write("t.c", "int f(void) { return 1 + :>; }\n");
+        assert!(text("--gcc-mode", "t.c").contains("expected expression before ']' token"));
+        // bcc's own format keeps its labels and notes.
+        let own = text("", "a.c");
+        assert!(
+            own.contains("not declared") && own.contains("= note:"),
+            "{own}"
+        );
+    }
+
     /// What follows a string in its array's braces is excess: a warning from
     /// Clang, which drops it, and an error from GCC and TCC.
     #[test]
@@ -1626,6 +1687,190 @@ mod tests {
         let run = Command::new(directory.path("n")).output().unwrap();
         // gcc 13.3 prints the same.
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
+    }
+
+    /// `-save-temps` keeps the intermediate files, named as each compiler
+    /// names them, and prints a warning once.
+    #[test]
+    fn gnu_save_temps_keeps_intermediate_files() {
+        let cases: [(&str, &[&str], &[&str]); 6] = [
+            (
+                "--gcc-mode",
+                &["-save-temps", "-c", "g.c"],
+                &["g.i", "g.s", "g.o"],
+            ),
+            (
+                "--gcc-mode",
+                &["-save-temps", "-c", "g.c", "-o", "o/x.o"],
+                &["o/x.i", "o/x.s", "o/x.o"],
+            ),
+            ("--gcc-mode", &["-save-temps", "-S", "g.c"], &["g.i", "g.s"]),
+            (
+                "--clang-mode",
+                &["-save-temps", "-c", "g.c"],
+                &["g.i", "g.s", "g.o"],
+            ),
+            (
+                "--clang-mode",
+                &["-save-temps=obj", "-c", "g.c", "-o", "o/x.o"],
+                &["o/g.i", "o/g.s", "o/x.o"],
+            ),
+            ("--clang-mode", &["-save-temps", "-E", "g.c"], &[]),
+        ];
+        for (mode, args, files) in cases {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "#define R 1\nint g(void) { return R; }\n");
+            let output = directory.bcc(mode, args);
+            succeeds(&output);
+            for file in files {
+                assert!(directory.path(file).exists(), "{mode} {args:?}: {file}");
+            }
+            if *files == ["g.i", "g.s", "g.o"] {
+                let text = std::fs::read_to_string(directory.path("g.i")).unwrap();
+                assert!(text.contains("return 1;"), "{mode}: {text}");
+                assert!(!text.contains("define"), "{mode}: {text}");
+            }
+        }
+
+        let directory = Directory::new();
+        directory.write("w.c", "#warning careful\nint w;\n");
+        let output = directory.bcc("--clang-mode", &["-save-temps", "-c", "w.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output).matches("warning:").count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+
+        // A failed compile prints its error once and saves nothing.
+        directory.write("e.c", "int e(void) { return x; }\n");
+        let output = directory.bcc("--gcc-mode", &["-save-temps", "-c", "e.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output).matches("error:").count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        assert!(!directory.path("e.s").exists());
+    }
+
+    /// The cases where `-save-temps` could damage a build: the command's own
+    /// output, and a header the saved text overwrites.
+    #[test]
+    fn gnu_save_temps_keeps_the_build_intact() {
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let directory = Directory::new();
+            directory.write("g.c", "int g(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &["-save-temps", "-c", "g.c", "-o", "g.i"]));
+            let object = std::fs::read(directory.path("g.i")).unwrap();
+            let expected = directory.bcc(mode, &["-c", "g.c", "-o", "plain.o"]);
+            succeeds(&expected);
+            assert_eq!(
+                object,
+                std::fs::read(directory.path("plain.o")).unwrap(),
+                "{mode}"
+            );
+
+            let directory = Directory::new();
+            directory.write("g.i", "typedef int T;\n");
+            directory.write("g.c", "#include \"g.i\"\nint g(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &["-save-temps", "-c", "g.c"]));
+            assert!(directory.path("g.s").exists(), "{mode}");
+        }
+    }
+
+    /// A saved stage never replaces the output however that output is spelled,
+    /// and reads the saved text as preprocessed whatever `-x` says.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_compares_files_and_reads_preprocessed_text() {
+        for (mode, flag, output) in [
+            ("--clang-mode", "-save-temps", "./g.i"),
+            ("--clang-mode", "-save-temps", "./g.s"),
+            ("--gcc-mode", "-save-temps=cwd", "./g.i"),
+            ("--gcc-mode", "-save-temps=cwd", "o/../g.i"),
+        ] {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "int main(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &[flag, "-c", "g.c", "-o", output]));
+            let object = std::fs::read(directory.path(output)).unwrap();
+            assert_eq!(&object[..4], b"\x7fELF", "{mode} {flag} {output}");
+        }
+
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let directory = Directory::new();
+            directory.write("h.h", "struct T { int x; };\n");
+            directory.write("g.c", "struct T t = {7};\nint main(void) { return t.x; }\n");
+            succeeds(&directory.bcc(
+                mode,
+                &[
+                    "-save-temps",
+                    "-x",
+                    "c",
+                    "-include",
+                    "h.h",
+                    "g.c",
+                    "-o",
+                    "saved",
+                ],
+            ));
+            let run = Command::new(directory.path("saved")).status().unwrap();
+            assert_eq!(run.code(), Some(7), "{mode}");
+        }
+    }
+
+    /// GCC's names follow the output, with `=cwd` leaving out its directory.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_names_follow_gcc() {
+        let cases: [(&[&str], &[&str]); 4] = [
+            (
+                &["-save-temps=cwd", "-c", "g.c", "-o", "o/x.o"],
+                &["x.i", "x.s", "o/x.o"],
+            ),
+            (
+                &["-save-temps", "g.c", "m.c", "-o", "o/prog.v1"],
+                &[
+                    "o/prog.v1-g.i",
+                    "o/prog.v1-m.s",
+                    "o/prog.v1-g.o",
+                    "o/prog.v1",
+                ],
+            ),
+            (
+                &["-save-temps=cwd", "g.c", "m.c", "-o", "o/prog.v1"],
+                &["prog.v1-g.i", "prog.v1-m.s", "prog.v1-g.o", "o/prog.v1"],
+            ),
+            (&["-save-temps", "-S", "g.c", "-o", "-"], &["g.i"]),
+        ];
+        for (args, files) in cases {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "int g(void) { return 7; }\n");
+            directory.write("m.c", "int g(void); int main(void) { return g(); }\n");
+            succeeds(&directory.bcc("--gcc-mode", args));
+            for file in files {
+                assert!(directory.path(file).exists(), "{args:?}: {file}");
+            }
+        }
+    }
+
+    /// A linked program's intermediate files, and its dependency file left
+    /// to the real compile.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_keeps_a_programs_objects() {
+        let directory = Directory::new();
+        directory.write("m.c", "int main(void) { return 0; }\n");
+        let output = directory.bcc("--gcc-mode", &["-save-temps", "-MD", "m.c", "-o", "p"]);
+        succeeds(&output);
+        for file in ["p", "p-m.i", "p-m.s", "p-m.o"] {
+            assert!(directory.path(file).exists(), "{file}");
+        }
     }
 
     /// `-ffunction-sections` and `-fdata-sections` give each definition a

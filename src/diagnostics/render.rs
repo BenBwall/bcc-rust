@@ -18,6 +18,7 @@ use super::{
     ColorChoice,
     Diagnostic,
     Renderer,
+    model::Label,
 };
 use crate::{
     configuration::DiagnosticFormat,
@@ -109,12 +110,33 @@ impl Renderer {
             return out.into_str();
         }
 
-        let marks = Self::marks(diagnostic, context, scratch);
+        // GCC and Clang share one snippet: a gutter five wide, nothing around
+        // the source line and its caret, and what relates to the message in
+        // `note:` lines of its own.
+        let compiler_snippet = matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang);
+        let mut marks = ArenaVec::new_in(scratch);
+        for label in diagnostic
+            .labels
+            .iter()
+            .filter(|label| !compiler_snippet || label.primary)
+        {
+            Self::push_label_marks(label, context, &mut marks);
+        }
+        if compiler_snippet {
+            for mark in &mut marks {
+                mark.label = None;
+            }
+        }
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
         let gutter_width = if max_line == 0 {
             1
         } else {
             max_line.ilog10() as usize + 1
+        };
+        let gutter_width = if compiler_snippet {
+            gutter_width.max(5)
+        } else {
+            gutter_width
         };
         let mut pad = ArenaString::new_in(scratch);
         for _ in 0..gutter_width {
@@ -170,16 +192,28 @@ impl Renderer {
                     column,
                 );
             }
-            let _ = writeln!(out, "{pad} {bar}");
+            if !compiler_snippet {
+                let _ = writeln!(out, "{pad} {bar}");
+            }
             let starts = context.source_line_starts(file).unwrap_or(&[0]);
             self.render_file_lines(
                 &mut out,
                 &marks,
                 (file, text, starts),
                 diagnostic.severity,
-                (gutter_width, pad.as_str()),
+                (gutter_width, pad.as_str(), compiler_snippet),
                 scratch,
             );
+        }
+        if compiler_snippet {
+            for label in diagnostic
+                .labels
+                .iter()
+                .filter(|label| !label.primary && label.message.is_some())
+            {
+                self.render_related_note(&mut out, label, context, scratch);
+            }
+            return out.into_str();
         }
 
         let has_snippet = !files.is_empty();
@@ -209,15 +243,72 @@ impl Renderer {
         out.into_str()
     }
 
+    /// Writes `label`, a secondary place in a diagnostic, as GCC and Clang do:
+    /// a `note:` of its own, at the place's reported location, over its source
+    /// lines when there are any to quote.
+    fn render_related_note(
+        &self,
+        out: &mut ArenaString<'_>,
+        label: &Label<'_>,
+        context: &Context<'_>,
+        scratch: &Bump,
+    ) {
+        let Some(vector) = label.source.vectors(context).first() else {
+            return;
+        };
+        let file = vector.source_file_index;
+        let _ = writeln!(
+            out,
+            "{}:{}:{}: {} {}",
+            context.get_source_file(file).display(),
+            vector.line,
+            vector.column,
+            self.paint("note:", Style::new().bold()),
+            label.message.unwrap_or_default(),
+        );
+        let mut marks = ArenaVec::new_in(scratch);
+        Self::push_label_marks(label, context, &mut marks);
+        for mark in &mut marks {
+            mark.primary = true;
+            mark.label = None;
+        }
+        let mut files = ArenaVec::new_in(scratch);
+        for mark in &marks {
+            if !files.contains(&mark.file) {
+                files.push(mark.file);
+            }
+        }
+        let last_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(1);
+        let gutter_width = (last_line.ilog10() as usize + 1).max(5);
+        let mut pad = ArenaString::new_in(scratch);
+        for _ in 0..gutter_width {
+            pad.push(' ');
+        }
+        for file in files {
+            let text = context.source_text(file).unwrap_or_default();
+            let starts = context.source_line_starts(file).unwrap_or(&[0]);
+            self.render_file_lines(
+                out,
+                &marks,
+                (file, text, starts),
+                ErrorSeverity::Warning,
+                (gutter_width, pad.as_str(), true),
+                scratch,
+            );
+        }
+    }
+
     fn render_file_lines(
         &self,
         out: &mut ArenaString<'_>,
         marks: &[Mark<'_>],
         (file, text, starts): (u32, &str, &[usize]),
         severity: ErrorSeverity,
-        (gutter_width, pad): (usize, &str),
+        (gutter_width, pad, compiler_snippet): (usize, &str, bool),
         scratch: &Bump,
     ) {
+        // GCC and Clang mark the rest of a range with tildes.
+        let tail = if compiler_snippet { '~' } else { '^' };
         let bar = self.paint("|", Self::gutter_style());
         // Sort once and walk the marks line by line: rescanning every mark
         // for each line made a label spanning many lines quadratic.
@@ -295,7 +386,7 @@ impl Renderer {
                         underline.push(' ');
                     },
                     | (Some(primary), Some((current, text))) if current == primary =>
-                        text.push(if *primary { '^' } else { '-' }),
+                        text.push(if *primary { tail } else { '-' }),
                     | (Some(primary), _) => {
                         flush(&mut run, &mut underline);
                         let mut text = ArenaString::new_in(scratch);
@@ -369,49 +460,47 @@ impl Renderer {
         );
     }
 
-    fn marks<'a, 'scratch>(
-        diagnostic: &'a Diagnostic<'_>,
+    /// Adds the marks of `label`: one on each physical line it covers, the
+    /// first holding its message.
+    fn push_label_marks<'a>(
+        label: &'a Label<'_>,
         context: &Context<'_>,
-        scratch: &'scratch Bump,
-    ) -> ArenaVec<'scratch, Mark<'a>> {
-        let mut marks: ArenaVec<'_, Mark<'a>> = ArenaVec::new_in(scratch);
-        for label in &diagnostic.labels {
-            let mut label_text = label.message;
-            for vector in label.source.vectors(context) {
-                let file = vector.source_file_index;
-                let Some(text) = context.source_text(file) else {
-                    continue;
-                };
-                let starts = context
-                    .source_line_starts(file)
-                    .expect("recorded source text has a line index");
-                let offset = (vector.index as usize).min(text.len());
-                let (line, line_start, line_end) = Self::locate(starts, text, offset);
-                let start = offset.max(line_start);
-                let end = vector.end().clamp(start, line_end);
-                // Adjacent segments of one range on one line form one mark.
-                if let Some(last) = marks.last_mut()
-                    && last.file == file
-                    && last.line == line
-                    && last.primary == label.primary
-                    && label_text.is_none()
-                {
-                    last.start = last.start.min(start);
-                    last.end = last.end.max(end);
-                    continue;
-                }
-                marks.push(Mark {
-                    file,
-                    line,
-                    start,
-                    end,
-                    primary: label.primary,
-                    label: label_text.take(),
-                    order: marks.len(),
-                });
+        marks: &mut ArenaVec<'_, Mark<'a>>,
+    ) {
+        let mut label_text = label.message;
+        for vector in label.source.vectors(context) {
+            let file = vector.source_file_index;
+            let Some(text) = context.source_text(file) else {
+                continue;
+            };
+            let starts = context
+                .source_line_starts(file)
+                .expect("recorded source text has a line index");
+            let offset = (vector.index as usize).min(text.len());
+            let (line, line_start, line_end) = Self::locate(starts, text, offset);
+            let start = offset.max(line_start);
+            let end = vector.end().clamp(start, line_end);
+            // Adjacent segments of one range on one line form one mark.
+            if let Some(last) = marks.last_mut()
+                && last.file == file
+                && last.line == line
+                && last.primary == label.primary
+                && label_text.is_none()
+            {
+                last.start = last.start.min(start);
+                last.end = last.end.max(end);
+                continue;
             }
+            marks.push(Mark {
+                file,
+                line,
+                start,
+                end,
+                primary: label.primary,
+                label: label_text.take(),
+                order: marks.len(),
+            });
         }
-        marks
     }
 
     /// Returns the 1-based physical line containing `offset` and the byte

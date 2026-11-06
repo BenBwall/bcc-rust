@@ -676,7 +676,7 @@ fn attribute_diagnostics_match_clang() {
         // The undeclared identifier is the only error.
         (
             "__attribute__((constructor(missing))) void f(void) {}",
-            &[K::UndeclaredIdentifier],
+            &[K::UndeclaredOutsideFunction],
         ),
         (
             "void f(void) __attribute__((section(L\"x\")));",
