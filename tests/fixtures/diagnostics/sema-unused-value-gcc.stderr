@@ -1,63 +1,27 @@
 sema-unused-value-gcc.c:3:5: warning: statement with no effect [-Wunused-value]
-  |
-3 |     a;
-  |     ^ result is discarded
-  |
-  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+    3 |     a;
+      |     ^
 sema-unused-value-gcc.c:4:7: warning: statement with no effect [-Wunused-value]
-  |
-4 |     a + 1;
-  |       ^ result is discarded
-  |
-  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+    4 |     a + 1;
+      |       ^
 sema-unused-value-gcc.c:5:7: warning: statement with no effect [-Wunused-value]
-  |
-5 |     a == 1;
-  |       ^^ result is discarded
-  |
-  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+    5 |     a == 1;
+      |       ^~
 sema-unused-value-gcc.c:6:5: warning: statement with no effect [-Wunused-value]
-  |
-6 |     *p;
-  |     ^ result is discarded
-  |
-  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+    6 |     *p;
+      |     ^
 sema-unused-value-gcc.c:7:5: warning: statement with no effect [-Wunused-value]
-  |
-7 |     (void *)p;
-  |     ^^^^^^^^ result is discarded
-  |
-  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+    7 |     (void *)p;
+      |     ^~~~~~~~
 sema-unused-value-gcc.c:8:6: warning: left-hand operand of comma expression has no effect [-Wunused-value]
-  |
-8 |     a, a = 1;
-  |      ^ result is discarded
-  |
-  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+    8 |     a, a = 1;
+      |      ^
 sema-unused-value-gcc.c:9:10: warning: right-hand operand of comma expression has no effect [-Wunused-value]
-   |
- 9 |     a = 1, a;
-   |          ^ result is discarded
-   |
-   = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+    9 |     a = 1, a;
+      |          ^
 sema-unused-value-gcc.c:10:9: warning: value computed is not used [-Wunused-value]
-   |
-10 |     h() + 1;
-   |         ^ result is discarded
-   |
-   = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+   10 |     h() + 1;
+      |         ^
 sema-unused-value-gcc.c:11:7: warning: value computed is not used [-Wunused-value]
-   |
-11 |     a && h();
-   |       ^^ result is discarded
-   |
-   = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
-
+   11 |     a && h();
+      |       ^~
