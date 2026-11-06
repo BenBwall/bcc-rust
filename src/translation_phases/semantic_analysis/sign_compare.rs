@@ -98,9 +98,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             bits,
         };
         let quiet = if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
-            self.gcc_comparison_is_quiet(comparison)
+            self.gcc_comparison_is_quiet(&comparison)
         } else {
-            self.clang_comparison_is_quiet(comparison)
+            self.clang_comparison_is_quiet(&comparison)
         };
         if quiet {
             return;
@@ -119,7 +119,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC's `warn_for_sign_compare`, and `shorten_compare`, which settles a
     /// relational comparison of two constants or of an unsigned value with
     /// zero before it gets there.
-    fn gcc_comparison_is_quiet(&self, comparison: Comparison<'tu>) -> bool {
+    fn gcc_comparison_is_quiet(&self, comparison: &Comparison<'tu>) -> bool {
         let Comparison {
             operator,
             left,
@@ -127,7 +127,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             signed,
             unsigned,
             bits,
-        } = comparison;
+        } = *comparison;
         let equality = matches!(operator, B::Equal | B::NotEqual);
         if !equality && left.ice && right.ice {
             return true;
@@ -160,14 +160,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// its widening casts, and a value outside that type's range decides the
     /// result. For a signed operand it decides only an equality, and the
     /// constant counts as signed.
-    fn gcc_comparison_is_shortened(&self, comparison: Comparison<'tu>) -> bool {
+    fn gcc_comparison_is_shortened(&self, comparison: &Comparison<'tu>) -> bool {
         let Comparison {
             operator,
             left,
             right,
             bits,
             ..
-        } = comparison;
+        } = *comparison;
         let (constant, operand, operator) = match (left.ice, right.ice) {
             | (false, true) => (right, left, operator),
             | (true, false) => (
@@ -226,7 +226,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang's `AnalyzeComparison`, which ranges both operands, leaves alone
     /// a comparison whose result is a constant, and warns through
     /// `DiagRuntimeBehavior`, so never in code it can tell is unreachable.
-    fn clang_comparison_is_quiet(&mut self, comparison: Comparison<'tu>) -> bool {
+    fn clang_comparison_is_quiet(&mut self, comparison: &Comparison<'tu>) -> bool {
         let Comparison {
             operator,
             left,
@@ -234,7 +234,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             signed,
             unsigned,
             bits,
-        } = comparison;
+        } = *comparison;
         if self.functions.dead || (left.ice && right.ice) {
             return true;
         }
