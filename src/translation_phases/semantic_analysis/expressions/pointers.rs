@@ -431,41 +431,69 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Clang's pointer-to-bool warning concerns a known address, not the
-    /// unknown value read from a pointer variable.
-    /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
+    /// The warning about an address known not to be null, which concerns the
+    /// entity an expression names and not the value read from a pointer:
+    /// Clang's `DiagnoseAlwaysNonNullPointer` and GCC's `-Waddress` in
+    /// `c_common_truthvalue_conversion`. Neither says anything about a string
+    /// literal, as in `assert(0 && "message")`, a compound literal, or a weak
+    /// entity, whose address can be null. Clang wants one name or member, and
+    /// leaves the address of a function alone as the way to silence it.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.5.3.2p3, p. 79; PDF p. 91.
     pub(super) fn pointer_bool_warning(&mut self, info: ExpressionInfo<'tu>) {
         use crate::translation_phases::parsing::syntax::{
+            BinaryOperator as B,
             ExpressionType as E,
             UnaryOperator as U,
         };
-        let mut expression = info.expression;
-        while let E::Parenthesized { expression: inner } = expression.kind {
-            expression = inner;
-        }
-        let address = if let E::Unary {
+        let without_parentheses = Self::without_parentheses;
+        let expression = without_parentheses(info.expression);
+        let clang = self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang;
+        let (address, named) = if let E::Unary {
             operator: U::AddressOf,
             operand_expression,
         } = expression.kind
         {
-            let mut operand = operand_expression;
-            loop {
-                match operand.kind {
-                    | E::Identifier(_) | E::CompoundLiteral { .. } => break true,
-                    | E::Parenthesized { expression } => operand = expression,
-                    | E::DirectMember {
-                        base_expression, ..
-                    } => operand = base_expression,
-                    | _ => break false,
-                }
-            }
+            (true, without_parentheses(operand_expression))
         } else {
-            false
+            (false, expression)
         };
-        if info.category == super::ValueCategory::FunctionDesignator
-            || matches!(self.types.nodes[info.ty.index], TypeKind::Array(..))
-            || address
-        {
+        let entity = match named.kind {
+            | E::Identifier(name) => {
+                if let Some(binding) = self.expression_info(named).binding
+                    && self.declared_weak(binding)
+                {
+                    return;
+                }
+                !clang
+                    || !matches!(
+                        self.context.string_cache.at(name.name),
+                        "__func__" | "__FUNCTION__" | "__PRETTY_FUNCTION__"
+                    )
+            },
+            | E::DirectMember { .. } => true,
+            | E::IndirectMember { .. } => clang || !address,
+            | E::Binary {
+                operator: B::Subscript,
+                ..
+            } => !clang && !address,
+            | _ => false,
+        };
+        if !entity {
+            return;
+        }
+        let function =
+            self.expression_info(named).category == super::ValueCategory::FunctionDesignator;
+        let array = matches!(
+            self.types.nodes[self.expression_info(named).ty.index],
+            TypeKind::Array(..)
+        );
+        let known = if address {
+            !(clang && function)
+        } else {
+            function || array
+        };
+        if known {
             self.pointer_diagnostic(
                 DiagnosticGroup::PointerBoolConversion,
                 expression.source_vectors,

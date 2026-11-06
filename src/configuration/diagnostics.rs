@@ -148,9 +148,12 @@ impl CompilerConfiguration {
                 self.warning_options[group as usize].apply_all(enabled);
             }
         }
-        // Clang's `-Wmain` is on already, and its `-Wall` does not hold it.
+        // Clang's `-Wmain` and `-Wpointer-bool-conversion` are on already, and
+        // its `-Wall` does not hold them.
         if self.identity.rules() != super::RuleSet::Clang {
             self.warning_options[DiagnosticGroup::Main as usize].apply_all(enabled);
+            self.warning_options[DiagnosticGroup::PointerBoolConversion as usize]
+                .apply_all(enabled);
         }
         self
     }
@@ -450,7 +453,8 @@ diagnostic_groups! {
     NonLiteralNullConversion => Some("non-literal-null-conversion"), Warning, false;
     PointerCompare => Some("pointer-compare"), Warning, false;
     NullConversion => Some("null-conversion"), Warning, false;
-    PointerBoolConversion => Some("pointer-bool-conversion"), Warning, false;
+    /// GCC's `-Waddress`, which only its `-Wall` holds.
+    PointerBoolConversion => Some("pointer-bool-conversion"), ClangWarning, false;
     /// A cast from a pointer to a narrower integer (GCC: an integer of any
     /// other width); the parent of Clang's enumeration and `void *` groups.
     PointerToIntCast => Some("pointer-to-int-cast"), Warning, false;
@@ -786,7 +790,8 @@ impl WarningSettings {
                 | DiagnosticGroup::UnusedLabel
                 | DiagnosticGroup::UnusedValue
                 | DiagnosticGroup::UnusedComparison
-                | DiagnosticGroup::Main => all,
+                | DiagnosticGroup::Main
+                | DiagnosticGroup::PointerBoolConversion => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
                 | _ => None,
             }
