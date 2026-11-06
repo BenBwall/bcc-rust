@@ -85,6 +85,9 @@ use crate::{
 /// Bits in x86-64's word, the widest ordinary access.
 const WORD: u64 = 64;
 
+/// [`WORD`], as an alignment in bits.
+const WORD_ALIGN: u32 = 64;
+
 /// The size from which GCC aligns an object it defines to a word or more,
 /// whatever its type asks (probed: `ix86_data_alignment` and `align_variable`
 /// raise it only then, without a declared alignment).
@@ -168,7 +171,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     fn volatile_root(&self, address: Value) -> VolatileRoot {
         let retained = |value: Value| self.alignments.get(&value).copied();
         let bits = |align: Align| {
-            u32::try_from(align.bytes() * 8).map_or(WORD as u32, |bits| bits.min(WORD as u32))
+            u32::try_from(align.bytes() * 8).map_or(WORD_ALIGN, |bits| bits.min(WORD_ALIGN))
         };
         let mut root = address;
         let mut offset = 0_u64;
@@ -213,7 +216,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         VolatileRoot {
             offset,
             least: known.min(hidden),
-            most: if grows { WORD as u32 } else { known },
+            most: if grows { WORD_ALIGN } else { known },
             size,
         }
     }
@@ -515,12 +518,13 @@ impl VolatileAccess {
     /// The access of `mode` bits at `start` that holds `bits` bits of the
     /// field from `position`.
     fn piece(self, start: u64, mode: u64, position: u64, bits: u64, reads: bool) -> Piece {
+        let small = |value: u64| u32::try_from(value).expect("a piece is at most 128 bits");
         Piece {
             start,
-            bytes: (mode / 8) as u32,
-            shift: (position - start) as u32,
-            bits: bits as u32,
-            low: (position - self.position) as u32,
+            bytes: small(mode / 8),
+            shift: small(position - start),
+            bits: small(bits),
+            low: small(position - self.position),
             reads,
         }
     }
