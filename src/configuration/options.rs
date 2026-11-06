@@ -960,6 +960,8 @@ impl CompilerConfiguration {
                 relocation:                 None,
                 tls_model:                  crate::target::TlsModel::GlobalDynamic,
                 strict_volatile_bit_fields: false,
+                function_sections:          false,
+                data_sections:              false,
             },
             standard,
             gnu: false,

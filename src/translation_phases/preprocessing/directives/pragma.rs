@@ -236,7 +236,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             break 'base;
                         },
                         | "clang" => {
-                            if !self.pragma_deprecated_macro() {
+                            // Only Clang knows these: an unknown pragma is
+                            // ignored, whatever macro it names.
+                            // C99: §6.10.6p1, p. 159; PDF p. 171.
+                            let clang = self.context.configuration.compiler_identity().rules()
+                                == RuleSet::Clang;
+                            if !clang || !self.pragma_deprecated_macro() {
                                 let line_state = (self.last_was_newline, self.current_is_newline);
                                 self.skip_until_newline();
                                 (self.last_was_newline, self.current_is_newline) = line_state;

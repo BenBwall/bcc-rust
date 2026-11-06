@@ -463,7 +463,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let StatementType::Compound { items } = block.kind else {
                     return None;
                 };
-                let (last, rest) = items.as_slice().split_last()?;
+                let (last, rest) = self.statement_expression_value_item(items.as_slice())?;
                 for item in rest {
                     if self.functions.emission.ignore_side_effects {
                         if !self.item_evaluates_ignoring_side_effects(*item, depth) {
