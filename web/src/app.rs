@@ -2102,10 +2102,17 @@ fn About() -> impl IntoView {
                 <article>
                     <h3><span class="spec-number">"§3"</span>"Limits of this model"</h3>
                     <p>
-                        "The engine runs a bounded subset of C: int and char locals, int pointers, fixed int arrays, \
-                         functions, if, while and for. No preprocessor (the preprocessor lesson opens in the compiler \
-                         pipeline instead), globals, structs, library calls or floating point. Operands are evaluated left to right, and nested side effects are rejected rather than \
-                         sequenced."
+                        "The engine runs a bounded subset of C: int and char objects, int pointers, fixed int arrays, \
+                         structures (members of those types, nested structures and pointers to structures, brace and \
+                         .member initializers, copies by =, by argument and by return), file-scope and static objects, \
+                         functions returning int or a structure, if, while and for. Still outside it: the preprocessor \
+                         (its lesson opens in the compiler pipeline instead), arrays of anything but int, unions, other \
+                         integer types, void functions, char parameters, char pointers and strings, switch, break and goto, library calls \
+                         and floating point. Initializers take no brace elision or array designators, and a static object's \
+                         takes only a decimal int constant, or 0 for a pointer, so no address constants or arithmetic. \
+                         Pointers to structures take no arithmetic, and a call's result has no members to select. \
+                         Operands are evaluated left to right, and nested side effects are rejected \
+                         rather than sequenced."
                     </p>
                     <p>
                         "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
@@ -2132,7 +2139,7 @@ fn tape_summary(state: &Snapshot) -> Option<String> {
                 .objects
                 .iter()
                 .find(|object| object.id == access.object)?;
-            let value = crate::panels::value_text(&object.value, &state.objects)
+            let value = crate::panels::value_text(&object.value)
                 .unwrap_or_else(|| "indeterminate".to_owned());
             Some(match access.kind.as_str() {
                 | "create" => format!("track {} begins, {value}", object.name),

@@ -12,7 +12,9 @@
 //! Calls are grouped by function and depth on the call stack, so a loop's
 //! repeated calls reuse one set of lanes, as a timing diagram reuses a
 //! register's line; a group with no live call folds to one row that still
-//! shows each call as a bar.
+//! shows each call as a bar. Objects with static storage duration belong to
+//! no call: they share one group, `static storage`, whose rule runs from the
+//! first of them to the end of the run.
 
 use std::{
     collections::HashMap,
@@ -35,6 +37,9 @@ use crate::{
         Value,
     },
 };
+
+/// The key of the group of objects with static storage duration.
+pub const STATIC_GROUP: &str = "static";
 
 /// Height of one lane, in pixels: a bus segment and a gap for a slant's
 /// label.
@@ -213,6 +218,27 @@ impl Reel {
                     }
                 }
             }
+            if snapshot.objects.iter().any(|object| object.frame_id == 0) {
+                let at = *index.entry(STATIC_GROUP.to_owned()).or_insert_with(|| {
+                    reel.groups.push(Group {
+                        key:   STATIC_GROUP.to_owned(),
+                        name:  "static storage".to_owned(),
+                        depth: 0,
+                        calls: vec![Call {
+                            frame:   0,
+                            first:   step,
+                            last:    step,
+                            waiting: Vec::new(),
+                        }],
+                        lanes: Vec::new(),
+                    });
+                    reel.groups.len() - 1
+                });
+                group_of_frame.insert(0, at);
+                if let Some(call) = reel.groups[at].calls.first_mut() {
+                    call.last = step;
+                }
+            }
             let alive: Vec<usize> = snapshot
                 .objects
                 .iter()
@@ -234,7 +260,7 @@ impl Reel {
                 }
                 let last = lane.segments.last_mut();
                 if object.alive {
-                    let value = value_text(&object.value, &snapshot.objects);
+                    let value = value_text(&object.value);
                     match last {
                         | Some(segment)
                             if segment.to == step
@@ -269,7 +295,7 @@ impl Reel {
                     .filter(|access| access.kind == "read")
                     .map(|access| (access.object, step, event.range)),
             );
-            if matches!(event.kind.as_str(), "subscript" | "dereference")
+            if matches!(event.kind.as_str(), "subscript" | "dereference" | "member")
                 && let Some(range) = event.range
             {
                 addresses.push(range);
@@ -454,7 +480,7 @@ fn arguments(
 
 /// An object's value as the tape and the cells write it, or `None` while it
 /// is indeterminate.
-pub fn value_text(value: &Value, objects: &[Object]) -> Option<String> {
+pub fn value_text(value: &Value) -> Option<String> {
     match value {
         | Value::Indeterminate => None,
         | Value::Integer { text } => Some(text.clone()),
@@ -462,26 +488,33 @@ pub fn value_text(value: &Value, objects: &[Object]) -> Option<String> {
             "{{{}}}",
             elements
                 .iter()
-                .map(|element| value_text(element, objects).unwrap_or_else(|| "?".to_owned()))
+                .map(|element| value_text(element).unwrap_or_else(|| "?".to_owned()))
+                .collect::<Vec<_>>()
+                .join(",")
+        )),
+        | Value::Struct { members, .. } => Some(format!(
+            "{{{}}}",
+            members
+                .iter()
+                .map(|member| format!(
+                    "{}={}",
+                    member.name,
+                    value_text(&member.value).unwrap_or_else(|| "?".to_owned())
+                ))
                 .collect::<Vec<_>>()
                 .join(",")
         )),
         | Value::Pointer { target: None, .. } => Some("null".to_owned()),
         | Value::Pointer { ended: true, .. } => Some("→ ended".to_owned()),
-        | &Value::Pointer {
+        | Value::Pointer {
             target: Some(id),
-            offset,
-            one_past,
+            to,
             ..
-        } => {
-            let target = objects.iter().find(|object| object.id == id);
-            let name = target.map_or_else(|| format!("#{id}"), |object| object.name.clone());
-            Some(match target.map(|object| &object.value) {
-                | Some(Value::Array { .. }) if one_past => format!("→{name}+{offset}"),
-                | Some(Value::Array { .. }) => format!("→{name}[{offset}]"),
-                | _ => format!("→{name}"),
-            })
-        },
+        } => Some(if to.is_empty() {
+            format!("→#{id}")
+        } else {
+            format!("→{to}")
+        }),
     }
 }
 
@@ -866,16 +899,18 @@ pub fn Deck(
                         let count = group.calls.len();
                         // The depth tells a recursion's calls apart.
                         let recursive = reel.groups.iter().filter(|other| other.name == group.name).count() > 1;
+                        let statics = group.key == STATIC_GROUP;
+                        let call = if statics { group.name.clone() } else { format!("{}()", group.name) };
                         view! {
                             <div class="deck-label is-group" class:is-folded=folded class:is-live=live>
                                 <button
                                     type="button"
                                     aria-expanded=(!folded).to_string()
-                                    aria-label=format!("{}(){}: {} its objects on the tape", group.name, if recursive { format!(" at depth {}", group.depth) } else { String::new() }, if folded { "show" } else { "fold" })
+                                    aria-label=format!("{call}{}: {} its objects on the tape", if recursive { format!(" at depth {}", group.depth) } else { String::new() }, if folded { "show" } else { "fold" })
                                     on:click=move |_| toggle(keys.clone())
                                 >
                                     <span class="deck-fold" aria-hidden="true">{if folded { "▸" } else { "▾" }}</span>
-                                    <span class="deck-call">{format!("{}()", group.name)}</span>
+                                    <span class="deck-call" class:is-static=statics>{call.clone()}</span>
                                     {recursive.then(|| view! { <span class="deck-depth" title=format!("depth {} on the call stack", group.depth)>{format!("d{}", group.depth)}</span> })}
                                     {(count > 1).then(|| view! { <span class="deck-count">{format!("×{count}")}</span> })}
                                 </button>
@@ -2353,36 +2388,61 @@ mod tests {
     }
 
     #[test]
+    fn static_objects_share_one_group_that_spans_the_run() {
+        let history = run("structs");
+        let reel = Reel::record(&history);
+        let keys: Vec<&str> = reel.groups.iter().map(|group| group.key.as_str()).collect();
+        assert_eq!(keys[0], STATIC_GROUP, "{keys:?}");
+        let statics = &reel.groups[0];
+        let names: Vec<&str> = statics.lanes.iter().map(|lane| lane.name.as_str()).collect();
+        assert_eq!(names, ["calls", "origin", "total"]);
+        assert_eq!(statics.calls.len(), 1);
+        assert_eq!(statics.calls[0].last, history.len() - 1, "alive to the end");
+        assert!(
+            rows(&reel, history.len() - 1, &[])
+                .first()
+                .is_some_and(|row| matches!(row, &Row::Group { at: 0, folded: false, .. })),
+            "the static group is never folded"
+        );
+        // A structure's lane writes its members.
+        let origin = &statics.lanes[1];
+        assert_eq!(origin.segments[0].value.as_deref(), Some("{x=1,y=2}"));
+        // A pointer to a member names the member.
+        let main = reel
+            .groups
+            .iter()
+            .find(|group| group.name == "main")
+            .expect("main's group");
+        let px = main.lanes.iter().find(|lane| lane.name == "px").expect("px");
+        assert_eq!(px.segments.last().and_then(|segment| segment.value.as_deref()), Some("→b.x"));
+    }
+
+    #[test]
     fn pointers_name_what_they_point_at() {
-        let objects = vec![Object {
-            id:        7,
-            name:      "values".to_owned(),
-            ty:        "int[3]".to_owned(),
-            storage:   "automatic".to_owned(),
-            alive:     true,
-            frame_id:  1,
-            function:  "main".to_owned(),
-            parameter: false,
-            value:     Value::Array {
-                elements: vec![Value::Indeterminate; 3],
-            },
-        }];
+        let array = Value::Array {
+            elements: vec![Value::Indeterminate; 3],
+        };
         let pointer = |offset, one_past| Value::Pointer {
             target: Some(7),
             offset,
             one_past,
             ended: false,
+            to: if one_past {
+                format!("values+{offset}")
+            } else {
+                format!("values[{offset}]")
+            },
         };
         assert_eq!(
-            value_text(&pointer(1, false), &objects).as_deref(),
+            value_text(&pointer(1, false)).as_deref(),
             Some("→values[1]")
         );
         assert_eq!(
-            value_text(&pointer(3, true), &objects).as_deref(),
+            value_text(&pointer(3, true)).as_deref(),
             Some("→values+3")
         );
         assert_eq!(
-            value_text(&objects[0].value, &objects).as_deref(),
+            value_text(&array).as_deref(),
             Some("{?,?,?}")
         );
     }

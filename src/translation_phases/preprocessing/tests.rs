@@ -49,6 +49,7 @@ use crate::{
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
+            TokenSpacing,
         },
     },
     util::shared::SharedVec,
@@ -444,6 +445,7 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
         PreprocessorTokenType::Whitespace,
     ] {
         let token = PreprocessorToken {
+            spacing: TokenSpacing::NONE,
             kind,
             source_vectors: source,
             contents,

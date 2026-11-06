@@ -30,6 +30,7 @@ use crate::{
             PreprocessorToken,
             PreprocessorTokenType,
             TokenSource,
+            TokenSpacing,
         },
     },
     util::bump::{
@@ -72,6 +73,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 None
             };
             if let Some(h) = hash_hash {
+                if let Some(spacing) = self.text_spacing() {
+                    spacing.pad_before();
+                }
                 let Some(rhs) = self.hash_hash_right_operand() else {
                     return Some((lhs, false));
                 };
@@ -80,6 +84,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     continue 'base;
                 }
                 if let Some(r) = self.parse_hash_hash_operator(lhs, h, rhs) {
+                    if let Some(spacing) = self.text_spacing() {
+                        spacing.pad_after_next();
+                    }
                     return Some((r, true));
                 }
                 continue 'base;
@@ -117,7 +124,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let lhs_frame = self.operand_frame(lhs);
         let rhs_frame = self.operand_frame(rhs);
         self.hash_hash_stack.push(HashHash::Empty);
-        let rhs_is_macro_argument = if let Some(frame) = rhs_frame {
+        let rhs_is_macro_argument = if let Some(mut frame) = rhs_frame {
+            // The result's padding follows what remains of the right operand.
+            if let TokenizerFrameType::FunctionLikeMacroArgument { end, .. } = &mut frame.frame_type
+            {
+                *end = TokenSpacing::END;
+            }
             self.push_tokenizer_frame(frame);
             true
         } else {
@@ -248,6 +260,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     PreprocessorTokenType::Identifier
                 };
                 Some(PreprocessorToken {
+                    spacing: TokenSpacing::NONE,
                     kind,
                     contents: new.contents,
                     source_vectors: new.source_vectors,
@@ -451,6 +464,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .context
             .merge_vectors(lhs.source_vectors, rhs.source_vectors);
         PreprocessorToken {
+            spacing: TokenSpacing::NONE,
             kind: result_token_type,
             contents: self.context.string_cache.intern(new_contents.as_str()),
             source_vectors,
@@ -500,6 +514,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .context
             .merge_vectors(lhs.source_vectors, rhs.source_vectors);
         PreprocessorToken {
+            spacing: TokenSpacing::NONE,
             kind: PreprocessorTokenType::Number,
             contents: self.context.string_cache.intern(contents.as_str()),
             source_vectors,
@@ -571,7 +586,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         };
         let tokenizer = TokenSource::replay(self.context, self.scratch, &[result], location);
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan { argument: false },
+            frame_type: TokenizerFrameType::Rescan {
+                argument: false,
+                end:      TokenSpacing::END,
+            },
             tokenizer,
         });
     }

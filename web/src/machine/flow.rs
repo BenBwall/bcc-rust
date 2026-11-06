@@ -10,6 +10,7 @@ use bcc_rust::abstract_machine::{
     Event,
     EventKind,
     Operand,
+    Program,
 };
 
 use crate::snapshot::{
@@ -26,8 +27,9 @@ pub(super) fn flow(
     operator: Option<&str>,
     exited: bool,
     objects: &Objects<'_>,
+    program: &Program,
 ) -> Vec<FlowPart> {
-    let chips = Chips { objects };
+    let chips = Chips { objects, program };
     let first = event.operands.first();
     let second = event.operands.get(1);
     let result = event.result.as_ref();
@@ -50,6 +52,18 @@ pub(super) fn flow(
             operand(result),
         ],
         | EventKind::Dereference => vec![operand(first), Some(arrow("*")), operand(result)],
+        | EventKind::Member if first.is_some() =>
+            vec![operand(first), Some(arrow("->")), operand(result)],
+        | EventKind::Member => vec![
+            event.objects.first().map(|&id| chips.whole(id)),
+            Some(arrow("member")),
+            operand(result),
+        ],
+        | EventKind::StaticStorage => vec![
+            event.objects.first().map(|&id| chips.whole(id)),
+            Some(arrow("starts at")),
+            operand(result),
+        ],
         | EventKind::Subscript => vec![
             operand(first),
             Some(operator_chip("+")),
@@ -106,14 +120,38 @@ pub(super) fn flow(
 pub(super) fn access(event: &Event) -> Vec<Access> {
     let at = |operand: Option<&Operand>, kind: &str| match operand {
         | Some(
-            &(Operand::Address { target, offset }
+            &(Operand::Address {
+                target,
+                offset,
+                structure: None,
+            }
             | Operand::Value(abstract_machine::Value::Pointer {
                 target: Some(target),
                 offset,
+                structure: None,
+                ..
             })),
         ) => vec![Access {
             object: target,
             cell:   usize::try_from(offset).ok(),
+            kind:   kind.to_owned(),
+        }],
+        // A whole structure: every cell of it.
+        | Some(
+            &(Operand::Address {
+                target,
+                offset,
+                structure: Some(_),
+            }
+            | Operand::Value(abstract_machine::Value::Pointer {
+                target: Some(target),
+                offset,
+                structure: Some(_),
+                ..
+            })),
+        ) => vec![Access {
+            object: target,
+            cell:   (offset != 0).then(|| usize::try_from(offset).ok()).flatten(),
             kind:   kind.to_owned(),
         }],
         | _ => Vec::new(),
@@ -133,10 +171,13 @@ pub(super) fn access(event: &Event) -> Vec<Access> {
         | EventKind::LvalueConversion => at(event.operands.first(), "read"),
         | EventKind::Initialize | EventKind::Assign | EventKind::Increment =>
             at(event.operands.first(), "write"),
-        | EventKind::Declare | EventKind::Call => whole("create"),
+        | EventKind::Declare | EventKind::Call | EventKind::StaticStorage => whole("create"),
         | EventKind::LeaveBlock | EventKind::Return => whole("end"),
-        | EventKind::Designate | EventKind::Subscript | EventKind::Dereference =>
-            at(event.result.as_ref(), "designate"),
+        | EventKind::Designate
+        | EventKind::Subscript
+        | EventKind::Dereference
+        | EventKind::Member
+        | EventKind::StaticLocal => at(event.result.as_ref(), "designate"),
         | EventKind::AddressOf | EventKind::ArrayDecay => at(event.result.as_ref(), "address"),
         | _ => Vec::new(),
     }
@@ -145,6 +186,7 @@ pub(super) fn access(event: &Event) -> Vec<Access> {
 /// Builds chips that name objects as the page does (`values[1]`).
 struct Chips<'a, 'o> {
     objects: &'a Objects<'o>,
+    program: &'a Program,
 }
 
 impl Chips<'_, '_> {
@@ -210,10 +252,18 @@ impl Chips<'_, '_> {
 
     fn operand(&self, operand: &Operand) -> FlowPart {
         match operand {
-            | Operand::Value(value) => part("value", &super::value_text(value, self.objects)),
-            | &Operand::Address { target, offset } => FlowPart {
+            | Operand::Value(value) =>
+                part("value", &super::value_text(value, self.objects, self.program)),
+            | &Operand::Address {
+                target,
+                offset,
+                structure,
+            } => FlowPart {
                 object: self.name(target),
-                ..part("object", &super::location(target, offset, self.objects))
+                ..part(
+                    "object",
+                    &super::location(target, offset, structure, self.objects, self.program),
+                )
             },
         }
     }
@@ -224,7 +274,13 @@ impl Chips<'_, '_> {
             | &Operand::Value(abstract_machine::Value::Pointer {
                 target: Some(target),
                 offset,
-            }) => Some(self.operand(&Operand::Address { target, offset })),
+                structure,
+                ..
+            }) => Some(self.operand(&Operand::Address {
+                target,
+                offset,
+                structure,
+            })),
             | _ => None,
         }
     }

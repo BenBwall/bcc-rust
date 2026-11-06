@@ -24,6 +24,8 @@ use super::{
     },
     FunctionLikeMacroArgument,
     MacroArguments,
+    SpacingState,
+    arguments::Prescan,
 };
 use crate::{
     configuration::{
@@ -36,6 +38,7 @@ use crate::{
             PreprocessorToken,
             PreprocessorTokenType,
             TokenSource,
+            TokenSpacing,
         },
     },
     util::bump::{
@@ -154,13 +157,24 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         .unwrap_or(end);
                     let contents =
                         Self::stringify(self.context, self.scratch, &selected[start..end], token);
+                    // The string stands where the operator was: GCC pads it
+                    // unless it begins the list, and adds nothing after it.
+                    let white = output
+                        .last()
+                        .is_some_and(|t: &PreprocessorToken| t.kind == T::Whitespace);
                     output.push(PreprocessorToken {
+                        spacing: if output.is_empty() {
+                            TokenSpacing::NONE
+                        } else {
+                            TokenSpacing::before(white)
+                        },
                         kind: T::String,
                         contents,
                         source_vectors: token.source_vectors,
                     });
                 } else if selected.is_empty() {
                     output.push(PreprocessorToken {
+                        spacing:        TokenSpacing::NONE,
                         kind:           T::Placeholder,
                         contents:       self.context.string_cache.intern(""),
                         source_vectors: token.source_vectors,
@@ -177,7 +191,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         location.clone(),
                     );
                     let expanded = self.scratch.alloc(OnceCell::new());
-                    drop(expanded.set(tokenizer.clone()));
+                    drop(expanded.set(Prescan {
+                        tokens: tokenizer.clone(),
+                        end:    TokenSpacing::END,
+                    }));
                     results.push(FunctionLikeMacroArgument {
                         omitted: false,
                         variadic: false,
@@ -189,6 +206,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         expanded,
                     });
                     output.push(PreprocessorToken {
+                        spacing:        TokenSpacing::NONE,
                         kind:           T::Identifier,
                         contents:       name,
                         source_vectors: token.source_vectors,
@@ -385,7 +403,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let newlines = (self.last_was_newline, self.current_is_newline);
         let placeholder_mode = self.generate_placeholders;
         let retain_placeholders = replace(&mut self.state.retain_placeholders, true);
+        let spacing = replace(&mut self.spacing, SpacingState::new());
         let newline = PreprocessorToken {
+            spacing:        TokenSpacing::NONE,
             kind:           PreprocessorTokenType::Newline,
             contents:       self.context.string_cache.intern("\n"),
             source_vectors: invocation.source_vectors,
@@ -411,6 +431,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             },
             tokenizer,
         });
+        self.spacing.begin_list();
         let depth = self.tokenizer_stack.len();
         let saved_operand = replace(&mut self.operand_fence, depth);
         let saved_expansion = replace(&mut self.expansion_fence, depth);
@@ -426,6 +447,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.generate_placeholders = placeholder_mode;
         self.state.retain_placeholders = retain_placeholders;
         (self.last_was_newline, self.current_is_newline) = newlines;
+        self.spacing = spacing;
         result
     }
 
@@ -470,7 +492,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             );
             if !argument.omitted {
                 output.push(token);
-                output.push(tokens[next]);
+                let mut parameter = tokens[next];
+                parameter.spacing = parameter.spacing.right_operand();
+                output.push(parameter);
             }
             return Some(next + 1);
         }
@@ -512,7 +536,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if let Some(empty) = *empty {
             return empty;
         }
-        let mut expanded = self.expanded_argument(invocation, argument);
+        let mut expanded = self.expanded_argument(invocation, argument).tokens.clone();
         let result = !std::iter::from_fn(|| expanded.next_item(self.context)).any(|t| {
             !matches!(
                 t.kind,

@@ -161,11 +161,16 @@ pub struct Object {
     pub name:      String,
     #[serde(rename = "type")]
     pub ty:        String,
+    /// `automatic` or `static`.
     pub storage:   String,
     pub alive:     bool,
+    /// The owning call, or 0 for an object with static storage duration.
     pub frame_id:  usize,
-    /// The owning function, or empty once its frame has returned.
+    /// The owning function, or empty once its frame has returned (and for
+    /// a static object).
     pub function:  String,
+    /// The function a block-scope `static` object is declared in.
+    pub scope:     Option<String>,
     pub parameter: bool,
     pub value:     Value,
 }
@@ -183,10 +188,47 @@ pub enum Value {
     #[serde(rename_all = "camelCase")]
     Pointer {
         target:   Option<usize>,
+        /// The scalar it points at, counted as the cells count them.
         offset:   i32,
         one_past: bool,
         ended:    bool,
+        /// What it points to, as the source names it: `values[1]`, `p.x`,
+        /// `values+3` one past the end.
+        to:       String,
     },
+    /// A structure: its members in order, each at its byte offset, with
+    /// the padding after it.
+    Struct {
+        /// `struct point`.
+        name:    String,
+        size:    usize,
+        members: Vec<MemberValue>,
+    },
+}
+
+impl Value {
+    /// How many scalars (cells) the value holds.
+    pub fn cells(&self) -> usize {
+        match self {
+            | Self::Array { elements } => elements.len(),
+            | Self::Struct { members, .. } => members.iter().map(|member| member.value.cells()).sum(),
+            | _ => 1,
+        }
+    }
+}
+
+/// One member of a structure value.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct MemberValue {
+    pub name:    String,
+    #[serde(rename = "type")]
+    pub ty:      String,
+    /// Byte offset from the start of the structure.
+    pub offset:  usize,
+    pub size:    usize,
+    /// Unnamed padding bytes after the member.
+    pub padding: usize,
+    pub value:   Value,
 }
 
 /// A terminal diagnostic, or a site-level error shown in the same place.

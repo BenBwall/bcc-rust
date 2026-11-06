@@ -12,6 +12,7 @@ use std::fmt::{
     Display,
 };
 
+use super::TokenSpacing;
 use crate::{
     diagnostics::quote_spelling,
     translation_phases::{
@@ -26,6 +27,9 @@ pub(crate) struct PreprocessorToken {
     pub(crate) kind:           PreprocessorTokenType,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) contents:       StringCacheId,
+    /// For a text of phase 4, how the token is separated from the one before
+    /// it; otherwise [`TokenSpacing::NONE`].
+    pub(crate) spacing:        TokenSpacing,
 }
 
 /// Phase-3 preprocessing-token categories plus phase-4 internal markers.
@@ -243,6 +247,7 @@ impl Default for PreprocessorToken {
             kind:           PreprocessorTokenType::WideGeneratedString,
             source_vectors: SourceVectors::empty(),
             contents:       StringCacheId::from_u32(u32::MAX),
+            spacing:        TokenSpacing::NONE,
         }
     }
 }

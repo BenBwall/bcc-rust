@@ -128,6 +128,7 @@ pub(super) fn emit<'s>(
     let mut values: ArenaVec<'_, Option<Value>> =
         ArenaVec::with_capacity_in(draft.values.len(), scratch);
     values.resize(draft.values.len(), None);
+    let mut edge_poison = [None; Type::ALL.len()];
     let missing = || LoweringError {
         kind:   super::LoweringErrorKind::MissingFact("a value is used where it is not defined"),
         source: None,
@@ -141,10 +142,20 @@ pub(super) fn emit<'s>(
             for (&param, &value) in data.params.iter().zip(params) {
                 values[param.index()] = Some(value);
             }
-            for (index, &used) in used_poison(&draft, &order).iter().enumerate() {
-                if used {
-                    values[index] = Some(builder.poison(draft.values[index].ty));
+            // A read of an uninitialized variable is a fixed value and an
+            // edge passes `poison`, as `optimizer/promote.rs` explains.
+            let uses = undefined_uses(&draft, &order);
+            for (index, &(read, passed)) in uses.iter().enumerate() {
+                if !read && !passed {
+                    continue;
                 }
+                let ty = draft.values[index].ty;
+                let poison = *edge_poison[ty as usize].get_or_insert_with(|| builder.poison(ty));
+                values[index] = Some(if draft.values[index].def == Def::Uninit && read {
+                    builder.unary(Opcode::Freeze, poison)
+                } else {
+                    poison
+                });
             }
         } else {
             for &param in &data.params {
@@ -215,7 +226,12 @@ pub(super) fn emit<'s>(
             let mut args = ArenaVec::with_capacity_in(edge.args.len(), scratch);
             for (&param, &arg) in params.iter().zip(&edge.args) {
                 if draft.values[param.index()].alias.is_none() {
-                    args.push(map(arg, &values)?);
+                    let resolved = &draft.values[draft.resolve(arg).index()];
+                    args.push(if resolved.def == Def::Uninit {
+                        edge_poison[resolved.ty as usize].ok_or_else(missing)?
+                    } else {
+                        map(arg, &values)?
+                    });
                 }
             }
             Ok(args)
@@ -280,15 +296,19 @@ pub(super) fn emit<'s>(
     Ok(())
 }
 
-/// Which values are `poison` used by a reachable block, after redundant
-/// parameters are resolved.
-fn used_poison<'s>(draft: &Draft<'s>, order: &[Block]) -> ArenaVec<'s, bool> {
+/// How a reachable block uses each `poison` or uninitialized value, after
+/// redundant parameters are resolved: as an operand, and as an edge's argument.
+fn undefined_uses<'s>(draft: &Draft<'s>, order: &[Block]) -> ArenaVec<'s, (bool, bool)> {
     let mut used = ArenaVec::with_capacity_in(draft.values.len(), draft.scratch());
-    used.resize(draft.values.len(), false);
-    let mut mark = |value: Value| {
+    used.resize(draft.values.len(), (false, false));
+    let undefined = |value: Value| {
         let value = draft.resolve(value);
-        if draft.values[value.index()].def == Def::Poison {
-            used[value.index()] = true;
+        matches!(draft.values[value.index()].def, Def::Poison | Def::Uninit)
+            .then_some(value.index())
+    };
+    let mut mark = |value: Value| {
+        if let Some(index) = undefined(value) {
+            used[index].0 = true;
         }
     };
     for &block in order {
@@ -324,11 +344,18 @@ fn used_poison<'s>(draft: &Draft<'s>, order: &[Block]) -> ArenaVec<'s, bool> {
             | Terminator::Return(Some(value)) => mark(value),
             | _ => {},
         }
+    }
+    for &block in order {
+        let Some(terminator) = &draft.blocks[block.index()].terminator else {
+            continue;
+        };
         for edge in terminator.edges() {
             let params = draft.block_params(edge.target);
             for (&param, &arg) in params.iter().zip(&edge.args) {
-                if draft.values[param.index()].alias.is_none() {
-                    mark(arg);
+                if draft.values[param.index()].alias.is_none()
+                    && let Some(index) = undefined(arg)
+                {
+                    used[index].1 = true;
                 }
             }
         }
@@ -418,7 +445,7 @@ fn remove_redundant_params(draft: &mut Draft<'_>, order: &[Block], reachable: &[
                 }
                 if redundant {
                     let ty = draft.values[param.index()].ty;
-                    let to = same.unwrap_or_else(|| draft.poison(ty));
+                    let to = same.unwrap_or_else(|| draft.uninit(ty));
                     draft.alias(param, to);
                     changed = true;
                 }

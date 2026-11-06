@@ -75,7 +75,14 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
             {
                 offset += 1;
             }
-        } else if b"{}()[];,+-*/%<>=!&".contains(&byte) {
+            if byte.is_ascii_digit() && bytes.get(offset) == Some(&b'.') {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    range(source, start, offset + 1),
+                    "floating point is outside this subset; the machine models int and char",
+                ));
+            }
+        } else if b"{}()[];,+-*/%<>=!&.".contains(&byte) {
             offset += 1;
             if offset < bytes.len()
                 && matches!(
@@ -91,6 +98,7 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
                         | b"*="
                         | b"/="
                         | b"&&"
+                        | b"->"
                 )
             {
                 offset += 1;

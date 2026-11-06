@@ -6,7 +6,10 @@
 //! C99: §6.9.1 paragraph 12, p. 142; PDF p. 154 (other fallthrough;
 //! conservatively rejected regardless of whether its value is used).
 
-use std::mem::size_of;
+use std::{
+    mem::size_of,
+    sync::Arc,
+};
 
 use super::{
     clauses,
@@ -20,8 +23,10 @@ use super::{
         MAX_OPERANDS,
         Op,
         Operand,
+        Place,
         Program,
         State,
+        Structure,
         Type,
         Undefined,
         Value,
@@ -39,10 +44,30 @@ pub(super) struct Machine {
     pub next_frame:  usize,
     pub cells:       usize,
     pub metadata:    Vec<ObjectMetadata>,
+    /// The program's structure types, for layouts and member names.
+    pub structures:  Arc<[Structure]>,
+    /// How many of the program's static objects exist so far: the machine
+    /// creates and initializes them, one per step, before `main` runs.
+    pub initialized: usize,
+    /// Whether `main` has begun: its first operation has run.
+    pub started:     bool,
 }
 
 impl Machine {
     pub fn execute(&mut self, program: &Program) {
+        if self.initialized < program.statics.len() {
+            let index = self.initialized;
+            self.initialized += 1;
+            self.state.status = "running";
+            self.state.source_range = program.statics[index].range;
+            match self.allocate_static(program, index) {
+                | Ok(id) => self.state.event = self.static_storage(program, index, id),
+                | Err(diagnostic) => self.stop(diagnostic),
+            }
+            self.refresh(program);
+            return;
+        }
+        self.started = true;
         let frame = &self.activations[self.activations.len() - 1];
         let Some(instruction) = program.functions[frame.function]
             .code
@@ -61,7 +86,10 @@ impl Machine {
         match self.operation(&instruction, program) {
             | Ok(event) => {
                 if let (Some(node), Some(result)) = (instruction.node, &event.result)
-                    && !matches!(instruction.op, Op::Call(..) | Op::Return | Op::Fallthrough)
+                    && !matches!(
+                        instruction.op,
+                        Op::Call(..) | Op::Return | Op::Fallthrough | Op::StaticLocal(_)
+                    )
                 {
                     self.record(node, result.clone());
                 }
@@ -119,6 +147,7 @@ impl Machine {
                 )?;
                 self.declare(range, id, *ty)
             },
+            | &Op::StaticLocal(index) => self.static_local(range, index + 1),
             | Op::Push(integer) => {
                 let value = Operand::Value(Value::Integer(*integer));
                 self.push(value.clone())?;
@@ -129,31 +158,42 @@ impl Machine {
                 self.push(value.clone())?;
                 narration::implicit_zero(range, value)
             },
-            | Op::Address(name) => {
-                let id = self.named(name)?;
+            | Op::Address(place) => {
+                let id = self.named(place)?;
+                let structure = match self.object_type(id) {
+                    | Some(Type::Struct(structure)) => Some(structure),
+                    | _ => None,
+                };
                 let operand = Operand::Address {
                     target: id,
                     offset: 0,
+                    structure,
                 };
                 self.push(operand.clone())?;
                 let role = self.designation(program, instruction);
                 self.designate(range, id, operand, role)
             },
-            | Op::Element(name, index) => {
-                let id = self.named(name)?;
+            | Op::Element {
+                name,
+                offset,
+                structure,
+            } => {
+                let id = self.named(&Place::Local(name.clone()))?;
                 let operand = Operand::Address {
-                    target: id,
-                    offset: *index,
+                    target:    id,
+                    offset:    *offset,
+                    structure: *structure,
                 };
                 self.push(operand.clone())?;
-                self.element(range, id, *index, operand)
+                self.element(range, id, *offset, operand)
             },
-            | Op::Decay(name) => {
-                let id = self.named(name)?;
-                let value = Value::Pointer {
-                    target: Some(id),
-                    offset: 0,
+            | Op::Decay(place) => {
+                let id = self.named(place)?;
+                let length = match self.object_type(id) {
+                    | Some(Type::Array(length)) => i32::try_from(length).unwrap_or(i32::MAX),
+                    | _ => 1,
                 };
+                let value = Value::pointer(id, 0, 0, length);
                 self.push(Operand::Value(value.clone()))?;
                 self.decay(range, id, value)
             },
@@ -163,25 +203,93 @@ impl Machine {
                 self.push(Operand::Value(value.clone()))?;
                 self.load(range, target, offset, value)
             },
+            | &Op::LoadStruct(structure) => {
+                let (target, offset) = self.pop_address()?;
+                let value = self.read_structure(target, offset, structure)?;
+                self.push(Operand::Value(value.clone()))?;
+                self.load_structure(range, target, offset, structure, value)
+            },
+            | Op::Member {
+                name,
+                offset,
+                arrow,
+                structure,
+                array,
+            } => {
+                let (target, base, whole, pointer) = if *arrow {
+                    let pointer = self.pop_value()?;
+                    if matches!(pointer, Value::Pointer { target: None, .. }) {
+                        return Err(Diagnostic::ub(
+                            self.state.source_range,
+                            &format!(
+                                "`->{name}` through a null pointer, which points to no structure"
+                            ),
+                            &clauses::INDIRECTION,
+                            Undefined::NullIndirection,
+                        ));
+                    }
+                    let (target, base, whole) = self.dereference(&pointer)?;
+                    (target, base, whole, Some(pointer))
+                } else {
+                    let Operand::Address {
+                        target,
+                        offset: base,
+                        structure: whole,
+                    } = self.pop()?
+                    else {
+                        return Err(self.error("expected a structure lvalue"));
+                    };
+                    (target, base, whole, None)
+                };
+                let at = base + offset;
+                let result = if let Some(length) = array {
+                    let length = i32::try_from(*length).unwrap_or(i32::MAX);
+                    Operand::Value(Value::pointer(target, at, at, length))
+                } else {
+                    Operand::Address {
+                        target,
+                        offset: at,
+                        structure: *structure,
+                    }
+                };
+                self.push(result.clone())?;
+                self.member(range, source, target, base, whole, pointer, result)
+            },
             | Op::Promote => {
                 let value = self.pop_value()?;
                 self.push(Operand::Value(value.clone()))?;
                 self.promote(range, value)
             },
             | Op::AddressOf => {
-                let (target, offset) = self.pop_address()?;
+                let Operand::Address {
+                    target,
+                    offset,
+                    structure,
+                } = self.pop()?
+                else {
+                    return Err(self.error("expected an lvalue"));
+                };
+                // An object that is not an array element counts as an array
+                // of one (C99 §6.5.6p7).
                 let value = Value::Pointer {
                     target: Some(target),
                     offset,
+                    first: offset,
+                    length: 1,
+                    structure,
                 };
                 self.push(Operand::Value(value.clone()))?;
-                self.address_of(range, target, offset, value)
+                self.address_of(range, target, offset, structure, value)
             },
             | Op::Dereference => {
                 let pointer = self.pop_value()?;
-                let (target, offset) = self.dereference(&pointer)?;
-                self.push(Operand::Address { target, offset })?;
-                self.indirection(range, source, pointer, target, offset)
+                let (target, offset, structure) = self.dereference(&pointer)?;
+                self.push(Operand::Address {
+                    target,
+                    offset,
+                    structure,
+                })?;
+                self.indirection(range, source, pointer, target, offset, structure)
             },
             | Op::Index => {
                 let index = self.pop_value()?;
@@ -197,8 +305,12 @@ impl Machine {
                     ));
                 }
                 let pointer = self.binary_value("+", base.clone(), index.clone())?;
-                let (target, offset) = self.dereference(&pointer)?;
-                self.push(Operand::Address { target, offset })?;
+                let (target, offset, _) = self.dereference(&pointer)?;
+                self.push(Operand::Address {
+                    target,
+                    offset,
+                    structure: None,
+                })?;
                 self.subscript(range, base, index, target, offset)
             },
             | Op::Unary(operator) => {
@@ -234,22 +346,38 @@ impl Machine {
                 initializer,
                 full_expression,
                 char_value,
+                structure,
             } => {
                 let value = self.pop_value()?;
                 let (target, offset) = self.pop_address()?;
-                let previous = self.peek(target, offset);
-                let stored = self.store(target, offset, value.clone())?;
-                self.stored(
-                    range,
-                    initializer,
-                    full_expression,
-                    char_value,
-                    target,
-                    offset,
-                    previous.as_ref(),
-                    value,
-                    stored,
-                )
+                if let Some(structure) = structure {
+                    let previous = self.read_structure(target, offset, structure)?;
+                    let stored = self.store(target, offset, value)?;
+                    self.copied(
+                        range,
+                        initializer,
+                        full_expression,
+                        target,
+                        offset,
+                        structure,
+                        &previous,
+                        stored,
+                    )
+                } else {
+                    let previous = self.peek(target, offset);
+                    let stored = self.store(target, offset, value.clone())?;
+                    self.stored(
+                        range,
+                        initializer,
+                        full_expression,
+                        char_value,
+                        target,
+                        offset,
+                        previous.as_ref(),
+                        value,
+                        stored,
+                    )
+                }
             },
             | &Op::Increment { delta, prefix } => {
                 let (target, offset) = self.pop_address()?;
@@ -327,10 +455,9 @@ impl Machine {
         let activation = &self.activations[self.activations.len() - 1];
         let function = &program.functions[activation.function];
         // The program counter is already past `instruction`.
-        let reads = function
-            .code
-            .get(activation.pc)
-            .is_some_and(|next| matches!(next.op, Op::Load) && next.node == instruction.node);
+        let reads = function.code.get(activation.pc).is_some_and(|next| {
+            matches!(next.op, Op::Load | Op::LoadStruct(_)) && next.node == instruction.node
+        });
         let parent = instruction.node.and_then(|node| {
             function
                 .nodes
@@ -354,6 +481,7 @@ impl Machine {
             | _ if initializes => Designation::Initialized,
             | Some("&") => Designation::Address,
             | Some("++" | "--") => Designation::Updated,
+            | Some(label) if label.starts_with('.') => Designation::Member,
             | _ => Designation::Assigned,
         }
     }
@@ -426,8 +554,8 @@ impl Machine {
         value: Value,
         fallthrough: bool,
     ) -> Result<Event, Diagnostic> {
-        if !matches!(value, Value::Integer(_)) {
-            return Err(self.error("int function returned a non-int value"));
+        if !matches!(value, Value::Integer(_) | Value::Struct { .. }) {
+            return Err(self.error("function returned a value of an unsupported type"));
         }
         let top = self.activations.len() - 1;
         let id = self.activations[top].id;
@@ -512,6 +640,18 @@ impl Machine {
 
     pub fn refresh(&mut self, program: &Program) {
         self.state.frames.clear();
+        // Static initialization comes before program startup: no call has
+        // begun until main's first operation (C99 §5.1.2p1).
+        if !self.started && !program.statics.is_empty() {
+            self.state.evaluation = None;
+            if !self.state.terminal() {
+                self.state.source_range = program.statics.get(self.initialized).map_or_else(
+                    || program.functions[program.entry].code[0].range,
+                    |next| next.range,
+                );
+            }
+            return;
+        }
         for (depth, frame) in self.activations.iter().enumerate() {
             let nodes = &program.functions[frame.function].nodes;
             self.state.frames.push(Frame {
@@ -551,13 +691,16 @@ impl Machine {
             operands:   Vec::new(),
             evaluation: None,
         }]);
-        let first = program.functions[program.entry].code[0].range;
+        let first = program.statics.first().map_or_else(
+            || program.functions[program.entry].code[0].range,
+            |object| object.range,
+        );
         let mut machine = Self {
             state: State {
                 step:            0,
                 status:          "ready",
                 source_range:    first,
-                event:           narration::start(first),
+                event:           narration::start(first, program.statics.len()),
                 evaluation:      None,
                 frames:          Vec::new(),
                 objects:         Vec::new(),
@@ -569,6 +712,9 @@ impl Machine {
             next_frame: 2,
             cells: 0,
             metadata: Vec::new(),
+            structures: Arc::clone(&program.structures),
+            initialized: 0,
+            started: false,
         };
         machine.refresh(program);
         machine
@@ -618,12 +764,12 @@ impl Machine {
 
     pub fn pop_address(&mut self) -> Result<(usize, i32), Diagnostic> {
         match self.pop()? {
-            | Operand::Address { target, offset } => Ok((target, offset)),
+            | Operand::Address { target, offset, .. } => Ok((target, offset)),
             | Operand::Value(_) => Err(self.error("expected a modifiable scalar lvalue")),
         }
     }
 
-    fn pop(&mut self) -> Result<Operand, Diagnostic> {
+    pub fn pop(&mut self) -> Result<Operand, Diagnostic> {
         let top = self.activations.len() - 1;
         self.activations[top]
             .operands
@@ -642,10 +788,10 @@ impl Machine {
             + self.activations.capacity() * size_of::<Activation>()
             + self.state.frames.capacity() * size_of::<Frame>();
         for object in &self.state.objects {
-            bytes += object.name.capacity() + object.r#type.capacity();
-            if let Value::Array(elements) = &object.value {
-                bytes += elements.capacity() * size_of::<Value>();
-            }
+            bytes += object.name.capacity()
+                + object.r#type.capacity()
+                + object.function.as_ref().map_or(0, String::capacity)
+                + value_bytes(&object.value);
         }
         for frame in &self.activations {
             bytes += frame.operands.capacity() * size_of::<Operand>();
@@ -668,6 +814,16 @@ impl Machine {
             bytes += effect.capacity();
         }
         bytes + 1024 // Diagnostic storage and allocator bookkeeping reserve.
+    }
+}
+
+/// The heap bytes an aggregate value holds beyond its own size.
+fn value_bytes(value: &Value) -> usize {
+    match value {
+        | Value::Array(elements) => elements.capacity() * size_of::<Value>(),
+        | Value::Struct { members, .. } =>
+            members.capacity() * size_of::<Value>() + members.iter().map(value_bytes).sum::<usize>(),
+        | _ => 0,
     }
 }
 

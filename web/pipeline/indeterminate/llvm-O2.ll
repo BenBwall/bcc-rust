@@ -5,7 +5,9 @@ target triple = "x86_64-unknown-linux-gnu"
 
 define i32 @main() {
 block0:
-  ret i32 poison
+  %v1 = freeze i32 poison
+  %v3 = add nsw i32 %v1, 1
+  ret i32 %v3
 }
 
 !llvm.module.flags = !{!0, !1}

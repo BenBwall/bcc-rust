@@ -40,14 +40,26 @@ clauses! {
     MAIN_RETURN = "5.1.2.2.3p1", "p. 13; PDF p. 25", "Program termination",
         "Returning from main ends the program with that status; reaching main's closing brace \
          returns 0.";
+    /// C99: §5.1.2 paragraph 1, p. 11; PDF p. 23.
+    STARTUP = "5.1.2p1", "p. 11; PDF p. 23", "Execution environments",
+        "Every object with static storage duration gets its initial value before the program \
+         starts, that is, before main is called.";
     /// C99: §6.2.1 paragraph 4, pp. 29-30; PDF pp. 41-42.
     BLOCK_SCOPE = "6.2.1p4", "pp. 29-30; PDF pp. 41-42", "Scopes of identifiers",
         "A name declared inside a block can be used only from its declaration to the end of that \
          block.";
+    /// C99: §6.2.1 paragraph 4, pp. 29-30; PDF pp. 41-42.
+    FILE_SCOPE = "6.2.1p4", "pp. 29-30; PDF pp. 41-42", "Scopes of identifiers",
+        "A name declared outside every function has file scope: it can be used from its \
+         declaration to the end of the file, in every function after it.";
     /// C99: §6.2.4 paragraph 2, p. 32; PDF p. 44.
     LIFETIME = "6.2.4p2", "p. 32; PDF p. 44", "Storage durations of objects",
         "An object exists only during its lifetime; using it, or a pointer to it, after the \
          lifetime ends is undefined.";
+    /// C99: §6.2.4 paragraph 3, p. 32; PDF p. 44.
+    STATIC_STORAGE = "6.2.4p3", "p. 32; PDF p. 44", "Storage durations of objects",
+        "An object declared outside every function, or with static, lives for the whole run of \
+         the program and is initialized only once, before the program starts.";
     /// C99: §6.2.4 paragraph 5, p. 32; PDF p. 44.
     AUTOMATIC_LIFETIME = "6.2.4p5", "p. 32; PDF p. 44", "Storage durations of objects",
         "A local variable lives from entry into its block until the block finishes; each new \
@@ -56,11 +68,19 @@ clauses! {
     CHAR_SIGNEDNESS = "6.2.5p15", "p. 35; PDF p. 47", "Types",
         "Whether plain char is signed or unsigned is up to the implementation; on x86-64 Linux \
          it is signed, holding -128 to 127.";
+    /// C99: §6.2.5 paragraph 20, pp. 35-36; PDF pp. 47-48.
+    STRUCTURE_TYPE = "6.2.5p20", "pp. 35-36; PDF pp. 47-48", "Types",
+        "A structure is a sequence of member objects, each with its own name and type, allocated \
+         one after another.";
     /// C99: §6.2.6.1 paragraph 5, pp. 37-38; PDF pp. 49-50.
     TRAP_REPRESENTATION = "6.2.6.1p5", "pp. 37-38; PDF pp. 49-50", "Representations of types",
         "Some bit patterns are not values of their type (trap representations); reading one as \
          that type is undefined, though a character type such as unsigned char may read any \
          byte.";
+    /// C99: §6.2.6.1 paragraph 6, p. 38; PDF p. 50.
+    STRUCTURE_VALUE = "6.2.6.1p6", "p. 38; PDF p. 50", "Representations of types",
+        "A structure's value is never a trap representation, even if a member's is; its padding \
+         bytes hold unspecified values.";
     /// C99: §6.3.1.1 paragraph 2, pp. 42-43; PDF pp. 54-55.
     INTEGER_PROMOTIONS = "6.3.1.1p2", "pp. 42-43; PDF pp. 54-55", "Boolean, characters, and integers",
         "Before arithmetic, values of types narrower than int (like char) are converted to int.";
@@ -104,6 +124,12 @@ clauses! {
     /// C99: §6.5.2.1 paragraph 2, p. 70; PDF p. 82.
     SUBSCRIPT = "6.5.2.1p2", "p. 70; PDF p. 82", "Array subscripting",
         "E1[E2] means *((E1)+(E2)): move E2 elements from the start, then designate that element.";
+    /// C99: §6.5.2.3 paragraph 3, p. 73; PDF p. 85.
+    MEMBER = "6.5.2.3p3", "p. 73; PDF p. 85", "Structure and union members",
+        "s.m designates member m of the structure s; it is an lvalue when s is one.";
+    /// C99: §6.5.2.3 paragraph 4, p. 73; PDF p. 85.
+    MEMBER_POINTER = "6.5.2.3p4", "p. 73; PDF p. 85", "Structure and union members",
+        "p->m designates member m of the structure p points to; it is always an lvalue.";
     /// C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83.
     CALL_ARGUMENTS = "6.5.2.2p4", "p. 71; PDF p. 83", "Function calls",
         "Arguments are evaluated and each parameter is assigned a copy of its argument's value: \
@@ -167,19 +193,58 @@ clauses! {
     /// C99: §6.5.16.1 paragraph 2, p. 92; PDF p. 104.
     SIMPLE_ASSIGNMENT = "6.5.16.1p2", "p. 92; PDF p. 104", "Simple assignment",
         "x = v converts v to x's type and replaces the value stored in x.";
+    /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
+    STRUCTURE_ASSIGNMENT = "6.5.16.1p1", "p. 92; PDF p. 104", "Simple assignment",
+        "Assignment works on whole structures of the same type: unlike arrays, a structure can \
+         be copied with =.";
     /// C99: §6.5.16 paragraph 4, p. 91; PDF p. 103.
     ASSIGNMENT_ORDER = "6.5.16p4", "p. 91; PDF p. 103", "Assignment operators",
         "Which operand of an assignment is evaluated first is unspecified.";
+    /// C99: §6.7.2.1 paragraph 12, p. 103; PDF p. 115.
+    MEMBER_ALIGNMENT = "6.7.2.1p12", "p. 103; PDF p. 115", "Structure and union specifiers",
+        "Each member is aligned as its type needs, in an implementation-defined way; on x86-64 \
+         an int starts at a multiple of 4 bytes and a pointer at a multiple of 8.";
+    /// C99: §6.7.2.1 paragraph 13, p. 103; PDF p. 115.
+    MEMBER_ORDER = "6.7.2.1p13", "p. 103; PDF p. 115", "Structure and union specifiers",
+        "Members are laid out in the order they are declared, the first at the very start; \
+         there may be unnamed padding between them.";
+    /// C99: §6.7.2.1 paragraph 15, p. 103; PDF p. 115.
+    TRAILING_PADDING = "6.7.2.1p15", "p. 103; PDF p. 115", "Structure and union specifiers",
+        "There may be unnamed padding at the end of a structure, so that every element of an \
+         array of it stays aligned.";
+    /// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137.
+    STATIC_INITIALIZER = "6.7.8p4", "p. 125; PDF p. 137", "Initialization",
+        "A static object's initializer must be a constant expression: its value is known before \
+         the program runs.";
+    /// C99: §6.7.8 paragraph 7, p. 125; PDF p. 137.
+    MEMBER_DESIGNATOR = "6.7.8p7", "p. 125; PDF p. 137", "Initialization",
+        "In an initializer list, .m = names the member that the next value initializes.";
     /// C99: §6.7.8 paragraph 10, p. 126; PDF p. 138.
     INDETERMINATE = "6.7.8p10", "p. 126; PDF p. 138", "Initialization",
         "A local variable that is not initialized holds an indeterminate value, not zero.";
+    /// C99: §6.7.8 paragraph 10, p. 126; PDF p. 138.
+    STATIC_ZERO = "6.7.8p10", "p. 126; PDF p. 138", "Initialization",
+        "A static object without an initializer starts at zero: every arithmetic member 0, every \
+         pointer null.";
     /// C99: §6.7.8 paragraph 11, p. 126; PDF p. 138.
     SCALAR_INITIALIZER = "6.7.8p11", "p. 126; PDF p. 138", "Initialization",
         "A scalar's initial value is its initializer's value, converted as if by assignment.";
+    /// C99: §6.7.8 paragraph 13, p. 126; PDF p. 138.
+    STRUCTURE_INITIALIZER = "6.7.8p13", "p. 126; PDF p. 138", "Initialization",
+        "A local structure is initialized by a brace-enclosed list or by a whole structure of \
+         the same type, whose value it copies.";
     /// C99: §6.7.8 paragraph 17, pp. 126-127; PDF pp. 138-139.
     INITIALIZER_ORDER = "6.7.8p17", "pp. 126-127; PDF pp. 138-139", "Initialization",
         "Without designators, an initializer list fills an array's elements in increasing index \
          order.";
+    /// C99: §6.7.8 paragraph 17, pp. 126-127; PDF pp. 138-139.
+    MEMBER_INITIALIZER_ORDER = "6.7.8p17", "pp. 126-127; PDF pp. 138-139", "Initialization",
+        "An initializer list fills a structure's members in declaration order; a designator \
+         .m = jumps to member m, and the list continues from the member after it.";
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+    IMPLICIT_INITIALIZATION = "6.7.8p19", "p. 127; PDF p. 139", "Initialization",
+        "Every member or element an initializer list does not mention is initialized as a \
+         static object would be: to zero.";
     /// C99: §6.7.8 paragraph 21, p. 127; PDF p. 139.
     PARTIAL_INITIALIZER = "6.7.8p21", "p. 127; PDF p. 139", "Initialization",
         "Array elements without an initializer of their own are initialized to zero.";
