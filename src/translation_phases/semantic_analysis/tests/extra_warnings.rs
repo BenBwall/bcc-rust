@@ -405,6 +405,19 @@ fn sign_compare_follows_each_compiler() {
             0,
             0,
         ),
+        (
+            "int f(__int128 a) { return a == (unsigned __int128)1 << 127; }",
+            1,
+            1,
+        ),
+        (
+            "int f(__int128 a, unsigned __int128 b) { return a < b; }",
+            1,
+            1,
+        ),
+        ("int f(unsigned __int128 a) { return a < -1; }", 1, 1),
+        ("int f(unsigned __int128 a) { return a <= -1; }", 1, 0),
+        ("int f(unsigned _BitInt(200) a) { return a < -1; }", 1, 1),
         ("int f(_Atomic int a, unsigned b) { return a < b; }", 1, 0),
         ("int f(int a, _Atomic unsigned b) { return a < b; }", 1, 1),
     ] {

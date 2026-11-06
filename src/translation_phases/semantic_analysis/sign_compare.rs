@@ -189,20 +189,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some((narrow, signed)) = self.narrowest_source(operand.expression) else {
             return false;
         };
-        if narrow >= bits {
+        if narrow >= bits || bits > MAX_MODELED_BITS {
             return false;
         }
         let value = truncated(value, bits);
         let equality = matches!(operator, B::Equal | B::NotEqual);
         if signed {
-            let value = if value >> (bits - 1) == 0 {
-                value
-            } else {
-                value - (1 << bits)
-            };
+            // Sign-extend from `bits`.
+            let unused = 128 - bits;
+            let value = (value << unused).cast_signed() >> unused;
             return equality && !(-(1 << (narrow - 1))..1 << (narrow - 1)).contains(&value);
         }
-        let maximum = (1 << narrow) - 1;
+        let maximum = truncated(-1, narrow);
         match operator {
             | B::LessThan | B::GreaterThanOrEqual => value == 0 || value > maximum,
             | B::GreaterThan | B::LessThanOrEqual => value >= maximum,
@@ -275,7 +273,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         other: ExpressionInfo<'tu>,
         bits: u32,
     ) -> bool {
-        let Some(value) = constant.integer.and_then(Integer::to_i128) else {
+        let Some(value) = constant
+            .integer
+            .and_then(Integer::to_i128)
+            .filter(|_| bits <= MAX_MODELED_BITS)
+        else {
             return false;
         };
         let value = truncated(value, bits);
@@ -1031,7 +1033,7 @@ impl IntRange {
 
     /// Clang's `PromotedRange::compare`: `value`, already in the comparison's
     /// unsigned type of `bits`, against this range converted to that type.
-    fn compare(self, value: i128, bits: u32) -> ComparedValue {
+    fn compare(self, value: u128, bits: u32) -> ComparedValue {
         let top = truncated(-1, bits);
         let (minimum, maximum) = if self.width == 0 {
             (0, 0)
@@ -1047,10 +1049,8 @@ impl IntRange {
         } else if self.width > bits {
             (0, top)
         } else {
-            (
-                truncated(-(1 << (self.width - 1)), bits),
-                (1 << (self.width - 1)) - 1,
-            )
+            let half = 1u128 << (self.width - 1);
+            (half.wrapping_neg() & top, half - 1)
         };
         let (below, above, in_range) = if minimum > maximum {
             // The range wraps around through the type's largest value.
@@ -1164,11 +1164,15 @@ impl ComparedValue {
     }
 }
 
-/// `value` as an unsigned number of `bits`.
-const fn truncated(value: i128, bits: u32) -> i128 {
-    if bits >= 127 {
-        value
+/// The widest comparison whose constants fit the range arithmetic; a wider
+/// `_BitInt` has no constant result here.
+const MAX_MODELED_BITS: u32 = 128;
+
+/// `value` as an unsigned number of `bits`, at most all of them.
+const fn truncated(value: i128, bits: u32) -> u128 {
+    if bits >= MAX_MODELED_BITS {
+        value.cast_unsigned()
     } else {
-        value & ((1 << bits) - 1)
+        value.cast_unsigned() & ((1 << bits) - 1)
     }
 }
