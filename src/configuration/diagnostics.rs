@@ -170,13 +170,20 @@ impl CompilerConfiguration {
         }
     }
 
-    fn with_pragma_group(self, group: DiagnosticGroup, class: PragmaClass) -> Self {
+    /// [`Self::with_pragma_class`] for one group. A group an earlier pragma
+    /// disabled keeps its default when `error` turns it back on, so that `-w`
+    /// leaves a default error in Clang.
+    pub(crate) fn with_pragma_group(self, group: DiagnosticGroup, class: PragmaClass) -> Self {
         match class {
             | PragmaClass::Ignored => self.with_warning_option(group, WarningOption::Enable(false)),
             | PragmaClass::Warning => self
                 .with_warning_option(group, WarningOption::Enable(true))
                 .with_warning_option(group, WarningOption::Error(false)),
-            | PragmaClass::Error => self.with_warning_option(group, WarningOption::Error(true)),
+            | PragmaClass::Error => {
+                let mut configuration = self.with_warning_option(group, WarningOption::Error(true));
+                configuration.warning_options[group as usize].0 &= !WarningSettings::REENABLED;
+                configuration
+            },
         }
     }
 

@@ -247,6 +247,127 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         self.context.pragma_diagnostic_class(name, class, fatal);
     }
 
+    /// `#pragma warning(...)`, read up to `warning`, as `cl` and clang-cl read
+    /// it: `push` with an optional level, `pop`, or specifiers each with a
+    /// list of warning numbers, `;` between them. Consumes the line.
+    ///
+    /// clang-cl's `push` and `pop` are its diagnostic pragmas' and it applies
+    /// no number, since its warnings have none. `cl` applies the numbers bcc
+    /// gives a warning (`Context::pragma_warning_number`) and says nothing
+    /// about a line it cannot read, whose warnings bcc does not model.
+    /// Microsoft Learn: "warning pragma".
+    /// C99: implementation-defined pragma behavior, §6.10.6 paragraph 1,
+    /// p. 159; PDF p. 171.
+    pub(super) fn pragma_warning(&mut self) {
+        let (tokens, end) = self.pragma_line_tokens();
+        let problem = self.read_pragma_warning(tokens);
+        if let Err((message, at)) = problem {
+            let at = at.map_or(end, |token: PreprocessorToken| token.source_vectors);
+            if self.context.configuration.compiler_identity() != CompilerIdentity::Msvc {
+                self.pragma_diagnostic_problem(Problem::ClangWarning(message), at);
+            }
+        }
+    }
+
+    /// Reads and applies the operands of `#pragma warning`; the error is what
+    /// was expected, and the token found instead, if any.
+    fn read_pragma_warning(
+        &mut self,
+        tokens: &[PreprocessorToken],
+    ) -> Result<(), (&'static str, Option<PreprocessorToken>)> {
+        const KINDS: &str = "#pragma warning expected `push`, `pop`, `default`, `disable`, \
+                             `error`, `once`, `suppress`, 1, 2, 3, or 4";
+        let cl = self.context.configuration.compiler_identity() == CompilerIdentity::Msvc;
+        let mut rest = tokens.iter().copied();
+        let open = rest.next();
+        if !open.is_some_and(|token| token.kind == PreprocessorTokenType::OpeningParenthesis) {
+            return Err(("#pragma warning expected `(`", open));
+        }
+        let mut token = rest.next();
+        let name = token
+            .filter(|token| token.kind.is_identifier())
+            .map(|token| self.context.string_cache.at(token.contents));
+        match name {
+            | Some("push") => {
+                self.context.pragma_diagnostic_push();
+                token = rest.next();
+                if token.is_some_and(|token| token.kind == PreprocessorTokenType::Comma) {
+                    let level = rest.next();
+                    let number = level
+                        .filter(|level| level.kind == PreprocessorTokenType::Number)
+                        .map(|level| self.pragma_spelling(level));
+                    token = if number.is_some() { rest.next() } else { level };
+                    if !matches!(number, Some("0" | "1" | "2" | "3" | "4")) {
+                        return Err((
+                            "#pragma warning(push, level) requires a level between 0 and 4",
+                            token,
+                        ));
+                    }
+                }
+            },
+            | Some("pop") => {
+                if !self.context.pragma_diagnostic_pop() {
+                    let at = match rest.clone().next() {
+                        | Some(token) => token.source_vectors,
+                        | None => self.current_location(),
+                    };
+                    self.pragma_diagnostic_problem(Problem::ClangCouldNotPop, at);
+                }
+                token = rest.next();
+            },
+            | _ => loop {
+                let number = token.filter(|token| token.kind == PreprocessorTokenType::Number);
+                let specifier = name_or_level(token.map(|token| {
+                    if token.kind.is_identifier() || number.is_some() {
+                        self.context.string_cache.at(token.contents)
+                    } else {
+                        ""
+                    }
+                }));
+                let Some(specifier) = specifier else {
+                    return Err((KINDS, token));
+                };
+                let colon = rest.next();
+                if !colon.is_some_and(|token| token.kind == PreprocessorTokenType::Colon) {
+                    return Err(("#pragma warning expected `:`", colon));
+                }
+                token = rest.next();
+                while let Some(number) =
+                    token.filter(|token| token.kind == PreprocessorTokenType::Number)
+                {
+                    if cl && let Ok(code) = self.pragma_spelling(number).parse() {
+                        self.context.pragma_warning_number(code, specifier);
+                    }
+                    token = rest.next();
+                }
+                if !token.is_some_and(|token| token.kind == PreprocessorTokenType::SemiColon) {
+                    break;
+                }
+                token = rest.next();
+            },
+        }
+        if !token.is_some_and(|token| token.kind == PreprocessorTokenType::ClosingParenthesis) {
+            return Err(("#pragma warning expected `)`", token));
+        }
+        if let Some(extra) = rest.next() {
+            self.pragma_warning_extra_tokens(extra);
+        }
+        Ok(())
+    }
+
+    fn pragma_warning_extra_tokens(&mut self, extra: PreprocessorToken) {
+        if self.context.configuration.compiler_identity() != CompilerIdentity::Msvc {
+            self.pragma_diagnostic_problem(Problem::ClangWarningExtraTokens, extra.source_vectors);
+        }
+    }
+
+    fn pragma_spelling(&self, token: PreprocessorToken) -> &str {
+        self.context
+            .string_cache
+            .at(token.contents)
+            .trim_end_matches('\0')
+    }
+
     /// The ordinary string literals that begin `tokens`, and what follows.
     fn pragma_option_literals<'a>(
         &self,
@@ -277,4 +398,32 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
 /// Whether `name` is bcc's own warning option, which neither compiler lists.
 fn is_bcc_warning(name: &str) -> bool {
     name == "constant-promotion"
+}
+
+/// What a specifier of `#pragma warning` does to a warning it lists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WarningSpecifier {
+    /// `disable`.
+    Disable,
+    /// `error`.
+    Error,
+    /// `default`: back to the command line's setting.
+    Default,
+    /// A level, or `once`: reports it, as a warning. bcc does not model
+    /// warning levels or `once`'s single report.
+    Enable,
+    /// `suppress`, which `cl` applies to the next line only. bcc does not
+    /// model that, so it changes nothing.
+    Suppress,
+}
+
+fn name_or_level(name: Option<&str>) -> Option<WarningSpecifier> {
+    match name?.trim_end_matches('\0') {
+        | "disable" => Some(WarningSpecifier::Disable),
+        | "error" => Some(WarningSpecifier::Error),
+        | "default" => Some(WarningSpecifier::Default),
+        | "once" | "1" | "2" | "3" | "4" => Some(WarningSpecifier::Enable),
+        | "suppress" => Some(WarningSpecifier::Suppress),
+        | _ => None,
+    }
 }

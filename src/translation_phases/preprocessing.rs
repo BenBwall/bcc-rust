@@ -64,6 +64,7 @@ mod errors;
 
 use std::ops::ControlFlow;
 
+pub(crate) use directives::WarningSpecifier;
 pub(crate) use errors::{
     PreprocessorError,
     PreprocessorErrorType,

@@ -6,6 +6,8 @@
 
 mod diagnostic;
 
+pub(crate) use diagnostic::WarningSpecifier;
+
 use std::fmt::Write as _;
 
 use super::super::{
@@ -210,6 +212,20 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 self.skip_until_newline();
                                 (self.last_was_newline, self.current_is_newline) = line_state;
                             }
+                            consumed_newline = true;
+                            break 'base;
+                        },
+                        | "warning"
+                            if self.context.configuration.compiler_identity().rules()
+                                == RuleSet::Clang
+                                && self
+                                    .context
+                                    .configuration
+                                    .accepts(crate::configuration::Feature::MsPragma)
+                                || self.context.configuration.compiler_identity()
+                                    == CompilerIdentity::Msvc =>
+                        {
+                            self.pragma_warning();
                             consumed_newline = true;
                             break 'base;
                         },

@@ -1,0 +1,19 @@
+pragma-diagnostic-call-gcc.c:4:24: warning: call to 'careful' declared with 'warning' attribute: careful [-Wattribute-warning]
+  |
+3 | __attribute__((warning("careful"))) void careful(void);
+  |                ------- previous declaration is here
+4 | void call_loud(void) { careful(); }
+  |                        ^^^^^^^^^ function attribute diagnostic
+  |
+  = note: GNU error/warning and Clang diagnose_if/unavailable attach a diagnostic to calls
+
+pragma-diagnostic-call-gcc.c:8:28: error: call to 'careful' declared with 'warning' attribute: careful [-Wattribute-warning]
+  |
+3 | __attribute__((warning("careful"))) void careful(void);
+  |                ------- previous declaration is here
+...
+8 | void call_promoted(void) { careful(); }
+  |                            ^^^^^^^^^ function attribute diagnostic
+  |
+  = note: GNU error/warning and Clang diagnose_if/unavailable attach a diagnostic to calls
+

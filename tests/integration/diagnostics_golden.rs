@@ -130,7 +130,11 @@ mod tests {
             // format or in GCC's and Clang's `file:line:col: error:`.
             let errors = stderr
                 .lines()
-                .any(|line| line.starts_with("error") || line.contains(": error: "));
+                .any(|line| {
+                    line.starts_with("error")
+                        || line.contains(": error: ")
+                        || line.contains(": fatal error: ")
+                });
             if output.status.code() != Some(i32::from(errors)) {
                 failures.push(format!(
                     "{}: exit status {:?} with errors: {errors}: {stderr}",

@@ -49,6 +49,8 @@ mod definitions;
 mod error;
 mod pragma;
 
+pub(crate) use pragma::WarningSpecifier;
+
 use super::{
     Expander,
     LiteralUnit,

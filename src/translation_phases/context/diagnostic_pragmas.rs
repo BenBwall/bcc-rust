@@ -33,7 +33,10 @@ use crate::{
         GetSeverity,
         TranslationError,
         errors::ClassifiedError,
-        preprocessing::PreprocessorError,
+        preprocessing::{
+            PreprocessorError,
+            WarningSpecifier,
+        },
         provenance::{
             SourceArena,
             SourceVectors,
@@ -197,6 +200,37 @@ impl<'tu> Context<'tu> {
         if name == "pedantic" {
             state.pedantic_warning = class == PragmaClass::Warning;
         }
+        self.record_pragma_state(state);
+    }
+
+    /// One number of `#pragma warning(<specifier>: <number>)` under the `cl`
+    /// identity, for the warnings bcc gives `cl`'s code. Microsoft Learn:
+    /// "warning pragma", "Compiler Warning (level 3) C4013", "Compiler
+    /// Warning (level 1) C4047", "Compiler Warning (level 1 and level 3)
+    /// C4133", "Compiler Warning (level 1) C4311", "Compiler Warning (level
+    /// 1) C4312".
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn pragma_warning_number(&mut self, number: u32, specifier: WarningSpecifier) {
+        let group = match number {
+            | 4013 => DiagnosticGroup::ImplicitFunctionDeclaration,
+            | 4047 => DiagnosticGroup::IntConversion,
+            | 4133 => DiagnosticGroup::IncompatiblePointerTypes,
+            | 4311 => DiagnosticGroup::PointerToIntCast,
+            | 4312 => DiagnosticGroup::IntToPointerCast,
+            | _ => return,
+        };
+        let class = match specifier {
+            | WarningSpecifier::Disable => PragmaClass::Ignored,
+            | WarningSpecifier::Error => PragmaClass::Error,
+            | WarningSpecifier::Enable => PragmaClass::Warning,
+            | WarningSpecifier::Default if self.configuration.diagnostic_severity(group).is_some() =>
+                PragmaClass::Warning,
+            | WarningSpecifier::Default => PragmaClass::Ignored,
+            | WarningSpecifier::Suppress => return,
+        };
+        let mut state = self.current_pragma_state();
+        state.configuration = state.configuration.with_pragma_group(group, class);
         self.record_pragma_state(state);
     }
 

@@ -1,0 +1,10 @@
+pragma-warning-clang-cl.c(6,23): warning: implicit declaration of function: `g1` [-Wimplicit-function-declaration]
+        C99 §6.5.1p2: an identifier is a primary expression only if it is declared; C89 §3.3.2.2 declared an undeclared called identifier as `extern int f();`
+pragma-warning-clang-cl.c(9,16): warning: #pragma warning expected `(` [-Wunknown-pragmas]
+pragma-warning-clang-cl.c(10,17): warning: #pragma warning expected `push`, `pop`, `default`, `disable`, `error`, `once`, `suppress`, 1, 2, 3, or 4 [-Wunknown-pragmas]
+pragma-warning-clang-cl.c(11,25): warning: #pragma warning expected `:` [-Wunknown-pragmas]
+pragma-warning-clang-cl.c(12,24): warning: #pragma warning(push, level) requires a level between 0 and 4 [-Wunknown-pragmas]
+pragma-warning-clang-cl.c(13,22): warning: extra tokens at end of #pragma warning directive [-Wextra-tokens]
+pragma-warning-clang-cl.c(14,20): warning: pragma diagnostic pop could not pop, no matching push [-Wunknown-pragmas]
+pragma-warning-clang-cl.c(8,23): error: implicit declaration of function: `g2` [-Wimplicit-function-declaration]
+        C99 §6.5.1p2: an identifier is a primary expression only if it is declared; C89 §3.3.2.2 declared an undeclared called identifier as `extern int f();`

@@ -1808,6 +1808,10 @@ pub(crate) enum PragmaDiagnosticProblem<'tu> {
     ClangInvalidOption,
     /// Clang: the string names no warning group.
     ClangUnknownGroup(&'tu str),
+    /// Clang: `#pragma warning` that does not read as it says here.
+    ClangWarning(&'static str),
+    /// Clang: tokens after `#pragma warning(...)`.
+    ClangWarningExtraTokens,
     /// Clang: an error, no warning: no string literal follows the kind.
     ExpectedString,
 }
@@ -1828,8 +1832,10 @@ impl PragmaDiagnosticProblem<'_> {
             | Self::ClangInvalidKind
             | Self::ClangUnexpectedToken
             | Self::ClangCouldNotPop
-            | Self::ClangInvalidOption => Some(G::UnknownStdcPragma),
+            | Self::ClangInvalidOption
+            | Self::ClangWarning(_) => Some(G::UnknownStdcPragma),
             | Self::ClangUnknownGroup(_) => Some(G::UnknownWarningOption),
+            | Self::ClangWarningExtraTokens => Some(G::ExtraTokens),
             | Self::ExpectedString => None,
         }
     }
@@ -1866,6 +1872,10 @@ impl PragmaDiagnosticProblem<'_> {
                 arena,
                 "unknown warning group `{option}`, ignored [-Wunknown-warning-option]"
             ),
+            | Self::ClangWarning(expected) =>
+                format_in!(arena, "{expected} [-Wunknown-pragmas]"),
+            | Self::ClangWarningExtraTokens =>
+                "extra tokens at end of #pragma warning directive [-Wextra-tokens]",
             | Self::ExpectedString => "expected string literal in pragma diagnostic",
         }
     }
@@ -1878,7 +1888,8 @@ impl PragmaDiagnosticProblem<'_> {
             | Self::GccUnknownOption | Self::ClangUnknownGroup(_) => "no such warning option",
             | Self::GccNotWarningOption(_) | Self::ClangInvalidOption => "no warning option",
             | Self::GccMissingAttribute => "expected an attribute name",
-            | Self::ClangUnexpectedToken => "unexpected token",
+            | Self::ClangUnexpectedToken | Self::ClangWarning(_) | Self::ClangWarningExtraTokens =>
+                "unexpected token",
             | Self::ClangCouldNotPop => "no matching `push`",
         }
     }
