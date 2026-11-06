@@ -2197,6 +2197,31 @@ to the `int` 1, as GCC and Clang do (a value the conversion changes gets
 `-Wconstant-conversion`, which bcc reports only there so far); they run on every back end with LLVM's buffer layout (see
 [middle-end.md](middle-end.md#gccs-builtin-setjmp-and-longjmp-2026-10-27)).
 
+GCC's `__builtin_clear_padding (T *)`
+([Other Builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html))
+zeroes the bits of an object that hold no part of its value, on every back end,
+in a loop for a large array. Measured against GCC 14.2 and Clang 23.1 with
+[`builtin_clear_padding.c`](tests/fixtures/programs/builtin_clear_padding.c),
+the value bits are those of the members, the 10 bytes of an x87 `long double` in
+16 and the low `N` bits of a `_BitInt(N)`; every bit of a `_Bool` is value.
+Each identity follows its compiler where they differ:
+
+| | GCC | Clang |
+| --- | --- | --- |
+| Array or function designator operand | decays | refused |
+| Pointer to a function | accepted, clears nothing | refused |
+| Pointer to `const` array elements | accepted | refused |
+| Pointer to `_Atomic` | refused | accepted |
+| Pointer to a variable length array | clears each element | accepted, clears nothing |
+| Bit-field directly in a union | whole bytes it reaches are value | its bits are value |
+| `nullptr_t` member | padding | value |
+
+Clang 23.1 also leaves an array of constant length alone where its type was
+spelled with a typedef, `typeof` or parentheses, so `struct S (*p)[3]` is not
+cleared and `&a` of `struct S a[3]` is. bcc's types do not keep that spelling,
+and it clears them all. A union over 1 MiB that no member covers with value bits,
+and a type that takes over 2^20 runs to describe, are refused by name.
+
 GCC contracts: [common attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html),
 [union casts](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html),
 [designated initializers](https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html),
@@ -3465,7 +3490,7 @@ of a constant fold, as GCC folds them and Clang does not.
 Still refused, now by name ("not yet supported by lowering:
 `__builtin_apply_args`"): `__builtin_apply`, `__builtin_apply_args`,
 `__builtin_return`, `__builtin_call_with_static_chain`,
-`__builtin_clear_padding`, `__builtin_powi{,f,l}`,
+`__builtin_powi{,f,l}`,
 `__builtin_speculation_safe_value` and `__builtin_stack_{save,restore}`;
 any other unregistered `__builtin_` name is "a builtin this compiler does
 not know". `__auto_type` and C23 `auto` inference are implemented since

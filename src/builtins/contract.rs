@@ -173,6 +173,9 @@ pub(crate) enum TypeRule {
     /// A type-generic bit operation on one integer operand, whose type
     /// selects the width and, for some, the result type.
     GenericBit,
+    /// GCC's `__builtin_clear_padding`: one pointer operand, whose pointee
+    /// type selects the bits cleared.
+    ClearPadding,
 }
 
 /// Clang's operand-overloaded vector builtins; the operand types select the
@@ -394,6 +397,11 @@ pub(crate) enum BuiltinOperation {
     /// the buffer, whose second argument is the constant 1. Does not
     /// return. GNU extension: GCC manual, "Nonlocal Gotos".
     Longjmp,
+    /// GNU `__builtin_clear_padding`: zeroes the bits of the pointed-to object
+    /// that hold no part of its value, and leaves the others alone. GNU
+    /// extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    ClearPadding,
     /// GNU `__builtin_va_arg_pack` (`false`) and `__builtin_va_arg_pack_len`
     /// (`true`): the anonymous arguments of the enclosing variadic function,
     /// or their number, at a call that inlines it. Lowering substitutes them

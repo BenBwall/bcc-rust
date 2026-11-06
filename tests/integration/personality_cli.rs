@@ -1778,6 +1778,172 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
     }
 
+    /// Each identity refuses an operand of `__builtin_clear_padding` as its
+    /// compiler does, in its words (GCC 14.2 and Clang 23.1 print these) and
+    /// at its position, and accepts what its compiler accepts.
+    #[test]
+    fn clear_padding_operands_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "c.c",
+            "struct Inc; struct S { char a; int b; }; struct F { int a; char f[]; };\nstruct G { \
+             struct F a; }; typedef void fn(void); void g(void);\nvoid f(int x, void *v, struct \
+             Inc *inc, const struct S *cs,\n\x20      _Atomic struct S *as, struct S *s, struct F \
+             *flex, struct G *nested,\n\x20      int (*open)[], const char (*row)[2], fn \
+             *function, char *c) {\n\x20   __builtin_clear_padding(x);\n\x20   \
+             __builtin_clear_padding(*s);\n\x20   __builtin_clear_padding(v);\n\x20   \
+             __builtin_clear_padding(inc);\n\x20   __builtin_clear_padding(open);\n\x20   \
+             __builtin_clear_padding(cs);\n\x20   __builtin_clear_padding(as);\n\x20   \
+             __builtin_clear_padding(flex);\n\x20   __builtin_clear_padding(nested);\n\x20   \
+             __builtin_clear_padding(row);\n\x20   __builtin_clear_padding(function);\n\x20   \
+             __builtin_clear_padding(s, s);\n\x20   __builtin_clear_padding();\n\x20   \
+             __builtin_clear_padding(g());\n}\n",
+        );
+        let lines = |mode: &str| {
+            let output = directory.bcc(mode, &["-fsyntax-only", "-w", "c.c"]);
+            assert_eq!(output.status.code(), Some(1));
+            stderr(&output)
+                .lines()
+                .filter(|line| line.contains("error:"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let call = "argument 1 in call to function '__builtin_clear_padding'";
+        let flexible = "flexible array member 'f' does not have well defined padding bits for \
+                        '__builtin_clear_padding'";
+        let gcc = lines("--gcc-mode");
+        assert_eq!(
+            gcc,
+            [
+                format!("c.c:6:29: error: {call} does not have pointer type"),
+                format!("c.c:7:29: error: {call} does not have pointer type"),
+                format!("c.c:8:29: error: {call} points to incomplete type"),
+                format!("c.c:9:29: error: {call} points to incomplete type"),
+                format!("c.c:10:29: error: {call} points to incomplete type"),
+                format!(
+                    "c.c:11:29: error: {call} has pointer to 'const' type ('const struct S *')"
+                ),
+                format!(
+                    "c.c:12:29: error: {call} has pointer to '_Atomic' type ('_Atomic struct S *')"
+                ),
+                format!("c.c:13:5: error: {flexible}"),
+                format!("c.c:14:5: error: {flexible}"),
+                "c.c:17:5: error: too many arguments to function '__builtin_clear_padding'"
+                    .to_owned(),
+                "c.c:18:5: error: too few arguments to function '__builtin_clear_padding'"
+                    .to_owned(),
+                "c.c:19:29: error: invalid use of void expression".to_owned(),
+            ],
+            "{gcc:#?}"
+        );
+        let clang = lines("--clang-mode");
+        let passing = |ty: &str| {
+            format!(
+                "passing '{ty}' to parameter of incompatible type pointer: type mismatch at 1st \
+                 parameter ('{ty}' vs pointer)"
+            )
+        };
+        assert_eq!(
+            clang,
+            [
+                format!("c.c:6:29: error: {}", passing("int")),
+                format!("c.c:7:29: error: {}", passing("struct S")),
+                "c.c:8:29: error: variable has incomplete type 'void'".to_owned(),
+                "c.c:9:29: error: variable has incomplete type 'struct Inc'".to_owned(),
+                "c.c:10:29: error: variable has incomplete type 'int[]'".to_owned(),
+                "c.c:11:29: error: read-only variable is not assignable".to_owned(),
+                "c.c:13:29: error: 'struct F' has flexible array member, which is unsupported by \
+                 __builtin_clear_padding"
+                    .to_owned(),
+                "c.c:14:29: error: 'struct G' has flexible array member, which is unsupported by \
+                 __builtin_clear_padding"
+                    .to_owned(),
+                "c.c:15:29: error: read-only variable is not assignable".to_owned(),
+                "c.c:16:29: error: argument to __builtin_clear_padding must be a pointer to a \
+                 trivially-copyable type ('void (*)(void)' invalid)"
+                    .to_owned(),
+                "c.c:17:32: error: too many arguments to function call, expected 1, have 2"
+                    .to_owned(),
+                "c.c:18:5: error: too few arguments to function call, expected 1, have 0"
+                    .to_owned(),
+                format!("c.c:19:29: error: {}", passing("void")),
+            ],
+            "{clang:#?}"
+        );
+        // bcc's own format has Clang's words.
+        let output = directory.bcc("", &["-fsyntax-only", "-w", "c.c"]);
+        assert!(
+            stderr(&output).contains("error: variable has incomplete type 'struct Inc'"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    /// A member of type `nullptr_t` is padding to GCC and value to Clang, and
+    /// GCC keeps the bytes a bit-field of a union reaches; each identity
+    /// leaves what its compiler left in GCC 14.2 and Clang 23.1. GCC does not
+    /// look into a `nullptr_t` object itself.
+    #[test]
+    fn clear_padding_masks_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "m.c",
+            "int printf(const char *, ...);\n#define SHOW(x) do { __builtin_memset(&x, 0xff, \
+             sizeof x); \\\n\x20   __builtin_clear_padding(&x); \\\n\x20   for (unsigned long i = \
+             0; i < sizeof x; i++) \\\n\x20       printf(\"%02x\", ((unsigned char *)&x)[i]); \
+             \\\n\x20   printf(\"\\n\"); } while (0)\nint main(void) {\n\x20   union { int a : \
+             13; } u;\n\x20   struct { char c; typeof(nullptr) n; } s;\n\x20   union { \
+             typeof(nullptr) n; char c; } v;\n\x20   typeof(nullptr) a[2];\n\x20   \
+             typeof(nullptr) n;\n\x20   SHOW(u); SHOW(s); SHOW(v); SHOW(a); SHOW(n);\n\x20   \
+             return 0;\n}\n",
+        );
+        let ones = "ffffffffffffffff";
+        for (mode, expected) in [
+            (
+                "--gcc-mode",
+                format!(
+                    "ffff0000\nff00000000000000{zeros}\nff00000000000000\n{ones}{ones}\n{ones}\n",
+                    zeros = "0000000000000000"
+                ),
+            ),
+            (
+                "--clang-mode",
+                format!("ff1f0000\nff00000000000000{ones}\n{ones}\n{ones}{ones}\n{ones}\n"),
+            ),
+        ] {
+            let output = directory.bcc(mode, &["-std=gnu2x", "-w", "m.c", "-o", "m"]);
+            succeeds(&output);
+            let run = Command::new(directory.path("m")).output().unwrap();
+            assert_eq!(stdout(&run), expected, "{mode}");
+        }
+    }
+
+    /// GCC refuses a record of variable size, with its "sorry".
+    #[test]
+    fn clear_padding_of_a_record_of_variable_size_is_refused_under_gcc() {
+        let directory = Directory::new();
+        directory.write(
+            "v.c",
+            "void f(int n) {\n\x20   struct { char a; int b[n]; } v;\n\x20   \
+             __builtin_clear_padding(&v);\n}\n",
+        );
+        // On Linux: MinGW's Microsoft record layout, the Windows default,
+        // refuses such a record on its own terms when it lowers.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["--target=x86_64-linux-gnu", "-fsyntax-only", "v.c"],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains(
+                "v.c:3:5: error: sorry, unimplemented: __builtin_clear_padding not supported for \
+                 variable length aggregates"
+            ),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// `-save-temps` keeps the intermediate files, named as each compiler
     /// names them, and prints a warning once.
     #[test]

@@ -84,6 +84,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return Some(self.classify_type(e, &arguments)),
             | crate::builtins::TypeRule::Math128(rule) =>
                 return Some(self.math128_builtin(e, rule, &arguments)),
+            | crate::builtins::TypeRule::ClearPadding =>
+                return Some(self.clear_padding_builtin(e, arguments.as_slice())),
             | crate::builtins::TypeRule::GenericBit => {
                 let CommonBuiltin::GenericBit(operation) = builtin else {
                     return None;
@@ -464,6 +466,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | CommonBuiltin::Atomic(_)
+            | CommonBuiltin::ClearPadding
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::GenericBit(_)
             | CommonBuiltin::Carry(..)
