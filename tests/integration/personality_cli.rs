@@ -2021,6 +2021,30 @@ mod tests {
         );
     }
 
+    /// With a type present, a typedef name before an attribute or `asm` label
+    /// is the declarator, and without one it stays the type.
+    #[test]
+    fn typedef_names_before_attributes_follow_the_declaration() {
+        let directory = Directory::new();
+        directory.write(
+            "t.c",
+            "typedef int U;\ntypedef int U __attribute__((unused));\ntypedef int V;\nconst V \
+             __attribute__((unused)) c = 1;\nV __attribute__((unused)) d = 2;\nint main(void) \
+             {\n    int U __attribute__((unused)) = 3;\n    long V __asm__(\"inner\");\n    \
+             (void)V;\n    return U - c - d;\n}\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-O1", "-c", "t.c", "-o", "t.o"]);
+            succeeds(&output);
+        }
+        // The type stays one when another declarator follows the attribute.
+        directory.write("e.c", "typedef int T;\nint T __attribute__((unused)) x;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-c", "e.c", "-o", "e.o"]);
+            assert!(!output.status.success(), "{mode}");
+        }
+    }
+
     /// `-save-temps` keeps the intermediate files, named as each compiler
     /// names them, and prints a warning once.
     #[test]

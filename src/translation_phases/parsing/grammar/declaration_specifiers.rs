@@ -688,7 +688,8 @@ impl<'tu> SpecifierList<'tu> {
             && parser.scopes.is_typedef(token.contents)
             && (self.mode == SpecifierMode::TypeName
                 || self.specifiers.type_specifiers == TypeSpecifiers::Empty
-                || parser.typedef_name_continues_specifiers())
+                || (parser.typedef_name_continues_specifiers()
+                    && !parser.declarator_suffix_follows()))
         {
             // A visible typedef spelling is still allowed to become the
             // declarator name. Consume it as a specifier only when no type
