@@ -82,6 +82,7 @@ mod builtins;
 mod cleanup;
 mod complex;
 mod expressions;
+mod general_regs;
 mod gnu;
 mod half;
 mod initializers;
@@ -266,6 +267,10 @@ fn lower_unit<'tu, 'ir>(
         .set_signaling_nans(context.configuration.signaling_nans());
     unit.module
         .set_fast_math(context.configuration.fast_math_flags());
+    unit.module
+        .set_general_regs_only(context.configuration.general_regs_only());
+    unit.module
+        .set_user_interrupts(context.configuration.user_interrupts());
     let plain_inline = options.plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
     let functions = nested::definition_order(&unit, &functions, arena);
@@ -308,6 +313,13 @@ fn lower_unit<'tu, 'ir>(
         options,
         &mut errors,
         &mut function_sources,
+    );
+    general_regs::check(
+        &unit.module,
+        target,
+        &function_sources,
+        scratch,
+        &mut errors,
     );
     let result = if errors.is_empty() {
         let call_diagnostics = arena.alloc_slice_copy(&unit.call_diagnostics);

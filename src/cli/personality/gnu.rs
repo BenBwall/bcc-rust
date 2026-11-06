@@ -174,7 +174,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         state.clang_warning(group, format_args!("{message}"));
     }
     let target = state.target.unwrap_or_else(|| host_target(personality));
-    let mmx = state.machine_options(target);
+    let machine = state.machine_options(target, personality);
     state.check_inputs();
     let jobs = state.jobs();
     // Clang's compiler validates the last `-std=` for each C source, so a
@@ -226,8 +226,28 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     common.push(format!("--driver-name={}", invocation.name).into());
     // Before the command line's `-D` and `-U`, as the compilers' own
     // macros come before them.
-    if !mmx {
+    if !machine.mmx {
         common.push("-U__MMX__".into());
+    }
+    if machine.general_regs_only {
+        // What GCC stops defining and starts defining without the baseline's
+        // MMX, SSE and x87 instructions.
+        for name in [
+            "__MMX__",
+            "__MMX_WITH_SSE__",
+            "__SSE__",
+            "__SSE2__",
+            "__SSE_MATH__",
+            "__SSE2_MATH__",
+        ] {
+            common.push(format!("-U{name}").into());
+        }
+        common.push("-D_SOFT_FLOAT=1".into());
+        common.push("--general-regs-only".into());
+    }
+    if machine.user_interrupts {
+        common.push("-D__UINTR__=1".into());
+        common.push("--user-interrupts".into());
     }
     // GCC applies a final `-Ofast`'s `-ffast-math` before every other
     // option, so any floating-point option overrides it; Clang applies it
@@ -422,6 +442,13 @@ struct Input {
     /// Whether no job takes it: Clang refused it as missing, or left it
     /// unused.
     dropped: bool,
+}
+
+/// What the deferred `-m` options ask of the compilation.
+struct MachineOptions {
+    mmx:               bool,
+    general_regs_only: bool,
+    user_interrupts:   bool,
 }
 
 /// The translation so far.
@@ -1439,21 +1466,33 @@ impl State<'_> {
 
     /// Applies [`treatment`] to the deferred `-m` options for `target`.
     /// `-mwindows` on MinGW-w64 links a GUI program, as GCC's driver does.
-    /// Returns whether `__MMX__` stays defined: the last of `-mmmx` and
-    /// `-mno-mmx` decides, as in both compilers.
-    fn machine_options(&mut self, target: Target) -> bool {
-        let mut mmx = true;
+    /// Returns what they ask of the compilation: the last of `-mmmx` and
+    /// `-mno-mmx` decides whether `__MMX__` stays defined, and the last of
+    /// `-muintr` and `-mno-uintr` whether the processor has user interrupts,
+    /// as in both compilers. GCC's `-mgeneral-regs-only` holds on System V
+    /// targets, where handlers need it; other uses stay refused.
+    fn machine_options(&mut self, target: Target, personality: Personality) -> MachineOptions {
+        let linux = matches!(target, Target::LinuxGnu | Target::LinuxMusl);
+        let mut machine = MachineOptions {
+            mmx:               true,
+            general_regs_only: false,
+            user_interrupts:   false,
+        };
         for option in std::mem::take(&mut self.machine) {
             if option == "-mwindows" && target == Target::WindowsGnu {
                 self.out.push("-Wl,--subsystem,windows".into());
+            } else if option == "-mgeneral-regs-only" && linux && personality == Personality::Gcc {
+                machine.general_regs_only = true;
+            } else if linux && let "-muintr" | "-mno-uintr" = option.as_str() {
+                machine.user_interrupts = option == "-muintr";
             } else {
                 if let "-mmmx" | "-mno-mmx" = option.as_str() {
-                    mmx = option == "-mmmx";
+                    machine.mmx = option == "-mmmx";
                 }
                 self.treat(&option, target);
             }
         }
-        mmx
+        machine
     }
 
     /// Ignores, warns about or refuses a known option bcc does not

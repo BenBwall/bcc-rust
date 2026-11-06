@@ -66,8 +66,11 @@ pub(crate) use errors::{
     AbiError,
     AbiErrorKind,
 };
-pub(crate) use plan::Convention;
-use plan::plan_signature;
+pub(crate) use plan::{
+    Convention,
+    ResultPlan,
+    plan_signature,
+};
 
 use crate::{
     ir::{

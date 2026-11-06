@@ -240,4 +240,21 @@ fn entry_errors_are_reported() {
         | Err(Trap::BadEntry(EntryError::NotDefined)) => {},
         | other => panic!("{other:?}"),
     }
+    let main =
+        "function @main() -> i32 external {\nblock0:\n    v0 = iconst.i32 0\n    return v0\n}\n";
+    let handler =
+        format!("{main}function @h(ptr) external interrupt {{\nblock0(v0: ptr):\n    return\n}}\n");
+    match run_text(&handler, "main").result {
+        | Err(Trap::BadEntry(EntryError::InterruptHandler)) => {},
+        | other => panic!("{other:?}"),
+    }
+    let naked = format!("{main}function @n() external naked {{\nblock0:\n    return\n}}\n");
+    match run_text(&naked, "main").result {
+        | Err(Trap::BadEntry(EntryError::NakedFunction)) => {},
+        | other => panic!("{other:?}"),
+    }
+    // Which registers a function saves does not show here.
+    let saving =
+        format!("{main}function @s() external preserve_registers {{\nblock0:\n    return\n}}\n");
+    _ = run_text(&saving, "main").result.unwrap();
 }

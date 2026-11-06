@@ -23,6 +23,7 @@ use crate::{
     ir::{
         Align,
         DllStorage as IrDllStorage,
+        EntryConvention,
         InitFunction,
         InitKind,
         InlineControl,
@@ -38,6 +39,7 @@ use crate::{
         InlineOdr,
         Inlining,
         Linkage,
+        MachineEntry,
         TypeId,
         TypeKind,
         UnsupportedAttribute,
@@ -253,6 +255,20 @@ impl Unit<'_, '_, '_> {
                 | Inlining::Never => InlineControl::Never,
                 | Inlining::Always => InlineControl::Always,
             };
+            function.entry = match attributes.machine_entry() {
+                | MachineEntry::C => EntryConvention::C,
+                | MachineEntry::Interrupt => EntryConvention::Interrupt,
+                | MachineEntry::NoCallerSaved => EntryConvention::PreserveRegisters,
+                | MachineEntry::Naked => EntryConvention::Naked,
+            };
+            // Nothing can run a handler's or a naked function's body in
+            // another function's frame.
+            if matches!(
+                function.entry,
+                EntryConvention::Interrupt | EntryConvention::Naked
+            ) {
+                function.inlining = InlineControl::Never;
+            }
         }
     }
 

@@ -1032,4 +1032,61 @@ mod tests {
             }
         }
     }
+
+    /// C99 §6.5.13p4, §6.5.14p4 and §6.5.15p4 leave these operands unevaluated,
+    /// and GCC and Clang raise `-Wundef` only for the operands they evaluate,
+    /// so the common `defined(X) && X < 1` stays quiet.
+    #[test]
+    fn wundef_reaches_only_evaluated_operands_of_an_if_expression() {
+        let source = "\
+#if defined(QUIET_A) && QUIET_A < 1
+#endif
+#if 0 && QUIET_B
+#endif
+#if 1 || QUIET_C
+#endif
+#if 1 ? 2 : QUIET_D
+#endif
+#if 0 ? QUIET_E : 2
+#endif
+#if (0 && (QUIET_F + 1)) || 1
+#endif
+#if 0 && (1 || QUIET_G)
+#endif
+#if 1 || (0 && QUIET_H)
+#endif
+#if 1
+#elif QUIET_I
+#endif
+#if 0
+#if QUIET_J
+#endif
+#endif
+#if LOUD_A
+#endif
+#if 0 || LOUD_B
+#endif
+#if 1 && LOUD_C
+#endif
+#if 1 ? LOUD_D : 0
+#endif
+#if 0 ? 0 : LOUD_E
+#endif
+#if LOUD_F ? 1 : 2
+#endif
+#if LOUD_G && 1
+#endif
+";
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["-Wundef", "--input", source])
+            .env("NO_COLOR", "1")
+            .env_remove("CLICOLOR_FORCE")
+            .output()
+            .unwrap();
+        let text = stderr(&output);
+        assert!(!text.contains("QUIET_"), "{text}");
+        for name in ["A", "B", "C", "D", "E", "F", "G"] {
+            assert!(text.contains(&format!("`LOUD_{name}`")), "{name}: {text}");
+        }
+    }
 }

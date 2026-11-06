@@ -47,6 +47,58 @@ fn noundef_register_return_emits_the_contract_without_freezing_bytes() {
 }
 
 #[test]
+fn handlers_are_x86_intrcc_with_a_byval_frame() {
+    let text = "abi lowered\nfunction @h(ptr, i64) external noinline interrupt {\nblock0(v0: ptr, \
+                v1: i64):\n    return\n}\nfunction @d(ptr) external interrupt\n";
+    let llvm = emit(text, Profile::PostAbi, Target::LinuxGnu);
+    assert!(
+        llvm.contains("define x86_intrcc void @h(ptr byval(i8) %v0, i64 %v1)"),
+        "{llvm}"
+    );
+    assert!(
+        llvm.contains("declare x86_intrcc void @d(ptr byval(i8))"),
+        "{llvm}"
+    );
+    assert!(llvm.contains("\"disable-tail-calls\"=\"true\""), "{llvm}");
+    assert!(llvm.contains("noredzone"), "{llvm}");
+}
+
+#[test]
+fn saving_functions_keep_the_c_convention_with_their_attribute() {
+    let text = "abi lowered\nfunction @f() external preserve_registers {\nblock0:\n    return\n}\n";
+    let llvm = emit(text, Profile::PostAbi, Target::LinuxGnu);
+    assert!(llvm.contains("define void @f()"), "{llvm}");
+    assert!(llvm.contains("\"no_caller_saved_registers\""), "{llvm}");
+}
+
+/// A naked body with values makes room for its frame, keeps reads of the
+/// entry stack pointer right, and traps where it would run off the end.
+#[test]
+fn naked_functions_make_room_for_their_frame() {
+    let text =
+        "abi lowered\nfunction @f() -> ptr external noinline naked {\nblock0:\n    v0 = \
+         stack_save\n    return v0\n}\nfunction @g() external noinline naked {\nblock0:\n    \
+         return\n}\n";
+    let llvm = emit(text, Profile::PostAbi, Target::LinuxGnu);
+    assert!(llvm.contains("naked"), "{llvm}");
+    assert!(llvm.contains("leaq -16(%rsp), %rsp"), "{llvm}");
+    assert!(llvm.contains("getelementptr inbounds i8, ptr"), "{llvm}");
+    assert!(llvm.contains("llvm.trap"), "{llvm}");
+    assert_eq!(llvm.matches("leaq").count(), 1, "{llvm}");
+}
+
+/// Clang 23 itself misplaces a local aligned above 8 bytes in a handler with
+/// an error code at -O0: it is aligned by hand.
+#[test]
+fn exception_handlers_align_their_slots_themselves() {
+    let text = "abi lowered\nfunction @h(ptr, i64) external interrupt {\n    slot0 = stack_slot \
+                4, align 64\nblock0(v0: ptr, v1: i64):\n    v2 = stack_addr slot0\n    v3 = \
+                iconst.i32 1\n    store.i32 v3, v2, align 64\n    return\n}\n";
+    let llvm = emit(text, Profile::PostAbi, Target::LinuxGnu);
+    assert!(llvm.contains("llvm.ptrmask"), "{llvm}");
+}
+
+#[test]
 fn returns_twice_marks_the_declaration_and_each_direct_call() {
     let text = "function @setjmp(ptr) -> i32 external\nfunction @main() -> i32 external {\n    \
                 slot0 = stack_slot 200, align 8\nblock0:\n    v0 = stack_addr slot0\n    v1 = \

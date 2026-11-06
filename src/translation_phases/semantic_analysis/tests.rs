@@ -42,6 +42,7 @@ mod int128;
 mod interchange_floats;
 mod labels_as_values;
 mod library_modes;
+mod machine_entry;
 mod main_function;
 mod math_builtins;
 mod mingw_inline;

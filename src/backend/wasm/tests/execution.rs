@@ -709,3 +709,36 @@ fn compile_module<'ir>(source: &str, arena: &'ir Bump) -> crate::ir::Module<'ir>
     .unwrap()
     .module
 }
+
+/// Handlers and naked bodies need a machine's registers and stack, which
+/// WebAssembly does not expose; textual IR is the only way to reach here.
+#[test]
+fn machine_entries_are_refused_by_name() {
+    for (entry, name) in [
+        ("interrupt", "an interrupt service routine"),
+        ("naked", "a naked function"),
+        (
+            "preserve_registers",
+            "a function with `no_caller_saved_registers`",
+        ),
+    ] {
+        let parameter = if entry == "interrupt" { "ptr" } else { "" };
+        let arguments = if entry == "interrupt" { "v0: ptr" } else { "" };
+        let header = if arguments.is_empty() {
+            "block0:".to_owned()
+        } else {
+            format!("block0({arguments}):")
+        };
+        let text = format!(
+            "abi lowered\nfunction @_start({parameter}) external {entry} {{\n{header}\n    \
+             return\n}}\n"
+        );
+        let arena = Bump::new();
+        let module = crate::ir::parse_module(&arena, &text).unwrap();
+        let error = super::super::compile(&[&module], 1, Target::Wasm32Wasi, &arena)
+            .err()
+            .expect("the module must be refused")
+            .to_string();
+        assert!(error.contains(name), "{error}");
+    }
+}

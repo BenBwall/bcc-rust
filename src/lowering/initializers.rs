@@ -701,7 +701,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             )? {
                 | Local::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
                 | Local::Address(address) => address,
-                | Local::Variable(_) =>
+                | Local::Variable(_) | Local::StackPointer =>
                     return Err(LoweringError::missing(
                         "an aggregate has no address",
                         SourceVectors::empty(),
@@ -737,6 +737,11 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                         self.draft.def_var(var, value);
                         return Ok(());
                     },
+                    | Local::StackPointer =>
+                        return Err(LoweringError::unsupported(
+                            Construct::StackPointerVariableWrite,
+                            source,
+                        )),
                     | Local::Slot(slot) =>
                         (self.inst(InstData::StackAddr { slot }, Type::Ptr), source),
                     | Local::Address(address) => (address, source),
@@ -782,7 +787,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             | Object::Slot(slot) => slot,
             | Object::Local(binding) => match self.local(binding, source)? {
                 | Local::Slot(slot) => slot,
-                | Local::Variable(_) | Local::Address(_) =>
+                | Local::Variable(_) | Local::Address(_) | Local::StackPointer =>
                     return Err(LoweringError::missing(
                         "a character array is not in a stack slot",
                         source,

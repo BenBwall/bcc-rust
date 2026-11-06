@@ -310,6 +310,12 @@ pub(crate) enum EntryError {
     /// The module has file-scope assembly, which may define symbols or
     /// code the interpreter cannot see.
     ModuleAsm,
+    /// The module defines an interrupt handler. GNU extension: GCC manual,
+    /// "x86 Function Attributes".
+    InterruptHandler,
+    /// The module defines a naked function. GNU extension: GCC manual,
+    /// "x86 Function Attributes".
+    NakedFunction,
 }
 
 impl fmt::Display for EntryError {
@@ -322,6 +328,12 @@ impl fmt::Display for EntryError {
             | Self::ModuleAsm =>
                 "the module has file-scope assembly, which the interpreter cannot run; compile it \
                  with -o instead",
+            | Self::InterruptHandler =>
+                "the module defines an interrupt service routine, which only the processor can \
+                 enter; compile it with -o instead",
+            | Self::NakedFunction =>
+                "the module defines a naked function, whose body assumes the machine's registers \
+                 and stack; compile it with -o instead",
         })
     }
 }

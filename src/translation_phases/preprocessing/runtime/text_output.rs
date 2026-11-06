@@ -100,8 +100,9 @@ impl<'tu> Preprocessor<'tu, '_> {
     /// read, sorted by name, in `arena`. A replacement list keeps its tokens'
     /// spellings with each run of whitespace written as one space. Of the
     /// built-in macros, those with a constant value are listed with it, as
-    /// GCC and Clang list them; `__FILE__`, `__LINE__`, `__DATE__`,
-    /// `__TIME__`, `__COUNTER__`, `_Pragma` and the `__has_*` queries are not.
+    /// GCC and Clang list them; `__FILE__`, `__LINE__`, `__DATE__`, `__TIME__`,
+    /// `__TIMESTAMP__`, `__COUNTER__`, `_Pragma` and the `__has_*` queries are
+    /// not.
     pub(crate) fn macro_listing_in<'a>(
         &mut self,
         context: &mut Context<'_>,

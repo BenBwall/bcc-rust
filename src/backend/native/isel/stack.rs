@@ -42,6 +42,7 @@ use crate::{
     },
     ir::{
         Align,
+        EntryConvention,
         Type,
         Value,
     },
@@ -128,6 +129,13 @@ impl Selector<'_, '_, '_> {
 
     /// `dst = stack_save`.
     pub(super) fn stack_save(&mut self, dst: Reg) {
+        if self.function.entry == EntryConvention::Naked {
+            self.emit(MInst::Lea {
+                dst,
+                addr: Mem::new(Base::Frame(FrameObject::EntryStack), 0),
+            });
+            return;
+        }
         self.emit(MInst::Mov {
             width: Width::B64,
             dst,

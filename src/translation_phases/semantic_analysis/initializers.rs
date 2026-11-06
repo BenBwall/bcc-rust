@@ -34,6 +34,7 @@ use super::{
     SemanticErrorKind,
     Subobject,
     WideStore,
+    errors::InitializedObject,
     expressions::{
         ConstantClass,
         ConstantFolding,
@@ -624,13 +625,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         }
                     }
                     let Some(mut target) = self.subobject(cursor.container, cursor.index) else {
-                        self.error(
-                            SemanticErrorKind::ExcessInitializer,
-                            element.source_vectors,
-                            None,
-                            None,
-                        );
-                        work.push(next_task(self.scratch.alloc(cursor), repeats));
+                        if self.excess_element(cursor.container, element.source_vectors) {
+                            plan.close_zero(zero);
+                        } else {
+                            work.push(next_task(self.scratch.alloc(cursor), repeats));
+                        }
                         continue;
                     };
                     if infer {
@@ -2086,6 +2085,45 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             );
         }
         Some(count)
+    }
+
+    /// Reports a list's element with no subobject of `container` left for it.
+    /// C99 §6.7.8p2 makes this a constraint violation, which GCC and Clang
+    /// diagnose with a warning, dropping the element unevaluated; TCC and `cl`
+    /// refuse it. An array of variable size has no elements to count against.
+    /// Returns whether the rest of the list is dropped too: Clang's
+    /// `InitListChecker` stops there, so a later designator applies nothing,
+    /// while GCC goes on and reports each element.
+    /// C99: §6.7.8 paragraph 2, p. 125; PDF p. 137.
+    fn excess_element(&mut self, container: TypeId, source: SourceVectors) -> bool {
+        use crate::configuration::CompilerIdentity as Identity;
+        let identity = self.context.configuration.compiler_identity();
+        let object = match self.types.nodes[container.index] {
+            | TypeKind::Array(_, ArrayBound::Constant(_)) => Some(InitializedObject::Array),
+            | TypeKind::Array(..) => None,
+            | TypeKind::Vector { .. } => Some(InitializedObject::Vector),
+            | TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Union =>
+                Some(InitializedObject::Union),
+            | TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum =>
+                Some(InitializedObject::Struct),
+            | _ => Some(InitializedObject::Scalar),
+        };
+        match (identity, object) {
+            | (Identity::Tcc | Identity::Msvc, _) | (_, None) => {
+                self.error(SemanticErrorKind::ExcessInitializer, source, None, None);
+                false
+            },
+            | (Identity::Gcc | Identity::Clang | Identity::ClangCl, Some(object)) => {
+                self.group_diagnostic(
+                    crate::configuration::DiagnosticGroup::ExcessInitializers,
+                    SemanticErrorKind::ExcessElements(object),
+                    source,
+                    None,
+                    None,
+                );
+                identity.rules() == crate::configuration::RuleSet::Clang
+            },
+        }
     }
 
     /// Selects the first initializable member, skipping unnamed bit-fields.
