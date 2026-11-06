@@ -3,8 +3,10 @@
 
 use std::fmt;
 
-use super::unused::UnusedRule;
-use super::main_function::MainRule;
+use super::{
+    main_function::MainRule,
+    unused::UnusedRule,
+};
 use crate::{
     diagnostics::{
         Diagnostic,
