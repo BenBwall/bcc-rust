@@ -26,8 +26,21 @@ impl CompilerConfiguration {
                 self.native |= feature.bit();
             }
             let accepted = match feature {
-                | Feature::OldStyleFunctionDeclarators
                 | Feature::VoidExpressionReturn
+                | Feature::CaseRanges
+                | Feature::BinaryConstants
+                | Feature::VaOpt
+                | Feature::HasInclude
+                | Feature::HasCAttribute => native || self.gnu || self.compiler_extensions,
+                | Feature::LineComments | Feature::Embed | Feature::HasEmbed =>
+                    native
+                        || self.gnu
+                        || (self.compiler_extensions
+                            && matches!(
+                                self.identity,
+                                super::CompilerIdentity::Clang | super::CompilerIdentity::ClangCl
+                            )),
+                | Feature::OldStyleFunctionDeclarators
                 | Feature::Digraphs
                 | Feature::Utf8CharacterConstants
                 | Feature::DigitSeparators
@@ -46,17 +59,8 @@ impl CompilerConfiguration {
                 | Feature::MsPragma
                 | Feature::MsAnonymousStructs
                 | Feature::MsVaArgs => native,
-                | Feature::CaseRanges
-                | Feature::LineComments
-                | Feature::BinaryConstants
-                | Feature::Elifdef
-                | Feature::WarningDirective
-                | Feature::Embed
-                | Feature::HasInclude
-                | Feature::HasEmbed
-                | Feature::HasCAttribute
-                | Feature::VaOpt
-                | Feature::Inline => native || self.gnu,
+                | Feature::Elifdef | Feature::WarningDirective | Feature::Inline =>
+                    native || self.gnu,
                 | Feature::Trigraphs => match self.trigraphs {
                     | Some(enabled) => enabled,
                     | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
@@ -840,6 +844,42 @@ impl CompilerConfiguration {
         self.fatal_errors && self.identity == super::CompilerIdentity::Gcc
     }
 
+    /// Whether `//` starts a comment when `next` follows it. Clang takes it for
+    /// one even in C89, but not before `*`: in `a //**/ b`, C89 has a division.
+    /// C89 had no such comment; C99 §6.4.9p2, p. 66; PDF p. 78.
+    pub(crate) const fn line_comment_before(self, next: Option<u8>) -> bool {
+        self.accepts(Feature::LineComments)
+            && (self.is_native(Feature::LineComments) || self.gnu || !matches!(next, Some(b'*')))
+    }
+
+    /// GCC's and Clang's `-std=c99` selects a language rather than turning off
+    /// what that language leaves free, so a conforming program means the same
+    /// and these extensions stay: the feature tests, a `void` expression in a
+    /// `return`, binary constants, case ranges and `__VA_OPT__`, and under
+    /// Clang `//` comments in C89 and `#embed`. Each is still an extension
+    /// under `-pedantic`. Set this after the compiler identity, which it reads.
+    pub(crate) const fn with_compiler_extensions(mut self, enabled: bool) -> Self {
+        self.compiler_extensions = enabled;
+        self.derive_features()
+    }
+
+    /// Whether `feature` is an operator that tests for features, which GCC
+    /// and Clang define in every language mode and neither reports under
+    /// `-pedantic`: code uses them to find out what it may use. GCC has no
+    /// `__has_embed` until its version 15. GCC manual, "`__has_attribute`" and
+    /// "`__has_include`"; Clang Language Extensions, "Feature Checking Macros".
+    pub(crate) fn always_tests_feature(self, feature: Feature) -> bool {
+        self.compiler_extensions
+            && match feature {
+                | Feature::HasInclude
+                | Feature::HasCAttribute
+                | Feature::HasAttribute
+                | Feature::HasBuiltin => true,
+                | Feature::HasEmbed => self.identity.rules() == super::RuleSet::Clang,
+                | _ => false,
+            }
+    }
+
     pub(crate) const fn with_suppress_warnings(mut self, enabled: bool) -> Self {
         self.suppress_warnings = enabled;
         self
@@ -988,6 +1028,7 @@ impl CompilerConfiguration {
             general_regs_only: false,
             user_interrupts: false,
             suppress_warnings: false,
+            compiler_extensions: false,
             permissive: None,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,
