@@ -1489,6 +1489,34 @@ mod tests {
         }
     }
 
+    /// Only Clang reads `#pragma clang deprecated`. GCC keeps it in its `-E`
+    /// text, where the macro it names no longer exists, and compiles that.
+    #[test]
+    fn gcc_ignores_clang_macro_pragmas() {
+        let directory = Directory::new();
+        directory.write("m.c", "#pragma clang deprecated(GONE)\nint x;\n");
+        directory.write(
+            "t.c",
+            "#define OLD 1\n#pragma clang deprecated(OLD)\nint x = OLD;\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-Werror", "-c", "m.c"]);
+        succeeds(&output);
+        let output = directory.bcc("--gcc-mode", &["-Werror", "-c", "t.c"]);
+        succeeds(&output);
+        assert!(
+            !directory
+                .bcc("--clang-mode", &["-c", "m.c"])
+                .status
+                .success()
+        );
+        assert!(
+            !directory
+                .bcc("--clang-mode", &["-Werror", "-c", "t.c"])
+                .status
+                .success()
+        );
+    }
+
     /// `-E` marks every change of file, with the compiler's flags, and the
     /// tokens of two files never join: two includes of a one-line header
     /// used to print `xx`.
@@ -1597,6 +1625,67 @@ mod tests {
             own.contains("not declared") && own.contains("= note:"),
             "{own}"
         );
+    }
+
+    /// `-ffunction-sections` and `-fdata-sections` give each definition a
+    /// section of its own, so that `--gc-sections` removes the unused ones.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_sections_let_the_linker_remove_unused_definitions() {
+        let directory = Directory::new();
+        directory.write(
+            "s.c",
+            "int unused_data = 7;\nint used_data = 3;\nint unused_function(void) { return 1; \
+             }\nint main(void) { return used_data - 3; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let sections = ["-ffunction-sections", "-fdata-sections"];
+            let object = [&sections[..], &["-c", "s.c", "-o", "s.o"]].concat();
+            succeeds(&directory.bcc(mode, &object));
+            let names = Command::new("objdump")
+                .args(["-h", directory.path("s.o").to_str().unwrap()])
+                .output();
+            // Without binutils the linked program below still has to run.
+            if let Ok(names) = names {
+                let names = stdout(&names);
+                for section in [".text.unused_function", ".data.unused_data", ".text.main"] {
+                    assert!(names.contains(section), "{mode}: {section}: {names}");
+                }
+            }
+            let program = [&sections[..], &["-Wl,--gc-sections", "s.c", "-o", "s"]].concat();
+            let output = directory.bcc(mode, &program);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
+            let bytes = std::fs::read(directory.path("s")).unwrap();
+            let has = |name: &str| {
+                bytes
+                    .windows(name.len())
+                    .any(|window| window == name.as_bytes())
+            };
+            assert!(!has("unused_function") && !has("unused_data"), "{mode}");
+            assert!(has("used_data"), "{mode}");
+            assert_eq!(
+                Command::new(directory.path("s")).status().unwrap().code(),
+                Some(0),
+                "{mode}"
+            );
+            // The last of a pair decides.
+            let last = [
+                "-ffunction-sections",
+                "-fno-function-sections",
+                "-c",
+                "s.c",
+                "-o",
+                "t.o",
+            ];
+            succeeds(&directory.bcc(mode, &last));
+            if let Ok(names) = Command::new("objdump")
+                .args(["-h", directory.path("t.o").to_str().unwrap()])
+                .output()
+            {
+                assert!(!stdout(&names).contains(".text.main"), "{mode}");
+            }
+        }
     }
 
     /// What follows a string in its array's braces is excess: a warning from
@@ -2787,87 +2876,39 @@ mod tests {
         }
     }
 
-    /// GCC and Clang have their feature-test operators in every language mode,
-    /// and neither calls them extensions under `-pedantic`.
+    /// GCC looks past null statements for a statement expression's value, and
+    /// Clang gives that block none.
     #[test]
-    fn gnu_feature_tests_exist_in_every_language_mode() {
+    fn statement_expression_value_before_null_statements_follows_each_compiler() {
         let directory = Directory::new();
         directory.write(
-            "q.c",
-            "#ifndef __has_include\n#error include\n#endif\n#ifndef __has_c_attribute\n#error \
-             attribute\n#endif\n#if !__has_include(<stddef.h>) || \
-             __has_include(\"missing.h\")\n#error found\n#endif\n#if \
-             !__has_c_attribute(nodiscard)\n#error nodiscard\n#endif\n#if \
-             !__has_attribute(unused) || !__has_builtin(__builtin_expect)\n#error \
-             gnu\n#endif\nint x;\n",
+            "s.c",
+            "#include <stdio.h>\nstatic int f(void) { return ({ int x = 9; x;; }); }\nint \
+             main(void) {\n  int a = ({ 7;; });\n  int b = ({ l: 8; ; ; });\n  int c = sizeof(({ \
+             1;; }));\n  if (({ 0;; })) puts(\"yes\"); else puts(\"no\");\n  printf(\"%d %d %d \
+             %d\\n\", a, b, f(), c);\n  (void)&&l;\n  return 0;\n}\n",
         );
-        for mode in ["--gcc-mode", "--clang-mode"] {
-            for standard in ["-std=c89", "-std=c99", "-std=c11", "-std=gnu17", "-std=c23"] {
-                let output = directory.bcc(
-                    mode,
-                    &[
-                        standard,
-                        "-pedantic-errors",
-                        "-Wall",
-                        "-c",
-                        "q.c",
-                        "-o",
-                        "q.o",
-                    ],
-                );
-                succeeds(&output);
-                assert_eq!(stderr(&output), "", "{mode} {standard}");
-            }
+        for options in [&["-O0"][..], &["-O2"]] {
+            let args = [options, &["-w", "s.c", "-o", "s"]].concat();
+            succeeds(&directory.bcc("--gcc-mode", &args));
+            let run = Command::new(directory.path("s")).output().unwrap();
+            assert_eq!(stdout(&run), "no\n7 8 9 4\n", "{options:?}");
         }
-        // `-std=c99` leaves these on in both, and `-pedantic-errors` refuses
-        // them.
-        for (name, source) in [
-            ("v.c", "void g(void);\nvoid f(void) { return g(); }\n"),
-            ("b.c", "int x = 0b101;\n"),
-            (
-                "r.c",
-                "int f(int x) { switch (x) { case 1 ... 2: return 1; } return 0; }\n",
-            ),
-            (
-                "o.c",
-                "#define M(a, ...) a __VA_OPT__(,) __VA_ARGS__\nint M(x);\n",
-            ),
-        ] {
-            directory.write(name, source);
-            for mode in ["--gcc-mode", "--clang-mode"] {
-                for standard in ["-std=c99", "-std=c11"] {
-                    let object = "e.o";
-                    succeeds(&directory.bcc(mode, &[standard, "-c", name, "-o", object]));
-                    assert!(
-                        !directory
-                            .bcc(
-                                mode,
-                                &[standard, "-pedantic-errors", "-c", name, "-o", object]
-                            )
-                            .status
-                            .success(),
-                        "{mode} {standard} {name}"
-                    );
-                }
-            }
-        }
-        // `//` in C89 is Clang's alone.
-        directory.write("c.c", "// comment\nint x;\n");
-        let args = ["-std=c89", "-c", "c.c", "-o", "c.o"];
-        succeeds(&directory.bcc("--clang-mode", &args));
-        assert!(!directory.bcc("--gcc-mode", &args).status.success());
-        // GCC 14 has no `__has_embed`, and Clang does.
-        directory.write(
-            "e.c",
-            "#ifdef __has_embed\nint has;\n#else\nint has_not;\n#endif\n",
+        directory.write("v.c", "int f(void) { return ({ 1;; }); }\n");
+        assert!(
+            !directory
+                .bcc("--clang-mode", &["-c", "v.c", "-o", "v.o"])
+                .status
+                .success()
         );
-        let text = |mode: &str| {
-            let output = directory.bcc(mode, &["-std=c99", "-E", "-P", "e.c"]);
-            succeeds(&output);
-            stdout(&output)
-        };
-        assert_eq!(text("--gcc-mode").trim(), "int has_not;");
-        assert_eq!(text("--clang-mode").trim(), "int has;");
+        // Other statements after the value leave GCC's block without one too.
+        directory.write("n.c", "int f(void) { return ({ 1; {} }); }\n");
+        assert!(
+            !directory
+                .bcc("--gcc-mode", &["-c", "n.c", "-o", "n.o"])
+                .status
+                .success()
+        );
     }
 
     /// The options around GCC 14's permerrors and Clang's default errors,
@@ -6198,6 +6239,89 @@ mod tests {
                 "{args:?}"
             );
         }
+    }
+
+    /// GCC and Clang have their feature-test operators in every language mode,
+    /// and neither calls them extensions under `-pedantic`.
+    #[test]
+    fn gnu_feature_tests_exist_in_every_language_mode() {
+        let directory = Directory::new();
+        directory.write(
+            "q.c",
+            "#ifndef __has_include\n#error include\n#endif\n#ifndef __has_c_attribute\n#error \
+             attribute\n#endif\n#if !__has_include(<stddef.h>) || \
+             __has_include(\"missing.h\")\n#error found\n#endif\n#if \
+             !__has_c_attribute(nodiscard)\n#error nodiscard\n#endif\n#if \
+             !__has_attribute(unused) || !__has_builtin(__builtin_expect)\n#error \
+             gnu\n#endif\nint x;\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for standard in ["-std=c89", "-std=c99", "-std=c11", "-std=gnu17", "-std=c23"] {
+                let output = directory.bcc(
+                    mode,
+                    &[
+                        standard,
+                        "-pedantic-errors",
+                        "-Wall",
+                        "-c",
+                        "q.c",
+                        "-o",
+                        "q.o",
+                    ],
+                );
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {standard}");
+            }
+        }
+        // `-std=c99` leaves these on in both, and `-pedantic-errors` refuses
+        // them.
+        for (name, source) in [
+            ("v.c", "void g(void);\nvoid f(void) { return g(); }\n"),
+            ("b.c", "int x = 0b101;\n"),
+            (
+                "r.c",
+                "int f(int x) { switch (x) { case 1 ... 2: return 1; } return 0; }\n",
+            ),
+            (
+                "o.c",
+                "#define M(a, ...) a __VA_OPT__(,) __VA_ARGS__\nint M(x);\n",
+            ),
+        ] {
+            directory.write(name, source);
+            for mode in ["--gcc-mode", "--clang-mode"] {
+                for standard in ["-std=c99", "-std=c11"] {
+                    let object = "e.o";
+                    succeeds(&directory.bcc(mode, &[standard, "-c", name, "-o", object]));
+                    assert!(
+                        !directory
+                            .bcc(
+                                mode,
+                                &[standard, "-pedantic-errors", "-c", name, "-o", object]
+                            )
+                            .status
+                            .success(),
+                        "{mode} {standard} {name}"
+                    );
+                }
+            }
+        }
+        // `//` in C89 is Clang's alone.
+        directory.write("c.c", "// comment\nint x;\n");
+        let args = ["-std=c89", "-c", "c.c", "-o", "c.o"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        assert!(!directory.bcc("--gcc-mode", &args).status.success());
+        // GCC 14 has no `__has_embed`, and Clang does.
+        directory.write(
+            "e.c",
+            "#ifdef __has_embed\nint has;\n#else\nint has_not;\n#endif\n",
+        );
+        let text = |mode: &str| {
+            let output = directory.bcc(mode, &["-std=c99", "-E", "-P", "e.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(text("--gcc-mode").trim(), "int has_not;");
+        assert_eq!(text("--clang-mode").trim(), "int has;");
     }
 
     /// Clang's warnings about unused arguments follow its warning options:
