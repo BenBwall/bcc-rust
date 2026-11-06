@@ -67,7 +67,12 @@ MSVC flags affect neither version nor strictness. `__STDC__`,
 predefined in every mode. `__STDC_HOSTED__` is `1` in the default hosted
 execution environment and `0` with `-ffreestanding`; `-fhosted` restores
 hosted and the later flag wins. `CompilerConfiguration::default()` is hosted
-as well.
+as well. GCC's and Clang's `__FILE_NAME__` (the last component of `__FILE__`),
+`__INCLUDE_LEVEL__` and `__TIMESTAMP__` are predefined too. `--msvc-mode` has
+only `__TIMESTAMP__` of the three and `--tcc-mode` none. `__TIMESTAMP__` is the
+current source file's modification time, in local time, and neither
+`SOURCE_DATE_EPOCH` nor `#line` changes it. Unlike the C99 names, these and
+`__BASE_FILE__` may be redefined and undefined, with a warning.
 
 Compiler identity follows Clang's approach. Every language mode, including
 strict ISO modes, defines `__GNUC__` `4`, `__GNUC_MINOR__` `2` and
@@ -3124,6 +3129,12 @@ characters that fit and is a warning in both compilers that
 `-pedantic-errors` makes an error (GCC prints it without an option, Clang
 under `-Wexcess-initializers`); bcc rejected it before. This covers string
 literals inside a compound literal (`(char[3]){"abcd"}`) too.
+
+So does an element beyond the object (`int a[2] = {1, 2, 3}`): the element is
+dropped unevaluated. GCC reports each such element and goes on applying the
+list's later designators (`int a[1] = {1, 2, [0] = 3}` gives 3); Clang reports
+a list's first and drops the rest of that list (it gives 1).
+`--tcc-mode` and `--msvc-mode` keep the error, as TCC and `cl` do.
 `Analyzer::copy_array_literal` holds the rules;
 `tests/fixtures/programs/array_compound_literals.c` runs the accepted forms
 on every back end against each compiler (`tests/integration/identity_programs.rs`),
