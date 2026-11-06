@@ -168,6 +168,10 @@ undeclared identifier, a missing expression, and the conversions in
 - The whole unit is parsed before semantic analysis, so syntax errors come before
   semantic ones, and recovery can find different errors after the first.
 
+A computed `goto` in a function that takes no label's address is GCC's to
+accept and Clang's to refuse; bcc follows the compiler it answers as. The jump
+has nowhere defined to go, so `-O2` treats it as unreachable.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`

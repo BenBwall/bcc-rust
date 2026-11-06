@@ -765,7 +765,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     (start..protected.len(), span)
                 })
                 .clone();
-            if self.control.taken(function).is_empty() {
+            // GCC takes it and jumps wherever the operand points; Clang
+            // refuses.
+            if self.control.taken(function).is_empty() && !self.gcc_identity() {
                 self.error(
                     SemanticErrorKind::IndirectGotoWithoutLabels,
                     jump.source,
