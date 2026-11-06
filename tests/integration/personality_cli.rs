@@ -1279,6 +1279,355 @@ mod tests {
         }
     }
 
+    /// `@FILE` reads arguments from a file in both modes, nested files
+    /// included, with the differences between the two compilers.
+    #[test]
+    fn gnu_response_files_supply_arguments() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a(void) { return 1; }\n");
+        directory.write("b c.c", "int b(void) { return 2; }\n");
+        directory.write("inner.rsp", "'b c.c'\n");
+        directory.write("outer.rsp", "-c a.c\n@inner.rsp\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["@outer.rsp"]);
+            succeeds(&output);
+            for object in ["a.o", "b c.o"] {
+                assert!(directory.path(object).exists(), "{mode}: {object}");
+                std::fs::remove_file(directory.path(object)).unwrap();
+            }
+            // A file it cannot read stays as an input, reported missing.
+            let output = directory.bcc(mode, &["-c", "@missing.rsp"]);
+            assert!(!output.status.success(), "{mode}");
+            assert!(stderr(&output).contains("@missing.rsp"), "{mode}");
+        }
+
+        // Either compiler resolves a nested name against the working directory,
+        // not against the file naming it.
+        std::fs::create_dir(directory.path("child")).unwrap();
+        directory.write("nested.c", "int value = VALUE;\n");
+        directory.write("child/outer.rsp", "@inner.rsp\n");
+        directory.write("inner.rsp", "-E -P -DVALUE=11 nested.c\n");
+        directory.write("child/inner.rsp", "-E -P -DVALUE=22 nested.c\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["@child/outer.rsp"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output).trim_end(), "int value = 11;", "{mode}");
+        }
+
+        // A directory is an error in each compiler's words.
+        let output = directory.bcc("--gcc-mode", &["@child", "-c", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "gcc: error: @-file refers to a directory\n"
+        );
+        let output = directory.bcc("--clang-mode", &["@child", "-c", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).starts_with("cannot not open file '"),
+            "{}",
+            stderr(&output)
+        );
+
+        directory.write("self.rsp", "@self.rsp\n");
+        let output = directory.bcc("--clang-mode", &["@self.rsp"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stderr(&output).starts_with("recursive expansion of: '"));
+        let output = directory.bcc("--gcc-mode", &["@self.rsp"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "gcc: error: too many @-files encountered\n"
+        );
+    }
+
+    /// A response file's bytes are never replaced: a file name that is not
+    /// UTF-8 is found, and a `-D` value bcc cannot take is refused rather than
+    /// changed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_response_files_keep_bytes_that_are_not_text() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let directory = Directory::new();
+        std::fs::write(
+            directory.0.join(std::ffi::OsStr::from_bytes(b"\xff.c")),
+            "int raw;\n",
+        )
+        .unwrap();
+        std::fs::write(directory.path("name.rsp"), b"-E -P \xff.c".as_slice()).unwrap();
+        directory.write("macro.c", "const char *s = MSG;\n");
+        std::fs::write(
+            directory.path("define.rsp"),
+            b"-E -P -DMSG='\"\xff\"' macro.c".as_slice(),
+        )
+        .unwrap();
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["@name.rsp"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output).trim_end(), "int raw;", "{mode}");
+            let output = directory.bcc(mode, &["@define.rsp"]);
+            assert!(!output.status.success(), "{mode}: {}", stdout(&output));
+        }
+    }
+
+    /// What follows a NUL in a response file is no option: Clang ends the
+    /// argument there and GCC stops reading the file.
+    #[test]
+    fn gnu_response_files_stop_at_a_nul() {
+        let directory = Directory::new();
+        directory.write(
+            "t.c",
+            "#ifndef OTHER\n#define OTHER 7\n#endif\nint value = OTHER;\n",
+        );
+        std::fs::write(
+            directory.path("r.rsp"),
+            b"-E -P t.c -DVALUE=1\0-DOTHER=2".as_slice(),
+        )
+        .unwrap();
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["@r.rsp"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output).trim_end(), "int value = 7;", "{mode}");
+        }
+    }
+
+    /// When several queries are given, the one each compiler answers, and
+    /// `--print-` spelled for `-print-`.
+    #[test]
+    fn gnu_query_precedence_follows_each_compiler() {
+        let directory = Directory::new();
+        let answer = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        for (mode, winner, loser) in [
+            ("--clang-mode", "-print-resource-dir", "-print-search-dirs"),
+            ("--clang-mode", "-print-runtime-dir", "-print-file-name=x"),
+            ("--clang-mode", "-print-runtime-dir", "-print-multi-lib"),
+            ("--clang-mode", "-print-multi-lib", "-print-target-triple"),
+            (
+                "--gcc-mode",
+                "-print-multiarch",
+                "-print-multi-os-directory",
+            ),
+            ("--gcc-mode", "-print-multiarch", "-print-sysroot"),
+            ("--gcc-mode", "-print-sysroot", "-print-multi-os-directory"),
+        ] {
+            let expected = answer(mode, &[winner]);
+            assert_eq!(answer(mode, &[winner, loser]), expected, "{mode} {winner}");
+            assert_eq!(answer(mode, &[loser, winner]), expected, "{mode} {winner}");
+        }
+        for (mode, query) in [
+            ("--gcc-mode", "print-multi-lib"),
+            ("--gcc-mode", "print-file-name=x"),
+            ("--clang-mode", "print-multi-directory"),
+            ("--clang-mode", "print-libgcc-file-name"),
+        ] {
+            assert_eq!(
+                answer(mode, &[&format!("--{query}")]),
+                answer(mode, &[&format!("-{query}")]),
+                "{mode} {query}"
+            );
+        }
+    }
+
+    /// The probes libtool and other build systems ask about library layout.
+    #[test]
+    fn gnu_print_queries_describe_the_library_layout() {
+        let directory = Directory::new();
+        let answer = |mode: &str, query: &str| {
+            let output = directory.bcc(mode, &[query]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(answer("--gcc-mode", "-print-multi-directory"), ".\n");
+        assert_eq!(answer("--clang-mode", "-print-multi-directory"), ".\n");
+        assert_eq!(
+            answer("--gcc-mode", "-print-multi-os-directory"),
+            "../lib\n"
+        );
+        assert_eq!(answer("--gcc-mode", "-print-multi-lib"), ".;\n");
+        assert_eq!(answer("--clang-mode", "-print-multi-lib"), ".;@m64\n");
+        let output = directory.bcc("--clang-mode", &["-print-multi-os-directory", "-c", "x.c"]);
+        assert!(!output.status.success());
+        assert!(
+            stderr(&output).contains("unsupported option '-print-multi-os-directory'"),
+            "{}",
+            stderr(&output)
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let dirs = answer(mode, "-print-search-dirs");
+            let programs = dirs
+                .lines()
+                .find_map(|line| line.strip_prefix("programs: ="))
+                .unwrap();
+            assert!(!programs.ends_with("ld.lld"), "{mode}: {dirs}");
+            assert!(
+                dirs.lines().any(|line| line.starts_with("libraries: =")),
+                "{mode}: {dirs}"
+            );
+            assert_eq!(
+                dirs.starts_with("install: "),
+                mode == "--gcc-mode",
+                "{mode}: {dirs}"
+            );
+        }
+    }
+
+    /// `-print-libgcc-file-name` finds the library as
+    /// `-print-file-name=libgcc.a` does.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn gnu_print_libgcc_file_name_is_a_path() {
+        let directory = Directory::new();
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let named = directory.bcc(mode, &["-print-file-name=libgcc.a"]);
+            let output = directory.bcc(mode, &["-print-libgcc-file-name"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), stdout(&named), "{mode}");
+        }
+    }
+
+    /// `-E` marks every change of file, with the compiler's flags, and the
+    /// tokens of two files never join: two includes of a one-line header
+    /// used to print `xx`.
+    #[test]
+    fn gnu_line_markers_mark_each_file_change() {
+        let directory = Directory::new();
+        directory.write("a.h", "x\n");
+        directory.write("empty.h", "");
+        directory.write("dup.c", "#include \"a.h\"\n#include \"a.h\"\nend\n");
+        directory.write("e.c", "#include \"empty.h\"\nz\n");
+        let text = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(
+            text("--clang-mode", &["-E", "dup.c"]),
+            "# 1 \"dup.c\"\n# 1 \"a.h\" 1\nx\n# 2 \"dup.c\" 2\n# 1 \"a.h\" 1\nx\n# 3 \"dup.c\" \
+             2\nend\n"
+        );
+        assert!(
+            text("--clang-mode", &["-E", "e.c"]).ends_with("# 1 \"empty.h\" 1\n# 2 \"e.c\" 2\nz\n")
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            assert_eq!(text(mode, &["-E", "-P", "dup.c"]), "x\nx\nend\n", "{mode}");
+            assert!(
+                text(mode, &["-E", "dup.c"]).contains("# 2 \"dup.c\" 2\n"),
+                "{mode}"
+            );
+        }
+        // Clang writes flag 3 for a system header and GCC adds 4.
+        #[cfg(not(windows))]
+        {
+            std::fs::create_dir(directory.path("sys")).unwrap();
+            directory.write("sys/s.h", "int s;\n");
+            directory.write("u.c", "#include <s.h>\nint u;\n");
+            for (mode, flags) in [("--clang-mode", "1 3"), ("--gcc-mode", "1 3 4")] {
+                let output = text(mode, &["-E", "-isystem", "sys", "u.c"]);
+                assert!(
+                    output.contains(&format!("# 1 \"sys/s.h\" {flags}\nint s;\n# 2 \"u.c\" 2\n")),
+                    "{mode}: {output}"
+                );
+                // The text reads back, in the same mode.
+                directory.write("u.i", &output);
+                succeeds(&directory.bcc(mode, &["-fsyntax-only", "u.i"]));
+            }
+        }
+    }
+
+    /// What follows a string in its array's braces is excess: a warning from
+    /// Clang, which drops it, and an error from GCC and TCC.
+    #[test]
+    fn excess_elements_after_a_braced_string() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "char w[] = {\"ab\", \"c\", \"d\"};\nint n[sizeof w == 3 ? 1 : -1];\n",
+        );
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "a.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output)
+                .matches("warning: excess elements in char array initializer")
+                .count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-fsyntax-only", "-Wno-excess-initializers", "a.c"],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output)
+                .matches("error: excess elements in char array initializer")
+                .count(),
+            2,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "a.c"]);
+        assert!(!output.status.success());
+    }
+
+    /// GCC reads an element for an aggregate with no subobjects as excess and
+    /// goes on to the next member, where Clang requires braces.
+    #[test]
+    fn excess_element_for_a_zero_length_array_member() {
+        let directory = Directory::new();
+        directory.write(
+            "z.c",
+            "struct { int a; int z[0]; int y; } t = {1, 2, 3};\nint n[sizeof t == 8 ? 1 : -1];\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "z.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output)
+                .matches("warning: excess elements in array initializer")
+                .count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "z.c"]);
+        assert_eq!(output.status.code(), Some(1));
+    }
+
+    /// GCC moves on from a member with no subobjects to the next one, inside
+    /// whatever encloses it, and counts the array of unknown bound from there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn excess_elements_leave_the_enclosing_object_in_place() {
+        let directory = Directory::new();
+        directory.write(
+            "n.c",
+            "extern int printf(const char *, ...);\n\
+             struct E { int z[0]; int y; };\n\
+             struct E unknown[] = {1, 2, 3, 4};\n\
+             struct { struct {} s; int y; } pairs[2] = {1, 2, 3, 4};\n\
+             int main(void) {\n\
+             \x20   struct { struct { int z[0]; int x; } s; int y; } t = {1, 2, 3};\n\
+             \x20   static struct { struct { int z[0]; int x; } s; int y; } u = {5, 6, 7};\n\
+             \x20   printf(\"%d %d %d %d %d %d %d %d\\n\", t.s.x, t.y, u.s.x, u.y,\n\
+             \x20          (int)(sizeof unknown / sizeof *unknown), unknown[1].y,\n\
+             \x20          pairs[0].y, pairs[1].y);\n\
+             \x20   return 0;\n\
+             }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["n.c", "-o", "n"]);
+        succeeds(&output);
+        let run = Command::new(directory.path("n")).output().unwrap();
+        // gcc 13.3 prints the same.
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
+    }
+
     /// `-save-temps` keeps the intermediate files, named as each compiler
     /// names them, and prints a warning once.
     #[test]
@@ -1463,145 +1812,6 @@ mod tests {
         }
     }
 
-    /// `-E` marks every change of file, with the compiler's flags, and the
-    /// tokens of two files never join: two includes of a one-line header
-    /// used to print `xx`.
-    #[test]
-    fn gnu_line_markers_mark_each_file_change() {
-        let directory = Directory::new();
-        directory.write("a.h", "x\n");
-        directory.write("empty.h", "");
-        directory.write("dup.c", "#include \"a.h\"\n#include \"a.h\"\nend\n");
-        directory.write("e.c", "#include \"empty.h\"\nz\n");
-        let text = |mode: &str, args: &[&str]| {
-            let output = directory.bcc(mode, args);
-            succeeds(&output);
-            stdout(&output)
-        };
-        assert_eq!(
-            text("--clang-mode", &["-E", "dup.c"]),
-            "# 1 \"dup.c\"\n# 1 \"a.h\" 1\nx\n# 2 \"dup.c\" 2\n# 1 \"a.h\" 1\nx\n# 3 \"dup.c\" \
-             2\nend\n"
-        );
-        assert!(
-            text("--clang-mode", &["-E", "e.c"]).ends_with("# 1 \"empty.h\" 1\n# 2 \"e.c\" 2\nz\n")
-        );
-        for mode in ["--gcc-mode", "--clang-mode"] {
-            assert_eq!(text(mode, &["-E", "-P", "dup.c"]), "x\nx\nend\n", "{mode}");
-            assert!(
-                text(mode, &["-E", "dup.c"]).contains("# 2 \"dup.c\" 2\n"),
-                "{mode}"
-            );
-        }
-        // Clang writes flag 3 for a system header and GCC adds 4.
-        #[cfg(not(windows))]
-        {
-            std::fs::create_dir(directory.path("sys")).unwrap();
-            directory.write("sys/s.h", "int s;\n");
-            directory.write("u.c", "#include <s.h>\nint u;\n");
-            for (mode, flags) in [("--clang-mode", "1 3"), ("--gcc-mode", "1 3 4")] {
-                let output = text(mode, &["-E", "-isystem", "sys", "u.c"]);
-                assert!(
-                    output.contains(&format!("# 1 \"sys/s.h\" {flags}\nint s;\n# 2 \"u.c\" 2\n")),
-                    "{mode}: {output}"
-                );
-                // The text reads back, in the same mode.
-                directory.write("u.i", &output);
-                succeeds(&directory.bcc(mode, &["-fsyntax-only", "u.i"]));
-            }
-        }
-    }
-
-    /// What follows a string in its array's braces is excess: a warning from
-    /// Clang, which drops it, and an error from GCC and TCC.
-    #[test]
-    fn excess_elements_after_a_braced_string() {
-        let directory = Directory::new();
-        directory.write(
-            "a.c",
-            "char w[] = {\"ab\", \"c\", \"d\"};\nint n[sizeof w == 3 ? 1 : -1];\n",
-        );
-        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "a.c"]);
-        succeeds(&output);
-        assert_eq!(
-            stderr(&output)
-                .matches("warning: excess elements in char array initializer")
-                .count(),
-            1,
-            "{}",
-            stderr(&output)
-        );
-        let output = directory.bcc(
-            "--clang-mode",
-            &["-fsyntax-only", "-Wno-excess-initializers", "a.c"],
-        );
-        succeeds(&output);
-        assert_eq!(stderr(&output), "");
-        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "a.c"]);
-        assert_eq!(output.status.code(), Some(1));
-        assert_eq!(
-            stderr(&output)
-                .matches("error: excess elements in char array initializer")
-                .count(),
-            2,
-            "{}",
-            stderr(&output)
-        );
-        let output = directory.bcc("--tcc-mode", &["-c", "a.c"]);
-        assert!(!output.status.success());
-    }
-
-    /// GCC reads an element for an aggregate with no subobjects as excess and
-    /// goes on to the next member, where Clang requires braces.
-    #[test]
-    fn excess_element_for_a_zero_length_array_member() {
-        let directory = Directory::new();
-        directory.write(
-            "z.c",
-            "struct { int a; int z[0]; int y; } t = {1, 2, 3};\nint n[sizeof t == 8 ? 1 : -1];\n",
-        );
-        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "z.c"]);
-        succeeds(&output);
-        assert_eq!(
-            stderr(&output)
-                .matches("warning: excess elements in array initializer")
-                .count(),
-            1,
-            "{}",
-            stderr(&output)
-        );
-        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "z.c"]);
-        assert_eq!(output.status.code(), Some(1));
-    }
-
-    /// GCC moves on from a member with no subobjects to the next one, inside
-    /// whatever encloses it, and counts the array of unknown bound from there.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn excess_elements_leave_the_enclosing_object_in_place() {
-        let directory = Directory::new();
-        directory.write(
-            "n.c",
-            "extern int printf(const char *, ...);\n\
-             struct E { int z[0]; int y; };\n\
-             struct E unknown[] = {1, 2, 3, 4};\n\
-             struct { struct {} s; int y; } pairs[2] = {1, 2, 3, 4};\n\
-             int main(void) {\n\
-             \x20   struct { struct { int z[0]; int x; } s; int y; } t = {1, 2, 3};\n\
-             \x20   static struct { struct { int z[0]; int x; } s; int y; } u = {5, 6, 7};\n\
-             \x20   printf(\"%d %d %d %d %d %d %d %d\\n\", t.s.x, t.y, u.s.x, u.y,\n\
-             \x20          (int)(sizeof unknown / sizeof *unknown), unknown[1].y,\n\
-             \x20          pairs[0].y, pairs[1].y);\n\
-             \x20   return 0;\n\
-             }\n",
-        );
-        let output = directory.bcc("--gcc-mode", &["n.c", "-o", "n"]);
-        succeeds(&output);
-        let run = Command::new(directory.path("n")).output().unwrap();
-        // gcc 13.3 prints the same.
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
-    }
-
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]
@@ -1665,7 +1875,7 @@ mod tests {
             assert!(!directory.path("x.o").exists(), "{mode}");
             let (status, text, _) = answer(mode, &["-print-file-name=x", "-print-search-dirs"]);
             assert_eq!(status, Some(0), "{mode}");
-            assert!(text.starts_with("install: "), "{mode}: {text}");
+            assert!(text.contains("programs: ="), "{mode}: {text}");
             assert_eq!(
                 answer(mode, &["--version", "--help"]).1,
                 help(mode),
@@ -1706,7 +1916,7 @@ mod tests {
                 "--gcc-mode",
                 &["-print-file-name=x", "-print-libgcc-file-name"]
             ),
-            file("libgcc.a")
+            answer("--gcc-mode", &["-print-file-name=libgcc.a"])
         );
         assert_eq!(
             answer(
