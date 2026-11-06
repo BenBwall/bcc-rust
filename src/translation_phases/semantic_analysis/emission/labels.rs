@@ -169,7 +169,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// The case and default labels of `switch` in source order, and the
     /// position of the last case range among them, once its function is
     /// walked. `None` for a switch this model does not fold.
-    pub(super) fn switch_labels(
+    pub(in crate::translation_phases::semantic_analysis) fn switch_labels(
         &mut self,
         switch: &'tu Statement<'tu>,
     ) -> Option<SwitchLabels<'tu, 's>> {
@@ -375,7 +375,7 @@ pub(in crate::translation_phases::semantic_analysis) struct Holds {
 #[derive(Clone, Copy)]
 pub(in crate::translation_phases::semantic_analysis) struct SwitchLabels<'tu, 's> {
     /// The labels in source order.
-    pub(super) labels:     &'s [&'tu Statement<'tu>],
+    pub(in crate::translation_phases::semantic_analysis) labels: &'s [&'tu Statement<'tu>],
     /// The position of the last case range among them.
     pub(super) last_range: Option<usize>,
 }

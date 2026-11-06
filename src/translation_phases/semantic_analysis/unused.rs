@@ -736,7 +736,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 super::statements::StatementWork::DiscardedValue(
                     expression,
                     self.semantic_errors,
-                    self.functions.dead || self.evaluation_inhibited(),
+                    self.evaluation_inhibited(),
                 ),
             ));
         }
@@ -744,12 +744,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Checks the expression whose value a statement discards, now analyzed
     /// without an error: neither compiler has anything to say about the value
-    /// of an invalid expression. `dead` says the program would not run the
-    /// statement, which Clang can tell.
+    /// of an invalid expression. `inhibited` says it is an operand the program
+    /// does not evaluate, which Clang can tell.
     /// C99: §6.8.3p2, p. 132; PDF p. 144.
-    pub(super) fn check_discarded_value(&mut self, e: &'tu Expression<'tu>, dead: bool) {
+    pub(super) fn check_discarded_value(&mut self, e: &'tu Expression<'tu>, inhibited: bool) {
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
-            self.clang_discarded_value(e, dead);
+            self.clang_discarded_value(e, inhibited);
         } else {
             self.gcc_discarded_value(e);
         }
@@ -839,23 +839,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's `DiagnoseUnusedExprResult`, which says nothing about an
-    /// expression a macro's body wrote and, comparisons aside
-    /// (`DiagIfReachable`), about one in unreachable code.
-    fn clang_discarded_value(&mut self, e: &'tu Expression<'tu>, dead: bool) {
-        if dead
-            && !matches!(
-                Self::without_parentheses(e).kind,
-                E::Binary {
-                    operator: B::Equal
-                        | B::NotEqual
-                        | B::LessThan
-                        | B::GreaterThan
-                        | B::LessThanOrEqual
-                        | B::GreaterThanOrEqual,
-                    ..
-                }
-            )
-        {
+    /// expression a macro's body wrote and, comparisons aside, which report at
+    /// once, about one it does not reach (`DiagIfReachable`).
+    fn clang_discarded_value(&mut self, e: &'tu Expression<'tu>, inhibited: bool) {
+        let comparison = match Self::without_parentheses(e).kind {
+            | E::Binary {
+                operator: B::Equal, ..
+            } => Some(UnusedRule::ClangEquality),
+            | E::Binary {
+                operator: B::NotEqual,
+                ..
+            } => Some(UnusedRule::ClangInequality),
+            | E::Binary {
+                operator: B::LessThan | B::GreaterThan | B::LessThanOrEqual | B::GreaterThanOrEqual,
+                ..
+            } => Some(UnusedRule::ClangRelational),
+            | _ => None,
+        };
+        if inhibited && comparison.is_none() {
             return;
         }
         if let Some((rule, site)) = self.clang_unused_result(e)
@@ -863,22 +864,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .context
                 .written_by_macro_body(Self::operator_site(Self::without_parentheses(e)))
         {
-            let rule = match Self::without_parentheses(e).kind {
-                | E::Binary {
-                    operator: B::Equal, ..
-                } => UnusedRule::ClangEquality,
-                | E::Binary {
-                    operator: B::NotEqual,
-                    ..
-                } => UnusedRule::ClangInequality,
-                | E::Binary {
-                    operator:
-                        B::LessThan | B::GreaterThan | B::LessThanOrEqual | B::GreaterThanOrEqual,
-                    ..
-                } => UnusedRule::ClangRelational,
-                | _ => rule,
-            };
-            self.unused_rule(rule, site, None);
+            if let Some(comparison) = comparison {
+                self.unused_rule(comparison, site, None);
+            } else {
+                self.warn_if_reachable(e, rule.group(), SemanticErrorKind::Unused(rule), site);
+            }
         }
     }
 
@@ -1005,14 +995,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
-            if !self.functions.dead
-                && !self.evaluation_inhibited()
+            if !self.evaluation_inhibited()
                 && self.clang_unused_result(left).is_some()
                 && !self
                     .context
                     .written_by_macro_body(Self::operator_site(Self::without_parentheses(left)))
             {
-                self.unused_rule(UnusedRule::ClangCommaLeft, Self::operator_site(left), None);
+                let rule = UnusedRule::ClangCommaLeft;
+                self.warn_if_reachable(
+                    left,
+                    rule.group(),
+                    SemanticErrorKind::Unused(rule),
+                    Self::operator_site(left),
+                );
             }
         } else if !self.is_void_or_unknown(left) && !self.computes_more(left, true) {
             self.unused_rule(UnusedRule::GccCommaLeft, Self::operator_site(comma), None);
@@ -1122,7 +1117,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types.unanalyzed(ty) || self.types.nodes[ty.index] == TypeKind::Scalar(Scalar::Void)
     }
 
-    fn without_parentheses(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+    pub(super) fn without_parentheses(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
         while let E::Parenthesized { expression } = e.kind {
             e = expression;
         }

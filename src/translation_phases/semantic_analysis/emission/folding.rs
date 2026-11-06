@@ -143,6 +143,26 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.folded_integer(condition).map(|value| !value.is_zero())
     }
 
+    /// Clang's `Expr::EvaluateAsRValue`, which `EM_IgnoreSideEffects` lets
+    /// pass what a constant result does not depend on: the left operand of a
+    /// comma, and the left operand of `X && 0` and `X || 1`. Each such result
+    /// holds only here, so none is memoized.
+    /// C99: §6.5.13p3, p. 89; PDF p. 101; §6.5.14p3, p. 89; PDF p. 101;
+    /// §6.5.17p2, p. 94; PDF p. 106.
+    pub(in crate::translation_phases::semantic_analysis) fn evaluate_ignoring_side_effects(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) -> Option<Value> {
+        let outer = self.begin_memo();
+        self.functions.emission.ignore_side_effects = true;
+        let value = self.compute_value(expression, 0);
+        self.functions.emission.ignore_side_effects = false;
+        let emission = &mut self.functions.emission;
+        emission.depth_cut = outer.0;
+        emission.weak_read = outer.1;
+        value
+    }
+
     /// Clang's `Expr::isEvaluatable`: whether `expression` evaluates to a
     /// constant of any type without side effects. A `void` expression has
     /// no value, so it is not evaluatable, nor is an address that is no
@@ -231,6 +251,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// The value of `expression` as Clang's evaluator computes it, if it
     /// does; memoized, since conditions nest (see [`Memo`]).
     fn evaluate_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
+        if self.functions.emission.ignore_side_effects {
+            return self.compute_value(expression, depth);
+        }
         let key = std::ptr::from_ref(expression).addr();
         if let Some(&memo) = self.functions.emission.folded.get(&key)
             && self.memo_holds(&memo, depth)
@@ -311,7 +334,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 left_expression,
                 right_expression,
             } => {
-                _ = self.evaluate_value(left_expression, depth)?;
+                let left = self.evaluate_value(left_expression, depth);
+                if left.is_none() && !self.functions.emission.ignore_side_effects {
+                    return None;
+                }
                 self.evaluate_value(right_expression, depth)
             },
             | ExpressionType::Binary {
@@ -319,8 +345,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 left_expression,
                 right_expression,
             } => {
-                let left = self.evaluate_value(left_expression, depth)?.truth()?;
-                if left == (operator == BinaryOperator::LogicalOr) {
+                let deciding = operator == BinaryOperator::LogicalOr;
+                let Some(left) = self
+                    .evaluate_value(left_expression, depth)
+                    .and_then(Value::truth)
+                else {
+                    if !self.functions.emission.ignore_side_effects {
+                        return None;
+                    }
+                    let right = self.evaluate_value(right_expression, depth)?.truth()?;
+                    return (right == deciding)
+                        .then(|| Value::Integer(Integer::int(i128::from(right))));
+                };
+                if left == deciding {
                     Some(Value::Integer(Integer::int(i128::from(left))))
                 } else {
                     let right = self.evaluate_value(right_expression, depth)?.truth()?;
@@ -2057,7 +2094,7 @@ pub(in crate::translation_phases::semantic_analysis) enum Value {
 
 impl Value {
     /// The truth of a scalar value, if known.
-    fn truth(self) -> Option<bool> {
+    pub(in crate::translation_phases::semantic_analysis) fn truth(self) -> Option<bool> {
         match self {
             | Self::Integer(integer) => Some(!integer.is_zero()),
             | Self::Address(..) | Self::String(..) | Self::CastString(..) => Some(true),

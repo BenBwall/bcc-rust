@@ -603,3 +603,181 @@ fn only_clang_warns_about_values_by_default() {
         );
     }
 }
+
+/// Clang's CFG, and not code generation's insertion point, decides a
+/// discarded value: each form here is silent in Clang 23.1.1, and warned about
+/// by GCC 14.2, which does not ask.
+#[test]
+fn unreachable_discarded_values_are_silent_for_clang_only() {
+    for source in [
+        // Loops that never run, by any spelling of the constant.
+        "void f(void) { while (0) { 42; } }",
+        "void f(void) { for (; 0;) { 42; } }",
+        "void f(void) { for (; 0; 42); }",
+        "void f(void) { while (1 - 1) 42; }",
+        "enum { Z }; void f(void) { while (Z) { 42; } }",
+        "void f(void) { while ((void *)0) { 42; } }",
+        "void f(void) { while (0.0) { 42; } }",
+        "void f(void) { const int c = 0; while (c) { 42; } }",
+        // Loops that never end.
+        "void f(void) { for (; 1;) {} 42; }",
+        "void f(void) { do {} while (1); 42; }",
+        "void f(void) { for (;; 42) { break; } }",
+        // A condition the CFG decides though it holds a variable.
+        "void f(int a) { while (a && 0) { 42; } }",
+        "void f(int a) { while (a || 1) {} 42; }",
+        "void f(int a) { if (a & 0) { 42; } }",
+        "void f(int a) { if (a * 0) { 42; } }",
+        "void f(int a) { if (!(a && 0)) {} else { 42; } }",
+        "int g(void); void f(void) { if (g(), 0) { 42; } }",
+        "void f(int a) { if ((a = 1, 0)) { 42; } }",
+        "void f(int a, int b) { if (a && (b & 0)) { 42; } }",
+        // The tautologies it recognizes.
+        "void f(int a) { if (a | 1) {} else { 42; } }",
+        "void f(int a) { if (a == 1 && a == 2) { 42; } }",
+        "void f(int a) { if (a != 1 || a != 2) {} else { 42; } }",
+        "void f(int a) { if ((a & 8) == 1) { 42; } }",
+        "void f(int a) { if ((a | 1) == 0) { 42; } }",
+        "void f(int a) { if ((a < 1) == 2) { 42; } }",
+        "void f(int a) { if ((a < 1) < 2) {} else { 42; } }",
+        // Calls that do not return, wherever they are.
+        "void f(void) { __builtin_trap(); 42; }",
+        "void f(void) { __builtin_trap(); { 42; } }",
+        "void f(int a) { if (a) __builtin_trap(); else __builtin_trap(); 42; }",
+        "void f(int a) { a ? __builtin_trap() : __builtin_trap(); 42; }",
+        "void f(void) { __builtin_trap(), 42; }",
+        "void f(void) { int x = (__builtin_trap(), 0); (void)x; 42; }",
+        "void f(void) { do { __builtin_trap(); } while (0); 42; }",
+        "void f(void) { while (__builtin_trap(), 1) { 42; } }",
+        "void f(void) { __builtin_assume(0); 42; }",
+        "void f(void) { ({ __builtin_trap(); }); 42; }",
+        "void f(void) { int x = ({ return; 0; }); (void)x; 42; }",
+        // Labels nothing reachable jumps to.
+        "void f(void) { return; x: 42; }",
+        "void f(void) { return; x: 42; goto x; }",
+        "void f(void) { goto y; x: 42; y: return; }",
+        "void f(void) { if (0) { x: 42; } }",
+        "void f(void) { while (0) { x: 42; } }",
+        "void *p; void f(void) { return; x: 42; p = &&x; }",
+        "void f(void) { while (0) { ({ __label__ x; x: 42; 0; }); } ({ __label__ x; goto x; x:; \
+         }); }",
+        // Switches.
+        "void f(int a) { switch (a) { case 0: return; default: return; } 42; }",
+        "void f(void) { switch (1) { case 0: 42; default:; } }",
+        "void f(void) { switch (1) { case 0 ... 2: return; } 42; }",
+        "void f(void) { switch (1) { default: 42; case 1:; } }",
+        "enum E { A, B }; void f(enum E e) { switch (e) { case A: return; case B: return; } 42; }",
+        "enum E { A, B }; void f(enum E e) { switch (e) { case A: break; case B: break; default: \
+         42; } }",
+        "enum E { A, B }; void f(enum E *e) { switch (*e) { case A ... B: return; } 42; }",
+        // The left operand of a comma.
+        "void f(int a) { while (0) { 42, a = 1; } }",
+        "void f(int a) { __builtin_trap(); 42, a = 1; }",
+    ] {
+        let unused_value = |rules: &[U]| {
+            rules
+                .iter()
+                .filter(|rule| rule.group() == DiagnosticGroup::UnusedValue)
+                .count()
+        };
+        assert_eq!(unused_value(&rules(source, clang())), 0, "{source}");
+        assert_ne!(unused_value(&rules(source, gcc())), 0, "{source}");
+    }
+}
+
+/// What Clang's CFG does reach, against
+/// [`unreachable_discarded_values_are_silent_for_clang_only`].
+#[test]
+fn reachable_discarded_values_still_warn_for_clang() {
+    for source in [
+        "void f(void) { 42; return; }",
+        "void f(void) { while (1) { 42; } }",
+        "void f(void) { while (1) { break; } 42; }",
+        "void f(int a) { while (a) {} 42; }",
+        "void f(void) { for (;;) { 42; } }",
+        "void f(void) { for (; 1;) { 42; } }",
+        "void f(void) { for (;; 42) { continue; } }",
+        "void f(void) { for (42; 0;); }",
+        "void f(void) { do { 42; } while (0); }",
+        "void f(void) { do { break; } while (1); 42; }",
+        "void f(int a) { do { if (a) break; } while (1); 42; }",
+        "void f(void) { while (sizeof(int) == 8) {} 42; }",
+        "void f(void) { if (0) 42; else 42; }",
+        "void f(int a) { if (a) return; 42; }",
+        "void f(int a) { if ((a = 0)) { 42; } }",
+        // Inside parentheses only the evaluation sees through.
+        "void f(int a) { if ((a & 0)) { 42; } }",
+        "void f(int a) { if ((a | 1)) {} else { 42; } }",
+        // Not what the tautologies recognize.
+        "void f(int a) { if (a > 2 && a < 5) { 42; } }",
+        "void f(int a) { if ((a & 3) == 1) { 42; } }",
+        "void f(int a) { if ((a < 1) == 1) { 42; } }",
+        "void f(int a) { if ((a < 1) > -1) {} else { 42; } }",
+        "void f(int *p) { if (*p == 1 && *p == 2) { 42; } }",
+        "enum { A }; enum { B = 1 }; void f(int a) { if (a == A && a == B) { 42; } }",
+        // Labels something reaches.
+        "void f(void) { goto x; x: 42; }",
+        "void f(void) { goto y; x: 42; return; y: goto x; }",
+        "void f(void) { if (0) { x: 42; } goto x; }",
+        "void f(void) { while (0) { x: 42; } goto x; }",
+        "void f(void) { goto x; while (0) { x:; } 42; }",
+        "void *p; void f(void) { p = &&x; goto *p; x: 42; }",
+        "void f(void) { ({ __label__ x; goto x; x:; }); ({ x: 42; 0; }); }",
+        // Calls that return, or that may not run.
+        "void g(void); void f(void) { g(); 42; }",
+        "void f(int a) { if (a) __builtin_trap(); 42; }",
+        "void f(void) { __builtin_debugtrap(); 42; }",
+        "void f(void) { __builtin_assume(1); 42; }",
+        "void f(void) { (void)sizeof(__builtin_trap(), 1); 42; }",
+        "void f(void) { (void)_Generic(0, int: 0, default: (__builtin_trap(), 0)); 42; }",
+        "void f(void) { (void)__builtin_choose_expr(1, 0, (__builtin_trap(), 0)); 42; }",
+        // Switches.
+        "void f(int a) { switch (a) { case 0: 42; } }",
+        "void f(int a) { switch (a) { case 0: return; } 42; }",
+        "void f(void) { switch (1) { case 1: 42; } }",
+        "void f(void) { switch (1) { case 0:; default: 42; } }",
+        "void f(void) { switch (0) { case 1: return; } 42; }",
+        "enum E { A, B }; void f(enum E e) { switch (e) { case A: return; } 42; }",
+        "enum E { A, B }; void f(enum E e) { switch ((int)e) { case A: return; case B: return; } \
+         42; }",
+        "enum E { A, B }; void f(enum E e) { switch (e + 0) { case A: return; case B: return; } \
+         42; }",
+        "enum E { A, B }; void f(enum E e) { switch (e) { case A: break; case B: return; } 42; }",
+    ] {
+        assert!(
+            rules(source, clang())
+                .iter()
+                .any(|rule| rule.group() == DiagnosticGroup::UnusedValue),
+            "{source}",
+        );
+    }
+}
+
+/// Clang's comparison warning reports at once, without asking.
+#[test]
+fn discarded_comparisons_warn_even_when_unreachable() {
+    for source in [
+        "void f(int a) { while (0) { a == 1; } }",
+        "void f(int a) { __builtin_trap(); a < 1; }",
+        "void f(int a) { return; a != 1; }",
+    ] {
+        assert_eq!(rules(source, clang()).len(), 1, "{source}");
+    }
+}
+
+/// Reachability says nothing about what counts as used: a variable, function
+/// or label named only in unreachable code is used for both compilers.
+#[test]
+fn uses_in_unreachable_code_still_count() {
+    for source in [
+        "void f(void) { int a; while (0) { (void)a; } }",
+        "void f(void) { int a = 0; __builtin_trap(); (void)a; }",
+        "static void g(void) {} void f(void) { while (0) { g(); } }",
+        "static void g(void) {} void f(void) { __builtin_trap(); g(); }",
+        "static int g; int f(void) { return 0; return g; }",
+        "void f(void) { while (0) { goto x; x:; } }",
+    ] {
+        assert_eq!(rules(source, clang()), [], "{source}");
+        assert_eq!(rules(source, gcc()), [], "{source}");
+    }
+}

@@ -495,6 +495,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn function_work(&mut self, work: FunctionWork<'tu>) {
         match work {
             | FunctionWork::Finish(previous, loops, switch, sizeof, targets) => {
+                self.report_reachable_warnings();
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());
