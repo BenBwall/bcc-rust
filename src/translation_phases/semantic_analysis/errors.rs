@@ -380,6 +380,9 @@ pub(crate) enum SemanticErrorKind {
     /// An element beyond the object, which GCC and Clang warn about and drop.
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessElements(InitializedObject),
+    /// Elements after a string in the braces of the array it initializes.
+    /// C99: §6.7.8 paragraph 2, p. 125; PDF p. 137.
+    ExcessCharArray,
     /// A flexible array member given elements outside a static object's own
     /// structure; GNU C allows only that case, and Clang an empty list too.
     /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p2, p. 125; PDF p. 137.
@@ -1002,7 +1005,7 @@ impl SemanticErrorKind {
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
             | Self::NonConstantArrayInitializer => "not a constant array",
-            | Self::ExcessInitializer | Self::ExcessElements(_) =>
+            | Self::ExcessInitializer | Self::ExcessElements(_) | Self::ExcessCharArray =>
                 "no subobject is left to initialize",
             | Self::FlexibleArrayInitializer => "initializes a flexible array member",
             | Self::FlexibleArrayBraces => "not a brace-enclosed list",
@@ -1983,6 +1986,11 @@ impl SemanticErrorKind {
                 },
                 "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
                  initialized entity; the element is dropped without being evaluated",
+            ),
+            | Self::ExcessCharArray => (
+                "excess elements in char array initializer",
+                "C99 §6.7.8p14 and p2: a string initializes the whole array, so nothing after it \
+                 in the braces has an object to initialize",
             ),
             | Self::FlexibleArrayInitializer => (
                 "initialization of flexible array member is not allowed",
