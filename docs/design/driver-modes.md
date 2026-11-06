@@ -1020,8 +1020,12 @@ design. Every personality reads the options in order, as measured against GCC
 `tcc -g` means `-g`; its `-gstabs` is ignored. The native and WebAssembly back
 ends warn that they write nothing, and `--interpret` says nothing.
 
-Levels 2 and 3 write the same, without macros. The tables' other differences
-from GCC and Clang are in `middle-end.md`, "Debug information".
+Levels 2 and 3 write the same, without macros. Level 1 is line tables, without
+variables or types, as Clang's `-gline-tables-only`. The tables' other differences from GCC and
+Clang are in `middle-end.md`, "Debug information".
+
+Every personality keeps named locals in memory when no optimizer runs, whether or
+not `-g` is given, because GCC and Clang do and `-g` must not change the code.
 
 ## Diagnostic pragmas
 
