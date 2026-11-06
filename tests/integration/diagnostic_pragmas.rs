@@ -337,6 +337,34 @@ int x;
 
     /// GCC's `-Wall` holds `-Wmain`, which `error` and `warning` reach, while
     /// its `ignored "-Wall"` changes nothing; Clang's does not hold it.
+    /// `-Waddress` names what bcc files as `-Wpointer-bool-conversion`, in a
+    /// pragma as on the command line. Both references were asked.
+    #[test]
+    fn a_pragma_naming_address_reaches_the_truth_warning() {
+        const USE: &str = "int g;\nint f(void) { return !!&g; }\n";
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for (class, flags, expected) in [
+                ("ignored", &["-Wall"][..], &[][..]),
+                ("ignored", &["-Wall", "-Werror"][..], &[][..]),
+                ("warning", &["-Wall", "-Werror"][..], &["3 warning"][..]),
+                ("error", &["-Wall"][..], &["3 error"][..]),
+            ] {
+                let source = format!("#pragma GCC diagnostic {class} \"-Waddress\"\n{USE}");
+                assert_eq!(
+                    compile("address_pragma", mode, flags, &source),
+                    expected,
+                    "{mode} {class}"
+                );
+            }
+        }
+        // With no option, the pragma alone turns GCC's on.
+        let source = format!("#pragma GCC diagnostic warning \"-Waddress\"\n{USE}");
+        assert_eq!(
+            compile("address_pragma_alone", "--gcc-mode", &[], &source),
+            ["3 warning"]
+        );
+    }
+
     #[test]
     fn a_pragma_naming_wall_reaches_main_under_gcc() {
         let source = |kind: &str| {

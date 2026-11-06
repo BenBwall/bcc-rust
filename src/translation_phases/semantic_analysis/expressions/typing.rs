@@ -1342,7 +1342,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ) && self.context.configuration.compiler_identity().rules()
             != crate::configuration::RuleSet::Clang
         {
-            self.gcc_address_warning(operand.expression, e.source_vectors);
+            self.gcc_address_warning(operand.expression, None);
         }
         // GNU: a structure or union cast to its own type is its value, an
         // rvalue, as GCC accepts it ("ISO C forbids casting nonscalar to

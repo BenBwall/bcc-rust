@@ -782,7 +782,12 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
                           x=2;\n";
             let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
             assert_eq!(allocations.calls, 0, "statement diagnostic paths");
-            assert!(summary.diagnostics >= 6, "invalid stage-3 source");
+            assert!(summary.diagnostics >= 5, "invalid stage-3 source");
+            // Clang's end of the unit reports nothing after an error.
+            let source = "static int missing(void); int f(void) {return missing();}\n";
+            let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+            assert_eq!(allocations.calls, 0, "undefined internal function");
+            assert_eq!(summary.diagnostics, 1, "undefined internal function");
             let source = format!("void f(void) {{{};}}\n", "if(1)while(1)".repeat(10_000));
             let (summary, allocations) = count_compile(|| bcc_rust::sema_source(&source));
             assert_no_allocations("deep statement paths", summary, &allocations);

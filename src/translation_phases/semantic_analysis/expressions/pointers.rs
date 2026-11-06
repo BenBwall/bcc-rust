@@ -95,7 +95,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.types.nodes[target.index],
                 TypeKind::Scalar(Scalar::Bool)
             ) {
-                self.boolean_conversion_warning(source, source.expression.source_vectors);
+                self.conversion_to_bool_warning(source);
             }
             return true;
         }
@@ -438,7 +438,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.clang_pointer_bool_warning(info, site);
         } else {
-            self.gcc_address_warning(info.expression, site);
+            self.gcc_address_warning(info.expression, Some(site));
+        }
+    }
+
+    /// [`Self::boolean_conversion_warning`] for a conversion to `_Bool`, whose
+    /// location GCC does not take from the expression, so a macro around it
+    /// changes nothing.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
+    fn conversion_to_bool_warning(&mut self, info: ExpressionInfo<'tu>) {
+        if self.nullptr_type(info.ty)
+            || self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang
+        {
+            self.boolean_conversion_warning(info, info.expression.source_vectors);
+        } else {
+            self.gcc_address_warning(info.expression, None);
         }
     }
 
@@ -516,10 +531,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC's `-Waddress` on a truth value, which walks a conditional's arms:
     /// `c_common_truthvalue_conversion` reports the address of a declaration
     /// wherever it is written, and `maybe_warn_for_null_address` the rest of
-    /// what [`Self::gcc_known_address`] finds, unless the conversion's location
-    /// comes from a macro.
+    /// what [`Self::gcc_known_address`] finds, unless `site`, the conversion's
+    /// location where it has one of its own, comes from a macro.
     /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.5.3.2p3, pp. 78-79; PDF pp. 90-91.
-    pub(super) fn gcc_address_warning(&mut self, e: &'tu Expression<'tu>, site: SourceVectors) {
+    pub(super) fn gcc_address_warning(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        site: Option<SourceVectors>,
+    ) {
         use crate::translation_phases::parsing::syntax::ExpressionType as E;
         let e = Self::without_parentheses(e);
         if let E::Conditional(c) = e.kind {
@@ -529,7 +548,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let known = match self.gcc_known_address(e) {
             | GccAddress::Declaration => true,
-            | GccAddress::Folded => !self.context.from_macro_expansion(site),
+            | GccAddress::Folded =>
+                !site.is_some_and(|site| self.context.from_macro_expansion(site)),
             | GccAddress::Unknown => false,
         };
         if known {
