@@ -1,22 +1,10 @@
 sema-sign-compare-clang.c:2:15: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
-  |
-2 |     int r = a < b;
-  |               ^ signed operand converts to unsigned
-  |
-  = note: C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand unsigned, so a negative value compares as a large one
-
+    2 |     int r = a < b;
+      |               ^
 sema-sign-compare-clang.c:3:12: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
-  |
-3 |     r += a == b;
-  |            ^^ signed operand converts to unsigned
-  |
-  = note: C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand unsigned, so a negative value compares as a large one
-
+    3 |     r += a == b;
+      |            ^~
 sema-sign-compare-clang.c:4:12: warning: comparison of integers of different signs: 'int' and 'unsigned long' [-Wsign-compare]
-  |
-4 |     r += a < c;
-  |            ^ signed operand converts to unsigned
-  |
-  = note: C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand unsigned, so a negative value compares as a large one
-
+    4 |     r += a < c;
+      |            ^
 3 warnings generated.
