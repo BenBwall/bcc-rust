@@ -23,6 +23,7 @@ mod braced_strings;
 mod builtin_bindings;
 mod case_label_scopes;
 mod checked_builtins;
+mod clear_padding;
 mod compound_assignments;
 mod computed_goto;
 mod declaration_initializers;

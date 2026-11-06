@@ -102,6 +102,7 @@ __builtin_cimag has=1111 intrinsic double(double _Complex) [InvalidArgumentCount
 __builtin_cimagf has=1111 intrinsic float(float _Complex) [InvalidArgumentCount] +0
 __builtin_cimagl has=1111 intrinsic long double(long double _Complex) [InvalidArgumentCount] +0
 __builtin_classify_type has=1111 intrinsic ?(unprototyped) [InvalidArgumentCount] +0
+__builtin_clear_padding has=1111 intrinsic void(unprototyped) [ClearPaddingOperand] +0
 __builtin_clrsb has=1111 intrinsic int(int) [InvalidArgumentCount] +0
 __builtin_clrsbg has=0000 intrinsic ?(unprototyped) [UndeclaredIdentifier] +0
 __builtin_clrsbl has=1111 intrinsic int(long) [InvalidArgumentCount] +0

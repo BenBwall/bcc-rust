@@ -9,6 +9,7 @@ mod argument_pack;
 mod assembly;
 mod bit_int;
 mod call_diagnostics;
+mod clear_padding;
 mod complex;
 mod correspondence;
 mod effects;
