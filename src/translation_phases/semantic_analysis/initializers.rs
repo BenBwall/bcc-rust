@@ -203,7 +203,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let before = self.semantic_errors;
         self.initializer_checks += 1;
         let mut unmodeled = false;
-        let mut excess_list: Option<&'tu BracedInitializerList<'tu>> = None;
         work.push(InitWork::Value(
             ty,
             initializer,
@@ -626,11 +625,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         }
                     }
                     let Some(mut target) = self.subobject(cursor.container, cursor.index) else {
-                        // Clang reports only a list's first excess element.
-                        let repeated = excess_list.is_some_and(|last| std::ptr::eq(last, list));
-                        excess_list = Some(list);
-                        self.excess_element(cursor.container, element.source_vectors, repeated);
-                        work.push(next_task(self.scratch.alloc(cursor), repeats));
+                        if self.excess_element(cursor.container, element.source_vectors) {
+                            plan.close_zero(zero);
+                        } else {
+                            work.push(next_task(self.scratch.alloc(cursor), repeats));
+                        }
                         continue;
                     };
                     if infer {
@@ -2092,8 +2091,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// C99 §6.7.8p2 makes this a constraint violation, which GCC and Clang
     /// diagnose with a warning, dropping the element unevaluated; TCC and `cl`
     /// refuse it. An array of variable size has no elements to count against.
+    /// Returns whether the rest of the list is dropped too: Clang's
+    /// `InitListChecker` stops there, so a later designator applies nothing,
+    /// while GCC goes on and reports each element.
     /// C99: §6.7.8 paragraph 2, p. 125; PDF p. 137.
-    fn excess_element(&mut self, container: TypeId, source: SourceVectors, repeated: bool) {
+    fn excess_element(&mut self, container: TypeId, source: SourceVectors) -> bool {
         use crate::configuration::CompilerIdentity as Identity;
         let identity = self.context.configuration.compiler_identity();
         let object = match self.types.nodes[container.index] {
@@ -2107,17 +2109,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | _ => Some(InitializedObject::Scalar),
         };
         match (identity, object) {
-            | (Identity::Tcc | Identity::Msvc, _) | (_, None) =>
-                self.error(SemanticErrorKind::ExcessInitializer, source, None, None),
-            | (Identity::Clang | Identity::ClangCl, Some(_)) if repeated => (),
-            | (Identity::Gcc | Identity::Clang | Identity::ClangCl, Some(object)) => self
-                .group_diagnostic(
+            | (Identity::Tcc | Identity::Msvc, _) | (_, None) => {
+                self.error(SemanticErrorKind::ExcessInitializer, source, None, None);
+                false
+            },
+            | (Identity::Gcc | Identity::Clang | Identity::ClangCl, Some(object)) => {
+                self.group_diagnostic(
                     crate::configuration::DiagnosticGroup::ExcessInitializers,
                     SemanticErrorKind::ExcessElements(object),
                     source,
                     None,
                     None,
-                ),
+                );
+                identity.rules() == crate::configuration::RuleSet::Clang
+            },
         }
     }
 
