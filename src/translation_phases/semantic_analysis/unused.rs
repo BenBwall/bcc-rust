@@ -1111,7 +1111,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         false
     }
 
-    const fn is_assignment(operator: B) -> bool {
+    pub(super) const fn is_assignment(operator: B) -> bool {
         matches!(
             operator,
             B::Assignment
@@ -1133,7 +1133,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types.unanalyzed(ty) || self.types.nodes[ty.index] == TypeKind::Scalar(Scalar::Void)
     }
 
-    fn without_parentheses(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+    pub(super) fn without_parentheses(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
         while let E::Parenthesized { expression } = e.kind {
             e = expression;
         }

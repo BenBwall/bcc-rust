@@ -157,12 +157,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .or(list.opening_brace_source_vectors);
         if let Some(place) = closing {
             let name = self.missing_field_wording(ty, &member);
-            self.group_diagnostic(
+            self.spelled_group_diagnostic(
                 DiagnosticGroup::MissingFieldInitializers,
                 SemanticErrorKind::MissingFieldInitializer,
                 place,
                 Some(name),
-                None,
             );
         }
     }
