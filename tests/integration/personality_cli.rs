@@ -1791,7 +1791,7 @@ mod tests {
         }
     }
 
-    /// `/Zi`, `/Z7` and `/ZI` put CodeView in the object, as with clang-cl.
+    /// `/Zi`, `/Z7` and `/ZI` put `CodeView` in the object, as with clang-cl.
     #[test]
     fn msvc_debug_options_write_codeview() {
         let directory = Directory::new();

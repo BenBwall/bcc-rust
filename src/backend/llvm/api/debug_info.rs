@@ -79,10 +79,14 @@ pub(in super::super) struct FunctionDescription<'a, 'id> {
     pub(in super::super) optimized:  bool,
 }
 
+#[expect(
+    clippy::unused_self,
+    reason = "The receiver binds handle types to this session's invariant brand."
+)]
 impl<'id> Session<'id> {
     /// A `DIBuilder` for the session's module, after recording in the module
     /// which debug format its objects carry: `dwarf` names a DWARF version,
-    /// otherwise the module's debug information is CodeView, as Clang's is
+    /// otherwise the module's debug information is `CodeView`, as Clang's is
     /// for an MSVC target.
     pub(in super::super) fn debug_builder<'a>(
         &'a self,

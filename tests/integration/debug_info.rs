@@ -346,7 +346,7 @@ long use(int n)
         }
     }
 
-    /// CodeView for an MSVC target unless DWARF is asked for, and DWARF for
+    /// `CodeView` for an MSVC target unless DWARF is asked for, and DWARF for
     /// MinGW, as with Clang. Not run on Windows here; the bytes are the
     /// object's whatever the host.
     #[test]

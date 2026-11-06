@@ -30,6 +30,10 @@ use super::Target;
 /// The code generation options that depend on how the output is linked or
 /// on the machine it runs on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent command-line option."
+)]
 pub(crate) struct CodeOptions {
     /// The relocation model the last `-fpic`-family flag selected, or
     /// `None` for the target's default.

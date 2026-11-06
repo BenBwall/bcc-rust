@@ -63,7 +63,7 @@ pub(crate) struct DebugUnit {
     /// How much the unit describes.
     pub(crate) level:         DebugLevel,
     /// The DWARF version `-gdwarf-N` asked for; `None` leaves the default,
-    /// which is DWARF 5, or CodeView for an MSVC target.
+    /// which is DWARF 5, or `CodeView` for an MSVC target.
     pub(crate) dwarf_version: Option<u8>,
     /// An optimizer ran, so a debugger should expect moved and merged code.
     pub(crate) optimized:     bool,

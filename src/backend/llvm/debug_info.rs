@@ -6,8 +6,8 @@
 //!
 //! Debug records only describe code, and LLVM keeps code generation
 //! independent of them, so `-g` does not change the machine code. An MSVC
-//! target gets CodeView unless `-gdwarf-N` asks for DWARF, as with Clang; every
-//! other target gets DWARF 5 by default, as with GCC and Clang.
+//! target gets `CodeView` unless `-gdwarf-N` asks for DWARF, as with Clang;
+//! every other target gets DWARF 5 by default, as with GCC and Clang.
 //!
 //! An instruction with no location keeps none. LLVM requires a location only
 //! on a call that its inliner could expand, between two functions that both
@@ -181,7 +181,7 @@ fn scope_in_file<'id>(
         .or_insert_with(|| builder.file_scope(node, files[file.index()]))
 }
 
-/// The DWARF version a module's objects carry, or `None` for CodeView: an
+/// The DWARF version a module's objects carry, or `None` for `CodeView`: an
 /// MSVC target's format unless `-gdwarf-N` asks for DWARF, and otherwise
 /// DWARF 5, the default of GCC 14.2 and Clang 23.
 const fn dwarf_version(target: Target, asked: Option<u8>) -> Option<u8> {
@@ -194,10 +194,6 @@ const fn dwarf_version(target: Target, asked: Option<u8>) -> Option<u8> {
 
 /// The working directory, which `DW_AT_comp_dir` records and relative source
 /// names are relative to; empty if it cannot be read.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "The compilation directory is a fact of the host that debug information records."
-)]
 fn compilation_directory(arena: &Bump) -> &str {
     std::env::current_dir().map_or("", |path| arena.alloc_str(&path.to_string_lossy()))
 }

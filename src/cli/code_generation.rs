@@ -364,7 +364,7 @@ pub(super) struct CodeGeneration {
     #[arg(long, action = clap::ArgAction::Count, hide = true)]
     pub(super) debug_toggle: u8,
     /// The DWARF version of the debug information, 2 through 6; the default
-    /// is 5, or CodeView for an MSVC target.
+    /// is 5, or `CodeView` for an MSVC target.
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u8).range(2..=6),
         overrides_with = "dwarf_version")]
     pub(super) dwarf_version: Option<u8>,
@@ -488,7 +488,7 @@ impl CodeGeneration {
     /// The debug level the options ask for, 0 for none.
     pub(super) fn debug_level(&self) -> u8 {
         let level = self.debug_level.unwrap_or(0);
-        if self.debug_toggle % 2 == 0 {
+        if self.debug_toggle.is_multiple_of(2) {
             level
         } else if level == 0 {
             2
