@@ -177,7 +177,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
                 ExpressionType::StatementExpression(block) => {
                     if let StatementType::Compound { items } = block.kind
-                        && let Some(&BlockItem::Statement(mut tail)) = items.last() {
+                        && let Some((&BlockItem::Statement(mut tail), _)) = self.statement_expression_value_item(items.as_slice()) {
                         loop {
                             match tail.kind {
                                 StatementType::Label(_, child) => tail = child,

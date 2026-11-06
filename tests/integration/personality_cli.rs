@@ -2787,6 +2787,41 @@ mod tests {
         }
     }
 
+    /// GCC looks past null statements for a statement expression's value, and
+    /// Clang gives that block none.
+    #[test]
+    fn statement_expression_value_before_null_statements_follows_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "s.c",
+            "#include <stdio.h>\nstatic int f(void) { return ({ int x = 9; x;; }); }\nint \
+             main(void) {\n  int a = ({ 7;; });\n  int b = ({ l: 8; ; ; });\n  int c = sizeof(({ \
+             1;; }));\n  if (({ 0;; })) puts(\"yes\"); else puts(\"no\");\n  printf(\"%d %d %d \
+             %d\\n\", a, b, f(), c);\n  (void)&&l;\n  return 0;\n}\n",
+        );
+        for options in [&["-O0"][..], &["-O2"]] {
+            let args = [options, &["-w", "s.c", "-o", "s"]].concat();
+            succeeds(&directory.bcc("--gcc-mode", &args));
+            let run = Command::new(directory.path("s")).output().unwrap();
+            assert_eq!(stdout(&run), "no\n7 8 9 4\n", "{options:?}");
+        }
+        directory.write("v.c", "int f(void) { return ({ 1;; }); }\n");
+        assert!(
+            !directory
+                .bcc("--clang-mode", &["-c", "v.c", "-o", "v.o"])
+                .status
+                .success()
+        );
+        // Other statements after the value leave GCC's block without one too.
+        directory.write("n.c", "int f(void) { return ({ 1; {} }); }\n");
+        assert!(
+            !directory
+                .bcc("--gcc-mode", &["-c", "n.c", "-o", "n.o"])
+                .status
+                .success()
+        );
+    }
+
     /// The options around GCC 14's permerrors and Clang's default errors,
     /// as each compiler orders them: `-Werror` does not reach into a system
     /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`
