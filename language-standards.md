@@ -2363,9 +2363,14 @@ was run):
   that supplied its name, that replacement's macro may expand again inside
   the call's replacement, as GCC and Clang choose (C11 §6.10.3.4p4 allows
   either); `TraceLoggingProvider.h` counts arguments that way.
-- `__rdtsc` is Clang's x86 builtin in every target and mode
+- `__rdtsc` is Clang's x86 builtin in every x86 target and mode
   (`unsigned long long __rdtsc(void)`, `llvm.x86.rdtsc`); the interpreter
   gives an increasing counter and the native back end refuses it.
+  `__builtin_ia32_rdtsc` is the same read under GCC's and Clang's spelling.
+  `__builtin_ia32_pause`, `_lfence`, `_sfence` and `_mfence` each run their
+  instruction, ordered against memory accesses, on both native-code back ends;
+  the interpreter refuses them as inline assembly. None of these exists on a
+  WebAssembly target, so `__has_builtin` is 0 there.
   `__debugbreak` is the Microsoft breakpoint with Microsoft extensions
   (`llvm.debugtrap`, `int3`); the interpreter ends the program as an
   undebugged breakpoint does.
