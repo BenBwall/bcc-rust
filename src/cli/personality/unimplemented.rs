@@ -172,10 +172,6 @@ const REFUSED: &[(&str, &str)] = &[
     ),
     ("-fno-merge-constants", "bcc may merge identical constants"),
     (
-        "-fstrict-volatile-bitfields",
-        "bcc may access volatile bit-fields by byte",
-    ),
-    (
         "-fstrict-flex-arrays*",
         "bcc treats every trailing array as flexible",
     ),
@@ -490,7 +486,6 @@ const IGNORED: &[&str] = &[
     "-fno-semantic-interposition",
     "-fstrict-bool",
     "-f[no-]assumptions",
-    "-fno-strict-volatile-bitfields",
     "-fsso-struct=native",
     "-fsso-struct=little-endian",
     "-fstack-reuse=all",

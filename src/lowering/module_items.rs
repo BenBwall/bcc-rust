@@ -402,7 +402,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// Whether this unit defines the linked object `binding`, tentatively
     /// included. C99: §6.9.2p2, p. 143; PDF p. 155.
     pub(super) fn defines_object(&self, binding: usize) -> bool {
-        self.defined_objects.contains_key(self.symbol_name(binding))
+        self.defines_object_named(self.symbol_name(binding))
+    }
+
+    /// Whether this unit defines the linked object named `name`, tentatively
+    /// included. C99: §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn defines_object_named(&self, name: &str) -> bool {
+        self.defined_objects.contains_key(name)
     }
 
     /// Whether this unit defines the linked object `binding` only

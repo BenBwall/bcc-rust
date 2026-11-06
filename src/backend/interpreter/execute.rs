@@ -342,8 +342,17 @@ impl Machine<'_, '_, '_> {
                 })
             },
             | InstData::Load {
-                ty, align, addr, ..
-            } => self.memory.load(ty, self.value(addr), align)?,
+                ty,
+                flags,
+                align,
+                addr,
+                ..
+            } =>
+                if flags.contains(InstFlags::VOLATILE) {
+                    self.memory.load_volatile(ty, self.value(addr), align)?
+                } else {
+                    self.memory.load(ty, self.value(addr), align)?
+                },
             | InstData::Store {
                 ty,
                 align,
