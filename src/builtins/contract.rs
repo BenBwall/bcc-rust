@@ -352,6 +352,10 @@ pub(crate) enum BuiltinOperation {
     /// x86 `__rdtsc`: the processor's time-stamp counter.
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-readcyclecounter>
     ReadTimestamp,
+    /// An x86 instruction with no operands, ordered against memory accesses
+    /// (`__builtin_ia32_pause` and the fences): the instruction's text. GCC
+    /// manual, "x86 Built-in Functions".
+    X86Instruction(&'static str),
     /// Microsoft `__debugbreak`: a breakpoint trap after which execution
     /// may continue. MSVC extension: Microsoft Learn, "__debugbreak".
     /// <https://learn.microsoft.com/en-us/cpp/intrinsics/debugbreak>

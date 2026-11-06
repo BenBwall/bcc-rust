@@ -563,6 +563,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 },
                 Type::I64,
             )),
+            // GCC orders these against memory accesses, and so does a memory
+            // clobber. GCC manual, "x86 Built-in Functions".
+            | CommonBuiltin::X86Instruction(instruction) => {
+                let asm = self.scratch.alloc(crate::ir::InlineAsm {
+                    template:     instruction,
+                    operands:     &[],
+                    clobbers:     crate::ir::AsmClobbers {
+                        memory: true,
+                        ..Default::default()
+                    },
+                    side_effects: true,
+                });
+                _ = self.draft.push(Op::InlineAsm(asm, &[]), None);
+                Operand::Void
+            },
             // Microsoft `__debugbreak` traps to a debugger and may continue.
             | CommonBuiltin::DebugTrap => {
                 _ = self.draft.push(

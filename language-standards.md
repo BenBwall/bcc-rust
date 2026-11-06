@@ -2353,6 +2353,10 @@ was run):
 - `__rdtsc` is Clang's x86 builtin in every target and mode
   (`unsigned long long __rdtsc(void)`, `llvm.x86.rdtsc`); the interpreter
   gives an increasing counter and the native back end refuses it.
+  `__builtin_ia32_rdtsc` is the same read under GCC's and Clang's spelling.
+  `__builtin_ia32_pause`, `_lfence`, `_sfence` and `_mfence` each run their
+  instruction, ordered against memory accesses, on both native-code back ends;
+  the interpreter and WebAssembly refuse them as inline assembly.
   `__debugbreak` is the Microsoft breakpoint with Microsoft extensions
   (`llvm.debugtrap`, `int3`); the interpreter ends the program as an
   undebugged breakpoint does.
