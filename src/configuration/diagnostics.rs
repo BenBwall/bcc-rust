@@ -46,6 +46,17 @@ pub(crate) enum DiagnosticFormat {
     Tcc,
 }
 
+/// What the options ask of color in diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiagnosticColor {
+    /// No option: the terminal and bcc's environment variables decide.
+    Unset,
+    /// `-fdiagnostics-color=auto`: the terminal alone decides.
+    Auto,
+    Always,
+    Never,
+}
+
 /// What GCC's and Clang's formats write of a diagnostic, each from the last
 /// option that sets it. The other formats have their own rules.
 #[expect(
@@ -64,9 +75,9 @@ pub(crate) struct DiagnosticPresentation {
     pub(crate) line_numbers: bool,
     /// The `[-Wname]` after a message: `-f[no-]diagnostics-show-option`.
     pub(crate) option_names: bool,
-    /// Whether to color, when an option says: `-fdiagnostics-color=`,
-    /// `-f[no-]color-diagnostics`. `None` leaves it to the terminal.
-    pub(crate) color:        Option<bool>,
+    /// What an option says about color: `-fdiagnostics-color=`,
+    /// `-f[no-]color-diagnostics`.
+    pub(crate) color:        DiagnosticColor,
 }
 
 impl Default for DiagnosticPresentation {
@@ -76,7 +87,7 @@ impl Default for DiagnosticPresentation {
             column:       true,
             line_numbers: true,
             option_names: true,
-            color:        None,
+            color:        DiagnosticColor::Unset,
         }
     }
 }
@@ -97,6 +108,15 @@ impl CompilerConfiguration {
 
     pub(crate) const fn diagnostic_presentation(self) -> DiagnosticPresentation {
         self.diagnostic_presentation
+    }
+
+    /// What the options ask of color: nothing, in the formats that do not
+    /// read them.
+    pub(crate) const fn diagnostic_color(self) -> DiagnosticColor {
+        match self.diagnostic_format {
+            | DiagnosticFormat::Gcc | DiagnosticFormat::Clang => self.diagnostic_presentation.color,
+            | _ => DiagnosticColor::Unset,
+        }
     }
 
     pub(crate) const fn diagnostic_format(self) -> DiagnosticFormat {

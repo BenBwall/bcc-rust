@@ -38,6 +38,7 @@ mod warning_names;
 mod options;
 
 pub(crate) use diagnostics::{
+    DiagnosticColor,
     DiagnosticFormat,
     DiagnosticGroup,
     DiagnosticPresentation,

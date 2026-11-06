@@ -109,7 +109,7 @@ pub(super) fn print_preprocessed<'tu>(
     let mut reporter = DiagnosticReporter::new(
         &reporter_arena,
         tu,
-        RenderColor::for_stderr(context.configuration.diagnostic_presentation().color),
+        RenderColor::for_stderr(context.configuration.diagnostic_color()),
     );
     let stderr = &mut io::stderr();
     let mut diagnosed = 0;

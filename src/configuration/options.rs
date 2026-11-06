@@ -996,7 +996,7 @@ impl CompilerConfiguration {
                 column:       true,
                 line_numbers: true,
                 option_names: true,
-                color:        None,
+                color:        super::DiagnosticColor::Unset,
             },
             warning_options: [super::diagnostics::WarningSettings::DEFAULT;
                 super::DiagnosticGroup::COUNT],

@@ -31,6 +31,7 @@ use crate::{
     configuration::{
         CompilerConfiguration,
         CompilerIdentity,
+        DiagnosticColor,
         DiagnosticFormat,
         DiagnosticGroup,
         DiagnosticPresentation,
@@ -436,15 +437,15 @@ impl Cli {
                 | "-fdiagnostics-show-option" => presentation.option_names = true,
                 | "-fno-diagnostics-show-option" => presentation.option_names = false,
                 | "-fdiagnostics-color" | "-fdiagnostics-color=always" | "-fcolor-diagnostics" =>
-                    presentation.color = Some(true),
+                    presentation.color = DiagnosticColor::Always,
                 | "-fno-diagnostics-color"
                 | "-fdiagnostics-color=never"
-                | "-fno-color-diagnostics" => presentation.color = Some(false),
-                | "-fdiagnostics-color=auto" => presentation.color = None,
+                | "-fno-color-diagnostics" => presentation.color = DiagnosticColor::Never,
+                | "-fdiagnostics-color=auto" => presentation.color = DiagnosticColor::Auto,
                 | "-fdiagnostics-plain-output" => {
                     presentation.caret = false;
                     presentation.line_numbers = false;
-                    presentation.color = Some(false);
+                    presentation.color = DiagnosticColor::Never;
                 },
                 | _ => {},
             }
