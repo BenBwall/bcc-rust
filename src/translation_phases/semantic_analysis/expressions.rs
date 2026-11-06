@@ -160,12 +160,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         );
                     }
                 } else if !self_reference && !e.recovered && !self.builtin_name(name) {
-                    self.error(
-                        SemanticErrorKind::UndeclaredIdentifier,
-                        name.source_vectors,
-                        Some(name.name),
-                        None,
-                    );
+                    let kind = if self.functions.current.is_some() {
+                        SemanticErrorKind::UndeclaredIdentifier
+                    } else {
+                        SemanticErrorKind::UndeclaredOutsideFunction
+                    };
+                    self.error(kind, name.source_vectors, Some(name.name), None);
                 }
             },
             | E::Constant(Constant::Integer(value)) => {

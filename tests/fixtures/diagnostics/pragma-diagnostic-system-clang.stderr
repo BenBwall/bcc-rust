@@ -1,9 +1,4 @@
 pragma-diagnostic-system-clang.c:12:5: warning: `LOUD` is not defined; it evaluates to 0
-   |
-12 | #if LOUD
-   |     ^^^^ not a macro
-   |
-   = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
-   = help: use `defined(LOUD)` to test whether it is defined
-
+   12 | #if LOUD
+      |     ^~~~
 1 warning generated.

@@ -109,12 +109,37 @@ impl Renderer {
             return out.into_str();
         }
 
-        let marks = Self::marks(diagnostic, context, scratch);
+        let mut marks = Self::marks(diagnostic, context, scratch);
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
+        // GCC and Clang share one snippet: a gutter five wide, nothing around
+        // the source line and its caret, and what relates to the message in
+        // `note:` lines of its own.
+        let compiler_snippet = matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang);
+        let related = if compiler_snippet {
+            let mut related = ArenaVec::new_in(scratch);
+            related.extend(
+                marks
+                    .iter()
+                    .filter(|mark| !mark.primary && mark.label.is_some())
+                    .cloned(),
+            );
+            marks.retain(|mark| mark.primary);
+            for mark in &mut marks {
+                mark.label = None;
+            }
+            related
+        } else {
+            ArenaVec::new_in(scratch)
+        };
         let gutter_width = if max_line == 0 {
             1
         } else {
             max_line.ilog10() as usize + 1
+        };
+        let gutter_width = if compiler_snippet {
+            gutter_width.max(5)
+        } else {
+            gutter_width
         };
         let mut pad = ArenaString::new_in(scratch);
         for _ in 0..gutter_width {
@@ -170,7 +195,9 @@ impl Renderer {
                     column,
                 );
             }
-            let _ = writeln!(out, "{pad} {bar}");
+            if !compiler_snippet {
+                let _ = writeln!(out, "{pad} {bar}");
+            }
             let starts = context.source_line_starts(file).unwrap_or(&[0]);
             self.render_file_lines(
                 &mut out,
@@ -178,8 +205,21 @@ impl Renderer {
                 (file, text, starts),
                 diagnostic.severity,
                 (gutter_width, pad.as_str()),
+                compiler_snippet,
                 scratch,
             );
+        }
+        if compiler_snippet {
+            for mark in related {
+                self.render_related_note(
+                    &mut out,
+                    mark,
+                    context,
+                    (gutter_width, pad.as_str()),
+                    scratch,
+                );
+            }
+            return out.into_str();
         }
 
         let has_snippet = !files.is_empty();
@@ -209,6 +249,44 @@ impl Renderer {
         out.into_str()
     }
 
+    /// Writes `mark`, a secondary place in a diagnostic, as GCC and Clang do:
+    /// a `note:` of its own, located there, over its source line.
+    fn render_related_note(
+        &self,
+        out: &mut ArenaString<'_>,
+        mark: Mark<'_>,
+        context: &Context<'_>,
+        gutter: (usize, &str),
+        scratch: &Bump,
+    ) {
+        let text = context.source_text(mark.file).unwrap_or_default();
+        let starts = context.source_line_starts(mark.file).unwrap_or(&[0]);
+        let line_start = starts.get(mark.line - 1).copied().unwrap_or(0);
+        let _ = writeln!(
+            out,
+            "{}:{}:{}: {} {}",
+            context.get_source_file(mark.file).display(),
+            mark.line,
+            mark.start.saturating_sub(line_start) + 1,
+            self.paint("note:", Style::new().bold()),
+            mark.label.unwrap_or_default(),
+        );
+        let marks = [Mark {
+            primary: true,
+            label: None,
+            ..mark
+        }];
+        self.render_file_lines(
+            out,
+            &marks,
+            (marks[0].file, text, starts),
+            ErrorSeverity::Warning,
+            gutter,
+            true,
+            scratch,
+        );
+    }
+
     fn render_file_lines(
         &self,
         out: &mut ArenaString<'_>,
@@ -216,8 +294,11 @@ impl Renderer {
         (file, text, starts): (u32, &str, &[usize]),
         severity: ErrorSeverity,
         (gutter_width, pad): (usize, &str),
+        compiler_snippet: bool,
         scratch: &Bump,
     ) {
+        // GCC and Clang mark the rest of a range with tildes.
+        let tail = if compiler_snippet { '~' } else { '^' };
         let bar = self.paint("|", Self::gutter_style());
         // Sort once and walk the marks line by line: rescanning every mark
         // for each line made a label spanning many lines quadratic.
@@ -295,7 +376,7 @@ impl Renderer {
                         underline.push(' ');
                     },
                     | (Some(primary), Some((current, text))) if current == primary =>
-                        text.push(if *primary { '^' } else { '-' }),
+                        text.push(if *primary { tail } else { '-' }),
                     | (Some(primary), _) => {
                         flush(&mut run, &mut underline);
                         let mut text = ArenaString::new_in(scratch);

@@ -141,6 +141,20 @@ the Clang identities, and none of them for `cl` or TCC
 bcc's own `-ffloatn-types` and `-fno-floatn-types`, which the GCC, Clang,
 TCC and clang-cl personalities pass on, override either default.
 
+GCC and Clang share a snippet: the source line under a gutter five wide, the
+caret and tildes under it, and nothing around them; bcc's labels and the C99
+notes and help it adds to its own format are left out. What a diagnostic relates
+to, such as an earlier declaration, is a `note:` of its own with its own snippet.
+Most messages keep bcc's wording. The wording is each compiler's for an
+undeclared identifier, a missing expression, and the conversions in
+`semantic_analysis/compiler_wording.rs`. The differences left: GCC's `In
+function 'f':` header and its `each undeclared identifier` note are not written;
+GCC's labels under an operand are not written; every caret is a caret and tildes,
+where Clang marks a single token with the caret alone and each side of an operator
+with tildes; and because the whole unit is parsed before semantic analysis, syntax
+errors come before semantic ones, and recovery can find different errors after
+the first.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`

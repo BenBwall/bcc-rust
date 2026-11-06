@@ -1759,6 +1759,36 @@ impl Display for ParserError<'_> {
     }
 }
 
+impl ParserError<'_> {
+    /// GCC's and Clang's words for a missing expression, in their diagnostic
+    /// formats. GCC names what it found, as its `c_parse_error` does.
+    fn gnu_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
+        use crate::configuration::DiagnosticFormat as Format;
+        if !matches!(
+            self.error_type,
+            ParserErrorType::ExpectedStatementExpression("expression operand", _)
+        ) {
+            return None;
+        }
+        match context.configuration.diagnostic_format() {
+            | Format::Clang => Some("expected expression"),
+            | Format::Gcc => Some(match (self.found, self.found_spelling) {
+                | (None, _) | (_, None) => "expected expression at end of input",
+                | (Some(TokenType::Identifier | TokenType::Keyword(_)), Some(spelling)) =>
+                    format_in!(arena, "expected expression before '{spelling}'"),
+                | (Some(TokenType::Integer(_) | TokenType::Float(_)), _) =>
+                    "expected expression before numeric constant",
+                | (Some(TokenType::String(_)), _) => "expected expression before string constant",
+                | (Some(TokenType::Character(_)), _) =>
+                    "expected expression before character constant",
+                | (Some(TokenType::Operator(_)), Some(spelling)) =>
+                    format_in!(arena, "expected expression before '{spelling}' token"),
+            }),
+            | _ => None,
+        }
+    }
+}
+
 impl ToDiagnostic for ParserError<'_> {
     fn diagnostic_in<'d>(
         &self,
@@ -1777,6 +1807,9 @@ impl ToDiagnostic for ParserError<'_> {
             } else {
                 "ISO C forbids an empty translation unit [-Wpedantic]"
             };
+        }
+        if let Some(words) = self.gnu_message(context, arena) {
+            explanation.message = words;
         }
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
