@@ -747,6 +747,50 @@ mod tests {
         );
     }
 
+    /// `-W` is the old spelling of `-Wextra`, which redis and nginx still
+    /// pass, and `-Wp,-MD,FILE` names the dependency file, as kbuild passes
+    /// it, rather than an input.
+    #[test]
+    fn old_warning_and_dependency_spellings_reach_their_options() {
+        let directory = Directory::new();
+        directory.write("x.c", "int x;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-W", "-Wall", "-c", "x.c", "-o", "x.o"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
+            for (option, file) in [("-Wp,-MD,x.d", "x.d"), ("-Wp,-MMD,y.d", "y.d")] {
+                let output = directory.bcc(mode, &[option, "-c", "x.c", "-o", "x.o"]);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {option}");
+                let text = std::fs::read_to_string(directory.path(file)).unwrap();
+                assert!(
+                    text.starts_with("x.o:") && text.contains("x.c"),
+                    "{mode}: {text}"
+                );
+            }
+        }
+    }
+
+    /// `-r` links partially, as kbuild's `built-in.o` needs: no start files or
+    /// libraries, and the output is another object to link.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn partial_links_produce_an_object_to_link() {
+        let directory = Directory::new();
+        directory.write("a.c", "int b(void);\nint main(void) { return b(); }\n");
+        directory.write("b.c", "int b(void) { return 42; }\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            succeeds(&directory.bcc(mode, &["-c", "a.c", "-o", "a.o"]));
+            succeeds(&directory.bcc(mode, &["-c", "b.c", "-o", "b.o"]));
+            let partial = directory.bcc(mode, &["-r", "a.o", "b.o", "-o", "both.o"]);
+            succeeds(&partial);
+            assert_eq!(stderr(&partial), "", "{mode}");
+            succeeds(&directory.bcc(mode, &["both.o", "-o", "both.exe"]));
+            let run = Command::new(directory.path("both.exe")).output().unwrap();
+            assert_eq!(run.status.code(), Some(42), "{mode}");
+        }
+    }
+
     /// `__BASE_FILE__` names the main source file as the command line
     /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
     #[test]

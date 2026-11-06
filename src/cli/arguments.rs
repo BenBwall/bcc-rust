@@ -1033,7 +1033,8 @@ const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
 
 /// GCC's linker options without an operand, which the driver passes to the
 /// link in order with the inputs.
-const SINGLE_DASH_LINKER_OPTIONS: [&str; 8] = [
+const SINGLE_DASH_LINKER_OPTIONS: [&str; 9] = [
+    "-r",
     "-static",
     "-nostdlib",
     "-nostartfiles",

@@ -640,7 +640,8 @@ const OPERAND_OPTIONS: [&str; 15] = [
 ];
 
 /// Options bcc reads in GCC's spelling and that take no operand.
-const PLAIN_OPTIONS: [&str; 29] = [
+const PLAIN_OPTIONS: [&str; 30] = [
+    "-r",
     "-w",
     "-pedantic",
     "-pedantic-errors",
@@ -675,7 +676,8 @@ const PLAIN_OPTIONS: [&str; 29] = [
 /// The [`PLAIN_OPTIONS`] only the link uses, which Clang reports as unused
 /// when the command line does not link. It uses `-static`, `-pthread`,
 /// `-nostdlib` and `-nodefaultlibs` in every stage.
-const LINK_ONLY_OPTIONS: [&str; 7] = [
+const LINK_ONLY_OPTIONS: [&str; 8] = [
+    "-r",
     "-shared",
     "-pie",
     "-no-pie",
@@ -707,6 +709,10 @@ impl State<'_> {
         if text == "-" || !text.starts_with('-') {
             self.input(argument);
             return None;
+        }
+        // The old spelling of `-Wextra`, which both compilers still take.
+        if text == "-W" {
+            return self.argument(OsStr::new("-Wextra"), rest);
         }
         let clang = self.compiler == Compiler::Clang;
         // `-print-file-name=NAME`: the library or start file the link would
@@ -1407,6 +1413,11 @@ impl State<'_> {
             let mut pieces = options.split(',').map(OsStr::new);
             while let Some(piece) = pieces.next() {
                 if let Some(plan) = self.argument(piece, &mut pieces) {
+                    drop(plan);
+                }
+                if matches!(piece.to_str(), Some("-MD" | "-MMD"))
+                    && let Some(plan) = self.argument(OsStr::new("-MF"), &mut pieces)
+                {
                     drop(plan);
                 }
             }
