@@ -30,9 +30,39 @@ use crate::{
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Checks the binary expression `e`, if `-Wsign-compare` is on and it
+    /// compares.
+    /// C99: §6.5.8p3, p. 86; PDF p. 98; §6.5.9p4, p. 87; PDF p. 99.
+    pub(super) fn check_compared_signs(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        operator: B,
+        left: &'tu Expression<'tu>,
+        right: &'tu Expression<'tu>,
+    ) {
+        if self.unused.sign_compare
+            && matches!(
+                operator,
+                B::LessThan
+                    | B::LessThanOrEqual
+                    | B::GreaterThan
+                    | B::GreaterThanOrEqual
+                    | B::Equal
+                    | B::NotEqual
+            )
+        {
+            self.check_sign_compare(
+                e,
+                operator,
+                self.expression_info(left),
+                self.expression_info(right),
+            );
+        }
+    }
+
     /// Checks the comparison `e` of `left` and `right`.
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
-    pub(super) fn check_sign_compare(
+    fn check_sign_compare(
         &mut self,
         e: &'tu Expression<'tu>,
         operator: B,

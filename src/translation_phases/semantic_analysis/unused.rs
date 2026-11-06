@@ -118,21 +118,30 @@ struct WriteSite {
     clang_compound: bool,
 }
 
-/// Working state for the warnings this module implements.
+/// Working state for the warnings this module implements, and whether
+/// the other warnings an identifier-free check serves are on.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag gates an independent group of warnings."
+)]
 pub(super) struct UnusedState<'s> {
     /// Whether a warning that needs identifier uses recorded is on.
-    pub(super) tracking: bool,
+    pub(super) tracking:       bool,
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
-    pub(super) values:   bool,
-    variables:           ArenaVec<'s, Usage>,
-    file_scope:          ArenaMap<'s, StringCacheId, Usage>,
-    writes:              ArenaMap<'s, usize, WriteSite>,
+    pub(super) values:         bool,
+    /// Whether `-Wsign-compare` is on.
+    pub(super) sign_compare:   bool,
+    /// Whether `-Wmissing-field-initializers` is on.
+    pub(super) missing_fields: bool,
+    variables:                 ArenaVec<'s, Usage>,
+    file_scope:                ArenaMap<'s, StringCacheId, Usage>,
+    writes:                    ArenaMap<'s, usize, WriteSite>,
     /// The commas that separate an attribute's arguments, which bcc parses as
     /// one expression: their left operands are arguments, not discarded.
-    separators:          ArenaMap<'s, usize, ()>,
+    separators:                ArenaMap<'s, usize, ()>,
     /// Tags declared `unused`, whose variables both compilers exempt.
-    exempt_tags:         ArenaMap<'s, StringCacheId, ()>,
+    exempt_tags:               ArenaMap<'s, StringCacheId, ()>,
 }
 
 impl<'s> UnusedState<'s> {
@@ -159,6 +168,8 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            sign_compare: on(&[G::SignCompare]),
+            missing_fields: on(&[G::MissingFieldInitializers]),
             variables: ArenaVec::new_in(scratch),
             file_scope: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             writes: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

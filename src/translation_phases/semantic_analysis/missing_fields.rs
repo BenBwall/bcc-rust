@@ -56,7 +56,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             match self.types.nodes[self.types.non_atomic(ty).index] {
                 | TypeKind::Array(element, _) => {
                     let designators = list.elements.iter().any(|e| e.designation.is_some());
-                    for item in list.elements.iter() {
+                    for item in list.elements {
                         match item.initializer.kind {
                             | InitializerType::InitializerList(inner) =>
                                 work.push((inner, element, designated || designators)),
@@ -71,7 +71,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let tag = self.types.tags[id];
                     let members = tag.members.get();
                     if tag.kind == TagKind::Union {
-                        self.walk_union(list, members, designated, &mut work);
+                        Self::walk_union(list, members, designated, &mut work);
                     } else if tag.kind == TagKind::Struct {
                         self.walk_struct(list, ty, members, designated, &mut work);
                     }
@@ -82,7 +82,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     fn walk_union(
-        &self,
         list: &'tu BracedInitializerList<'tu>,
         members: &'tu [Member],
         designated: bool,
@@ -91,7 +90,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(item) = list.elements.as_slice().first() else {
             return;
         };
-        let member = match self.named_member(item, members) {
+        let member = match Self::named_member(item, members) {
             | Some(found) => found.map(|index| &members[index]),
             | None => members.iter().find(|member| Self::initializable(member)),
         };
@@ -112,8 +111,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) {
         let mut designators = false;
         let mut next = 0;
-        for item in list.elements.iter() {
-            match self.named_member(item, members) {
+        for item in list.elements {
+            match Self::named_member(item, members) {
                 | Some(Some(index)) => {
                     designators = true;
                     next = index;
@@ -156,9 +155,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let closing = list
             .closing_brace_source_vectors
             .or(list.opening_brace_source_vectors);
-        if let Some(place) = closing
-            && let Some(name) = self.missing_field_wording(ty, &member)
-        {
+        if let Some(place) = closing {
+            let name = self.missing_field_wording(ty, &member);
             self.group_diagnostic(
                 DiagnosticGroup::MissingFieldInitializers,
                 SemanticErrorKind::MissingFieldInitializer,
@@ -175,11 +173,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         clippy::option_option,
         reason = "No designator and an unreadable one are different answers."
     )]
-    fn named_member(
-        &self,
-        item: &InitializerElement<'tu>,
-        members: &[Member],
-    ) -> Option<Option<usize>> {
+    fn named_member(item: &InitializerElement<'tu>, members: &[Member]) -> Option<Option<usize>> {
         let designation = item.designation?;
         let designators = designation.designators.as_slice();
         if let [designator] = designators
@@ -261,7 +255,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         ty: TypeId,
         member: &Member,
-    ) -> Option<crate::util::string_cache::StringCacheId> {
+    ) -> crate::util::string_cache::StringCacheId {
         let field = member.name.map_or("({anonymous})", |name| {
             self.context.string_cache.at(name.name)
         });
@@ -284,6 +278,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             format_in!(self.scratch, "missing field '{field}' initializer")
         };
-        Some(self.context.string_cache.intern(text))
+        self.context.string_cache.intern(text)
     }
 }
