@@ -23,6 +23,8 @@
 //! - Atomic calls: `atomics.rs` checks atomic operands and orders.
 //! - Type-generic bit operations: `bits.rs` types, checks and folds
 //!   `__builtin_popcountg`, its siblings and the `__builtin_stdc_*` forms.
+//! - Operand-typed memory operations: `clear_padding.rs` checks
+//!   `__builtin_clear_padding` and retains the type whose padding it clears.
 //! - Target and overloaded calls: `x86_builtins.rs` checks generated x86
 //!   immediates and the overloaded vector builtins. Vector shuffles,
 //!   conversions and bit casts are in `../vectors.rs`; type classification,
@@ -48,6 +50,9 @@ mod atomics;
 
 // Type-generic bit operations
 mod bits;
+
+// Operand-typed memory operations
+mod clear_padding;
 
 // Target immediates and overloaded operands
 mod x86_builtins;

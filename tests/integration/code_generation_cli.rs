@@ -2348,6 +2348,110 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         std::fs::remove_file(&executable).unwrap();
     }
 
+    /// `tests/fixtures/programs/builtin_clear_padding.c` checks the bytes
+    /// `__builtin_clear_padding` leaves, which GCC 14.2 and Clang 23.1 leave
+    /// too, in each identity: in the interpreter, in executables built
+    /// through LLVM and through the native back end, and on wasm32.
+    #[test]
+    fn builtin_clear_padding_matches_gcc_and_clang_on_every_back_end() {
+        const TRANSCRIPT: &str = "failures: 0\n";
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs/builtin_clear_padding.c");
+        let compile = |flags: &[&str]| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command
+                .arg(&source)
+                .args(["-w", "-std=gnu2x"])
+                .args(flags)
+                .env("NO_COLOR", "1");
+            run_native(&mut command).unwrap()
+        };
+        let identities = [
+            &["--compiler-identity=clang"][..],
+            &["--compiler-identity=gcc"][..],
+        ];
+        let linux = "--target=x86_64-unknown-linux-gnu";
+        for identity in identities {
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let output = compile(&[identity, &["--interpret", linux, opt][..]].concat());
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{identity:?} {opt}: {}\n{}",
+                    text(&output.stdout),
+                    text(&output.stderr)
+                );
+                assert_eq!(text(&output.stdout), TRANSCRIPT, "{identity:?} {opt}");
+            }
+        }
+        // Every configuration runs before the test fails, so a report names
+        // each one that differs.
+        let mut failures = Vec::new();
+        if cfg!(target_os = "linux") && host().is_some() {
+            let executable = temporary("builtin-clear-padding.exe");
+            let path = executable.to_str().unwrap();
+            for identity in identities {
+                for opt in [
+                    &["--llvm-opt=O0"][..],
+                    &["--opt=bcc", "--llvm-opt=O2"][..],
+                    &["--backend=native", "--opt=none"][..],
+                    &["--backend=native", "--opt=bcc"][..],
+                ] {
+                    let built = compile(&[identity, &[linux, "-o", path][..], opt].concat());
+                    assert!(
+                        built.status.success(),
+                        "{identity:?} {opt:?}: {}",
+                        text(&built.stderr)
+                    );
+                    let output = run_native(&mut Command::new(&executable)).unwrap();
+                    if output.status.code() != Some(0) || text(&output.stdout) != TRANSCRIPT {
+                        failures.push(format!(
+                            "{identity:?} {opt:?}: {:?}\n{}",
+                            output.status.code(),
+                            text(&output.stdout)
+                        ));
+                    }
+                }
+            }
+            std::fs::remove_file(&executable).unwrap();
+        }
+        if Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            let module = temporary("builtin-clear-padding.wasm");
+            let path = module.to_str().unwrap();
+            let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let built = compile(&["--target=wasm32-wasip1", "-o", path, opt]);
+                assert!(
+                    built.status.success(),
+                    "wasm32 {opt}: {}",
+                    text(&built.stderr)
+                );
+                let output = Command::new("node")
+                    .arg("--no-warnings")
+                    .arg(&runner)
+                    .arg(&module)
+                    .output()
+                    .unwrap();
+                if output.status.code() != Some(0) || text(&output.stdout) != TRANSCRIPT {
+                    failures.push(format!(
+                        "wasm32 {opt}: {:?}\n{}\n{}",
+                        output.status.code(),
+                        text(&output.stdout),
+                        text(&output.stderr)
+                    ));
+                }
+            }
+            std::fs::remove_file(&module).unwrap();
+        } else {
+            eprintln!("skipping wasm32: node is not on the path");
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// GCC's `__builtin_setjmp` and `__builtin_longjmp` from
     /// `tests/fixtures/programs/builtin_setjmp.c` print what GCC 15 and
     /// Clang print at -O0 and -O2, in the interpreter and in executables

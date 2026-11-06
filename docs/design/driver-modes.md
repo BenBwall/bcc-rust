@@ -161,10 +161,12 @@ undeclared identifier, a missing expression, and the conversions in
 - A snippet's line number is the physical line, where Clang shows the one `#line`
   gave. Tabs print as four spaces and each Unicode scalar counts as one cell, and
   a column counts scalars, where GCC's counts display cells and Clang's bytes.
-- `-fdiagnostics-plain-output`, `-fno-diagnostics-show-caret`,
-  `-fno-caret-diagnostics` and `-fno-show-column` are accepted and change nothing,
-  and `-fdiagnostics-color=always` does not force color through a pipe;
-  `CLICOLOR_FORCE` does.
+- `-fdiagnostics-show-caret`, `-fcaret-diagnostics`, `-fshow-column`,
+  `-fdiagnostics-show-line-numbers`, `-fdiagnostics-show-option`,
+  `-fdiagnostics-color=`, `-fcolor-diagnostics`, their negations and
+  `-fdiagnostics-plain-output` work, each under the compiler that knows it. Color
+  marks the same parts, but with bcc's codes rather than each compiler's, and
+  leaves quoted source uncolored.
 - The whole unit is parsed before semantic analysis, so syntax errors come before
   semantic ones, and recovery can find different errors after the first.
 

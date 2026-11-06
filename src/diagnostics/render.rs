@@ -21,7 +21,10 @@ use super::{
     model::Label,
 };
 use crate::{
-    configuration::DiagnosticFormat,
+    configuration::{
+        DiagnosticFormat,
+        DiagnosticPresentation,
+    },
     translation_phases::{
         Context,
         ErrorSeverity,
@@ -51,6 +54,12 @@ impl Renderer {
             | ErrorSeverity::Warning => "warning:",
         };
         let format = context.configuration.diagnostic_format();
+        let compiler_snippet = matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang);
+        let presentation = if compiler_snippet {
+            context.configuration.diagnostic_presentation()
+        } else {
+            DiagnosticPresentation::default()
+        };
         // GCC, Clang and MSVC lead with the primary location.
         let location = diagnostic
             .labels
@@ -68,17 +77,21 @@ impl Renderer {
                 | DiagnosticFormat::Msvc { column: false, .. } =>
                     write!(out, "{file}({}): ", vector.line),
                 | DiagnosticFormat::Tcc => write!(out, "{file}:{}: ", vector.line),
+                | _ if !presentation.column => write!(out, "{file}:{}: ", vector.line),
                 | _ => write!(out, "{file}:{}:{}: ", vector.line, vector.column),
             };
         }
         // TCC names no warning options, so a message drops the `[-W…]`
-        // suffix bcc appended as GCC and Clang print it, and only that.
-        let message = match format {
-            | DiagnosticFormat::Tcc if diagnostic.option_suffix => diagnostic
+        // suffix bcc appended as GCC and Clang print it, and only that. Those
+        // two drop it on request.
+        let drop_suffix = format == DiagnosticFormat::Tcc || !presentation.option_names;
+        let message = if drop_suffix && diagnostic.option_suffix {
+            diagnostic
                 .message
                 .rfind(" [-W")
-                .map_or(diagnostic.message, |at| &diagnostic.message[..at]),
-            | _ => diagnostic.message,
+                .map_or(diagnostic.message, |at| &diagnostic.message[..at])
+        } else {
+            diagnostic.message
         };
         // `cl` writes its code between the severity and the message:
         // `error C2065: 'y': undeclared identifier`.
@@ -113,12 +126,11 @@ impl Renderer {
         // GCC and Clang share one snippet: a gutter five wide, nothing around
         // the source line and its caret, and what relates to the message in
         // `note:` lines of its own.
-        let compiler_snippet = matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang);
         let mut marks = ArenaVec::new_in(scratch);
         for label in diagnostic
             .labels
             .iter()
-            .filter(|label| !compiler_snippet || label.primary)
+            .filter(|label| presentation.caret && (!compiler_snippet || label.primary))
         {
             Self::push_label_marks(label, context, &mut marks);
         }
@@ -201,7 +213,12 @@ impl Renderer {
                 &marks,
                 (file, text, starts),
                 diagnostic.severity,
-                (gutter_width, pad.as_str(), compiler_snippet),
+                &Gutter {
+                    width: gutter_width,
+                    pad: pad.as_str(),
+                    compiler_snippet,
+                    without_numbers: Self::without_numbers(format, presentation),
+                },
                 scratch,
             );
         }
@@ -256,16 +273,27 @@ impl Renderer {
         let Some(vector) = label.source.vectors(context).first() else {
             return;
         };
+        let format = context.configuration.diagnostic_format();
+        let presentation = context.configuration.diagnostic_presentation();
         let file = vector.source_file_index;
+        let _ = write!(
+            out,
+            "{}:{}:",
+            context.get_source_file(file).display(),
+            vector.line
+        );
+        if presentation.column {
+            let _ = write!(out, "{}:", vector.column);
+        }
         let _ = writeln!(
             out,
-            "{}:{}:{}: {} {}",
-            context.get_source_file(file).display(),
-            vector.line,
-            vector.column,
+            " {} {}",
             self.paint("note:", Style::new().bold()),
             label.message.unwrap_or_default(),
         );
+        if !presentation.caret {
+            return;
+        }
         let mut marks = ArenaVec::new_in(scratch);
         Self::push_label_marks(label, context, &mut marks);
         for mark in &mut marks {
@@ -292,9 +320,27 @@ impl Renderer {
                 &marks,
                 (file, text, starts),
                 ErrorSeverity::Warning,
-                (gutter_width, pad.as_str(), true),
+                &Gutter {
+                    width:            gutter_width,
+                    pad:              pad.as_str(),
+                    compiler_snippet: true,
+                    without_numbers:  Self::without_numbers(format, presentation),
+                },
                 scratch,
             );
+        }
+    }
+
+    /// What stands before quoted source without line numbers: GCC leaves one
+    /// space there and Clang none. `None` keeps the numbers.
+    const fn without_numbers(
+        format: DiagnosticFormat,
+        presentation: DiagnosticPresentation,
+    ) -> Option<&'static str> {
+        match (presentation.line_numbers, format) {
+            | (true, _) => None,
+            | (false, DiagnosticFormat::Gcc) => Some(" "),
+            | (false, _) => Some(""),
         }
     }
 
@@ -304,12 +350,17 @@ impl Renderer {
         marks: &[Mark<'_>],
         (file, text, starts): (u32, &str, &[usize]),
         severity: ErrorSeverity,
-        (gutter_width, pad, compiler_snippet): (usize, &str, bool),
+        gutter: &Gutter<'_>,
         scratch: &Bump,
     ) {
         // GCC and Clang mark the rest of a range with tildes.
-        let tail = if compiler_snippet { '~' } else { '^' };
+        let tail = if gutter.compiler_snippet { '~' } else { '^' };
         let bar = self.paint("|", Self::gutter_style());
+        // What stands before an underline.
+        let lead = match gutter.without_numbers {
+            | Some(lead) => lead,
+            | None => crate::diagnostics::format_in!(scratch, "{} {bar} ", gutter.pad),
+        };
         // Sort once and walk the marks line by line: rescanning every mark
         // for each line made a label spanning many lines quadratic.
         let mut file_marks = ArenaVec::new_in(scratch);
@@ -335,7 +386,7 @@ impl Renderer {
                         out,
                         previous + 1,
                         line_text(previous + 1),
-                        gutter_width,
+                        gutter,
                         scratch,
                     );
                 } else if line > previous + 2 {
@@ -344,7 +395,7 @@ impl Renderer {
             }
             previous = Some(line);
             let source = line_text(line);
-            self.write_source_line(out, line, source, gutter_width, scratch);
+            self.write_source_line(out, line, source, gutter, scratch);
             let line_start = starts[line - 1];
 
             // Underline row: secondary marks first so primary ones win.
@@ -404,12 +455,12 @@ impl Renderer {
             }));
             match labelled.split_last() {
                 | None => {
-                    let _ = writeln!(out, "{pad} {bar} {underline}");
+                    let _ = writeln!(out, "{lead}{underline}");
                 },
                 | Some((&(_, primary, label), rest)) => {
                     let _ = writeln!(
                         out,
-                        "{pad} {bar} {underline} {}",
+                        "{lead}{underline} {}",
                         self.paint(label, underline_style(primary))
                     );
                     // Remaining labels hang below their marks, rightmost first.
@@ -427,13 +478,13 @@ impl Renderer {
                             (row, width)
                         };
                         let (row, _) = connectors(index + 1);
-                        let _ = writeln!(out, "{pad} {bar} {row}");
+                        let _ = writeln!(out, "{lead}{row}");
                         let (mut row, width) = connectors(index);
                         for _ in width..column {
                             row.push(' ');
                         }
                         self.paint_into(&mut row, label, underline_style(primary));
-                        let _ = writeln!(out, "{pad} {bar} {row}");
+                        let _ = writeln!(out, "{lead}{row}");
                     }
                 },
             }
@@ -445,12 +496,17 @@ impl Renderer {
         out: &mut ArenaString<'_>,
         line: usize,
         source: &str,
-        gutter_width: usize,
+        gutter: &Gutter<'_>,
         scratch: &Bump,
     ) {
-        let mut number = ArenaString::new_in(scratch);
-        let _ = write!(number, "{line:>gutter_width$}");
         let visible = visible_source(source, scratch);
+        if let Some(lead) = gutter.without_numbers {
+            let _ = writeln!(out, "{lead}{}", visible.as_str().trim_end());
+            return;
+        }
+        let mut number = ArenaString::new_in(scratch);
+        let width = gutter.width;
+        let _ = write!(number, "{line:>width$}");
         let _ = writeln!(
             out,
             "{} {} {}",
@@ -564,6 +620,15 @@ impl Renderer {
             scratch: Bump::new(),
         }
     }
+}
+
+/// What stands to the left of quoted source.
+struct Gutter<'a> {
+    width:            usize,
+    pad:              &'a str,
+    compiler_snippet: bool,
+    /// See [`Renderer::without_numbers`].
+    without_numbers:  Option<&'static str>,
 }
 
 /// One underline on one physical source line.
