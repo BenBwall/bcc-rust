@@ -12,6 +12,7 @@ use crate::{
         Bits64,
         Block,
         DebugLoc,
+        DeclaredVariable,
         Entity,
         FuncId,
         FunctionBuilder,
@@ -22,6 +23,7 @@ use crate::{
         StackSlot,
         Type,
         Value,
+        VariablePlace,
     },
     util::bump::ArenaVec,
 };
@@ -93,6 +95,21 @@ impl<'s> Draft<'_, 's> {
                     numbering.values[param.index()].expect("reserved above"),
                     self.value_type(param),
                 );
+            }
+        }
+        for declared in self.variables() {
+            let place = match declared.place {
+                | VariablePlace::Slot(slot) =>
+                    numbering.slots[slot.index()].map(VariablePlace::Slot),
+                | VariablePlace::Address(value) =>
+                    numbering.values[self.resolve(value).index()].map(VariablePlace::Address),
+            };
+            if let (Some(place), Some(location)) = (place, finished(Some(declared.location))) {
+                builder.declare_variable(DeclaredVariable {
+                    variable: declared.variable,
+                    place,
+                    location,
+                });
             }
         }
         for block in self.alive_blocks() {

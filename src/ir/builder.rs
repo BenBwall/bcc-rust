@@ -8,6 +8,7 @@
 use super::{
     FuncId,
     Module,
+    debug_info::DeclaredVariable,
     entities::{
         Block,
         BlockLabel,
@@ -99,6 +100,11 @@ impl FunctionBuilder<'_, '_> {
     /// `location`.
     pub(crate) const fn set_location(&mut self, location: Option<DebugLoc>) {
         self.location = location;
+    }
+
+    /// Records where the function keeps a described variable.
+    pub(crate) fn declare_variable(&mut self, variable: DeclaredVariable) {
+        self.body.variables.push(variable);
     }
 
     /// Retains a frontend diagnostic ID while this call survives optimization.
