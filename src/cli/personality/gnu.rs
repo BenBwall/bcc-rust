@@ -80,6 +80,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         positions: Vec::new(),
         linker_words: Vec::new(),
         queries: Vec::new(),
+        dependency_mode: None,
+        dependency_file: None,
+        preprocessor_dependency_file: false,
         unrecognized: Vec::new(),
         bad_standard: None,
     };
@@ -89,6 +92,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if let Some(query) = state.argument(argument, &mut arguments) {
             return Ok(query);
         }
+    }
+    if let Some(mode) = state.dependency_mode.take() {
+        state.out.push(mode);
+    }
+    if let Some(file) = state.dependency_file.take() {
+        state.out.extend(["-MF".into(), file]);
     }
     // GCC reports the options it does not recognize once it has read the
     // whole command line, after its other complaints.
@@ -457,75 +466,82 @@ struct MachineOptions {
     reason = "Independent switches of the command line being translated."
 )]
 struct State<'a> {
-    invocation:      &'a Invocation,
-    compiler:        Compiler,
+    invocation: &'a Invocation,
+    compiler: Compiler,
     /// bcc's options and inputs, in order.
-    out:             Vec<OsString>,
-    errors:          usize,
-    target:          Option<Target>,
-    sysroot:         Option<OsString>,
+    out: Vec<OsString>,
+    errors: usize,
+    target: Option<Target>,
+    sysroot: Option<OsString>,
     /// The options that stop before linking, in order: `-c`, `-S`, `-E`,
     /// `-M` and `-MM`.
-    stages:          Vec<&'static str>,
+    stages: Vec<&'static str>,
     /// `-fsyntax-only`, which the preprocessing stages override and which
     /// overrides the others.
-    syntax_only:     bool,
+    syntax_only: bool,
     /// The `-o` operands.
-    outputs:         Vec<OsString>,
+    outputs: Vec<OsString>,
     /// The input files.
-    inputs:          Vec<Input>,
+    inputs: Vec<Input>,
     /// The kind of input the `-x` language in effect makes a file, or
     /// `None` to decide by its extension.
-    language:        Option<InputKind>,
+    language: Option<InputKind>,
     /// The `-w`, `-W` and `-Qunused-arguments` options, in order, which
     /// decide how Clang reports an argument it leaves unused.
     warning_options: Vec<String>,
-    verbose:         bool,
-    dry_run:         bool,
+    verbose: bool,
+    dry_run: bool,
     /// The known `-m` options bcc does not implement, judged once the
     /// target is known, since `--target` may come after them.
-    machine:         Vec<String>,
+    machine: Vec<String>,
     /// The position on the command line of the argument being read.
-    position:        usize,
+    position: usize,
     /// Where `-Ofast` stands among the `-O` options.
-    ofast:           Ofast,
+    ofast: Ofast,
     /// The indices in [`State::out`] of the `-ffast-math` each Clang
     /// `-Ofast` stands for, which hold only if the last `-O` option is an
     /// `-Ofast`.
-    ofast_at:        Vec<usize>,
+    ofast_at: Vec<usize>,
     /// The indices in [`State::out`] of each `-ffp-model=fast`'s two
     /// options, which become `-fno-fast-math` and `-O3` if the last `-O`
     /// option is an `-Ofast`.
-    ofast_models:    Vec<usize>,
+    ofast_models: Vec<usize>,
     /// Clang's `-ffp-eval-method=` was given, which it refuses beside
     /// reassociation, reciprocals and approximate functions.
-    eval_method:     bool,
+    eval_method: bool,
     /// The last Clang `-ffp-model=`.
-    fp_model:        Option<&'static str>,
+    fp_model: Option<&'static str>,
     /// The option that last set Clang's complex range to "basic"
     /// (`-ffast-math`), which a later model overrides with a warning.
-    basic_complex:   Option<&'static str>,
+    basic_complex: Option<&'static str>,
     /// Clang's warnings about overridden floating-point options, with
     /// their groups, reported once the warning options are known.
-    overrides:       Vec<(&'static str, String)>,
+    overrides: Vec<(&'static str, String)>,
     /// The arguments Clang may report as unused, with their positions and
     /// as Clang spells them: the stage options, `-fsyntax-only`, and the
     /// options that only the link uses (`-L/usr/lib`, `-T x.ld`, `-s`).
-    positions:       Vec<(usize, Unused)>,
+    positions: Vec<(usize, Unused)>,
     /// The linker inputs that are options (`-lm`, `-Wl,...`,
     /// `-Xlinker ARG`, `-z now`), as Clang spells them, each with its index
     /// in [`State::out`], which orders them among the input files.
-    linker_words:    Vec<(usize, String)>,
+    linker_words: Vec<(usize, String)>,
     /// The queries asked, in order, answered once the whole command line
     /// has been read.
-    queries:         Vec<Query>,
+    queries: Vec<Query>,
+    /// `-MD` or `-MMD`, which may each repeat; `-MMD` wins in either order,
+    /// in both compilers.
+    dependency_mode: Option<OsString>,
+    /// Where the dependency output goes, once the command line has decided.
+    dependency_file: Option<OsString>,
+    /// Whether `-Wp,-MD,FILE` or `-Wp,-MMD,FILE` chose it.
+    preprocessor_dependency_file: bool,
     /// The options GCC does not recognize, which it reports once it has
     /// read the whole command line, and not at all if a `-dump` query ends
     /// it first.
-    unrecognized:    Vec<String>,
+    unrecognized: Vec<String>,
     /// Clang's last `-std=`, when its value is unknown: its compiler, not
     /// its driver, refuses it, so an earlier one and a query go unreported.
-    bad_standard:    Option<String>,
+    bad_standard: Option<String>,
 }
 
 /// A driver query: an option that prints something about the compiler
@@ -1252,6 +1268,11 @@ impl State<'_> {
                 )),
             },
             | "--sysroot" | "-isysroot" => self.sysroot = Some(operand.into()),
+            // The last wins, except that GCC's `-Wp,-MD,FILE` beats any `-MF`.
+            | "-MF" =>
+                if self.compiler == Compiler::Clang || !self.preprocessor_dependency_file {
+                    self.dependency_file = Some(operand.into());
+                },
             | "-Xpreprocessor" => {
                 let mut none = std::iter::empty();
                 drop(self.argument(operand, &mut none));
@@ -1302,6 +1323,12 @@ impl State<'_> {
 
     /// Translates an option without an operand.
     fn flag(&mut self, text: &str) {
+        if matches!(text, "-MD" | "-MMD") {
+            if self.dependency_mode.as_deref() != Some(OsStr::new("-MMD")) {
+                self.dependency_mode = Some(text.into());
+            }
+            return;
+        }
         if text == "-w"
             || (text.starts_with("-W")
                 && !["-Wl,", "-Wa,", "-Wp,"]
@@ -1415,10 +1442,14 @@ impl State<'_> {
                 if let Some(plan) = self.argument(piece, &mut pieces) {
                     drop(plan);
                 }
-                if matches!(piece.to_str(), Some("-MD" | "-MMD"))
-                    && let Some(plan) = self.argument(OsStr::new("-MF"), &mut pieces)
-                {
-                    drop(plan);
+                if matches!(piece.to_str(), Some("-MD" | "-MMD")) {
+                    match pieces.next() {
+                        | Some(file) => {
+                            self.dependency_file = Some(file.into());
+                            self.preprocessor_dependency_file = true;
+                        },
+                        | None => self.error(format_args!("missing argument to '-MF'")),
+                    }
                 }
             }
             self.queries.truncate(queries);
