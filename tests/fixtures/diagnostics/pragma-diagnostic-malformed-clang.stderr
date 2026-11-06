@@ -1,94 +1,55 @@
 pragma-diagnostic-malformed-clang.c:1:25: warning: pragma diagnostic expected `error`, `warning`, `ignored`, `fatal`, `push`, or `pop` [-Wunknown-pragmas]
-  |
-1 | #pragma clang diagnostic
-  |                         ^ expected a kind of diagnostic pragma
-
+    1 | #pragma clang diagnostic
+      |                         ^
 pragma-diagnostic-malformed-clang.c:2:31: warning: pragma diagnostic expected `error`, `warning`, `ignored`, `fatal`, `push`, or `pop` [-Wunknown-pragmas]
-  |
-2 | #pragma clang diagnostic bogus
-  |                               ^ expected a kind of diagnostic pragma
-
+    2 | #pragma clang diagnostic bogus
+      |                               ^
 pragma-diagnostic-malformed-clang.c:3:33: error: expected string literal in pragma diagnostic
-  |
-3 | #pragma clang diagnostic ignored
-  |                                 ^ expected a string literal
-
+    3 | #pragma clang diagnostic ignored
+      |                                 ^
 pragma-diagnostic-malformed-clang.c:4:34: error: expected string literal in pragma diagnostic
-  |
-4 | #pragma clang diagnostic ignored -Wundef
-  |                                  ^ expected a string literal
-
+    4 | #pragma clang diagnostic ignored -Wundef
+      |                                  ^
 pragma-diagnostic-malformed-clang.c:5:34: warning: unknown warning group `-Wnosuch`, ignored [-Wunknown-warning-option]
-  |
-5 | #pragma clang diagnostic ignored "-Wnosuch"
-  |                                  ^^^^^^^^^^ no such warning option
-
+    5 | #pragma clang diagnostic ignored "-Wnosuch"
+      |                                  ^~~~~~~~~~
 pragma-diagnostic-malformed-clang.c:6:34: warning: pragma diagnostic expected option name (e.g. "-Wundef") [-Wunknown-pragmas]
-  |
-6 | #pragma clang diagnostic ignored "Wundef"
-  |                                  ^^^^^^^^ no warning option
-
+    6 | #pragma clang diagnostic ignored "Wundef"
+      |                                  ^~~~~~~~
 pragma-diagnostic-malformed-clang.c:7:34: warning: unknown warning group `-Werror=undef`, ignored [-Wunknown-warning-option]
-  |
-7 | #pragma clang diagnostic ignored "-Werror=undef"
-  |                                  ^^^^^^^^^^^^^^^ no such warning option
-
+    7 | #pragma clang diagnostic ignored "-Werror=undef"
+      |                                  ^~~~~~~~~~~~~~~
 pragma-diagnostic-malformed-clang.c:8:34: error: expected string literal in pragma diagnostic
-  |
-8 | #pragma clang diagnostic warning L"-Wundef"
-  |                                  ^^^^^^^^^^ expected a string literal
-
+    8 | #pragma clang diagnostic warning L"-Wundef"
+      |                                  ^~~~~~~~~~
 pragma-diagnostic-malformed-clang.c:9:30: warning: pragma diagnostic pop could not pop, no matching push [-Wunknown-pragmas]
-   |
- 9 | #pragma clang diagnostic pop junk
-   |                              ^^^^ no matching `push`
-
+    9 | #pragma clang diagnostic pop junk
+      |                              ^~~~
 pragma-diagnostic-malformed-clang.c:9:30: warning: unexpected token in pragma diagnostic [-Wunknown-pragmas]
-   |
- 9 | #pragma clang diagnostic pop junk
-   |                              ^^^^ unexpected token
-
+    9 | #pragma clang diagnostic pop junk
+      |                              ^~~~
 pragma-diagnostic-malformed-clang.c:10:31: warning: unexpected token in pragma diagnostic [-Wunknown-pragmas]
-   |
-10 | #pragma clang diagnostic push junk
-   |                               ^^^^ unexpected token
-
+   10 | #pragma clang diagnostic push junk
+      |                               ^~~~
 pragma-diagnostic-malformed-clang.c:12:29: warning: pragma diagnostic pop could not pop, no matching push [-Wunknown-pragmas]
-   |
-12 | #pragma clang diagnostic pop
-   |                             ^ no matching `push`
-
+   12 | #pragma clang diagnostic pop
+      |                             ^
 pragma-diagnostic-malformed-clang.c:15:34: warning: unknown warning group `-Wstringop-overflow`, ignored [-Wunknown-warning-option]
-   |
-15 | #pragma clang diagnostic ignored "-Wstringop-overflow"
-   |                                  ^^^^^^^^^^^^^^^^^^^^^ no such warning option
-
+   15 | #pragma clang diagnostic ignored "-Wstringop-overflow"
+      |                                  ^~~~~~~~~~~~~~~~~~~~~
 pragma-diagnostic-malformed-clang.c:16:34: warning: unknown warning group `-Wno-undef`, ignored [-Wunknown-warning-option]
-   |
-16 | #pragma clang diagnostic ignored "-Wno-undef"
-   |                                  ^^^^^^^^^^^^ no such warning option
-
+   16 | #pragma clang diagnostic ignored "-Wno-undef"
+      |                                  ^~~~~~~~~~~~
 <pragma string>:1:26: warning: unknown warning group `-Wnosuch`, ignored [-Wunknown-warning-option]
-  |
-1 | clang diagnostic ignored "-Wnosuch"
-  |                          ^^^^^^^^^^ no such warning option
-
+    1 | clang diagnostic ignored "-Wnosuch"
+      |                          ^~~~~~~~~~
 pragma-diagnostic-malformed-clang.c:20:42: warning: unexpected token in pragma diagnostic [-Wunknown-pragmas]
-   |
-20 | #pragma GCC diagnostic ignored "-Wundef" junk
-   |                                          ^^^^ unexpected token
-
+   20 | #pragma GCC diagnostic ignored "-Wundef" junk
+      |                                          ^~~~
 pragma-diagnostic-malformed-clang.c:21:5: warning: `LOUD` is not defined; it evaluates to 0
-   |
-21 | #if LOUD
-   |     ^^^^ not a macro
-   |
-   = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
-   = help: use `defined(LOUD)` to test whether it is defined
-
+   21 | #if LOUD
+      |     ^~~~
 pragma-diagnostic-malformed-clang.c:27:34: error: expected string literal in pragma diagnostic
-   |
-27 | #pragma clang diagnostic warning OPTION
-   |                                  ^^^^^^ expected a string literal
-
+   27 | #pragma clang diagnostic warning OPTION
+      |                                  ^~~~~~
 4 errors and 14 warnings generated.
