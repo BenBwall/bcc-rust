@@ -1,7 +1,3 @@
 sema3-internal-tentative.c:1:12: error: internal tentative definition has incomplete type: `a`
-  |
-1 | static int a[];
-  |            ^ declared with an incomplete type
-  |
-  = note: C99 §6.9.2p3: a tentative definition with internal linkage shall not have an incomplete type
-
+    1 | static int a[];
+      |            ^
