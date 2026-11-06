@@ -1,0 +1,8 @@
+sema-main-clang-third.c:1:5: error: third parameter of 'main' (environment) must be of type 'char **'
+  |
+1 | int main(int argc, char **argv, int envp) { return 0; }
+  |     ^^^^ nonportable declaration of main
+  |
+  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
+
+1 error generated.

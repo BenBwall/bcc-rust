@@ -1214,6 +1214,26 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 _ = lowerer.locals.insert(parameter, Local::Address(home));
                 continue;
             }
+            // GNU: a definition written with a member's type after a
+            // declaration that took a transparent union. The composite type
+            // keeps the union, so the argument arrives as the union's address
+            // and the parameter takes the member. GCC manual, "Common Type
+            // Attributes", `transparent_union`.
+            if matches!(
+                lowerer.repr(parameters[index], parameter_source)?,
+                Repr::Aggregate
+            ) {
+                let unqualified = declared.unqualified();
+                let member = lowerer.read(
+                    super::work::Place::Memory(value),
+                    unqualified,
+                    unqualified,
+                    parameter_source,
+                )?;
+                lowerer.operands.push(member);
+                lowerer.initialize(Object::Local(parameter), 0, declared, None)?;
+                continue;
+            }
             // A bit-precise argument's padding bits are unspecified, and
             // one the convention passes in memory arrives as its address.
             let value = if types::limb_argument(&lowerer.unit.sema.types, incoming) {

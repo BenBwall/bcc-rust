@@ -357,6 +357,11 @@ definition. On System V such an argument takes its first member's registers
 and extension, and the whole union's stack slot once they are taken; Win64
 passes the whole union.
 
+Where function types meet (a conversion, a redeclaration, `?:`,
+`__builtin_types_compatible_p`), a transparent union's parameter matches any of
+its members' types and the composite keeps the union, as in GCC and Clang.
+glibc declares `getsockname` this way under `_GNU_SOURCE`.
+
 Startup preprocessing uses `PreprocessingOption::{Define,Undefine,Include}`
 in `src/configuration.rs`, borrowed by `Context.preprocessing_options`; the
 scalar `CompilerConfiguration` remains lifetime-free and `Copy`. CLI spellings
@@ -784,6 +789,14 @@ The following vocabulary entries retain the established diagnostic contracts:
   spellings under Warn/Deny, including GNU modes; C99 and later are silent.
   Parser `__extension__` suppression applies. C99 §6.7.5p1 (printed p. 114;
   PDF p. 126) specifies all three forms.
+- A tentative definition with internal linkage and an incomplete type
+  (`static const char doc[];`, `static struct S s;`), which C99 §6.9.2p3
+  forbids and CPython's `PyDoc_VAR` relies on, follows each compiler. GCC, TCC,
+  Clang and clang-cl complete it at the end of the unit: an array that nothing
+  completes gets one element and the warning `int a[];` gets, and a tag that
+  nothing completes is an error. Clang reports it under `-pedantic`, and
+  `-pedantic` makes GCC refuse an array ("array size missing"). `--msvc-mode`
+  refuses both, without evidence from a real `cl`.
 - `SameTypeCasts` has GNU origin. A cast of a structure or union to its own
   type, qualifiers aside (`(struct S)s`, through typedefs too), gives the
   operand's value as an rvalue, as GCC accepts it ("ISO C forbids casting

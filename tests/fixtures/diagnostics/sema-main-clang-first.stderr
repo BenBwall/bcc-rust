@@ -1,0 +1,8 @@
+sema-main-clang-first.c:1:5: error: first parameter of 'main' (argument count) must be of type 'int'
+  |
+1 | int main(long argc, char **argv) { return 0; }
+  |     ^^^^ nonportable declaration of main
+  |
+  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
+
+1 error generated.

@@ -540,7 +540,18 @@ impl Machine<'_, '_, '_> {
                 .iter()
                 .zip(args)
                 .all(|(&param, &arg)| param == body.value_type(arg));
-        actual == expected || variadic_match(actual, expected) || open_host || compatible_open_call
+        // `noundef` is no part of the function's type: `call` checks the
+        // callee's and the call site checks its own. A transparent union's
+        // parameter, once it takes its member's register, has none, and a
+        // pointer taking the member says it has. GCC manual, "Common Type
+        // Attributes".
+        crate::ir::Signature {
+            noundef: actual.noundef,
+            ..expected
+        } == actual
+            || variadic_match(actual, expected)
+            || open_host
+            || compatible_open_call
     }
 }
 

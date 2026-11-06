@@ -275,6 +275,80 @@ mod tests {
         assert_eq!(stderr(&round_trip), "");
     }
 
+    /// GCC and Clang take `static int a[];` and `static struct S s;`, which
+    /// C99 §6.9.2p3 forbids; Python's `PyDoc_VAR` relies on it.
+    #[test]
+    fn incomplete_internal_tentative_definitions_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "array.c",
+            "static const char a[];\nconst char *p = a;\nstatic const char a[] = \"abc\";\n",
+        );
+        directory.write(
+            "tag.c",
+            "struct S;\nstatic struct S s;\nstruct S { int a; };\nint f(void) { return s.a; }\n",
+        );
+        directory.write("never.c", "struct S;\nstatic struct S s;\n");
+        directory.write(
+            "marked.c",
+            "__extension__ static int a[];\nstatic int a[3];\n__extension__ static int z[];\nint \
+             *p = z;\n",
+        );
+        for (mode, option) in [
+            ("--gcc-mode", "-pedantic"),
+            ("--gcc-mode", "-pedantic-errors"),
+            ("--clang-mode", "-pedantic"),
+            ("--clang-mode", "-pedantic-errors"),
+        ] {
+            let output = directory.bcc(mode, &[option, "-c", "marked.c", "-o", "marked.o"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            assert!(
+                text.contains("assumed to have one element"),
+                "{mode} {option}: {text}"
+            );
+            assert!(!text.contains("internal"), "{mode} {option}: {text}");
+        }
+        let refused = "internal tentative definition has incomplete type";
+        for (mode, option, file, ok, message) in [
+            ("--gcc-mode", "-w", "array.c", true, ""),
+            ("--gcc-mode", "-w", "tag.c", true, ""),
+            ("--gcc-mode", "-pedantic", "array.c", false, refused),
+            ("--gcc-mode", "-pedantic", "tag.c", true, ""),
+            ("--clang-mode", "-Wall", "array.c", true, ""),
+            ("--clang-mode", "-pedantic", "array.c", true, "warning: "),
+            ("--clang-mode", "-pedantic", "tag.c", true, "warning: "),
+            (
+                "--clang-mode",
+                "-pedantic-errors",
+                "array.c",
+                false,
+                "error: ",
+            ),
+            ("--tcc-mode", "-w", "array.c", true, ""),
+            ("--gcc-mode", "-w", "never.c", false, "remains incomplete"),
+            (
+                "--clang-mode",
+                "-Wall",
+                "never.c",
+                false,
+                "remains incomplete",
+            ),
+        ] {
+            let output = directory.bcc(mode, &[option, "-c", file, "-o", "out.o"]);
+            let text = stderr(&output);
+            assert_eq!(
+                output.status.success(),
+                ok,
+                "{mode} {option} {file}: {text}"
+            );
+            assert!(text.contains(message), "{mode} {option} {file}: {text}");
+            if message.is_empty() {
+                assert_eq!(text, "", "{mode} {option} {file}");
+            }
+        }
+    }
+
     /// GCC warns of an unclosed quote in a skipped group, compiling as well
     /// as under `-E`, and `-pedantic-errors` makes it an error; Clang and
     /// TCC do not.
@@ -745,6 +819,117 @@ mod tests {
             "{}",
             stderr(&output)
         );
+    }
+
+    /// `-W` is the old spelling of `-Wextra`, which redis and nginx still
+    /// pass, and `-Wp,-MD,FILE` names the dependency file, as kbuild passes
+    /// it, rather than an input.
+    #[test]
+    fn old_warning_and_dependency_spellings_reach_their_options() {
+        let directory = Directory::new();
+        directory.write("x.c", "int x;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-W", "-Wall", "-c", "x.c", "-o", "x.o"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
+            for (option, file) in [("-Wp,-MD,x.d", "x.d"), ("-Wp,-MMD,y.d", "y.d")] {
+                let output = directory.bcc(mode, &[option, "-c", "x.c", "-o", "x.o"]);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {option}");
+                let text = std::fs::read_to_string(directory.path(file)).unwrap();
+                assert!(
+                    text.starts_with("x.o:") && text.contains("x.c"),
+                    "{mode}: {text}"
+                );
+            }
+        }
+    }
+
+    /// The last `-MF` names the dependency file, but GCC's `-Wp,-MD,FILE`
+    /// beats any `-MF`, wherever it stands, and Clang's does not.
+    #[test]
+    fn dependency_file_options_override_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write("x.c", "int x;\n");
+        for (mode, options, wins, loses) in [
+            (
+                "--gcc-mode",
+                &["-MD", "-MF", "a.d", "-MF", "b.d"][..],
+                "b.d",
+                "a.d",
+            ),
+            (
+                "--clang-mode",
+                &["-MD", "-MF", "c.d", "-MF", "d.d"][..],
+                "d.d",
+                "c.d",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wp,-MD,e.d", "-MF", "f.d"][..],
+                "e.d",
+                "f.d",
+            ),
+            (
+                "--gcc-mode",
+                &["-MF", "g.d", "-Wp,-MD,h.d"][..],
+                "h.d",
+                "g.d",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wp,-MD,i.d", "-Wp,-MD,j.d"][..],
+                "j.d",
+                "i.d",
+            ),
+            (
+                "--clang-mode",
+                &["-Wp,-MD,k.d", "-MF", "l.d"][..],
+                "l.d",
+                "k.d",
+            ),
+            (
+                "--clang-mode",
+                &["-MF", "m.d", "-Wp,-MD,n.d"][..],
+                "n.d",
+                "m.d",
+            ),
+        ] {
+            let args = [options, &["-c", "x.c", "-o", "x.o"]].concat();
+            succeeds(&directory.bcc(mode, &args));
+            assert!(directory.path(wins).exists(), "{mode} {options:?}");
+            assert!(!directory.path(loses).exists(), "{mode} {options:?}");
+        }
+        // `-MMD` leaves out system headers, in either order against `-MD`.
+        directory.write("y.c", "#include <stddef.h>\nint y;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for options in [["-MD", "-MMD"], ["-MMD", "-MD"]] {
+                let args = [&options[..], &["-c", "y.c", "-o", "y.o"]].concat();
+                succeeds(&directory.bcc(mode, &args));
+                let text = std::fs::read_to_string(directory.path("y.d")).unwrap();
+                assert!(!text.contains("stddef.h"), "{mode} {options:?}: {text}");
+            }
+        }
+    }
+
+    /// `-r` links partially, as kbuild's `built-in.o` needs: no start files or
+    /// libraries, and the output is another object to link.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn partial_links_produce_an_object_to_link() {
+        let directory = Directory::new();
+        directory.write("a.c", "int b(void);\nint main(void) { return b(); }\n");
+        directory.write("b.c", "int b(void) { return 42; }\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            succeeds(&directory.bcc(mode, &["-c", "a.c", "-o", "a.o"]));
+            succeeds(&directory.bcc(mode, &["-c", "b.c", "-o", "b.o"]));
+            let partial = directory.bcc(mode, &["-r", "a.o", "b.o", "-o", "both.o"]);
+            succeeds(&partial);
+            assert_eq!(stderr(&partial), "", "{mode}");
+            succeeds(&directory.bcc(mode, &["both.o", "-o", "both.exe"]));
+            let run = Command::new(directory.path("both.exe")).output().unwrap();
+            assert_eq!(run.status.code(), Some(42), "{mode}");
+        }
     }
 
     /// An element beyond the object is a warning in GCC and Clang, each with
