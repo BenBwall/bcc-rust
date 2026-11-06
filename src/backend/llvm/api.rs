@@ -119,6 +119,7 @@ use llvm_sys::{
         LLVMGetNextFunction,
         LLVMGetParam,
         LLVMGetPoison,
+        LLVMGetStringAttributeAtIndex,
         LLVMGetTarget,
         LLVMHalfTypeInContext,
         LLVMInstructionEraseFromParent,
@@ -140,6 +141,7 @@ use llvm_sys::{
         LLVMSetDLLStorageClass,
         LLVMSetDataLayout,
         LLVMSetExact,
+        LLVMSetFunctionCallConv,
         LLVMSetGlobalConstant,
         LLVMSetInitializer,
         LLVMSetLinkage,
@@ -1625,6 +1627,41 @@ impl<'id> Session<'id> {
         }
     }
 
+    /// Whether a function of the module has `no_caller_saved_registers`. LLVM's
+    /// fast instruction selector, which its -O0 code generator uses, selects a
+    /// return without taking the return register out of such a function's
+    /// saved registers, so the epilogue overwrites the result (Clang 23's -O0
+    /// code loses it too); the selector above -O0 takes it out.
+    fn preserves_registers(&self) -> bool {
+        const KEY: &str = "no_caller_saved_registers";
+        // SAFETY: This session owns the live module and its function list.
+        let mut function = unsafe { LLVMGetFirstFunction(self.module) };
+        while !function.is_null() {
+            // SAFETY: A live function and a counted key LLVM reads during the
+            // call; the function index addresses its function attributes.
+            let attribute = unsafe {
+                LLVMGetStringAttributeAtIndex(
+                    function,
+                    u32::MAX,
+                    KEY.as_ptr().cast(),
+                    u32::try_from(KEY.len()).expect("the key is short"),
+                )
+            };
+            if !attribute.is_null() {
+                return true;
+            }
+            // SAFETY: A live function of this module.
+            function = unsafe { LLVMGetNextFunction(function) };
+        }
+        false
+    }
+
+    /// Gives the function `function` LLVM's calling convention number `cc`.
+    pub(super) fn call_conv(&self, function: Val<'id>, cc: u32) {
+        // SAFETY: The type system ties the function to this live session.
+        unsafe { LLVMSetFunctionCallConv(function.0, cc) }
+    }
+
     /// Adds the string attribute `key`=`value` to the function `function`.
     pub(super) fn string_attribute(&self, function: Val<'id>, key: &str, value: &str) {
         let key_length = u32::try_from(key.len()).expect("attribute key fits in u32");
@@ -1734,6 +1771,8 @@ impl<'id> Session<'id> {
             }
         }
         let level = match opt.unwrap_or(OptLevel::O0) {
+            | OptLevel::O0 if self.preserves_registers() =>
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelLess,
             | OptLevel::O0 => LLVMCodeGenOptLevel::LLVMCodeGenLevelNone,
             | OptLevel::O1 => LLVMCodeGenOptLevel::LLVMCodeGenLevelLess,
             | OptLevel::O2 | OptLevel::Os | OptLevel::Oz =>

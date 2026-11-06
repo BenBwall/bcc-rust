@@ -176,6 +176,10 @@ use crate::util::bump::{
 
 /// A translation unit's IR: its functions, globals and interned signatures,
 /// and the target they are for. Everything it holds lives in its `'ir` arena.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent option that back ends read on its own."
+)]
 pub(crate) struct Module<'ir> {
     arena:                 &'ir Bump,
     triple:                &'ir str,
@@ -208,6 +212,13 @@ pub(crate) struct Module<'ir> {
     /// (`-ffast-math` and its relatives), which the LLVM back end gives
     /// LLVM as fast-math flags; the other back ends keep the semantics.
     fast_math:             crate::configuration::FastMathFlags,
+    /// Code uses general registers alone (`-mgeneral-regs-only`), which the
+    /// back ends keep it to and which lowering's check for floating values
+    /// has made possible.
+    general_regs_only:     bool,
+    /// The processor has user interrupts (`-muintr`), so an interrupt handler
+    /// returns with `uiret`.
+    user_interrupts:       bool,
     /// The descriptors of the functions' `asm` instructions.
     inline_asm:            Table<'ir, AsmId, InlineAsm<'ir>>,
 }
@@ -242,6 +253,42 @@ pub(crate) struct Function<'ir> {
     /// recursive body is not inline viable and calls the external
     /// definition). C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
     pub(crate) inline_copy_of: Option<&'ir str>,
+    /// How the machine enters and leaves the function.
+    pub(crate) entry:          EntryConvention,
+}
+
+/// How the machine enters and leaves a function, beyond the signature the
+/// target's C convention gives it. GNU extension: GCC manual, "x86 Function
+/// Attributes" (`interrupt`, `no_caller_saved_registers`, `naked`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum EntryConvention {
+    /// The target's C convention.
+    #[default]
+    C,
+    /// An interrupt or exception handler, which the processor enters without
+    /// a return address. Its first parameter is the address of the frame the
+    /// processor pushed; a second one, in an exception handler, is the error
+    /// code pushed below that frame. It preserves every register, and clears
+    /// the direction flag, and returns with `iretq` (`uiret` when the module
+    /// has user interrupts), past the error code.
+    Interrupt,
+    /// The C convention, but the function preserves every register it does
+    /// not return a value in.
+    PreserveRegisters,
+    /// No prologue or epilogue: the function's body is all of its code.
+    Naked,
+}
+
+impl EntryConvention {
+    /// The keyword of the IR's text form.
+    pub(crate) const fn keyword(self) -> Option<&'static str> {
+        match self {
+            | Self::C => None,
+            | Self::Interrupt => Some("interrupt"),
+            | Self::PreserveRegisters => Some("preserve_registers"),
+            | Self::Naked => Some("naked"),
+        }
+    }
 }
 
 // Tests

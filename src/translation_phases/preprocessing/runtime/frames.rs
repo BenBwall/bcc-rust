@@ -24,7 +24,10 @@ use super::super::{
 use crate::{
     translation_phases::{
         SourceVector,
-        preprocessor_tokenizer::TokenSource,
+        preprocessor_tokenizer::{
+            TokenSource,
+            TokenSpacing,
+        },
     },
     util::string_cache::StringCacheId,
 };
@@ -92,6 +95,8 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         ///
         /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
         argument: bool,
+        /// The padding its end brings, for a text of phase 4.
+        end:      TokenSpacing,
     },
     /// Already collected query arguments, replayed without macro replacement
     /// until their enclosing embed parameter is evaluated.
@@ -158,6 +163,8 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         /// p. 155; PDF p. 167). A prescanned argument is replaced where it
         /// was read alone.
         operand:             bool,
+        /// The padding its end brings, for a text of phase 4.
+        end:                 TokenSpacing,
     },
 }
 

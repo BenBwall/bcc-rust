@@ -12,6 +12,7 @@ use super::{
     MacroArguments,
     MacroDefinition,
     arguments::find_argument,
+    spacing::frame_end,
 };
 use crate::{
     configuration::Feature,
@@ -39,6 +40,7 @@ use crate::{
             SharedRun,
             SharedToken,
             TokenSource,
+            TokenSpacing,
         },
     },
     util::{
@@ -68,6 +70,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         token: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
+        let white = self.spacing.token_white();
         if let Some(md) = self
             .state
             .macro_definitions
@@ -98,6 +101,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         self.trace_invocation(&frame);
                     }
                     self.push_tokenizer_frame(frame);
+                    if let Some(spacing) = self.text_spacing() {
+                        spacing.entered_list(white);
+                    }
                     return None;
                 },
                 | MacroDefinition::FunctionLike {
@@ -138,10 +144,22 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         self.trace_invocation(&frame);
                     }
                     self.push_tokenizer_frame(frame);
+                    if let Some(spacing) = self.text_spacing() {
+                        spacing.entered_list(white);
+                    }
                     return None;
                 },
                 | MacroDefinition::BuiltIn => {
+                    let (spacing, depth) = (self.spacing, self.tokenizer_stack.len());
                     let result = self.expand_builtin(token);
+                    self.spacing = spacing;
+                    // A consumed pragma is no replacement: GCC adds no padding.
+                    if (result.is_some() || self.tokenizer_stack.len() > depth)
+                        && let Some(spacing) = self.text_spacing()
+                    {
+                        spacing.pad_before();
+                        spacing.pad_after_next();
+                    }
                     if self.tracing() {
                         self.trace_builtin(token, result);
                     }
@@ -582,6 +600,14 @@ struct MacroCallCursor<'x> {
     pending:      ArenaVec<'x, PreprocessorToken>,
     pending_head: usize,
     line_start:   bool,
+    /// Whether a text of phase 4 reads the call, so spacing matters.
+    text:         bool,
+    /// The padding since the last token collected, for a text of phase 4.
+    spacing:      TokenSpacing,
+    /// The padding that comes after `pending`.
+    pending_end:  TokenSpacing,
+    /// White space was read since the last token.
+    white:        bool,
 }
 
 /// A token of a macro call being collected: read with its provenance, or,
@@ -668,6 +694,7 @@ impl<'x> MacroCallCursor<'x> {
             preprocessor.last_was_newline,
             preprocessor.current_is_newline,
         );
+        let saved_spacing = preprocessor.spacing;
         preprocessor.resume_at_line_start();
         preprocessor.parse_directive(hash);
         // The directive may have changed any frame, so the cursor
@@ -686,6 +713,7 @@ impl<'x> MacroCallCursor<'x> {
             preprocessor.last_was_newline,
             preprocessor.current_is_newline,
         ) = saved_lines;
+        preprocessor.spacing = saved_spacing;
         self.line_start = true;
     }
 
@@ -693,10 +721,14 @@ impl<'x> MacroCallCursor<'x> {
         loop {
             if let Some(token) = self.pending.get(self.pending_head).copied() {
                 self.pending_head += 1;
-                return Some(CallToken::Read(token));
+                return Some(CallToken::Read(self.pad(token)));
             }
             self.pending.clear();
             self.pending_head = 0;
+            if self.text {
+                self.spacing = self.spacing.then(self.pending_end);
+                self.pending_end = TokenSpacing::NONE;
+            }
             let index = self.index.filter(|index| *index >= self.floor)?;
             let frame = &mut self.frames[index - self.base];
             let position = frame.tokenizer.position(preprocessor.context);
@@ -758,13 +790,26 @@ impl<'x> MacroCallCursor<'x> {
             };
             if ends {
                 frame.tokenizer.set_position(position);
+                if self.text {
+                    self.spacing = self.spacing.then(frame_end(&frame.frame_type));
+                    self.white = false;
+                }
                 self.index = index.checked_sub(1);
                 continue;
             }
             let token = token?;
             let CallToken::Read(mut token) = token else {
+                if self.spacing != TokenSpacing::NONE && !is_blank(token.kind()) {
+                    let token = token.read(preprocessor.context);
+                    return Some(CallToken::Read(self.pad(token)));
+                }
                 return Some(token);
             };
+            let white = std::mem::replace(
+                &mut self.white,
+                token.kind == PreprocessorTokenType::Whitespace,
+            );
+            let mut stringified = false;
             if replacement && token.kind == PreprocessorTokenType::Hash {
                 let position = frame.tokenizer.position(preprocessor.context);
                 let operand =
@@ -785,6 +830,7 @@ impl<'x> MacroCallCursor<'x> {
                     token.source_vectors = preprocessor
                         .context
                         .merge_vectors(token.source_vectors, operand.source_vectors);
+                    stringified = true;
                 } else {
                     frame.tokenizer.set_position(position);
                 }
@@ -820,6 +866,7 @@ impl<'x> MacroCallCursor<'x> {
             }
             if pasted {
                 self.pending.extend(tokens);
+                self.pad_replacement(white, TokenSpacing::END);
                 continue;
             }
             if token.kind.is_identifier()
@@ -827,14 +874,48 @@ impl<'x> MacroCallCursor<'x> {
                     find_argument(arguments, token.identifier_id(preprocessor.context))
                 })
             {
-                let mut expanded = preprocessor.expanded_argument(token, argument);
+                let prescan = preprocessor.expanded_argument(token, argument);
+                let mut expanded = prescan.tokens.clone();
                 while let Some(token) = expanded.next_item(preprocessor.context) {
                     self.pending.push(token);
                 }
+                if token.spacing.is_right_operand() {
+                    self.pending_end = prescan.end;
+                } else {
+                    self.pad_replacement(white, prescan.end);
+                }
                 continue;
             }
-            return Some(CallToken::Read(token));
+            if stringified && self.text {
+                self.pending.push(token);
+                self.pad_replacement(white, TokenSpacing::END);
+                continue;
+            }
+            return Some(CallToken::Read(self.pad(token)));
         }
+    }
+
+    /// Records that `pending` now holds a parameter's or operator's
+    /// replacement, written with white space before it or without, and ending
+    /// in padding `end`. The call never begins with one: its name came first.
+    fn pad_replacement(&mut self, white: bool, end: TokenSpacing) {
+        if self.text {
+            self.spacing = self.spacing.then(TokenSpacing::before(white));
+            self.pending_end = end;
+        }
+    }
+
+    /// `token`, with the padding gathered before it, unless it is white
+    /// space, which leaves that for the next token.
+    fn pad(&mut self, mut token: PreprocessorToken) -> PreprocessorToken {
+        if self.spacing != TokenSpacing::NONE && !is_blank(token.kind) {
+            token.spacing = self
+                .spacing
+                .then(token.spacing)
+                .with_white(token.spacing.white());
+            self.spacing = TokenSpacing::NONE;
+        }
+        token
     }
 
     /// Moves the real frame stack to the cursor. Replacement frames that the
@@ -871,7 +952,10 @@ impl<'x> MacroCallCursor<'x> {
             self.frames.insert(
                 self.index.map_or(0, |index| index + 1) - self.base,
                 TokenizerFrame {
-                    frame_type: TokenizerFrameType::Rescan { argument: false },
+                    frame_type: TokenizerFrameType::Rescan {
+                        argument: false,
+                        end:      self.pending_end,
+                    },
                     tokenizer,
                 },
             );
@@ -899,6 +983,10 @@ impl<'x> MacroCallCursor<'x> {
             pending: ArenaVec::new_in(preprocessor.scratch),
             pending_head: 0,
             line_start: false,
+            text: preprocessor.state.as_text,
+            spacing: TokenSpacing::NONE,
+            pending_end: TokenSpacing::NONE,
+            white: false,
         }
     }
 
@@ -966,6 +1054,7 @@ impl CallToken<'_> {
         match self {
             | Self::Read(token) => token.identifier_id(context),
             | Self::Shared(token) => PreprocessorToken {
+                spacing:        TokenSpacing::NONE,
                 kind:           token.kind(),
                 contents:       token.contents(),
                 source_vectors: SourceVectors::default(),

@@ -30,6 +30,7 @@
 //! - Token sources: `token_source.rs` reads lexed files; `replay.rs` reads
 //!   tokens made in phase 4, which nested macro arguments share.
 //! - Token and diagnostic types: `token.rs` defines preprocessing tokens;
+//!   `spacing.rs` what a text of phase 4 records about their spacing;
 //!   `errors.rs` defines the lexical diagnostics.
 //! - Tests: `tests.rs` checks lexer snapshots, replay, and preprocessing;
 //!   `storage.rs` also holds the packed-entry layout test.
@@ -63,6 +64,7 @@ mod token_source;
 
 // Token and diagnostic types.
 mod errors;
+mod spacing;
 mod token;
 
 pub(crate) use errors::{
@@ -75,6 +77,10 @@ pub(crate) use replay::{
     CopiedRun,
     SharedRun,
     SharedToken,
+};
+pub(crate) use spacing::{
+    OutputSpacing,
+    TokenSpacing,
 };
 pub(crate) use splicing::{
     LogicalCharacter,

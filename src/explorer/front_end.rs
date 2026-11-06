@@ -56,13 +56,14 @@ use crate::{
         Feature,
     },
     pipeline::{
+        PasteClass,
         Pragmas,
         TextOptions,
         TextWriter,
+        avoid_paste,
         describe_token,
         with_preprocessor,
         with_traced_preprocessor,
-        would_paste,
     },
     translation_phases::{
         Context,
@@ -74,6 +75,7 @@ use crate::{
             Truncated,
         },
         preprocessor_tokenizer::{
+            OutputSpacing,
             PreprocessorTokenType,
             RemapKind,
             TokenSource,
@@ -722,9 +724,8 @@ impl<'c, 'tu> Trace<'c, 'tu> {
             | TraceEvent::Produced {
                 expansion,
                 spelling,
-                spelled,
-                white_before,
-            } => self.produced(expansion, *spelling, spelled.as_ref(), *white_before),
+                spacing,
+            } => self.produced(expansion, *spelling, *spacing),
             | TraceEvent::Condition {
                 directive,
                 taken,
@@ -868,37 +869,23 @@ impl<'c, 'tu> Trace<'c, 'tu> {
         &mut self,
         expansion: &SourceVector,
         spelling: StringCacheId,
-        spelled: Option<&SourceVector>,
-        white_before: bool,
+        spacing: OutputSpacing,
     ) {
         let Some(index) = self.expansion(expansion) else {
             return;
         };
         let spelling = self.spell(spelling);
-        let first = spelling.bytes().next();
-        let ResultEnd { end, last, .. } = &mut self.keys[index].1;
+        let class = PasteClass::of(spelling);
+        let first = spelling.as_bytes().first().copied().unwrap_or(0);
+        let ResultEnd { last, .. } = &mut self.keys[index].1;
         let result = &mut self.output.expansions[index].result;
-        if !result.is_empty() {
-            let space = match (*end, spelled) {
-                | (Some((file, end, line)), Some(vector)) if file == vector.source_file_index => {
-                    let start = vector.index as usize;
-                    if start == end {
-                        false
-                    } else if start > end && vector.line == line {
-                        true
-                    } else {
-                        white_before || would_paste(*last, first)
-                    }
-                },
-                | _ => white_before || would_paste(*last, first),
-            };
-            if space {
-                result.push(' ');
-            }
+        if !result.is_empty()
+            && (spacing.space || (spacing.avoid_paste && avoid_paste(*last, class, first)))
+        {
+            result.push(' ');
         }
         result.push_str(spelling);
-        *end = spelled.map(|vector| (vector.source_file_index, vector.end(), vector.line));
-        *last = (first, spelling.bytes().last());
+        *last = class;
     }
 
     /// The latest expansion whose invocation is at `expansion`.
@@ -984,10 +971,8 @@ impl<'c, 'tu> Trace<'c, 'tu> {
 /// `-E` would.
 #[derive(Default)]
 struct ResultEnd {
-    /// The last token's file, the byte offset just past it, and its line.
-    end:    Option<(u32, usize, u32)>,
-    /// The first and last bytes of its spelling.
-    last:   (Option<u8>, Option<u8>),
+    /// The class of the last token's spelling.
+    last:   PasteClass,
     /// The index of the latest step at each depth, for the next step's
     /// parent.
     levels: Vec<usize>,

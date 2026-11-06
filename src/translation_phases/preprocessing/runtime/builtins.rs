@@ -38,6 +38,7 @@ use crate::{
             PreprocessorToken,
             PreprocessorTokenType,
             TokenSource,
+            TokenSpacing,
         },
     },
     util::{
@@ -106,6 +107,7 @@ impl Expander<'_, '_, '_, '_> {
                     intern_string_literal(self.context, self.scratch, &file.to_string_lossy())
                 };
                 Some(PreprocessorToken {
+                    spacing: TokenSpacing::NONE,
                     kind: PreprocessorTokenType::String,
                     contents,
                     source_vectors: self.context.push_source_vectors(&[invocation]),
@@ -115,6 +117,7 @@ impl Expander<'_, '_, '_, '_> {
                 let invocation = self.current_line_location(token);
                 let contents = intern_line_number(self.context, self.scratch, invocation.line);
                 Some(PreprocessorToken {
+                    spacing: TokenSpacing::NONE,
                     kind: PreprocessorTokenType::Number,
                     contents,
                     source_vectors: self.context.push_source_vectors(&[invocation]),
@@ -168,6 +171,7 @@ impl Expander<'_, '_, '_, '_> {
                     "1\0"
                 };
                 Some(PreprocessorToken {
+                    spacing:        TokenSpacing::NONE,
                     kind:           PreprocessorTokenType::Number,
                     contents:       self.context.string_cache.intern(spelling),
                     source_vectors: token.source_vectors,
@@ -189,6 +193,7 @@ impl Expander<'_, '_, '_, '_> {
                     },
                 );
                 Some(PreprocessorToken {
+                    spacing: TokenSpacing::NONE,
                     kind: PreprocessorTokenType::String,
                     contents,
                     source_vectors: token.source_vectors,

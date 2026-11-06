@@ -84,6 +84,7 @@ use crate::{
         ControlFlowGraph,
         DominatorTree,
         Entity,
+        EntryConvention,
         Function,
         Inst,
         InstData,
@@ -184,6 +185,22 @@ pub(crate) fn select<'a>(
         })
     });
     selector.func.dynamic = uses(&[Opcode::DynAlloca, Opcode::StackRestore]) || over_aligned_byval;
+    selector.func.entry = function.entry;
+    selector.func.general_regs = module.general_regs_only();
+    // A handler aligns its own stack, which leaves `%rsp` no fixed distance
+    // from the processor's frame, and addresses its frame from `%rbp`. Neither
+    // it nor a naked function names a return address or a caller's frame.
+    if matches!(
+        function.entry,
+        EntryConvention::Interrupt | EntryConvention::Naked
+    ) && uses(&[Opcode::ReturnAddress, Opcode::FrameAddress])
+    {
+        return Err(Construct::MachineEntryFrameQuery);
+    }
+    if function.entry == EntryConvention::Interrupt {
+        selector.func.dynamic = true;
+        selector.func.first_push = Some(PReg::Rbp);
+    }
     // The blocks selecting each IR block adds (its edges' copies, a
     // switch's compares, an atomic retry loop), which follow it in the
     // layout.

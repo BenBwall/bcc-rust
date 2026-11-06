@@ -63,6 +63,7 @@ use crate::{
     },
     ir::{
         Entity,
+        EntryConvention,
         Extension,
         Inst,
         InstData,
@@ -162,6 +163,10 @@ impl Selector<'_, '_, '_> {
             .entry_block()
             .expect("a selected body has an entry block");
         let params = body.block_params(entry);
+        if self.function.entry == EntryConvention::Interrupt {
+            self.handler_entry(params);
+            return Ok(());
+        }
         // The static chain arrives in `%r10`, which the register allocator
         // and the parameter copies below may use as scratch: take it first.
         let chain = self.signature.chain_param();
@@ -335,6 +340,35 @@ impl Selector<'_, '_, '_> {
     /// register save area (every SSE argument register too: `%al` only
     /// bounds them), or Win64's home area, which makes all arguments one
     /// array of 8-byte slots.
+    /// Takes a handler's parameters from the processor's frame, whose address
+    /// the prologue leaves in `%rax`: the error code, if any, and above it
+    /// the frame the first parameter points at. No register holds an
+    /// argument, only what the interrupted code had there.
+    fn handler_entry(&mut self, params: &[Value]) {
+        let register = |selector: &Self, param| match selector.kind(param) {
+            | ValueKind::Reg(vreg) => Reg::Virt(vreg),
+            | _ => unreachable!("a handler's parameters are a pointer and a word"),
+        };
+        let pointer = register(self, params[0]);
+        if let Some(&error) = params.get(1) {
+            let error = register(self, error);
+            let frame = self.vreg();
+            self.copy(frame, Reg::Phys(PReg::Rax));
+            let word = |offset| Mem::new(Base::Reg(frame), offset);
+            self.emit(MInst::Mov {
+                width: Width::B64,
+                dst:   error,
+                src:   Operand::Mem(word(0)),
+            });
+            self.emit(MInst::Lea {
+                dst:  pointer,
+                addr: word(8),
+            });
+        } else {
+            self.copy(pointer, Reg::Phys(PReg::Rax));
+        }
+    }
+
     fn save_argument_registers(&mut self) {
         let conv = self.conv;
         match conv.kind {
@@ -348,7 +382,14 @@ impl Selector<'_, '_, '_> {
                         src:   Operand::Reg(Reg::Phys(register)),
                     });
                 }
-                for (index, &register) in conv.float_arguments.iter().enumerate() {
+                // Without SSE (`-mgeneral-regs-only`) no argument is there,
+                // and `va_arg` refuses to read one.
+                let float_arguments = if self.func.general_regs {
+                    &[]
+                } else {
+                    conv.float_arguments
+                };
+                for (index, &register) in float_arguments.iter().enumerate() {
                     let offset = 48 + 16 * u32::try_from(index).expect("eight registers");
                     debug_assert!(offset < REGISTER_SAVE_BYTES, "the save area holds it");
                     // All 16 bytes: a `__float128` argument fills its register.

@@ -52,11 +52,15 @@ pub(crate) use middle_end::{
     lower_translation_unit_with_lines,
     with_optional_retention,
 };
+#[cfg(feature = "explorer")]
+pub(crate) use preprocessed_text::{
+    PasteClass,
+    avoid_paste,
+};
 pub(crate) use preprocessed_text::{
     Pragmas,
     TextOptions,
     TextWriter,
-    would_paste,
 };
 #[cfg(feature = "explorer")]
 pub(crate) use stages::with_traced_preprocessor;

@@ -12,6 +12,7 @@ use super::{
         self,
         Clause,
     },
+    layout,
     machine::Machine,
     model::{
         Diagnostic,
@@ -19,6 +20,7 @@ use super::{
         EventKind,
         Op,
         Operand,
+        Program,
         SourceRange,
         Type,
         Undefined,
@@ -56,6 +58,11 @@ pub(super) enum Topic {
     Increment,
     Condition,
     ByValue,
+    StaticStorage,
+    StaticLocal,
+    Member,
+    StructureCopy,
+    Padding,
     ExitStatus,
     Undefined,
     IndeterminateRead,
@@ -145,6 +152,28 @@ impl Topic {
                 "C passes every argument by value: the callee gets copies, so assigning to a \
                  parameter never changes the caller's variable. Passing a pointer copies an \
                  address, which still lets the callee reach the caller's objects.",
+            | Self::StaticStorage =>
+                "C has two lifetimes for ordinary variables. Automatic objects (locals) are \
+                 created each time their block runs and start indeterminate. Static objects \
+                 (declared outside every function, or with `static`) exist once, for the whole \
+                 run, and start at zero unless initialized: no code runs to set them, because the \
+                 value is already in the program file the system loads.",
+            | Self::StaticLocal =>
+                "A `static` local keeps its value from one call to the next, which makes it useful \
+                 for counters and caches, but also makes the function depend on its history: two \
+                 calls with the same arguments can return different results.",
+            | Self::Member =>
+                "A member is an object in its own right, at a fixed offset inside the structure. \
+                 `p->x` is shorthand for `(*p).x`: follow the pointer, then select the member.",
+            | Self::StructureCopy =>
+                "Unlike an array, a structure is copied whole by `=`, by passing it to a function \
+                 and by returning it. A large structure is often passed by pointer instead, to \
+                 avoid the copy and to let the callee change the caller's object.",
+            | Self::Padding =>
+                "On x86-64 an int starts on a multiple of 4 bytes and a pointer on a multiple of \
+                 8, so a char followed by an int leaves 3 unused bytes between them. Ordering \
+                 members from largest to smallest alignment often removes the padding. Padding \
+                 holds unspecified bytes, which is why comparing structures with memcmp is unsafe.",
             | Self::ExitStatus =>
                 "The exit status is how a program reports to whoever ran it: 0 means success. A \
                  shell shows it as `$?`, and on Linux only its low 8 bits get there.",
@@ -173,18 +202,48 @@ pub(super) enum Designation {
     Address,
     /// Read and store it: the operand of `++` or `--`.
     Updated,
+    /// Select one of its members: the left operand of `.`.
+    Member,
 }
 
-/// The initial state's event: nothing has run yet.
-pub(super) fn start(range: SourceRange) -> Event {
+/// The initial state's event: nothing has run yet. A program with
+/// `statics` objects of static storage duration initializes them first.
+pub(super) fn start(range: SourceRange, statics: usize) -> Event {
+    if statics == 0 {
+        return noted(
+            explained(
+                Event::new(EventKind::Start, range, String::from("Ready to run main")),
+                "Nothing has run yet: each Step performs one evaluation and says which rule of C \
+                 it followed.",
+                "Nothing has run yet. Each Step performs one evaluation of the abstract machine \
+                 and explains the rule of C behind it, starting with main's body.",
+                &[clauses::ABSTRACT_MACHINE],
+            ),
+            Topic::AbstractMachine,
+        );
+    }
+    let objects = if statics == 1 {
+        String::from("its object with static storage duration gets its initial value")
+    } else {
+        format!("its {statics} objects with static storage duration get their initial values")
+    };
     noted(
         explained(
-            Event::new(EventKind::Start, range, String::from("Ready to run main")),
-            "Nothing has run yet: each Step performs one evaluation and says which rule of C it \
-             followed.",
-            "Nothing has run yet. Each Step performs one evaluation of the abstract machine and \
-             explains the rule of C behind it, starting with main's body.",
-            &[clauses::ABSTRACT_MACHINE],
+            Event::new(
+                EventKind::Start,
+                range,
+                String::from("Ready to start the program"),
+            ),
+            &format!(
+                "Nothing has run yet: before main is called, {objects}; then each Step performs \
+                 one evaluation."
+            ),
+            &format!(
+                "Nothing has run yet. Before the program starts, that is before main is called, \
+                 {objects}. Then each Step performs one evaluation of the abstract machine and \
+                 explains the rule of C behind it, starting with main's body."
+            ),
+            &[clauses::ABSTRACT_MACHINE, clauses::STARTUP],
         ),
         Topic::AbstractMachine,
     )
@@ -249,9 +308,10 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             "Outside the supported subset",
             sentence(&diagnostic.message),
             String::from(
-                "The abstract machine runs a small subset of C: int and char locals, int \
-                 pointers, fixed int arrays, functions, if, while and for. The compiler pipeline \
-                 and WebAssembly views compile the whole language.",
+                "The abstract machine runs a small subset of C: int and char objects, int \
+                 pointers, fixed int arrays, structures, file-scope and static objects, \
+                 functions, if, while and for. The compiler pipeline and WebAssembly views \
+                 compile the whole language.",
             ),
             None,
         ),
@@ -348,7 +408,11 @@ impl Machine {
     pub(super) fn pending_effect(&self, op: &Op) -> Option<String> {
         let top = self.activations.last()?;
         let location = |operand: Option<&Operand>| match operand {
-            | Some(&Operand::Address { target, offset }) => self.location(target, offset),
+            | Some(&Operand::Address {
+                target,
+                offset,
+                structure,
+            }) => self.location_of(target, offset, structure),
             | _ => String::from("an object"),
         };
         match op {
@@ -418,12 +482,23 @@ impl Machine {
             ),
             | Type::Pointer =>
                 String::from("an int * object, a pointer to int (8 bytes on x86-64). Its value is"),
+            | Type::StructPointer(_) => format!(
+                "a {} object, a pointer to a structure (8 bytes on x86-64). Its value is",
+                object.r#type
+            ),
+            | Type::Struct(id) => format!(
+                "a {} object, {}. Each member's value is",
+                object.r#type,
+                self.layout_text(id)
+            ),
             | Type::Char => String::from("a char object (1 byte). Its value is"),
             | Type::Int => String::from("an int object (4 bytes on x86-64). Its value is"),
         };
         let kind = match ty {
             | Type::Array(count) => format!("an array of {count} ints"),
             | Type::Pointer => String::from("a pointer to int"),
+            | Type::StructPointer(_) => String::from("a pointer to a structure"),
+            | Type::Struct(_) => format!("a {}", object.r#type),
             | Type::Char => String::from("a char object"),
             | Type::Int => String::from("an int object"),
         };
@@ -438,6 +513,15 @@ impl Machine {
              storage duration.",
             name = object.name,
         );
+        let mut cited = vec![clauses::AUTOMATIC_LIFETIME, clauses::INDETERMINATE];
+        if matches!(ty, Type::Struct(_)) {
+            cited.extend([
+                clauses::STRUCTURE_TYPE,
+                clauses::MEMBER_ORDER,
+                clauses::MEMBER_ALIGNMENT,
+                clauses::TRAILING_PADDING,
+            ]);
+        }
         let mut event = noted(
             explained(
                 Event::new(
@@ -447,12 +531,412 @@ impl Machine {
                 ),
                 &summary,
                 &text,
-                &[clauses::AUTOMATIC_LIFETIME, clauses::INDETERMINATE],
+                &cited,
             ),
-            Topic::Indeterminate,
+            if matches!(ty, Type::Struct(_)) && self.padded(ty) {
+                Topic::Padding
+            } else {
+                Topic::Indeterminate
+            },
         );
         event.objects.push(id);
         event
+    }
+
+    /// Before `main`: static object `index` of the program, now object
+    /// `id`, exists with its initial value.
+    pub(super) fn static_storage(&self, program: &Program, index: usize, id: usize) -> Event {
+        let declared = &program.statics[index];
+        let object = &self.state.objects[id - 1];
+        let name = &object.name;
+        let shown = self.short_value(&object.value);
+        let pointer = matches!(declared.ty, Type::Pointer | Type::StructPointer(_));
+        let aggregate = matches!(declared.ty, Type::Array(_) | Type::Struct(_));
+        let (place, scope) = declared.function.as_ref().map_or_else(
+            || {
+                (
+                    String::from("declared outside every function"),
+                    clauses::FILE_SCOPE,
+                )
+            },
+            |function| {
+                (
+                    format!("declared `static` inside {function}"),
+                    clauses::BLOCK_SCOPE,
+                )
+            },
+        );
+        let lifetime = format!(
+            "`{name}` is {place}, so it has static storage duration: it exists for the whole run \
+             of the program, not just during one call, and belongs to no frame."
+        );
+        let (title, summary, how, mut cited) = if declared.explicit {
+            (
+                format!("Before main: `{name}` = {shown}"),
+                format!(
+                    "`{name}` has static storage duration: it gets its constant initializer's \
+                     value, {shown}, before main runs, and keeps existing until the program ends."
+                ),
+                format!(
+                    "Its initializer must be a constant expression, known before the program \
+                     runs, so no code runs to compute it: the value {} is simply there when the \
+                     program starts.{}",
+                    self.value_text(&object.value),
+                    if aggregate {
+                        " Every element or member the initializer does not mention starts at zero."
+                    } else {
+                        ""
+                    }
+                ),
+                vec![clauses::STATIC_STORAGE, clauses::STATIC_INITIALIZER],
+            )
+        } else {
+            let zero = if aggregate {
+                format!(
+                    "every member and element zero, every pointer in it null: {}",
+                    self.value_text(&object.value)
+                )
+            } else if pointer {
+                String::from("a null pointer")
+            } else {
+                String::from("zero")
+            };
+            (
+                format!("Before main: `{name}` = {shown} (static storage)"),
+                format!(
+                    "`{name}` has static storage duration, so without an initializer it starts as \
+                     {}, not indeterminate, before main runs.",
+                    if aggregate {
+                        "all zeros"
+                    } else if pointer {
+                        "a null pointer"
+                    } else {
+                        "zero"
+                    }
+                ),
+                format!(
+                    "It has no initializer, and unlike an automatic local it does not start \
+                     indeterminate: C initializes it to {zero}."
+                ),
+                vec![clauses::STATIC_STORAGE, clauses::STATIC_ZERO],
+            )
+        };
+        cited.extend([clauses::STARTUP, scope]);
+        let mut text = format!("{lifetime} {how} All of this happens before main is called.");
+        if let Type::Struct(structure) = declared.ty {
+            let _ = write!(
+                text,
+                " It is a {}, {}",
+                object.r#type,
+                self.layout_text(structure)
+            );
+            cited.extend([clauses::MEMBER_ORDER, clauses::MEMBER_ALIGNMENT]);
+        }
+        let mut event = noted(
+            explained(
+                Event::new(EventKind::StaticStorage, declared.range, title),
+                &summary,
+                &text,
+                &cited,
+            ),
+            Topic::StaticStorage,
+        );
+        event.objects.push(id);
+        event.result = Some(Operand::Value(object.value.clone()));
+        event
+    }
+
+    /// Execution reaches the declaration of the block-scope static `id`.
+    pub(super) fn static_local(&self, range: SourceRange, id: usize) -> Event {
+        let object = &self.state.objects[id - 1];
+        let name = &object.name;
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::StaticLocal,
+                    range,
+                    format!("`{name}` is static: nothing to create"),
+                ),
+                &format!(
+                    "`{name}` is declared `static`, so it already exists and keeps its value, {}, \
+                     from earlier calls: this declaration does nothing at run time.",
+                    self.short_value(&object.value)
+                ),
+                &format!(
+                    "An automatic local would be created here, indeterminate, every time the \
+                     block runs. `{name}` has static storage duration instead: it was created and \
+                     initialized once, before main, and its initializer does not run again. The \
+                     declaration only makes the name `{name}` usable in this block. It holds {}.",
+                    self.value_text(&object.value)
+                ),
+                &[clauses::STATIC_STORAGE, clauses::BLOCK_SCOPE],
+            ),
+            Topic::StaticLocal,
+        );
+        event.objects.push(id);
+        event
+    }
+
+    /// Lvalue conversion of a whole structure: a copy of every member.
+    pub(super) fn load_structure(
+        &self,
+        range: SourceRange,
+        target: usize,
+        offset: i32,
+        structure: usize,
+        value: Value,
+    ) -> Event {
+        let location = self.location_of(target, offset, Some(structure));
+        let shown = self.value_text(&value);
+        let mut text = format!(
+            "{location} is used for its value, so the machine reads the whole structure, every \
+             member at once: {shown}. C calls this lvalue conversion; for a structure, the value \
+             is a copy of all its members."
+        );
+        let mut cited = vec![clauses::LVALUE_CONVERSION];
+        if indeterminate_member(&value) {
+            text.push_str(
+                " Some members are still indeterminate. That is not an error here: a structure's \
+                 value is never a trap representation, so copying it copies those members as they \
+                 are, still indeterminate.",
+            );
+            cited.push(clauses::STRUCTURE_VALUE);
+        }
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::LvalueConversion,
+                    range,
+                    format!("Read {location} → {}", self.short_value(&value)),
+                ),
+                &format!(
+                    "The expression needs the value of the structure {location}, so the machine \
+                     reads every member: {shown}."
+                ),
+                &text,
+                &cited,
+            ),
+            Topic::StructureCopy,
+        );
+        event.operands.push(Operand::Address {
+            target,
+            offset,
+            structure: Some(structure),
+        });
+        event.objects.push(target);
+        result(event, Operand::Value(value))
+    }
+
+    /// `.m` or `->m` designated a member of the structure `whole` at leaf
+    /// `base`. `pointer` is the pointer `->` followed.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One member access's complete observation."
+    )]
+    pub(super) fn member(
+        &self,
+        range: SourceRange,
+        source: &str,
+        target: usize,
+        base: i32,
+        whole: Option<usize>,
+        pointer: Option<Value>,
+        selected: Operand,
+    ) -> Event {
+        let written = snippet(source, range);
+        let (member, offset, decayed) = match &selected {
+            | &Operand::Address {
+                offset, structure, ..
+            } => (self.location_of(target, offset, structure), offset, None),
+            | Operand::Value(value @ Value::Pointer { first, .. }) =>
+                (self.array_name(target, *first), *first, Some(value)),
+            | Operand::Value(_) => (String::from("the member"), base, None),
+        };
+        let whole = self.location_of(target, base, whole);
+        let byte = self.byte_offset(target, base, offset);
+        let at = byte.map_or_else(String::new, |byte| format!(", {byte} bytes into it"));
+        let (summary, mut text, mut cited) = if let Some(pointer) = &pointer {
+            (
+                format!(
+                    "`{written}` follows the pointer to the structure {whole} and designates its \
+                     member {member}{at}."
+                ),
+                format!(
+                    "The left operand holds {}, so `->` designates the member of the structure it \
+                     points to: {member}{at}. `p->m` means `(*p).m`. Nothing is read or written \
+                     yet.",
+                    self.value_text(pointer)
+                ),
+                vec![clauses::MEMBER_POINTER, clauses::MEMBER_ORDER],
+            )
+        } else {
+            (
+                format!("`{written}` designates the member {member} inside {whole}{at}."),
+                format!(
+                    "The `.` operator designates a member of the structure {whole}: {member}, an \
+                     object of its own at a fixed offset{at}. It is an lvalue, like the \
+                     structure; nothing is read or written yet."
+                ),
+                vec![clauses::MEMBER, clauses::MEMBER_ORDER],
+            )
+        };
+        if let Some(decayed) = decayed {
+            let _ = write!(
+                text,
+                " The member is an array, so, used in an expression, it becomes {} at once.",
+                self.value_text(decayed)
+            );
+            cited.push(clauses::ARRAY_DECAY);
+        }
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::Member,
+                    range,
+                    if decayed.is_some() {
+                        format!("`{written}` decays to a pointer")
+                    } else {
+                        format!("`{written}` designates {member}")
+                    },
+                ),
+                &summary,
+                &text,
+                &cited,
+            ),
+            Topic::Member,
+        );
+        if let Some(pointer) = pointer {
+            event.operands.push(Operand::Value(pointer));
+        }
+        event.objects.push(target);
+        result(event, selected)
+    }
+
+    /// A whole structure stored by `=` or an initializer: a copy of every
+    /// member.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One copy's complete observation."
+    )]
+    pub(super) fn copied(
+        &self,
+        range: SourceRange,
+        initializer: bool,
+        full_expression: bool,
+        target: usize,
+        offset: i32,
+        structure: usize,
+        previous: &Value,
+        stored: Value,
+    ) -> Event {
+        let location = self.location_of(target, offset, Some(structure));
+        let shown = self.short_value(&stored);
+        let size = self
+            .structures
+            .get(structure)
+            .map_or(0, |layout| layout.size);
+        let members = self
+            .structures
+            .get(structure)
+            .map_or(0, |layout| layout.members.len());
+        let (kind, title, mut cited) = if initializer {
+            (
+                EventKind::Initialize,
+                format!("Initialize {location} = {shown}"),
+                vec![clauses::STRUCTURE_INITIALIZER],
+            )
+        } else {
+            (
+                EventKind::Assign,
+                format!("Copy {shown} into {location}"),
+                vec![clauses::SIMPLE_ASSIGNMENT, clauses::STRUCTURE_ASSIGNMENT],
+            )
+        };
+        let mut summary = if initializer {
+            format!(
+                "The initializer copies a whole structure into {location}: all {members} members, \
+                 {shown}."
+            )
+        } else {
+            format!(
+                "The assignment copies the whole structure into {location}, all {members} \
+                 members: {shown}."
+            )
+        };
+        let mut text = if initializer {
+            format!(
+                "{location} is initialized from a structure of the same type, so it gets a copy \
+                 of that structure's value, member by member: {}. The two are separate objects \
+                 afterwards; changing one does not change the other.",
+                self.value_text(&stored)
+            )
+        } else {
+            format!(
+                "Simple assignment works on whole structures: {} replaces the value of {location} \
+                 (previously {}), member by member, {size} bytes in all on x86-64. The two are \
+                 separate objects afterwards; changing one does not change the other.",
+                self.value_text(&stored),
+                self.value_text(previous)
+            )
+        };
+        if indeterminate_member(&stored) {
+            text.push_str(
+                " Indeterminate members are copied as they are: a structure's value is never a \
+                 trap representation.",
+            );
+            cited.push(clauses::STRUCTURE_VALUE);
+        }
+        if full_expression {
+            summary.push_str(" That ends the full expression: a sequence point.");
+            text.push_str(" The full expression ends here, a sequence point.");
+            cited.push(clauses::FULL_EXPRESSION);
+        }
+        let mut event = noted(
+            explained(Event::new(kind, range, title), &summary, &text, &cited),
+            Topic::StructureCopy,
+        );
+        event.sequence_point = full_expression;
+        event.operands.extend([
+            Operand::Address {
+                target,
+                offset,
+                structure: Some(structure),
+            },
+            Operand::Value(stored.clone()),
+        ]);
+        event.objects.push(target);
+        result(event, Operand::Value(stored))
+    }
+
+    /// The byte offset of leaf `offset` from the structure at leaf `base` of
+    /// `target`, as laid out on x86-64.
+    fn byte_offset(&self, target: usize, base: i32, offset: i32) -> Option<usize> {
+        let mut ty = self.object_type(target)?;
+        let mut within = usize::try_from(offset).ok()?;
+        let base = usize::try_from(base).ok()?;
+        let mut bytes = 0;
+        let mut start = None;
+        let mut consumed = 0;
+        loop {
+            match ty {
+                | Type::Struct(id) => {
+                    if consumed == base && start.is_none() {
+                        start = Some(bytes);
+                    }
+                    let (member, rest) = layout::member_at(self.structures.get(id)?, within)?;
+                    bytes += member.offset;
+                    consumed += within - rest;
+                    within = rest;
+                    ty = member.ty;
+                },
+                | Type::Array(_) => {
+                    bytes += within * 4;
+                    break;
+                },
+                | _ => break,
+            }
+        }
+        Some(bytes - start?)
     }
 
     /// The event for a name evaluated to the object it designates, told by
@@ -521,6 +1005,18 @@ impl Machine {
                 format!("{lvalue} `&` turns that place into a pointer; nothing is read."),
                 &[clauses::IDENTIFIER, clauses::LVALUE],
             ),
+            | Designation::Member => (
+                format!("`{name}` holds the member to select"),
+                format!(
+                    "`.` selects a member inside `{name}`, so the structure is located, not read \
+                     as a whole."
+                ),
+                format!(
+                    "{lvalue} The `.` operator next designates one of its members, an object at a \
+                     fixed offset inside it; nothing is read yet."
+                ),
+                &[clauses::IDENTIFIER, clauses::LVALUE, clauses::MEMBER],
+            ),
             | Designation::Updated => (
                 format!("`{name}` is the object to update"),
                 format!(
@@ -548,15 +1044,36 @@ impl Machine {
         &self,
         range: SourceRange,
         id: usize,
-        index: i32,
+        offset: i32,
         operand: Operand,
     ) -> Event {
-        let location = self.location(id, index);
-        let text = format!(
-            "An initializer list fills the array's elements in increasing index order, so the \
-             next value initializes {location}."
-        );
-        let mut event = noted(
+        let structure = match operand {
+            | Operand::Address { structure, .. } => structure,
+            | Operand::Value(_) => None,
+        };
+        let location = self.location_of(id, offset, structure);
+        let mut event = if matches!(self.object_type(id), Some(Type::Array(_))) {
+            let text = format!(
+                "An initializer list fills the array's elements in increasing index order, so the \
+                 next value initializes {location}."
+            );
+            noted(
+                explained(
+                    Event::new(
+                        EventKind::Designate,
+                        range,
+                        format!("Select {location} to initialize"),
+                    ),
+                    &format!(
+                        "An initializer list fills an array from [0] upward, so the next value \
+                         goes to {location}."
+                    ),
+                    &text,
+                    &[clauses::INITIALIZER_ORDER],
+                ),
+                Topic::ElementOrder,
+            )
+        } else {
             explained(
                 Event::new(
                     EventKind::Designate,
@@ -564,14 +1081,20 @@ impl Machine {
                     format!("Select {location} to initialize"),
                 ),
                 &format!(
-                    "An initializer list fills an array from [0] upward, so the next value goes \
-                     to {location}."
+                    "An initializer list fills a structure's members in declaration order, or \
+                     jumps to the one a `.member =` names, so the next value goes to {location}."
                 ),
-                &text,
-                &[clauses::INITIALIZER_ORDER],
-            ),
-            Topic::ElementOrder,
-        );
+                &format!(
+                    "Each brace-enclosed list initializes one object, member after member in \
+                     declaration order; a designator `.member =` moves to that member and the \
+                     list continues after it. The next value initializes {location}."
+                ),
+                &[
+                    clauses::MEMBER_INITIALIZER_ORDER,
+                    clauses::MEMBER_DESIGNATOR,
+                ],
+            )
+        };
         event.objects.push(id);
         result(event, operand)
     }
@@ -635,7 +1158,11 @@ impl Machine {
             ),
             Topic::LvalueConversion,
         );
-        event.operands.push(Operand::Address { target, offset });
+        event.operands.push(Operand::Address {
+            target,
+            offset,
+            structure: None,
+        });
         event.objects.push(target);
         result(event, Operand::Value(value))
     }
@@ -672,9 +1199,10 @@ impl Machine {
         range: SourceRange,
         target: usize,
         offset: i32,
+        structure: Option<usize>,
         value: Value,
     ) -> Event {
-        let location = self.location(target, offset);
+        let location = self.location_of(target, offset, structure);
         let text = format!(
             "The & operator produces a pointer to {location}, which other code can later use to \
              read or change it. It does not read {location} itself."
@@ -706,8 +1234,9 @@ impl Machine {
         pointer: Value,
         target: usize,
         offset: i32,
+        structure: Option<usize>,
     ) -> Event {
-        let location = self.location(target, offset);
+        let location = self.location_of(target, offset, structure);
         let operand = snippet(source, range).trim_start_matches('*');
         let summary =
             format!("`*{operand}` follows the pointer to the object it points to, {location}.");
@@ -728,7 +1257,14 @@ impl Machine {
         );
         event.operands.push(Operand::Value(pointer));
         event.objects.push(target);
-        result(event, Operand::Address { target, offset })
+        result(
+            event,
+            Operand::Address {
+                target,
+                offset,
+                structure,
+            },
+        )
     }
 
     pub(super) fn subscript(
@@ -762,7 +1298,14 @@ impl Machine {
             .operands
             .extend([Operand::Value(base), Operand::Value(index)]);
         event.objects.push(target);
-        result(event, Operand::Address { target, offset })
+        result(
+            event,
+            Operand::Address {
+                target,
+                offset,
+                structure: None,
+            },
+        )
     }
 
     pub(super) fn unary(
@@ -897,7 +1440,7 @@ impl Machine {
                 } else {
                     &[clauses::POINTER_ARITHMETIC, clauses::EVALUATION_ORDER]
                 };
-                if self.one_past(&output) {
+                if one_past(&output) {
                     text.push_str(
                         " That is the one-past-the-end position: a pointer there may be formed \
                          and compared, but never dereferenced.",
@@ -914,7 +1457,7 @@ impl Machine {
                         "`{written}` computes an address from the pointer and the index; the \
                          element is never read."
                     )
-                } else if self.one_past(&output) {
+                } else if one_past(&output) {
                     format!(
                         "Pointer arithmetic counts elements: {sign} {} gives {}, which may be \
                          formed and compared but not read through.",
@@ -1057,7 +1600,8 @@ impl Machine {
             )
         };
         let converted = value != stored;
-        let char_conversion = converted && self.object_type(target) == Some(Type::Char);
+        let leaf = self.leaf_type(target, offset);
+        let char_conversion = converted && leaf == Some(Type::Char);
         let mut text = if char_conversion {
             let operation = if initializer {
                 "Initialization"
@@ -1104,7 +1648,7 @@ impl Machine {
             );
             format!("The assignment stores {shown} into {location}, replacing {before}.")
         };
-        if !converted && !char_value && self.object_type(target) == Some(Type::Char) {
+        if !converted && !char_value && leaf == Some(Type::Char) {
             let _ = write!(
                 text,
                 " The int {shown} is converted to {location}'s type, char; it fits in -128 to \
@@ -1113,7 +1657,7 @@ impl Machine {
         }
         let mut cited = vec![clause];
         let mut topic = None;
-        if converted && self.object_type(target) == Some(Type::Pointer) {
+        if converted && matches!(leaf, Some(Type::Pointer | Type::StructPointer(_))) {
             let _ = write!(
                 text,
                 " The integer constant 0 is a null pointer constant: storing it into a pointer \
@@ -1138,9 +1682,14 @@ impl Machine {
             event = noted(event, topic);
         }
         event.sequence_point = full_expression;
-        event
-            .operands
-            .extend([Operand::Address { target, offset }, Operand::Value(value)]);
+        event.operands.extend([
+            Operand::Address {
+                target,
+                offset,
+                structure: None,
+            },
+            Operand::Value(value),
+        ]);
         event.objects.push(target);
         result(event, Operand::Value(stored))
     }
@@ -1180,7 +1729,7 @@ impl Machine {
                 " The {arithmetic} happens in int; the int result did not fit in a char, so the \
                  implementation-defined conversion kept its low 8 bits."
             );
-        } else if self.object_type(target) == Some(Type::Char) {
+        } else if self.leaf_type(target, offset) == Some(Type::Char) {
             let _ = write!(
                 text,
                 " The char is promoted to int for the {arithmetic}, and the int result, which \
@@ -1209,9 +1758,14 @@ impl Machine {
             Topic::Increment,
         );
         event.sequence_point = true;
-        event
-            .operands
-            .extend([Operand::Address { target, offset }, Operand::Value(current)]);
+        event.operands.extend([
+            Operand::Address {
+                target,
+                offset,
+                structure: None,
+            },
+            Operand::Value(current),
+        ]);
         event.objects.push(target);
         result(event, Operand::Value(stored))
     }
@@ -1382,6 +1936,15 @@ impl Machine {
                 " Each parameter is a brand-new local object initialized with a copy of its \
                  argument: {bindings}."
             );
+            if arguments
+                .iter()
+                .any(|argument| matches!(argument, Value::Struct { .. }))
+            {
+                text.push_str(
+                    " A structure argument is copied whole, every member: the callee works on its \
+                     own copy, and changing it leaves the caller's structure alone.",
+                );
+            }
         }
         let mut cited = vec![
             clauses::CALL_ARGUMENTS,
@@ -1464,6 +2027,12 @@ impl Machine {
                 text,
                 " In the caller, the call `{call}` now has the value {shown}."
             );
+            if matches!(value, Value::Struct { .. }) {
+                text.push_str(
+                    " A structure is returned by value: the caller gets a copy of every member, \
+                     and the function's own objects can end safely.",
+                );
+            }
         } else {
             let _ = write!(
                 text,
@@ -1517,31 +2086,58 @@ impl Machine {
         result(event, Operand::Value(value))
     }
 
-    /// How the source names a location: `x`, `values[1]`, or `values[3]`
-    /// (one past), qualified with the owning function when it is not the
-    /// innermost activation's.
+    /// How the source names a location: `x`, `values[1]`, `p.x`, or
+    /// `values[3]` (one past), qualified with the owning function when it is
+    /// not the innermost activation's.
     pub(super) fn location(&self, target: usize, offset: i32) -> String {
+        self.location_of(target, offset, None)
+    }
+
+    /// [`Self::location`] for the whole structure `structure` at `offset`
+    /// when given, rather than its first scalar.
+    pub(super) fn location_of(
+        &self,
+        target: usize,
+        offset: i32,
+        structure: Option<usize>,
+    ) -> String {
         let Some(object) = target
             .checked_sub(1)
             .and_then(|index| self.state.objects.get(index))
         else {
             return format!("object #{target}");
         };
-        let mut text = if matches!(self.object_type(target), Some(Type::Array(_))) {
-            format!("{}[{offset}]", object.name)
-        } else if offset == 0 {
-            format!("`{}`", object.name)
+        let path = layout::path(&object.value, offset, structure, &self.structures);
+        let mut text = if path.ends_with(']') {
+            format!("{}{path}", object.name)
+        } else if let Some(past) = path.strip_prefix('+') {
+            format!("`{}` + {past}", object.name)
         } else {
-            format!("`{}` + {offset}", object.name)
+            format!("`{}{path}`", object.name)
         };
-        if self
-            .activations
-            .last()
-            .is_some_and(|activation| activation.id != object.frame_id)
+        if object.frame_id != 0
+            && self
+                .activations
+                .last()
+                .is_some_and(|activation| activation.id != object.frame_id)
         {
             let _ = write!(text, " (in {})", self.function_name(object.frame_id));
         }
         text
+    }
+
+    /// The name of the array whose element 0 is leaf `first` of `target`:
+    /// `values`, `s.a`, or the object itself when it is no array.
+    pub(super) fn array_name(&self, target: usize, first: i32) -> String {
+        let Some(object) = target
+            .checked_sub(1)
+            .and_then(|index| self.state.objects.get(index))
+        else {
+            return format!("object #{target}");
+        };
+        let path = layout::path(&object.value, first, None, &self.structures);
+        let path = path.strip_suffix("[0]").unwrap_or(&path);
+        format!("`{}{path}`", object.name)
     }
 
     fn value_text(&self, value: &Value) -> String {
@@ -1552,16 +2148,20 @@ impl Machine {
             | &Value::Pointer {
                 target: Some(target),
                 offset,
+                first,
+                structure,
+                ..
             } =>
-                if self.one_past(value) {
-                    let name = self
-                        .state
-                        .objects
-                        .get(target - 1)
-                        .map_or("", |object| object.name.as_str());
-                    format!("a pointer one past the end of `{name}`")
+                if one_past(value) {
+                    format!(
+                        "a pointer one past the end of {}",
+                        self.array_name(target, first)
+                    )
                 } else {
-                    format!("a pointer to {}", self.location(target, offset))
+                    format!(
+                        "a pointer to {}",
+                        self.location_of(target, offset, structure)
+                    )
                 },
             | Value::Array(elements) => {
                 let mut text = String::from("{");
@@ -1570,6 +2170,24 @@ impl Machine {
                         text.push_str(", ");
                     }
                     text.push_str(&self.short_value(element));
+                }
+                text.push('}');
+                text
+            },
+            | Value::Struct { structure, members } => {
+                let mut text = String::from("{");
+                let names = self
+                    .structures
+                    .get(*structure)
+                    .map(|layout| &layout.members);
+                for (index, member) in members.iter().enumerate() {
+                    if index > 0 {
+                        text.push_str(", ");
+                    }
+                    if let Some(name) = names.and_then(|names| names.get(index)) {
+                        let _ = write!(text, ".{} = ", name.name);
+                    }
+                    text.push_str(&self.short_value(member));
                 }
                 text.push('}');
                 text
@@ -1585,24 +2203,64 @@ impl Machine {
             | &Value::Pointer {
                 target: Some(target),
                 offset,
-            } => format!("&{}", self.location(target, offset).replace('`', "")),
-            | Value::Array(_) => self.value_text(value),
+                structure,
+                ..
+            } => format!(
+                "&{}",
+                self.location_of(target, offset, structure).replace('`', "")
+            ),
+            | Value::Array(_) | Value::Struct { .. } => self.value_text(value),
         }
     }
 
-    fn one_past(&self, value: &Value) -> bool {
-        let &Value::Pointer {
-            target: Some(target),
-            offset,
-        } = value
-        else {
-            return false;
+    /// Structure `id`'s layout in words: its size and each member's offset,
+    /// with the padding between them.
+    fn layout_text(&self, id: usize) -> String {
+        let Some(layout) = self.structures.get(id) else {
+            return String::from("a structure");
         };
-        let length = match self.object_type(target) {
-            | Some(Type::Array(count)) => count,
-            | _ => 1,
-        };
-        usize::try_from(offset) == Ok(length)
+        let mut text = format!(
+            "{} bytes on x86-64, aligned to {}: ",
+            layout.size, layout.align
+        );
+        for (index, member) in layout.members.iter().enumerate() {
+            if index > 0 {
+                text.push_str(", ");
+            }
+            let _ = write!(
+                text,
+                "`{}` ({}) at byte {}",
+                member.name, member.r#type, member.offset
+            );
+            if member.padding > 0 {
+                let after = if index + 1 == layout.members.len() {
+                    "at the end"
+                } else {
+                    "before the next member"
+                };
+                let _ = write!(
+                    text,
+                    " followed by {} byte{} of padding {after}",
+                    member.padding,
+                    if member.padding == 1 { "" } else { "s" }
+                );
+            }
+        }
+        text.push('.');
+        text
+    }
+
+    /// Whether structure type `ty` has padding.
+    fn padded(&self, ty: Type) -> bool {
+        match ty {
+            | Type::Struct(id) => self.structures.get(id).is_some_and(|layout| {
+                layout
+                    .members
+                    .iter()
+                    .any(|member| member.padding > 0 || self.padded(member.ty))
+            }),
+            | _ => false,
+        }
     }
 
     fn names(&self, ids: &[usize]) -> String {
@@ -1673,10 +2331,14 @@ pub(super) fn implicit_zero(range: SourceRange, value: Operand) -> Event {
                 range,
                 String::from("Supply an implicit 0"),
             ),
-            "The list has no value left for this element, so C initializes it to zero.",
-            "The initializer list ran out before the array did. Elements without an initializer \
-             of their own are initialized to zero.",
-            &[clauses::PARTIAL_INITIALIZER],
+            "The list has no value for this element or member, so C initializes it to zero.",
+            "The initializer list gives no value for this element or member. Every element or \
+             member without an initializer of its own is initialized as an object with static \
+             storage duration would be: to zero, or to a null pointer for a pointer.",
+            &[
+                clauses::PARTIAL_INITIALIZER,
+                clauses::IMPLICIT_INITIALIZATION,
+            ],
         ),
         value,
     )
@@ -1703,6 +2365,27 @@ pub(super) fn jump(range: SourceRange, backward: bool) -> Event {
             &[clauses::IF_STATEMENT],
         )
     }
+}
+
+/// Whether a structure value has an indeterminate member.
+fn indeterminate_member(value: &Value) -> bool {
+    let mut leaves = Vec::new();
+    layout::flatten(value, &mut leaves);
+    leaves.contains(&Value::Indeterminate)
+}
+
+/// Whether a pointer points one past the end of its array.
+const fn one_past(value: &Value) -> bool {
+    matches!(
+        *value,
+        Value::Pointer {
+            target: Some(_),
+            offset,
+            first,
+            length,
+            ..
+        } if offset == first + length
+    )
 }
 
 /// How a shell on Linux sees main's return `value` when it is outside 0 to

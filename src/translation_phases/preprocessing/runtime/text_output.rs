@@ -32,7 +32,10 @@ use crate::{
         SourcePosition,
         SourceVector,
         TranslationPhase,
-        preprocessor_tokenizer::PreprocessorTokenType,
+        preprocessor_tokenizer::{
+            OutputSpacing,
+            PreprocessorTokenType,
+        },
     },
     util::bump::{
         ArenaString,
@@ -55,6 +58,8 @@ pub(crate) struct ReadAt {
     /// it: for a header's tokens, at the end of the main file's `#include`
     /// line that brought the header in.
     pub(crate) root:      Option<(u32, SourcePosition)>,
+    /// How the token is separated from the one before it on its line.
+    pub(crate) spacing:   OutputSpacing,
 }
 
 impl<'tu> Preprocessor<'tu, '_> {
@@ -73,6 +78,7 @@ impl<'tu> Preprocessor<'tu, '_> {
                 | Some(token) => {
                     let expansion = preprocessor.outermost_invocation().cloned();
                     let root = preprocessor.root_position();
+                    let spacing = preprocessor.spacing.output.output();
                     let at = preprocessor
                         .reading_position()
                         .map(|(file, position)| ReadAt {
@@ -80,6 +86,7 @@ impl<'tu> Preprocessor<'tu, '_> {
                             position,
                             expansion,
                             root,
+                            spacing,
                         });
                     visit(preprocessor.context, token, at);
                     ControlFlow::Continue(())
