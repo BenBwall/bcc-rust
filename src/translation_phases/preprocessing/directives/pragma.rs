@@ -27,7 +27,8 @@ use crate::{
         Context,
         SourcePosition,
         SourceVectors,
-        TextPragma,
+        TextEvent,
+        TextEventKind,
         interface::StrExt,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -91,11 +92,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         if let Some(text) = line
             && let Some((file, at)) = at
         {
-            self.context.text_pragmas.push(TextPragma {
+            self.context.text_events.push(TextEvent {
                 position,
                 file,
                 line: at.line,
-                text,
+                kind: TextEventKind::Pragma(text),
             });
         }
         consumed_newline
