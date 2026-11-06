@@ -204,13 +204,12 @@ impl Renderer {
                 &marks,
                 (file, text, starts),
                 diagnostic.severity,
-                (gutter_width, pad.as_str()),
-                compiler_snippet,
+                (gutter_width, pad.as_str(), compiler_snippet),
                 scratch,
             );
         }
         if compiler_snippet {
-            for mark in related {
+            for mark in &related {
                 self.render_related_note(
                     &mut out,
                     mark,
@@ -254,9 +253,9 @@ impl Renderer {
     fn render_related_note(
         &self,
         out: &mut ArenaString<'_>,
-        mark: Mark<'_>,
+        mark: &Mark<'_>,
         context: &Context<'_>,
-        gutter: (usize, &str),
+        (gutter_width, pad): (usize, &str),
         scratch: &Bump,
     ) {
         let text = context.source_text(mark.file).unwrap_or_default();
@@ -274,15 +273,14 @@ impl Renderer {
         let marks = [Mark {
             primary: true,
             label: None,
-            ..mark
+            ..mark.clone()
         }];
         self.render_file_lines(
             out,
             &marks,
             (marks[0].file, text, starts),
             ErrorSeverity::Warning,
-            gutter,
-            true,
+            (gutter_width, pad, true),
             scratch,
         );
     }
@@ -293,8 +291,7 @@ impl Renderer {
         marks: &[Mark<'_>],
         (file, text, starts): (u32, &str, &[usize]),
         severity: ErrorSeverity,
-        (gutter_width, pad): (usize, &str),
-        compiler_snippet: bool,
+        (gutter_width, pad, compiler_snippet): (usize, &str, bool),
         scratch: &Bump,
     ) {
         // GCC and Clang mark the rest of a range with tildes.
