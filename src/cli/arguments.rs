@@ -361,6 +361,7 @@ impl Cli {
             .with_suppress_warnings(self.suppress_warnings)
             .with_syntax_only(self.driver.syntax_only)
             .with_compiler_identity(self.compiler_identity.into())
+            .with_compiler_extensions(self.compiler_extensions)
             .with_default_math_errno()
             .with_diagnostic_format(self.diagnostic_format.into())
             .with_diagnostic_presentation(self.diagnostic_presentation())

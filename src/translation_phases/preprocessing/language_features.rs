@@ -118,8 +118,10 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             .iter()
             .find(|(spelling, _)| *spelling == name)
             .expect("registered language builtin");
-        self.context
-            .report_extension(feature, name, token.source_vectors);
+        if !self.context.configuration.always_tests_feature(feature) {
+            self.context
+                .report_extension(feature, name, token.source_vectors);
+        }
         let name = self.context.string_cache.at(token.contents);
         // C23 §6.10.2p11, p. 167; PDF p. 180: these names are
         // conditional-inclusion operators, not ordinary expression macros.
