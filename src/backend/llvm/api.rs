@@ -214,6 +214,7 @@ use crate::{
     target::{
         CodeOptions,
         Relocation,
+        StackProtector,
         Target,
         TlsModel,
     },
@@ -359,6 +360,15 @@ impl Session<'_> {
             if pie {
                 session.module_flag(MODULE_FLAG_MAX, "PIE Level", level);
             }
+        }
+        // As Clang marks them, so that linking keeps a property only where
+        // every object has it.
+        let hardening = session.code.hardening;
+        if hardening.return_protection {
+            session.module_flag(MODULE_FLAG_MIN, "cf-protection-return", 1);
+        }
+        if hardening.branch_protection {
+            session.module_flag(MODULE_FLAG_MIN, "cf-protection-branch", 1);
         }
         body(&session)
     }
@@ -1663,6 +1673,28 @@ impl<'id> Session<'id> {
     }
 
     /// Adds the string attribute `key`=`value` to the function `function`.
+    /// The run-time checks the options ask of a defined function, in Clang's
+    /// attributes.
+    pub(super) fn hardening(&self, function: Val<'id>, no_stack_protector: bool) {
+        let hardening = self.code.hardening;
+        let protector = match hardening.stack_protector {
+            | StackProtector::Off => None,
+            | _ if no_stack_protector => None,
+            | StackProtector::Basic => Some("ssp"),
+            | StackProtector::Strong => Some("sspstrong"),
+            | StackProtector::All => Some("sspreq"),
+        };
+        if let Some(protector) = protector {
+            self.attribute(function, u32::MAX, protector, 0, None, false);
+        }
+        if hardening.stack_clash {
+            self.string_attribute(function, "probe-stack", "inline-asm");
+        }
+        if hardening.keep_frame_pointer {
+            self.string_attribute(function, "frame-pointer", "all");
+        }
+    }
+
     pub(super) fn string_attribute(&self, function: Val<'id>, key: &str, value: &str) {
         let key_length = u32::try_from(key.len()).expect("attribute key fits in u32");
         let value_length = u32::try_from(value.len()).expect("attribute value fits in u32");

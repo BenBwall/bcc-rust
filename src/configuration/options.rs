@@ -946,6 +946,7 @@ impl CompilerConfiguration {
         Self {
             target: crate::target::Target::LinuxGnu,
             code_options: crate::target::CodeOptions {
+                hardening:                  crate::target::Hardening::NONE,
                 relocation:                 None,
                 tls_model:                  crate::target::TlsModel::GlobalDynamic,
                 strict_volatile_bit_fields: false,

@@ -103,6 +103,9 @@ impl<'ir> Module<'ir> {
             if let Some(keyword) = function.inlining.keyword() {
                 write!(f, " {keyword}")?;
             }
+            if function.no_stack_protector {
+                f.write_str(" no_stack_protector")?;
+            }
             if let Some(external) = function.inline_copy_of {
                 write!(f, " inline_copy_of {}", display_name(external))?;
             }

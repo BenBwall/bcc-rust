@@ -1147,6 +1147,21 @@ pub(super) fn with_identity_macros<'a>(
             _ = write!(out, "#define __PIE__ {level}\n#define __pie__ {level}\n");
         }
     }
+    // The compilers number their protector macros differently.
+    let hardening = configuration.code_options().hardening;
+    let gcc = identity == CompilerIdentity::Gcc;
+    match hardening.stack_protector {
+        | crate::target::StackProtector::Off => {},
+        | crate::target::StackProtector::Basic => out.push_str("#define __SSP__ 1\n"),
+        | crate::target::StackProtector::Strong =>
+            _ = writeln!(out, "#define __SSP_STRONG__ {}", if gcc { 3 } else { 2 }),
+        | crate::target::StackProtector::All =>
+            _ = writeln!(out, "#define __SSP_ALL__ {}", if gcc { 2 } else { 3 }),
+    }
+    let cet = u8::from(hardening.branch_protection) + 2 * u8::from(hardening.return_protection);
+    if cet != 0 {
+        _ = writeln!(out, "#define __CET__ {cet}");
+    }
     // The widest `_BitInt` the identity's compiler accepts, which
     // semantic analysis enforces (C23 §5.2.5.3.2p1, pp. 22-23; PDF pp. 35-36).
     _ = writeln!(

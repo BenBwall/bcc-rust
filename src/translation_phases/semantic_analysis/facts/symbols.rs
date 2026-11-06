@@ -91,6 +91,8 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) declared_alignment: bool,
     /// GNU `noinline`/`noipa` or `always_inline` on a function.
     pub(crate) inlining:           Inlining,
+    /// GNU `no_stack_protector` on a function.
+    pub(crate) no_stack_protector: bool,
     /// x86 `interrupt`: an interrupt or exception handler.
     /// GNU extension: GCC manual, "x86 Function Attributes".
     pub(crate) interrupt:          bool,

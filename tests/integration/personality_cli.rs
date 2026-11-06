@@ -1627,6 +1627,155 @@ mod tests {
         );
     }
 
+    /// A distribution's hardening options do what they say on Linux, with the
+    /// macros each compiler numbers its own way.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_hardening_options_take_effect() {
+        let directory = Directory::new();
+        directory.write(
+            "s.c",
+            "void g(char *);\nint f(int n) { char a[16]; g(a); return n; }\nint leaf(int n) { \
+             return n + 1; }\n",
+        );
+        let assembly = |mode: &str, options: &[&str]| {
+            let args = [options, &["-O2", "-S", "s.c", "-o", "-"]].concat();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} {options:?}");
+            stdout(&output)
+        };
+        let macros = |mode: &str, options: &[&str]| {
+            let args = [options, &["-E", "-dM", "s.c"]].concat();
+            stdout(&directory.bcc(mode, &args))
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let plain = assembly(mode, &[]);
+            assert!(!plain.contains("__stack_chk_fail"), "{mode}");
+            assert!(!plain.contains("endbr64"), "{mode}");
+            for option in [
+                "-fstack-protector",
+                "-fstack-protector-strong",
+                "-fstack-protector-all",
+            ] {
+                assert!(
+                    assembly(mode, &[option]).contains("__stack_chk_fail"),
+                    "{mode} {option}"
+                );
+            }
+            assert!(
+                !assembly(mode, &["-fstack-protector-strong", "-fno-stack-protector"])
+                    .contains("__stack_chk_fail"),
+                "{mode}"
+            );
+            let protected = assembly(mode, &["-fcf-protection=branch"]);
+            assert!(protected.contains("endbr64"), "{mode}");
+            assert!(
+                !assembly(mode, &["-fcf-protection=return"]).contains("endbr64"),
+                "{mode}"
+            );
+            assert!(
+                !assembly(mode, &["-fcf-protection=full", "-fcf-protection=none"])
+                    .contains("endbr64"),
+                "{mode}"
+            );
+            let framed = assembly(mode, &["-fno-omit-frame-pointer"]);
+            assert!(framed.contains("%rbp"), "{mode}");
+            assert!(!plain.contains("%rbp"), "{mode}");
+            let macro_of = |options: &[&str], line: &str| macros(mode, options).contains(line);
+            assert!(
+                macro_of(&["-fstack-protector"], "#define __SSP__ 1\n"),
+                "{mode}"
+            );
+            assert!(
+                macro_of(&["-fcf-protection"], "#define __CET__ 3\n"),
+                "{mode}"
+            );
+            assert!(
+                macro_of(&["-fcf-protection=branch"], "#define __CET__ 1\n"),
+                "{mode}"
+            );
+            assert!(
+                macro_of(&["-fcf-protection=return"], "#define __CET__ 2\n"),
+                "{mode}"
+            );
+            let (strong, all) = if mode == "--gcc-mode" { (3, 2) } else { (2, 3) };
+            assert!(
+                macro_of(
+                    &["-fstack-protector-strong"],
+                    &format!("#define __SSP_STRONG__ {strong}\n")
+                ),
+                "{mode}"
+            );
+            assert!(
+                macro_of(
+                    &["-fstack-protector-all"],
+                    &format!("#define __SSP_ALL__ {all}\n")
+                ),
+                "{mode}"
+            );
+            // The attribute keeps a function out, whatever the options ask.
+            directory.write(
+                "n.c",
+                "void g(char *);\n__attribute__((no_stack_protector)) void a(void) { char b[32]; \
+                 g(b); }\nvoid c(void) { char b[32]; g(b); }\n",
+            );
+            let args = ["-fstack-protector-all", "-O2", "-S", "n.c", "-o", "-"];
+            let output = stdout(&directory.bcc(mode, &args));
+            assert_eq!(
+                output.matches("callq\t__stack_chk_fail").count(),
+                1,
+                "{mode}: {output}"
+            );
+            // The program stops at a smashed canary, and runs without one.
+            directory.write(
+                "o.c",
+                "#include <string.h>\nvolatile int n = 64;\nint main(void) { char a[8]; memset(a, \
+                 1, n); return a[0] == 2; }\n",
+            );
+            let args = ["-O1", "-fstack-protector-all", "o.c", "-o", "o"];
+            succeeds(&directory.bcc(mode, &args));
+            assert_ne!(
+                Command::new(directory.path("o"))
+                    .output()
+                    .unwrap()
+                    .status
+                    .code(),
+                Some(0),
+                "{mode}"
+            );
+            // Large frames probe each page.
+            directory.write(
+                "c.c",
+                "void g(char *);\nvoid f(void) { char a[70000]; g(a); }\n",
+            );
+            let probed = |options: &[&str]| {
+                let args = [options, &["-O2", "-S", "c.c", "-o", "-"]].concat();
+                stdout(&directory.bcc(mode, &args)).contains("$4096")
+            };
+            assert!(probed(&["-fstack-clash-protection"]), "{mode}");
+            assert!(!probed(&[]), "{mode}");
+        }
+        // Windows hasn't got them, and says so.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &[
+                "--target=x86_64-w64-mingw32",
+                "-fstack-protector-strong",
+                "-c",
+                "s.c",
+                "-o",
+                "w.o",
+            ],
+        );
+        succeeds(&output);
+        assert!(
+            stderr(&output).contains("is ignored"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// `-ffunction-sections` and `-fdata-sections` give each definition a
     /// section of its own, so that `--gc-sections` removes the unused ones.
     #[cfg(target_os = "linux")]
@@ -4971,15 +5120,20 @@ mod tests {
         );
         succeeds(&fedora);
         let warnings = stderr(&fedora);
-        for line in [
-            "gcc: warning: '-fstack-protector-strong' is ignored: bcc does not emit stack \
-             protectors",
-            "gcc: warning: '-fstack-clash-protection' is ignored",
-            "gcc: warning: '-fcf-protection' is ignored",
-        ] {
-            assert!(warnings.contains(line), "{warnings}");
+        // Linux has these checks, and bcc doesn't give them to Windows.
+        if cfg!(windows) {
+            for line in [
+                "gcc: warning: '-fstack-protector-strong' is ignored: bcc does not emit stack \
+                 protectors",
+                "gcc: warning: '-fstack-clash-protection' is ignored",
+                "gcc: warning: '-fcf-protection' is ignored",
+            ] {
+                assert!(warnings.contains(line), "{warnings}");
+            }
+            assert_eq!(warnings.lines().count(), 3, "{warnings}");
+        } else {
+            assert_eq!(warnings, "", "{warnings}");
         }
-        assert_eq!(warnings.lines().count(), 3, "{warnings}");
         // TCC ignores the options it does not know, so they change nothing
         // in the program it builds either.
         let tcc = directory.bcc(
