@@ -405,6 +405,25 @@ impl CompilerConfiguration {
         }
     }
 
+    /// Whether a tentative definition with internal linkage and the given
+    /// kind of incomplete type is refused: by GCC for an array under
+    /// `-pedantic` ("array size missing"), and by `cl`, which bcc has no
+    /// evidence accepts it. The others complete it at the end of the unit.
+    /// C99: §6.9.2 paragraphs 2-3, p. 143; PDF p. 155.
+    pub(crate) const fn refuses_incomplete_internal_tentative(self, array: bool) -> bool {
+        match self.identity {
+            | super::CompilerIdentity::Msvc => true,
+            | super::CompilerIdentity::Gcc =>
+                array && !matches!(self.extension_policy, ExtensionPolicy::Allow),
+            | _ => false,
+        }
+    }
+
+    /// Whether `-pedantic` reports such a definition, as Clang's does.
+    pub(crate) const fn reports_incomplete_internal_tentative(self) -> bool {
+        matches!(self.identity.rules(), super::RuleSet::Clang)
+    }
+
     /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
     /// bytes of malformed UTF-8 in a literal: GCC keeps them silently in
     /// unprefixed and `u8` literals and rejects the wide ones; Clang warns
@@ -915,8 +934,9 @@ impl CompilerConfiguration {
         Self {
             target: crate::target::Target::LinuxGnu,
             code_options: crate::target::CodeOptions {
-                relocation: None,
-                tls_model:  crate::target::TlsModel::GlobalDynamic,
+                relocation:                 None,
+                tls_model:                  crate::target::TlsModel::GlobalDynamic,
+                strict_volatile_bit_fields: false,
             },
             standard,
             gnu: false,

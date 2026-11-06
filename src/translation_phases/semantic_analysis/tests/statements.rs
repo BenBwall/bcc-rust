@@ -492,7 +492,7 @@ fn tentative_and_external_definitions() {
     );
     assert_eq!(
         kinds("static int a[];"),
-        [SemanticErrorKind::IncompleteInternalTentative]
+        [SemanticErrorKind::TentativeArrayAssumedOne]
     );
     assert_eq!(
         kinds("struct S; struct S s;"),

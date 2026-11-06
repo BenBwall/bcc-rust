@@ -22,10 +22,33 @@
 //! stores. The value of an assignment is the field's value after the store,
 //! so `(s.f = 5)` for a three-bit signed field is -3 (§6.5.16p3).
 //!
+//! GCC's `-fstrict-volatile-bitfields` asks that a `volatile` field be read
+//! and written with one access of its declared type's width, for
+//! memory-mapped registers that answer only to that width. Where GCC cannot
+//! do that it falls back on another access, whose number and widths a device
+//! sees just the same, so under the option bcc performs that one too. The
+//! `volatile_access` child holds the rule, a plan of volatile loads and stores
+//! for each [`VolatileAccess`], and refuses the shapes it cannot match. Such
+//! an access can hold the bytes of the field's neighbors. It is sound because
+//! the IR makes a volatile load never poison: it reads the bytes as they are
+//! in memory, an unwritten byte is arbitrary and every other byte keeps its
+//! value (`middle-end.md`, "Undefined behaviour"). `freeze` could not do this
+//! for a wider load, since it replaces all the bits of a load that is poison
+//! as a whole, the neighbors' and the field's own. A flag on these loads alone
+//! would give every pass and back end one more form to carry, to keep poison
+//! for the other volatile loads, where nothing relies on it: no pass reasons
+//! about what a volatile load returns.
+//!
 //! C99: §6.7.2.1 paragraphs 3-4 and 10-11, pp. 101-102; PDF pp. 113-114.
 //! §6.5.16 paragraph 3, p. 91; PDF p. 103.
+//! C99: §6.7.3 paragraph 6, p. 109; PDF p. 121 (what an access to a volatile
+//! object is, implementation-defined).
 //! GNU extension: GCC Common Attributes, packed permits straddling fields.
 //! <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
+//! GNU extension: GCC Code Gen Options, `-fstrict-volatile-bitfields`.
+//! <https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html>
+
+mod volatile_access;
 
 use super::{
     FunctionLowerer,
@@ -97,6 +120,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             width: bits.width,
             signed: wide.map_or(representation.signed(), |(_, signed)| signed),
             align,
+            volatile_access: None,
         })
     }
 
@@ -109,6 +133,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         volatile: bool,
         result: Type,
     ) -> Value {
+        if let Some(access) = field.volatile_access {
+            return self.load_volatile_access(address, field, access, result);
+        }
         if field.shift + field.width > 128 {
             return self.load_spanning_bit_field(address, field, volatile, result);
         }
@@ -200,6 +227,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         value: Value,
         result: Type,
     ) -> Value {
+        if let Some(access) = field.volatile_access {
+            return self.store_volatile_access(address, field, access, value, result);
+        }
         let working = working_type(field);
         let narrowed = self.extend(value, false, working);
         let low = if field.width == working.bits() {
@@ -247,8 +277,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 position += 1;
             }
         }
-        // The new value of the field is the low bits written, read back as
-        // the field reads: an unsigned field is already masked.
+        self.value_after_store(low, field, result)
+    }
+
+    /// The new value of `field` from `low`, the low bits written, read back
+    /// as the field reads: an unsigned field is already masked.
+    fn value_after_store(&mut self, low: Value, field: BitField, result: Type) -> Value {
         if field.signed {
             let readable = BitField { shift: 0, ..field };
             self.extract_bit_field(low, readable, result)

@@ -77,9 +77,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match work {
             | StatementWork::AssemblyDone(statement, asm, jumps) =>
                 self.finish_assembly(statement, asm, jumps),
-            | StatementWork::DiscardedValue(expression, errors) =>
+            | StatementWork::DiscardedValue(expression, errors, dead) =>
                 if errors == self.semantic_errors {
-                    self.check_discarded_value(expression);
+                    self.check_discarded_value(expression, dead);
                 },
             | StatementWork::RetainTail(statement) => {
                 self.statement_effects(statement);
@@ -1148,7 +1148,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 #[derive(Clone, Copy)]
 pub(super) enum StatementWork<'tu> {
     /// C99: §6.8.3p2, p. 132; PDF p. 144.
-    DiscardedValue(&'tu Expression<'tu>, usize),
+    DiscardedValue(&'tu Expression<'tu>, usize, bool),
     RestoreStatementExpression {
         region:   Option<RegionId>,
         previous: Option<RegionId>,

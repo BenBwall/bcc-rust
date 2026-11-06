@@ -393,16 +393,26 @@ impl Cli {
         failed
     }
 
-    /// The relocation model of the last `-fpic`-family flag, and the TLS
-    /// model.
+    /// The relocation model of the last `-fpic`-family flag, the TLS model,
+    /// and the last of `-f[no-]strict-volatile-bitfields`.
     fn code_options(&self) -> CodeOptions {
         CodeOptions {
-            relocation: self
+            relocation:                 self
                 .language_option
                 .iter()
                 .filter_map(|option| Relocation::parse(option))
                 .next_back(),
-            tls_model:  self.tls_model.unwrap_or_default(),
+            tls_model:                  self.tls_model.unwrap_or_default(),
+            strict_volatile_bit_fields: self
+                .language_option
+                .iter()
+                .rfind(|option| {
+                    matches!(
+                        option.as_str(),
+                        "-fstrict-volatile-bitfields" | "-fno-strict-volatile-bitfields"
+                    )
+                })
+                .is_some_and(|option| option == "-fstrict-volatile-bitfields"),
         }
     }
 
@@ -672,7 +682,8 @@ enum LanguageFlag {
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
     /// `-f[no-]wrapv-pointer`, `-f[no-]delete-null-pointer-checks` or
-    /// `-f[no-]common`, which [`Cli::code_assumptions`] reads in order.
+    /// `-f[no-]common`, which [`Cli::code_assumptions`] reads in order, or
+    /// `-f[no-]strict-volatile-bitfields`, which [`Cli::code_options`] does.
     Code,
 }
 
@@ -837,7 +848,9 @@ impl LanguageFlag {
             | "-fdelete-null-pointer-checks"
             | "-fno-delete-null-pointer-checks"
             | "-fcommon"
-            | "-fno-common" => return Some(Self::Code),
+            | "-fno-common"
+            | "-fstrict-volatile-bitfields"
+            | "-fno-strict-volatile-bitfields" => return Some(Self::Code),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpermissive" => return Some(Self::Permissive(true)),
             | "-fno-permissive" => return Some(Self::Permissive(false)),

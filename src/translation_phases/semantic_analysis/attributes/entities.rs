@@ -55,6 +55,7 @@ use super::{
     written::WrittenAttribute,
 };
 use crate::{
+    configuration::CompilerIdentity,
     translation_phases::{
         SourceVectors,
         preprocessing::{
@@ -104,6 +105,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     ) {
         let linked = self.attribute_entity(subject);
         for attribute in self.written_attributes(specifier) {
+            self.note_attribute_references(subject, specifier, attribute);
             // GCC ignores `scalar_storage_order` with a warning on anything
             // declared but a typedef, which `storage_order.rs` checks.
             if self.is_storage_order(specifier.syntax, attribute) {
@@ -122,7 +124,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             ) else {
                 continue;
             };
+            let ignored = follows_definition(rule, attribute.name)
+                && self.ignored_after_definition(linked, attribute.name, attribute.source);
+            // Clang's warning says what it means: it ignored the attribute.
             if self.unused.tracking
+                && (!ignored
+                    || self.context.configuration.compiler_identity() == CompilerIdentity::Gcc)
                 && (rule == Rule::Cleanup
                     || rule == Rule::Used
                     || rule == Rule::Constructor
@@ -135,9 +142,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             {
                 self.exempt_from_unused(binding);
             }
-            if follows_definition(rule, attribute.name)
-                && self.ignored_after_definition(linked, attribute.name, attribute.source)
-            {
+            if ignored {
                 continue;
             }
             match rule {
@@ -223,6 +228,57 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if self.bindings[binding].linkage != Linkage::None =>
                 Some((self.entity_of(binding), self.earlier_definition(binding))),
             | _ => None,
+        }
+    }
+
+    /// The references an attribute's arguments make, which analyzing them
+    /// does not always record. Both compilers parse an argument as an
+    /// expression, so `cleanup(c)` and `malloc(d)` refer to their functions;
+    /// GCC does so for an attribute it does not know too. A string names its
+    /// target for GCC's `alias` and `weakref` and both compilers' `ifunc`.
+    fn note_attribute_references(
+        &mut self,
+        subject: Subject,
+        specifier: &'tu AttributeSpecifier<'tu>,
+        attribute: WrittenAttribute<'_>,
+    ) {
+        if !self.unused.tracking {
+            return;
+        }
+        let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
+        let known = rule(
+            specifier.syntax,
+            attribute.namespace,
+            attribute.name,
+            self.context.configuration.target(),
+        )
+        .is_some();
+        for token in attribute.arguments.unwrap_or_default() {
+            match token.kind {
+                | TokenType::Identifier if known || gcc => {
+                    if let Some(entry) = self.lookup(Namespace::Ordinary, token.contents)
+                        && matches!(
+                            self.bindings[entry.binding].kind,
+                            BindingKind::Function | BindingKind::Object | BindingKind::Parameter
+                        )
+                    {
+                        self.note_reference(entry.binding, false, false);
+                    }
+                },
+                | TokenType::String(StringTokenType::String(id))
+                    if attribute.name == "ifunc"
+                        || (gcc && matches!(attribute.name, "alias" | "weakref")) =>
+                    if let Some(target) = self.context.literal_text_in(self.scratch, id, false) {
+                        self.exempt_symbol_target(target);
+                    },
+                | _ => {},
+            }
+        }
+        if gcc
+            && attribute.name == "weakref"
+            && let Subject::Function { binding, .. } = subject
+        {
+            self.note_weak_reference(binding);
         }
     }
 
@@ -599,9 +655,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let Some(target) = self.string_argument(attribute) else {
             return;
         };
-        if self.unused.tracking {
-            self.exempt_alias_target(target);
-        }
         let (binding, definition) = match subject {
             | Subject::Function {
                 binding,

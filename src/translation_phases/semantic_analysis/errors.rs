@@ -1069,7 +1069,8 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::MissingFieldInitializer => "later members are left zero",
-            | Self::IncompleteInternalTentative | Self::IncompleteTentativeDefinition =>
+            | Self::IncompleteInternalTentative => "declared with an incomplete type",
+            | Self::IncompleteTentativeDefinition =>
                 "still incomplete at the end of the translation unit",
             | Self::TentativeArrayAssumedOne => "array assumed to have one element",
             | Self::UndefinedInternal => "used here but never defined",

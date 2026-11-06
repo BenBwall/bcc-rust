@@ -275,6 +275,80 @@ mod tests {
         assert_eq!(stderr(&round_trip), "");
     }
 
+    /// GCC and Clang take `static int a[];` and `static struct S s;`, which
+    /// C99 §6.9.2p3 forbids; Python's `PyDoc_VAR` relies on it.
+    #[test]
+    fn incomplete_internal_tentative_definitions_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "array.c",
+            "static const char a[];\nconst char *p = a;\nstatic const char a[] = \"abc\";\n",
+        );
+        directory.write(
+            "tag.c",
+            "struct S;\nstatic struct S s;\nstruct S { int a; };\nint f(void) { return s.a; }\n",
+        );
+        directory.write("never.c", "struct S;\nstatic struct S s;\n");
+        directory.write(
+            "marked.c",
+            "__extension__ static int a[];\nstatic int a[3];\n__extension__ static int z[];\nint \
+             *p = z;\n",
+        );
+        for (mode, option) in [
+            ("--gcc-mode", "-pedantic"),
+            ("--gcc-mode", "-pedantic-errors"),
+            ("--clang-mode", "-pedantic"),
+            ("--clang-mode", "-pedantic-errors"),
+        ] {
+            let output = directory.bcc(mode, &[option, "-c", "marked.c", "-o", "marked.o"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            assert!(
+                text.contains("assumed to have one element"),
+                "{mode} {option}: {text}"
+            );
+            assert!(!text.contains("internal"), "{mode} {option}: {text}");
+        }
+        let refused = "internal tentative definition has incomplete type";
+        for (mode, option, file, ok, message) in [
+            ("--gcc-mode", "-w", "array.c", true, ""),
+            ("--gcc-mode", "-w", "tag.c", true, ""),
+            ("--gcc-mode", "-pedantic", "array.c", false, refused),
+            ("--gcc-mode", "-pedantic", "tag.c", true, ""),
+            ("--clang-mode", "-Wall", "array.c", true, ""),
+            ("--clang-mode", "-pedantic", "array.c", true, "warning: "),
+            ("--clang-mode", "-pedantic", "tag.c", true, "warning: "),
+            (
+                "--clang-mode",
+                "-pedantic-errors",
+                "array.c",
+                false,
+                "error: ",
+            ),
+            ("--tcc-mode", "-w", "array.c", true, ""),
+            ("--gcc-mode", "-w", "never.c", false, "remains incomplete"),
+            (
+                "--clang-mode",
+                "-Wall",
+                "never.c",
+                false,
+                "remains incomplete",
+            ),
+        ] {
+            let output = directory.bcc(mode, &[option, "-c", file, "-o", "out.o"]);
+            let text = stderr(&output);
+            assert_eq!(
+                output.status.success(),
+                ok,
+                "{mode} {option} {file}: {text}"
+            );
+            assert!(text.contains(message), "{mode} {option} {file}: {text}");
+            if message.is_empty() {
+                assert_eq!(text, "", "{mode} {option} {file}");
+            }
+        }
+    }
+
     /// GCC warns of an unclosed quote in a skipped group, compiling as well
     /// as under `-E`, and `-pedantic-errors` makes it an error; Clang and
     /// TCC do not.
@@ -827,6 +901,40 @@ mod tests {
             Some(1)
         );
         succeeds(&directory.bcc("--clang-mode", &["-w", "-fsyntax-only", "named.c"]));
+    }
+
+    /// A store through a cast to what this unit only declares const reaches
+    /// the other unit's object under GCC, whose optimizer keeps it, and Clang
+    /// drops it at `-O2`. busybox sets its `bb_errno` this way on GCC.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stores_to_const_declarations_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "extern int *const e;\nint x = 7;\nvoid init(void) {\n  *(void **)&e = (void *)&x;\n  \
+             __asm__ volatile(\"\" : : : \"memory\");\n}\n",
+        );
+        directory.write(
+            "b.c",
+            "int *e;\nvoid init(void);\nint main(void) {\n  init();\n  return e ? *e : 99;\n}\n",
+        );
+        for (mode, level, expected) in [
+            ("--gcc-mode", "-O0", 7),
+            ("--gcc-mode", "-O2", 7),
+            ("--clang-mode", "-O0", 7),
+            ("--clang-mode", "-O2", 99),
+        ] {
+            succeeds(&directory.bcc(mode, &[level, "a.c", "b.c", "-o", "const.exe"]));
+            let run = Command::new(directory.path("const.exe")).output().unwrap();
+            assert_eq!(run.status.code(), Some(expected), "{mode} {level}");
+        }
+        // A definition stays read-only, whichever compiler it follows.
+        directory.write("d.c", "const int k = 1;\nconst int *p = &k;\n");
+        let output = directory.bcc("--gcc-mode", &["-S", "d.c", "-o", "d.s"]);
+        succeeds(&output);
+        let text = std::fs::read_to_string(directory.path("d.s")).unwrap();
+        assert!(text.contains(".rodata"), "{text}");
     }
 
     /// `__BASE_FILE__` names the main source file as the command line
@@ -1498,6 +1606,58 @@ mod tests {
             for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
                 let output = directory.bcc(mode, &["-std=c17", "-fsyntax-only", "redeclared.c"]);
                 assert_eq!(output.status.success(), accepted, "{mode} {source}");
+            }
+        }
+    }
+
+    /// GCC withholds its unused warnings when a system header spells the
+    /// token, as a system macro's body does, but not when the user wrote it
+    /// as an argument; its label warning goes by the invocation. Clang goes
+    /// by the invocation for all, and skips a value a macro's body wrote.
+    #[test]
+    fn unused_warnings_follow_each_compilers_system_macro_rule() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sys")).unwrap();
+        directory.write(
+            "sys/sys.h",
+            "#define NOOP(x) ((x) + 1)\n#define LOCAL int macro_local;\n#define STATICFN static \
+             void macro_fn(void) {}\n#define STATICOBJ static int macro_obj;\n#define PARAM void \
+             macro_param(int p) {}\n#define PAREN(x) (x)\n#define SET int s; s = 1;\n#define \
+             WRAP(x) x\n#define LABEL lab:;\n",
+        );
+        for (source, in_gcc, in_clang) in [
+            ("void f(int x) { NOOP(x); }", false, false),
+            ("void f(int x) { PAREN(x); }", false, true),
+            ("void f(void) { LOCAL }", false, true),
+            ("void f(void) { SET }", false, true),
+            ("STATICFN", false, true),
+            ("STATICOBJ", false, true),
+            ("PARAM", false, true),
+            ("void f(int x) { WRAP(x + 1); }", true, true),
+            ("void f(int x) { PAREN(x + 1); }", true, true),
+            ("void f(void) { WRAP(int inner;) }", true, true),
+            ("void f(void) { LABEL }", true, true),
+        ] {
+            directory.write("use.c", &format!("#include <sys.h>\n{source}\n"));
+            for (mode, warns) in [("--gcc-mode", in_gcc), ("--clang-mode", in_clang)] {
+                let output = directory.bcc(
+                    mode,
+                    &[
+                        "-isystem",
+                        "sys",
+                        "-fsyntax-only",
+                        "-Wall",
+                        "-Wextra",
+                        "use.c",
+                    ],
+                );
+                succeeds(&output);
+                assert_eq!(
+                    stderr(&output).contains("[-Wunused"),
+                    warns,
+                    "{mode} {source}: {}",
+                    stderr(&output)
+                );
             }
         }
     }
@@ -7152,6 +7312,295 @@ mod tests {
             );
             succeeds(&output);
             assert_eq!(stderr(&output), "", "{mode}");
+        }
+    }
+
+    /// The memory accesses `function` makes through a pointer, in AT&T syntax,
+    /// as `l` or `s` and a width: not those of its own frame.
+    fn memory_accesses(assembly: &str, function: &str) -> Vec<String> {
+        let label = format!("{function}:");
+        let mut accesses = Vec::new();
+        for line in assembly
+            .lines()
+            .skip_while(|line| *line != label)
+            .skip(1)
+            .take_while(|line| !line.contains(".cfi_endproc") && !line.contains(".size"))
+        {
+            let mut words = line.split_whitespace();
+            let (Some(mnemonic), operands) = (words.next(), words.collect::<Vec<_>>().join(" "))
+            else {
+                continue;
+            };
+            let frame = operands.contains("(%rbp") || operands.contains("(%rsp");
+            if !operands.contains('(') || frame || mnemonic.starts_with("lea") {
+                continue;
+            }
+            let width = if let Some(extending) = mnemonic
+                .strip_prefix("movz")
+                .or_else(|| mnemonic.strip_prefix("movs"))
+            {
+                extending.chars().next()
+            } else {
+                mnemonic.chars().last()
+            };
+            let width = match width {
+                | Some('b') => 8,
+                | Some('w') => 16,
+                | Some('l') => 32,
+                | Some('q') => 64,
+                | _ => panic!("{line}"),
+            };
+            let destination = operands
+                .rsplit(' ')
+                .next()
+                .is_some_and(|last| last.contains('('));
+            if !destination {
+                accesses.push(format!("l{width}"));
+            } else if mnemonic.starts_with("mov") {
+                accesses.push(format!("s{width}"));
+            } else {
+                accesses.push(format!("l{width}"));
+                accesses.push(format!("s{width}"));
+            }
+        }
+        accesses
+    }
+
+    /// `-fstrict-volatile-bitfields` makes each back end read and write a
+    /// `volatile` bit-field with one access of its declared type: GCC's
+    /// option, off by default and the last of the pair winning, which Clang
+    /// does not know and TCC ignores. The widths are what GCC 14 emits.
+    #[test]
+    fn strict_volatile_bitfields_set_the_access_width() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "w.c",
+            "struct S { volatile unsigned a : 8, b : 8, c : 16; };\nint r(struct S *p) { return \
+             p->b; }\nvoid w(struct S *p) { p->b = 3; }\n",
+        );
+        let assembly = |mode: &str, options: &[&str]| {
+            let mut args = vec!["-O2", "-S", "-o", "-", "w.c"];
+            args.extend(options);
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        let strict = "-fstrict-volatile-bitfields";
+        let plain = "-fno-strict-volatile-bitfields";
+        for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+            let gcc = |options: &[&str]| assembly("--gcc-mode", &[options, backend].concat());
+            let wide = gcc(&[strict]);
+            // Two loads, one of which may fold into the mask, and a store.
+            let accesses: Vec<&str> = wide.lines().filter(|l| l.contains("(%rdi)")).collect();
+            assert_eq!(accesses.len(), 3, "{wide}");
+            assert!(
+                accesses.iter().all(|line| {
+                    let line = line.trim_start();
+                    line.contains("\t(%rdi)") || line.ends_with(", (%rdi)")
+                }),
+                "{wide}"
+            );
+            assert!(
+                accesses.iter().all(|line| line
+                    .trim_start()
+                    .split('\t')
+                    .next()
+                    .unwrap()
+                    .ends_with('l')
+                    && !line.contains("movz")),
+                "{wide}"
+            );
+            for narrow in [gcc(&[]), gcc(&[strict, plain])] {
+                assert!(narrow.contains("1(%rdi)"), "{narrow}");
+                assert!(!narrow.contains("movl\t(%rdi)"), "{narrow}");
+            }
+            assert_eq!(gcc(&[plain, strict]), wide);
+        }
+        let clang = directory.bcc("--clang-mode", &["-c", strict, "w.c"]);
+        assert!(!clang.status.success());
+        assert!(
+            stderr(&clang).contains(&format!("unknown argument: '{strict}'")),
+            "{}",
+            stderr(&clang)
+        );
+        // TCC ignores it, and so does clang-cl, with its usual warning.
+        let ignored = directory.bcc("--tcc-mode", &["-c", strict, "w.c", "-o", "t.o"]);
+        succeeds(&ignored);
+        assert_eq!(stderr(&ignored), "");
+        succeeds(&directory.bcc("--tcc-mode", &["-c", "w.c", "-o", "plain.o"]));
+        assert_eq!(
+            std::fs::read(directory.path("t.o")).unwrap(),
+            std::fs::read(directory.path("plain.o")).unwrap()
+        );
+        let clang_cl = directory.bcc("--clang-cl-mode", &["-c", strict, "w.c"]);
+        succeeds(&clang_cl);
+        assert!(
+            stderr(&clang_cl).contains("unknown argument ignored in clang-cl"),
+            "{}",
+            stderr(&clang_cl)
+        );
+    }
+
+    /// Where the option's single access does not apply, each back end and
+    /// level performs the accesses GCC 13.3 and 14.2 do, which a device sees:
+    /// a memory-destination instruction is one read and one write.
+    #[test]
+    fn strict_volatile_bitfields_fall_back_on_gccs_accesses() {
+        const WANTED: &[(&str, &[&str])] = &[
+            ("a", &["l16", "s16"]),
+            ("ra", &["l32"]),
+            ("ca", &["l32", "l16", "s16"]),
+            ("b", &["l8", "s8", "l8", "s8"]),
+            ("c", &["l16", "s16", "l8", "s8"]),
+            ("rd", &["l8", "l8"]),
+            ("re", &["l32", "l32"]),
+            ("e", &["l32", "s32", "l32", "s32"]),
+            ("f", &["s64", "l64", "s64"]),
+            ("g", &["l16", "s16"]),
+        ];
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "f.c",
+            "struct A { volatile unsigned a : 12; };\nvoid a(struct A *p) { p->a = 3; }\nunsigned \
+             ra(struct A *p) { return p->a; }\nvoid ca(struct A *p) { p->a += 1; }\nstruct B { \
+             char c; volatile unsigned a : 12; };\nvoid b(struct B *p) { p->a = 3; }\nstruct C { \
+             volatile unsigned a : 17; char c; };\nvoid c(struct C *p) { p->a = 3; }\nstruct D { \
+             volatile unsigned a : 12; } __attribute__((packed));\nunsigned rd(struct D *p) { \
+             return p->a; }\nstruct E { char x : 7; volatile unsigned y : 26; } \
+             __attribute__((packed, aligned(4)));\nunsigned re(struct E *p) { return p->y; \
+             }\nvoid e(struct E *p) { p->y = 3; }\nstruct F { volatile __int128 a : 70; };\nvoid \
+             f(struct F *p) { p->a = 3; }\nstruct G { unsigned char b : 8; volatile unsigned a : \
+             8; } __attribute__((packed));\nvoid g(struct G *p) { p->a = 3; }\n",
+        );
+        for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+            for level in ["-O0", "-O2"] {
+                let mut args = vec!["-fstrict-volatile-bitfields", level, "-S", "-o", "-", "f.c"];
+                args.extend(backend);
+                let output = directory.bcc("--gcc-mode", &args);
+                succeeds(&output);
+                let assembly = stdout(&output);
+                for (function, wanted) in WANTED {
+                    assert_eq!(
+                        &memory_accesses(&assembly, function),
+                        wanted,
+                        "{function} {level} {backend:?}\n{assembly}"
+                    );
+                }
+            }
+        }
+        // Without the option the same writes stay in the field's own bytes.
+        let output = directory.bcc("--gcc-mode", &["-O2", "-S", "-o", "-", "f.c"]);
+        succeeds(&output);
+        assert_eq!(memory_accesses(&stdout(&output), "ra"), ["l16"]);
+    }
+
+    /// What the back ends cannot make GCC's accesses is a clear error under
+    /// the option and compiles without it.
+    #[test]
+    fn strict_volatile_bitfields_refuse_what_they_cannot_match() {
+        let directory = Directory::new();
+        directory.write(
+            "r.c",
+            "struct S { volatile __int128 a : 128; };\nvoid w(struct S *p) { p->a = 3; }\n",
+        );
+        let strict = directory.bcc("--gcc-mode", &["-fstrict-volatile-bitfields", "-c", "r.c"]);
+        assert!(!strict.status.success());
+        assert!(
+            stderr(&strict).contains("r.c:2:")
+                && stderr(&strict).contains("volatile bit-field under -fstrict-volatile-bitfields"),
+            "{}",
+            stderr(&strict)
+        );
+        succeeds(&directory.bcc("--gcc-mode", &["-c", "r.c", "-o", "plain.o"]));
+    }
+
+    /// A wider access keeps the neighbors' bits and the field's value on
+    /// every back end, optimized or not, where GCC's runs agree. Memory that
+    /// was never written beside a written field stays out of the result,
+    /// though the load covers it.
+    #[test]
+    fn strict_volatile_bitfields_keep_every_value() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "v.c",
+            "struct T { volatile unsigned a : 8, b : 8, c : 16; };\nstruct N { char c; volatile \
+             int a : 8; volatile int b : 3; char d; };\nstruct P { char x; volatile unsigned y : \
+             31; } __attribute__((packed));\nunion U { struct T t; unsigned char bytes[4]; \
+             };\nstruct T global = {1, 2, 3};\nvolatile struct N neighbors = {1, -2, -3, \
+             4};\nstruct P packed;\nint check(void) {\n  /* Each field beside its neighbors. */\n  \
+             global.b = 0xab;\n  if (global.a != 1 || global.b != 0xab || global.c != 3) return \
+             1;\n  if ((global.c = 0x12345) != 0x2345 || global.a != 1) return 2;\n  \
+             global.a++;\n  if (global.a != 2 || global.b != 0xab) return 3;\n  /* The unit \
+             starts before the field; signed values extend. */\n  if (neighbors.a != -2 || \
+             neighbors.b != -3) return 4;\n  neighbors.a = 5;\n  if (neighbors.c != 1 || \
+             neighbors.a != 5 || neighbors.b != -3 || neighbors.d != 4) return 5;\n  if \
+             ((neighbors.b = 7) != -1) return 6;\n  /* A packed field keeps its ordinary access. \
+             */\n  packed.y = 0x7fffffff;\n  if (packed.y != 0x7fffffff || packed.x != 0) return \
+             7;\n  /* An automatic object with bytes nobody wrote. */\n  struct { volatile \
+             unsigned a : 8; char c; } local;\n  local.a = 0x5a;\n  if (local.a != 0x5a) return \
+             8;\n  union U u;\n  u.bytes[0] = 7;\n  u.t.b = 9;\n  if (u.bytes[0] != 7 || \
+             u.bytes[1] != 9 || u.t.b != 9) return 9;\n  return 0;\n}\nint main(void) { return \
+             check(); }\n",
+        );
+        let strict = "-fstrict-volatile-bitfields";
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            let built = Command::new("gcc")
+                .args(["-O2", strict, "v.c", "-o", "reference"])
+                .current_dir(&directory.0)
+                .output()
+                .unwrap();
+            succeeds(&built);
+            let run = Command::new(directory.path("reference")).output().unwrap();
+            assert_eq!(run.status.code(), Some(0), "gcc");
+        }
+        for options in [
+            &["-O0"][..],
+            &["-O2"],
+            &["--opt=bcc"],
+            &["--backend=native", "-O0"],
+            &["--backend=native", "-O2"],
+        ] {
+            let mut args = vec![strict, "v.c", "-o", "program"];
+            args.extend(options);
+            succeeds(&directory.bcc("", &args));
+            let run = Command::new(directory.path("program")).output().unwrap();
+            assert_eq!(run.status.code(), Some(0), "{options:?}");
+        }
+        for options in [&["-O0"][..], &["-O2"]] {
+            let mut args = vec![strict, "--interpret", "v.c"];
+            args.extend(options);
+            let run = directory.bcc("", &args);
+            assert_eq!(run.status.code(), Some(0), "interpreter {options:?}");
+        }
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for options in [&["-O0"][..], &["-O2"]] {
+            let mut args = vec![strict, "--target=wasm32-wasip1", "v.c", "-o", "v.wasm"];
+            args.extend(options);
+            succeeds(&directory.bcc("", &args));
+            let run = Command::new("node")
+                .arg("--no-warnings")
+                .arg(&runner)
+                .arg(directory.path("v.wasm"))
+                .output()
+                .unwrap();
+            assert_eq!(run.status.code(), Some(0), "wasm32 {options:?}");
         }
     }
 

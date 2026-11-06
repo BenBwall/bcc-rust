@@ -314,6 +314,16 @@ impl Context<'_> {
         self.invocation_site(source).is_some()
     }
 
+    /// Whether the first token of `source` is spelled in a system header, the
+    /// question GCC asks of a warning's location rather than where the
+    /// outermost macro was invoked (`linemap_location_in_system_header_p`):
+    /// a system macro's body counts wherever it is invoked, and an argument
+    /// the user wrote does not.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    pub(crate) fn spelled_in_system_header(&self, source: SourceVectors) -> bool {
+        source.length() != 0 && self.in_system_header(self.first_source_vector(source))
+    }
+
     /// Whether `source`'s expansion location is in the main source file, not
     /// in a file it includes. `source` must not be empty.
     pub(crate) fn in_main_file(&self, source: SourceVectors) -> bool {
