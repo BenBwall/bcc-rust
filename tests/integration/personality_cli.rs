@@ -1536,6 +1536,58 @@ mod tests {
         }
     }
 
+    /// GCC withholds its unused warnings when a system header spells the
+    /// token, as a system macro's body does, but not when the user wrote it
+    /// as an argument; its label warning goes by the invocation. Clang goes
+    /// by the invocation for all, and skips a value a macro's body wrote.
+    #[test]
+    fn unused_warnings_follow_each_compilers_system_macro_rule() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sys")).unwrap();
+        directory.write(
+            "sys/sys.h",
+            "#define NOOP(x) ((x) + 1)\n#define LOCAL int macro_local;\n#define STATICFN static \
+             void macro_fn(void) {}\n#define STATICOBJ static int macro_obj;\n#define PARAM void \
+             macro_param(int p) {}\n#define PAREN(x) (x)\n#define SET int s; s = 1;\n#define \
+             WRAP(x) x\n#define LABEL lab:;\n",
+        );
+        for (source, in_gcc, in_clang) in [
+            ("void f(int x) { NOOP(x); }", false, false),
+            ("void f(int x) { PAREN(x); }", false, true),
+            ("void f(void) { LOCAL }", false, true),
+            ("void f(void) { SET }", false, true),
+            ("STATICFN", false, true),
+            ("STATICOBJ", false, true),
+            ("PARAM", false, true),
+            ("void f(int x) { WRAP(x + 1); }", true, true),
+            ("void f(int x) { PAREN(x + 1); }", true, true),
+            ("void f(void) { WRAP(int inner;) }", true, true),
+            ("void f(void) { LABEL }", true, true),
+        ] {
+            directory.write("use.c", &format!("#include <sys.h>\n{source}\n"));
+            for (mode, warns) in [("--gcc-mode", in_gcc), ("--clang-mode", in_clang)] {
+                let output = directory.bcc(
+                    mode,
+                    &[
+                        "-isystem",
+                        "sys",
+                        "-fsyntax-only",
+                        "-Wall",
+                        "-Wextra",
+                        "use.c",
+                    ],
+                );
+                succeeds(&output);
+                assert_eq!(
+                    stderr(&output).contains("[-Wunused"),
+                    warns,
+                    "{mode} {source}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
     /// Plain `_Complex` means `_Complex double` to GCC and Clang: Clang
     /// warns, GCC only under `-pedantic`, and `-pedantic-errors` refuses it
     /// in both (gcc.c-torture/execute/20070614-1.c).

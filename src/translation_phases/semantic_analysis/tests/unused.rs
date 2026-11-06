@@ -118,6 +118,18 @@ fn used_things_are_silent() {
         "void f(void) { __builtin_trap(); }",
         "void f(int a) { a ? (void)0 : (void)1; }",
         "#define M(x) ((void)0)\nvoid f(int a) { (void)a; M(a); }",
+        // An attribute's argument is an expression that refers to its name.
+        "static void c(int *p) { (void)p; } void f(void) { int x __attribute__((cleanup(c))) = 0; \
+         }",
+        "static void c(int *p) { (void)p; } void f(void) { int x __attribute__((__cleanup__(c))); \
+         }",
+        "static void c(int *); void f(void) { int x __attribute__((cleanup(c))); } static void \
+         c(int *p) { (void)p; }",
+        "static inline void c(int *p) { (void)p; } void f(void) { int x \
+         __attribute__((cleanup(c))); }",
+        "static void d(void *p) { (void)p; } void *m(void) __attribute__((malloc(d)));",
+        "static void d(void *p) { (void)p; } void *m(void) __attribute__((malloc(d, 1)));",
+        "static void *r(void) { return 0; } void f(void) __attribute__((ifunc(\"r\")));",
     ] {
         assert_eq!(rules(source, gcc()), [], "GCC: {source}");
         assert_eq!(rules(source, clang()), [], "Clang: {source}");
@@ -127,6 +139,42 @@ fn used_things_are_silent() {
 #[test]
 fn each_compiler_counts_uses_its_own_way() {
     for (source, in_gcc, in_clang) in [
+        // A cleanup function's own variable is exempt, not the function that
+        // nothing else refers to.
+        (
+            "static void c(int *p) { (void)p; } static void f(void) { int x \
+             __attribute__((cleanup(c))) = 0; }",
+            &[U::GccFunction][..],
+            &[U::ClangFunction][..],
+        ),
+        // An alias or a weak reference's target is a use to GCC alone.
+        (
+            "static void t(void) {} void w(void) __attribute__((alias(\"t\")));",
+            &[],
+            &[U::ClangFunction],
+        ),
+        (
+            "static int t; extern int w __attribute__((alias(\"t\")));",
+            &[],
+            &[U::Variable],
+        ),
+        (
+            "static void t(void) {} static void w(void) __attribute__((weakref(\"t\")));",
+            &[],
+            &[U::ClangFunction],
+        ),
+        // Clang ignores an attribute after the definition, and says so.
+        (
+            "static void g(void) {} static void g(void) __attribute__((used));",
+            &[],
+            &[U::ClangFunction],
+        ),
+        // GCC takes an attribute it does not know for an expression too.
+        (
+            "static void d(void) {} void g(void) __attribute__((nosuch(d)));",
+            &[],
+            &[U::ClangFunction],
+        ),
         (
             "void f(void) { int a; }",
             &[U::Variable][..],
@@ -344,6 +392,50 @@ fn clang_skips_a_macro_body() {
     assert_eq!(rules(argument, clang()), [U::ClangResult]);
 }
 
+/// A variable length array's `sizeof` evaluates its bound and so has an
+/// effect for GCC, which keeps quiet about it however it is used; Clang warns.
+/// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+#[test]
+fn gcc_counts_what_a_variably_modified_type_evaluates() {
+    for source in [
+        "int g(void); void f(void) { sizeof(int[g()]); }",
+        "void f(int n) { sizeof(int[n]); }",
+        "void f(int n) { int a[n]; sizeof a; }",
+        "void f(int n) { int a[2][n]; sizeof(a[0]); }",
+        "void f(int n, int (*p)[n]) { sizeof(*p); }",
+        "int g(void); void f(void) { sizeof(__typeof__(int[g()])); }",
+        "int g(void); void f(void) { (sizeof(int[g()])); }",
+        "int g(void); void f(void) { sizeof(int[g()]) + 1; }",
+        "int g(void); void f(void) { !sizeof(int[g()]); }",
+        "int g(void); void f(void) { (long)sizeof(int[g()]); }",
+        "int g(void); void f(int c) { c ? sizeof(int[g()]) : 0; }",
+        "void f(int n, void *p) { (int (*)[n])p; }",
+    ] {
+        assert_eq!(rules(source, gcc()), [], "{source}");
+        assert_ne!(rules(source, clang()), [], "{source}");
+    }
+    // A constant size evaluates nothing, even with a bound in its operand's
+    // pointer type or an element of constant size.
+    for source in [
+        "void f(int n) { int a[n][2]; sizeof(a[0]); }",
+        "void f(int n, int (*p)[n]) { sizeof(p); }",
+        "int g(void); void f(void) { sizeof(int (*)[g()]); }",
+        "int g(void); void f(void) { sizeof(g()); }",
+        "int g(void); void f(int *x) { sizeof(x[g()]); }",
+        "int g(void); void f(void) { _Alignof(int[g()]); }",
+    ] {
+        assert_eq!(rules(source, gcc()), [U::GccNoEffect], "{source}");
+    }
+    assert_eq!(
+        rules("int g(void); void f(void) { sizeof(int[g()]), 0; }", gcc()),
+        [U::GccCommaRight]
+    );
+    assert_eq!(
+        rules("int g(void); void f(void) { 0, sizeof(int[g()]); }", gcc()),
+        [U::GccCommaLeft]
+    );
+}
+
 #[test]
 fn options_hold_their_groups_as_each_compiler_does() {
     let base = |identity| CompilerConfiguration::default().with_compiler_identity(identity);
@@ -448,6 +540,12 @@ fn only_clang_warns_about_values_by_default() {
             .with_compiler_identity(identity)
             .with_gnu_extensions(true)
     };
+    let comparison = "void f(int a) { a == 1; }";
+    assert_eq!(rules(comparison, base(CompilerIdentity::Gcc)), []);
+    assert_eq!(
+        rules(comparison, base(CompilerIdentity::Clang)),
+        [U::ClangEquality]
+    );
     let source = "void f(int a) { a; }";
     assert_eq!(rules(source, base(CompilerIdentity::Gcc)), []);
     assert_eq!(

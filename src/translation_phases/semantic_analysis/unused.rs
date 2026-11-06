@@ -94,10 +94,12 @@ struct Usage {
     /// A function's references outside its own body, which GCC counts.
     outside:    bool,
     /// `unused`, `maybe_unused`, `used`, `cleanup`, or for a function
-    /// `constructor`, `destructor` or being an alias's target.
+    /// `constructor`, `destructor` or being a symbol attribute's target.
     exempt:     bool,
     /// A function declared `inline`.
     inline:     bool,
+    /// A function declared GCC's `weakref`, which is defined elsewhere.
+    weakref:    bool,
 }
 
 /// How a discarded assignment writes the identifier expression it names.
@@ -292,6 +294,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let array = matches!(self.types.nodes[data.ty.index], TypeKind::Array(..));
         let written_gcc = site.gcc && (!site.gcc_array || array);
         let written_clang = site.clang && !(site.clang_compound && data.ty.is_volatile());
+        self.note_reference(binding, written_gcc, written_clang);
+    }
+
+    /// Counts one reference to `binding`, which only writes it under the
+    /// compilers that say so.
+    pub(super) fn note_reference(
+        &mut self,
+        binding: usize,
+        written_gcc: bool,
+        written_clang: bool,
+    ) {
+        let data = self.bindings[binding];
         let current = self.functions.current.and_then(|function| function.binding);
         let own_body =
             current.is_some_and(|function| self.bindings[function].name.name == data.name.name);
@@ -465,10 +479,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.unused.variable(binding).exempt = true;
     }
 
-    /// A function an `alias` attribute names.
-    pub(super) fn exempt_alias_target(&mut self, name: &str) {
+    /// A function or object a symbol attribute's string names.
+    pub(super) fn exempt_symbol_target(&mut self, name: &str) {
         let name = self.context.string_cache.intern(name);
         self.unused.file_scope.entry(name).or_default().exempt = true;
+    }
+
+    /// An internal function GCC's `weakref` says is defined elsewhere.
+    pub(super) fn note_weak_reference(&mut self, binding: usize) {
+        let name = self.bindings[binding].name.name;
+        self.unused.file_scope.entry(name).or_default().weakref = true;
+    }
+
+    /// Whether GCC takes an undefined internal function for a weak reference.
+    pub(super) fn is_weak_reference(&self, name: StringCacheId) -> bool {
+        self.unused
+            .file_scope
+            .get(&name)
+            .is_some_and(|usage| usage.weakref)
     }
 
     /// A structure or union type specifier: one declared `unused` exempts
@@ -727,8 +755,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.is_void_or_unknown(e) {
             return;
         }
-        if !self.computes_more(e) {
-            self.unused_rule(UnusedRule::GccNoEffect, Self::operator_site(e), None);
+        if !self.computes_more(e, true) {
+            self.unused_rule(UnusedRule::GccNoEffect, Self::gcc_statement_site(e), None);
             return;
         }
         let e = Self::without_parentheses(e);
@@ -750,14 +778,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 comma = right;
                 right = Self::without_parentheses(right_expression);
             }
-            if !self.computes_more(right)
+            if !self.computes_more(right, true)
                 && !self.is_void_or_unknown(right)
                 && !matches!(right.kind, E::Cast { .. })
             {
                 self.unused_rule(UnusedRule::GccCommaRight, Self::operator_site(comma), None);
             }
-        } else if self.gcc_value_is_unused(e) {
+        } else if self.computes_more(e, false) && self.gcc_value_is_unused(e) {
             self.unused_rule(UnusedRule::GccValueComputed, Self::operator_site(e), None);
+        }
+    }
+
+    /// Where GCC reports a discarded expression with no effect: at its
+    /// operator through parentheses, or, when it has no location of its own,
+    /// at the statement's first token.
+    fn gcc_statement_site(e: &'tu Expression<'tu>) -> SourceVectors {
+        let inner = Self::without_parentheses(e);
+        match inner.kind {
+            | E::Identifier(_)
+            | E::Constant(_)
+            | E::StringLiteral(_)
+            | E::SizeofExpr(_)
+            | E::SizeofType(_)
+            | E::AlignofExpr(_)
+            | E::AlignofType(_)
+            | E::Boolean(_)
+            | E::Nullptr => Self::operator_site(e),
+            | _ => Self::operator_site(inner),
         }
     }
 
@@ -943,16 +990,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 self.unused_rule(UnusedRule::ClangCommaLeft, Self::operator_site(left), None);
             }
-        } else if !self.is_void_or_unknown(left) && !self.computes_more(left) {
+        } else if !self.is_void_or_unknown(left) && !self.computes_more(left, true) {
             self.unused_rule(UnusedRule::GccCommaLeft, Self::operator_site(comma), None);
         }
     }
 
     /// Whether evaluating `e` does anything but compute its value: an
     /// assignment, an update, a call, a volatile access, or a construct this
-    /// does not read.
-    /// C99: §5.1.2.3p2, p. 13; PDF p. 25.
-    fn computes_more(&self, e: &'tu Expression<'tu>) -> bool {
+    /// does not read. A `sizeof` of a variable length array evaluates its
+    /// operand and a cast to a variably modified type its bounds, which GCC
+    /// keeps quiet about however it is used; `evaluated_types` counts those.
+    /// C99: §5.1.2.3p2, p. 13; PDF p. 25; §6.5.3.4p2, p. 80; PDF p. 92;
+    /// §6.7.5.2p4-5, p. 117; PDF p. 129.
+    fn computes_more(&self, e: &'tu Expression<'tu>, evaluated_types: bool) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
         work.push(e);
         while let Some(e) = work.pop() {
@@ -984,7 +1034,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
                 | E::Cast {
                     operand_expression, ..
-                } => work.push(operand_expression),
+                } => {
+                    if evaluated_types && self.types.variably_modified(self.expression_info(e).ty) {
+                        return true;
+                    }
+                    work.push(operand_expression);
+                },
+                | E::SizeofExpr(_) | E::SizeofType(_) =>
+                    if evaluated_types && !self.expression_info(e).ice {
+                        return true;
+                    },
                 | E::DirectMember {
                     base_expression, ..
                 }
@@ -1007,8 +1066,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     },
                 | E::Constant(_)
                 | E::StringLiteral(_)
-                | E::SizeofExpr(_)
-                | E::SizeofType(_)
                 | E::AlignofExpr(_)
                 | E::AlignofType(_)
                 | E::Boolean(_)
@@ -1065,13 +1122,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.context.in_main_file(site)
     }
 
+    /// Reports one warning. GCC's label warning goes by the invocation; its
+    /// others go by the token's spelling too.
     fn unused_rule(&mut self, rule: UnusedRule, site: SourceVectors, name: Option<StringCacheId>) {
-        self.group_diagnostic(
-            rule.group(),
-            SemanticErrorKind::Unused(rule),
-            site,
-            name,
-            None,
-        );
+        let kind = SemanticErrorKind::Unused(rule);
+        if rule == UnusedRule::GccLabel {
+            self.group_diagnostic(rule.group(), kind, site, name, None);
+        } else {
+            self.spelled_group_diagnostic(rule.group(), kind, site, name);
+        }
     }
 }

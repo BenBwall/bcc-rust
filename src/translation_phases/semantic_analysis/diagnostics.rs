@@ -71,6 +71,25 @@ impl Analyzer<'_, '_, '_> {
             })]);
     }
 
+    /// [`Self::group_diagnostic`] for a warning GCC also withholds when a
+    /// system header spells its token, as a system macro's body does; most of
+    /// GCC's type-conversion warnings move to the invocation instead, and
+    /// Clang goes by the invocation alone.
+    pub(super) fn spelled_group_diagnostic(
+        &mut self,
+        group: crate::configuration::DiagnosticGroup,
+        kind: SemanticErrorKind,
+        source_vectors: SourceVectors,
+        name: Option<StringCacheId>,
+    ) {
+        if self.context.configuration.compiler_identity()
+            != crate::configuration::CompilerIdentity::Gcc
+            || !self.context.spelled_in_system_header(source_vectors)
+        {
+            self.group_diagnostic(group, kind, source_vectors, name, None);
+        }
+    }
+
     #[cold]
     #[inline(never)]
     pub(super) fn error(

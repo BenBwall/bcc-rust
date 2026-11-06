@@ -1043,7 +1043,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Some(b.name.name),
                         Some(b.name.source_vectors),
                     );
-                } else if b.kind == BindingKind::Function {
+                } else if b.kind == BindingKind::Function && !self.is_weak_reference(b.name.name) {
                     self.group_diagnostic(
                         crate::configuration::DiagnosticGroup::UnusedFunction,
                         SemanticErrorKind::UnusedStaticFunction,
