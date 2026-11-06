@@ -1875,6 +1875,7 @@ mod tests {
 
     /// `-ffunction-sections` and `-fdata-sections` give each definition a
     /// section of its own, so that `--gc-sections` removes the unused ones.
+    #[cfg(target_os = "linux")]
     #[test]
     fn gnu_sections_let_the_linker_remove_unused_definitions() {
         let directory = Directory::new();
