@@ -343,16 +343,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         for (position, &parameter) in parameters.iter().enumerate() {
             self.gcc_main_atomic_parameter(parameter, site);
-            let fault = match position {
-                | 0 if self.without_atomic(parameter).unqualified() == int => None,
-                | 0 => Some(MainRule::GccFirstParameter),
-                | 1 if self.gcc_argument_array(parameter) => None,
-                | 1 => Some(MainRule::GccSecondParameter),
-                | 2 if self.gcc_argument_array(parameter) => None,
-                | 2 => Some(MainRule::GccThirdParameter),
-                | _ => None,
+            let (fits, fault) = match position {
+                | 0 => (
+                    self.without_atomic(parameter).unqualified() == int,
+                    MainRule::GccFirstParameter,
+                ),
+                | 1 => (
+                    self.gcc_argument_array(parameter),
+                    MainRule::GccSecondParameter,
+                ),
+                | 2 => (
+                    self.gcc_argument_array(parameter),
+                    MainRule::GccThirdParameter,
+                ),
+                | _ => continue,
             };
-            if let Some(fault) = fault {
+            if !fits {
                 self.main_rule(fault, site);
             }
         }

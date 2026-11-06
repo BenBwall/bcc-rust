@@ -672,7 +672,7 @@ impl WarningSettings {
             match group {
                 | DiagnosticGroup::ImplicitFunctionDeclaration
                 | DiagnosticGroup::ImplicitLibraryFunction
-                | DiagnosticGroup::ImplicitInt => all,
+                | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::Main => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
                 | _ => None,
