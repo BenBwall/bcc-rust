@@ -475,9 +475,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.retain_parameter_facts(id, parameters, &parameter_bindings);
         }
         self.define_func_name(name);
-        if !old_style {
-            self.check_main(f, ty);
-        }
+        self.check_main_definition(f, ty);
         self.work.push(Work::PopScope);
         self.work.push(Work::Statement(f.body, false));
         self.work
@@ -1482,7 +1480,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && let Some(composite) = self.types.composite(binding.ty, defined)
         {
             self.bindings[index].ty = composite;
-            self.check_main(function, composite);
+            self.check_main_old_parameters(function, composite, &original_types);
         } else {
             let previous = self
                 .functions
@@ -1532,55 +1530,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
         if let Some(current) = &mut self.functions.current {
             current.name = Some(self.bindings.len() - 1);
-        }
-    }
-
-    /// Hosted `main` signatures are implementation-defined outside the two
-    /// portable forms; warn without rejecting them. A freestanding startup
-    /// function's name and type are implementation-defined, so nothing is
-    /// checked there.
-    /// C99: §5.1.2.2.1p1, p. 12; PDF p. 24; §5.1.2.1p1, p. 11; PDF p. 23.
-    fn check_main(&mut self, f: &'tu FunctionDefinition<'tu>, ty: TypeId) {
-        if !self.context.configuration.hosted() {
-            return;
-        }
-        let Some(name) = f.declarator.identifier() else {
-            return;
-        };
-        if self.context.string_cache.at(name.name) != "main"
-            || self.scopes[self.scope]
-                .parent
-                .is_some_and(|s| self.scopes[s].kind != ScopeKind::File)
-        {
-            return;
-        }
-        let TypeKind::Function {
-            result,
-            parameters,
-            variadic,
-            ..
-        } = self.types.nodes[ty.index]
-        else {
-            return;
-        };
-        if self.types.unanalyzed(ty) {
-            return;
-        }
-        let int = self.types.scalar(Scalar::Int);
-        let char = self.types.scalar(Scalar::Char);
-        let pointer = self.types.intern(TypeKind::Pointer(char));
-        let argv = self.types.intern(TypeKind::Pointer(pointer));
-        if f.declaration_specifiers.storage_class == Some(StorageClass::Static)
-            || result != int
-            || variadic
-            || !(parameters.is_empty() || parameters == [int, argv])
-        {
-            self.error(
-                SemanticErrorKind::MainSignature,
-                name.source_vectors,
-                Some(name.name),
-                None,
-            );
         }
     }
 

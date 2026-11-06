@@ -1,0 +1,7 @@
+sema-main-gcc-werror.c:1:5: error: 'main' takes only zero or two arguments [-Werror=main]
+  |
+1 | int main(int argc) { return 0; }
+  |     ^^^^ nonportable declaration of main
+  |
+  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
+

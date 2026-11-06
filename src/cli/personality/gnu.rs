@@ -1393,6 +1393,8 @@ impl State<'_> {
                     | "-fno-honor-infinities"
                     | "-fapprox-func"
                     | "-fno-approx-func"
+                    | "-Wmain-return-type"
+                    | "-Wno-main-return-type"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an
