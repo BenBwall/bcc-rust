@@ -23,6 +23,7 @@ mod bit_int_widths;
 mod bits;
 mod builtin_names;
 mod checked_builtins;
+mod clear_padding;
 mod compound_literal_statics;
 mod compound_literal_storage;
 mod constexpr_objects;

@@ -9,10 +9,12 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html>
 //!
 //! `atomic.rs` lowers the atomic builtins, `floating.rs` the floating
-//! classifications and `bits.rs` the type-generic bit builtins.
+//! classifications, `bits.rs` the type-generic bit builtins and
+//! `clear_padding.rs` `__builtin_clear_padding`.
 
 mod atomic;
 mod bits;
+mod clear_padding;
 mod floating;
 
 use super::{
@@ -601,6 +603,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
                 self.draft
                     .terminate_and_continue_dead(Terminator::Unreachable);
+                Operand::Void
+            },
+            | CommonBuiltin::ClearPadding => {
+                let pointer = self.value(items[0], source)?;
+                let ty = instance.operation_type.ok_or_else(|| {
+                    LoweringError::missing("clear_padding has no object type", source)
+                })?;
+                self.clear_padding(pointer, ty, source)?;
                 Operand::Void
             },
             | CommonBuiltin::Setjmp => {

@@ -269,6 +269,11 @@ pub(crate) enum SemanticErrorKind {
     /// `__builtin_longjmp` must be the constant 1.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
     InvalidLongjmpValue,
+    /// GNU extension: an operand of `__builtin_clear_padding` that GCC or
+    /// Clang refuses; the name holds that compiler's words, which semantic
+    /// analysis put together with the types.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    ClearPaddingOperand,
     /// GNU extension: the bound of `__builtin_alloca_with_align_and_max`
     /// must be a constant, as GCC 13 requires it ("third argument to
     /// function ... must be a constant integer").
@@ -975,6 +980,7 @@ impl SemanticErrorKind {
             | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
             | Self::InvalidLongjmpValue => "expected the constant 1",
+            | Self::ClearPaddingOperand => "not a pointer to an object with defined padding",
             | Self::InvalidAllocaMaximum => "expected a constant",
             | Self::ConstantConversion(_) => "the converted value differs",
             | Self::FloatOverflow(_) | Self::LiteralConversion(_) | Self::PedanticOverflow =>
@@ -1353,6 +1359,11 @@ impl SemanticErrorKind {
                 "the value argument must be the integer constant 1",
                 "GNU extension: GCC Nonlocal Gotos requires the second argument of \
                  __builtin_longjmp to be the integer constant 1",
+            ),
+            | Self::ClearPaddingOperand => (
+                "invalid argument to __builtin_clear_padding",
+                "GNU extension: GCC Other Builtins requires a pointer to a complete, writable \
+                 object whose padding is defined",
             ),
             | Self::InvalidBuiltinProbability => (
                 "the probability argument must be a constant from 0 to 1",
@@ -2752,7 +2763,9 @@ impl ToDiagnostic for SemanticError {
             )
         } else if matches!(
             self.kind,
-            SemanticErrorKind::CallAttribute | SemanticErrorKind::CallAttributeWarning
+            SemanticErrorKind::CallAttribute
+                | SemanticErrorKind::CallAttributeWarning
+                | SemanticErrorKind::ClearPaddingOperand
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
