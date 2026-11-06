@@ -32,6 +32,7 @@ use crate::{
         SourceVectors,
         parsing::{
             GenericSelection,
+            SpecifierExtensionKind,
             declaration_syntax::{
                 Declaration,
                 DeclarationSpecifiers,
@@ -828,8 +829,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && !self.declares_alias(b.name.name)
             {
                 let mut ty = b.ty;
-                let refused =
-                    b.linkage == Linkage::Internal && self.internal_tentative_is_refused(ty);
+                let refused = b.linkage == Linkage::Internal
+                    && !entity.extension_tentative
+                    && self.internal_tentative_is_refused(ty);
                 if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index]
                     && !refused
                     && !self.types.unanalyzed(ty)
@@ -1709,7 +1711,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         && !self.types.unanalyzed(binding.ty)
                         && !self.complete_object(binding.ty)
                     {
-                        self.incomplete_internal_tentative(binding.name, binding.ty);
+                        // `__extension__` silences both compilers' reports.
+                        if extension_marked(spec) {
+                            entity.extension_tentative = true;
+                        } else {
+                            self.incomplete_internal_tentative(binding.name, binding.ty);
+                        }
                     }
                 }
             }
@@ -2601,7 +2608,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut chain = spec.extensions;
         while let Some(item) = chain {
-            if let super::SpecifierExtensionKind::Attributes(attribute) = item.kind
+            if let SpecifierExtensionKind::Attributes(attribute) = item.kind
                 && attribute_has(attribute)
             {
                 return true;
@@ -2746,19 +2753,22 @@ pub(super) enum FunctionWork<'tu> {
     reason = "Each flag is an independent declaration fact of the entity."
 )]
 pub(super) struct Entity {
-    latest:           usize,
-    definition:       Option<SourceVectors>,
-    tentative:        Option<usize>,
-    non_inline:       bool,
-    function_body:    Option<FunctionBody>,
-    msvc_inline:      MsvcInlineState,
+    latest:              usize,
+    definition:          Option<SourceVectors>,
+    tentative:           Option<usize>,
+    /// A tentative definition with internal linkage and an incomplete type
+    /// that `__extension__` marked.
+    extension_tentative: bool,
+    non_inline:          bool,
+    function_body:       Option<FunctionBody>,
+    msvc_inline:         MsvcInlineState,
     /// Clang's canRedefineFunction: GNU extern inline declarations permit
     /// a later static declaration and a replacement function body.
-    can_redefine:     bool,
-    gnu_inline:       bool,
+    can_redefine:        bool,
+    gnu_inline:          bool,
     /// A file-scope declaration says `inline` without `extern`, which
     /// makes a GNU extern inline body an external definition.
-    gnu_plain_inline: bool,
+    gnu_plain_inline:    bool,
 }
 
 /// Source facts and the current emission decision for Microsoft inline
@@ -3093,4 +3103,16 @@ pub(super) fn function_derivation<'tu>(
         }
     }
     None
+}
+
+/// Whether a declaration's specifiers include `__extension__`.
+fn extension_marked(specifiers: DeclarationSpecifiers<'_>) -> bool {
+    let mut chain = specifiers.extensions;
+    while let Some(item) = chain {
+        if item.kind == SpecifierExtensionKind::ExtensionMarker {
+            return true;
+        }
+        chain = item.next;
+    }
+    false
 }

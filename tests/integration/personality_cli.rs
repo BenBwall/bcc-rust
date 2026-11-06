@@ -289,6 +289,26 @@ mod tests {
             "struct S;\nstatic struct S s;\nstruct S { int a; };\nint f(void) { return s.a; }\n",
         );
         directory.write("never.c", "struct S;\nstatic struct S s;\n");
+        directory.write(
+            "marked.c",
+            "__extension__ static int a[];\nstatic int a[3];\n__extension__ static int z[];\nint \
+             *p = z;\n",
+        );
+        for (mode, option) in [
+            ("--gcc-mode", "-pedantic"),
+            ("--gcc-mode", "-pedantic-errors"),
+            ("--clang-mode", "-pedantic"),
+            ("--clang-mode", "-pedantic-errors"),
+        ] {
+            let output = directory.bcc(mode, &[option, "-c", "marked.c", "-o", "marked.o"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            assert!(
+                text.contains("assumed to have one element"),
+                "{mode} {option}: {text}"
+            );
+            assert!(!text.contains("internal"), "{mode} {option}: {text}");
+        }
         let refused = "internal tentative definition has incomplete type";
         for (mode, option, file, ok, message) in [
             ("--gcc-mode", "-w", "array.c", true, ""),
