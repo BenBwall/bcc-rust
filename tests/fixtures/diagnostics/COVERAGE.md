@@ -718,6 +718,8 @@ pinned by the `.args` sidecars.
 | `IncompleteTentativeDefinition` | [incomplete-tentative](sema3-incomplete-tentative.c) |
 | `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c), [cleanup use](sema3-internal-cleanup.c) |
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
+| `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
+| `MissingFieldInitializer` | [GCC](sema-missing-fields-gcc.c), [Clang](sema-missing-fields-clang.c) |
 | `Unused` | GCC's words: [variables and parameters](sema-unused-variables-gcc.c), [file scope](sema-unused-file-scope-gcc.c), [labels](sema-unused-label-gcc.c), [values](sema-unused-value-gcc.c); Clang's: [variables and parameters](sema-unused-variables-clang.c), [file scope](sema-unused-file-scope-clang.c), [labels](sema-unused-label-clang.c), [values](sema-unused-value-clang.c); [`-Werror`](sema-unused-werror-clang.c) |
 | `InlineInternalReference` | [inline-reference](sema3-inline-reference.c) |
 | `InlineStaticObject` | [inline-object](sema3-inline-object.c) |

@@ -111,6 +111,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if initializer.recovered || (self.types.unanalyzed(ty) && !variable_size) {
             return (ty, None);
         }
+        if self.missing_fields
+            && let InitializerType::InitializerList(list) = initializer.kind
+        {
+            self.check_missing_fields(list, ty);
+        }
         // An empty initializer fills a variable length array with zeros at
         // run time, as C23 lets it (an extension before C23, which the
         // parser reports, as GCC and Clang accept it in every mode).

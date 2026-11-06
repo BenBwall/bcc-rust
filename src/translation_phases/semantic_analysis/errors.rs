@@ -112,6 +112,12 @@ pub(crate) enum SemanticErrorKind {
     MainSignature,
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
     Unused(UnusedRule),
+    /// The words are the diagnostic's name.
+    /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
+    SignCompare,
+    /// The words are the diagnostic's name.
+    /// C99: §6.7.8p21, p. 127; PDF p. 139.
+    MissingFieldInitializer,
     /// C99: §6.9.2p3, p. 143; PDF p. 155.
     IncompleteInternalTentative,
     /// C99: §6.9p3,p5, p. 140; PDF p. 152.
@@ -1061,6 +1067,8 @@ impl SemanticErrorKind {
             | Self::DefinitionStarArray => "`[*]` is not allowed in a definition",
             | Self::MainSignature => "nonportable signature for main",
             | Self::Unused(rule) => rule.label(),
+            | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative | Self::IncompleteTentativeDefinition =>
                 "still incomplete at the end of the translation unit",
             | Self::TentativeArrayAssumedOne => "array assumed to have one element",
@@ -1253,6 +1261,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Normalized
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
+                    | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
                     | crate::configuration::DiagnosticGroup::UnusedVariable
@@ -1628,6 +1638,16 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::SignCompare => (
+                "comparison of integers of different signs",
+                "C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand \
+                 unsigned, so a negative value compares as a large one",
+            ),
+            | Self::MissingFieldInitializer => (
+                "missing field initializer",
+                "C99 §6.7.8p21: members with no initializer in a brace-enclosed list are \
+                 initialized as if they had static storage duration",
             ),
             | Self::Unused(rule) => (
                 rule.words().0,
@@ -2448,6 +2468,8 @@ impl SemanticErrorKind {
         match self {
             | Self::PointerConstraint(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
+            | Self::SignCompare => Some(G::SignCompare),
+            | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),
             | Self::ImplicitFunctionDeclaration => Some(G::ImplicitFunctionDeclaration),
             | Self::ImplicitLibraryFunction(_) => Some(G::ImplicitLibraryFunction),
@@ -2704,6 +2726,13 @@ impl ToDiagnostic for SemanticError {
                 arena,
                 "argument value {value} is outside the valid range [{low}, {high}]"
             )
+        } else if matches!(
+            self.kind,
+            SemanticErrorKind::SignCompare | SemanticErrorKind::MissingFieldInitializer
+        ) {
+            self.name.map_or(message, |name| {
+                arena.alloc_str(context.string_cache.at(name))
+            })
         } else if let SemanticErrorKind::Unused(rule) = self.kind {
             let (before, after) = rule.words();
             match self.name.map(|name| context.string_cache.at(name)) {

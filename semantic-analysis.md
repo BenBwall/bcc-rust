@@ -1207,6 +1207,15 @@ reports nothing, as are `const`/`pure` calls under `-Wunused-value`,
 `-Wunused-result`, and a value in a statement expression's last statement,
 which Clang reads.
 
+#### Comparisons and initializers under `-Wextra`
+
+`sign_compare.rs` implements `-Wsign-compare` and GCC's word for the same
+conversion in a conditional's operand. `missing_fields.rs` implements
+`-Wmissing-field-initializers`, walking a braced list against the types without
+modeling brace elision, so a list that elides braces reports nothing at its
+level. Both are designed to stay silent where a compiler's range analysis might
+be; a typedef name is spelled from its canonical type, as everywhere in bcc.
+
 #### Remaining backend and quality work
 
 - Optional fallthrough/missing-return warnings are

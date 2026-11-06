@@ -1,0 +1,14 @@
+sema-missing-fields-gcc.c:3:18: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+  |
+3 | struct S one = {1};
+  |                  ^ later members are left zero
+  |
+  = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-gcc.c:8:22: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+  |
+8 | struct T nested = {{1}, 2};
+  |                      ^ later members are left zero
+  |
+  = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+

@@ -74,7 +74,9 @@ mod functions;
 mod implicit;
 mod inference;
 mod initializers;
+mod missing_fields;
 mod predefined;
+mod sign_compare;
 mod statements;
 mod traversal;
 mod unused;
@@ -2175,6 +2177,10 @@ struct Analyzer<'a, 'tu, 's> {
     va_list_type:            Option<TypeId>,
     statements:              statements::State<'tu, 's>,
     unused:                  unused::UnusedState<'s>,
+    /// Whether `-Wsign-compare` is on.
+    sign_compare:            bool,
+    /// Whether `-Wmissing-field-initializers` is on.
+    missing_fields:          bool,
     control:                 builder::Builder<'tu, 's>,
     function_extensions:     FunctionExtensions<'tu>,
     /// Checked statement-level `asm` facts, by statement identity.

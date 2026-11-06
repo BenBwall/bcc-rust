@@ -31,6 +31,7 @@ mod correspondence;
 mod diagnostic_parity;
 mod effects;
 mod emission_work;
+mod extra_warnings;
 mod float128;
 mod float_integer_conversions;
 mod fortify;

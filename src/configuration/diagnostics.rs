@@ -156,6 +156,12 @@ impl CompilerConfiguration {
     /// [`Self::diagnostic_severity`] asks when it reads them.
     pub(crate) fn with_extra_warnings(mut self, enabled: bool) -> Self {
         self.warning_options[DiagnosticGroup::Extra as usize].apply_all(enabled);
+        for group in [
+            DiagnosticGroup::SignCompare,
+            DiagnosticGroup::MissingFieldInitializers,
+        ] {
+            self.warning_options[group as usize].apply_all(enabled);
+        }
         if self.identity.rules() == super::RuleSet::Clang {
             for group in [
                 DiagnosticGroup::UnusedParameter,
@@ -565,6 +571,11 @@ diagnostic_groups! {
     /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and
     /// `-Werror=` options unless they have their own.
     Conversion => Some("conversion"), Ignored, false;
+    /// A signed operand the usual arithmetic conversions make unsigned, under
+    /// `-Wextra`.
+    SignCompare => Some("sign-compare"), Ignored, false;
+    /// A braced list that leaves later members zero, under `-Wextra`.
+    MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds
@@ -748,6 +759,8 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitFunctionDeclaration
                 | DiagnosticGroup::ImplicitLibraryFunction
                 | DiagnosticGroup::ImplicitInt
+                | DiagnosticGroup::SignCompare
+                | DiagnosticGroup::MissingFieldInitializers
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
                 | DiagnosticGroup::UnusedVariable
