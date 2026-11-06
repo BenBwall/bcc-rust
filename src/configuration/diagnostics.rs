@@ -7,6 +7,17 @@ use super::{
 };
 use crate::translation_phases::ErrorSeverity;
 
+/// What `#pragma GCC diagnostic` or `#pragma clang diagnostic` makes of a
+/// warning option. Clang's `fatal` is an `Error` the context also marks.
+/// C99: implementation-defined pragma behavior, §6.10.6 paragraph 1, p. 159;
+/// PDF p. 171.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PragmaClass {
+    Ignored,
+    Warning,
+    Error,
+}
+
 /// How diagnostics are printed, which `--diagnostic-format` and the driver
 /// personalities select: bcc's annotated snippets, Clang's and GCC's
 /// `file:line:col: error: message` lines with the snippet (Clang adds the
@@ -62,8 +73,13 @@ impl CompilerConfiguration {
     ) -> Self {
         let clang = self.identity.rules() == super::RuleSet::Clang;
         self.warning_options[group as usize].apply(option, clang);
-        if group == DiagnosticGroup::UnknownPragmas {
+        if group == DiagnosticGroup::UnknownPragmas || (group == DiagnosticGroup::Pragmas && clang)
+        {
             self.warning_options[DiagnosticGroup::UnknownStdcPragma as usize].apply(option, clang);
+        }
+        // Clang's `-Wpragmas` holds `-Wunknown-pragmas`; GCC's stands alone.
+        if group == DiagnosticGroup::Pragmas && clang {
+            self.warning_options[DiagnosticGroup::UnknownPragmas as usize].apply(option, clang);
         }
         let children: &[DiagnosticGroup] = match group {
             | DiagnosticGroup::PointerToIntCast => &[
@@ -124,6 +140,109 @@ impl CompilerConfiguration {
             self.warning_options[DiagnosticGroup::Main as usize].apply_all(enabled);
         }
         self
+    }
+
+    /// This configuration after `#pragma GCC diagnostic` or `#pragma clang
+    /// diagnostic` sets the warning option `name` (without its `-W`) to
+    /// `class`. A pragma outranks the command line: `warning` keeps a warning
+    /// from `-Werror`, and `error` makes one of a warning `-Wno-error=` kept,
+    /// though `-w` still silences both, as in GCC and Clang. An option bcc
+    /// does not model changes nothing.
+    /// GCC: <https://gcc.gnu.org/onlinedocs/gcc/Diagnostic-Pragmas.html>.
+    /// Clang: <https://clang.llvm.org/docs/UsersManual.html#controlling-diagnostics-via-pragmas>.
+    /// C99: implementation-defined pragma behavior, §6.10.6 paragraph 1,
+    /// p. 159; PDF p. 171.
+    pub(crate) fn with_pragma_class(self, name: &str, class: PragmaClass) -> Self {
+        let clang = self.identity.rules() == super::RuleSet::Clang;
+        match name {
+            | "pedantic" => self.with_pragma_pedantic(class),
+            // GCC's `ignored "-Wall"` silences nothing it holds, as it says
+            // nothing about the options `-Wall` enabled.
+            | "all" if class == PragmaClass::Ignored && !clang => self,
+            // GCC's `-Wall` holds `-Wmain`; Clang's does not.
+            | "all" => DiagnosticGroup::UNDER_ALL
+                .iter()
+                .chain((!clang).then_some(&DiagnosticGroup::Main))
+                .fold(self, |configuration, &group| {
+                    configuration.with_pragma_group(group, class)
+                }),
+            | "everything" if clang => DiagnosticGroup::ALL
+                .iter()
+                .fold(self.with_pragma_pedantic(class), |configuration, &group| {
+                    configuration.with_pragma_group(group, class)
+                }),
+            | _ => DiagnosticGroup::parse(name)
+                .map_or(self, |group| self.with_pragma_group(group, class)),
+        }
+    }
+
+    /// [`Self::with_pragma_class`] for one group. A group an earlier pragma
+    /// disabled keeps its default when `error` turns it back on, so that `-w`
+    /// leaves a default error in Clang.
+    pub(crate) fn with_pragma_group(self, group: DiagnosticGroup, class: PragmaClass) -> Self {
+        match class {
+            | PragmaClass::Ignored => self.with_warning_option(group, WarningOption::Enable(false)),
+            | PragmaClass::Warning => self
+                .with_warning_option(group, WarningOption::Enable(true))
+                .with_warning_option(group, WarningOption::Error(false)),
+            | PragmaClass::Error => {
+                let mut configuration = self.with_warning_option(group, WarningOption::Error(true));
+                configuration.warning_options[group as usize].0 &= !WarningSettings::REENABLED;
+                configuration
+            },
+        }
+    }
+
+    /// `-Wpedantic` named by a pragma: an `error` is `-Werror=pedantic`
+    /// with the diagnostics on, and `-w` silences it as it does that option.
+    fn with_pragma_pedantic(self, class: PragmaClass) -> Self {
+        let command_line_pedantic_deny = Some(self.command_line_pedantic_deny());
+        let configuration = match class {
+            | PragmaClass::Ignored => self.with_pedantic(false),
+            | PragmaClass::Warning => self.with_pedantic_as_error(false).with_pedantic(true),
+            | PragmaClass::Error if self.suppress_warnings => self.with_pedantic(false),
+            | PragmaClass::Error => self
+                .with_pedantic_as_error(true)
+                .with_werror_pedantic()
+                .with_pedantic(true),
+        };
+        // What the option holds besides the extension policy, whatever the
+        // command line said of each.
+        let configuration = DiagnosticGroup::ALL
+            .iter()
+            .filter(|group| group.default() == GroupDefault::Extension)
+            .fold(configuration, |configuration, &group| {
+                configuration.with_pragma_group(group, class)
+            });
+        Self {
+            command_line_pedantic_deny,
+            ..configuration
+        }
+    }
+
+    /// Whether the command line made pedantic warnings errors.
+    fn command_line_pedantic_deny(self) -> bool {
+        self.command_line_pedantic_deny
+            .unwrap_or(self.extension_policy == ExtensionPolicy::Deny)
+    }
+
+    /// One bit per [`DiagnosticGroup`] that a pragma naming the warning
+    /// option `name` reaches, parents' children included.
+    pub(crate) fn pragma_group_mask(self, name: &str) -> u128 {
+        const {
+            assert!(
+                DiagnosticGroup::COUNT <= u128::BITS as usize,
+                "a mask holds one bit per group"
+            );
+        }
+        let mut cleared = self;
+        cleared.warning_options = [WarningSettings::DEFAULT; DiagnosticGroup::COUNT];
+        let set = cleared.with_pragma_class(name, PragmaClass::Error);
+        set.warning_options
+            .iter()
+            .enumerate()
+            .filter(|(_, settings)| **settings != WarningSettings::DEFAULT)
+            .fold(0, |mask, (group, _)| mask | (1 << group))
     }
 
     /// Enables every group that is off by default, for tests that observe
@@ -277,8 +396,16 @@ impl CompilerConfiguration {
                     self.identity.rules() == super::RuleSet::Clang,
                 | _ => false,
             };
+        // A pragma naming `-Wpedantic` reaches that option's own groups. The
+        // rest are errors under `-pedantic-errors` whatever it says, in both
+        // compilers: GCC's `pedwarn` and Clang's ExtWarn stay so.
+        let deny = if group.default() == GroupDefault::Extension {
+            self.extension_policy == ExtensionPolicy::Deny
+        } else {
+            self.command_line_pedantic_deny()
+        };
         promoted
-            && self.extension_policy == ExtensionPolicy::Deny
+            && deny
             && !(self.identity == super::CompilerIdentity::Gcc
                 && group.default() == GroupDefault::Permerror
                 && self.permissive == Some(true))
@@ -457,7 +584,34 @@ diagnostic_groups! {
     Undef => Some("undef"), Ignored, false;
     /// A `#pragma` that names nothing bcc knows.
     UnknownPragmas => Some("unknown-pragmas"), Ignored, false;
+    /// The members of `-Wunknown-pragmas` that report by default: an
+    /// unknown `STDC` pragma, and Clang's malformed diagnostic pragmas.
     UnknownStdcPragma => Some("unknown-pragmas"), Warning, false;
+    /// GCC: a pragma it knows, used wrongly. In Clang the parent of
+    /// `-Wunknown-pragmas`.
+    Pragmas => Some("pragmas"), Warning, false;
+    /// `#warning`; GCC's `-Wcpp` and Clang's `-W#warnings`, whose other name
+    /// [`DiagnosticGroup::parse`] reads.
+    Cpp => Some("cpp"), Warning, false;
+    /// Clang: `#pragma GCC warning`. GCC names no option for it.
+    PragmaMessages => Some("#pragma-messages"), Warning, false;
+    /// Clang: tokens after a directive is complete.
+    ExtraTokens => Some("extra-tokens"), Warning, false;
+    /// Clang: a macro `#pragma clang deprecated` marks is expanded.
+    DeprecatedPragma => Some("deprecated-pragma"), Warning, false;
+    /// `#pragma once` in the main file.
+    PragmaOnceOutsideHeader => Some("pragma-once-outside-header"), Warning, false;
+    /// Clang: `#pragma GCC system_header` in the main file.
+    PragmaSystemHeaderOutsideHeader => Some("pragma-system-header-outside-header"), Warning, false;
+    /// Clang: `#include_next` in the main file.
+    IncludeNextOutsideHeader => Some("include-next-outside-header"), Warning, false;
+    /// Clang: `#include_next` in a file found by no search entry.
+    IncludeNextAbsolutePath => Some("include-next-absolute-path"), Warning, false;
+    /// Clang: a `'` or `"` that closes on no line, in text phase 7 never reads.
+    InvalidPpToken => Some("invalid-pp-token"), Warning, false;
+    /// Clang: a macro redefined differently; a warning `-pedantic-errors`
+    /// promotes as it does in GCC, which names no option for it.
+    MacroRedefined => Some("macro-redefined"), Warning, true;
     /// A `\` before a character that begins no escape sequence; Clang's
     /// extension warning, which `-pedantic-errors` promotes.
     UnknownEscapeSequence => Some("unknown-escape-sequence"), Warning, true;
@@ -549,6 +703,17 @@ enum GroupDefault {
 }
 
 impl DiagnosticGroup {
+    /// The groups bcc models under `-Wall`, as a pragma naming it reaches
+    /// them.
+    const UNDER_ALL: &[Self] = &[
+        Self::UnusedFunction,
+        Self::ImplicitFunctionDeclaration,
+        Self::ImplicitLibraryFunction,
+        Self::ImplicitInt,
+        Self::ReturnMismatch,
+        Self::VoidReturnMismatch,
+    ];
+
     /// Whether Clang's `-Wconversion` holds this group.
     const fn converts(self) -> bool {
         matches!(
@@ -568,6 +733,9 @@ impl DiagnosticGroup {
     }
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
+        if name == "#warnings" {
+            return Some(Self::Cpp);
+        }
         Self::ALL
             .iter()
             .copied()

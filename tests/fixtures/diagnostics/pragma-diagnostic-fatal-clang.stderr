@@ -1,0 +1,14 @@
+pragma-diagnostic-fatal-clang.c:1:2: warning: #warning shown
+  |
+1 | #warning shown
+  |  ^^^^^^^ `#warning` directive
+
+pragma-diagnostic-fatal-clang.c:3:5: fatal error: `FIRST` is not defined; it evaluates to 0
+  |
+3 | #if FIRST
+  |     ^^^^^ not a macro
+  |
+  = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
+  = help: use `defined(FIRST)` to test whether it is defined
+
+1 error and 1 warning generated.

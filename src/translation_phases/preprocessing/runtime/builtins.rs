@@ -305,7 +305,11 @@ impl Expander<'_, '_, '_, '_> {
             .add_synthetic_source_file(Path::new("<pragma string>"), input);
         self.tokenizer = TokenSource::new(self.context, self.scratch, pragma_string, input);
         self.pushed_frames += 1;
+        // C99: §6.10.9p1, p. 161; PDF p. 173: its tokens are processed as a
+        // directive's, whose operands a text of phase 4 reads as tokens too.
+        let in_directive = std::mem::replace(&mut self.state.in_directive, true);
         _ = self.parse_pragma_directive(from, at);
+        self.state.in_directive = in_directive;
         if self.tokenizer.next_item(self.context).is_some() {
             let source_vectors = self.current_location();
             self.context.preprocessor_error(PreprocessorError {

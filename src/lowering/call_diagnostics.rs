@@ -114,19 +114,22 @@ impl CallDiagnostic {
         let Some(severity) = self.severity(context) else {
             return;
         };
-        context.append_pending_errors([crate::translation_phases::TranslationError::Semantic(
-            crate::translation_phases::semantic_analysis::SemanticError {
-                kind: if self.warning {
-                    crate::translation_phases::semantic_analysis::SemanticErrorKind::CallAttributeWarning
-                } else {
-                    crate::translation_phases::semantic_analysis::SemanticErrorKind::CallAttribute
+        context.classified_error(
+            self.source,
+            crate::translation_phases::TranslationError::Semantic(
+                crate::translation_phases::semantic_analysis::SemanticError {
+                    kind: if self.warning {
+                        crate::translation_phases::semantic_analysis::SemanticErrorKind::CallAttributeWarning
+                    } else {
+                        crate::translation_phases::semantic_analysis::SemanticErrorKind::CallAttribute
+                    },
+                    extension_severity: Some(severity),
+                    source_vectors:     self.source,
+                    name:               Some(self.message),
+                    previous:           Some(self.declaration),
                 },
-                extension_severity: Some(severity),
-                source_vectors:     self.source,
-                name:               Some(self.message),
-                previous:           Some(self.declaration),
-            },
-        )]);
+            ),
+        );
     }
 
     /// The output preparation boundary must honor promotion and suppression

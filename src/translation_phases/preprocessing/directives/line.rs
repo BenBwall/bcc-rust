@@ -8,21 +8,27 @@ use std::{
     path::Path,
 };
 
-use crate::translation_phases::{
-    preprocessing::{
-        Expander,
-        errors::{
-            PreprocessorError,
-            PreprocessorErrorType,
-        },
-        token::{
-            StringTokenType,
-            TokenType,
-        },
+use crate::{
+    configuration::{
+        ExtensionPolicy,
+        RuleSet,
     },
-    preprocessor_tokenizer::{
-        PreprocessorToken,
-        PreprocessorTokenType,
+    translation_phases::{
+        preprocessing::{
+            Expander,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+            token::{
+                StringTokenType,
+                TokenType,
+            },
+        },
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+        },
     },
 };
 
@@ -94,8 +100,21 @@ impl Expander<'_, '_, '_, '_> {
         let value = digits.bytes().try_fold(0u32, |value, digit| {
             value.checked_mul(10)?.checked_add(u32::from(digit - b'0'))
         });
+        // Clang files these under `-Wpedantic`, so a pragma naming it governs
+        // them. GCC's pragma can only turn its preprocessor's pedantic checks
+        // on, and they stay ungrouped warnings the command line decides.
+        let clang = self.context.configuration.compiler_identity().rules() == RuleSet::Clang;
+        let here = self
+            .context
+            .configuration_at(token.source_vectors)
+            .extension_policy();
+        let policy = match self.context.configuration.extension_policy() {
+            | _ if clang => here,
+            | ExtensionPolicy::Allow if here != ExtensionPolicy::Allow => ExtensionPolicy::Warn,
+            | policy => policy,
+        };
         let pedantic = crate::translation_phases::policy_severity(
-            self.context.configuration.extension_policy(),
+            policy,
             crate::translation_phases::DiagnosticPolicy::Extension,
         );
         let out_of_range = match value {
@@ -106,14 +125,19 @@ impl Expander<'_, '_, '_, '_> {
         };
         if let Some((too_large, Some(severity))) = out_of_range {
             let digits = self.context.diagnostic_text(digits);
-            self.context.preprocessor_error(PreprocessorError {
+            let error = PreprocessorError {
                 error_type:     if too_large {
                     PreprocessorErrorType::LineDirectiveNumberTooLarge(digits, severity)
                 } else {
                     PreprocessorErrorType::LineDirectiveNumberZero(digits, severity)
                 },
                 source_vectors: token.source_vectors,
-            });
+            };
+            if clang {
+                self.context.pedantic_preprocessor_error(error);
+            } else {
+                self.context.preprocessor_error(error);
+            }
         }
         let name = self.expect_token_without_rewind::<true>(
             |_, t| {
