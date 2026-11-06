@@ -136,15 +136,22 @@ impl<'tu> Parser<'_, 'tu, '_> {
         {
             return;
         }
-        // Clang's warning has no group, so the command line decides it and no
-        // pragma reaches it: an error wherever `-pedantic-errors` appeared.
+        // Clang's warning has no group, so the command line decides it, an
+        // error wherever `-pedantic-errors` appeared, and only a pragma naming
+        // `-Weverything` reaches it.
         // GCC's is a `-Wpedantic` diagnostic, which its pedantic options enable
         // and make errors, and a pragma naming that option governs it.
         let clang_rules = self.context.configuration.compiler_identity().rules()
             == crate::configuration::RuleSet::Clang;
         let plain_complex_severity = plain_complex.then(|| {
             if clang_rules {
-                Some(if self.context.configuration.pedantic_errors() {
+                use crate::configuration::PragmaClass as Class;
+                let class = self.context.everything_class_at(source_vectors);
+                let error = match class {
+                    | Some(class) => class == Class::Error,
+                    | None => self.context.configuration.pedantic_errors(),
+                };
+                (class != Some(Class::Ignored)).then_some(if error {
                     ErrorSeverity::Error
                 } else {
                     ErrorSeverity::Warning
@@ -227,9 +234,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
             // `-Werror` must not then overrule when they are reported.
             let pedantic = matches!(error.error_type, ParserErrorType::EmptyTranslationUnit)
                 || (plain_complex && !clang_rules);
-            let severity_is_final = pedantic
-                && error.severity == ErrorSeverity::Warning
-                && self.context.pedantic_warning_at(source_vectors);
+            let everything = plain_complex
+                && clang_rules
+                && self.context.everything_class_at(source_vectors)
+                    == Some(crate::configuration::PragmaClass::Warning);
+            let severity_is_final = error.severity == ErrorSeverity::Warning
+                && (everything || (pedantic && self.context.pedantic_warning_at(source_vectors)));
             self.context.parser_error(ParserError {
                 severity_is_final,
                 ..error

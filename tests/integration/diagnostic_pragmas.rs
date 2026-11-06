@@ -676,6 +676,36 @@ int g(void) { return ({ 1; }); }
 
     /// `cl` applies the warning numbers bcc gives its warnings, and reads no
     /// other compiler's diagnostic pragma.
+    /// Clang's `-Weverything` holds `-Wpedantic` and reaches the plain
+    /// `_Complex` warning, which has no other group.
+    #[test]
+    fn everything_reaches_what_no_other_group_does() {
+        let severity = |name: &str, class: &str, flags: &[&str], body: &str| {
+            let source = format!("#pragma clang diagnostic {class} \"-Weverything\"\n{body}");
+            compile(name, "--clang-mode", flags, &source)
+        };
+        assert_eq!(
+            severity(
+                "every-ignored",
+                "ignored",
+                &["-pedantic-errors"],
+                "_Complex x;\n"
+            ),
+            Vec::<String>::new()
+        );
+        for flags in [&["-pedantic-errors"][..], &["-pedantic", "-Werror"]] {
+            let reported = severity("every-warning", "warning", flags, "_Complex x;\n");
+            assert_eq!(reported.len(), 1, "{flags:?}: {reported:?}");
+            assert!(reported[0].contains("warning"), "{flags:?}: {reported:?}");
+        }
+        let reported = severity("every-error", "error", &[], "_Complex x;\n");
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert!(reported[0].contains("error"), "{reported:?}");
+        let reported = severity("every-empty", "warning", &["-pedantic", "-Werror"], "");
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert!(reported[0].contains("warning"), "{reported:?}");
+    }
+
     #[test]
     fn cl_applies_warning_numbers() {
         let source = "\

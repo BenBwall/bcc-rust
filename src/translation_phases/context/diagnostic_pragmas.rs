@@ -78,6 +78,9 @@ struct PragmaState {
     /// `warning "-Wpedantic"`: `-Werror` no longer promotes extension
     /// diagnostics.
     pedantic_warning: bool,
+    /// The class Clang's `-Weverything` last set, which reaches diagnostics
+    /// that belong to no other group.
+    everything:       Option<PragmaClass>,
 }
 
 impl<'tu> DiagnosticPragmas<'tu> {
@@ -133,6 +136,13 @@ impl<'tu> Context<'tu> {
     pub(crate) fn pedantic_warning_at(&self, source: SourceVectors) -> bool {
         self.pragma_state_at(source)
             .is_some_and(|state| state.pedantic_warning)
+    }
+
+    /// The class Clang's `-Weverything` set where `source` is, if a pragma set
+    /// one.
+    pub(crate) fn everything_class_at(&self, source: SourceVectors) -> Option<PragmaClass> {
+        self.pragma_state_at(source)
+            .and_then(|state| state.everything)
     }
 
     /// Queues an extension diagnostic, which `warning "-Wpedantic"` keeps from
@@ -241,8 +251,15 @@ impl<'tu> Context<'tu> {
         } else {
             state.fatal & !mask
         };
-        if name == "pedantic" {
+        // Clang's `-Weverything` holds `-Wpedantic`.
+        let everything = name == "everything"
+            && self.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang;
+        if name == "pedantic" || everything {
             state.pedantic_warning = class == PragmaClass::Warning;
+        }
+        if everything {
+            state.everything = Some(class);
         }
         self.record_pragma_state(state);
     }
@@ -371,6 +388,7 @@ impl<'tu> Context<'tu> {
             configuration,
             fatal: 0,
             pedantic_warning: false,
+            everything: None,
         }
     }
 
