@@ -21,8 +21,10 @@
 use std::fmt::Write as _;
 
 use crate::{
+    configuration::CompilerIdentity,
     translation_phases::{
         Context,
+        TextEventKind,
         preprocessing::{
             ReadAt,
             StringTokenType,
@@ -37,29 +39,37 @@ use crate::{
     },
 };
 
-/// The pragmas a text of phase 4 writes back where they were, as GCC and
-/// Clang write them: each `#pragma` line, and each `_Pragma` operator's, on a
-/// line of its own, spelled as written, unless the preprocessor alone
-/// carries it out.
+/// What a text of phase 4 writes between its tokens, as GCC and Clang write
+/// it. Each `#pragma` line, and each `_Pragma` operator's, stands on a line of
+/// its own, spelled as written, unless the preprocessor alone carries it out.
+/// Each file entered or returned to gets a line marker, even when no token
+/// lies between two of them.
 /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171; §6.10.9 paragraph 1,
 /// p. 161; PDF p. 173.
 #[derive(Default)]
-pub(crate) struct Pragmas {
+pub(crate) struct TextEvents {
     next: usize,
 }
 
-impl Pragmas {
-    /// Writes the pragmas that came before output token `ordinal`.
+impl TextEvents {
+    /// Writes what came before output token `ordinal`.
     pub(crate) fn write_before(
         &mut self,
         context: &Context<'_>,
         ordinal: usize,
         writer: &mut TextWriter<'_>,
     ) {
-        while let Some(pragma) = context.text_pragmas.get(self.next)
-            && pragma.position <= ordinal
+        while let Some(&event) = context.text_events.get(self.next)
+            && event.position <= ordinal
         {
-            writer.pragma(context, pragma.file, pragma.line, pragma.text);
+            match event.kind {
+                | TextEventKind::Pragma(text) =>
+                    writer.pragma(context, event.file, event.line, text),
+                | TextEventKind::FileEntered =>
+                    writer.file_change(context, event.file, event.line, Flag::Entered),
+                | TextEventKind::FileReturned =>
+                    writer.file_change(context, event.file, event.line, Flag::Returned),
+            }
             self.next += 1;
         }
     }
@@ -95,6 +105,16 @@ pub(crate) struct TextWriter<'a> {
     /// The current line holds a pragma: a token for it or an earlier line
     /// starts one of its own, with a line marker.
     after_pragma:    bool,
+    /// A file change's marker was just written, so the next token or marker
+    /// starts its line with no new line first, whatever line it is on.
+    at_line_start:   bool,
+}
+
+/// The flag on a line marker for a change of file.
+#[derive(Clone, Copy)]
+enum Flag {
+    Entered,
+    Returned,
 }
 
 /// A token's spelling as far as it decides what it could paste with: GCC's
@@ -227,6 +247,7 @@ impl<'a> TextWriter<'a> {
             last: PasteClass::None,
             main_file,
             after_pragma: false,
+            at_line_start: false,
         }
     }
 
@@ -295,13 +316,18 @@ impl<'a> TextWriter<'a> {
         let first = classified.as_bytes().first().copied().unwrap_or(0);
         let later = matches!(self.line, Some((current_file, current_line))
             if current_file == file && line > current_line);
-        if std::mem::take(&mut self.after_pragma)
+        if self.at_line_start {
+            self.advance(context, file, line);
+            self.at_line_start = false;
+            self.indent(column);
+            self.begin_line(column, spacing, class);
+        } else if std::mem::take(&mut self.after_pragma)
             && !later
             && self.line.is_some_and(|(f, _)| f == file)
         {
             self.text.push('\n');
             if !self.options.no_line_markers {
-                self.marker(context, file, line);
+                self.marker(context, file, line, None);
             }
             self.line = Some((file, line));
             self.indent(column);
@@ -339,16 +365,18 @@ impl<'a> TextWriter<'a> {
     /// a line. The next token starts a line of its own.
     pub(crate) fn pragma(&mut self, context: &Context<'_>, file: u32, line: u32, text: &str) {
         match self.line {
-            | Some((current_file, current_line)) if current_file == file && line <= current_line =>
+            | Some((current_file, current_line))
+                if current_file == file && line <= current_line && !self.at_line_start =>
             {
                 self.text.push('\n');
                 if !self.options.no_line_markers {
-                    self.marker(context, file, line);
+                    self.marker(context, file, line, None);
                 }
                 self.line = Some((file, line));
             },
             | _ => self.advance(context, file, line),
         }
+        self.at_line_start = false;
         self.text.push_str(text);
         self.after_pragma = true;
         self.last = PasteClass::None;
@@ -361,10 +389,12 @@ impl<'a> TextWriter<'a> {
     fn advance(&mut self, context: &Context<'_>, file: u32, line: u32) {
         match self.line {
             | Some((current_file, current_line)) if current_file == file => {
-                if self.options.no_line_markers || line - current_line > MAX_BLANK_LINES {
-                    self.text.push('\n');
+                if self.options.no_line_markers
+                    || line.saturating_sub(current_line) > MAX_BLANK_LINES
+                {
+                    self.end_line();
                     if !self.options.no_line_markers {
-                        self.marker(context, file, line);
+                        self.marker(context, file, line, None);
                     }
                 } else {
                     for _ in current_line..line {
@@ -375,27 +405,66 @@ impl<'a> TextWriter<'a> {
             | previous =>
                 if !self.options.no_line_markers {
                     match previous {
-                        | Some(_) => self.text.push('\n'),
-                        | None => self.marker(context, self.main_file, 1),
+                        | Some(_) => self.end_line(),
+                        | None => self.marker(context, self.main_file, 1, None),
                     }
                     if file != self.main_file || line > 1 {
-                        self.marker(context, file, line);
+                        self.marker(context, file, line, None);
                     }
                 } else if previous.is_some() {
-                    self.text.push('\n');
+                    self.end_line();
                 },
         }
         self.line = Some((file, line));
     }
 
-    /// Writes `# LINE "FILE"` and a new line, with flag 3 for a system
-    /// header.
-    fn marker(&mut self, context: &Context<'_>, file: u32, line: u32) {
+    /// Records that the reader changed file: a line marker for it at `line`,
+    /// on a line of its own, and without markers just the end of the line, so
+    /// that the tokens of two files never join.
+    fn file_change(&mut self, context: &Context<'_>, file: u32, line: u32, flag: Flag) {
+        if self.line.is_some() {
+            self.end_line();
+        } else if !self.options.no_line_markers {
+            self.marker(context, self.main_file, 1, None);
+        }
+        if !self.options.no_line_markers {
+            self.marker(context, file, line, Some(flag));
+        }
+        self.line = Some((file, line));
+        self.at_line_start = true;
+        self.after_pragma = false;
+        self.last = PasteClass::None;
+    }
+
+    /// Ends the current line, unless a marker just did.
+    fn end_line(&mut self) {
+        if !self.at_line_start {
+            self.text.push('\n');
+        }
+    }
+
+    /// Writes `# LINE "FILE"` and a new line, with GCC's flags as each
+    /// identity's compiler writes them: 1 entering a file, 2 returning to one,
+    /// 3 in a system header, and from GCC 4 there too, on the targets where a
+    /// system header is implicitly `extern "C"`. `cl` writes no flags, so
+    /// `flag` stays off there.
+    fn marker(&mut self, context: &Context<'_>, file: u32, line: u32, flag: Option<Flag>) {
         let path = context.get_source_file(file);
         _ = write!(self.text, "# {line} ");
         _ = crate::diagnostics::write_c_quoted(&mut self.text, "", '"', &path.to_string_lossy());
+        let identity = context.configuration.compiler_identity();
+        match flag {
+            | _ if identity == CompilerIdentity::Msvc => (),
+            | Some(Flag::Entered) => self.text.push_str(" 1"),
+            | Some(Flag::Returned) => self.text.push_str(" 2"),
+            | None => (),
+        }
         if context.has_system_header_part(file) {
-            self.text.push_str(" 3");
+            self.text.push_str(if identity == CompilerIdentity::Gcc {
+                " 3 4"
+            } else {
+                " 3"
+            });
         }
         self.text.push('\n');
     }
@@ -422,7 +491,7 @@ impl<'a> TextWriter<'a> {
     /// Ends the last line.
     pub(crate) fn finish(&mut self) {
         if self.line.is_some() {
-            self.text.push('\n');
+            self.end_line();
         }
     }
 }

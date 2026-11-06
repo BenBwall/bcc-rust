@@ -120,6 +120,9 @@ pub(super) struct PreprocessorState<'pp> {
     /// Produce phase 4's tokens for a text of them, unconverted
     /// ([`Context::phase_four_text`](crate::translation_phases::Context::phase_four_text)).
     pub(super) as_text:             bool,
+    /// How many files a text of phase 4 has entered by `#include` and not yet
+    /// returned from, so that the frames beneath them make no line markers.
+    pub(super) text_includes:       u32,
     pub(super) arena:               &'pp Bump,
     pub(super) once_set:            ArenaSet<'pp, u32>,
     pub(super) macro_definitions:   ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,

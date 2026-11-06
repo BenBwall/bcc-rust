@@ -24,7 +24,7 @@ use crate::{
     },
     headers::HeaderSearch,
     pipeline::{
-        Pragmas,
+        TextEvents,
         TextOptions,
         TextWriter,
         with_preprocessor,
@@ -75,7 +75,7 @@ pub(super) fn print_preprocessed<'tu>(
         |mut preprocessor, context, _pp| {
             let main_file = context.intern_source_file(source_filename);
             let mut writer = TextWriter::new(&text_arena, options, main_file);
-            let mut pragmas = Pragmas::default();
+            let mut pragmas = TextEvents::default();
             let mut ordinal = 0;
             let mut diagnosed = 0;
             let mut flushed = 0;
