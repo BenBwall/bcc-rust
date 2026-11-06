@@ -142,6 +142,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             {
                 self.exempt_from_unused(binding);
             }
+            if self.unused.tracking
+                && let Subject::Typedef(Some(binding)) = subject
+            {
+                self.note_typedef_attribute(binding, attribute.name);
+            }
             if ignored {
                 continue;
             }

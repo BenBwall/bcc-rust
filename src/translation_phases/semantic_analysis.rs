@@ -811,11 +811,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | TypeSpecifiers::Enum(enumeration) => enumeration.attributes,
                     | _ => None,
                 };
-                if self.unused.tracking
-                    && let TypeSpecifiers::StructOrUnion(record) = s
-                {
-                    self.note_record_specifier(record);
-                }
                 self.check_extension_chain(attributes);
                 self.attribute_chain_operands(attributes);
             },
