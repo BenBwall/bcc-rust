@@ -6484,6 +6484,95 @@ mod tests {
         }
     }
 
+    /// GCC and Clang have their feature-test operators in every language mode,
+    /// and neither calls them extensions under `-pedantic`.
+    #[test]
+    fn gnu_feature_tests_exist_in_every_language_mode() {
+        let directory = Directory::new();
+        directory.write(
+            "q.c",
+            "#ifndef __has_include\n#error include\n#endif\n#ifndef __has_c_attribute\n#error \
+             attribute\n#endif\n#if !__has_include(<stddef.h>) || \
+             __has_include(\"missing.h\")\n#error found\n#endif\n#if \
+             !__has_c_attribute(nodiscard)\n#error nodiscard\n#endif\n#if \
+             !__has_attribute(unused) || !__has_builtin(__builtin_expect)\n#error \
+             gnu\n#endif\nint x;\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for standard in ["-std=c89", "-std=c99", "-std=c11", "-std=gnu17", "-std=c23"] {
+                let output = directory.bcc(
+                    mode,
+                    &[
+                        standard,
+                        "-pedantic-errors",
+                        "-Wall",
+                        "-c",
+                        "q.c",
+                        "-o",
+                        "q.o",
+                    ],
+                );
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {standard}");
+            }
+        }
+        // `-std=c99` leaves these on in both, and `-pedantic-errors` refuses
+        // them.
+        for (name, source) in [
+            ("v.c", "void g(void);\nvoid f(void) { return g(); }\n"),
+            ("b.c", "int x = 0b101;\n"),
+            (
+                "r.c",
+                "int f(int x) { switch (x) { case 1 ... 2: return 1; } return 0; }\n",
+            ),
+            (
+                "o.c",
+                "#define M(a, ...) a __VA_OPT__(,) __VA_ARGS__\nint M(x);\n",
+            ),
+        ] {
+            directory.write(name, source);
+            for mode in ["--gcc-mode", "--clang-mode"] {
+                for standard in ["-std=c99", "-std=c11"] {
+                    let object = "e.o";
+                    succeeds(&directory.bcc(mode, &[standard, "-c", name, "-o", object]));
+                    assert!(
+                        !directory
+                            .bcc(
+                                mode,
+                                &[standard, "-pedantic-errors", "-c", name, "-o", object]
+                            )
+                            .status
+                            .success(),
+                        "{mode} {standard} {name}"
+                    );
+                }
+            }
+        }
+        // Before `*`, C89 keeps its division, in Clang too.
+        directory.write("d.c", "int main(void) { return 4//**/2\n; }\n");
+        let args = ["-std=c89", "d.c", "-o", "d"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        let status = Command::new(directory.path("d")).status().unwrap();
+        assert_eq!(status.code(), Some(2));
+        // `//` in C89 is Clang's alone.
+        directory.write("c.c", "// comment\nint x;\n");
+        let args = ["-std=c89", "-c", "c.c", "-o", "c.o"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        assert!(!directory.bcc("--gcc-mode", &args).status.success());
+        // GCC 14 has no `__has_embed`, and Clang does.
+        directory.write(
+            "e.c",
+            "#ifdef __has_embed\nint has;\n#else\nint has_not;\n#endif\n",
+        );
+        let text = |mode: &str| {
+            let output = directory.bcc(mode, &["-std=c99", "-E", "-P", "e.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(text("--gcc-mode").trim(), "int has_not;");
+        assert_eq!(text("--clang-mode").trim(), "int has;");
+    }
+
     /// Clang's warnings about unused arguments follow its warning options:
     /// `-w` and `-Wno-unused-command-line-argument` silence them, and
     /// `-Werror` or `-Werror=unused-command-line-argument` make them errors
@@ -8055,8 +8144,9 @@ mod tests {
         succeeds(&output);
         assert!(
             stderr(&output).ends_with(&line(&format!(
-                "\"--compiler-identity=clang\" \"--diagnostic-format=clang\" \
-                 \"--target={triple}\" \"--driver-name=clang\" \"a.c\" \"-c\""
+                "\"--compiler-extensions\" \"--compiler-identity=clang\" \
+                 \"--diagnostic-format=clang\" \"--target={triple}\" \"--driver-name=clang\" \
+                 \"a.c\" \"-c\""
             ))),
             "{}",
             stderr(&output)
@@ -8072,8 +8162,8 @@ mod tests {
         // GCC's `-v` quotes nothing, its `-###` only what the shell needs.
         assert!(
             text.contains(&format!(
-                " {exe} -v --compiler-identity=gcc --diagnostic-format=gcc --target={triple} \
-                 --driver-name=gcc a.c -c\n"
+                " {exe} -v --compiler-extensions --compiler-identity=gcc --diagnostic-format=gcc \
+                 --target={triple} --driver-name=gcc a.c -c\n"
             )),
             "{text}"
         );
@@ -8727,8 +8817,9 @@ mod tests {
         let text = stderr(&output);
         assert!(
             text.ends_with(&format!(
-                " \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \"--target={}\" \
-                 \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n",
+                " --compiler-extensions \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
+                 \"--target={}\" \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \
+                 \"--output=o\\$.o\"\n",
                 HOST_TARGET.0
             )),
             "{text}"

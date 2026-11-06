@@ -148,6 +148,10 @@ fn run_driver(args: &Cli, matches: &clap::ArgMatches) -> Result<i32, MainError> 
     driver::run(args, matches)
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each is a separate command-line switch."
+)]
 #[derive(Parser)]
 #[command(group(clap::ArgGroup::new("generation").multiple(true)))]
 #[command(author, version, about, long_about, color = ColorChoice::Always,
@@ -184,6 +188,10 @@ struct Cli {
     #[arg(long, value_name = "MODEL", value_parser = TlsModelParser,
         action = clap::ArgAction::Set, overrides_with = "tls_model")]
     tls_model: Option<crate::target::TlsModel>,
+    /// Keep, in every language mode, the extensions GCC's and Clang's drivers
+    /// keep there.
+    #[arg(long, hide = true)]
+    compiler_extensions: bool,
     /// GCC startup preprocessing options, normalized with their operation.
     #[arg(long, hide = true, allow_hyphen_values = true, value_parser = preprocessing_option)]
     preprocessing_option: Vec<String>,

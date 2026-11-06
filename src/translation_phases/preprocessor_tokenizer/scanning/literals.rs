@@ -35,7 +35,12 @@ impl Lexer<'_, '_, '_, '_> {
             end += byte_scan::horizontal_space_run(&self.bytes[end..]);
             match self.peek(end) {
                 | Some(b'/') => match self.peek(end + 1) {
-                    | Some(b'/') if self.context.configuration.accepts(Feature::LineComments) => {
+                    | Some(b'/')
+                        if self
+                            .context
+                            .configuration
+                            .line_comment_before(self.peek(end + 2)) =>
+                    {
                         self.record_spliced_extension(Feature::LineComments, "//", end, end + 2);
                         end = self.skip_line_comment(end + 2);
                     },
