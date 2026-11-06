@@ -194,6 +194,12 @@ fn split(text: &[u8], compiler: Compiler) -> Vec<Vec<u8>> {
     if started || !word.is_empty() {
         words.push(word);
     }
+    // An argument is a C string to Clang, so it ends at a NUL within quotes.
+    for word in &mut words {
+        if let Some(end) = word.iter().position(|&byte| byte == 0) {
+            word.truncate(end);
+        }
+    }
     words
 }
 
@@ -240,5 +246,6 @@ mod tests {
         assert_eq!(words(b"a\\", Compiler::Clang), ["a\\"]);
         assert_eq!(words(b"a\0b", Compiler::Gcc), ["a"]);
         assert_eq!(words(b"a\0b", Compiler::Clang), ["a", "b"]);
+        assert_eq!(words(b"'a\0b' c", Compiler::Clang), ["a", "c"]);
     }
 }
