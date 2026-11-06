@@ -57,6 +57,21 @@ fn symbol_attributes_round_trip_and_verify() {
 }
 
 #[test]
+fn entry_conventions_round_trip() {
+    assert_round_trip(
+        "\
+function @handler(ptr, i64) external interrupt
+
+function @saving() external preserve_registers
+
+function @bare() external noinline naked hidden
+
+function @plain() external
+",
+    );
+}
+
+#[test]
 fn returns_twice_round_trips_and_follows_the_external_catalog() {
     let text = "\
 function @save(ptr) -> i32 external align 16 returns_twice hidden

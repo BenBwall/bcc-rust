@@ -49,6 +49,7 @@ mod entities;
 mod functions;
 mod jumps;
 mod layout;
+mod machine_entry;
 mod mangling;
 mod msvc_mangling;
 mod overloads;
@@ -175,6 +176,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | catalog::Convention::Other => Some(UnsupportedAttribute::CallingConvention),
                 },
                 | catalog::Rule::Unsupported(capability) => Some(capability),
+                | catalog::Rule::Naked if !self.gcc_identity() => Some(UnsupportedAttribute::Naked),
                 | catalog::Rule::Ignored => {
                     let name = self.context.string_cache.intern(attribute.name);
                     self.error(

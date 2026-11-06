@@ -638,6 +638,10 @@ enum LanguageFlag {
     RelaxedFloatingPoint(RelaxedFloatingPoint, bool),
     /// `-fsignaling-nans` (true) or `-fno-signaling-nans`.
     SignalingNans(bool),
+    /// `--general-regs-only`, which GCC's `-mgeneral-regs-only` maps to.
+    GeneralRegsOnly,
+    /// `--user-interrupts`, which `-muintr` maps to.
+    UserInterrupts,
     /// `-ffast-math`, `-funsafe-math-optimizations` or
     /// `-ffinite-math-only` (true), or their `-fno-` forms, which give up
     /// or restore the options they imply, in order with the others, as in
@@ -780,6 +784,8 @@ impl LanguageFlag {
                 )),
             | "-fsignaling-nans" => return Some(Self::SignalingNans(true)),
             | "-fno-signaling-nans" => return Some(Self::SignalingNans(false)),
+            | "--general-regs-only" => return Some(Self::GeneralRegsOnly),
+            | "--user-interrupts" => return Some(Self::UserInterrupts),
             | "-fno-honor-nans" | "-fhonor-nans" =>
                 return Some(Self::RelaxedFloatingPoint(
                     RelaxedFloatingPoint::NoNans,
@@ -932,6 +938,8 @@ impl LanguageFlag {
             | Self::RelaxedFloatingPoint(option, relaxed) =>
                 configuration.with_relaxed_floating_point(option, relaxed),
             | Self::SignalingNans(enabled) => configuration.with_signaling_nans(enabled),
+            | Self::GeneralRegsOnly => configuration.with_general_regs_only(true),
+            | Self::UserInterrupts => configuration.with_user_interrupts(true),
             | Self::FloatingPointGroup(group, relaxed) => group.apply(configuration, relaxed),
             | Self::ExcessPrecisionStandard(standard) =>
                 configuration.with_standard_excess_precision(standard),

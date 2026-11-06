@@ -181,7 +181,8 @@ to the options TCC itself implements; see [TCC](#tcc).
   (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on
   Linux, `-mno-ms-bitfields` on Windows, `-mregparm=`, `-mlong-double-64`
   outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
-  `-mgeneral-regs-only`; `cl /arch:AVX2`, which also changes macros),
+  `-mgeneral-regs-only` except as below; `cl /arch:AVX2`, which also changes
+  macros),
   language rules bcc does not follow (`-fsemantic-interposition`,
   `-frounding-math`, `cl /fp:strict`, `/volatile:ms`),
   run-time support bcc's code lacks (`-fsplit-stack`: bcc's functions run on
@@ -194,7 +195,12 @@ to the options TCC itself implements; see [TCC](#tcc).
   refused until someone audits it.
 
 Where bcc can do what the option asks cheaply, the personality maps it
-instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
+instead: GCC's `-mgeneral-regs-only` on Linux targets (GCC's macro changes, and
+every function's code keeps to general registers; floating code is refused with
+GCC's error where it has one, and by name where it would compile with general
+registers or libgcc routines x86-64 lacks: floating parameters, copies and
+comparisons), `-muintr`, on either personality on Linux targets (`__UINTR__`, and
+handlers return with `uiret`), `-fwrapv` (lowering marks signed arithmetic without `nsw`),
 `-ftrapv` (signed `+`, `-`, `*`, negation and `++`/`--` of `int` and
 wider check for overflow, and so does `abs`, `labs` or `llabs` of the most
 negative value while the library builtins are on (`__builtin_abs` and

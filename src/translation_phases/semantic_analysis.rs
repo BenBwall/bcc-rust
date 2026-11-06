@@ -111,6 +111,7 @@ use collection::Collection;
 pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
+    MachineEntryFault,
     SemanticError,
     SemanticErrorKind,
 };

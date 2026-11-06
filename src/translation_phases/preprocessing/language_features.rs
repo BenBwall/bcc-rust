@@ -1221,6 +1221,13 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
     } else {
         relaxed(Relaxed::CxLimitedRange)
     };
+    // GCC's soft-float mode, as `-mgeneral-regs-only` selects it, claims no
+    // IEC 60559 conformance.
+    let iec_559 = if configuration.general_regs_only() {
+        0
+    } else {
+        iec_559
+    };
     let complex = if limited_complex { 0 } else { iec_559 };
     _ = write!(
         out,

@@ -91,6 +91,16 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) declared_alignment: bool,
     /// GNU `noinline`/`noipa` or `always_inline` on a function.
     pub(crate) inlining:           Inlining,
+    /// x86 `interrupt`: an interrupt or exception handler.
+    /// GNU extension: GCC manual, "x86 Function Attributes".
+    pub(crate) interrupt:          bool,
+    /// x86 `no_caller_saved_registers`: the function preserves every
+    /// register it returns no value in.
+    /// GNU extension: GCC manual, "x86 Function Attributes".
+    pub(crate) no_caller_saved:    bool,
+    /// GNU `naked`: the function has no prologue or epilogue.
+    /// GNU extension: GCC manual, "x86 Function Attributes".
+    pub(crate) naked:              bool,
     /// Microsoft `selectany` on an external object: its definitions in
     /// different translation units are one, and the linker keeps any.
     pub(crate) select_any:         bool,
@@ -111,6 +121,33 @@ pub(crate) struct EntityAttributes<'tu> {
     /// Clang's `basicGVALinkageForFunction` assigns it.
     /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
     pub(crate) inline_odr:         Option<InlineOdr>,
+}
+
+impl EntityAttributes<'_> {
+    /// How the machine enters and leaves the function. `naked` prevails over
+    /// `no_caller_saved_registers`, and `interrupt` over that; GCC refuses
+    /// `interrupt` with `naked`.
+    pub(crate) const fn machine_entry(&self) -> MachineEntry {
+        if self.naked {
+            MachineEntry::Naked
+        } else if self.interrupt {
+            MachineEntry::Interrupt
+        } else if self.no_caller_saved {
+            MachineEntry::NoCallerSaved
+        } else {
+            MachineEntry::C
+        }
+    }
+}
+
+/// How the machine enters and leaves a function.
+/// GNU extension: GCC manual, "x86 Function Attributes".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MachineEntry {
+    C,
+    Interrupt,
+    NoCallerSaved,
+    Naked,
 }
 
 /// How an entity crosses a Windows DLL boundary.
