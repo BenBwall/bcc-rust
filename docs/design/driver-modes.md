@@ -204,9 +204,8 @@ to the options TCC itself implements; see [TCC](#tcc).
   `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`; and requests
   bcc's output satisfies less fully but correctly: a newer processor
   (`-march=native`, `-march=x86-64-v3`, `-mavx2`; baseline x86-64 code runs
-  on it, but its macros such as `__AVX2__` stay undefined), and
-  `-ffunction-sections`/`-fdata-sections` (the linker's `--gc-sections`
-  removes less). The build goes on and says what it lacks.
+  on it, but its macros such as `__AVX2__` stay undefined). The build goes
+  on and says what it lacks.
 - **Refused**, with the compiler's kind of error, for everything else:
   options that change layout or the ABI away from the target's
   (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on

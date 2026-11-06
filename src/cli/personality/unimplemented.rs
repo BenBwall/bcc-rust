@@ -324,8 +324,6 @@ const IGNORED: &[&str] = &[
     "-f[no-]force-addr",
     "-f[no-]forward-propagate",
     "-f[no-]function-cse",
-    "-fno-function-sections",
-    "-fno-data-sections",
     "-f[no-]gcse*",
     "-f[no-]graphite*",
     "-f[no-]guess-branch-probability",
@@ -660,14 +658,6 @@ const WARNED: &[(&str, &str)] = &[
     (
         "-fhandle-exceptions",
         "bcc emits no landing pads, so cleanups do not run while an exception unwinds",
-    ),
-    (
-        "-ffunction-sections",
-        "bcc places functions in one section, so the linker's --gc-sections removes less",
-    ),
-    (
-        "-fdata-sections",
-        "bcc places data in one section, so the linker's --gc-sections removes less",
     ),
 ];
 
@@ -1059,8 +1049,6 @@ mod tests {
             "-fcf-protection=full",
             "-fexceptions",
             "-ftrivial-auto-var-init=zero",
-            "-ffunction-sections",
-            "-fdata-sections",
             "-march=native",
             "-march=x86-64-v3",
             "-mavx2",
