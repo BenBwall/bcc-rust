@@ -17,7 +17,7 @@
 //! - Source storage: `source_files.rs`, `source_text.rs`.
 //! - Provenance: `source_vectors.rs`, `expansion_sites.rs`, `merge_anchors.rs`.
 //! - Segmented storage: `segmented_vec.rs`.
-//! - Phase results: `diagnostics.rs`, `literals.rs`.
+//! - Phase results: `diagnostics.rs`, `diagnostic_pragmas.rs`, `literals.rs`.
 //! - Context fixtures: `tests.rs`.
 //!
 //! C99: shared storage for translation phases 1-7, §5.1.1.2 paragraph 1,
@@ -38,6 +38,7 @@ mod segmented_vec;
 mod source_vectors;
 
 // Literals and diagnostics
+mod diagnostic_pragmas;
 mod diagnostics;
 mod literals;
 
@@ -174,6 +175,8 @@ pub(crate) struct Context<'tu> {
     /// which keeps a translation unit that declares nothing from being
     /// empty.
     pub(crate) pragma_content: bool,
+    /// What `#pragma GCC diagnostic` and `#pragma clang diagnostic` changed.
+    diagnostic_pragmas: diagnostic_pragmas::DiagnosticPragmas<'tu>,
     /// The pragmas a text of phase 4 ([`Self::phase_four_text`]) writes back
     /// where they were and the files it enters and leaves, in order.
     pub(crate) text_events: ArenaVec<'tu, TextEvent<'tu>>,

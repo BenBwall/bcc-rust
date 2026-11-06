@@ -80,7 +80,7 @@ impl<'tu> Context<'tu> {
         {
             return None;
         }
-        let severity = policy_severity(self.configuration.extension_policy(), baseline)?;
+        let severity = policy_severity(self.configuration_at(source).extension_policy(), baseline)?;
         (!self.withholds(
             severity,
             !matches!(baseline, DiagnosticPolicy::Error),
@@ -101,15 +101,19 @@ impl<'tu> Context<'tu> {
         source_vectors: SourceVectors,
     ) {
         let spelling = self.diagnostic_text(spelling);
+        let at = source_vectors;
         let source_vectors = self.file_location(source_vectors);
-        self.pending_errors
-            .push_back(TranslationError::Extension(ExtensionDiagnostic {
-                suppressed: self.tu_arena().alloc(Cell::new(false)),
+        let suppressed = self.tu_arena().alloc(Cell::new(false));
+        self.classified_extension(
+            at,
+            TranslationError::Extension(ExtensionDiagnostic {
+                suppressed,
                 spelling,
                 origin,
                 severity,
                 source_vectors,
-            }));
+            }),
+        );
     }
 
     /// Retains a phase's typed explanation while sharing suppression and
@@ -128,7 +132,7 @@ impl<'tu> Context<'tu> {
             DiagnosticPolicy::Error
         };
         if let Some(severity) = self.extension_severity(feature.origin(), baseline, source) {
-            self.pending_errors.push_back(diagnostic(severity));
+            self.classified_extension(source, diagnostic(severity));
         }
     }
 
@@ -161,13 +165,13 @@ impl<'tu> Context<'tu> {
         debug_assert!(
             matches!(
                 slot,
-                TranslationError::Preprocessing(_) | TranslationError::Extension(_)
+                TranslationError::Preprocessing(_)
+                    | TranslationError::Extension(_)
+                    | TranslationError::Classified(_)
             ),
             "only preprocessing and extension diagnostics are withdrawn"
         );
-        if let TranslationError::Extension(extension) = slot
-            && extension.suppressed.get()
-        {
+        if slot.is_suppressed() {
             return;
         }
         *slot = TranslationError::Extension(ExtensionDiagnostic {

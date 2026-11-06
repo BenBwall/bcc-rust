@@ -51,9 +51,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // type-name bound remains a VLA even if its value is known.
                 let group = crate::configuration::DiagnosticGroup::GnuFoldingConstant;
                 if !self.runtime_bound
-                    && (self.context.configuration.extension_policy()
+                    && (self
+                        .context
+                        .configuration_at(expression.source_vectors)
+                        .extension_policy()
                         != crate::configuration::ExtensionPolicy::Allow
-                        || self.context.configuration.diagnostic_requested(group))
+                        || self
+                            .context
+                            .configuration_at(expression.source_vectors)
+                            .diagnostic_requested(group))
                 {
                     self.error(
                         super::SemanticErrorKind::FoldedIntegerConstant,

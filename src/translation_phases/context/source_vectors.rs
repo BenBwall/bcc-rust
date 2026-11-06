@@ -189,6 +189,12 @@ impl Context<'_> {
         );
         let (arena, start) = SourceArena::decode(source);
         let range = start as usize..(start + source.length()) as usize;
+        if target == SourceArena::Retained
+            && source.length() != 0
+            && self.records_retained_pragma_copies()
+        {
+            self.record_retained_pragma_copy(end - source.length(), source);
+        }
         if source.length() != 0
             && let Some(site) = self.expansion_starts[arena as usize].get(start)
         {

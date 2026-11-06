@@ -32,6 +32,7 @@ mod language;
 // Feature policy
 mod diagnostics;
 mod features;
+mod warning_names;
 
 // Construction and accessors
 mod options;
@@ -39,6 +40,7 @@ mod options;
 pub(crate) use diagnostics::{
     DiagnosticFormat,
     DiagnosticGroup,
+    PragmaClass,
     WarningOption,
 };
 pub(crate) use features::{
@@ -57,6 +59,12 @@ pub(crate) use language::{
     MsvcFeature,
     PreprocessingOption,
     RelaxedFloatingPoint,
+};
+pub(crate) use warning_names::{
+    CL_CODED_WARNINGS,
+    clang_knows_warning,
+    gcc_knows_flag,
+    gcc_knows_warning,
 };
 
 impl CompilerConfiguration {
@@ -99,6 +107,9 @@ pub(crate) struct CompilerConfiguration {
     /// keeps them warnings, `None` without it. Only the diagnostics bcc
     /// files under `-Wpedantic` for GCC read it.
     werror_pedantic: Option<bool>,
+    /// Whether the command line made pedantic warnings errors, kept once a
+    /// pragma naming `-Wpedantic` has changed `extension_policy`.
+    command_line_pedantic_deny: Option<bool>,
     /// Whether the last of `-Wpedantic`, `-Wno-pedantic` and
     /// `-Werror=pedantic` was `-Wno-pedantic`, which stops the diagnostics
     /// but leaves their error state for a later `-Wpedantic`, as in GCC.
@@ -168,6 +179,8 @@ pub(crate) struct CompilerConfiguration {
     /// either was given ([`CompilerConfiguration::permerror_default`]).
     permissive: Option<bool>,
     warnings_as_errors: bool,
+    /// `-Wfatal-errors`: GCC stops at the first error it reports.
+    fatal_errors: bool,
     /// The compiler the identity macros claim.
     identity: CompilerIdentity,
     diagnostic_format: DiagnosticFormat,

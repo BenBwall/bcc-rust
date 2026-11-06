@@ -18,7 +18,8 @@
 //! - Source files and presumed locations: `directives/include.rs`,
 //!   `directives/line.rs`.
 //! - Macro definitions: `directives/definitions.rs`.
-//! - Messages and pragmas: `directives/error.rs`, `directives/pragma.rs`.
+//! - Messages and pragmas: `directives/error.rs`, `directives/pragma.rs`, with
+//!   the diagnostic pragmas in `directives/pragma/diagnostic.rs`.
 //! - Conditional groups: the sibling `conditional.rs` and `expression.rs`.
 //!
 //! C99: directive grammar, §6.10 paragraph 1, pp. 145-146; PDF pp. 157-158;
@@ -48,6 +49,8 @@ mod definitions;
 // Messages and pragmas.
 mod error;
 mod pragma;
+
+pub(crate) use pragma::WarningSpecifier;
 
 use super::{
     Expander,

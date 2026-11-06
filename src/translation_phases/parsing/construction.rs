@@ -79,7 +79,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         let mut token_diagnostics: TokenDiagnostics<'tu, 'p> =
             ArenaMap::with_hasher_in(FxBuildHasher, arena);
         for (index, error) in context.pending_errors.iter().enumerate() {
-            let (spelling, source, occurrence) = match error {
+            let (spelling, source, occurrence) = match error.unclassified() {
                 | TranslationError::Extension(error) => (
                     error.spelling(),
                     error.source_vectors,

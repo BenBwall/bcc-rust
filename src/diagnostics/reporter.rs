@@ -62,6 +62,8 @@ pub(crate) struct DiagnosticReporter<'r, 'tu> {
     other_errors:        ArenaMap<'r, &'r [SourceVector], usize>,
     pub(crate) errors:   usize,
     pub(crate) warnings: usize,
+    /// A fatal diagnostic was written, so nothing further is.
+    fatal_reported:      bool,
 }
 
 impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
@@ -157,15 +159,22 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         self.last_parser = None;
         self.last_other = None;
         self.other_errors.clear();
-        // TCC stops compiling at the first error, so nothing follows it.
+        // TCC stops compiling at the first error, as GCC's `-Wfatal-errors`
+        // does, so nothing follows it.
         let stops_at_error = context.configuration.diagnostic_format()
-            == crate::configuration::DiagnosticFormat::Tcc;
+            == crate::configuration::DiagnosticFormat::Tcc
+            || context.configuration.fatal_errors();
         for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
             if diagnostic.severity == ErrorSeverity::Warning
                 && context.configuration.suppress_warnings()
             {
                 continue;
             }
+            // Clang's `fatal` ends the compilation, counts and all.
+            if self.fatal_reported {
+                continue;
+            }
+            self.fatal_reported = diagnostic.fatal;
             let stopped = stops_at_error && self.errors != 0;
             match diagnostic.severity {
                 | ErrorSeverity::Error => self.errors += 1,
@@ -185,6 +194,9 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
 
     pub(crate) fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
         self.flush(context, out)?;
+        if context.configuration.fatal_errors() && self.errors != 0 {
+            writeln!(out, "compilation terminated.")?;
+        }
         // GCC, MSVC and TCC print no summary.
         if matches!(
             context.configuration.diagnostic_format(),
@@ -280,6 +292,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             other_errors: ArenaMap::with_hasher_in(FxBuildHasher, arena),
             errors: 0,
             warnings: 0,
+            fatal_reported: false,
         }
     }
 }
