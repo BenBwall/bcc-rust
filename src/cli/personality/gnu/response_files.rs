@@ -10,8 +10,9 @@
 //! NUL, keeps an empty `""`, drops a backslash that ends the file, reads `@`
 //! alone as an input, and stops after 2000 `@` arguments. Clang (LLVM's
 //! `ExpandResponseFiles`, whose `TokenizeGNUCommandLine` it selects) reads a
-//! NUL as white space, drops an empty `""`, keeps a final backslash, reads `@`
-//! alone as the working directory, and refuses a file that names itself.
+//! NUL as the end of its argument, drops an empty `""`, keeps a final
+//! backslash, reads `@` alone as the working directory, and refuses a file that
+//! names itself.
 
 use std::{
     ffi::{
@@ -182,7 +183,7 @@ fn split(text: &[u8], compiler: Compiler) -> Vec<Vec<u8>> {
                 quote = Some(byte);
                 started |= !clang;
             },
-            | (b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C | 0, None) => {
+            | (b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C, None) => {
                 if started || !word.is_empty() {
                     words.push(std::mem::take(&mut word));
                 }
@@ -194,12 +195,14 @@ fn split(text: &[u8], compiler: Compiler) -> Vec<Vec<u8>> {
     if started || !word.is_empty() {
         words.push(word);
     }
-    // An argument is a C string to Clang, so it ends at a NUL within quotes.
+    // An argument is a C string to Clang, so it ends at a NUL, and one with
+    // nothing before a NUL is no argument.
     for word in &mut words {
         if let Some(end) = word.iter().position(|&byte| byte == 0) {
             word.truncate(end);
         }
     }
+    words.retain(|word| !clang || !word.is_empty());
     words
 }
 
@@ -245,7 +248,8 @@ mod tests {
         assert_eq!(words(b"a\\", Compiler::Gcc), ["a"]);
         assert_eq!(words(b"a\\", Compiler::Clang), ["a\\"]);
         assert_eq!(words(b"a\0b", Compiler::Gcc), ["a"]);
-        assert_eq!(words(b"a\0b", Compiler::Clang), ["a", "b"]);
+        assert_eq!(words(b"a\0b c", Compiler::Clang), ["a", "c"]);
+        assert_eq!(words(b"\0a b", Compiler::Clang), ["b"]);
         assert_eq!(words(b"'a\0b' c", Compiler::Clang), ["a", "c"]);
     }
 }

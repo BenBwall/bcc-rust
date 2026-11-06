@@ -293,8 +293,9 @@ quotes, with a backslash taking the next byte literally; FILE may name further
 files, against the working directory, and after 2000 `@` arguments GCC stops
 with `too many @-files encountered`. A file that does not exist stays as an
 input, which is then reported missing, and a directory is an error. Clang does
-the same with these differences: an empty `""` and a NUL separate no argument
-(GCC keeps the first and stops reading at the second), a final backslash stays,
+the same with these differences: an empty `""` is no argument, which GCC keeps,
+a NUL ends only its argument, where GCC stops reading the file, a final
+backslash stays,
 `@` alone is the working directory, and a file naming itself is `recursive
 expansion of: 'FILE'`. Both take `--print-` for `-print-`. An option's value
 that is not UTF-8, such as `-DMSG="\xff"`, is refused on the command line and

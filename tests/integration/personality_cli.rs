@@ -1370,6 +1370,27 @@ mod tests {
         }
     }
 
+    /// What follows a NUL in a response file is no option: Clang ends the
+    /// argument there and GCC stops reading the file.
+    #[test]
+    fn gnu_response_files_stop_at_a_nul() {
+        let directory = Directory::new();
+        directory.write(
+            "t.c",
+            "#ifndef OTHER\n#define OTHER 7\n#endif\nint value = OTHER;\n",
+        );
+        std::fs::write(
+            directory.path("r.rsp"),
+            b"-E -P t.c -DVALUE=1\0-DOTHER=2".as_slice(),
+        )
+        .unwrap();
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["@r.rsp"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output).trim_end(), "int value = 7;", "{mode}");
+        }
+    }
+
     /// When several queries are given, the one each compiler answers, and
     /// `--print-` spelled for `-print-`.
     #[test]
