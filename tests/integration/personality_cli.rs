@@ -1538,6 +1538,67 @@ mod tests {
         }
     }
 
+    /// GCC's and Clang's snippet and their words for the commonest errors, and
+    /// a related place as a note of its own.
+    #[test]
+    fn gnu_diagnostics_have_the_compilers_shape() {
+        let directory = Directory::new();
+        directory.write("a.c", "int f(void) { return x; }\n");
+        directory.write("b.c", "int outside = y;\n");
+        directory.write("c.c", "int f(void) { return 1 +; }\n");
+        directory.write("d.c", "int y;\nchar y;\n");
+        let text = |mode: &str, file: &str| {
+            let output = directory.bcc(mode, &["-fsyntax-only", file]);
+            assert_eq!(output.status.code(), Some(1), "{mode} {file}");
+            stderr(&output)
+        };
+        assert_eq!(
+            text("--gcc-mode", "a.c"),
+            "a.c:1:22: error: 'x' undeclared (first use in this function)\n\x20   1 | int f(void) \
+             { return x; }\n\x20     |                      ^\n"
+        );
+        assert_eq!(
+            text("--clang-mode", "a.c"),
+            "a.c:1:22: error: use of undeclared identifier 'x'\n\x20   1 | int f(void) { return \
+             x; }\n\x20     |                      ^\n1 error generated.\n"
+        );
+        assert!(
+            text("--gcc-mode", "b.c")
+                .starts_with("b.c:1:15: error: 'y' undeclared here (not in a function)\n")
+        );
+        assert!(
+            text("--gcc-mode", "c.c")
+                .starts_with("c.c:1:25: error: expected expression before ';' token\n")
+        );
+        assert!(text("--clang-mode", "c.c").starts_with("c.c:1:25: error: expected expression\n"));
+        let related = text("--clang-mode", "d.c");
+        assert!(
+            related.contains("d.c:1:5: note: ") && related.contains("    1 | int y;\n"),
+            "{related}"
+        );
+        // A note reports where `#line` says the place is, and keeps every
+        // line of its range.
+        directory.write("l.c", "#line 44\nint x;\nchar x;\n");
+        assert!(text("--gcc-mode", "l.c").contains("l.c:44:5: note: "));
+        directory.write("r.c", "int first extra\njunk\nmiddle\nlast;\nint after;\n");
+        let recovery = text("--gcc-mode", "r.c");
+        for line in ["junk", "middle", "last;"] {
+            assert!(
+                recovery.contains(&format!("| {line}\n")),
+                "{line}: {recovery}"
+            );
+        }
+        // GCC spells the operator, not the digraph written for it.
+        directory.write("t.c", "int f(void) { return 1 + :>; }\n");
+        assert!(text("--gcc-mode", "t.c").contains("expected expression before ']' token"));
+        // bcc's own format keeps its labels and notes.
+        let own = text("", "a.c");
+        assert!(
+            own.contains("not declared") && own.contains("= note:"),
+            "{own}"
+        );
+    }
+
     /// What follows a string in its array's braces is excess: a warning from
     /// Clang, which drops it, and an error from GCC and TCC.
     #[test]
