@@ -66,6 +66,7 @@ use crate::{
     translation_phases::{
         parsing::{
             declaration_syntax::{
+                Declaration,
                 DeclarationSpecifiers,
                 Declarator,
                 Initializer,
@@ -464,6 +465,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 };
                 let (last, rest) = items.as_slice().split_last()?;
                 for item in rest {
+                    if self.functions.emission.ignore_side_effects {
+                        if !self.item_evaluates_ignoring_side_effects(*item, depth) {
+                            return None;
+                        }
+                        continue;
+                    }
                     match *item {
                         | BlockItem::Statement(statement) => match statement.kind {
                             | StatementType::Null => {},
@@ -496,6 +503,61 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         value.map(|value| match value {
             | Value::Integer(integer) => self.converted_value(Value::Integer(integer), expression),
             | other => other,
+        })
+    }
+
+    /// Clang's `EvaluateStmt`, under `EM_IgnoreSideEffects`, for a statement
+    /// expression's item before its last: an expression statement always
+    /// passes, a declaration's initializer must evaluate, and a selection
+    /// needs its condition and then what it selects.
+    fn item_evaluates_ignoring_side_effects(&mut self, item: BlockItem<'tu>, depth: u32) -> bool {
+        let statement = match item {
+            | BlockItem::Statement(statement) => statement,
+            | BlockItem::Declaration(declaration) =>
+                return self.declaration_evaluates_ignoring_side_effects(declaration, depth),
+            | BlockItem::FunctionDefinition(_) => return false,
+        };
+        match statement.kind {
+            | StatementType::Null | StatementType::Expression(_) => true,
+            | StatementType::Declaration(declaration) =>
+                self.declaration_evaluates_ignoring_side_effects(declaration, depth),
+            | StatementType::Compound { items } => items
+                .iter()
+                .all(|&item| self.item_evaluates_ignoring_side_effects(item, depth)),
+            | StatementType::If {
+                condition_expression: ExpressionSlot::Parsed(condition),
+                then_statement,
+                else_statement,
+            } => match self.evaluate_value(condition, depth).and_then(Value::truth) {
+                | Some(true) => self.item_evaluates_ignoring_side_effects(
+                    BlockItem::Statement(then_statement),
+                    depth,
+                ),
+                | Some(false) => else_statement.is_none_or(|statement| {
+                    self.item_evaluates_ignoring_side_effects(
+                        BlockItem::Statement(statement),
+                        depth,
+                    )
+                }),
+                | None => false,
+            },
+            | _ => false,
+        }
+    }
+
+    fn declaration_evaluates_ignoring_side_effects(
+        &mut self,
+        declaration: &'tu Declaration<'tu>,
+        depth: u32,
+    ) -> bool {
+        declaration.init_declarators.iter().all(|init| {
+            init.initializer.is_none_or(|initializer| {
+                matches!(
+                    initializer.kind,
+                    InitializerType::AssignmentExpression(expression)
+                        if self.evaluate_value(expression, depth).is_some()
+                )
+            })
         })
     }
 
@@ -651,6 +713,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .map(|truth| Value::Integer(Integer::int(i128::from(truth)).cast(8, false))),
             | TypeKind::Pointer(_) => match value {
                 | Value::Integer(zero) if zero.is_zero() => Some(Value::Integer(zero)),
+                // An integer's address, which is no result of a constant
+                // expression but has a truth and compares.
+                | Value::Integer(_) if self.functions.emission.ignore_side_effects => Some(value),
                 | Value::Address(..) | Value::CastString(..) => Some(value),
                 // A conversion to a pointer to another type invalidates the
                 // evaluator's designator: the literal is no longer read

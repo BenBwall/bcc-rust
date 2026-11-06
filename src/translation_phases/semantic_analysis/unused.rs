@@ -873,7 +873,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if inhibited && comparison.is_none() {
             return;
         }
-        if let Some((rule, site)) = self.clang_unused_result(e)
+        if let Some((rule, site, anchor)) = self.clang_unused_result(e)
             && !self
                 .context
                 .written_by_macro_body(Self::operator_site(Self::without_parentheses(e)))
@@ -882,7 +882,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.unused_rule(comparison, site, None);
             } else {
                 self.warn_if_reachable(
-                    e,
+                    anchor,
                     rule.group(),
                     SemanticErrorKind::Unused(rule),
                     site,
@@ -893,14 +893,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's `Expr::isUnusedResultAWarning`: the rule and place of the
-    /// warning, if discarding `e` deserves one.
-    fn clang_unused_result(&self, e: &'tu Expression<'tu>) -> Option<(UnusedRule, SourceVectors)> {
+    /// warning, if discarding `e` deserves one, and the expression it is about
+    /// (`WarnE`), whose reachability decides: of a conditional, the last arm
+    /// it read, so `1 ? a : b;` is silent and `0 ? a : b;` is not.
+    fn clang_unused_result(
+        &self,
+        e: &'tu Expression<'tu>,
+    ) -> Option<(UnusedRule, SourceVectors, &'tu Expression<'tu>)> {
         let e = Self::without_parentheses(e);
         if self.is_void_or_unknown(e) {
             return None;
         }
         let result =
-            |e: &'tu Expression<'tu>| Some((UnusedRule::ClangResult, Self::operator_site(e)));
+            |e: &'tu Expression<'tu>| Some((UnusedRule::ClangResult, Self::operator_site(e), e));
         match e.kind {
             | E::Unary {
                 operator: U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement,
@@ -950,7 +955,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && target.qualifiers.is_empty()
                     && self.types.nodes[target.index] == TypeKind::Scalar(Scalar::Void)
                 {
-                    Some((UnusedRule::ClangVoidPointerCast, Self::operator_site(e)))
+                    Some((UnusedRule::ClangVoidPointerCast, Self::operator_site(e), e))
                 } else {
                     result(e)
                 }
@@ -1016,14 +1021,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
             if !self.evaluation_inhibited()
-                && self.clang_unused_result(left).is_some()
+                && let Some((_, _, anchor)) = self.clang_unused_result(left)
                 && !self
                     .context
                     .written_by_macro_body(Self::operator_site(Self::without_parentheses(left)))
             {
                 let rule = UnusedRule::ClangCommaLeft;
                 self.warn_if_reachable(
-                    left,
+                    anchor,
                     rule.group(),
                     SemanticErrorKind::Unused(rule),
                     Self::operator_site(left),

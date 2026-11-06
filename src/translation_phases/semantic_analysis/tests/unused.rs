@@ -670,6 +670,15 @@ fn unreachable_discarded_values_are_silent_for_clang_only() {
         "enum E { A, B }; void f(enum E e) { switch (e) { case A: break; case B: break; default: \
          42; } }",
         "enum E { A, B }; void f(enum E *e) { switch (*e) { case A ... B: return; } 42; }",
+        // A statement expression's value, and an integer's address.
+        "void f(int a) { if (({ (void)a; 0; })) { 42; } }",
+        "int g(void); void f(void) { if (({ g(); 0; })) { 42; } }",
+        "void f(int a) { while (({ a = 1; 0; })) { 42; } }",
+        "void f(void) { if (({ int x = 0; 0; })) { 42; } }",
+        "void f(void) { if (({ {} 0; })) { 42; } }",
+        "void f(void) { if ((char *)1) {} else { 42; } }",
+        "void f(void) { while ((void *)-1) {} 42; }",
+        "void f(void) { if ((char *)1 == 0) { 42; } }",
         // The left operand of a comma.
         "void f(int a) { while (0) { 42, a = 1; } }",
         "void f(int a) { __builtin_trap(); 42, a = 1; }",
@@ -708,6 +717,10 @@ fn reachable_discarded_values_still_warn_for_clang() {
         // Inside parentheses only the evaluation sees through.
         "void f(int a) { if ((a & 0)) { 42; } }",
         "void f(int a) { if ((a | 1)) {} else { 42; } }",
+        // A statement expression that does not evaluate.
+        "void f(int a) { if (({ int x = a; 0; })) { 42; } }",
+        "void f(int a) { if (({ if (a); 0; })) { 42; } }",
+        "void f(int a) { if (({ if (a) return; 0; })) { 42; } }",
         // Not what the tautologies recognize.
         "void f(int a) { if (a > 2 && a < 5) { 42; } }",
         "void f(int a) { if ((a & 3) == 1) { 42; } }",
@@ -779,5 +792,26 @@ fn uses_in_unreachable_code_still_count() {
     ] {
         assert_eq!(rules(source, clang()), [], "{source}");
         assert_eq!(rules(source, gcc()), [], "{source}");
+    }
+}
+
+/// Clang asks about the expression its warning is about: a conditional's last
+/// arm, so that a condition known true silences the warning, and known false
+/// does not, whatever the arms are.
+#[test]
+fn a_discarded_conditional_asks_about_its_last_arm() {
+    for (source, warns) in [
+        ("void f(int a) { 1 ? 0 : 42; }", false),
+        ("void f(int a) { 0 ? 0 : 42; }", true),
+        ("void f(int a) { a || 1 ? a : a; }", false),
+        ("void f(int a) { (a || 1) ? 0 : 42; }", false),
+        ("void f(int a) { a && 0 ? 0 : 42; }", true),
+        ("void f(int a) { a ? 0 : 42; }", true),
+        ("void f(int a, int b) { a || b ? a : b; }", true),
+    ] {
+        let found = rules(source, clang())
+            .iter()
+            .any(|rule| rule.group() == DiagnosticGroup::UnusedValue);
+        assert_eq!(found, warns, "{source}");
     }
 }
