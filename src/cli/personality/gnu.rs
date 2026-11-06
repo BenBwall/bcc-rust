@@ -5,6 +5,9 @@
 //! diagnose unknown ones as the compiler does, and add the
 //! compiler's defaults: its identity and diagnostic format, the host's
 //! target and system headers, and `-o a.out` when the command links.
+//! `@FILE` arguments are read first (`gnu/response_files.rs`).
+
+mod response_files;
 
 use std::{
     ffi::{
@@ -14,6 +17,7 @@ use std::{
     path::Path,
 };
 
+use self::response_files::ResponseFileError;
 use super::{
     Invocation,
     MainError,
@@ -86,7 +90,22 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         unrecognized: Vec::new(),
         bad_standard: None,
     };
-    let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
+    let expanded = match response_files::expand(&invocation.arguments, compiler) {
+        | Ok(arguments) => arguments,
+        | Err(ResponseFileError::TooMany) => {
+            invocation.error(format_args!("too many @-files encountered"));
+            return Err(MainError::Reported(1));
+        },
+        | Err(ResponseFileError::Recursive(file)) => {
+            // LLVM's own words, before the driver exists to name itself.
+            super::print(
+                &format!("recursive expansion of: '{}'\n", file.display()),
+                true,
+            );
+            return Err(MainError::Reported(1));
+        },
+    };
+    let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         state.position += 1;
         if let Some(query) = state.argument(argument, &mut arguments) {
@@ -572,6 +591,16 @@ enum Query {
     Multiarch,
     /// GCC's `-print-sysroot`.
     Sysroot,
+    /// `-print-multi-lib`: bcc builds one library layout.
+    MultiLib,
+    /// `-print-multi-directory`.
+    MultiDirectory,
+    /// GCC's `-print-multi-os-directory`.
+    MultiOsDirectory,
+    /// Clang's `-print-resource-dir`, answered by the bundled clang.
+    ResourceDirectory,
+    /// Clang's `-print-runtime-dir`, answered by the bundled clang.
+    RuntimeDirectory,
 }
 
 impl Query {
@@ -585,11 +614,14 @@ impl Query {
                 | Self::SearchDirectories => 0,
                 | Self::FileName(_) | Self::LibgccFileName => 1,
                 | Self::ProgramName(_) => 2,
-                | Self::Multiarch => 3,
-                | Self::Sysroot => 4,
-                | Self::Help => 5,
-                | Self::Version => 6,
-                | _ => 7,
+                | Self::MultiLib => 3,
+                | Self::MultiDirectory => 4,
+                | Self::Sysroot => 5,
+                | Self::MultiOsDirectory => 6,
+                | Self::Multiarch => 7,
+                | Self::Help => 8,
+                | Self::Version => 9,
+                | _ => 10,
             },
             | Compiler::Clang => match self {
                 | Self::DumpMachine => 0,
@@ -597,11 +629,15 @@ impl Query {
                 | Self::Help => 2,
                 | Self::Version => 3,
                 | Self::SearchDirectories => 4,
-                | Self::FileName(_) => 5,
-                | Self::ProgramName(_) => 6,
-                | Self::LibgccFileName => 7,
-                | Self::Triple => 8,
-                | _ => 9,
+                | Self::ResourceDirectory => 5,
+                | Self::FileName(_) => 6,
+                | Self::ProgramName(_) => 7,
+                | Self::LibgccFileName => 8,
+                | Self::MultiLib => 9,
+                | Self::MultiDirectory => 10,
+                | Self::Triple => 11,
+                | Self::RuntimeDirectory => 12,
+                | _ => 13,
             },
         }
     }
@@ -752,6 +788,11 @@ impl State<'_> {
             | "-print-target-triple" | "-print-effective-triple" if clang => Some(Query::Triple),
             | "-print-multiarch" if !clang => Some(Query::Multiarch),
             | "-print-sysroot" if !clang => Some(Query::Sysroot),
+            | "-print-multi-lib" => Some(Query::MultiLib),
+            | "-print-multi-directory" => Some(Query::MultiDirectory),
+            | "-print-multi-os-directory" if !clang => Some(Query::MultiOsDirectory),
+            | "-print-resource-dir" if clang => Some(Query::ResourceDirectory),
+            | "-print-runtime-dir" if clang => Some(Query::RuntimeDirectory),
             | _ => None,
         };
         if let Some(query) = query {
@@ -770,7 +811,8 @@ impl State<'_> {
         match text {
             // Clang knows GCC's query and refuses it; it does not know
             // `-print-sysroot` at all.
-            | "-print-multiarch" => self.error(format_args!("unsupported option '{text}'")),
+            | "-print-multiarch" | "-print-multi-os-directory" =>
+                self.error(format_args!("unsupported option '{text}'")),
             // Clang ignores GCC's full version, unused.
             | "-dumpfullversion" => self
                 .positions
@@ -1577,17 +1619,24 @@ impl State<'_> {
             | Query::DumpFullVersion => format!("{}\n", version::GCC_VERSION),
             | Query::Help => help(personality, &self.invocation.name),
             | Query::Version => version::banner(personality, &self.invocation.name, target),
-            | Query::SearchDirectories => format!(
-                "install: {}\nprograms: ={}\nlibraries: =/usr/local/lib:/usr/lib/{}:/usr/lib\n",
-                version::program_name("bcc"),
-                version::program_name("ld"),
-                version::gcc_machine(target)
-            ),
+            | Query::SearchDirectories => self.search_directories(personality, target),
             // GCC and Clang print a file they do not find as named.
             | Query::FileName(name) => format!("{}\n", self.library_file(name, target)),
-            | Query::LibgccFileName => "libgcc.a\n".into(),
+            | Query::LibgccFileName => format!("{}\n", self.library_file("libgcc.a", target)),
             | Query::ProgramName(name) => format!("{}\n", version::program_name(name)),
             | Query::Multiarch => format!("{}\n", version::gcc_machine(target)),
+            | Query::MultiLib if personality == Personality::Gcc => ".;\n".into(),
+            | Query::MultiLib => ".;@m64\n".into(),
+            | Query::MultiDirectory => ".\n".into(),
+            | Query::MultiOsDirectory => "../lib\n".into(),
+            | Query::ResourceDirectory => format!(
+                "{}\n",
+                bundled_clang_answer("-print-resource-dir", target).unwrap_or_default()
+            ),
+            | Query::RuntimeDirectory => format!(
+                "{}\n",
+                bundled_clang_answer("-print-runtime-dir", target).unwrap_or_default()
+            ),
             // GCC prints nothing when no root is selected.
             | Query::Sysroot => self
                 .sysroot
@@ -1595,6 +1644,38 @@ impl State<'_> {
                 .map(|sysroot| format!("{}\n", sysroot.to_string_lossy()))
                 .unwrap_or_default(),
         }
+    }
+
+    /// What `-print-search-dirs` prints: GCC's `install:` line, which Clang
+    /// has not, then where the programs and libraries are found, starting
+    /// with the directory holding libgcc when the system has one.
+    fn search_directories(&self, personality: Personality, target: Target) -> String {
+        let directory_of = |file: &str| {
+            Path::new(file)
+                .parent()
+                .map(|directory| directory.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let install = (personality == Personality::Gcc).then(|| {
+            let directory = std::env::current_exe()
+                .ok()
+                .and_then(|program| program.parent().map(Path::to_path_buf))
+                .map(|directory| directory.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!("install: {directory}/\n")
+        });
+        let libgcc = self.library_file("libgcc.a", target);
+        let libgcc = if libgcc == "libgcc.a" {
+            String::new()
+        } else {
+            format!("{}:", directory_of(&libgcc))
+        };
+        format!(
+            "{}programs: ={}\nlibraries: ={libgcc}/usr/local/lib:/usr/lib/{}:/usr/lib\n",
+            install.unwrap_or_default(),
+            directory_of(&version::program_name("ld")),
+            version::gcc_machine(target)
+        )
     }
 
     /// The path the bundled clang finds for the library or start file
@@ -1627,6 +1708,20 @@ impl State<'_> {
 }
 
 /// `--help`.
+fn bundled_clang_answer(query: &str, target: Target) -> Option<String> {
+    let output = std::process::Command::new(version::program_name("clang"))
+        .arg(format!("--target={}", target.triple()))
+        .arg(query)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_owned(),
+    )
+}
+
 fn help(personality: Personality, name: &str) -> String {
     let compiler = if personality == Personality::Gcc {
         "GCC"

@@ -1279,6 +1279,112 @@ mod tests {
         }
     }
 
+    /// `@FILE` reads arguments from a file in both modes, nested files
+    /// included, with the differences between the two compilers.
+    #[test]
+    fn gnu_response_files_supply_arguments() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a(void) { return 1; }\n");
+        directory.write("b c.c", "int b(void) { return 2; }\n");
+        directory.write("inner.rsp", "'b c.c'\n");
+        directory.write("outer.rsp", "-c a.c\n@inner.rsp\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["@outer.rsp"]);
+            succeeds(&output);
+            for object in ["a.o", "b c.o"] {
+                assert!(directory.path(object).exists(), "{mode}: {object}");
+                std::fs::remove_file(directory.path(object)).unwrap();
+            }
+            // A file it cannot read stays as an input, reported missing.
+            let output = directory.bcc(mode, &["-c", "@missing.rsp"]);
+            assert!(!output.status.success(), "{mode}");
+            assert!(stderr(&output).contains("@missing.rsp"), "{mode}");
+        }
+
+        std::fs::create_dir(directory.path("sub")).unwrap();
+        directory.write("sub/a2.c", "int a2(void) { return 3; }\n");
+        directory.write("sub/nested.rsp", "-c sub/a2.c\n");
+        directory.write("sub/start.rsp", "@nested.rsp\n");
+        directory.write("start.rsp", "@sub/start.rsp\n");
+        // Clang finds a nested name beside the file that names it; GCC looks
+        // in the working directory, so this one stays an input.
+        succeeds(&directory.bcc("--clang-mode", &["@start.rsp"]));
+        assert!(
+            !directory
+                .bcc("--gcc-mode", &["@start.rsp"])
+                .status
+                .success()
+        );
+
+        directory.write("self.rsp", "@self.rsp\n");
+        let output = directory.bcc("--clang-mode", &["@self.rsp"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stderr(&output).starts_with("recursive expansion of: '"));
+        let output = directory.bcc("--gcc-mode", &["@self.rsp"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "gcc: error: too many @-files encountered\n"
+        );
+    }
+
+    /// The probes libtool and other build systems ask about library layout.
+    #[test]
+    fn gnu_print_queries_describe_the_library_layout() {
+        let directory = Directory::new();
+        let answer = |mode: &str, query: &str| {
+            let output = directory.bcc(mode, &[query]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(answer("--gcc-mode", "-print-multi-directory"), ".\n");
+        assert_eq!(answer("--clang-mode", "-print-multi-directory"), ".\n");
+        assert_eq!(
+            answer("--gcc-mode", "-print-multi-os-directory"),
+            "../lib\n"
+        );
+        assert_eq!(answer("--gcc-mode", "-print-multi-lib"), ".;\n");
+        assert_eq!(answer("--clang-mode", "-print-multi-lib"), ".;@m64\n");
+        let output = directory.bcc("--clang-mode", &["-print-multi-os-directory", "-c", "x.c"]);
+        assert!(!output.status.success());
+        assert!(
+            stderr(&output).contains("unsupported option '-print-multi-os-directory'"),
+            "{}",
+            stderr(&output)
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let dirs = answer(mode, "-print-search-dirs");
+            let programs = dirs
+                .lines()
+                .find_map(|line| line.strip_prefix("programs: ="))
+                .unwrap();
+            assert!(!programs.ends_with("ld.lld"), "{mode}: {dirs}");
+            assert!(
+                dirs.lines().any(|line| line.starts_with("libraries: =")),
+                "{mode}: {dirs}"
+            );
+            assert_eq!(
+                dirs.starts_with("install: "),
+                mode == "--gcc-mode",
+                "{mode}: {dirs}"
+            );
+        }
+    }
+
+    /// `-print-libgcc-file-name` finds the library as
+    /// `-print-file-name=libgcc.a` does.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn gnu_print_libgcc_file_name_is_a_path() {
+        let directory = Directory::new();
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let named = directory.bcc(mode, &["-print-file-name=libgcc.a"]);
+            let output = directory.bcc(mode, &["-print-libgcc-file-name"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), stdout(&named), "{mode}");
+        }
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]
@@ -1342,7 +1448,7 @@ mod tests {
             assert!(!directory.path("x.o").exists(), "{mode}");
             let (status, text, _) = answer(mode, &["-print-file-name=x", "-print-search-dirs"]);
             assert_eq!(status, Some(0), "{mode}");
-            assert!(text.starts_with("install: "), "{mode}: {text}");
+            assert!(text.contains("programs: ="), "{mode}: {text}");
             assert_eq!(
                 answer(mode, &["--version", "--help"]).1,
                 help(mode),
