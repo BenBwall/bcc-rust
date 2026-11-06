@@ -11,6 +11,11 @@ extern "C" void bcc_llvm_use_init_array(LLVMTargetMachineRef machine) {
     reinterpret_cast<llvm::TargetMachine *>(machine)->Options.UseInitArray = true;
 }
 
+extern "C" void bcc_llvm_use_intel_syntax(LLVMTargetMachineRef machine) {
+    // As above. Variant 1 is x86's Intel syntax, which -S writes.
+    reinterpret_cast<llvm::TargetMachine *>(machine)->Options.MCOptions.OutputAsmVariant = 1;
+}
+
 extern "C" void bcc_llvm_use_sections(LLVMTargetMachineRef machine, bool functions, bool data) {
     // As above: the caller owns a live machine that has not started emission.
     auto &options = reinterpret_cast<llvm::TargetMachine *>(machine)->Options;

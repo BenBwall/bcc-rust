@@ -214,7 +214,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 updates:  &updates,
                 labels:   &labels,
             };
-            match template::parse(text, &names, tu) {
+            let intel = self.context.configuration.code_options().intel_syntax;
+            match template::parse(text, &names, intel, tu) {
                 | Ok(pieces) => self.size_suffixes(asm, operands, pieces)?,
                 | Err(fault) => {
                     let token = asm.template?;
@@ -282,7 +283,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.assembly_error(AsmFault::SizeModifier, source, None);
                 return None;
             };
-            resolved.push(AsmPiece::Text(suffix));
+            // Intel syntax names no size in the mnemonic.
+            if !self.context.configuration.code_options().intel_syntax {
+                resolved.push(AsmPiece::Text(suffix));
+            }
         }
         Some(resolved.leak())
     }

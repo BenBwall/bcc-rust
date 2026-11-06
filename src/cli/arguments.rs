@@ -412,6 +412,7 @@ impl Cli {
                 "-fstrict-volatile-bitfields",
                 "-fno-strict-volatile-bitfields",
             ),
+            intel_syntax:               self.last_of("-masm=intel", "-masm=att"),
             function_sections:          self
                 .last_of("-ffunction-sections", "-fno-function-sections"),
             data_sections:              self.last_of("-fdata-sections", "-fno-data-sections"),
@@ -930,7 +931,9 @@ impl LanguageFlag {
             | "-ffunction-sections"
             | "-fno-function-sections"
             | "-fdata-sections"
-            | "-fno-data-sections" => return Some(Self::Code),
+            | "-fno-data-sections"
+            | "-masm=intel"
+            | "-masm=att" => return Some(Self::Code),
             | _ if is_diagnostic_presentation(text) => return Some(Self::Presentation),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpermissive" => return Some(Self::Permissive(true)),
