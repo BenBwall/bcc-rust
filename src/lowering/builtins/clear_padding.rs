@@ -26,9 +26,8 @@
 //!
 //! GNU extension: GCC manual, "Other Builtins".
 //! <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-//! C99: §6.2.6.1 paragraph 6, p. 37; PDF p. 49 (padding bytes); §6.7.2.1
-//! paragraphs 12-15, pp. 102-103; PDF pp. 114-115 (where a record's padding
-//! is).
+//! C99: §6.2.6.1 paragraph 6, p. 38; PDF p. 50 (padding bytes); §6.7.2.1
+//! paragraphs 13-15, p. 103; PDF p. 115 (where a record's padding is).
 
 use super::super::{
     FunctionLowerer,
@@ -384,7 +383,7 @@ impl<'s> Mask<'_, '_, 's> {
     }
 
     /// A structure's members in order, with the gaps between them padding.
-    /// C99: §6.7.2.1 paragraphs 12-15, pp. 102-103; PDF pp. 114-115.
+    /// C99: §6.7.2.1 paragraphs 13 and 15, p. 103; PDF p. 115.
     fn structure(
         &mut self,
         tag: &Tag<'_>,
@@ -408,7 +407,7 @@ impl<'s> Mask<'_, '_, 's> {
                     fields_at = member.offset;
                 }
                 let bit = (member.offset - fields_at) * 8 + u64::from(member.bit_offset);
-                let end = (bit + u64::from(width)).div_ceil(8) as usize;
+                let end = index((bit + u64::from(width)).div_ceil(8));
                 if fields.len() < end {
                     fields.resize(end, 0);
                 }
@@ -448,7 +447,7 @@ impl<'s> Mask<'_, '_, 's> {
             return Err(self.refused());
         }
         let mut bytes = ArenaVec::new_in(self.scratch);
-        bytes.resize(size as usize, 0_u8);
+        bytes.resize(index(size), 0_u8);
         for member in tag.members.get() {
             if let Some(width) = member.width.filter(|_| member.name.is_some()) {
                 // GCC keeps the whole bytes a bit-field reaches here.
@@ -607,6 +606,12 @@ impl<'s> Mask<'_, '_, 's> {
 /// and the exponent.
 const X87_VALUE_BYTES: u64 = 10;
 
+/// A position in a buffer of at most [`FLAT_UNION_BYTES`] or a bit-field's few
+/// bytes, which every host can address.
+fn index(position: u64) -> usize {
+    usize::try_from(position).expect("a position in a small buffer")
+}
+
 /// Sets `width` bits of `bytes` from bit `start`, counted from the low bit
 /// of the first byte.
 fn set_bits(bytes: &mut [u8], start: u64, width: u64) {
@@ -615,7 +620,7 @@ fn set_bits(bytes: &mut [u8], start: u64, width: u64) {
     while bit < end {
         let low = bit % 8;
         let count = (8 - low).min(end - bit);
-        bytes[(bit / 8) as usize] |= (u8::MAX >> (8 - count)) << low;
+        bytes[index(bit / 8)] |= (u8::MAX >> (8 - count)) << low;
         bit += count;
     }
 }
@@ -626,14 +631,14 @@ fn apply(bytes: &mut [u8], at: u64, runs: &[Run<'_>]) {
     for run in runs {
         match *run {
             | Run::Value(count) => {
-                for byte in &mut bytes[at as usize..(at + count) as usize] {
+                for byte in &mut bytes[index(at)..index(at + count)] {
                     *byte = u8::MAX;
                 }
                 at += count;
             },
             | Run::Padding(count) => at += count,
             | Run::Mixed(value_bits) => {
-                bytes[at as usize] |= value_bits;
+                bytes[index(at)] |= value_bits;
                 at += 1;
             },
             | Run::Repeat { body, size, count } =>

@@ -27,7 +27,7 @@
 //!
 //! GNU extension: GCC manual, "Other Builtins".
 //! <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-//! C99: §6.2.6.1 paragraph 6, p. 37; PDF p. 49 (padding bytes).
+//! C99: §6.2.6.1 paragraph 6, p. 38; PDF p. 50 (padding bytes).
 
 use crate::{
     configuration::RuleSet,
@@ -145,6 +145,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.clear_padding_error(source, text);
             return None;
         };
+        // Lowering refuses by name a pointee semantic analysis does not model.
+        if self.types.unanalyzed(pointee) {
+            return Some(pointee);
+        }
         let kind = self.types.nodes[pointee.index];
         if matches!(kind, TypeKind::Function { .. }) {
             return Some(void);
@@ -226,6 +230,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.clear_padding_error(source, text);
             return None;
         };
+        if self.types.unanalyzed(pointee) {
+            return Some(pointee);
+        }
         let mut element = pointee;
         let mut read_only = pointee.qualifiers.contains(TypeQualifiers::CONST);
         while let TypeKind::Array(inner, _) = self.types.nodes[element.index] {

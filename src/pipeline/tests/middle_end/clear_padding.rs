@@ -35,11 +35,9 @@ fn the_shared_program_clears_what_gcc_and_clang_clear() {
     let source = include_str!("../../../../tests/fixtures/programs/builtin_clear_padding.c");
     for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
         for optimize in [false, true] {
-            assert_eq!(
-                status(source, Target::LinuxGnu, identity, optimize),
-                (0, "failures: 0\n".to_owned()),
-                "{identity:?} optimize={optimize}"
-            );
+            let (status, output) = status(source, Target::LinuxGnu, identity, optimize);
+            assert_eq!(status, 0, "{identity:?} optimize={optimize}: {output}");
+            assert_eq!(output, "failures: 0\n", "{identity:?} optimize={optimize}");
         }
     }
 }

@@ -6,6 +6,8 @@
 //! `tests/fixtures/programs/builtin_clear_padding.c`. GNU extension: GCC
 //! manual, "Other Builtins".
 
+use std::fmt::Write;
+
 use super::*;
 use crate::configuration::{
     CompilerConfiguration,
@@ -160,13 +162,28 @@ fn a_type_too_large_to_describe_is_refused_by_name() {
     // Records that double in size, which no array compresses.
     let mut source = String::from("struct s0 { char a; int b; };\n");
     for level in 1..=24 {
-        source.push_str(&format!(
-            "struct s{level} {{ struct s{previous} a; char b; struct s{previous} c; }};\n",
+        writeln!(
+            source,
+            "struct s{level} {{ struct s{previous} a; char b; struct s{previous} c; }};",
             previous = level - 1
-        ));
+        )
+        .unwrap();
     }
     source.push_str("void g(struct s24 *p) { __builtin_clear_padding(p); }");
     refused(&source);
+}
+
+#[test]
+fn a_pointee_semantic_analysis_does_not_model_is_refused_at_lowering() {
+    let errors = lower_with(
+        "void f(_Decimal32 *p) { __builtin_clear_padding(p); }",
+        gcc(),
+    )
+    .unwrap_err();
+    assert!(
+        errors.iter().any(|error| error.contains("_Decimal32")),
+        "{errors:?}"
+    );
 }
 
 #[test]

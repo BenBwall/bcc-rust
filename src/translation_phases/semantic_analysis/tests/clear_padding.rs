@@ -100,11 +100,11 @@ fn a_call_has_one_argument_and_no_value() {
 }
 
 /// The kind of the type retained for the one call in `body`.
-fn retained(body: &str, identity: CompilerIdentity) -> String {
+fn retained(body: &str, identity: CompilerIdentity) -> &'static str {
     let source = format!("{DECLARATIONS}void f(int n, void *p) {{ {body} }}\nint following;\n");
     let configuration = CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
         .with_compiler_identity(identity);
-    let mut retained = String::new();
+    let mut retained = "";
     with_configuration(&source, configuration, |context, unit| {
         assert_eq!(context.pending_error_count(), 0, "{body}");
         let mut calls = unit
@@ -122,8 +122,7 @@ fn retained(body: &str, identity: CompilerIdentity) -> String {
             | TypeKind::Scalar(_) => "scalar",
             | TypeKind::Nullptr => "nullptr",
             | other => panic!("{body}: {other:?}"),
-        }
-        .to_owned();
+        };
     });
     retained
 }
