@@ -483,6 +483,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Library
             | CommonBuiltin::Offsetof
             | CommonBuiltin::ReadTimestamp
+            | CommonBuiltin::X86Instruction(_)
             | CommonBuiltin::DebugTrap
             | CommonBuiltin::Annotation
             | CommonBuiltin::Semantic(_)
