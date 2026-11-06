@@ -108,27 +108,89 @@ impl Machine {
     }
 }
 
-/// The byte range of the first line of `source` that is a preprocessing
-/// directive, `#` being its first character other than white space.
+/// The byte range of the first preprocessing directive in `source`, up to the
+/// end of its physical line: a `#` that is the first token on its line.
+/// Comments count as white space there, having become spaces in translation
+/// phase 3, and a `#` inside a comment or a literal is not a directive.
 ///
+/// C99: §5.1.1.2 paragraph 1 item 3, p. 10; PDF p. 22.
 /// C99: §6.10 paragraph 2, p. 146; PDF p. 158.
 fn first_directive(source: &str) -> Option<SourceRange> {
-    let mut start = 0;
-    source.split_inclusive('\n').find_map(|line| {
-        let at = start;
-        start += line.len();
-        line.trim_start().starts_with('#').then(|| SourceRange {
-            start: at,
-            end: at + line.trim_end().len(),
-            ..SourceRange::default()
-        })
-    })
+    let bytes = source.as_bytes();
+    let mut at = 0;
+    let mut starts_line = true;
+    while let Some(&byte) = bytes.get(at) {
+        let rest = &bytes[at + 1..];
+        match byte {
+            | b'\n' => {
+                starts_line = true;
+                at += 1;
+            },
+            | b'\\' if rest.starts_with(b"\n") => at += 2,
+            | b'\\' if rest.starts_with(b"\r\n") => at += 3,
+            | b'/' if rest.starts_with(b"*") => {
+                let body = &source[at + 2..];
+                at += 2 + body.find("*/").map_or(body.len(), |end| end + 2);
+            },
+            | b'/' if rest.starts_with(b"/") => at = end_of_logical_line(bytes, at),
+            | b'#' if starts_line => {
+                let line = source[at..].lines().next().unwrap_or_default();
+                return Some(SourceRange {
+                    start: at,
+                    end: at + line.trim_end().len(),
+                    ..SourceRange::default()
+                });
+            },
+            | b'"' | b'\'' => {
+                starts_line = false;
+                at = end_of_literal(bytes, at);
+            },
+            | b' ' | b'\t' | b'\r' | 0x0B | 0x0C => at += 1,
+            | _ => {
+                starts_line = false;
+                at += 1;
+            },
+        }
+    }
+    None
+}
+
+/// The offset of the new-line ending the line at `start`, past any line
+/// splices, or the end of `bytes`.
+fn end_of_logical_line(bytes: &[u8], start: usize) -> usize {
+    let mut at = start;
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            | b'\n' => return at,
+            | b'\\' if bytes[at + 1..].starts_with(b"\r\n") => at += 3,
+            | b'\\' => at += 2,
+            | _ => at += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// The offset just past the string or character literal opening at `start`, or
+/// the new-line ending it if it is unterminated.
+fn end_of_literal(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let mut at = start + 1;
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            | b'\n' => return at,
+            | b'\\' if bytes[at + 1..].starts_with(b"\r\n") => at += 3,
+            | b'\\' => at += 2,
+            | _ if byte == quote => return at + 1,
+            | _ => at += 1,
+        }
+    }
+    bytes.len()
 }
 
 /// The snapshot for a program with preprocessing directives. The machine reads
-/// source as written, so it never gets to run one, but nothing is wrong with
-/// the program: directives are executed in translation phase 4, long before
-/// any evaluation.
+/// source as written, so it never gets to run one, and stopping here says
+/// nothing about the program: directives are executed in translation phase 4,
+/// long before any evaluation.
 ///
 /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
 fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
@@ -143,7 +205,7 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
             title:          "The machine starts after the preprocessor".to_owned(),
             summary:        "Lines starting with # are handled before the program runs, and this \
                              machine reads source only as it is written, so it stops here. \
-                             Nothing is wrong with the program."
+                             Stopping here does not mean the program is wrong."
                 .to_owned(),
             explanation:    "C processes a file in translation phases: directives are executed \
                              and macros expanded in phase 4, and evaluation only happens once the \
@@ -561,6 +623,21 @@ mod tests {
     }
 
     #[test]
+    fn finds_a_directive_only_where_one_can_stand() {
+        let found = |source| first_directive(source).map(|range| range.start);
+        assert_eq!(found("#define X\n"), Some(0));
+        assert_eq!(found("  /* note */ # define X\r\nint y;\n"), Some(13));
+        assert_eq!(found("int x;\n#if 0\n"), Some(7));
+        assert_eq!(found("int x; #if 0\n"), None);
+        assert_eq!(found("/* #a\n#b */\n"), None);
+        assert_eq!(found("// #a\\\n#b\n"), None);
+        assert_eq!(found("char *s = \"\\\n#a\";\n"), None);
+        assert_eq!(found("int x; /* a\n*/ #b\n"), None);
+        assert_eq!(found("char c = '#';\n"), None);
+        assert_eq!(found("int x\\\n#a\n"), None);
+    }
+
+    #[test]
     fn a_directive_stops_the_machine_without_blaming_the_program() {
         let mut machine = Machine::default();
         let state =
@@ -577,12 +654,20 @@ mod tests {
             Err("Load a program before stepping.".into())
         );
 
-        let state = machine.load("int main(void) { return 1.5; }\n".to_owned());
-        assert_eq!(
-            state.event.title,
-            "This program is outside the supported subset"
-        );
-        assert!(state.diagnostic.is_some());
+        for source in [
+            "int main(void) { return 1.5; }\n",
+            "/*\n#define X 1\n*/\nint main(void) { return 1.5; }\n",
+            "// a line \\\n#define X 1\nint main(void) { return 1.5; }\n",
+            "int a = 1.5; int s = \"\\\n#define X\";\nint main(void) { return 0; }\n",
+            "int a = 1.5 /* a\n*/ #define\n;",
+        ] {
+            let state = machine.load(source.to_owned());
+            assert_eq!(
+                state.event.title, "This program is outside the supported subset",
+                "{source}"
+            );
+            assert!(state.diagnostic.is_some(), "{source}");
+        }
     }
 
     fn integer(value: Option<&Value>) -> Option<&str> {
