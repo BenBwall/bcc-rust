@@ -2819,6 +2819,43 @@ mod tests {
                 assert_eq!(stderr(&output), "", "{mode} {standard}");
             }
         }
+        // `-std=c99` leaves these on in both, and `-pedantic-errors` refuses
+        // them.
+        for (name, source) in [
+            ("v.c", "void g(void);\nvoid f(void) { return g(); }\n"),
+            ("b.c", "int x = 0b101;\n"),
+            (
+                "r.c",
+                "int f(int x) { switch (x) { case 1 ... 2: return 1; } return 0; }\n",
+            ),
+            (
+                "o.c",
+                "#define M(a, ...) a __VA_OPT__(,) __VA_ARGS__\nint M(x);\n",
+            ),
+        ] {
+            directory.write(name, source);
+            for mode in ["--gcc-mode", "--clang-mode"] {
+                for standard in ["-std=c99", "-std=c11"] {
+                    let object = "e.o";
+                    succeeds(&directory.bcc(mode, &[standard, "-c", name, "-o", object]));
+                    assert!(
+                        !directory
+                            .bcc(
+                                mode,
+                                &[standard, "-pedantic-errors", "-c", name, "-o", object]
+                            )
+                            .status
+                            .success(),
+                        "{mode} {standard} {name}"
+                    );
+                }
+            }
+        }
+        // `//` in C89 is Clang's alone.
+        directory.write("c.c", "// comment\nint x;\n");
+        let args = ["-std=c89", "-c", "c.c", "-o", "c.o"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        assert!(!directory.bcc("--gcc-mode", &args).status.success());
         // GCC 14 has no `__has_embed`, and Clang does.
         directory.write(
             "e.c",
@@ -7734,7 +7771,7 @@ mod tests {
         succeeds(&output);
         assert!(
             stderr(&output).ends_with(&line(&format!(
-                "\"--compiler-feature-tests\" \"--compiler-identity=clang\" \
+                "\"--compiler-extensions\" \"--compiler-identity=clang\" \
                  \"--diagnostic-format=clang\" \"--target={triple}\" \"--driver-name=clang\" \
                  \"a.c\" \"-c\""
             ))),
@@ -7752,8 +7789,8 @@ mod tests {
         // GCC's `-v` quotes nothing, its `-###` only what the shell needs.
         assert!(
             text.contains(&format!(
-                " {exe} -v --compiler-feature-tests --compiler-identity=gcc \
-                 --diagnostic-format=gcc --target={triple} --driver-name=gcc a.c -c\n"
+                " {exe} -v --compiler-extensions --compiler-identity=gcc --diagnostic-format=gcc \
+                 --target={triple} --driver-name=gcc a.c -c\n"
             )),
             "{text}"
         );
@@ -8407,9 +8444,9 @@ mod tests {
         let text = stderr(&output);
         assert!(
             text.ends_with(&format!(
-                " --compiler-feature-tests \"--compiler-identity=gcc\" \
-                 \"--diagnostic-format=gcc\" \"--target={}\" \"--driver-name=gcc\" \"a b.c\" -D \
-                 \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n",
+                " --compiler-extensions \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
+                 \"--target={}\" \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \
+                 \"--output=o\\$.o\"\n",
                 HOST_TARGET.0
             )),
             "{text}"

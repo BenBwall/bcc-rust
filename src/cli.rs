@@ -188,10 +188,10 @@ struct Cli {
     #[arg(long, value_name = "MODEL", value_parser = TlsModelParser,
         action = clap::ArgAction::Set, overrides_with = "tls_model")]
     tls_model: Option<crate::target::TlsModel>,
-    /// Define the feature-test operators in every language mode, and never
-    /// report them as extensions, as GCC's and Clang's drivers do.
+    /// Keep, in every language mode, the extensions GCC's and Clang's drivers
+    /// keep there.
     #[arg(long, hide = true)]
-    compiler_feature_tests: bool,
+    compiler_extensions: bool,
     /// GCC startup preprocessing options, normalized with their operation.
     #[arg(long, hide = true, allow_hyphen_values = true, value_parser = preprocessing_option)]
     preprocessing_option: Vec<String>,

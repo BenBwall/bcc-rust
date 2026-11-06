@@ -26,8 +26,21 @@ impl CompilerConfiguration {
                 self.native |= feature.bit();
             }
             let accepted = match feature {
-                | Feature::OldStyleFunctionDeclarators
                 | Feature::VoidExpressionReturn
+                | Feature::CaseRanges
+                | Feature::BinaryConstants
+                | Feature::VaOpt
+                | Feature::HasInclude
+                | Feature::HasCAttribute => native || self.gnu || self.compiler_extensions,
+                | Feature::LineComments | Feature::Embed | Feature::HasEmbed =>
+                    native
+                        || self.gnu
+                        || (self.compiler_extensions
+                            && matches!(
+                                self.identity,
+                                super::CompilerIdentity::Clang | super::CompilerIdentity::ClangCl
+                            )),
+                | Feature::OldStyleFunctionDeclarators
                 | Feature::Digraphs
                 | Feature::Utf8CharacterConstants
                 | Feature::DigitSeparators
@@ -46,17 +59,8 @@ impl CompilerConfiguration {
                 | Feature::MsPragma
                 | Feature::MsAnonymousStructs
                 | Feature::MsVaArgs => native,
-                | Feature::CaseRanges
-                | Feature::LineComments
-                | Feature::BinaryConstants
-                | Feature::Elifdef
-                | Feature::WarningDirective
-                | Feature::Embed
-                | Feature::HasInclude
-                | Feature::HasEmbed
-                | Feature::HasCAttribute
-                | Feature::VaOpt
-                | Feature::Inline => native || self.gnu,
+                | Feature::Elifdef | Feature::WarningDirective | Feature::Inline =>
+                    native || self.gnu,
                 | Feature::Trigraphs => match self.trigraphs {
                     | Some(enabled) => enabled,
                     | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
@@ -840,9 +844,15 @@ impl CompilerConfiguration {
         self.fatal_errors && self.identity == super::CompilerIdentity::Gcc
     }
 
-    pub(crate) const fn with_compiler_feature_tests(mut self, enabled: bool) -> Self {
-        self.compiler_feature_tests = enabled;
-        self
+    /// GCC's and Clang's `-std=c99` selects a language rather than turning off
+    /// what that language leaves free, so a conforming program means the same
+    /// and these extensions stay: the feature tests, a `void` expression in a
+    /// `return`, binary constants, case ranges and `__VA_OPT__`, and under
+    /// Clang `//` comments in C89 and `#embed`. Each is still an extension
+    /// under `-pedantic`. Set this after the compiler identity, which it reads.
+    pub(crate) const fn with_compiler_extensions(mut self, enabled: bool) -> Self {
+        self.compiler_extensions = enabled;
+        self.derive_features()
     }
 
     /// Whether `feature` is an operator that tests for features, which GCC
@@ -851,7 +861,7 @@ impl CompilerConfiguration {
     /// `__has_embed` until its version 15. GCC manual, "`__has_attribute`" and
     /// "`__has_include`"; Clang Language Extensions, "Feature Checking Macros".
     pub(crate) fn always_tests_feature(self, feature: Feature) -> bool {
-        self.compiler_feature_tests
+        self.compiler_extensions
             && match feature {
                 | Feature::HasInclude
                 | Feature::HasCAttribute
@@ -1008,7 +1018,7 @@ impl CompilerConfiguration {
             general_regs_only: false,
             user_interrupts: false,
             suppress_warnings: false,
-            compiler_feature_tests: false,
+            compiler_extensions: false,
             permissive: None,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,

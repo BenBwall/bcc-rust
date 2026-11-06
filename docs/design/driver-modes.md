@@ -176,7 +176,10 @@ The feature-test operators (`__has_include`, `__has_c_attribute`,
 `__has_attribute`, `__has_builtin`, `__has_feature`, `__has_extension`, and
 Clang's `__has_embed`) exist in every `-std=` under `--gcc-mode` and
 `--clang-mode`, and neither compiler calls them extensions under `-pedantic`.
-Plain bcc keeps them behind the language mode.
+A `void` expression in a `return`, binary constants, case ranges and `__VA_OPT__`
+also stay in every `-std=` under both, and `//` comments in C89 and `#embed` under
+Clang: `-std=c99` selects a language, and each is still an extension under
+`-pedantic`. Plain bcc keeps all of these behind the language mode.
 
 ## Options a compiler knows and bcc does not implement
 
