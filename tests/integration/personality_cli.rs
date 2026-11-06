@@ -785,6 +785,135 @@ mod tests {
         }
     }
 
+    /// A presumed file name that ends in a separator has an empty last
+    /// component for GCC, and `.` for Clang, or `/` if it is all separators.
+    #[test]
+    fn file_name_macro_splits_as_each_compiler_does() {
+        let directory = Directory::new();
+        for (name, gcc, clang) in [
+            ("foo/bar/", "\"\"", "\".\""),
+            ("foo//", "\"\"", "\".\""),
+            ("/", "\"\"", "\"/\""),
+            ("foo/.", "\".\"", "\".\""),
+            ("foo/..", "\"..\"", "\"..\""),
+            ("foo/bar.c", "\"bar.c\"", "\"bar.c\""),
+            ("", "\"\"", "\"\""),
+        ] {
+            directory.write("n.c", &format!("#line 1 \"{name}\"\n__FILE_NAME__\n"));
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-E", "-P", "n.c"]);
+                succeeds(&output);
+                assert_eq!(stdout(&output).trim(), expected, "{mode} {name:?}");
+            }
+        }
+    }
+
+    /// `__FILE_NAME__` is the last component of the presumed file name and
+    /// `__INCLUDE_LEVEL__` counts `#include`s from the main file, forced ones
+    /// included, in GCC and Clang. Microsoft's and TCC's compilers have
+    /// neither.
+    #[test]
+    fn file_name_and_include_level_follow_gcc_and_clang() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write(
+            "sub/h.h",
+            "h = __INCLUDE_LEVEL__ __FILE_NAME__\n#include \"i.h\"\n",
+        );
+        directory.write("sub/i.h", "i = __INCLUDE_LEVEL__ __FILE_NAME__ EARLY\n");
+        directory.write("forced.h", "f = __INCLUDE_LEVEL__ __FILE_NAME__\n");
+        directory.write(
+            "m.c",
+            "#define EARLY __INCLUDE_LEVEL__\n#include \"sub/h.h\"\nm = __INCLUDE_LEVEL__ \
+             __FILE_NAME__\n#line 9 \"zz/renamed.c\"\nr = __INCLUDE_LEVEL__ __FILE_NAME__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "-include", "forced.h", "m.c"]);
+            succeeds(&output);
+            assert_eq!(
+                stdout(&output),
+                "f = 1 \"forced.h\"\nh = 1 \"h.h\"\ni = 2 \"i.h\" 2\nm = 0 \"m.c\"\nr = 0 \
+                 \"renamed.c\"\n",
+                "{mode}"
+            );
+        }
+        directory.write("q.c", "__FILE_NAME__ __INCLUDE_LEVEL__\n");
+        for (mode, preprocess) in [("--msvc-mode", "/E"), ("--tcc-mode", "-E")] {
+            let output = directory.bcc(mode, &[preprocess, "q.c"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).contains("__FILE_NAME__ __INCLUDE_LEVEL__"),
+                "{mode}: {}",
+                stdout(&output)
+            );
+        }
+    }
+
+    /// `__TIMESTAMP__` spells the modification time of the file being read as
+    /// `asctime` does, in every personality but TCC's, and
+    /// `SOURCE_DATE_EPOCH` does not pin it.
+    #[test]
+    fn timestamp_is_the_modification_time_of_the_current_file() {
+        let directory = Directory::new();
+        directory.write("h.h", "__TIMESTAMP__\n");
+        directory.write(
+            "m.c",
+            "#include \"h.h\"\n#line 3 \"elsewhere.c\"\n__TIMESTAMP__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .current_dir(&directory.0)
+                .args([mode, "-E", "-P", "m.c"])
+                .env("SOURCE_DATE_EPOCH", "0")
+                .output()
+                .unwrap();
+            succeeds(&output);
+            let text = stdout(&output);
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines.len(), 2, "{mode}: {text}");
+            for line in lines {
+                // "Thu Nov  5 23:13:48 2026" within quotes.
+                let bytes = line.as_bytes();
+                assert_eq!(bytes.len(), 26, "{mode}: {line}");
+                assert_eq!(bytes[0], b'"');
+                assert_eq!(&line[20..21], " ", "{mode}: {line}");
+                assert!(!line.contains("??"), "{mode}: {line}");
+                assert!(!line.ends_with("1970\""), "{mode}: {line}");
+            }
+        }
+        directory.write("q.c", "__TIMESTAMP__\n");
+        let output = directory.bcc("--tcc-mode", &["-E", "-P", "q.c"]);
+        succeeds(&output);
+        assert!(
+            stdout(&output).contains("__TIMESTAMP__"),
+            "{}",
+            stdout(&output)
+        );
+    }
+
+    /// Unlike the names C99 §6.10.8 predefines, these extensions can be
+    /// redefined and undefined, with a warning, as in GCC and Clang.
+    #[test]
+    fn file_extension_macros_can_be_redefined() {
+        let directory = Directory::new();
+        directory.write(
+            "m.c",
+            "#define __BASE_FILE__ 1\n#define __FILE_NAME__ 2\n#define __INCLUDE_LEVEL__ \
+             3\n#define __TIMESTAMP__ 4\n__BASE_FILE__ __FILE_NAME__ __INCLUDE_LEVEL__ \
+             __TIMESTAMP__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "1 2 3 4\n", "{mode}");
+            assert!(
+                stderr(&output).contains("warning"),
+                "{mode}: {}",
+                stderr(&output)
+            );
+        }
+    }
+
     /// Clang's `__BASE_FILE__` is the main file's presumed name where the
     /// outermost `#include` (or the expansion itself) sits, so a `#line`
     /// there renames it; GCC and TCC keep the command line's name. Standard
