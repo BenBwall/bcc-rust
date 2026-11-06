@@ -1810,6 +1810,14 @@ impl<'id> Session<'id> {
                 bcc_llvm_use_init_array(machine.0);
             }
         }
+        // SAFETY: As above; this option is also missing from LLVM-C.
+        unsafe {
+            bcc_llvm_use_sections(
+                machine.0,
+                self.code.function_sections,
+                self.code.data_sections,
+            );
+        }
         if !skip_passes {
             let pipeline = match opt.unwrap_or(OptLevel::O0) {
                 | OptLevel::O0 => c"default<O0>",
@@ -2091,6 +2099,9 @@ pub(super) struct Machine(LLVMTargetMachineRef);
 unsafe extern "C" {
     /// Selects ELF initialization arrays on a live, unused target machine.
     fn bcc_llvm_use_init_array(machine: LLVMTargetMachineRef);
+    /// Gives each function, and each data object, a section of its own on a
+    /// live, unused target machine.
+    fn bcc_llvm_use_sections(machine: LLVMTargetMachineRef, functions: bool, data: bool);
     /// Merges the counted `attributes` into the attribute list of a live
     /// function (`call` 0) or call instruction (`call` 1) in one step.
     fn bcc_llvm_add_attributes(

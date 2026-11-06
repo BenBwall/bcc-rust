@@ -590,6 +590,17 @@ fn end_of_unit_reports_follow_each_compiler() {
     }
 }
 
+/// GCC's statement expression takes its value from before any null statement,
+/// so nothing there is discarded.
+#[test]
+fn gcc_statement_expression_value_precedes_null_statements() {
+    let source = "int f(void) { return ({ 7;; }); }";
+    assert_eq!(rules(source, gcc()), []);
+    assert_eq!(rules("int f(void) { ({ 7; 8;; }); return 0; }", gcc()), [
+        U::GccNoEffect,
+    ]);
+}
+
 /// Clang leaves an expression a macro's body wrote alone; its argument is the
 /// user's own.
 #[test]

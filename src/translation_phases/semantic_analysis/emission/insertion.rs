@@ -1007,7 +1007,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .push(Work::FunctionWork(FunctionWork::StatementExpressionEnd(
                 self.functions.dead,
             )));
-        let Some(last) = value_statement_of(block) else {
+        let Some(last) = self.value_statement_of(block) else {
             return;
         };
         self.note_statement_expression_value(last);
@@ -1021,28 +1021,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
-/// The expression statement that gives statement expression `block` its
-/// value: the last item, after its labels.
-/// GNU extension: GCC manual, "Statement Exprs".
-fn value_statement_of<'tu>(block: &'tu Statement<'tu>) -> Option<&'tu Statement<'tu>> {
-    let StatementType::Compound { items } = block.kind else {
-        return None;
-    };
-    let Some(&BlockItem::Statement(mut last)) = items.last() else {
-        return None;
-    };
-    loop {
-        match last.kind {
-            | StatementType::Label(_, child) => last = child,
-            | StatementType::Attributed(attributed) => last = attributed.statement,
-            | _ => break,
+impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// The expression statement that gives statement expression `block` its
+    /// value: the item that holds it, after its labels.
+    /// GNU extension: GCC manual, "Statement Exprs".
+    fn value_statement_of(&self, block: &'tu Statement<'tu>) -> Option<&'tu Statement<'tu>> {
+        let StatementType::Compound { items } = block.kind else {
+            return None;
+        };
+        let (&BlockItem::Statement(mut last), _) =
+            self.statement_expression_value_item(items.as_slice())?
+        else {
+            return None;
+        };
+        loop {
+            match last.kind {
+                | StatementType::Label(_, child) => last = child,
+                | StatementType::Attributed(attributed) => last = attributed.statement,
+                | _ => break,
+            }
         }
+        matches!(
+            last.kind,
+            StatementType::Expression(ExpressionSlot::Parsed(_))
+        )
+        .then_some(last)
     }
-    matches!(
-        last.kind,
-        StatementType::Expression(ExpressionSlot::Parsed(_))
-    )
-    .then_some(last)
 }
 
 fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
