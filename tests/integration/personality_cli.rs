@@ -829,6 +829,40 @@ mod tests {
         succeeds(&directory.bcc("--clang-mode", &["-w", "-fsyntax-only", "named.c"]));
     }
 
+    /// A store through a cast to what this unit only declares const reaches
+    /// the other unit's object under GCC, whose optimizer keeps it, and Clang
+    /// drops it at `-O2`. busybox sets its `bb_errno` this way on GCC.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stores_to_const_declarations_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "extern int *const e;\nint x = 7;\nvoid init(void) {\n  *(void **)&e = (void *)&x;\n  \
+             __asm__ volatile(\"\" : : : \"memory\");\n}\n",
+        );
+        directory.write(
+            "b.c",
+            "int *e;\nvoid init(void);\nint main(void) {\n  init();\n  return e ? *e : 99;\n}\n",
+        );
+        for (mode, level, expected) in [
+            ("--gcc-mode", "-O0", 7),
+            ("--gcc-mode", "-O2", 7),
+            ("--clang-mode", "-O0", 7),
+            ("--clang-mode", "-O2", 99),
+        ] {
+            succeeds(&directory.bcc(mode, &[level, "a.c", "b.c", "-o", "const.exe"]));
+            let run = Command::new(directory.path("const.exe")).output().unwrap();
+            assert_eq!(run.status.code(), Some(expected), "{mode} {level}");
+        }
+        // A definition stays read-only, whichever compiler it follows.
+        directory.write("d.c", "const int k = 1;\nconst int *p = &k;\n");
+        let output = directory.bcc("--gcc-mode", &["-S", "d.c", "-o", "d.s"]);
+        succeeds(&output);
+        let text = std::fs::read_to_string(directory.path("d.s")).unwrap();
+        assert!(text.contains(".rodata"), "{text}");
+    }
+
     /// `__BASE_FILE__` names the main source file as the command line
     /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
     #[test]

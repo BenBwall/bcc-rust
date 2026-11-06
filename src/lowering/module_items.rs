@@ -1055,8 +1055,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 // using the definition's completed type from the outset.
                 // The definition's binding names the same entity, so its
                 // linkage and symbol attributes are the entity's.
-                let binding = self.defined_objects.get(name).copied().unwrap_or(binding);
-                let declaration = self.global_declaration(binding, self.ir_linkage(binding))?;
+                let definition = self.defined_objects.get(name).copied();
+                let binding = definition.unwrap_or(binding);
+                let mut declaration = self.global_declaration(binding, self.ir_linkage(binding))?;
+                // Writing to a const object is undefined (C99 §6.7.3p5, p. 108;
+                // PDF p. 120), but GCC keeps a store through a cast to what is
+                // only declared const here, and Clang drops it. busybox relies
+                // on GCC's: another unit defines `bb_errno` without the const,
+                // and on anything claiming to be GCC it stores directly.
+                if definition.is_none() && self.rules() == crate::configuration::RuleSet::Gcc {
+                    declaration.constant = false;
+                }
                 let global = self.module.declare_global(name, declaration);
                 self.symbol_attributes(binding, Symbol::Global(global));
                 Ok(global)
