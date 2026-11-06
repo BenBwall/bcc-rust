@@ -3154,7 +3154,8 @@ mod tests {
         );
     }
 
-    /// `-masm=intel` writes Intel syntax and reads `asm` statements in it.
+    /// `-masm=intel` writes Intel syntax and reads `asm` statements in it. The
+    /// checks name no register, since the argument's differs on Windows.
     #[test]
     fn gnu_intel_syntax_reads_and_writes_assembly() {
         let directory = Directory::new();
@@ -3171,12 +3172,12 @@ mod tests {
             let intel =
                 stdout(&directory.bcc(mode, &["-masm=intel", "-O1", "-S", "p.c", "-o", "-"]));
             assert!(intel.contains(".intel_syntax noprefix"), "{mode}: {intel}");
-            assert!(intel.contains("dword ptr [rdi]"), "{mode}: {intel}");
+            assert!(intel.contains("dword ptr [r"), "{mode}: {intel}");
             let plain = stdout(&directory.bcc(
                 mode,
                 &["-masm=intel", "-masm=att", "-O1", "-S", "p.c", "-o", "-"],
             ));
-            assert!(plain.contains("(%rdi)"), "{mode}: {plain}");
+            assert!(plain.contains("(%r"), "{mode}: {plain}");
             // Under GCC, `%z` names no size in Intel syntax.
             directory.write(
                 "z.c",
@@ -3185,7 +3186,7 @@ mod tests {
             );
             if mode == "--gcc-mode" {
                 let args = ["-masm=intel", "-O1", "-S", "z.c", "-o", "-"];
-                assert!(stdout(&directory.bcc(mode, &args)).contains("mov\tax, di"));
+                assert!(stdout(&directory.bcc(mode, &args)).contains("mov\tax, "));
             }
             // A group's alternative follows the syntax in use.
             directory.write(
