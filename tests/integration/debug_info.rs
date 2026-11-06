@@ -339,8 +339,10 @@ long use(int n)
             let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "a.o") else {
                 return;
             };
+            // By lines: `readelf` ends them with CRLF on Windows.
+            let expected = format!("Version:       {version}");
             assert!(
-                info.contains(&format!("Version:       {version}\n")),
+                info.lines().any(|line| line.trim() == expected),
                 "{flags:?}: {info}"
             );
         }
