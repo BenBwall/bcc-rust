@@ -7,6 +7,7 @@ tests/fixtures/lexing/test_programs.snap whitespace=-trailing-space
 tests/fixtures/diagnostics/sema-permerrors-gcc.stderr whitespace=-blank-at-eof
 tests/fixtures/diagnostics/sema-permerrors-gnu89.stderr whitespace=-blank-at-eof
 tests/fixtures/diagnostics/sema-permerrors-permissive.stderr whitespace=-blank-at-eof
+tests/fixtures/diagnostics/sema3-internal-tentative.stderr whitespace=-blank-at-eof
 
 # PDFs are binary, even linearized ones that Git would detect as text: never
 # convert their line endings or diff them as text.
