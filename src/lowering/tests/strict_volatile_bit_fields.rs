@@ -220,7 +220,7 @@ fn accesses_use_the_declared_type_where_gcc_does() {
             write:        I8,
         },
         // A field that straddles the unit, here at bits 7 to 32, keeps the
-        // ordinary access to its own bytes.
+        // ordinary access to its own bytes: GCC's own is two words.
         Case {
             declarations: "struct S { char x : 7; volatile unsigned y : 26; } \
                            __attribute__((packed, aligned(4)));",
@@ -252,6 +252,26 @@ fn accesses_use_the_declared_type_where_gcc_does() {
         },
     ] {
         check(&case);
+    }
+}
+
+/// The unit is as aligned as its type, whether it starts at the field or
+/// before it, where the field's own address has a lower alignment.
+#[test]
+fn units_have_the_alignment_of_their_type() {
+    for lvalue in ["p->a", "p->b", "p->c"] {
+        let source = format!(
+            "struct S {{ volatile unsigned a : 8, b : 8, c : 16; }}; int r(struct S *p) {{ \
+             {lvalue} = 1; return {lvalue}; }}"
+        );
+        let configuration = CompilerConfiguration::default().with_code_options(CodeOptions {
+            strict_volatile_bit_fields: true,
+            ..CodeOptions::default()
+        });
+        let text = lower_with(&source, configuration).unwrap();
+        let accesses: Vec<&str> = text.lines().filter(|l| l.contains(" volatile ")).collect();
+        assert_eq!(accesses.len(), 3, "{text}");
+        assert!(accesses.iter().all(|l| l.ends_with("align 4")), "{text}");
     }
 }
 

@@ -30,12 +30,13 @@
 //! bytes as they are in memory, an unwritten byte is arbitrary and every
 //! other byte keeps its value (`middle-end.md`, "Undefined behaviour").
 //! `freeze` could not do this, since it replaces all the bits of a load that
-//! is poison as a whole, the neighbors' and the field's own; and a flag on
-//! the instruction would only spare the volatile loads of other C objects a
-//! rule that describes them as well, since nothing may reason about what a
-//! volatile load returns. So a read loads the unit and extracts the field,
-//! and a write loads the unit, without a `freeze`, merges the field's bits
-//! and stores it, or stores it without a load when the field fills it.
+//! is poison as a whole, the neighbors' and the field's own. A flag on these
+//! loads alone would give every pass and back end one more form to carry, to
+//! keep poison for the other volatile loads, where nothing relies on it: no
+//! pass reasons about what a volatile load returns. So a read loads the unit
+//! and extracts the field, and a write loads the unit, without a `freeze`,
+//! merges the field's bits and stores it, or stores it without a load when
+//! the field fills it.
 //!
 //! GCC's rule (`strict_volatile_bitfield_p` in its `expmed.cc`, checked by
 //! compiling with GCC 13.3 and 14.2) has no case for a field whose unit
@@ -147,6 +148,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// starts within it, which would be out of bounds of an object in the IR,
     /// so those keep the ordinary access; and so does a record of variable
     /// size. `VolatileUnit::writes` tells whether a write may use the unit.
+    /// C99: §6.7.3 paragraph 6, p. 109; PDF p. 121 (implementation-defined).
     pub(super) fn volatile_unit(
         &self,
         ty: TypeId,
@@ -357,16 +359,20 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         field: BitField,
         unit: VolatileUnit,
     ) -> (Value, BitField) {
+        let align = Align::from_bytes(u64::from(unit.size)).unwrap_or(Align::BYTE);
         let address = if unit.before == 0 {
             address
         } else {
             let back = self.iconst(Type::I64, -i128::from(unit.before));
-            self.ptr_add(address, back)
+            let start = self.ptr_add(address, back);
+            // The field's own address says less than the unit's does.
+            self.retain_alignment(start, align);
+            start
         };
         let place = BitField {
             span: unit.size,
             shift: field.shift + unit.before * 8,
-            align: Align::from_bytes(u64::from(unit.size)).unwrap_or(Align::BYTE),
+            align,
             volatile_unit: None,
             ..field
         };
