@@ -736,7 +736,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 super::statements::StatementWork::DiscardedValue(
                     expression,
                     self.semantic_errors,
-                    self.functions.dead,
+                    self.functions.dead || self.evaluation_inhibited(),
                 ),
             ));
         }
@@ -744,8 +744,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Checks the expression whose value a statement discards, now analyzed
     /// without an error: neither compiler has anything to say about the value
-    /// of an invalid expression. `dead` says code generation would skip the
-    /// statement, which Clang takes for unreachable.
+    /// of an invalid expression. `dead` says the program would not run the
+    /// statement, which Clang can tell.
     /// C99: §6.8.3p2, p. 132; PDF p. 144.
     pub(super) fn check_discarded_value(&mut self, e: &'tu Expression<'tu>, dead: bool) {
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
@@ -1006,6 +1006,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
             if !self.functions.dead
+                && !self.evaluation_inhibited()
                 && self.clang_unused_result(left).is_some()
                 && !self
                     .context

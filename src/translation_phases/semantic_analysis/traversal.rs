@@ -103,8 +103,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                         self.functions.dead,
                     )));
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreSkippedOperand(
+                            self.functions.skipped_operand,
+                        )));
                 }
                 self.work.push(Work::Expression(right_expression));
+                if let Some(live) = live {
+                    self.work.push(Work::FunctionWork(FunctionWork::DecidedOperand(
+                        left_expression,
+                        live,
+                    )));
+                }
                 if let Some(live) = live.filter(|_| !branch) {
                     self.dead_arm(left_expression, live, Some(right_expression));
                     self.begin_condition_references(left_expression);
@@ -202,6 +212,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
                         self.functions.emission.orphan,
                     )));
+                // Only the selected association is evaluated, which is not
+                // known until they are all typed; warnings about evaluation
+                // err toward silence in any of them.
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreSkippedOperand(
+                        self.functions.skipped_operand,
+                    )));
+                self.functions.skipped_operand = true;
                 // Marks around each operand let the selection skip the
                 // references code generation does not emit.
                 for association in g.associations.iter().rev() {

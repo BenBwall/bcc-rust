@@ -420,6 +420,14 @@ fn clang_skips_unreachable_values() {
         ),
         []
     );
+    assert_eq!(
+        rules("void f(int x) { (void)sizeof(({ x + 1; 1; })); }", clang()),
+        []
+    );
+    assert_eq!(
+        rules("void f(int x) { (void)(0 ? (x + 1, 1) : 1); }", clang()),
+        []
+    );
     // A label makes the code reachable again.
     assert_eq!(
         rules("void f(int x) { if (0) { l: x + 1; } goto l; }", clang()),
