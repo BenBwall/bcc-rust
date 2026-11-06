@@ -483,8 +483,8 @@ diagnostic_groups! {
     ConstantPromotion => Some("constant-promotion"), Ignored, false;
     /// An integer constant whose implicit conversion changes its value.
     ConstantConversion => Some("constant-conversion"), Warning, false;
-    /// A string literal longer than the array it initializes, null
-    /// character aside: a warning by default that `-pedantic-errors` makes
+    /// An element beyond the object it initializes, or a string literal
+    /// longer than its array, null character aside: a warning by default that `-pedantic-errors` makes
     /// an error, as in GCC (a pedantic warning without an option) and Clang.
     ExcessInitializers => Some("excess-initializers"), Warning, true;
     /// GCC: a floating constant converted out of an integer type's range in

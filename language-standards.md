@@ -3129,6 +3129,12 @@ characters that fit and is a warning in both compilers that
 `-pedantic-errors` makes an error (GCC prints it without an option, Clang
 under `-Wexcess-initializers`); bcc rejected it before. This covers string
 literals inside a compound literal (`(char[3]){"abcd"}`) too.
+
+So does an element beyond the object (`int a[2] = {1, 2, 3}`): the element is
+dropped unevaluated. GCC reports each such element and goes on applying the
+list's later designators (`int a[1] = {1, 2, [0] = 3}` gives 3); Clang reports
+a list's first and drops the rest of that list (it gives 1).
+`--tcc-mode` and `--msvc-mode` keep the error, as TCC and `cl` do.
 `Analyzer::copy_array_literal` holds the rules;
 `tests/fixtures/programs/array_compound_literals.c` runs the accepted forms
 on every back end against each compiler (`tests/integration/identity_programs.rs`),
