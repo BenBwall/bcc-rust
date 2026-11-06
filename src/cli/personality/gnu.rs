@@ -11,7 +11,10 @@ use std::{
         OsStr,
         OsString,
     },
-    path::Path,
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 use super::{
@@ -716,11 +719,13 @@ const LINK_ONLY_OPTIONS: [&str; 8] = [
 /// options in `unimplemented.rs` are ignored too.
 const IGNORED_OPTIONS: [&str; 3] = ["-pipe", "-Q", "-time"];
 
-/// Where `-save-temps` writes under Clang, which names the files after the
-/// input. GCC names them after the output either way.
+/// Which `-save-temps` the command line gives.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SaveTemps {
-    /// `-save-temps` and `-save-temps=cwd`: the working directory.
+    /// `-save-temps`: beside the output for GCC, the working directory for
+    /// Clang.
+    Plain,
+    /// `-save-temps=cwd`: the working directory.
     WorkingDirectory,
     /// `-save-temps=obj`: beside the output.
     OutputDirectory,
@@ -730,9 +735,12 @@ impl State<'_> {
     /// The bcc command lines that write what `-save-temps` keeps of each C
     /// source: its preprocessed text, its assembly unless `-S` already asks
     /// for that, and its object when the command links, so that the program
-    /// is otherwise built as without the option. They only rewrite what the
-    /// real compile produced, so they report no warnings, and leave dependency
-    /// files to it. Standard input names no file to save after.
+    /// is otherwise built as without the option. As in the compilers, each
+    /// stage reads the text the first one saved, not the source, whose headers
+    /// that text may just have overwritten. A file the command's output is
+    /// named after is never overwritten. These runs only repeat what the real
+    /// compile did, so they report no warnings, and leave dependency files to
+    /// it. Standard input names no file to save after.
     fn saved_temporaries(&self, common: &[OsString], links: bool) -> Vec<Vec<OsString>> {
         let Some(save_temps) = self.save_temps else {
             return Vec::new();
@@ -753,42 +761,73 @@ impl State<'_> {
             }
             let path = Path::new(&input.path);
             let base = self.saved_temporary_base(path, save_temps, links);
+            let named = |extension: &str| {
+                let mut name = base.clone();
+                name.push(".");
+                name.push(extension);
+                name
+            };
+            let kept = |name: &OsString| !self.outputs.contains(name);
+            let text = named("i");
+            let mut read = input.path.clone();
+            let arguments = |read: &OsStr| {
+                let mut step = common.to_vec();
+                for argument in
+                    without_dependency_options(self.arguments(Inputs::One(input.at), false))
+                {
+                    if argument == input.path {
+                        step.push(read.to_owned());
+                    } else {
+                        step.push(argument);
+                    }
+                }
+                step.push("-w".into());
+                step
+            };
+            let output = |name: &OsString| {
+                let mut option = OsString::from("--output=");
+                option.push(name);
+                option
+            };
             let preprocessed = path.extension().is_some_and(|extension| extension == "i");
-            let mut stages = Vec::new();
-            if !preprocessed {
-                stages.push(("-E", "i"));
+            if !preprocessed && kept(&text) {
+                let mut step = arguments(&read);
+                step.push("-E".into());
+                step.push(output(&text));
+                steps.push(step);
+                read = text;
             }
+            let mut stages = Vec::new();
             if !stops_at_assembly {
-                stages.push(("-S", "s"));
+                stages.push(("-S", named("s")));
             }
             if links {
-                stages.push(("-c", "o"));
+                stages.push(("-c", named("o")));
             }
-            for (stage, extension) in stages {
-                let mut step = common.to_vec();
-                step.extend(without_dependency_options(
-                    self.arguments(Inputs::One(input.at), false),
-                ));
-                step.push("-w".into());
-                step.push(stage.into());
-                let mut output = OsString::from("--output=");
-                output.push(&base);
-                output.push(".");
-                output.push(extension);
-                step.push(output);
-                steps.push(step);
+            for (stage, name) in stages {
+                if kept(&name) {
+                    let mut step = arguments(&read);
+                    step.push(stage.into());
+                    step.push(output(&name));
+                    steps.push(step);
+                }
             }
         }
         steps
     }
 
     /// The name, without its extension, `-save-temps` gives what it keeps of
-    /// `input`. GCC follows the output, `-save-temps=obj` or not: `o/x.i` for
-    /// `-c g.c -o o/x.o`, and `p-g.i` for a program `p`. Clang follows the
-    /// input: `g.i`, in the output's directory under `-save-temps=obj`.
+    /// `input`. GCC follows the output: `o/x.i` for `-c g.c -o o/x.o`, and
+    /// `o/p.v1-g.i` for a program `o/p.v1`, or `a-g.i` when it has no name, and
+    /// `-save-temps=cwd` leaves the directory out. Clang follows the input:
+    /// `g.i`, in the output's directory under `-save-temps=obj`.
     fn saved_temporary_base(&self, input: &Path, save_temps: SaveTemps, links: bool) -> OsString {
         let stem = input.file_stem().unwrap_or(input.as_os_str());
-        let output = self.outputs.first().map(Path::new);
+        let output = self
+            .outputs
+            .first()
+            .map(Path::new)
+            .filter(|output| *output != Path::new("-"));
         if self.compiler == Compiler::Clang {
             return match (save_temps, output.and_then(Path::parent)) {
                 | (SaveTemps::OutputDirectory, Some(directory)) =>
@@ -796,17 +835,21 @@ impl State<'_> {
                 | _ => stem.to_owned(),
             };
         }
-        match (links, output) {
-            | (false, Some(output)) => output.with_extension("").into_os_string(),
-            | (false, None) => stem.to_owned(),
+        let base = match (links, output) {
+            | (false, Some(output)) => output.with_extension(""),
+            | (false, None) => PathBuf::from(stem),
             | (true, output) => {
-                let mut base = output.unwrap_or(Path::new("a.out")).with_extension("");
-                let mut name = base.file_name().unwrap_or_default().to_owned();
+                let program = output.unwrap_or(Path::new("a"));
+                let mut name = program.file_name().unwrap_or_default().to_owned();
                 name.push("-");
                 name.push(stem);
-                base.set_file_name(name);
-                base.into_os_string()
+                program.with_file_name(name)
             },
+        };
+        if save_temps == SaveTemps::WorkingDirectory {
+            base.file_name().unwrap_or_default().to_owned()
+        } else {
+            base.into_os_string()
         }
     }
 
@@ -1523,7 +1566,11 @@ impl State<'_> {
             self.out.push(text.into());
             return;
         }
-        if text == "-save-temps" || text == "-save-temps=cwd" {
+        if text == "-save-temps" {
+            self.save_temps = Some(SaveTemps::Plain);
+            return;
+        }
+        if text == "-save-temps=cwd" {
             self.save_temps = Some(SaveTemps::WorkingDirectory);
             return;
         }

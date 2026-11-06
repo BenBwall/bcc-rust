@@ -320,9 +320,12 @@ read as preprocessor options (Fedora's `-Wp,-D_FORTIFY_SOURCE=2`). `-s`,
 `-T`, `-u`, `-z` and `-e` become linker options. `-Wa,` and `-Xassembler`
 reach bcc's assembly inputs. `-save-temps` and `-save-temps=cwd|obj` keep
 each C source's `.i` and `.s`, named after the output (`o/x.i` for `-c g.c -o
-o/x.o`, `p-g.i` and `p-g.o` for a program `p`). bcc writes them after the
-program compiles, from separate runs, so a failed compile leaves none, where
-GCC keeps the `.i`, and a source read from standard input saves nothing.
+o/x.o`, `o/p.v1-g.i` and `o/p.v1-g.o` for a program `o/p.v1`), and
+`-save-temps=cwd` leaves the directory out. bcc writes them after the program
+compiles, from separate runs that read the saved `.i`, and never over the
+command's own output. So a failed compile leaves none, where GCC keeps the
+`.i`; a source read from standard input saves nothing; and `-fsyntax-only`
+writes nothing, where GCC and Clang write the `.i`.
 `-g*`, `-pipe` and `--param` have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
 refused: it implies `-ffast-math`, which defines `__FAST_MATH__` and links
 `crtfastmath`, which bcc does not do.

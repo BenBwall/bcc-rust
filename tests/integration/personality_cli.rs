@@ -1347,6 +1347,67 @@ mod tests {
         assert!(!directory.path("e.s").exists());
     }
 
+    /// The cases where `-save-temps` could damage a build: the command's own
+    /// output, and a header the saved text overwrites.
+    #[test]
+    fn gnu_save_temps_keeps_the_build_intact() {
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let directory = Directory::new();
+            directory.write("g.c", "int g(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &["-save-temps", "-c", "g.c", "-o", "g.i"]));
+            let object = std::fs::read(directory.path("g.i")).unwrap();
+            let expected = directory.bcc(mode, &["-c", "g.c", "-o", "plain.o"]);
+            succeeds(&expected);
+            assert_eq!(
+                object,
+                std::fs::read(directory.path("plain.o")).unwrap(),
+                "{mode}"
+            );
+
+            let directory = Directory::new();
+            directory.write("g.i", "typedef int T;\n");
+            directory.write("g.c", "#include \"g.i\"\nint g(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &["-save-temps", "-c", "g.c"]));
+            assert!(directory.path("g.s").exists(), "{mode}");
+        }
+    }
+
+    /// GCC's names follow the output, with `=cwd` leaving out its directory.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_names_follow_gcc() {
+        let cases: [(&[&str], &[&str]); 4] = [
+            (
+                &["-save-temps=cwd", "-c", "g.c", "-o", "o/x.o"],
+                &["x.i", "x.s", "o/x.o"],
+            ),
+            (
+                &["-save-temps", "g.c", "m.c", "-o", "o/prog.v1"],
+                &[
+                    "o/prog.v1-g.i",
+                    "o/prog.v1-m.s",
+                    "o/prog.v1-g.o",
+                    "o/prog.v1",
+                ],
+            ),
+            (
+                &["-save-temps=cwd", "g.c", "m.c", "-o", "o/prog.v1"],
+                &["prog.v1-g.i", "prog.v1-m.s", "prog.v1-g.o", "o/prog.v1"],
+            ),
+            (&["-save-temps", "-S", "g.c", "-o", "-"], &["g.i"]),
+        ];
+        for (args, files) in cases {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "int g(void) { return 7; }\n");
+            directory.write("m.c", "int g(void); int main(void) { return g(); }\n");
+            succeeds(&directory.bcc("--gcc-mode", args));
+            for file in files {
+                assert!(directory.path(file).exists(), "{args:?}: {file}");
+            }
+        }
+    }
+
     /// A linked program's intermediate files, and its dependency file left
     /// to the real compile.
     #[cfg(target_os = "linux")]
