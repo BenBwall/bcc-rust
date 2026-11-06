@@ -401,6 +401,20 @@ fn address_warnings_look_at_macros() {
         ("if (!G) return 1; return 0;", 1, 0),
         ("IF(&s.x); return 0;", 0, 0),
         ("IF(&g); return 0;", 1, 0),
+        // A conversion to `_Bool`, whose location is not the expression's.
+        ("_Bool b = D; return b;", 1, 0),
+        ("_Bool b = I(&s.x); return b;", 1, 1),
+        ("_Bool b; b = D; return b;", 1, 0),
+        ("return (_Bool)D;", 1, 0),
+        ("return (_Bool)I(&s.x);", 1, 0),
+        // The operators': `&&`'s left operand at its first token, its right
+        // operand at the operator, and `?` at itself.
+        ("return D && g;", 0, 0),
+        ("return g && D;", 1, 0),
+        ("return I(&s.x) && g;", 0, 1),
+        ("return G && g;", 1, 0),
+        ("return D ? 1 : 0;", 1, 0),
+        ("return I(&s.x) ? 1 : 0;", 1, 1),
         // An argument the user wrote and nothing in a body converts.
         ("if (I(&s.x)) return 1; return 0;", 0, 1),
         ("if (I(&g)) return 1; return 0;", 1, 1),
