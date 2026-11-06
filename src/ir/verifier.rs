@@ -15,6 +15,7 @@ use std::fmt;
 
 use super::{
     Body,
+    EntryConvention,
     FuncId,
     GlobalId,
     Module,
@@ -270,6 +271,20 @@ fn verify_function_into<'m, 's>(
             kind,
         });
     });
+    if function.entry == EntryConvention::Interrupt
+        && !module
+            .get_signature(function.signature)
+            .is_some_and(|signature| {
+                signature.result.is_none()
+                    && matches!(signature.params, [Type::Ptr] | [Type::Ptr, Type::I64])
+            })
+    {
+        errors.push(VerifierError {
+            item:     function.name,
+            location: Location::Item,
+            kind:     VerifierErrorKind::HandlerSignature,
+        });
+    }
     let Some(signature) = module.get_signature(function.signature) else {
         errors.push(VerifierError {
             item:     function.name,
@@ -1410,6 +1425,9 @@ pub(crate) enum VerifierErrorKind {
     Noundef(&'static str),
     /// A static chain that is not a plain `ptr` last fixed parameter.
     StaticChain,
+    /// An interrupt handler that does not take a frame pointer and an optional
+    /// error code, or returns a value.
+    HandlerSignature,
     /// LLVM and the native symbol interfaces require NUL-free names.
     NulSymbolName,
     /// An alias, section, constructor or destructor request breaks the rule
@@ -1662,6 +1680,9 @@ impl fmt::Display for VerifierErrorKind {
             | Self::StaticChain =>
                 f.write_str("a static chain must be a plain `ptr` last fixed parameter"),
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
+            | Self::HandlerSignature => f.write_str(
+                "an interrupt handler takes a pointer and an optional i64, and returns nothing",
+            ),
             | Self::AtomicContract =>
                 f.write_str("invalid atomic operand count or memory ordering"),
             | Self::SymbolAttribute(rule) => write!(f, "invalid symbol attribute: {rule}"),

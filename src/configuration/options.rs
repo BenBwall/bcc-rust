@@ -759,6 +759,32 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Keeps generated code to general registers, as GCC's
+    /// `-mgeneral-regs-only` does; floating values are then refused
+    /// (`lowering/general_regs.rs`). GNU extension: GCC manual, "x86 Options".
+    pub(crate) const fn with_general_regs_only(mut self, enabled: bool) -> Self {
+        self.general_regs_only = enabled;
+        self
+    }
+
+    /// Whether `-mgeneral-regs-only` is in effect.
+    pub(crate) const fn general_regs_only(self) -> bool {
+        self.general_regs_only
+    }
+
+    /// Says the processor has user interrupts, as `-muintr` does: an
+    /// interrupt handler returns with `uiret`. GNU extension: GCC manual,
+    /// "x86 Options".
+    pub(crate) const fn with_user_interrupts(mut self, enabled: bool) -> Self {
+        self.user_interrupts = enabled;
+        self
+    }
+
+    /// Whether `-muintr` is in effect.
+    pub(crate) const fn user_interrupts(self) -> bool {
+        self.user_interrupts
+    }
+
     /// Whether `-fsignaling-nans` is in effect.
     pub(crate) const fn signaling_nans(self) -> bool {
         self.signaling_nans
@@ -924,6 +950,8 @@ impl CompilerConfiguration {
             standard_excess_precision: false,
             fast_math_saved: 0,
             signaling_nans: false,
+            general_regs_only: false,
+            user_interrupts: false,
             suppress_warnings: false,
             permissive: None,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,

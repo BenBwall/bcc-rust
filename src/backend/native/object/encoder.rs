@@ -24,8 +24,9 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
     };
     let [a, b, d] = operands(name, args)?;
     match name {
-        | "retq" | "callq" | "jmpq" => code.control_transfer(name, args, a)?,
+        | "retq" | "callq" | "jmpq" | "iretq" | "uiret" => code.control_transfer(name, args, a)?,
         | "ud2" => code.raw(&[0x0F, 0x0B])?,
+        | "cld" => code.byte(0xFC)?,
         | "mfence" => code.raw(&[0x0F, 0xAE, 0xF0])?,
         | "int3" => code.byte(0xCC)?,
         | "cltd" => code.byte(0x99)?,
@@ -618,7 +619,7 @@ fn validate(name: &str, args: &str, operands: &[Operand<'_>]) -> Result<()> {
                     .map_err(|_| Error("return adjustment exceeds 16 bits"))?;
                 Ok(())
             },
-        | "ud2" | "int3" | "cltd" | "cqto" | "mfence" => form(&[]),
+        | "ud2" | "cld" | "iretq" | "uiret" | "int3" | "cltd" | "cqto" | "mfence" => form(&[]),
         | "callq" | "jmpq" =>
             if args.starts_with('*') {
                 form(&[Rm(64)])
@@ -974,6 +975,8 @@ impl<'a> Code<'a> {
 
     fn control_transfer(&mut self, name: &str, args: &'a str, a: Operand<'a>) -> Result<()> {
         match name {
+            | "iretq" => self.raw(&[0x48, 0xCF])?,
+            | "uiret" => self.raw(&[0xF3, 0x0F, 0x01, 0xEC])?,
             | "retq" =>
                 if matches!(a, Operand::Empty) {
                     self.byte(0xC3)?;

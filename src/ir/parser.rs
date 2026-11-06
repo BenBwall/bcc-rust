@@ -24,6 +24,7 @@ use lexer::{
 };
 
 use super::{
+    EntryConvention,
     FunctionBuilder,
     Module,
     entities::{
@@ -150,6 +151,7 @@ fn declare_items<'t>(
                     || (header.linkage != Linkage::Internal
                         && crate::builtins::returns_twice(name.text_name(scratch)?));
                 module.function_mut(func).inlining = header.inlining;
+                module.function_mut(func).entry = header.entry;
                 if let Some(external) = header.inline_copy_of {
                     module.set_inline_copy_of(func, external.text_name(scratch)?);
                 }
@@ -517,8 +519,9 @@ fn parse_relocation_target<'t>(
 }
 
 /// `function @name(params) [-> ty] linkage [align N] [returns_twice]
-/// [noinline | alwaysinline] [inline_copy_of @name]` and its symbol
-/// attributes, up to the body.
+/// [noinline | alwaysinline] [inline_copy_of @name]
+/// [interrupt | preserve_registers | naked]` and its symbol attributes, up to
+/// the body.
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
     scratch: &'s Bump,
@@ -546,6 +549,18 @@ fn parse_function_header<'t, 's>(
     } else {
         None
     };
+    let entry = [
+        EntryConvention::Interrupt,
+        EntryConvention::PreserveRegisters,
+        EntryConvention::Naked,
+    ]
+    .into_iter()
+    .find(|entry| {
+        entry
+            .keyword()
+            .is_some_and(|keyword| cursor.eat(TokenKind::Ident(keyword)))
+    })
+    .unwrap_or_default();
     let attributes = WrittenAttributes::parse(cursor)?;
     Ok(FunctionHeader {
         name,
@@ -555,6 +570,7 @@ fn parse_function_header<'t, 's>(
         returns_twice,
         inlining,
         inline_copy_of,
+        entry,
         attributes,
     })
 }
@@ -567,6 +583,7 @@ struct FunctionHeader<'t, 's> {
     returns_twice:  bool,
     inlining:       InlineControl,
     inline_copy_of: Option<Token<'t>>,
+    entry:          EntryConvention,
     attributes:     WrittenAttributes<'t>,
 }
 

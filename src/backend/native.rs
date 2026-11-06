@@ -70,6 +70,7 @@ use self::{
     conv::CallConv,
     emit::Emitter,
     frame::Frame,
+    support::Construct,
 };
 use crate::{
     ir::{
@@ -299,6 +300,13 @@ fn emit<'m>(
                 function: Some(function.name),
                 construct,
             })?;
+            if module.general_regs_only() && func.uses_floating_registers() {
+                return Err(Unsupported {
+                    function:  Some(function.name),
+                    construct: Construct::FloatingRegisters,
+                }
+                .into());
+            }
             let mut allocation = regalloc::allocate(&mut func, conv, arena);
             adjust(&func, &mut allocation);
             regalloc::rewrite(&mut func, &allocation, arena);

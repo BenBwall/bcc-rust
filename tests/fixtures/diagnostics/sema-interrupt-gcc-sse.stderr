@@ -1,0 +1,25 @@
+error: sorry, unimplemented: SSE instructions aren't allowed in an interrupt service routine
+ --> sema-interrupt-gcc-sse.c:2:33
+  |
+2 | __attribute__((interrupt)) void interrupt(void *p) {}
+  |                                 ^^^^^^^^^ compiled with SSE enabled
+  |
+  = note: GCC x86 Function Attributes: compile the function with -mgeneral-regs-only, since GCC does not save SSE, MMX or x87 state
+
+error: sorry, unimplemented: SSE instructions aren't allowed in an exception service routine
+ --> sema-interrupt-gcc-sse.c:3:33
+  |
+3 | __attribute__((interrupt)) void exception(void *p, unsigned long e) {}
+  |                                 ^^^^^^^^^ compiled with SSE enabled
+  |
+  = note: GCC x86 Function Attributes: compile the function with -mgeneral-regs-only, since GCC does not save SSE, MMX or x87 state
+
+error: sorry, unimplemented: SSE instructions aren't allowed in a function with the 'no_caller_saved_registers' attribute
+ --> sema-interrupt-gcc-sse.c:4:49
+  |
+4 | __attribute__((no_caller_saved_registers)) void saving(void) {}
+  |                                                 ^^^^^^ compiled with SSE enabled
+  |
+  = note: GCC x86 Function Attributes: compile the function with -mgeneral-regs-only, since GCC does not save SSE, MMX or x87 state
+
+3 errors generated.

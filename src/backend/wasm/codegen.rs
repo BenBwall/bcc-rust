@@ -89,6 +89,13 @@ pub(crate) fn generate<'a>(
         .body
         .as_ref()
         .expect("only defined functions are generated");
+    match function.entry {
+        | crate::ir::EntryConvention::Interrupt => return Err("an interrupt service routine"),
+        | crate::ir::EntryConvention::Naked => return Err("a naked function"),
+        | crate::ir::EntryConvention::PreserveRegisters =>
+            return Err("a function with `no_caller_saved_registers`"),
+        | crate::ir::EntryConvention::C => {},
+    }
     let signature = module.signature(function.signature);
     let mut codegen = Codegen {
         link,

@@ -136,6 +136,8 @@ pub(crate) fn text(name: &Path) -> Option<&'static str> {
         | "cpuid.h" => include_str!("headers/cpuid.h"),
         | "immintrin.h" => include_str!("headers/immintrin.h"),
         | "x86intrin.h" => include_str!("headers/x86intrin.h"),
+        | "x86gprintrin.h" => include_str!("headers/x86gprintrin.h"),
+        | "uintrintrin.h" => include_str!("headers/uintrintrin.h"),
         | "__wmmintrin_aes.h" => include_str!("headers/__wmmintrin_aes.h"),
         | "__wmmintrin_pclmul.h" => include_str!("headers/__wmmintrin_pclmul.h"),
         | "prfchwintrin.h" => include_str!("headers/prfchwintrin.h"),

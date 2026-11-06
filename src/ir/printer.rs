@@ -106,6 +106,9 @@ impl<'ir> Module<'ir> {
             if let Some(external) = function.inline_copy_of {
                 write!(f, " inline_copy_of {}", display_name(external))?;
             }
+            if let Some(keyword) = function.entry.keyword() {
+                write!(f, " {keyword}")?;
+            }
             write!(f, "{}", self.display_symbol_attributes(function.attributes))?;
             let Some(body) = &function.body else {
                 return f.write_char('\n');

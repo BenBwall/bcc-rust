@@ -1687,3 +1687,22 @@ loop's offset within a 64-byte line, which 16- and 32-byte alignment leave
 free. Only 64-byte alignment pins it (0.216-0.237 s over the same shifts,
 apart from one at 0.248 s), at the code size above, so the back end keeps LLVM's
 16 bytes; 64-byte loop alignment for this processor is left open.
+
+## Machine entries
+
+`Function::entry` chooses a function's prologue and epilogue; `frame.rs` has the
+layouts. An `interrupt` handler arrives with no return address, at whatever
+alignment the interrupted code left, so it clears the direction flag, pushes what
+it must preserve, rounds `%rsp` down, keeps the entry `%rsp` in the frame for the
+epilogue, and addresses its frame from `%rbp` as a moving stack does. `%rax`
+carries the entry `%rsp` to instruction selection, which reads the error code and
+frame pointer from it: no register holds an argument. The epilogue pops an error
+code and returns with `iretq`, or `uiret` under `-muintr`. A handler has no `.cfi`
+information, since nothing unwinds into what it interrupted, and refuses
+`__builtin_return_address` and `__builtin_frame_address`. A
+`no_caller_saved_registers` function keeps the ordinary layout and saves more; its
+callers treat it as any other function. A `naked` function pushes nothing and
+ends in `ud2`; a C body subtracts what it needs from `%rsp` first, and reads of a
+register variable in `%rsp` add it back. `-mgeneral-regs-only` leaves SSE out of
+every save and of `va_start`'s register area, and a function that selected an SSE
+or x87 register anyway is refused.

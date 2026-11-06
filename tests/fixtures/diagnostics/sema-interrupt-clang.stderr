@@ -1,0 +1,65 @@
+error: x86-64 'interrupt' attribute only applies to functions that have only a pointer parameter optionally followed by an integer parameter
+ --> sema-interrupt-clang.c:3:16
+  |
+3 | __attribute__((interrupt)) void none(void);
+  |                ^^^^^^^^^ wrong number of parameters
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: x86-64 'interrupt' attribute only applies to functions that have a pointer as the first parameter
+ --> sema-interrupt-clang.c:4:16
+  |
+4 | __attribute__((interrupt)) void not_pointer(int x);
+  |                ^^^^^^^^^ not a pointer
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: x86-64 'interrupt' attribute only applies to functions that have a 'unsigned long' type as the second parameter
+ --> sema-interrupt-clang.c:5:16
+  |
+5 | __attribute__((interrupt)) void not_word(void *p, long e);
+  |                ^^^^^^^^^ not a word-sized integer
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: x86-64 'interrupt' attribute only applies to functions that have only a pointer parameter optionally followed by an integer parameter
+ --> sema-interrupt-clang.c:6:16
+  |
+6 | __attribute__((interrupt)) void three(void *p, unsigned long e, unsigned long z);
+  |                ^^^^^^^^^ wrong number of parameters
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: x86-64 'interrupt' attribute only applies to functions that have a 'void' return type
+ --> sema-interrupt-clang.c:7:16
+  |
+7 | __attribute__((interrupt)) int returns(void *p);
+  |                ^^^^^^^^^ does not return void
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: interrupt service routine cannot be called directly
+  --> sema-interrupt-clang.c:9:21
+   |
+ 9 | void caller(void) { handler(0); }
+   |                     ^^^^^^^^^^ only the processor enters a handler
+   |
+   = note: GCC x86 Function Attributes: only the processor enters a handler, which returns with iret
+
+warning: interrupt service routine should only call a function with attribute 'no_caller_saved_registers' or be compiled with '-mgeneral-regs-only' [-Wexcessive-regsave]
+  --> sema-interrupt-clang.c:11:52
+   |
+11 | __attribute__((interrupt)) void calling(void *p) { plain(); }
+   |                                                    ^^^^^^^ saves every register the callee may change
+   |
+   = note: Clang -Wexcessive-regsave: the handler saves every register the callee may change
+
+warning: function with attribute 'no_caller_saved_registers' should only call a function with attribute 'no_caller_saved_registers' or be compiled with '-mgeneral-regs-only' [-Wexcessive-regsave]
+  --> sema-interrupt-clang.c:12:64
+   |
+12 | __attribute__((no_caller_saved_registers)) void saving(void) { plain(); }
+   |                                                                ^^^^^^^ saves every register the callee may change
+   |
+   = note: Clang -Wexcessive-regsave: the caller saves every register the callee may change
+
+6 errors and 2 warnings generated.

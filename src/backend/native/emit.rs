@@ -72,6 +72,7 @@ use crate::{
         AsmTemplatePiece,
         DllStorage,
         Entity,
+        EntryConvention,
         FuncId,
         GlobalInit,
         InitKind,
@@ -227,7 +228,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.p2align\t{align}, 0x90")?;
             writeln!(self.out, "\t.type\t{name},@function")?;
             writeln!(self.out, "{name}:")?;
-            writeln!(self.out, "\t.cfi_startproc")?;
+            // A handler has no caller to unwind to.
+            if function.entry != EntryConvention::Interrupt {
+                writeln!(self.out, "\t.cfi_startproc")?;
+            }
         } else {
             self.coff_function(name, function.linkage)?;
             self.binding(name, function.linkage, function.attributes.visibility)?;
@@ -238,7 +242,11 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         if !self.elf {
             self.stubs.extend(func.indirect_symbols.iter().copied());
         }
-        self.prologue(frame)?;
+        if function.entry == EntryConvention::Interrupt {
+            self.handler_prologue(frame)?;
+        } else {
+            self.prologue(frame)?;
+        }
         let aligned = aligned_blocks(func, arena);
         for (index, block) in func.blocks.iter().enumerate() {
             let block_id = MBlock::new(index);
@@ -259,7 +267,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
         }
         if self.elf {
-            writeln!(self.out, "\t.cfi_endproc")?;
+            if function.entry != EntryConvention::Interrupt {
+                writeln!(self.out, "\t.cfi_endproc")?;
+            }
             writeln!(self.out, "\t.size\t{name}, .-{name}")?;
         } else {
             writeln!(self.out, "\t.seh_endproc")?;
@@ -478,12 +488,11 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
         }
         for &(register, offset) in &frame.saved_xmm {
-            writeln!(
-                self.out,
-                "\tmovaps\t%{}, {offset}(%rsp)\n\t.seh_savexmm %{}, {offset}",
-                register.name(Width::B64),
-                register.name(Width::B64)
-            )?;
+            let name = register.name(Width::B64);
+            writeln!(self.out, "\tmovaps\t%{name}, {offset}(%rsp)")?;
+            if !self.elf {
+                writeln!(self.out, "\t.seh_savexmm %{name}, {offset}")?;
+            }
         }
         if frame.rbp_based {
             writeln!(self.out, "\tmovq\t%rsp, %rbp")?;
@@ -502,6 +511,62 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\tandq\t$-{}, %rsp", frame.realign)?;
         }
         Ok(())
+    }
+
+    /// A handler's entry, as `frame.rs` lays it out; `%rax` keeps the entry
+    /// `%rsp`, which instruction selection takes the parameters from. LLVM's
+    /// `x86_intrcc` clears the direction flag too, since nothing says what the
+    /// interrupted code left in it.
+    /// GNU extension: GCC manual, "x86 Function Attributes", `interrupt`.
+    fn handler_prologue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        writeln!(self.out, "\tcld")?;
+        for &register in &frame.saved {
+            writeln!(self.out, "\tpushq\t%{}", register.name(Width::B64))?;
+        }
+        let pushed = 8 * frame.saved.len();
+        writeln!(self.out, "\tleaq\t{pushed}(%rsp), %rax")?;
+        writeln!(self.out, "\tandq\t$-16, %rsp")?;
+        writeln!(self.out, "\tsubq\t${}, %rsp", frame.size)?;
+        writeln!(self.out, "\tmovq\t%rax, {}(%rsp)", frame.entry_rsp)?;
+        for &(register, offset) in &frame.saved_xmm {
+            writeln!(
+                self.out,
+                "\tmovaps\t%{}, {offset}(%rsp)",
+                register.name(Width::B64)
+            )?;
+        }
+        writeln!(self.out, "\tmovq\t%rsp, %rbp")?;
+        if frame.realign > 16 {
+            writeln!(self.out, "\tandq\t$-{}, %rsp", frame.realign)?;
+        }
+        Ok(())
+    }
+
+    /// A handler's return: the registers back, the error code popped, then
+    /// `iretq`, or `uiret` where the processor has user interrupts, which
+    /// the processor's frame tells where to resume.
+    fn handler_epilogue(&mut self, frame: &Frame<'_>, error_code: bool) -> fmt::Result {
+        for &(register, offset) in &frame.saved_xmm {
+            writeln!(
+                self.out,
+                "\tmovaps\t{offset}(%rbp), %{}",
+                register.name(Width::B64)
+            )?;
+        }
+        writeln!(self.out, "\tmovq\t{}(%rbp), %rsp", frame.entry_rsp)?;
+        writeln!(self.out, "\tleaq\t-{}(%rsp), %rsp", 8 * frame.saved.len())?;
+        for &register in frame.saved.iter().rev() {
+            writeln!(self.out, "\tpopq\t%{}", register.name(Width::B64))?;
+        }
+        if error_code {
+            writeln!(self.out, "\tleaq\t8(%rsp), %rsp")?;
+        }
+        let name = if self.module.user_interrupts() {
+            "uiret"
+        } else {
+            "iretq"
+        };
+        writeln!(self.out, "\t{name}")
     }
 
     fn epilogue(&mut self, frame: &Frame<'_>) -> fmt::Result {
@@ -971,7 +1036,17 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 if store { "fnstcw" } else { "fldcw" },
                 at(Operand::Mem(mem), Width::B16)
             ),
-            | MInst::Ret { .. } => self.epilogue(frame),
+            | MInst::Ret { .. } => match frame.entry {
+                // Control running off a naked body has no epilogue to return
+                // through, and GCC ends it the same way.
+                | EntryConvention::Naked => writeln!(out, "\tud2"),
+                | EntryConvention::Interrupt => {
+                    let signature = self.module.function(func).signature;
+                    let error_code = self.module.signature(signature).params.len() == 2;
+                    self.handler_epilogue(frame, error_code)
+                },
+                | EntryConvention::C | EntryConvention::PreserveRegisters => self.epilogue(frame),
+            },
             | MInst::InlineAsm { .. } => unreachable!("inline assembly is written apart"),
             | MInst::Ud2 => writeln!(out, "\tud2"),
             | MInst::Int3 => writeln!(out, "\tint3"),

@@ -35,6 +35,15 @@ pub(crate) struct LoweringError {
     pub(crate) source: Option<SourceVectors>,
 }
 
+/// The registers GCC's refusals under `-mgeneral-regs-only` name.
+/// GNU extension: GCC manual, "x86 Options".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DisabledRegister {
+    SseReturn,
+    X87Return,
+    SseArgument,
+}
+
 /// What went wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LoweringErrorKind {
@@ -55,6 +64,10 @@ pub(crate) enum LoweringErrorKind {
     UnsupportedBuiltin(Option<&'static str>),
     /// File-scope assembly in a form GCC's grammar and Clang reject.
     InvalidFileScopeAsm(FileScopeAsmFault),
+    /// GCC's refusal of a floating value in a register that
+    /// `-mgeneral-regs-only` takes away.
+    /// GNU extension: GCC manual, "x86 Options".
+    DisabledRegister(DisabledRegister),
     /// A fact lowering relies on is missing from the semantic results: a
     /// compiler bug, reported rather than turned into wrong code.
     MissingFact(&'static str),
@@ -83,6 +96,13 @@ pub(crate) enum Construct {
     /// not implement: x87, MMX and register pairs, `__int128`, aggregates in
     /// registers, or an immediate address with an offset.
     InlineAssemblyOperand,
+    /// Floating code under `-mgeneral-regs-only` that GCC would compile but
+    /// bcc has no general-register code for.
+    FloatingWithoutSse,
+    /// An assignment to a local register variable in the stack pointer.
+    StackPointerVariableWrite,
+    /// An interrupt handler with variable arguments.
+    VariadicHandler,
     /// An `asm` operand that is a GNU local register variable whose
     /// register its constraint cannot take or lowering cannot place it in.
     RegisterVariableOperand,
@@ -178,6 +198,10 @@ impl Construct {
             | Self::InlineAssembly => "MSVC inline assembly",
             | Self::InlineAssemblyOperand =>
                 "inline assembly operands of this register class or type",
+            | Self::FloatingWithoutSse => "floating-point values under -mgeneral-regs-only",
+            | Self::StackPointerVariableWrite =>
+                "an assignment to a local register variable in the stack pointer",
+            | Self::VariadicHandler => "an interrupt service routine with variable arguments",
             | Self::RegisterVariableOperand =>
                 "an asm operand in this local register variable's register",
             | Self::FileScopeAssembly =>
@@ -242,6 +266,12 @@ impl FileScopeAsmFault {
 impl LoweringErrorKind {
     fn message(self) -> &'static str {
         match self {
+            | Self::DisabledRegister(DisabledRegister::SseReturn) =>
+                "SSE register return with SSE disabled",
+            | Self::DisabledRegister(DisabledRegister::X87Return) =>
+                "x87 register return with x87 disabled",
+            | Self::DisabledRegister(DisabledRegister::SseArgument) =>
+                "SSE register argument with SSE disabled",
             #[cfg(test)]
             | Self::CallDiagnostic(_) => "function attribute diagnostic",
             | Self::UnitHasErrors => "code is not generated for a translation unit with errors",

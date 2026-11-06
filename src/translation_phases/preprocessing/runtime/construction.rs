@@ -34,6 +34,7 @@ use super::{
 #[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
+    configuration::CompilerIdentity,
     headers::HeaderSearch,
     translation_phases::{
         Context,
@@ -74,6 +75,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             if (name == "__STDC_VERSION__"
                 && context.configuration.standard().version_macro().is_none())
                 || (name == "__STRICT_ANSI__" && !context.configuration.strict_ansi())
+                || !identity_defines(context.configuration.compiler_identity(), name)
             {
                 continue;
             }
@@ -122,7 +124,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         let target = context.configuration.target();
         let gnu = context.configuration.gnu_extensions();
         let table = match context.configuration.compiler_identity() {
-            | crate::configuration::CompilerIdentity::Gcc => target.gcc_predefined_macros(gnu),
+            | CompilerIdentity::Gcc => target.gcc_predefined_macros(gnu),
             | _ => None,
         };
         let definitions = language_features::with_identity_macros(
@@ -256,12 +258,15 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
 /// defined names of §6.10.8 paragraph 2, p. 161; PDF p. 173, is defined.
 /// `_Pragma` is an operator (§6.10.9, p. 161; PDF p. 173), not a macro; it
 /// is registered here so that rescanning recognizes it.
-const PREDEFINED_MACRO_NAMES: [&str; 11] = [
+const PREDEFINED_MACRO_NAMES: [&str; 14] = [
     "__LINE__",
     "__FILE__",
     "__BASE_FILE__",
+    "__FILE_NAME__",
+    "__INCLUDE_LEVEL__",
     "__DATE__",
     "__TIME__",
+    "__TIMESTAMP__",
     "_Pragma",
     "__STDC__",
     "__STDC_VERSION__",
@@ -269,3 +274,15 @@ const PREDEFINED_MACRO_NAMES: [&str; 11] = [
     "__STDC_HOSTED__",
     "__STDC_MB_MIGHT_NEQ_WC__",
 ];
+
+/// Whether the compiler being mimicked has predefined `name`. GCC and Clang
+/// have every extension here; Microsoft's list has only `__TIMESTAMP__` and
+/// TCC has none of these three. Microsoft Learn, "Predefined macros".
+fn identity_defines(identity: CompilerIdentity, name: &str) -> bool {
+    match name {
+        | "__FILE_NAME__" | "__INCLUDE_LEVEL__" =>
+            !matches!(identity, CompilerIdentity::Msvc | CompilerIdentity::Tcc),
+        | "__TIMESTAMP__" => !matches!(identity, CompilerIdentity::Tcc),
+        | _ => true,
+    }
+}

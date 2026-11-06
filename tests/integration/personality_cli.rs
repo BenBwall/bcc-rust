@@ -747,6 +747,88 @@ mod tests {
         );
     }
 
+    /// An element beyond the object is a warning in GCC and Clang, each with
+    /// its own count, and is dropped without being evaluated. TCC and `cl`
+    /// refuse it. C99 §6.7.8p2.
+    #[test]
+    fn excess_initializer_elements_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "m.c",
+            "int a[2] = {1, 2, 3, 4};\nstruct S { int x; } s = {5, 6};\nunion U { int i; } u = \
+             {7, 8};\nint v = {9, 10};\n",
+        );
+        for (mode, first) in [("--gcc-mode", 4), ("--clang-mode", 3)] {
+            let output = directory.bcc(mode, &["-fsyntax-only", "m.c"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            assert_eq!(
+                text.matches("warning: excess elements").count(),
+                first + 1,
+                "{mode}: {text}"
+            );
+            for object in ["array", "struct", "union", "scalar"] {
+                assert!(
+                    text.contains(&format!("excess elements in {object} initializer")),
+                    "{text}"
+                );
+            }
+            let silent = directory.bcc(mode, &["-w", "-fsyntax-only", "m.c"]);
+            succeeds(&silent);
+            assert!(stderr(&silent).is_empty(), "{mode}: {}", stderr(&silent));
+            let strict = directory.bcc(mode, &["-pedantic-errors", "-fsyntax-only", "m.c"]);
+            assert_eq!(strict.status.code(), Some(1), "{mode}: {}", stderr(&strict));
+        }
+        directory.write(
+            "run.c",
+            "int f(void) { __builtin_trap(); }\nint main(void) { int d[1] = {1, f()}; return d[0] \
+             - 1; }\n",
+        );
+        for opt in ["--opt=none", "--opt=bcc"] {
+            let output = directory.bcc("", &["--interpret", opt, "run.c"]);
+            assert_eq!(output.status.code(), Some(0), "{opt}: {}", stderr(&output));
+        }
+        let output = directory.bcc("--tcc-mode", &["-c", "m.c"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        let output = directory.bcc("--msvc-mode", &["/c", "m.c"]);
+        assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    }
+
+    /// After an excess element Clang drops the rest of its list, so a later
+    /// designator applies nothing and names no error; GCC goes on applying
+    /// and checking them. C99 §6.7.8p2.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_later_designator_after_an_excess_element_follows_each_compiler() {
+        let directory = Directory::new();
+        for (source, gcc, clang) in [
+            ("int a[1] = {1, 2, [0] = 3};", 3, 1),
+            ("int a[2][1] = {{4, 5, [0] = 6}, {7, 8, [0] = 9}};", 6, 4),
+        ] {
+            directory.write(
+                "later.c",
+                &format!(
+                    "{source}\nint main(void) {{ return a[0]{}; }}\n",
+                    if source.contains("[2]") { "[0]" } else { "" }
+                ),
+            );
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                succeeds(&directory.bcc(mode, &["-w", "later.c", "-o", "later.exe"]));
+                let run = Command::new(directory.path("later.exe")).output().unwrap();
+                assert_eq!(run.status.code(), Some(expected), "{mode}: {source}");
+            }
+        }
+        directory.write("named.c", "struct S { int a; } s = {1, 2, .b = 3};\n");
+        assert_eq!(
+            directory
+                .bcc("--gcc-mode", &["-w", "-fsyntax-only", "named.c"])
+                .status
+                .code(),
+            Some(1)
+        );
+        succeeds(&directory.bcc("--clang-mode", &["-w", "-fsyntax-only", "named.c"]));
+    }
+
     /// `__BASE_FILE__` names the main source file as the command line
     /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
     #[test]
@@ -781,6 +863,135 @@ mod tests {
                 stdout(&output).contains("const char *f = \"m.c\";"),
                 "{mode}: {}",
                 stdout(&output)
+            );
+        }
+    }
+
+    /// A presumed file name that ends in a separator has an empty last
+    /// component for GCC, and `.` for Clang, or `/` if it is all separators.
+    #[test]
+    fn file_name_macro_splits_as_each_compiler_does() {
+        let directory = Directory::new();
+        for (name, gcc, clang) in [
+            ("foo/bar/", "\"\"", "\".\""),
+            ("foo//", "\"\"", "\".\""),
+            ("/", "\"\"", "\"/\""),
+            ("foo/.", "\".\"", "\".\""),
+            ("foo/..", "\"..\"", "\"..\""),
+            ("foo/bar.c", "\"bar.c\"", "\"bar.c\""),
+            ("", "\"\"", "\"\""),
+        ] {
+            directory.write("n.c", &format!("#line 1 \"{name}\"\n__FILE_NAME__\n"));
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-E", "-P", "n.c"]);
+                succeeds(&output);
+                assert_eq!(stdout(&output).trim(), expected, "{mode} {name:?}");
+            }
+        }
+    }
+
+    /// `__FILE_NAME__` is the last component of the presumed file name and
+    /// `__INCLUDE_LEVEL__` counts `#include`s from the main file, forced ones
+    /// included, in GCC and Clang. Microsoft's and TCC's compilers have
+    /// neither.
+    #[test]
+    fn file_name_and_include_level_follow_gcc_and_clang() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write(
+            "sub/h.h",
+            "h = __INCLUDE_LEVEL__ __FILE_NAME__\n#include \"i.h\"\n",
+        );
+        directory.write("sub/i.h", "i = __INCLUDE_LEVEL__ __FILE_NAME__ EARLY\n");
+        directory.write("forced.h", "f = __INCLUDE_LEVEL__ __FILE_NAME__\n");
+        directory.write(
+            "m.c",
+            "#define EARLY __INCLUDE_LEVEL__\n#include \"sub/h.h\"\nm = __INCLUDE_LEVEL__ \
+             __FILE_NAME__\n#line 9 \"zz/renamed.c\"\nr = __INCLUDE_LEVEL__ __FILE_NAME__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "-include", "forced.h", "m.c"]);
+            succeeds(&output);
+            assert_eq!(
+                stdout(&output),
+                "f = 1 \"forced.h\"\nh = 1 \"h.h\"\ni = 2 \"i.h\" 2\nm = 0 \"m.c\"\nr = 0 \
+                 \"renamed.c\"\n",
+                "{mode}"
+            );
+        }
+        directory.write("q.c", "__FILE_NAME__ __INCLUDE_LEVEL__\n");
+        for (mode, preprocess) in [("--msvc-mode", "/E"), ("--tcc-mode", "-E")] {
+            let output = directory.bcc(mode, &[preprocess, "q.c"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).contains("__FILE_NAME__ __INCLUDE_LEVEL__"),
+                "{mode}: {}",
+                stdout(&output)
+            );
+        }
+    }
+
+    /// `__TIMESTAMP__` spells the modification time of the file being read as
+    /// `asctime` does, in every personality but TCC's, and
+    /// `SOURCE_DATE_EPOCH` does not pin it.
+    #[test]
+    fn timestamp_is_the_modification_time_of_the_current_file() {
+        let directory = Directory::new();
+        directory.write("h.h", "__TIMESTAMP__\n");
+        directory.write(
+            "m.c",
+            "#include \"h.h\"\n#line 3 \"elsewhere.c\"\n__TIMESTAMP__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .current_dir(&directory.0)
+                .args([mode, "-E", "-P", "m.c"])
+                .env("SOURCE_DATE_EPOCH", "0")
+                .output()
+                .unwrap();
+            succeeds(&output);
+            let text = stdout(&output);
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines.len(), 2, "{mode}: {text}");
+            for line in lines {
+                // "Thu Nov  5 23:13:48 2026" within quotes.
+                let bytes = line.as_bytes();
+                assert_eq!(bytes.len(), 26, "{mode}: {line}");
+                assert_eq!(bytes[0], b'"');
+                assert_eq!(&line[20..21], " ", "{mode}: {line}");
+                assert!(!line.contains("??"), "{mode}: {line}");
+                assert!(!line.ends_with("1970\""), "{mode}: {line}");
+            }
+        }
+        directory.write("q.c", "__TIMESTAMP__\n");
+        let output = directory.bcc("--tcc-mode", &["-E", "-P", "q.c"]);
+        succeeds(&output);
+        assert!(
+            stdout(&output).contains("__TIMESTAMP__"),
+            "{}",
+            stdout(&output)
+        );
+    }
+
+    /// Unlike the names C99 §6.10.8 predefines, these extensions can be
+    /// redefined and undefined, with a warning, as in GCC and Clang.
+    #[test]
+    fn file_extension_macros_can_be_redefined() {
+        let directory = Directory::new();
+        directory.write(
+            "m.c",
+            "#define __BASE_FILE__ 1\n#define __FILE_NAME__ 2\n#define __INCLUDE_LEVEL__ \
+             3\n#define __TIMESTAMP__ 4\n__BASE_FILE__ __FILE_NAME__ __INCLUDE_LEVEL__ \
+             __TIMESTAMP__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "1 2 3 4\n", "{mode}");
+            assert!(
+                stderr(&output).contains("warning"),
+                "{mode}: {}",
+                stderr(&output)
             );
         }
     }

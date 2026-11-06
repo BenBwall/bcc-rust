@@ -22,6 +22,7 @@ use super::{
     },
 };
 use crate::{
+    diagnostics::format_in,
     ir::{
         Block,
         BlockCall,
@@ -29,6 +30,7 @@ use crate::{
         ControlFlowGraph,
         DominatorTree,
         Entity,
+        EntryConvention,
         Extension,
         FloatCC,
         FuncId,
@@ -106,9 +108,30 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
         values.resize(body.value_count(), None);
         api.position(blocks[entry.index()].ok_or(std::fmt::Error)?);
         let mut slots = ArenaVec::new_in(self.arena);
+        // LLVM 23 lays out a handler's frame 8 bytes off when the processor
+        // pushed an error code and the handler realigns its stack, so that an
+        // object aligned to 16 bytes or more misses its alignment (Clang 23's
+        // code for GCC's `pr98219-2.c` aborts at -O0): align such a slot here.
+        let misaligning =
+            function.entry == EntryConvention::Interrupt && signature.params.len() == 2;
         for (slot, data) in body.stack_slots() {
-            let value = api.alloca(api.array(api.ty(Type::I8), u64::from(data.size)));
-            api.alignment(value, data.align.bytes());
+            let align = data.align.bytes();
+            let value = if misaligning && align >= 16 {
+                let area =
+                    api.alloca(api.array(api.ty(Type::I8), u64::from(data.size) + align - 1));
+                let last = api.gep(area, api.bits(Type::I64, u128::from(align - 1)), true);
+                let (mask, ty) =
+                    api.intrinsic("llvm.ptrmask", &[api.ty(Type::Ptr), api.ty(Type::I64)]);
+                api.call(
+                    ty,
+                    mask,
+                    &[last, api.bits(Type::I64, u128::from(align.wrapping_neg()))],
+                )
+            } else {
+                let value = api.alloca(api.array(api.ty(Type::I8), u64::from(data.size)));
+                api.alignment(value, align);
+                value
+            };
             api.set_name(value, &named(slot, self.arena));
             slots.push(value);
         }
@@ -151,10 +174,13 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
         }
         let cfg = ControlFlowGraph::compute(body, self.arena);
         let dom = DominatorTree::compute(body, &cfg, self.arena);
+        let naked_frame = naked_frame(function.entry, body);
         let mut builder = BodyBuilder {
             emitter: self,
             body,
             signature,
+            entry: function.entry,
+            naked_frame,
             function: self.functions[id.index()],
             blocks: &blocks,
             slots: &slots,
@@ -165,6 +191,16 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 continue;
             }
             api.position(blocks[block.index()].ok_or(std::fmt::Error)?);
+            if block == entry && naked_frame > 0 {
+                // LLVM addresses a naked function's frame upwards from `%rsp`,
+                // as if the prologue it omits had moved it, and would write
+                // over what the caller left there. Make room for the frame, as
+                // that prologue would have.
+                let ty = api.signature(api.void(), &[], false);
+                let template = format_in!(self.arena, "leaq -{naked_frame}(%rsp), %rsp");
+                let asm = api.inline_asm(ty, template, "", true);
+                _ = api.call(ty, asm, &[]);
+            }
             for &inst in body.block_insts(block) {
                 let value = builder.inst(inst)?;
                 if fast_math != llvm_sys::LLVMFastMathNone
@@ -224,6 +260,36 @@ pub(super) fn strict(module: &Module<'_>) -> bool {
                     .all(|index| body.value_type(Value::new(index)) != Type::BF16)
             })
         })
+}
+
+/// The bytes to set aside for what LLVM may keep in a naked function's frame:
+/// no more than every slot and every value spilled, in a multiple of 16 that
+/// leaves the stack aligned as it was. None if the body only runs assembly,
+/// which owns the stack and every register, and returns what C makes of its
+/// missing value.
+fn naked_frame(entry: EntryConvention, body: &Body<'_>) -> u64 {
+    if entry != EntryConvention::Naked
+        || body.blocks().all(|block| {
+            body.block_insts(block).iter().all(|&inst| {
+                matches!(
+                    body.inst(inst).opcode(),
+                    Opcode::InlineAsm
+                        | Opcode::Return
+                        | Opcode::Unreachable
+                        | Opcode::Poison
+                        | Opcode::Iconst
+                )
+            })
+        })
+    {
+        return 0;
+    }
+    let slots: u64 = body
+        .stack_slots()
+        .map(|(_, data)| u64::from(data.size) + data.align.bytes())
+        .sum();
+    let values = 16 * u64::try_from(body.value_count()).expect("values fit u64");
+    (slots + values).next_multiple_of(16)
 }
 
 /// Whether `block` takes no parameters and holds only `trap` and
@@ -373,13 +439,16 @@ fn extension<'id>(
 }
 
 struct BodyBuilder<'a, 'id, 'm, 'ir> {
-    emitter:   &'a Emitter<'a, 'id, 'm, 'ir>,
-    body:      &'m Body<'ir>,
-    signature: Signature<'ir>,
-    function:  Val<'id>,
-    blocks:    &'a [Option<api::Block<'id>>],
-    slots:     &'a [Val<'id>],
-    values:    ArenaVec<'a, Option<Val<'id>>>,
+    emitter:     &'a Emitter<'a, 'id, 'm, 'ir>,
+    body:        &'m Body<'ir>,
+    signature:   Signature<'ir>,
+    entry:       EntryConvention,
+    /// The bytes a naked function's body keeps below the entry `%rsp`.
+    naked_frame: u64,
+    function:    Val<'id>,
+    blocks:      &'a [Option<api::Block<'id>>],
+    slots:       &'a [Val<'id>],
+    values:      ArenaVec<'a, Option<Val<'id>>>,
 }
 
 impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
@@ -767,6 +836,12 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 }
                 switch
             },
+            // Control running off a naked body has no epilogue to return
+            // through; GCC ends such a function with `ud2`.
+            | InstData::Return { .. } if self.entry == EntryConvention::Naked => {
+                _ = self.intrinsic("llvm.trap", &[], &[]);
+                api.unreachable()
+            },
             | InstData::Return { value: Some(value) } => api.ret(self.value(value)?),
             | InstData::Return { value: None } => {
                 if let Some(ParamAbi::Registers(registers)) = self.signature.result_param() {
@@ -786,7 +861,17 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             | InstData::Nullary {
                 opcode: Opcode::StackSave,
                 ..
-            } => self.intrinsic("llvm.stacksave", &[], &[api.ty(Type::Ptr)]),
+            } => {
+                let stack = self.intrinsic("llvm.stacksave", &[], &[api.ty(Type::Ptr)]);
+                if self.naked_frame > 0 {
+                    // What a register variable in `%rsp` reads: the entry
+                    // `%rsp`.
+                    let frame = u128::from(self.naked_frame);
+                    api.gep(stack, api.bits(Type::I64, frame), true)
+                } else {
+                    stack
+                }
+            },
             | InstData::Nullary {
                 opcode: Opcode::FrameAddress,
                 ..
