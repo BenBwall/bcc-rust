@@ -1058,6 +1058,15 @@ Besides those above:
   Adjacent string literals are joined, as phase 6 joins them. A macro's
   expansion keeps the spacing of its definition, so the text differs from
   GCC's in whitespace.
+- `-E` writes a line marker for every file entered and returned to, with
+  flags 1 and 2, and with no token needed between them, as GCC and Clang do.
+  A system header adds 3 and, under the GCC identity, 4. The markers still
+  differ in these ways: GCC's and Clang's first lines for `<built-in>` and the
+  command line are not written, the pseudo-file is `<command line>` under
+  every identity where GCC says `<command-line>`, a header is named as
+  bcc's search found it (`a.h` where Clang says `./a.h`), a resource header
+  is `<built-in>/limits.h`, and an `#include` late in a file writes no blank
+  lines before its marker. `cl`'s text has no flags 1 and 2.
 - Of a GNU line marker's flags, only 3 has an effect: it makes the lines
   up to the next marker a system header, as in GCC, so a `.i` file's system
   header sections keep their warnings withheld. Flags 1 and 2 (entering and

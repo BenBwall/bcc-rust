@@ -63,7 +63,7 @@ impl<'tu> Context<'tu> {
             pack_pragmas: ArenaVec::new_in(tu),
             pragma_content: false,
             weak_pragmas: ArenaVec::new_in(tu),
-            text_pragmas: ArenaVec::new_in(tu),
+            text_events: ArenaVec::new_in(tu),
             storage_order_pragmas: ArenaVec::new_in(tu),
             source_vectors: SourceVectorStack(RegionVec::new()),
             parser_token_vectors: RegionVec::new(),

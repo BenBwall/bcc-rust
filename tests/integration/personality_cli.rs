@@ -1468,6 +1468,55 @@ mod tests {
         }
     }
 
+    /// `-E` marks every change of file, with the compiler's flags, and the
+    /// tokens of two files never join: two includes of a one-line header
+    /// used to print `xx`.
+    #[test]
+    fn gnu_line_markers_mark_each_file_change() {
+        let directory = Directory::new();
+        directory.write("a.h", "x\n");
+        directory.write("empty.h", "");
+        directory.write("dup.c", "#include \"a.h\"\n#include \"a.h\"\nend\n");
+        directory.write("e.c", "#include \"empty.h\"\nz\n");
+        let text = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(
+            text("--clang-mode", &["-E", "dup.c"]),
+            "# 1 \"dup.c\"\n# 1 \"a.h\" 1\nx\n# 2 \"dup.c\" 2\n# 1 \"a.h\" 1\nx\n# 3 \"dup.c\" \
+             2\nend\n"
+        );
+        assert!(
+            text("--clang-mode", &["-E", "e.c"]).ends_with("# 1 \"empty.h\" 1\n# 2 \"e.c\" 2\nz\n")
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            assert_eq!(text(mode, &["-E", "-P", "dup.c"]), "x\nx\nend\n", "{mode}");
+            assert!(
+                text(mode, &["-E", "dup.c"]).contains("# 2 \"dup.c\" 2\n"),
+                "{mode}"
+            );
+        }
+        // Clang writes flag 3 for a system header and GCC adds 4.
+        #[cfg(not(windows))]
+        {
+            std::fs::create_dir(directory.path("sys")).unwrap();
+            directory.write("sys/s.h", "int s;\n");
+            directory.write("u.c", "#include <s.h>\nint u;\n");
+            for (mode, flags) in [("--clang-mode", "1 3"), ("--gcc-mode", "1 3 4")] {
+                let output = text(mode, &["-E", "-isystem", "sys", "u.c"]);
+                assert!(
+                    output.contains(&format!("# 1 \"sys/s.h\" {flags}\nint s;\n# 2 \"u.c\" 2\n")),
+                    "{mode}: {output}"
+                );
+                // The text reads back, in the same mode.
+                directory.write("u.i", &output);
+                succeeds(&directory.bcc(mode, &["-fsyntax-only", "u.i"]));
+            }
+        }
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]
