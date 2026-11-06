@@ -275,6 +275,80 @@ mod tests {
         assert_eq!(stderr(&round_trip), "");
     }
 
+    /// GCC and Clang take `static int a[];` and `static struct S s;`, which
+    /// C99 §6.9.2p3 forbids; Python's `PyDoc_VAR` relies on it.
+    #[test]
+    fn incomplete_internal_tentative_definitions_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "array.c",
+            "static const char a[];\nconst char *p = a;\nstatic const char a[] = \"abc\";\n",
+        );
+        directory.write(
+            "tag.c",
+            "struct S;\nstatic struct S s;\nstruct S { int a; };\nint f(void) { return s.a; }\n",
+        );
+        directory.write("never.c", "struct S;\nstatic struct S s;\n");
+        directory.write(
+            "marked.c",
+            "__extension__ static int a[];\nstatic int a[3];\n__extension__ static int z[];\nint \
+             *p = z;\n",
+        );
+        for (mode, option) in [
+            ("--gcc-mode", "-pedantic"),
+            ("--gcc-mode", "-pedantic-errors"),
+            ("--clang-mode", "-pedantic"),
+            ("--clang-mode", "-pedantic-errors"),
+        ] {
+            let output = directory.bcc(mode, &[option, "-c", "marked.c", "-o", "marked.o"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            assert!(
+                text.contains("assumed to have one element"),
+                "{mode} {option}: {text}"
+            );
+            assert!(!text.contains("internal"), "{mode} {option}: {text}");
+        }
+        let refused = "internal tentative definition has incomplete type";
+        for (mode, option, file, ok, message) in [
+            ("--gcc-mode", "-w", "array.c", true, ""),
+            ("--gcc-mode", "-w", "tag.c", true, ""),
+            ("--gcc-mode", "-pedantic", "array.c", false, refused),
+            ("--gcc-mode", "-pedantic", "tag.c", true, ""),
+            ("--clang-mode", "-Wall", "array.c", true, ""),
+            ("--clang-mode", "-pedantic", "array.c", true, "warning: "),
+            ("--clang-mode", "-pedantic", "tag.c", true, "warning: "),
+            (
+                "--clang-mode",
+                "-pedantic-errors",
+                "array.c",
+                false,
+                "error: ",
+            ),
+            ("--tcc-mode", "-w", "array.c", true, ""),
+            ("--gcc-mode", "-w", "never.c", false, "remains incomplete"),
+            (
+                "--clang-mode",
+                "-Wall",
+                "never.c",
+                false,
+                "remains incomplete",
+            ),
+        ] {
+            let output = directory.bcc(mode, &[option, "-c", file, "-o", "out.o"]);
+            let text = stderr(&output);
+            assert_eq!(
+                output.status.success(),
+                ok,
+                "{mode} {option} {file}: {text}"
+            );
+            assert!(text.contains(message), "{mode} {option} {file}: {text}");
+            if message.is_empty() {
+                assert_eq!(text, "", "{mode} {option} {file}");
+            }
+        }
+    }
+
     /// GCC warns of an unclosed quote in a skipped group, compiling as well
     /// as under `-E`, and `-pedantic-errors` makes it an error; Clang and
     /// TCC do not.
@@ -827,6 +901,40 @@ mod tests {
             Some(1)
         );
         succeeds(&directory.bcc("--clang-mode", &["-w", "-fsyntax-only", "named.c"]));
+    }
+
+    /// A store through a cast to what this unit only declares const reaches
+    /// the other unit's object under GCC, whose optimizer keeps it, and Clang
+    /// drops it at `-O2`. busybox sets its `bb_errno` this way on GCC.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stores_to_const_declarations_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "extern int *const e;\nint x = 7;\nvoid init(void) {\n  *(void **)&e = (void *)&x;\n  \
+             __asm__ volatile(\"\" : : : \"memory\");\n}\n",
+        );
+        directory.write(
+            "b.c",
+            "int *e;\nvoid init(void);\nint main(void) {\n  init();\n  return e ? *e : 99;\n}\n",
+        );
+        for (mode, level, expected) in [
+            ("--gcc-mode", "-O0", 7),
+            ("--gcc-mode", "-O2", 7),
+            ("--clang-mode", "-O0", 7),
+            ("--clang-mode", "-O2", 99),
+        ] {
+            succeeds(&directory.bcc(mode, &[level, "a.c", "b.c", "-o", "const.exe"]));
+            let run = Command::new(directory.path("const.exe")).output().unwrap();
+            assert_eq!(run.status.code(), Some(expected), "{mode} {level}");
+        }
+        // A definition stays read-only, whichever compiler it follows.
+        directory.write("d.c", "const int k = 1;\nconst int *p = &k;\n");
+        let output = directory.bcc("--gcc-mode", &["-S", "d.c", "-o", "d.s"]);
+        succeeds(&output);
+        let text = std::fs::read_to_string(directory.path("d.s")).unwrap();
+        assert!(text.contains(".rodata"), "{text}");
     }
 
     /// `__BASE_FILE__` names the main source file as the command line
