@@ -60,13 +60,16 @@ use super::{
 };
 use crate::backend::llvm::operand;
 
-/// Clang options that clang-cl takes only after `/clang:`; given bare, it
-/// ignores them with a warning, as for an unknown `/` option.
-const CLANG_ONLY_OPTIONS: [&str; 4] = [
+/// Options that clang-cl ignores with a warning when given bare, as for an
+/// unknown `/` option: Clang options it takes only after `/clang:`, and GCC's
+/// `-fstrict-volatile-bitfields`, which bcc reads but Clang does not know.
+const CLANG_ONLY_OPTIONS: [&str; 6] = [
     "-fsigned-char",
     "-fno-signed-char",
     "-funsigned-char",
     "-fno-unsigned-char",
+    "-fstrict-volatile-bitfields",
+    "-fno-strict-volatile-bitfields",
 ];
 
 /// Translates a `cl.exe` or clang-cl command line.

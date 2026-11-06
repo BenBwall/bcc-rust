@@ -192,17 +192,49 @@ impl<'a> Memory<'a> {
         address: RuntimeValue,
         align: Align,
     ) -> Result<RuntimeValue, Fault> {
-        let size = ty.bytes();
-        let (index, offset) = self.resolve(address, u64::from(size), align, false)?;
-        let cells = &self.objects[index].cells[offset..offset + size as usize];
+        let cells = self.cells_to_load(ty, address, align)?;
         if cells.iter().any(|cell| cell.tag == Cell::POISON_TAG) {
             return Ok(RuntimeValue::Poison);
         }
+        Ok(self.loaded_value(ty, cells))
+    }
+
+    /// Loads a value of type `ty` from `address` as a `volatile` load does:
+    /// it reads the bytes as they are in memory, so a byte never written is
+    /// arbitrary, here zero as `freeze` makes it, and the others keep their
+    /// values. Never poison; `middle-end.md` gives the rule.
+    pub(crate) fn load_volatile(
+        &self,
+        ty: Type,
+        address: RuntimeValue,
+        align: Align,
+    ) -> Result<RuntimeValue, Fault> {
+        let cells = self.cells_to_load(ty, address, align)?;
+        Ok(match self.loaded_value(ty, cells) {
+            | RuntimeValue::Poison => RuntimeValue::Int(u128::from(cells[0].byte & 1)),
+            | value => value,
+        })
+    }
+
+    /// The cells a load of `ty` from `address` reads.
+    fn cells_to_load(
+        &self,
+        ty: Type,
+        address: RuntimeValue,
+        align: Align,
+    ) -> Result<&[Cell], Fault> {
+        let size = ty.bytes();
+        let (index, offset) = self.resolve(address, u64::from(size), align, false)?;
+        Ok(&self.objects[index].cells[offset..offset + size as usize])
+    }
+
+    /// The value of type `ty` that `cells`, which are its bytes, hold.
+    fn loaded_value(&self, ty: Type, cells: &[Cell]) -> RuntimeValue {
         let bits = cells
             .iter()
             .rev()
             .fold(0_u128, |bits, cell| (bits << 8) | u128::from(cell.byte));
-        Ok(match ty {
+        match ty {
             | Type::I1 if bits > 1 => RuntimeValue::Poison,
             | Type::F16 | Type::BF16 => RuntimeValue::half(ty, truncate_u16(bits)),
             | Type::F32 => RuntimeValue::F32(f32::from_bits(truncate_u32(bits))),
@@ -226,7 +258,7 @@ impl<'a> Memory<'a> {
                 })
             },
             | _ => RuntimeValue::Int(bits),
-        })
+        }
     }
 
     /// Stores `value` of type `ty` at `address`. Storing poison makes the
