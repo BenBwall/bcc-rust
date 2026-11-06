@@ -1,8 +1,4 @@
 sema-main-clang-return.c:1:1: warning: return type of 'main' is not 'int' [-Wmain-return-type]
-  |
-1 | void main(void) {}
-  | ^^^^ nonportable declaration of main
-  |
-  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
-
+    1 | void main(void) {}
+      | ^~~~
 1 warning generated.

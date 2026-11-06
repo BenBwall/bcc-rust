@@ -1,15 +1,6 @@
 pragma-diagnostic-system-gcc.c:12:5: warning: `LOUD` is not defined; it evaluates to 0
-   |
-12 | #if LOUD
-   |     ^^^^ not a macro
-   |
-   = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
-   = help: use `defined(LOUD)` to test whether it is defined
-
+   12 | #if LOUD
+      |     ^~~~
 system-headers/pragma-noisy.h:3:27: error: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
-  |
-3 | char *system_conversion = 1;
-  |                           ^ pointer constraint violation
-  |
-  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
-
+    3 | char *system_conversion = 1;
+      |                           ^

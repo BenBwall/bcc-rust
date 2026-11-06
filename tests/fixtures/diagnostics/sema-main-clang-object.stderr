@@ -1,8 +1,4 @@
 sema-main-clang-object.c:1:1: warning: variable named 'main' with external linkage has undefined behavior [-Wmain]
-  |
-1 | int main;
-  | ^^^ nonportable declaration of main
-  |
-  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
-
+    1 | int main;
+      | ^~~
 1 warning generated.

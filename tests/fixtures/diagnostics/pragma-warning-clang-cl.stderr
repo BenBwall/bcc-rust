@@ -1,45 +1,25 @@
 pragma-warning-clang-cl.c:6:23: warning: call to undeclared function 'g1'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
-  |
-6 | int f1(void) { return g1(); }
-  |                       ^^ undeclared function called here
-  |
-  = note: C99 §6.5.1p2: an identifier is a primary expression only if it is declared; C89 §3.3.2.2 declared an undeclared called identifier as `extern int f();`
-
+    6 | int f1(void) { return g1(); }
+      |                       ^~
 pragma-warning-clang-cl.c:9:16: warning: #pragma warning expected `(` [-Wunknown-pragmas]
-   |
- 9 | #pragma warning
-   |                ^ unexpected token
-
+    9 | #pragma warning
+      |                ^
 pragma-warning-clang-cl.c:10:17: warning: #pragma warning expected `push`, `pop`, `default`, `disable`, `error`, `once`, `suppress`, 1, 2, 3, or 4 [-Wunknown-pragmas]
-   |
-10 | #pragma warning(bogus)
-   |                 ^^^^^ unexpected token
-
+   10 | #pragma warning(bogus)
+      |                 ^~~~~
 pragma-warning-clang-cl.c:11:25: warning: #pragma warning expected `:` [-Wunknown-pragmas]
-   |
-11 | #pragma warning(disable 4013)
-   |                         ^^^^ unexpected token
-
+   11 | #pragma warning(disable 4013)
+      |                         ^~~~
 pragma-warning-clang-cl.c:12:24: warning: #pragma warning(push, level) requires a level between 0 and 4 [-Wunknown-pragmas]
-   |
-12 | #pragma warning(push, 5)
-   |                        ^ unexpected token
-
+   12 | #pragma warning(push, 5)
+      |                        ^
 pragma-warning-clang-cl.c:13:22: warning: extra tokens at end of #pragma warning directive [-Wextra-tokens]
-   |
-13 | #pragma warning(pop) junk
-   |                      ^^^^ unexpected token
-
+   13 | #pragma warning(pop) junk
+      |                      ^~~~
 pragma-warning-clang-cl.c:14:20: warning: pragma diagnostic pop could not pop, no matching push [-Wunknown-pragmas]
-   |
-14 | #pragma warning(pop)
-   |                    ^ no matching `push`
-
+   14 | #pragma warning(pop)
+      |                    ^
 pragma-warning-clang-cl.c:8:23: error: call to undeclared function 'g2'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
-  |
-8 | int f2(void) { return g2(); }
-  |                       ^^ undeclared function called here
-  |
-  = note: C99 §6.5.1p2: an identifier is a primary expression only if it is declared; C89 §3.3.2.2 declared an undeclared called identifier as `extern int f();`
-
+    8 | int f2(void) { return g2(); }
+      |                       ^~
 1 error and 7 warnings generated.
