@@ -137,8 +137,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     || matches!(attribute.name, "unused" | "maybe_unused"))
                 && let Subject::Function { binding, .. }
                 | Subject::Object { binding, .. }
-                | Subject::Parameter(Some(binding))
-                | Subject::Typedef(Some(binding)) = subject
+                | Subject::Parameter(Some(binding)) = subject
             {
                 self.exempt_from_unused(binding);
             }
@@ -1344,7 +1343,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 );
                 continue;
             }
-            if !request.emitted {
+            // Both compilers resolve an alias as they generate code.
+            if !request.emitted || self.context.configuration.syntax_only() {
                 continue;
             }
             let target = match names.resolve(request.target) {

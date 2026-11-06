@@ -708,7 +708,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | BindingKind::Object => false,
             | _ => return,
         };
-        if data.linkage == Linkage::Internal || self.types.unanalyzed(data.ty) {
+        if self.types.unanalyzed(data.ty) {
+            return;
+        }
+        if data.linkage == Linkage::Internal {
+            self.report_block_extern(data.kind, name);
             return;
         }
         let usage = *self.unused.variable(binding);
@@ -762,6 +766,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.unused_rule_read_at(rule, name.source_vectors, Some(name.name), settings_at);
     }
 
+    /// A block-scope `extern` naming a file-scope `static`: GCC's `pop_scope`
+    /// reports it as it does a local variable, and it stands for the name's
+    /// other reports. Clang reports only the file-scope declaration.
+    /// C99: §6.2.2p4, p. 30; PDF p. 42.
+    fn report_block_extern(&mut self, kind: BindingKind, name: Identifier) {
+        if kind != BindingKind::Object
+            || self.context.configuration.compiler_identity() != CompilerIdentity::Gcc
+        {
+            return;
+        }
+        let usage = self.unused.file_scope.entry(name.name).or_default();
+        if usage.exempt || usage.referenced {
+            return;
+        }
+        usage.referenced = true;
+        let settings_at = self.scope_end_or(self.scope, name.source_vectors);
+        self.unused_rule_read_at(
+            UnusedRule::Variable,
+            name.source_vectors,
+            Some(name.name),
+            settings_at,
+        );
+    }
+
     /// Notes that `source`, a compound or `for` statement, ends the scope just
     /// entered. GCC reports an unused variable and an unused label as it leaves
     /// their scope, and its `warning` asks the settings at the current token
@@ -805,13 +833,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         scope
     }
 
+    /// Whether the end of the unit reports what it left unused. GCC does that
+    /// as it compiles the unit (`check_global_declaration` in `cgraphunit.cc`),
+    /// so not under `-fsyntax-only`. Clang does under either, unless an error
+    /// has been reported (`ActOnEndOfTranslationUnitFragment`).
+    pub(super) fn reports_unused_at_unit_end(&self) -> bool {
+        self.unused.tracking
+            && if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+                !self.context.configuration.syntax_only()
+            } else {
+                self.context.error_count() == 0
+            }
+    }
+
     /// Reports file-scope objects with internal linkage: GCC at the last
     /// declaration, Clang at the first.
     /// C99: §6.2.2p3, p. 30; PDF p. 42.
     pub(super) fn report_unused_file_scope(&mut self) {
-        if !self.unused.tracking {
-            return;
-        }
         let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
         let mut sites: ArenaMap<'_, StringCacheId, usize> =
             ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
@@ -884,9 +922,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `inline` one alone and counts no reference from its own body, and
     /// Clang leaves one alone only outside the main file.
     pub(super) fn report_unused_function(&mut self, name: Identifier, site: SourceVectors) {
-        if !self.unused.tracking {
-            return;
-        }
         let usage = self
             .unused
             .file_scope

@@ -556,6 +556,61 @@ fn unused_on_a_type_reaches_the_variable() {
     assert_eq!(rules("static const int x = 1;", gcc()), constant);
 }
 
+/// GCC reports what the end of a unit leaves unused as it compiles the unit,
+/// and Clang whenever no error has been reported; each of them also reports
+/// `static void f(void);` as it pops the file scope, and GCC a local `extern`.
+#[test]
+fn end_of_unit_reports_follow_each_compiler() {
+    let syntax_only = || gcc().with_syntax_only(true);
+    for source in [
+        "static int x;",
+        "static const int x = 1;",
+        "static void f(void) {}",
+        "static int x; static int g(void) { return x; }",
+    ] {
+        assert_ne!(rules(source, gcc()), [], "{source}");
+        assert_eq!(rules(source, syntax_only()), [], "{source}");
+        assert_ne!(rules(source, clang()), [], "{source}");
+        assert_ne!(
+            rules(source, clang().with_syntax_only(true)),
+            [],
+            "{source}"
+        );
+    }
+    // Local reports stay, and a label's, value's or parameter's.
+    for (source, expected) in [
+        ("void f(void) { int a; }", U::Variable),
+        ("void f(void) { static int a; }", U::Variable),
+        ("void f(void) { int a; a = 1; }", U::ButSetVariable),
+        ("void f(int a) {}", U::Parameter),
+        ("static int x; void f(void) { extern int x; }", U::Variable),
+    ] {
+        assert_eq!(rules(source, syntax_only()), [expected], "{source}");
+    }
+    // A block-scope `extern` stands for the name's other reports, once.
+    for source in [
+        "static int x; void f(void) { extern int x; }",
+        "static int x; void f(void) { extern int x; } void g(void) { extern int x; }",
+        "static int x; void f(void) { extern int x; } int g(void) { return x; }",
+    ] {
+        assert_eq!(rules(source, gcc()), [U::Variable], "{source}");
+    }
+    assert_eq!(
+        rules("static int x; void f(void) { extern int x; }", clang()),
+        [U::Variable]
+    );
+    // Clang drops the end of the unit after an error, which a warning made an
+    // error counts as; GCC's is the same either way.
+    for source in [
+        "static int x; int f(void) { return y; }",
+        "static void g(void) {} int f(void) { return y; }",
+    ] {
+        assert_eq!(rules(source, clang()), [], "{source}");
+        assert_ne!(rules(source, gcc()), [], "{source}");
+        assert_eq!(rules(source, syntax_only()), [], "{source}");
+    }
+}
+
 /// Clang leaves an expression a macro's body wrote alone; its argument is the
 /// user's own.
 #[test]
