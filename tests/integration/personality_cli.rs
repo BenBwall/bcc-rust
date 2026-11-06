@@ -1689,81 +1689,204 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
     }
 
-    /// The options that choose what a diagnostic writes, each under the
-    /// compiler that knows it, with the last of a pair deciding.
+    /// `-save-temps` keeps the intermediate files, named as each compiler
+    /// names them, and prints a warning once.
     #[test]
-    fn gnu_diagnostic_presentation_options() {
-        let directory = Directory::new();
-        directory.write("e.c", "int x;\nchar x;\nint y = 1.0 + \"\";\n");
-        let text = |mode: &str, args: &[&str]| {
-            let output = directory.bcc(mode, &[args, &["-c", "e.c", "-o", "e.o"]].concat());
-            stderr(&output)
-        };
-        let plain = text("--gcc-mode", &[]);
-        assert!(plain.contains("e.c:2:6: error: ") && plain.contains("    2 | char x;\n"));
-        for (mode, off) in [
-            ("--gcc-mode", "-fno-diagnostics-show-caret"),
-            ("--gcc-mode", "-fdiagnostics-plain-output"),
-            ("--clang-mode", "-fno-caret-diagnostics"),
-        ] {
-            let output = text(mode, &[off]);
-            assert!(output.contains("e.c:2:6: error: "), "{off}: {output}");
-            assert!(output.contains("e.c:1:5: note: "), "{off}: {output}");
-            assert!(
-                !output.contains('|') && !output.contains('^'),
-                "{off}: {output}"
-            );
-        }
-        assert!(
-            text(
+    fn gnu_save_temps_keeps_intermediate_files() {
+        let cases: [(&str, &[&str], &[&str]); 6] = [
+            (
                 "--gcc-mode",
-                &["-fdiagnostics-plain-output", "-fdiagnostics-show-caret"]
-            )
-            .contains(" char x;\n"),
-            "line numbers stay off, the caret comes back"
-        );
-        for mode in ["--gcc-mode", "--clang-mode"] {
-            let output = text(mode, &["-fno-show-column"]);
-            assert!(output.contains("e.c:2: error: "), "{output}");
-            assert!(output.contains("e.c:1: note: "), "{output}");
-            assert!(output.contains("    2 | char x;\n"), "{output}");
-            let output = text(mode, &["-fshow-column"]);
-            assert!(output.contains("e.c:2:6: error: "), "{output}");
-            let output = text(mode, &["-fdiagnostics-color=always"]);
-            assert!(output.contains('\u{1b}'), "{output}");
-            let output = text(
-                mode,
-                &["-fdiagnostics-color=always", "-fdiagnostics-color=never"],
-            );
-            assert!(!output.contains('\u{1b}'), "{output}");
+                &["-save-temps", "-c", "g.c"],
+                &["g.i", "g.s", "g.o"],
+            ),
+            (
+                "--gcc-mode",
+                &["-save-temps", "-c", "g.c", "-o", "o/x.o"],
+                &["o/x.i", "o/x.s", "o/x.o"],
+            ),
+            ("--gcc-mode", &["-save-temps", "-S", "g.c"], &["g.i", "g.s"]),
+            (
+                "--clang-mode",
+                &["-save-temps", "-c", "g.c"],
+                &["g.i", "g.s", "g.o"],
+            ),
+            (
+                "--clang-mode",
+                &["-save-temps=obj", "-c", "g.c", "-o", "o/x.o"],
+                &["o/g.i", "o/g.s", "o/x.o"],
+            ),
+            ("--clang-mode", &["-save-temps", "-E", "g.c"], &[]),
+        ];
+        for (mode, args, files) in cases {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "#define R 1\nint g(void) { return R; }\n");
+            let output = directory.bcc(mode, args);
+            succeeds(&output);
+            for file in files {
+                assert!(directory.path(file).exists(), "{mode} {args:?}: {file}");
+            }
+            if *files == ["g.i", "g.s", "g.o"] {
+                let text = std::fs::read_to_string(directory.path("g.i")).unwrap();
+                assert!(text.contains("return 1;"), "{mode}: {text}");
+                assert!(!text.contains("define"), "{mode}: {text}");
+            }
         }
-        // Clang's spelling, which GCC doesn't know, and GCC's, which Clang
-        // doesn't.
-        assert!(text("--clang-mode", &["-fcolor-diagnostics"]).contains('\u{1b}'));
-        assert!(
-            text("--gcc-mode", &["-fcolor-diagnostics"])
-                .contains("unrecognized command-line option")
+
+        let directory = Directory::new();
+        directory.write("w.c", "#warning careful\nint w;\n");
+        let output = directory.bcc("--clang-mode", &["-save-temps", "-c", "w.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output).matches("warning:").count(),
+            1,
+            "{}",
+            stderr(&output)
         );
-        assert!(text("--clang-mode", &["-fdiagnostics-plain-output"]).contains("unknown argument"));
-        // GCC keeps a space where line numbers would be; Clang doesn't.
-        let bare = text("--gcc-mode", &["-fno-diagnostics-show-line-numbers"]);
-        assert!(bare.contains("\n char x;\n      ^\n"), "{bare}");
-        let bare = text("--clang-mode", &["-fno-diagnostics-show-line-numbers"]);
-        assert!(bare.contains("\nchar x;\n     ^\n"), "{bare}");
-        // Without the option's name.
-        directory.write("w.c", "char *p = 1;\n");
+
+        // A failed compile prints its error once and saves nothing.
+        directory.write("e.c", "int e(void) { return x; }\n");
+        let output = directory.bcc("--gcc-mode", &["-save-temps", "-c", "e.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output).matches("error:").count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        assert!(!directory.path("e.s").exists());
+    }
+
+    /// The cases where `-save-temps` could damage a build: the command's own
+    /// output, and a header the saved text overwrites.
+    #[test]
+    fn gnu_save_temps_keeps_the_build_intact() {
         for mode in ["--gcc-mode", "--clang-mode"] {
-            let named = |args: &[&str]| {
-                let output = directory.bcc(mode, &[args, &["-c", "w.c", "-o", "w.o"]].concat());
-                stderr(&output).contains("[-W")
-            };
-            assert!(named(&[]), "{mode}");
-            assert!(!named(&["-fno-diagnostics-show-option"]), "{mode}");
-            assert!(
-                named(&["-fno-diagnostics-show-option", "-fdiagnostics-show-option"]),
+            let directory = Directory::new();
+            directory.write("g.c", "int g(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &["-save-temps", "-c", "g.c", "-o", "g.i"]));
+            let object = std::fs::read(directory.path("g.i")).unwrap();
+            let expected = directory.bcc(mode, &["-c", "g.c", "-o", "plain.o"]);
+            succeeds(&expected);
+            assert_eq!(
+                object,
+                std::fs::read(directory.path("plain.o")).unwrap(),
                 "{mode}"
             );
+
+            let directory = Directory::new();
+            directory.write("g.i", "typedef int T;\n");
+            directory.write("g.c", "#include \"g.i\"\nint g(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &["-save-temps", "-c", "g.c"]));
+            assert!(directory.path("g.s").exists(), "{mode}");
         }
+    }
+
+    /// A saved stage never replaces the output however that output is spelled,
+    /// and reads the saved text as preprocessed whatever `-x` says.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_compares_files_and_reads_preprocessed_text() {
+        for (mode, flag, output) in [
+            ("--clang-mode", "-save-temps", "./g.i"),
+            ("--clang-mode", "-save-temps", "./g.s"),
+            ("--gcc-mode", "-save-temps=cwd", "./g.i"),
+            ("--gcc-mode", "-save-temps=cwd", "o/../g.i"),
+        ] {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "int main(void) { return 7; }\n");
+            succeeds(&directory.bcc(mode, &[flag, "-c", "g.c", "-o", output]));
+            let object = std::fs::read(directory.path(output)).unwrap();
+            assert_eq!(&object[..4], b"\x7fELF", "{mode} {flag} {output}");
+        }
+
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let directory = Directory::new();
+            directory.write("h.h", "struct T { int x; };\n");
+            directory.write("g.c", "struct T t = {7};\nint main(void) { return t.x; }\n");
+            succeeds(&directory.bcc(
+                mode,
+                &[
+                    "-save-temps",
+                    "-x",
+                    "c",
+                    "-include",
+                    "h.h",
+                    "g.c",
+                    "-o",
+                    "saved",
+                ],
+            ));
+            let run = Command::new(directory.path("saved")).status().unwrap();
+            assert_eq!(run.code(), Some(7), "{mode}");
+        }
+    }
+
+    /// GCC's names follow the output, with `=cwd` leaving out its directory.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_names_follow_gcc() {
+        let cases: [(&[&str], &[&str]); 4] = [
+            (
+                &["-save-temps=cwd", "-c", "g.c", "-o", "o/x.o"],
+                &["x.i", "x.s", "o/x.o"],
+            ),
+            (
+                &["-save-temps", "g.c", "m.c", "-o", "o/prog.v1"],
+                &[
+                    "o/prog.v1-g.i",
+                    "o/prog.v1-m.s",
+                    "o/prog.v1-g.o",
+                    "o/prog.v1",
+                ],
+            ),
+            (
+                &["-save-temps=cwd", "g.c", "m.c", "-o", "o/prog.v1"],
+                &["prog.v1-g.i", "prog.v1-m.s", "prog.v1-g.o", "o/prog.v1"],
+            ),
+            (&["-save-temps", "-S", "g.c", "-o", "-"], &["g.i"]),
+        ];
+        for (args, files) in cases {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "int g(void) { return 7; }\n");
+            directory.write("m.c", "int g(void); int main(void) { return g(); }\n");
+            succeeds(&directory.bcc("--gcc-mode", args));
+            for file in files {
+                assert!(directory.path(file).exists(), "{args:?}: {file}");
+            }
+        }
+    }
+
+    /// A linked program's intermediate files, and its dependency file left
+    /// to the real compile.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_keeps_a_programs_objects() {
+        let directory = Directory::new();
+        directory.write("m.c", "int main(void) { return 0; }\n");
+        let output = directory.bcc("--gcc-mode", &["-save-temps", "-MD", "m.c", "-o", "p"]);
+        succeeds(&output);
+        for file in ["p", "p-m.i", "p-m.s", "p-m.o"] {
+            assert!(directory.path(file).exists(), "{file}");
+        }
+    }
+
+    /// GCC compiles a computed goto in a function that takes no label's
+    /// address, and Clang refuses it.
+    #[test]
+    fn computed_goto_without_label_addresses_follows_each_compiler() {
+        let directory = Directory::new();
+        directory.write("g.c", "void go(void *p) { goto *p; }\n");
+        succeeds(&directory.bcc("--gcc-mode", &["-c", "g.c"]));
+        let output = directory.bcc("--clang-mode", &["-c", "g.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("computed goto in a function without label addresses"),
+            "{}",
+            stderr(&output)
+        );
     }
 
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
@@ -2661,6 +2784,83 @@ mod tests {
                 succeeds(&quiet);
                 assert_eq!(stderr(&quiet), "", "{header} {mode} {options:?}");
             }
+        }
+    }
+
+    /// The options that choose what a diagnostic writes, each under the
+    /// compiler that knows it, with the last of a pair deciding.
+    #[test]
+    fn gnu_diagnostic_presentation_options() {
+        let directory = Directory::new();
+        directory.write("e.c", "int x;\nchar x;\nint y = 1.0 + \"\";\n");
+        let text = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, &[args, &["-c", "e.c", "-o", "e.o"]].concat());
+            stderr(&output)
+        };
+        let plain = text("--gcc-mode", &[]);
+        assert!(plain.contains("e.c:2:6: error: ") && plain.contains("    2 | char x;\n"));
+        for (mode, off) in [
+            ("--gcc-mode", "-fno-diagnostics-show-caret"),
+            ("--gcc-mode", "-fdiagnostics-plain-output"),
+            ("--clang-mode", "-fno-caret-diagnostics"),
+        ] {
+            let output = text(mode, &[off]);
+            assert!(output.contains("e.c:2:6: error: "), "{off}: {output}");
+            assert!(output.contains("e.c:1:5: note: "), "{off}: {output}");
+            assert!(
+                !output.contains('|') && !output.contains('^'),
+                "{off}: {output}"
+            );
+        }
+        assert!(
+            text(
+                "--gcc-mode",
+                &["-fdiagnostics-plain-output", "-fdiagnostics-show-caret"]
+            )
+            .contains(" char x;\n"),
+            "line numbers stay off, the caret comes back"
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = text(mode, &["-fno-show-column"]);
+            assert!(output.contains("e.c:2: error: "), "{output}");
+            assert!(output.contains("e.c:1: note: "), "{output}");
+            assert!(output.contains("    2 | char x;\n"), "{output}");
+            let output = text(mode, &["-fshow-column"]);
+            assert!(output.contains("e.c:2:6: error: "), "{output}");
+            let output = text(mode, &["-fdiagnostics-color=always"]);
+            assert!(output.contains('\u{1b}'), "{output}");
+            let output = text(
+                mode,
+                &["-fdiagnostics-color=always", "-fdiagnostics-color=never"],
+            );
+            assert!(!output.contains('\u{1b}'), "{output}");
+        }
+        // Clang's spelling, which GCC doesn't know, and GCC's, which Clang
+        // doesn't.
+        assert!(text("--clang-mode", &["-fcolor-diagnostics"]).contains('\u{1b}'));
+        assert!(
+            text("--gcc-mode", &["-fcolor-diagnostics"])
+                .contains("unrecognized command-line option")
+        );
+        assert!(text("--clang-mode", &["-fdiagnostics-plain-output"]).contains("unknown argument"));
+        // GCC keeps a space where line numbers would be; Clang doesn't.
+        let bare = text("--gcc-mode", &["-fno-diagnostics-show-line-numbers"]);
+        assert!(bare.contains("\n char x;\n      ^\n"), "{bare}");
+        let bare = text("--clang-mode", &["-fno-diagnostics-show-line-numbers"]);
+        assert!(bare.contains("\nchar x;\n     ^\n"), "{bare}");
+        // Without the option's name.
+        directory.write("w.c", "char *p = 1;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let named = |args: &[&str]| {
+                let output = directory.bcc(mode, &[args, &["-c", "w.c", "-o", "w.o"]].concat());
+                stderr(&output).contains("[-W")
+            };
+            assert!(named(&[]), "{mode}");
+            assert!(!named(&["-fno-diagnostics-show-option"]), "{mode}");
+            assert!(
+                named(&["-fno-diagnostics-show-option", "-fdiagnostics-show-option"]),
+                "{mode}"
+            );
         }
     }
 

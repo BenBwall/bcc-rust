@@ -14,7 +14,10 @@ use std::{
         OsStr,
         OsString,
     },
-    path::Path,
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 use self::response_files::ResponseFileError;
@@ -87,6 +90,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         positions: Vec::new(),
         linker_words: Vec::new(),
         queries: Vec::new(),
+        save_temps: None,
         dependency_mode: None,
         dependency_file: None,
         preprocessor_dependency_file: false,
@@ -380,6 +384,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         steps.push(bcc);
     }
+    let saved_temporaries = state.saved_temporaries(&common, links);
     // Under `-fsyntax-only` the C and assembly inputs form separate jobs,
     // and each runs whether the other fails, as in the compilers.
     let mut plan = Plan {
@@ -431,6 +436,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         plan.steps.push(Step::Bcc(bcc));
     }
+    // Only once the program has compiled, so that no diagnostic prints twice.
+    plan.steps
+        .extend(saved_temporaries.into_iter().map(Step::Link));
     Ok(plan)
 }
 
@@ -505,6 +513,8 @@ struct MachineOptions {
 struct State<'a> {
     invocation: &'a Invocation,
     compiler: Compiler,
+    /// `-save-temps`.
+    save_temps: Option<SaveTemps>,
     /// bcc's options and inputs, in order.
     out: Vec<OsString>,
     errors: usize,
@@ -761,9 +771,155 @@ const LINK_ONLY_OPTIONS: [&str; 8] = [
 /// builds: driver conveniences and reports.
 /// `-g*` (debug information, which bcc does not emit) and the `-f` and `-m`
 /// options in `unimplemented.rs` are ignored too.
-const IGNORED_OPTIONS: [&str; 4] = ["-pipe", "-save-temps", "-Q", "-time"];
+const IGNORED_OPTIONS: [&str; 3] = ["-pipe", "-Q", "-time"];
+
+/// Which `-save-temps` the command line gives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SaveTemps {
+    /// `-save-temps`: beside the output for GCC, the working directory for
+    /// Clang.
+    Plain,
+    /// `-save-temps=cwd`: the working directory.
+    WorkingDirectory,
+    /// `-save-temps=obj`: beside the output.
+    OutputDirectory,
+}
 
 impl State<'_> {
+    /// The bcc command lines that write what `-save-temps` keeps of each C
+    /// source: its preprocessed text, its assembly unless `-S` already asks
+    /// for that, and its object when the command links, so that the program
+    /// is otherwise built as without the option. As in the compilers, each
+    /// stage reads the text the first one saved, not the source, whose headers
+    /// that text may just have overwritten. A file the command's output is
+    /// named after is never overwritten. These runs only repeat what the real
+    /// compile did, so they report no warnings, and leave dependency files to
+    /// it. Standard input names no file to save after.
+    fn saved_temporaries(&self, common: &[OsString], links: bool) -> Vec<Vec<OsString>> {
+        let Some(save_temps) = self.save_temps else {
+            return Vec::new();
+        };
+        let compiles = links
+            || self
+                .stages
+                .iter()
+                .any(|stage| matches!(*stage, "-c" | "-S"));
+        if !compiles || self.syntax_only {
+            return Vec::new();
+        }
+        let stops_at_assembly = self.stages.contains(&"-S");
+        let mut steps = Vec::new();
+        for input in &self.inputs {
+            if input.dropped || input.kind != InputKind::C || input.path == "-" {
+                continue;
+            }
+            let path = Path::new(&input.path);
+            let base = self.saved_temporary_base(path, save_temps, links);
+            let named = |extension: &str| {
+                let mut name = base.clone();
+                name.push(".");
+                name.push(extension);
+                name
+            };
+            let kept = |name: &OsString| {
+                let name = resolved_output(Path::new(name));
+                !self
+                    .outputs
+                    .iter()
+                    .map(Path::new)
+                    .chain(self.inputs.iter().map(|input| Path::new(&input.path)))
+                    .any(|taken| resolved_output(taken) == name)
+            };
+            let text = named("i");
+            let mut read = input.path.clone();
+            let arguments = |read: &OsStr| {
+                let mut step = common.to_vec();
+                for argument in
+                    without_dependency_options(self.arguments(Inputs::One(input.at), false))
+                {
+                    if argument == input.path {
+                        // A later `-x c` must not preprocess the saved text
+                        // again, which would apply `-include` twice.
+                        if read != input.path {
+                            step.extend(["-x".into(), "cpp-output".into()]);
+                        }
+                        step.push(read.to_owned());
+                    } else {
+                        step.push(argument);
+                    }
+                }
+                step.push("-w".into());
+                step
+            };
+            let output = |name: &OsString| {
+                let mut option = OsString::from("--output=");
+                option.push(name);
+                option
+            };
+            let preprocessed = path.extension().is_some_and(|extension| extension == "i");
+            if !preprocessed && kept(&text) {
+                let mut step = arguments(&read);
+                step.push("-E".into());
+                step.push(output(&text));
+                steps.push(step);
+                read = text;
+            }
+            let mut stages = Vec::new();
+            if !stops_at_assembly {
+                stages.push(("-S", named("s")));
+            }
+            if links {
+                stages.push(("-c", named("o")));
+            }
+            for (stage, name) in stages {
+                if kept(&name) {
+                    let mut step = arguments(&read);
+                    step.push(stage.into());
+                    step.push(output(&name));
+                    steps.push(step);
+                }
+            }
+        }
+        steps
+    }
+
+    /// The name, without its extension, `-save-temps` gives what it keeps of
+    /// `input`. GCC follows the output: `o/x.i` for `-c g.c -o o/x.o`, and
+    /// `o/p.v1-g.i` for a program `o/p.v1`, or `a-g.i` when it has no name, and
+    /// `-save-temps=cwd` leaves the directory out. Clang follows the input:
+    /// `g.i`, in the output's directory under `-save-temps=obj`.
+    fn saved_temporary_base(&self, input: &Path, save_temps: SaveTemps, links: bool) -> OsString {
+        let stem = input.file_stem().unwrap_or(input.as_os_str());
+        let output = self
+            .outputs
+            .first()
+            .map(Path::new)
+            .filter(|output| *output != Path::new("-"));
+        if self.compiler == Compiler::Clang {
+            return match (save_temps, output.and_then(Path::parent)) {
+                | (SaveTemps::OutputDirectory, Some(directory)) =>
+                    directory.join(stem).into_os_string(),
+                | _ => stem.to_owned(),
+            };
+        }
+        let base = match (links, output) {
+            | (false, Some(output)) => output.with_extension(""),
+            | (false, None) => PathBuf::from(stem),
+            | (true, output) => {
+                let program = output.unwrap_or(Path::new("a"));
+                let mut name = program.file_name().unwrap_or_default().to_owned();
+                name.push("-");
+                name.push(stem);
+                program.with_file_name(name)
+            },
+        };
+        if save_temps == SaveTemps::WorkingDirectory {
+            base.file_name().unwrap_or_default().to_owned()
+        } else {
+            base.into_os_string()
+        }
+    }
+
     /// Translates one argument, reading its operand from `rest`. Returns
     /// the plan of a query that ends the command line, such as
     /// `--version`.
@@ -1496,10 +1652,19 @@ impl State<'_> {
             self.out.push(text.into());
             return;
         }
-        if IGNORED_OPTIONS.contains(&text)
-            || text.starts_with("-g")
-            || text.starts_with("-save-temps")
-        {
+        if text == "-save-temps" {
+            self.save_temps = Some(SaveTemps::Plain);
+            return;
+        }
+        if text == "-save-temps=cwd" {
+            self.save_temps = Some(SaveTemps::WorkingDirectory);
+            return;
+        }
+        if text == "-save-temps=obj" {
+            self.save_temps = Some(SaveTemps::OutputDirectory);
+            return;
+        }
+        if IGNORED_OPTIONS.contains(&text) || text.starts_with("-g") {
             return;
         }
         if text.starts_with("-Wa,") {
@@ -1738,7 +1903,7 @@ impl State<'_> {
     }
 }
 
-/// `--help`.
+/// What the bundled Clang prints for `query`, when it runs and succeeds.
 fn bundled_clang_answer(query: &str, target: Target) -> Option<String> {
     let output = std::process::Command::new(version::program_name("clang"))
         .arg(format!("--target={}", target.triple()))
@@ -1753,6 +1918,37 @@ fn bundled_clang_answer(query: &str, target: Target) -> Option<String> {
     )
 }
 
+/// `path` as the file it names, however it is spelled: from the root, through
+/// its directory when the file does not exist yet.
+fn resolved_output(path: &Path) -> PathBuf {
+    if let Ok(full) = std::fs::canonicalize(path) {
+        return full;
+    }
+    let directory = match path.parent() {
+        | Some(parent) if !parent.as_os_str().is_empty() => parent,
+        | _ => Path::new("."),
+    };
+    match (std::fs::canonicalize(directory), path.file_name()) {
+        | (Ok(directory), Some(name)) => directory.join(name),
+        | _ => path.to_path_buf(),
+    }
+}
+
+/// `arguments` without the options that write a dependency file.
+fn without_dependency_options(arguments: Vec<OsString>) -> Vec<OsString> {
+    let mut kept = Vec::with_capacity(arguments.len());
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        match argument.to_str() {
+            | Some("-MD" | "-MMD") => (),
+            | Some("-MF" | "-MT" | "-MQ") => drop(arguments.next()),
+            | _ => kept.push(argument),
+        }
+    }
+    kept
+}
+
+/// `--help`.
 fn help(personality: Personality, name: &str) -> String {
     let compiler = if personality == Personality::Gcc {
         "GCC"

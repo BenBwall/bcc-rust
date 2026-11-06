@@ -170,6 +170,10 @@ undeclared identifier, a missing expression, and the conversions in
 - The whole unit is parsed before semantic analysis, so syntax errors come before
   semantic ones, and recovery can find different errors after the first.
 
+A computed `goto` in a function that takes no label's address is GCC's to
+accept and Clang's to refuse; bcc follows the compiler it answers as. The jump
+has nowhere defined to go, so `-O2` treats it as unreachable.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
@@ -361,8 +365,15 @@ options it implements, so the personality passes them through: `-c -S -E -o
 -fgnu89-inline -ffreestanding -ftls-model= -H -MG`. `-Wp,` is split and
 read as preprocessor options (Fedora's `-Wp,-D_FORTIFY_SOURCE=2`). `-s`,
 `-T`, `-u`, `-z` and `-e` become linker options. `-Wa,` and `-Xassembler`
-reach bcc's assembly inputs. `-g*`, `-pipe`, `-save-temps` and `--param`
-have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
+reach bcc's assembly inputs. `-save-temps` and `-save-temps=cwd|obj` keep
+each C source's `.i` and `.s`, named after the output (`o/x.i` for `-c g.c -o
+o/x.o`, `o/p.v1-g.i` and `o/p.v1-g.o` for a program `o/p.v1`), and
+`-save-temps=cwd` leaves the directory out. bcc writes them after the program
+compiles, from separate runs that read the saved `.i`, and never over the
+command's own output. So a failed compile leaves none, where GCC keeps the
+`.i`; a source read from standard input saves nothing; and `-fsyntax-only`
+writes nothing, where GCC and Clang write the `.i`.
+`-g*`, `-pipe` and `--param` have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
 refused: it implies `-ffast-math`, which defines `__FAST_MATH__` and links
 `crtfastmath`, which bcc does not do.
 
@@ -428,6 +439,10 @@ Scripts read the version at the end of the first line; Meson recognizes GCC
 by the Foundation's name, which the disclaimer contains.
 
 ## Clang
+
+`-save-temps` names what it keeps after the input: `g.i` and `g.s` in the
+working directory, or beside the output under `-save-temps=obj`. Clang's `.bc`
+is not written, because bcc makes no bitcode file.
 
 **Command line.** GCC's, plus `--target=`/`-target`, `-isysroot`,
 `-Xclang`, `--driver-mode=`, and `-fdiagnostics-format=`. Clang errors on an
