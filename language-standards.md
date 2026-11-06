@@ -1341,7 +1341,12 @@ function for an ordinary label, or the end of a `for` statement for its
 declaration, whatever came after the declaration. So `QUIET(int x;)` silences an
 unused `x` in Clang and not in GCC, and a pragma just before the brace does the
 reverse. Clang's `-Wunused-but-set-global` is reported only if the group is on at
-the end of the unit, and classified at the declaration.
+the end of the unit, and classified at the declaration. `-Wsign-compare` reads at
+the comparison's operator in both, and GCC's `?:` form at the operand it converts,
+though Clang's waits for the function's end to know the code can run;
+`-Wmissing-field-initializers` reads at the initializer's closing brace. GCC
+rejects a pragma inside an expression or an initializer, so only Clang can tell
+those places from the statement's.
 
 bcc files every extension under `-Wpedantic`, including those each compiler gives
 a group of its own: GCC's `-Wlong-long` and `-Wdeclaration-after-statement`, and
