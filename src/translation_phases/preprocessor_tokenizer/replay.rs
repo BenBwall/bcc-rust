@@ -6,6 +6,7 @@
 use super::{
     PreprocessorToken,
     PreprocessorTokenType,
+    TokenSpacing,
 };
 use crate::{
     translation_phases::{
@@ -129,6 +130,7 @@ const _: () = assert!(
 pub(crate) struct ReplayedToken<'a> {
     kind:           PreprocessorTokenType,
     contents:       StringCacheId,
+    spacing:        TokenSpacing,
     source_vectors: ReplaySources<'a>,
 }
 
@@ -272,6 +274,7 @@ impl<'a> ReplayCursor<'a> {
             tokens.push(ReplayedToken {
                 kind:           token.kind,
                 contents:       token.contents,
+                spacing:        token.spacing,
                 source_vectors: ReplaySources::new(arena, token.source_vectors.as_slice()),
             });
         }
@@ -329,6 +332,7 @@ impl<'a> ReplayedToken<'a> {
         Self {
             kind:           token.kind,
             contents:       token.contents,
+            spacing:        token.spacing,
             source_vectors: ReplaySources::new(
                 arena,
                 context.get_source_vectors(token.source_vectors),
@@ -341,6 +345,7 @@ impl<'a> ReplayedToken<'a> {
         PreprocessorToken {
             kind:           self.kind,
             contents:       self.contents,
+            spacing:        self.spacing,
             source_vectors: context.push_source_vectors(self.source_vectors.as_slice()),
         }
     }

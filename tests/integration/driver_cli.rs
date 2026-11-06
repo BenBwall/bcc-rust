@@ -410,13 +410,14 @@ mod tests {
         let source = "a # b %: c ## d\n#define H #\nH define X 1\nX\ndon't stop\nsay \"hi\n";
         std::fs::write(project.path("text.c"), source).unwrap();
         // C99 6.10p2: a `#` that does not start a line, or that a macro
-        // produced, begins no directive; an unclosed quote keeps the rest of
-        // its line with a warning. GCC and Clang print the text as written.
+        // produced, begins no directive, and GCC and Clang set the latter
+        // apart so that it does not read as one; an unclosed quote keeps the
+        // rest of its line with a warning.
         let output = project.bcc(&["-E", "-P", "text.c"]);
         succeeds(&output);
         assert_eq!(
             stdout(&output),
-            "a # b %: c ## d\n# define X 1\nX\ndon't stop\nsay \"hi\n"
+            "a # b %: c ## d\n # define X 1\nX\ndon't stop\nsay \"hi\n"
         );
         let diagnostics = stderr(&output);
         for quote in ["'", "\""] {
@@ -505,7 +506,7 @@ mod tests {
         let text = stdout(&output);
         assert!(text.starts_with("# 1 \"main.c\"\n"), "{text}");
         assert!(text.contains("int helper(int);"), "{text}");
-        assert!(text.contains("return helper( ((20)+1)) - 40;"), "{text}");
+        assert!(text.contains("return helper(((20)+1)) - 40;"), "{text}");
         assert!(text.contains("# 3 \"main.c\"\n"), "{text}");
         let plain = project.bcc(&["-E", "-P", "main.c"]);
         assert!(!stdout(&plain).contains('#'), "{}", stdout(&plain));

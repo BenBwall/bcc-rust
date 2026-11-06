@@ -7,9 +7,13 @@
 
 #[cfg(test)]
 mod tests {
-    use std::process::{
-        Command,
-        Output,
+    use std::{
+        io::Write as _,
+        process::{
+            Command,
+            Output,
+            Stdio,
+        },
     };
 
     fn bcc(args: &[&str]) -> Output {
@@ -33,6 +37,160 @@ mod tests {
             output.status.success() && !text.contains("error:") && !text.contains("warning:"),
             "{text}"
         );
+    }
+
+    /// `-E -P` under each compiler personality, for `source`.
+    fn preprocessed(personality: &str, source: &str) -> String {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args([personality, "-std=gnu23", "-E", "-P", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(source.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
+    }
+
+    /// The lines `-E -P` prints for `source`, each with its indentation.
+    fn expect_spacing(source: &str, expected: &str) {
+        for personality in ["--gcc-mode", "--clang-mode"] {
+            assert_eq!(preprocessed(personality, source), expected, "{personality}");
+        }
+    }
+
+    /// The tokens around a macro's expansion and its arguments are spaced as
+    /// GCC 13.3's and Clang 23's `-E -P` space them.
+    #[test]
+    fn expansions_are_spaced_as_gcc_and_clang_space_them() {
+        expect_spacing(
+            concat!(
+                "#define H(x) x\n",
+                "#define O(x)(x)\n",
+                "#define Q -x\n",
+                "#define P(a,b) a+b\n",
+                "#define P2(a,b) a + b\n",
+                "#define ID(x) x\n",
+                "#define W(x) [x]\n",
+                "#define F(...) #__VA_OPT__(x)\n",
+                "#define G(...) __VA_OPT__(x)\n",
+                "h = H(1);\n",
+                "o = O(2);\n",
+                "t=H(1);\n",
+                "u=Q;\n",
+                "p = P(x , y);\n",
+                "p2 = P2(x,y);\n",
+                "i = ID(ID(1))+ID( 2 );\n",
+                "w = W( a b );\n",
+                "n = ID(-)ID(-);\n",
+                "b = F(1);\n",
+                "c = G(1);\n",
+            ),
+            concat!(
+                "h = 1;\n",
+                "o = (2);\n",
+                "t=1;\n",
+                "u=-x;\n",
+                "p = x+y;\n",
+                "p2 = x + y;\n",
+                "i = 1 +2;\n",
+                "w = [a b];\n",
+                "n = - -;\n",
+                "b = \"x\";\n",
+                "c = x;\n",
+            ),
+        );
+    }
+
+    /// GCC's own tests of `-E` spacing, gcc.dg/cpp/spacing1.c without the
+    /// invocation that spans lines, whose line placement differs, and
+    /// spacing2.c: padding survives a failed search for a macro's `(`, and an
+    /// empty macro leaves no space before the next line.
+    #[test]
+    fn padding_survives_looking_for_a_macro_call() {
+        expect_spacing(
+            concat!(
+                "#define str(x) #x\n",
+                "#define f(x) x\n",
+                "#define glue(x, y) x ## y\n",
+                "#define EMPTY\n",
+                "#define A(x) B x\n",
+                "#define B(x)\n",
+                "#define C A\n",
+                "#define D() A\n",
+                "#define foo bar\n",
+                "glue (EMPTY 4, 4) EMPTY;\n",
+                "A(Q) C(Q) D()Q D():\n",
+                "f\n",
+                "bar\n",
+                "A\n",
+                "bad\n",
+                "a = EMPTY\n",
+                "foo..\n",
+            ),
+            " 44 ;\nB Q B Q A Q A:\nf\nbar\nA\nbad\na =\nbar..\n",
+        );
+    }
+
+    /// A name or number stays apart from a prefixed literal after it, as in
+    /// Clang. GCC 13.3 writes `returnL"x"`, which is other tokens; a wrong
+    /// spacing is at worst cosmetic, and that is a compile error.
+    #[test]
+    fn a_prefixed_literal_does_not_paste_to_what_comes_before_it() {
+        expect_spacing(
+            "#define ID(x) x\nID(1)L\"x\" ID(return)u8\"y\" ID(x)L'a'\n",
+            "1 L\"x\" return u8\"y\" x L'a'\n",
+        );
+    }
+
+    /// GCC's gcc.dg/cpp/avoidpaste1.c and avoidpaste2.c: tokens that are
+    /// already together stay together, and macros and arguments do not
+    /// paste what surrounds them. `__COUNTER__` stands in for
+    /// `__INCLUDE_LEVEL__`, which is not implemented.
+    #[test]
+    fn replacement_does_not_paste_what_surrounds_it() {
+        expect_spacing(
+            concat!(
+                "#define f(x) x\n",
+                "#define g\n",
+                "#define tricky 1.0e ## -1\n",
+                ":: :g: :f(): :f(^): tricky\n",
+                ":f(:): .. .__COUNTER__ __COUNTER__.\n",
+            ),
+            ":: : : : : :^: 1.0e- 1\n: : : .. . 0 1 .\n",
+        );
+        expect_spacing(
+            concat!(
+                "#define EMPTY_WITH_LEADING_SPACE\n",
+                "#define f(x, y) :x: -y##> -##y>\n",
+                "#define g(x, y) :x: :y##2 2##y:\n",
+                " EMPTY_WITH_LEADING_SPACE\n",
+                "f(:,) \n",
+                "g(2, 2)\n",
+            ),
+            ": : : - > - >\n:2: :22 22:\n",
+        );
+    }
+
+    /// A wider matrix of expansions, arguments, `#`, `##`, `__VA_OPT__`,
+    /// built-in macros and token pairs. The expected text is `gcc -E -P
+    /// -std=gnu2x` from GCC 13.3, whose model both personalities follow, but
+    /// for `c27`, where GCC's `nL"s"` is other tokens and bcc keeps Clang's;
+    /// see the PR that added it for where Clang's own printer differs.
+    #[test]
+    fn expansion_matrix_is_spaced_as_gcc_spaces_it() {
+        let source =
+            include_str!("../fixtures/preprocessing/expansion_spacing.c").replace("\r\n", "\n");
+        let expected = include_str!("../fixtures/preprocessing/expansion_spacing.expected")
+            .replace("\r\n", "\n");
+        expect_spacing(&source, &expected);
     }
 
     /// `#` drops a final `\\` that would escape the closing quote and warns

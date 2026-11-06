@@ -40,6 +40,7 @@ use crate::{
             PreprocessorToken,
             PreprocessorTokenType as T,
             TokenSource,
+            TokenSpacing,
         },
     },
     util::bump::{
@@ -155,6 +156,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                 let name = self.context.string_cache.at(token.contents);
                 if name == "__pragma" {
                     let newline = PreprocessorToken {
+                        spacing:        TokenSpacing::NONE,
                         kind:           T::Newline,
                         contents:       self.context.string_cache.intern("\n"),
                         source_vectors: token.source_vectors,
@@ -341,6 +343,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             for (index, byte) in bytes.iter().enumerate() {
                 if index != 0 {
                     output.push(PreprocessorToken {
+                        spacing:        TokenSpacing::NONE,
                         kind:           T::Comma,
                         contents:       self.context.string_cache.intern(","),
                         source_vectors: directive.source_vectors,
@@ -351,6 +354,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             output.extend_from_slice(params.suffix);
         }
         output.push(PreprocessorToken {
+            spacing:        TokenSpacing::NONE,
             kind:           T::Newline,
             contents:       self.context.string_cache.intern("\n"),
             source_vectors: directive.source_vectors,
@@ -362,7 +366,10 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             SourceVector::default(),
         );
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan { argument: false },
+            frame_type: TokenizerFrameType::Rescan {
+                argument: false,
+                end:      TokenSpacing::NONE,
+            },
             tokenizer,
         });
         self.resume_at_line_start();
@@ -405,6 +412,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         let mut spelling = ArenaString::new_in(self.scratch);
         _ = write!(spelling, "{value}\0");
         PreprocessorToken {
+            spacing: TokenSpacing::NONE,
             kind: T::Number,
             contents: self.context.string_cache.intern(&*spelling),
             source_vectors,
@@ -422,7 +430,10 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             SourceVector::default(),
         );
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan { argument: false },
+            frame_type: TokenizerFrameType::Rescan {
+                argument: false,
+                end:      TokenSpacing::NONE,
+            },
             tokenizer,
         });
     }
@@ -873,6 +884,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         source: SourceVectors,
     ) -> Option<u64> {
         let end = PreprocessorToken {
+            spacing:        TokenSpacing::NONE,
             kind:           T::Newline,
             contents:       self.context.string_cache.intern("\n"),
             source_vectors: source,
@@ -883,7 +895,10 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             std::mem::replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let generate_placeholders = self.generate_placeholders;
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan { argument: false },
+            frame_type: TokenizerFrameType::Rescan {
+                argument: false,
+                end:      TokenSpacing::NONE,
+            },
             tokenizer,
         });
         let depth = self.tokenizer_stack.len();

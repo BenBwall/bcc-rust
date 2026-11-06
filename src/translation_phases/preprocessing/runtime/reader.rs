@@ -28,6 +28,7 @@ use crate::translation_phases::{
         PreprocessorToken,
         PreprocessorTokenType,
         TokenSource,
+        TokenSpacing,
     },
 };
 
@@ -61,6 +62,7 @@ impl Expander<'_, '_, '_, '_> {
                 self.trace_produced(token);
             }
             if let Some(result) = self.map_preprocessor_token(token) {
+                self.spacing.output = token.spacing;
                 if matches!(self.output_purpose, OutputPurpose::Parsing) {
                     if let Some(site) = self.expansion_end() {
                         self.context
@@ -231,7 +233,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                     location,
                                 );
                                 self.push_tokenizer_frame(TokenizerFrame {
-                                    frame_type: TokenizerFrameType::Rescan { argument: false },
+                                    frame_type: TokenizerFrameType::Rescan {
+                                        argument: false,
+                                        end:      TokenSpacing::NONE,
+                                    },
                                     tokenizer,
                                 });
                             }

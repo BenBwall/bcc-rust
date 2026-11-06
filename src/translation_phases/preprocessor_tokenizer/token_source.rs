@@ -12,6 +12,7 @@ use std::fmt::{
 
 use super::{
     PreprocessorToken,
+    TokenSpacing,
     replay::{
         ReplayCursor,
         SharedRun,
@@ -104,6 +105,7 @@ impl LexedCursor<'_> {
             start.line = start.line.wrapping_add(self.line_delta);
             let vector = context.push_lexed_source_vector(start, self.source_file_index, length);
             return Some(PreprocessorToken {
+                spacing: TokenSpacing::NONE,
                 kind,
                 source_vectors: SourceVectors::new(vector, vector + 1),
                 contents: self.file.contents(entry),
@@ -138,6 +140,7 @@ impl LexedCursor<'_> {
         let length = self.file.eof().index - start.index;
         let vector = context.push_lexed_source_vector(start, self.source_file_index, length);
         PreprocessorToken {
+            spacing:        TokenSpacing::NONE,
             kind:           super::PreprocessorTokenType::Newline,
             source_vectors: SourceVectors::new(vector, vector + 1),
             contents:       context.string_cache.intern("\n"),

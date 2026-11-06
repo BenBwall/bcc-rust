@@ -33,6 +33,7 @@ use crate::{
         SourceVectors,
         preprocessing::macro_expansion::FunctionLikeMacroArgument,
         preprocessor_tokenizer::{
+            OutputSpacing,
             PreprocessorToken,
             PreprocessorTokenType,
             TokenSource,
@@ -139,12 +140,10 @@ pub(crate) enum TraceEvent<'pp> {
     /// A token that a replacement produced left phase 4.
     /// C99: §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
     Produced {
-        expansion:    SourceVector,
-        spelling:     StringCacheId,
-        /// Where the token is spelled, if it has a place.
-        spelled:      Option<SourceVector>,
-        /// Whether whitespace precedes the token where it is spelled.
-        white_before: bool,
+        expansion: SourceVector,
+        spelling:  StringCacheId,
+        /// How the token is separated from the one before it.
+        spacing:   OutputSpacing,
     },
     /// A conditional directive decided whether its group is processed.
     /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
@@ -504,23 +503,11 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         let Some((expansion, _)) = self.replacement() else {
             return;
         };
-        let spelled = self
-            .context
-            .get_source_vectors(token.source_vectors)
-            .first()
-            .cloned();
-        let white_before = spelled.as_ref().is_some_and(|vector| {
-            self.context
-                .source_text(vector.source_file_index)
-                .and_then(|text| text.as_bytes().get((vector.index as usize).checked_sub(1)?))
-                .is_some_and(u8::is_ascii_whitespace)
-        });
         self.push_trace(
             TraceEvent::Produced {
                 expansion,
                 spelling: token.contents,
-                spelled,
-                white_before,
+                spacing: token.spacing.output(),
             },
             None,
         );
