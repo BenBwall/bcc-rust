@@ -511,6 +511,18 @@ impl<'s> Draft<'s> {
             })
     }
 
+    /// The instruction that defines `value`, if one does.
+    pub(super) fn defining_inst(&self, value: Value) -> Option<InstData> {
+        self.blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find(|&&(_, result)| result == Some(value))
+            .and_then(|&(op, _)| match op {
+                | Op::Inst(data) => Some(data),
+                | _ => None,
+            })
+    }
+
     pub(super) fn create_slot(&mut self, size: u32, align: crate::ir::Align) -> StackSlot {
         let slot = StackSlot::new(self.slots.len());
         self.slots.push(StackSlotData { size, align });
