@@ -80,6 +80,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         positions: Vec::new(),
         linker_words: Vec::new(),
         queries: Vec::new(),
+        save_temps: None,
         dependency_mode: None,
         dependency_file: None,
         preprocessor_dependency_file: false,
@@ -343,6 +344,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         steps.push(bcc);
     }
+    let saved_temporaries = state.saved_temporaries(&common, links);
     // Under `-fsyntax-only` the C and assembly inputs form separate jobs,
     // and each runs whether the other fails, as in the compilers.
     let mut plan = Plan {
@@ -394,6 +396,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         plan.steps.push(Step::Bcc(bcc));
     }
+    // Only once the program has compiled, so that no diagnostic prints twice.
+    plan.steps
+        .extend(saved_temporaries.into_iter().map(Step::Link));
     Ok(plan)
 }
 
@@ -468,6 +473,8 @@ struct MachineOptions {
 struct State<'a> {
     invocation: &'a Invocation,
     compiler: Compiler,
+    /// `-save-temps`.
+    save_temps: Option<SaveTemps>,
     /// bcc's options and inputs, in order.
     out: Vec<OsString>,
     errors: usize,
@@ -707,9 +714,102 @@ const LINK_ONLY_OPTIONS: [&str; 8] = [
 /// builds: driver conveniences and reports.
 /// `-g*` (debug information, which bcc does not emit) and the `-f` and `-m`
 /// options in `unimplemented.rs` are ignored too.
-const IGNORED_OPTIONS: [&str; 4] = ["-pipe", "-save-temps", "-Q", "-time"];
+const IGNORED_OPTIONS: [&str; 3] = ["-pipe", "-Q", "-time"];
+
+/// Where `-save-temps` writes under Clang, which names the files after the
+/// input. GCC names them after the output either way.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SaveTemps {
+    /// `-save-temps` and `-save-temps=cwd`: the working directory.
+    WorkingDirectory,
+    /// `-save-temps=obj`: beside the output.
+    OutputDirectory,
+}
 
 impl State<'_> {
+    /// The bcc command lines that write what `-save-temps` keeps of each C
+    /// source: its preprocessed text, its assembly unless `-S` already asks
+    /// for that, and its object when the command links, so that the program
+    /// is otherwise built as without the option. They only rewrite what the
+    /// real compile produced, so they report no warnings, and leave dependency
+    /// files to it. Standard input names no file to save after.
+    fn saved_temporaries(&self, common: &[OsString], links: bool) -> Vec<Vec<OsString>> {
+        let Some(save_temps) = self.save_temps else {
+            return Vec::new();
+        };
+        let compiles = links
+            || self
+                .stages
+                .iter()
+                .any(|stage| matches!(*stage, "-c" | "-S"));
+        if !compiles || self.syntax_only {
+            return Vec::new();
+        }
+        let stops_at_assembly = self.stages.contains(&"-S");
+        let mut steps = Vec::new();
+        for input in &self.inputs {
+            if input.dropped || input.kind != InputKind::C || input.path == "-" {
+                continue;
+            }
+            let path = Path::new(&input.path);
+            let base = self.saved_temporary_base(path, save_temps, links);
+            let preprocessed = path.extension().is_some_and(|extension| extension == "i");
+            let mut stages = Vec::new();
+            if !preprocessed {
+                stages.push(("-E", "i"));
+            }
+            if !stops_at_assembly {
+                stages.push(("-S", "s"));
+            }
+            if links {
+                stages.push(("-c", "o"));
+            }
+            for (stage, extension) in stages {
+                let mut step = common.to_vec();
+                step.extend(without_dependency_options(
+                    self.arguments(Inputs::One(input.at), false),
+                ));
+                step.push("-w".into());
+                step.push(stage.into());
+                let mut output = OsString::from("--output=");
+                output.push(&base);
+                output.push(".");
+                output.push(extension);
+                step.push(output);
+                steps.push(step);
+            }
+        }
+        steps
+    }
+
+    /// The name, without its extension, `-save-temps` gives what it keeps of
+    /// `input`. GCC follows the output, `-save-temps=obj` or not: `o/x.i` for
+    /// `-c g.c -o o/x.o`, and `p-g.i` for a program `p`. Clang follows the
+    /// input: `g.i`, in the output's directory under `-save-temps=obj`.
+    fn saved_temporary_base(&self, input: &Path, save_temps: SaveTemps, links: bool) -> OsString {
+        let stem = input.file_stem().unwrap_or(input.as_os_str());
+        let output = self.outputs.first().map(Path::new);
+        if self.compiler == Compiler::Clang {
+            return match (save_temps, output.and_then(Path::parent)) {
+                | (SaveTemps::OutputDirectory, Some(directory)) =>
+                    directory.join(stem).into_os_string(),
+                | _ => stem.to_owned(),
+            };
+        }
+        match (links, output) {
+            | (false, Some(output)) => output.with_extension("").into_os_string(),
+            | (false, None) => stem.to_owned(),
+            | (true, output) => {
+                let mut base = output.unwrap_or(Path::new("a.out")).with_extension("");
+                let mut name = base.file_name().unwrap_or_default().to_owned();
+                name.push("-");
+                name.push(stem);
+                base.set_file_name(name);
+                base.into_os_string()
+            },
+        }
+    }
+
     /// Translates one argument, reading its operand from `rest`. Returns
     /// the plan of a query that ends the command line, such as
     /// `--version`.
@@ -1423,10 +1523,15 @@ impl State<'_> {
             self.out.push(text.into());
             return;
         }
-        if IGNORED_OPTIONS.contains(&text)
-            || text.starts_with("-g")
-            || text.starts_with("-save-temps")
-        {
+        if text == "-save-temps" || text == "-save-temps=cwd" {
+            self.save_temps = Some(SaveTemps::WorkingDirectory);
+            return;
+        }
+        if text == "-save-temps=obj" {
+            self.save_temps = Some(SaveTemps::OutputDirectory);
+            return;
+        }
+        if IGNORED_OPTIONS.contains(&text) || text.starts_with("-g") {
             return;
         }
         if text.starts_with("-Wa,") {
@@ -1627,6 +1732,20 @@ impl State<'_> {
 }
 
 /// `--help`.
+/// `arguments` without the options that write a dependency file.
+fn without_dependency_options(arguments: Vec<OsString>) -> Vec<OsString> {
+    let mut kept = Vec::with_capacity(arguments.len());
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        match argument.to_str() {
+            | Some("-MD" | "-MMD") => (),
+            | Some("-MF" | "-MT" | "-MQ") => drop(arguments.next()),
+            | _ => kept.push(argument),
+        }
+    }
+    kept
+}
+
 fn help(personality: Personality, name: &str) -> String {
     let compiler = if personality == Personality::Gcc {
         "GCC"

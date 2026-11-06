@@ -1279,6 +1279,88 @@ mod tests {
         }
     }
 
+    /// `-save-temps` keeps the intermediate files, named as each compiler
+    /// names them, and prints a warning once.
+    #[test]
+    fn gnu_save_temps_keeps_intermediate_files() {
+        let cases: [(&str, &[&str], &[&str]); 6] = [
+            (
+                "--gcc-mode",
+                &["-save-temps", "-c", "g.c"],
+                &["g.i", "g.s", "g.o"],
+            ),
+            (
+                "--gcc-mode",
+                &["-save-temps", "-c", "g.c", "-o", "o/x.o"],
+                &["o/x.i", "o/x.s", "o/x.o"],
+            ),
+            ("--gcc-mode", &["-save-temps", "-S", "g.c"], &["g.i", "g.s"]),
+            (
+                "--clang-mode",
+                &["-save-temps", "-c", "g.c"],
+                &["g.i", "g.s", "g.o"],
+            ),
+            (
+                "--clang-mode",
+                &["-save-temps=obj", "-c", "g.c", "-o", "o/x.o"],
+                &["o/g.i", "o/g.s", "o/x.o"],
+            ),
+            ("--clang-mode", &["-save-temps", "-E", "g.c"], &[]),
+        ];
+        for (mode, args, files) in cases {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "#define R 1\nint g(void) { return R; }\n");
+            let output = directory.bcc(mode, args);
+            succeeds(&output);
+            for file in files {
+                assert!(directory.path(file).exists(), "{mode} {args:?}: {file}");
+            }
+            if *files == ["g.i", "g.s", "g.o"] {
+                let text = std::fs::read_to_string(directory.path("g.i")).unwrap();
+                assert!(text.contains("return 1;"), "{mode}: {text}");
+                assert!(!text.contains("define"), "{mode}: {text}");
+            }
+        }
+
+        let directory = Directory::new();
+        directory.write("w.c", "#warning careful\nint w;\n");
+        let output = directory.bcc("--clang-mode", &["-save-temps", "-c", "w.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output).matches("warning:").count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+
+        // A failed compile prints its error once and saves nothing.
+        directory.write("e.c", "int e(void) { return x; }\n");
+        let output = directory.bcc("--gcc-mode", &["-save-temps", "-c", "e.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output).matches("error:").count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        assert!(!directory.path("e.s").exists());
+    }
+
+    /// A linked program's intermediate files, and its dependency file left
+    /// to the real compile.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_save_temps_keeps_a_programs_objects() {
+        let directory = Directory::new();
+        directory.write("m.c", "int main(void) { return 0; }\n");
+        let output = directory.bcc("--gcc-mode", &["-save-temps", "-MD", "m.c", "-o", "p"]);
+        succeeds(&output);
+        for file in ["p", "p-m.i", "p-m.s", "p-m.o"] {
+            assert!(directory.path(file).exists(), "{file}");
+        }
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]
