@@ -1,1 +1,1 @@
---clang-cl-mode -c -Fonul.obj
+--compiler-identity=clang-cl --diagnostic-format=clang -fms-extensions

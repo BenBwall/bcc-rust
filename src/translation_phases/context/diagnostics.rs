@@ -206,9 +206,17 @@ impl<'tu> Context<'tu> {
     /// Whether a preprocessing error was queued at or after position
     /// `start`.
     pub(crate) fn preprocessing_error_since(&self, start: usize) -> bool {
-        self.pending_errors.iter().skip(start).any(|error| {
-            matches!(error, TranslationError::Preprocessing(error) if error.severity() == ErrorSeverity::Error)
-        })
+        self.pending_errors
+            .iter()
+            .skip(start)
+            .any(|error| match error {
+                | TranslationError::Preprocessing(error) =>
+                    error.severity() == ErrorSeverity::Error,
+                | TranslationError::Classified(classified) =>
+                    classified.severity == ErrorSeverity::Error
+                        && matches!(*classified.error, TranslationError::Preprocessing(_)),
+                | _ => false,
+            })
     }
 
     /// Marks one arena-stable occurrence without scanning the diagnostic FIFO.

@@ -331,6 +331,27 @@ int x;
         }
     }
 
+    /// A warning lowering reports, after the whole unit is analyzed, reads
+    /// the settings where the call is.
+    #[test]
+    fn a_pragma_governs_a_call_warning_from_lowering() {
+        let source = "\
+__attribute__((warning(\"careful\"))) void careful(void);
+void loud(void) { careful(); }
+#pragma GCC diagnostic ignored \"-Wattribute-warning\"
+void quiet(void) { careful(); }
+#pragma GCC diagnostic error \"-Wattribute-warning\"
+void promoted(void) { careful(); }
+";
+        for mode in MODES {
+            assert_eq!(
+                compile("call", mode, &[], source),
+                ["2 warning", "6 error"],
+                "{mode}"
+            );
+        }
+    }
+
     /// `cl` applies the warning numbers bcc gives its warnings, and reads no
     /// other compiler's diagnostic pragma.
     #[test]

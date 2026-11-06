@@ -1,1 +1,1 @@
---clang-mode -std=gnu17 -c -o /dev/null
+--compiler-identity=clang --diagnostic-format=clang -std=gnu17

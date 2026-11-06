@@ -112,6 +112,32 @@ impl<'tu> Context<'tu> {
         }
     }
 
+    /// Queues an extension diagnostic, which `warning "-Wpedantic"` keeps from
+    /// `-Werror`. A parser diagnostic stays itself for the reporter to fold,
+    /// so `-Werror` still promotes one.
+    pub(crate) fn classified_extension(
+        &mut self,
+        source: SourceVectors,
+        error: TranslationError<'tu>,
+    ) {
+        if !matches!(error, TranslationError::Parsing(_))
+            && error.severity() == ErrorSeverity::Warning
+            && self
+                .pragma_state_at(source)
+                .is_some_and(|state| state.pedantic_warning)
+        {
+            let error = self.tu.alloc(error);
+            self.pending_errors
+                .push_back(TranslationError::Classified(ClassifiedError {
+                    severity: ErrorSeverity::Warning,
+                    fatal: false,
+                    error,
+                }));
+        } else {
+            self.classified_error(source, error);
+        }
+    }
+
     /// What the settings at `source` make of a diagnostic of `group`, for a
     /// caller that holds part of the context while it queues one with
     /// [`Self::raw_classified_preprocessor_error`]: `None` where only the
@@ -158,11 +184,6 @@ impl<'tu> Context<'tu> {
                 return;
             };
             (severity, state.fatal & (1 << group as u32) != 0)
-        } else if state.pedantic_warning
-            && matches!(error, TranslationError::Extension(_))
-            && error.severity() == ErrorSeverity::Warning
-        {
-            (ErrorSeverity::Warning, false)
         } else {
             self.pending_errors.push_back(error);
             return;

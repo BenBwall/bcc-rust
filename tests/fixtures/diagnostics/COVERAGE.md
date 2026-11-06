@@ -3,13 +3,12 @@
 Diagnostic pragmas: `pragma-diagnostic-{gcc,clang}` pin the warning of each phase
 under `#pragma GCC diagnostic` and `#pragma clang diagnostic`, a macro's body and
 invocation under different settings, `_Pragma` in an expansion, and a header read
-twice; `pragma-diagnostic-call-*` a lowering warning; `pragma-diagnostic-system-*`
-system headers; `pragma-diagnostic-malformed-*` each compiler's complaints, in its
+twice; `pragma-diagnostic-system-*` system headers; `pragma-diagnostic-malformed-*` each compiler's complaints, in its
 own words; `pragma-diagnostic-fatal-clang` Clang's `fatal`; `pragma-warning-clang-cl`
 `#pragma warning`. Lines and severities were read from GCC 14.2 and Clang 23.1,
 except the reported line of a warning in a macro's body, which GCC puts in the
-body. `tests/integration/diagnostic_pragmas.rs` holds the option combinations, `cl`
-and the `-E` round trip.
+body. `tests/integration/diagnostic_pragmas.rs` holds the option combinations,
+lowering's warning, `cl` and the `-E` round trip.
 
 Issues #49/#54 (2026-10-16): extension headlines now retain `[-Wpedantic]`,
 and the predefined-name fixture retains

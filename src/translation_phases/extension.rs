@@ -104,7 +104,7 @@ impl<'tu> Context<'tu> {
         let at = source_vectors;
         let source_vectors = self.file_location(source_vectors);
         let suppressed = self.tu_arena().alloc(Cell::new(false));
-        self.classified_error(
+        self.classified_extension(
             at,
             TranslationError::Extension(ExtensionDiagnostic {
                 suppressed,
@@ -132,7 +132,7 @@ impl<'tu> Context<'tu> {
             DiagnosticPolicy::Error
         };
         if let Some(severity) = self.extension_severity(feature.origin(), baseline, source) {
-            self.classified_error(source, diagnostic(severity));
+            self.classified_extension(source, diagnostic(severity));
         }
     }
 
