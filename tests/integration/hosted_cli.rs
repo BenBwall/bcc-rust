@@ -383,7 +383,7 @@ mod tests {
         let source = "void main(void) {}\n";
         let hosted = bcc(&["--input", source]);
         assert!(
-            stderr(&hosted).contains("main has a nonportable signature"),
+            stderr(&hosted).contains("return type of 'main' is not 'int'"),
             "{hosted:?}"
         );
         clean(&bcc(&["-ffreestanding", "--input", source]));

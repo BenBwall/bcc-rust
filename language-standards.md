@@ -357,6 +357,11 @@ definition. On System V such an argument takes its first member's registers
 and extension, and the whole union's stack slot once they are taken; Win64
 passes the whole union.
 
+Where function types meet (a conversion, a redeclaration, `?:`,
+`__builtin_types_compatible_p`), a transparent union's parameter matches any of
+its members' types and the composite keeps the union, as in GCC and Clang.
+glibc declares `getsockname` this way under `_GNU_SOURCE`.
+
 Startup preprocessing uses `PreprocessingOption::{Define,Undefine,Include}`
 in `src/configuration.rs`, borrowed by `Context.preprocessing_options`; the
 scalar `CompilerConfiguration` remains lifetime-free and `Copy`. CLI spellings

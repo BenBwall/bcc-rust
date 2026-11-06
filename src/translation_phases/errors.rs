@@ -85,6 +85,7 @@ impl TranslationError<'_> {
             | Self::Semantic(error) => match error.kind {
                 | semantic_analysis::SemanticErrorKind::PointerConstraint(_)
                 | semantic_analysis::SemanticErrorKind::Unused(_)
+                | semantic_analysis::SemanticErrorKind::Main(_)
                 | semantic_analysis::SemanticErrorKind::SignCompare
                 | semantic_analysis::SemanticErrorKind::MissingFieldInitializer
                 | semantic_analysis::SemanticErrorKind::ImplicitFunctionDeclaration

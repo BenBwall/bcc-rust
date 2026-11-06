@@ -74,6 +74,7 @@ mod functions;
 mod implicit;
 mod inference;
 mod initializers;
+mod main_function;
 mod missing_fields;
 mod predefined;
 mod sign_compare;

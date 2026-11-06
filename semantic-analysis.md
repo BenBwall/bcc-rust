@@ -807,11 +807,16 @@ finds no declaration resolves them (`predefined.rs`), `__FUNCTION__` to the
 in the function, holding the signature as Clang prints it in C, with typedef
 names as written. The object is installed in the function scope, so later uses
 find it without another build. Outside any function all three warn at each use
-and share one file-scope object (an empty string, or `top level`). Hosted `main`
-signatures outside the portable `int (void)` and `int (int, char **)` forms,
-including internal linkage, receive an implementation warning. With
+and share one file-scope object (an empty string, or `top level`). A
+function or external object named `main` follows its compiler's rules
+(`main_function.rs`): GCC's `-Wmain`, off until `-Wall` or `-Wpedantic`, reads
+a definition's signature, and Clang reads every declaration, with default
+warnings under `-Wmain` and `-Wmain-return-type` and errors for wrong parameter
+types, too many parameters and, in a strict mode, the return type. Neither says
+anything about `int main(int, char **, char **)` or a `const` argument array.
+TCC checks nothing, and `cl`'s rules are not modeled. With
 `-ffreestanding` the startup function is implementation-defined (§5.1.2.1p1),
-so `main` is not checked. GNU nested
+so only an explicit GCC `-Wmain` checks it. GNU nested
 definitions have lexical bindings and no translation-unit linkage; their
 statement/return state is independent of the enclosing function.
 

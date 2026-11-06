@@ -165,7 +165,9 @@ fn function_definition_constraints() {
     clean("int main(int argc, char **argv) { return argc; }");
     assert_eq!(
         kinds("void main(void) {}"),
-        [SemanticErrorKind::MainSignature]
+        [SemanticErrorKind::Main(
+            crate::translation_phases::semantic_analysis::main_function::MainRule::ClangMustReturnInt
+        )]
     );
     // A freestanding startup function is implementation-defined (C99
     // §5.1.2.1p1), so `main` has no required signature there.

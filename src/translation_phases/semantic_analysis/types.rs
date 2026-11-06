@@ -91,6 +91,26 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         self.composite_with_alignment(left, right, false)
     }
 
+    /// Whether `union` is a `transparent_union` with a member of a type
+    /// compatible with `ty`. As a function's parameter it then matches `ty`,
+    /// and the composite keeps the union: glibc declares `getsockname` this
+    /// way, and programs convert it to a pointer taking `struct sockaddr *`.
+    /// GNU extension: GCC manual, "Common Type Attributes"; GCC c-typeck.cc,
+    /// `type_lists_compatible_p`; Clang `mergeTransparentUnionType`.
+    fn transparent_union_holds(&mut self, union: TypeId, ty: TypeId) -> bool {
+        let TypeKind::Tag(id) = self.nodes[union.index] else {
+            return false;
+        };
+        if !self.tags[id].transparent.get() {
+            return false;
+        }
+        self.tags[id].members.get().iter().any(|member| {
+            !member.invalid
+                && member.width.is_none()
+                && self.composite(member.ty.unqualified(), ty).is_some()
+        })
+    }
+
     /// A later object declaration supplies its typedef-derived alignment;
     /// explicit object alignment is inherited separately by declaration typing.
     /// C99: §6.2.7p4, p. 40; PDF p. 52 (visible composite declarations).
@@ -234,7 +254,14 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                             ));
                             if (aproto && bproto) || (aproto != bproto && !old_params.is_empty()) {
                                 for (&a, &b) in ap.iter().zip(bp).rev() {
-                                    work.push(Work::Pair(a.unqualified(), b.unqualified()));
+                                    let (a, b) = (a.unqualified(), b.unqualified());
+                                    if self.transparent_union_holds(a, b) {
+                                        work.push(Work::Pair(a, a));
+                                    } else if self.transparent_union_holds(b, a) {
+                                        work.push(Work::Pair(b, b));
+                                    } else {
+                                        work.push(Work::Pair(a, b));
+                                    }
                                 }
                             } else {
                                 for &p in params.iter().rev() {
