@@ -808,6 +808,59 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// C99 §6.9.2p2 completes a tentative array with one element at the end
+    /// of the unit, which GCC and Clang extend to internal linkage; a later
+    /// definition or tag completes the type before then.
+    #[test]
+    fn incomplete_internal_tentative_definitions_reach_every_back_end() {
+        let source = r#"
+            static const char a[];
+            const char *pa = a;
+            static const char a[] = "abc";
+            struct S;
+            static struct S s;
+            struct S { int a, b; };
+            struct S *ps = &s;
+            static int z[];
+            int *pz = z;
+            int main(void) {
+                s.b = 7;
+                z[0] = 3;
+                return pa[2] == 'c' && ps->b == 7 && sizeof a == 4 && *pz == 3
+                        && sizeof s == 2 * sizeof(int)
+                    ? 42
+                    : 1;
+            }
+        "#;
+        for options in ["--opt=none", "--opt=bcc"] {
+            let output = bcc(source, &["-w", "--interpret", options]);
+            assert_eq!(output.status.code(), Some(42), "{options}");
+        }
+        // The default target's start files exist only on Linux here.
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let executable = temporary("internal-tentative.exe");
+        for options in [
+            &["--opt=none"][..],
+            &["--opt=bcc"][..],
+            &["--opt=none", "--backend=native"][..],
+            &["--opt=bcc", "--backend=native"][..],
+        ] {
+            let built = bcc(
+                source,
+                &[options, &["-w", "-o", executable.to_str().unwrap()]].concat(),
+            );
+            assert!(
+                built.status.success(),
+                "{options:?}: {}",
+                text(&built.stderr)
+            );
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(42), "{options:?}");
+        }
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [

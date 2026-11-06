@@ -1061,7 +1061,8 @@ impl SemanticErrorKind {
             | Self::DefinitionStarArray => "`[*]` is not allowed in a definition",
             | Self::MainSignature => "nonportable signature for main",
             | Self::Unused(rule) => rule.label(),
-            | Self::IncompleteInternalTentative | Self::IncompleteTentativeDefinition =>
+            | Self::IncompleteInternalTentative => "declared with an incomplete type",
+            | Self::IncompleteTentativeDefinition =>
                 "still incomplete at the end of the translation unit",
             | Self::TentativeArrayAssumedOne => "array assumed to have one element",
             | Self::UndefinedInternal => "used here but never defined",
