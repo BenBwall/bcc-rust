@@ -145,6 +145,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             if ignored {
                 continue;
             }
+            if attribute.name == "weakref"
+                && let Subject::Function { binding, .. } | Subject::Object { binding, .. } = subject
+            {
+                let entity = self.entity_of(binding);
+                self.attributes.entity(entity).weak_reference = true;
+            }
             match rule {
                 | Rule::CallDiagnostic => self.apply_call_diagnostic(subject, specifier, attribute),
                 | Rule::Aligned => match subject {
@@ -368,7 +374,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.attributes
             .entities
             .get(&entity)
-            .is_some_and(|attributes| attributes.weak)
+            .is_some_and(|attributes| attributes.weak || attributes.weak_reference)
     }
 
     /// GCC `weak`: external entities only; Clang rejects internal and

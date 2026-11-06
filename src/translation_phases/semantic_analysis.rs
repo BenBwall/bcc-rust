@@ -696,7 +696,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
             | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
             | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
-            | Work::Condition(slot, integer) => self.check_condition(slot, integer),
+            | Work::Condition(slot, integer, statement) =>
+                self.check_condition(slot, integer, statement),
             | Work::RequireConstant(e, assertion, before) => {
                 let value = self.integers.pop().flatten();
                 if self.semantic_errors == before && !self.unanalyzed_constant(e) {
@@ -1952,7 +1953,9 @@ enum Work<'tu, 's> {
     /// A `constexpr` declaration or compound literal has been analyzed.
     EndUnderspecified,
     InitializeDone(usize, &'tu Initializer<'tu>),
-    Condition(ExpressionSlot<'tu>, bool),
+    /// A controlling expression, whether it must be an integer, and the
+    /// statement it controls.
+    Condition(ExpressionSlot<'tu>, bool, SourceVectors),
     RequireConstant(
         &'tu Expression<'tu>,
         Option<&'tu super::parsing::StaticAssertion<'tu>>,
