@@ -231,7 +231,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let StatementType::Compound { items } = block.kind else {
                         return false;
                     };
-                    let Some(&BlockItem::Statement(last)) = items.last() else {
+                    let Some((&BlockItem::Statement(last), _)) =
+                        self.statement_expression_value_item(items.as_slice())
+                    else {
                         return false;
                     };
                     let StatementType::Expression(ExpressionSlot::Parsed(value)) = last.kind else {

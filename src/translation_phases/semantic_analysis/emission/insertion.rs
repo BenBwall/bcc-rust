@@ -1013,7 +1013,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let StatementType::Compound { items } = block.kind else {
             return;
         };
-        let Some(&BlockItem::Statement(mut last)) = items.last() else {
+        let Some((&BlockItem::Statement(mut last), _)) =
+            self.statement_expression_value_item(items.as_slice())
+        else {
             return;
         };
         loop {

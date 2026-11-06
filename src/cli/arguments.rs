@@ -397,7 +397,8 @@ impl Cli {
     }
 
     /// The relocation model of the last `-fpic`-family flag, the TLS model,
-    /// and the last of `-f[no-]strict-volatile-bitfields`.
+    /// and the last of `-f[no-]strict-volatile-bitfields`,
+    /// `-f[no-]function-sections` and `-f[no-]data-sections`.
     fn code_options(&self) -> CodeOptions {
         CodeOptions {
             relocation:                 self
@@ -406,16 +407,13 @@ impl Cli {
                 .filter_map(|option| Relocation::parse(option))
                 .next_back(),
             tls_model:                  self.tls_model.unwrap_or_default(),
-            strict_volatile_bit_fields: self
-                .language_option
-                .iter()
-                .rfind(|option| {
-                    matches!(
-                        option.as_str(),
-                        "-fstrict-volatile-bitfields" | "-fno-strict-volatile-bitfields"
-                    )
-                })
-                .is_some_and(|option| option == "-fstrict-volatile-bitfields"),
+            strict_volatile_bit_fields: self.last_of(
+                "-fstrict-volatile-bitfields",
+                "-fno-strict-volatile-bitfields",
+            ),
+            function_sections:          self
+                .last_of("-ffunction-sections", "-fno-function-sections"),
+            data_sections:              self.last_of("-fdata-sections", "-fno-data-sections"),
         }
     }
 
@@ -451,6 +449,14 @@ impl Cli {
             }
         }
         presentation
+    }
+
+    /// Whether `on` came after the last `off`, and at all.
+    fn last_of(&self, on: &str, off: &str) -> bool {
+        self.language_option
+            .iter()
+            .rfind(|option| *option == on || *option == off)
+            .is_some_and(|option| option == on)
     }
 
     /// What code generation may assume about pointers and tentative
@@ -748,7 +754,8 @@ enum LanguageFlag {
     Relocation,
     /// `-f[no-]wrapv-pointer`, `-f[no-]delete-null-pointer-checks` or
     /// `-f[no-]common`, which [`Cli::code_assumptions`] reads in order, or
-    /// `-f[no-]strict-volatile-bitfields`, which [`Cli::code_options`] does.
+    /// `-f[no-]strict-volatile-bitfields`, `-f[no-]function-sections` or
+    /// `-f[no-]data-sections`, which [`Cli::code_options`] does.
     Code,
     /// An option [`Cli::diagnostic_presentation`] reads.
     Presentation,
@@ -918,7 +925,11 @@ impl LanguageFlag {
             | "-fcommon"
             | "-fno-common"
             | "-fstrict-volatile-bitfields"
-            | "-fno-strict-volatile-bitfields" => return Some(Self::Code),
+            | "-fno-strict-volatile-bitfields"
+            | "-ffunction-sections"
+            | "-fno-function-sections"
+            | "-fdata-sections"
+            | "-fno-data-sections" => return Some(Self::Code),
             | _ if is_diagnostic_presentation(text) => return Some(Self::Presentation),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpermissive" => return Some(Self::Permissive(true)),
