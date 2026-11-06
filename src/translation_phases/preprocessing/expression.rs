@@ -51,9 +51,12 @@ use crate::{
             PreprocessorTokenType,
         },
     },
-    util::bump::{
-        ArenaVec,
-        Bump,
+    util::{
+        bump::{
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
     },
 };
 
@@ -386,11 +389,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 .group_severity(crate::configuration::DiagnosticGroup::Undef, token.source_vectors)
                                 .is_some()
                         {
-                            self.context.preprocessor_error(PreprocessorError {
-                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(self.context.diagnostic_text(self.context.string_cache.at(token.contents))),
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
+                            self.expression_parser.operand_stack.record_undefined_identifier(token.contents, token.source_vectors);
                         }
                         self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
                         self.expression_parser.state = BINARY;
@@ -562,9 +561,9 @@ enum ArithmeticFaultKind {
     RightShiftOverflow,
 }
 
-/// Only arithmetic that would diagnose allocates nodes. Operand roots let
-/// short-circuit operators discard a whole unevaluated subtree in constant
-/// time.
+/// Only arithmetic that would diagnose, and an identifier `-Wundef` reports,
+/// allocates nodes. Operand roots let short-circuit operators discard a whole
+/// unevaluated subtree in constant time.
 ///
 /// C99: an unevaluated operand of `&&`, `||`, or `?:` raises no fault
 /// (§6.5.13 paragraph 4 and §6.5.14 paragraph 4, p. 89; PDF p. 101;
@@ -574,6 +573,12 @@ enum ArithmeticFaultKind {
 enum ArithmeticFaultNode {
     Fault {
         kind:           ArithmeticFaultKind,
+        source_vectors: SourceVectors,
+    },
+    /// `-Wundef`, which GCC and Clang raise only for an identifier the
+    /// expression evaluates, so that `defined(X) && X < 1` stays quiet.
+    UndefinedIdentifier {
+        name:           StringCacheId,
         source_vectors: SourceVectors,
     },
     Join {
@@ -1584,6 +1589,16 @@ impl<'pp> PreprocessorExpressionOperandStack<'pp> {
         self.retain_faults(Some(root));
     }
 
+    #[cold]
+    #[inline(never)]
+    fn record_undefined_identifier(&mut self, name: StringCacheId, source_vectors: SourceVectors) {
+        let root = self.add_fault_node(ArithmeticFaultNode::UndefinedIdentifier {
+            name,
+            source_vectors,
+        });
+        self.retain_faults(Some(root));
+    }
+
     fn emit_faults(&mut self, context: &mut Context<'_>, root: Option<NonZeroU32>) {
         let Some(root) = root else {
             return;
@@ -1599,6 +1614,17 @@ impl<'pp> PreprocessorExpressionOperandStack<'pp> {
                     error_type: kind.error_type(),
                     source_vectors,
                 }),
+                | ArithmeticFaultNode::UndefinedIdentifier {
+                    name,
+                    source_vectors,
+                } => {
+                    let name = context.diagnostic_text(context.string_cache.at(name));
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(name),
+                        source_vectors,
+                    });
+                },
                 | ArithmeticFaultNode::Join { left, right } => {
                     pending.push(right);
                     pending.push(left);

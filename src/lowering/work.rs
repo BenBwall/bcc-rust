@@ -281,6 +281,8 @@ pub(super) enum Operand {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Place {
     Variable(Var),
+    /// The stack pointer, as a GNU local register variable names it.
+    StackPointer,
     Memory(Value),
     /// A bit-field: the address of its storage unit and where in the unit
     /// the field is.
@@ -327,6 +329,10 @@ pub(super) enum Local {
     /// A structure or union parameter: the copy the caller passed, at the
     /// address the entry block receives.
     Address(Value),
+    /// A GNU local register variable in the stack pointer, which each read
+    /// takes from there. GNU extension: GCC manual, "Local Register
+    /// Variables".
+    StackPointer,
 }
 
 /// Where `break` and `continue` go from inside a loop or switch.

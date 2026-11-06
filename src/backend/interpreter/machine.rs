@@ -39,6 +39,7 @@ use crate::{
         BlockCall,
         Body,
         Entity,
+        EntryConvention,
         FuncId,
         GlobalInit,
         Inst,
@@ -622,6 +623,21 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
         // reaches; running without it could silently differ.
         if !module.module_asm().is_empty() {
             return Err(Trap::BadEntry(EntryError::ModuleAsm));
+        }
+        // Only the processor enters a handler, and a naked body counts on the
+        // machine's registers and stack, none of which the interpreter has.
+        // A function with `no_caller_saved_registers` runs as any other: which
+        // registers it saves is not visible here.
+        for (_, function) in module.functions() {
+            if function.body.is_some() {
+                match function.entry {
+                    | EntryConvention::Interrupt =>
+                        return Err(Trap::BadEntry(EntryError::InterruptHandler)),
+                    | EntryConvention::Naked =>
+                        return Err(Trap::BadEntry(EntryError::NakedFunction)),
+                    | EntryConvention::C | EntryConvention::PreserveRegisters => {},
+                }
+            }
         }
         let mut memory = Memory::new(arena, limits.max_object_size);
         let mut functions = ArenaVec::new_in(arena);

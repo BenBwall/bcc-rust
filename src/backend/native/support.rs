@@ -373,6 +373,16 @@ pub(crate) enum Construct {
     Opcode(Opcode),
     /// A Win64 `i128` passed by value.
     WideByValue,
+    /// `__builtin_return_address` or `__builtin_frame_address` in a handler
+    /// or a naked function, neither of which has a return address and frame
+    /// at a fixed place.
+    MachineEntryFrameQuery,
+    /// What a naked function's body would need its missing prologue for: a
+    /// moving stack, a register save area, stack arguments or an object
+    /// aligned above 16 bytes.
+    NakedFrame,
+    /// SSE or x87 code under `-mgeneral-regs-only`.
+    FloatingRegisters,
     /// A structure result returned in registers of this type.
     RegisterResult(Type),
     /// A stack argument or return area aligned above 16 bytes, which the
@@ -413,6 +423,14 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::Opcode(opcode) => write!(f, "the `{opcode}` instruction")?,
             | Construct::InlineAsm(reason) => write!(f, "inline assembly with {reason}")?,
             | Construct::WideByValue => write!(f, "an i128 passed by value on Win64")?,
+            | Construct::MachineEntryFrameQuery => write!(
+                f,
+                "a return or frame address in an interrupt handler or naked function"
+            )?,
+            | Construct::NakedFrame =>
+                write!(f, "a naked function body that needs a stack frame set up")?,
+            | Construct::FloatingRegisters =>
+                write!(f, "SSE or x87 registers under -mgeneral-regs-only")?,
             | Construct::RegisterResult(ty) =>
                 write!(f, "a structure result returned in an {ty} register")?,
             | Construct::SlotAlignment(align) =>

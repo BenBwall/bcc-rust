@@ -7,6 +7,7 @@ use std::fmt;
 use bitflags::bitflags;
 
 use super::{
+    EntryConvention,
     Function,
     InlineAsm,
     Module,
@@ -165,6 +166,7 @@ impl<'ir> Module<'ir> {
             returns_twice: false,
             inlining: InlineControl::Default,
             inline_copy_of: None,
+            entry: EntryConvention::C,
         });
         self.add_symbol(name, Symbol::Function(id));
         id
@@ -335,6 +337,26 @@ impl<'ir> Module<'ir> {
         self.signaling_nans
     }
 
+    /// Keeps the module's code to general registers (`-mgeneral-regs-only`).
+    pub(crate) const fn set_general_regs_only(&mut self, enabled: bool) {
+        self.general_regs_only = enabled;
+    }
+
+    /// Whether the module's code uses general registers alone.
+    pub(crate) const fn general_regs_only(&self) -> bool {
+        self.general_regs_only
+    }
+
+    /// Says that the processor has user interrupts (`-muintr`).
+    pub(crate) const fn set_user_interrupts(&mut self, enabled: bool) {
+        self.user_interrupts = enabled;
+    }
+
+    /// Whether an interrupt handler returns with `uiret`.
+    pub(crate) const fn user_interrupts(&self) -> bool {
+        self.user_interrupts
+    }
+
     /// Gives up the parts of IEC 60559 semantics `flags` name, which the
     /// LLVM back end passes on to LLVM (`-ffast-math` and its relatives).
     pub(crate) const fn set_fast_math(&mut self, flags: crate::configuration::FastMathFlags) {
@@ -396,6 +418,8 @@ impl<'ir> Module<'ir> {
             library_builtins: LibraryBuiltins::All,
             null_pointer_is_valid: false,
             signaling_nans: false,
+            general_regs_only: false,
+            user_interrupts: false,
             fast_math: crate::configuration::FastMathFlags::NONE,
             inline_asm: Table::new_in(arena),
         }
