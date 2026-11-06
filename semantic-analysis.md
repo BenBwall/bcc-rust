@@ -1247,10 +1247,12 @@ modeling brace elision, so a list that elides braces reports nothing at its
 level. A typedef name is spelled from its canonical type, as everywhere in bcc.
 
 The compilers decide whether a signed operand can be negative differently, so
-each has its own reading: `cannot_be_negative` follows GCC's nonnegative test on
-its folded tree (clamps that fold to `MAX_EXPR`, masks moved through casts and
-shifts, the bit-counting builtins), with `shorten_compare`'s constant results,
-and `clang_range` ports Clang's `TryGetExprRange` for both operands, with its
+each has its own reading: `folded_sign` follows GCC's nonnegative test on its
+folded tree, computing from the operands what `fold` leaves (unary plus, a constant
+condition, a zero product, identical operands that cancel, and clamps that fold
+to `MAX_EXPR`) and what `tree_expr_nonnegative_warnv_p` proves of it (masks moved
+through casts and shifts, a sum only of zero extensions, the bit-counting
+builtins), with `shorten_compare`'s constant results, and `clang_range` ports Clang's `TryGetExprRange` for both operands, with its
 tautology check. Neither warns in an operand that is not evaluated, and Clang not
 in what `reachability.rs` finds unreachable either, where GCC warns. GCC withholds
 the sign warning when a system header spells the operator. It reports a missing
