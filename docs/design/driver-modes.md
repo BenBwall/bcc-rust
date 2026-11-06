@@ -288,6 +288,18 @@ members and no `_MSC_EXTENSIONS`), and `cl /Zc:trigraphs`.
 **Command line.** Single-dash options; short options take their operand
 joined or as the next argument (`-o out`, `-Idir`, `-D NAME=VALUE`); long
 single-dash options such as `-include`, `-isystem`, `-std=`, `-pedantic`.
+`@FILE` is replaced by the arguments FILE holds, split at white space outside
+quotes, with a backslash taking the next byte literally; FILE may name further
+files, against the working directory, and after 2000 `@` arguments GCC stops
+with `too many @-files encountered`. A file that does not exist stays as an
+input, which is then reported missing, and a directory is an error. Clang does
+the same with these differences: an empty `""` is no argument, which GCC keeps,
+a NUL ends only its argument, where GCC stops reading the file, a final
+backslash stays,
+`@` alone is the working directory, and a file naming itself is `recursive
+expansion of: 'FILE'`. Both take `--print-` for `-print-`. An option's value
+that is not UTF-8, such as `-DMSG="\xff"`, is refused on the command line and
+from a file, where both compilers take it; a file name need not be UTF-8.
 Stages: `-E`, `-S`, `-c`, and linking otherwise, into `a.out`. Several inputs
 are compiled separately and linked. GCC rejects an unknown option
 (`gcc: error: unrecognized command-line option '-ffoo'`) except an unknown
@@ -295,13 +307,15 @@ are compiled separately and linked. GCC rejects an unknown option
 after reading the whole command line. Queries: `--version`, `-v`,
 `-dumpversion` (the major version since GCC 7), `-dumpfullversion`,
 `-dumpmachine`, `-print-file-name=`, `-print-libgcc-file-name`,
-`-print-prog-name=`, `-print-search-dirs`, `-print-multiarch`,
+`-print-prog-name=`, `-print-search-dirs`, `-print-multi-lib`,
+`-print-multi-directory`, `-print-multi-os-directory`, `-print-multiarch`,
 `-print-sysroot`, `-###`. The `-dump` options print at once wherever they
 stand; the others are answered once the command line has been read, so a
 later `--sysroot` applies, and only one: `-print-search-dirs`, then the
 last of `-print-file-name=` and `-print-libgcc-file-name`, the last
-`-print-prog-name=`, `-print-multiarch`, `-print-sysroot`, `--help`, and
-`--version`. A query ignores the inputs, and its status is 0 even after an
+`-print-prog-name=`, `-print-multi-lib`, `-print-multi-directory`,
+`-print-multiarch`, `-print-sysroot`, `-print-multi-os-directory`, `--help`,
+and `--version`. `-print-multi-os-directory` ignores `-m32`. A query ignores the inputs, and its status is 0 even after an
 error. An unknown `-std=` is unrecognized wherever it stands.
 `-v` prints the version lines, then each command before running it and
 the header search its compiler uses; `-###` prints the commands without
@@ -392,12 +406,15 @@ unknown option (`clang: error: unknown argument: '-ffoo'`) but only warns
 about an unknown warning option (`warning: unknown warning option '-Wfoo'
 [-Wunknown-warning-option]`) and goes on. Its queries are answered once
 the command line has been read, and only one: `-dumpmachine`,
-`-dumpversion`, `--help`, `--version`, `-print-search-dirs`, the last
-`-print-file-name=`, the last `-print-prog-name=`,
-`-print-libgcc-file-name`, then `-print-target-triple` or
-`-print-effective-triple`. A driver error still prints and makes the status
-1; `-print-multiarch` is such an error, and `-print-sysroot` and
-`-dumpfullversion` are not Clang queries. Clang's compiler, not its driver,
+`-dumpversion`, `--help`, `--version`, `-print-resource-dir`,
+`-print-search-dirs`, `-print-runtime-dir`, the last `-print-file-name=`, the
+last `-print-prog-name=`, `-print-libgcc-file-name`, `-print-multi-lib`,
+`-print-multi-directory`, then `-print-target-triple` or
+`-print-effective-triple`. The bundled clang answers
+`-print-resource-dir` and `-print-runtime-dir`. A driver error still prints
+and makes the status 1; `-print-multiarch` and `-print-multi-os-directory` are
+such errors, and `-print-sysroot` and `-dumpfullversion` are not Clang
+queries. Clang's compiler, not its driver,
 validates `-std=`, and only the last one: an unknown value is `error:
 invalid value 'bogus' in '-std=bogus'` with its list of standards, once for
 each C source, unless a driver error, `-###` or a query stops first.
