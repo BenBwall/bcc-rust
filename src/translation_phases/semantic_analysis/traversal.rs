@@ -109,14 +109,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         )));
                 }
                 self.work.push(Work::Expression(right_expression));
+                if let Some(live) = live.filter(|_| !branch) {
+                    self.dead_arm(left_expression, live, Some(right_expression));
+                }
+                // Before the dead-arm work runs, as this is a stack: its limit
+                // on optional locals applies to the work right after it, the
+                // right operand.
                 if let Some(live) = live {
                     self.work.push(Work::FunctionWork(FunctionWork::DecidedOperand(
                         left_expression,
                         live,
                     )));
                 }
-                if let Some(live) = live.filter(|_| !branch) {
-                    self.dead_arm(left_expression, live, Some(right_expression));
+                if live.is_some() && !branch {
                     self.begin_condition_references(left_expression);
                 }
                 self.work.push(Work::Expression(left_expression));
