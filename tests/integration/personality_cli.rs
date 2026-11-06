@@ -785,6 +785,29 @@ mod tests {
         }
     }
 
+    /// A presumed file name that ends in a separator has an empty last
+    /// component for GCC, and `.` for Clang, or `/` if it is all separators.
+    #[test]
+    fn file_name_macro_splits_as_each_compiler_does() {
+        let directory = Directory::new();
+        for (name, gcc, clang) in [
+            ("foo/bar/", "\"\"", "\".\""),
+            ("foo//", "\"\"", "\".\""),
+            ("/", "\"\"", "\"/\""),
+            ("foo/.", "\".\"", "\".\""),
+            ("foo/..", "\"..\"", "\"..\""),
+            ("foo/bar.c", "\"bar.c\"", "\"bar.c\""),
+            ("", "\"\"", "\"\""),
+        ] {
+            directory.write("n.c", &format!("#line 1 \"{name}\"\n__FILE_NAME__\n"));
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-E", "-P", "n.c"]);
+                succeeds(&output);
+                assert_eq!(stdout(&output).trim(), expected, "{mode} {name:?}");
+            }
+        }
+    }
+
     /// `__FILE_NAME__` is the last component of the presumed file name and
     /// `__INCLUDE_LEVEL__` counts `#include`s from the main file, forced ones
     /// included, in GCC and Clang. Microsoft's and TCC's compilers have

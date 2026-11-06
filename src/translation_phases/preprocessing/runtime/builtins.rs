@@ -93,10 +93,7 @@ impl Expander<'_, '_, '_, '_> {
                     }
                 }
                 if name == "__FILE_NAME__" {
-                    file = file
-                        .components()
-                        .next_back()
-                        .map_or(file, |last| Path::new(last.as_os_str()));
+                    file = last_file_name(file, self.context.configuration.compiler_identity());
                 }
                 // A name that is not UTF-8 keeps its bytes, as GCC's and
                 // Clang's do.
@@ -147,6 +144,7 @@ impl Expander<'_, '_, '_, '_> {
                     kind: PreprocessorTokenType::Number,
                     contents,
                     source_vectors: token.source_vectors,
+                    spacing: TokenSpacing::NONE,
                 })
             },
             | name @ ("__STDC__"
@@ -208,6 +206,7 @@ impl Expander<'_, '_, '_, '_> {
                     kind: PreprocessorTokenType::String,
                     contents,
                     source_vectors: token.source_vectors,
+                    spacing: TokenSpacing::NONE,
                 })
             },
             // In an argument's prescan the operator stays, to be carried
@@ -438,4 +437,25 @@ impl<'pp> TranslationTimestamp<'pp> {
         write!(clock, "{}", time.format("%H:%M:%S")).expect("arena formatting cannot fail");
         Self { date, time: clock }
     }
+}
+
+/// The file name `__FILE_NAME__` gives: what follows the last separator, as
+/// GCC's `lbasename` takes it, so a name that ends in a separator gives an
+/// empty one. Clang's `sys::path::filename` gives `.` there, and `/` for a
+/// root. GNU extension: GCC manual, "Common Predefined Macros".
+fn last_file_name(file: &Path, identity: CompilerIdentity) -> &Path {
+    let bytes = file.as_os_str().as_encoded_bytes();
+    let is_separator = |byte: &u8| std::path::is_separator(char::from(*byte));
+    let start = bytes.iter().rposition(is_separator).map_or(0, |at| at + 1);
+    if start == bytes.len() && start > 0 && identity.rules() == crate::configuration::RuleSet::Clang
+    {
+        return Path::new(if bytes.iter().all(is_separator) {
+            "/"
+        } else {
+            "."
+        });
+    }
+    // SAFETY: `start` is 0 or follows an ASCII separator, a boundary that
+    // `from_encoded_bytes_unchecked` allows.
+    Path::new(unsafe { std::ffi::OsStr::from_encoded_bytes_unchecked(&bytes[start..]) })
 }
