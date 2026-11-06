@@ -47,14 +47,50 @@ pub(crate) enum TranslationError<'tu> {
     Semantic(semantic_analysis::SemanticError),
     #[error(transparent)]
     Extension(extension::ExtensionDiagnostic<'tu>),
+    #[error(transparent)]
+    Classified(ClassifiedError<'tu>),
+}
+
+/// A diagnostic a `#pragma GCC diagnostic` or `#pragma clang diagnostic`
+/// classified where it arose, which the command line's settings cannot tell
+/// when it is reported. Only a unit with such a pragma has any.
+/// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+#[derive(Error, Debug)]
+#[error("{error}")]
+pub(crate) struct ClassifiedError<'tu> {
+    pub(crate) error:    &'tu mut TranslationError<'tu>,
+    pub(crate) severity: ErrorSeverity,
+    /// Clang's `#pragma clang diagnostic fatal`, after which nothing else is
+    /// reported.
+    pub(crate) fatal:    bool,
 }
 
 impl TranslationError<'_> {
+    /// The diagnostic itself, without a pragma's classification around it.
+    /// Whoever asks what a queued diagnostic is reads it through this.
+    pub(crate) fn unclassified(&self) -> &Self {
+        match self {
+            | Self::Classified(classified) => classified.error,
+            | error => error,
+        }
+    }
+
+    /// Whether `__extension__` or a withdrawal has taken this diagnostic back.
+    pub(crate) fn is_suppressed(&self) -> bool {
+        matches!(self.unclassified(), Self::Extension(extension) if extension.suppressed.get())
+    }
+
     /// A warning-group diagnostic takes its group's configured severity,
     /// which already includes global -Werror and the group's own overrides.
     /// Other warnings from every phase share the global -Werror control.
     pub(crate) fn configured_severity(&self, context: &Context<'_>) -> ErrorSeverity {
-        if let Some(group) = self.group() {
+        if let Self::Classified(classified) = self {
+            classified.severity
+        } else if let Self::Parsing(error) = self
+            && error.severity_is_final
+        {
+            error.severity
+        } else if let Some(group) = self.group() {
             context
                 .configuration
                 .diagnostic_severity(group)
@@ -69,10 +105,29 @@ impl TranslationError<'_> {
         use super::preprocessing::PreprocessorErrorType as P;
         use crate::configuration::DiagnosticGroup as G;
         match self {
+            | Self::Classified(classified) => classified.error.group(),
             | Self::InitialProcessing(_) => Some(G::NewlineEof),
             | Self::Preprocessing(error) => match error.error_type {
                 | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
                 | P::UnknownPragmaDirective => Some(G::UnknownPragmas),
+                | P::WarningDirective(_) => Some(G::Cpp),
+                | P::PragmaMessage { error: false, .. } => Some(G::PragmaMessages),
+                | P::StorageOrderPragmaOperand { .. } => Some(G::Pragmas),
+                | P::PragmaDiagnostic(problem) => problem.group(),
+                | P::ExtraTokensAfterPragmaOnce(..)
+                | P::ExtraTokensAfterPragmaOperator
+                | P::ExtraTokensAfterIncludeDirective
+                | P::ExtraTokensAfterConditionalDirective(_)
+                | P::ExtraTokensAfterIfdefDirective(_)
+                | P::ExtraTokensAfterIfndefDirective(_) => Some(G::ExtraTokens),
+                | P::DeprecatedMacro(..) => Some(G::DeprecatedPragma),
+                | P::PragmaOnceInNonHeader => Some(G::PragmaOnceOutsideHeader),
+                | P::SystemHeaderPragmaInMainFile => Some(G::PragmaSystemHeaderOutsideHeader),
+                | P::IncludeNextInPrimarySource(..) => Some(G::IncludeNextOutsideHeader),
+                | P::IncludeNextWithoutSearchEntry(..) => Some(G::IncludeNextAbsolutePath),
+                | P::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(..)
+                | P::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
+                | P::MacroRedefinedWithDifferentDefinition(..) => Some(G::MacroRedefined),
                 | P::UnknownEscapeSequence(_) => Some(G::UnknownEscapeSequence),
                 | P::IllegalCharacterEncoding {
                     prefixed: false, ..
@@ -130,6 +185,7 @@ impl TranslationError<'_> {
         visit: &mut impl FnMut(&mut SourceVectors),
     ) {
         match self {
+            | Self::Classified(classified) => classified.error.for_each_source_vectors_mut(visit),
             | Self::InitialProcessing(_) | Self::PreprocessorTokenizining(_) => {},
             | Self::Preprocessing(error) => visit(&mut error.source_vectors),
             | Self::Parsing(error) => error.for_each_source_vectors_mut(visit),
@@ -157,6 +213,7 @@ pub(crate) trait GetSeverity {
 impl GetSeverity for TranslationError<'_> {
     fn severity(&self) -> ErrorSeverity {
         match self {
+            | Self::Classified(classified) => classified.severity,
             | Self::InitialProcessing(error) => error.severity(),
             | Self::PreprocessorTokenizining(error) => error.severity(),
             | Self::Preprocessing(error) => error.severity(),
@@ -177,6 +234,11 @@ impl ToDiagnostic for TranslationError<'_> {
         // C99 §5.1.1.3 and footnote 8: every primary label has a location.
         _ = context.diagnostic_position(source);
         let mut diagnostic = match self {
+            | Self::Classified(classified) => {
+                let mut diagnostic = classified.error.diagnostic_in(context, source, arena);
+                diagnostic.fatal = classified.fatal;
+                diagnostic
+            },
             | Self::InitialProcessing(error) => error.diagnostic_in(context, source, arena),
             | Self::PreprocessorTokenizining(error) => error.diagnostic_in(context, source, arena),
             | Self::Preprocessing(error) => error.diagnostic_in(context, source, arena),
@@ -192,6 +254,7 @@ impl ToDiagnostic for TranslationError<'_> {
 impl GetSourceVectors for TranslationError<'_> {
     fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
         match self {
+            | Self::Classified(classified) => classified.error.source_vectors(context),
             | Self::InitialProcessing(error) => error.source_vectors(context),
             | Self::PreprocessorTokenizining(error) => error.source_vectors(context),
             | Self::Preprocessing(error) => error.source_vectors(context),

@@ -1001,8 +1001,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             )
                             .is_some()
                         {
-                            Context::raw_preprocessor_error(
+                            let classified = context.pragma_classification(
+                                DiagnosticGroup::UnknownEscapeSequence,
+                                token.source_vectors,
+                            );
+                            Context::raw_classified_preprocessor_error(
                                 &mut context.pending_errors,
+                                classified,
                                 PreprocessorError {
                                     error_type:     PreprocessorErrorType::UnknownEscapeSequence(c),
                                     source_vectors: token.source_vectors,
@@ -1068,13 +1073,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 .group_severity(DiagnosticGroup::InvalidSourceEncoding, token.source_vectors)
                 .is_some()
         {
-            Context::raw_preprocessor_error(
-                &mut context.pending_errors,
-                PreprocessorError {
-                    error_type,
-                    source_vectors: token.source_vectors,
-                },
-            );
+            context.preprocessor_error(PreprocessorError {
+                error_type,
+                source_vectors: token.source_vectors,
+            });
         }
         error
     }
@@ -1097,31 +1099,28 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             | RuleSet::Gcc if wide => PreprocessorErrorType::UnconvertibleSourceCharacter,
             | RuleSet::Gcc => return,
         };
-        let warning = context
-            .pending_errors
-            .iter_mut()
-            .rev()
-            .find_map(|error| match error {
-                | TranslationError::Preprocessing(PreprocessorError {
-                    error_type:
-                        error_type @ PreprocessorErrorType::IllegalCharacterEncoding {
-                            prefixed: false,
-                            ..
-                        },
+        // The warning may wear a pragma's classification, which the error it
+        // becomes does not keep.
+        let warning = context.pending_errors.iter_mut().rev().find(|error| {
+            matches!(
+                error.unclassified(),
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::IllegalCharacterEncoding {
+                        prefixed: false,
+                        ..
+                    },
                     source_vectors: warned,
-                }) if *warned == source_vectors => Some(error_type),
-                | _ => None,
-            });
+                }) if *warned == source_vectors
+            )
+        });
+        let error = PreprocessorError {
+            error_type,
+            source_vectors,
+        };
         if let Some(warning) = warning {
-            *warning = error_type;
+            *warning = TranslationError::Preprocessing(error);
         } else {
-            Context::raw_preprocessor_error(
-                &mut context.pending_errors,
-                PreprocessorError {
-                    error_type,
-                    source_vectors,
-                },
-            );
+            Context::raw_preprocessor_error(&mut context.pending_errors, error);
         }
     }
 

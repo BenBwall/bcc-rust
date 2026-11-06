@@ -45,6 +45,7 @@ impl Renderer {
         let mut out = ArenaString::new_in(scratch);
         let severity_style = Self::severity_style(diagnostic.severity);
         let severity = match diagnostic.severity {
+            | ErrorSeverity::Error if diagnostic.fatal => "fatal error:",
             | ErrorSeverity::Error => "error:",
             | ErrorSeverity::Warning => "warning:",
         };

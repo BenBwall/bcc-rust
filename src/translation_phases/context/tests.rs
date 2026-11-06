@@ -303,6 +303,108 @@ fn macro_locations_survive_compaction_without_retaining_temporary_metadata() {
 }
 
 #[test]
+fn diagnostic_pragmas_govern_retained_copies_of_tokens_by_output_order() {
+    use crate::{
+        configuration::{
+            DiagnosticGroup,
+            PragmaClass,
+        },
+        translation_phases::{
+            ErrorSeverity,
+            SourceVectors,
+        },
+    };
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let group = DiagnosticGroup::InitializerOverrides;
+    let spelled = SourceVector {
+        length: 1,
+        ..SourceVector::default()
+    };
+    let token = |context: &mut Context<'_>| {
+        let source = context.push_source_vectors(std::slice::from_ref(&spelled));
+        context.retain_token_source(source)
+    };
+    let before = token(&mut context);
+    context.pragma_diagnostic_class("initializer-overrides", PragmaClass::Ignored, false);
+    let quiet = token(&mut context);
+    let next = token(&mut context);
+    context.pragma_diagnostic_class("initializer-overrides", PragmaClass::Error, false);
+    let promoted = token(&mut context);
+    let severity =
+        |context: &Context<'_>, source| context.configuration_at(source).diagnostic_severity(group);
+    // Directly, by the token's place in the output.
+    assert_eq!(severity(&context, before), Some(ErrorSeverity::Warning));
+    assert_eq!(severity(&context, quiet), None);
+    assert_eq!(severity(&context, promoted), Some(ErrorSeverity::Error));
+    // A merged range that had to be copied reads its first token's place.
+    let merged = context.merge_vectors(quiet, promoted);
+    assert_eq!(severity(&context, merged), None);
+    let reversed = context.merge_vectors(promoted, before);
+    assert_eq!(severity(&context, reversed), Some(ErrorSeverity::Error));
+    // And so does a copy of a copy.
+    let again = context.merge_vectors(reversed, next);
+    assert_eq!(severity(&context, again), Some(ErrorSeverity::Error));
+    let early = context.merge_vectors(before, merged);
+    assert_eq!(severity(&context, early), Some(ErrorSeverity::Warning));
+    // A location with no output token yet reads the latest change.
+    assert_eq!(
+        severity(&context, SourceVectors::default()),
+        Some(ErrorSeverity::Error)
+    );
+}
+
+/// A zero-width location for syntax the input left out copies no provenance,
+/// so without its own note it would read the settings of whatever retained
+/// copy came before it, or the latest change.
+#[test]
+fn diagnostic_pragmas_govern_anchors_for_missing_syntax() {
+    use crate::{
+        configuration::{
+            DiagnosticGroup,
+            PragmaClass,
+        },
+        translation_phases::{
+            ErrorSeverity,
+            provenance::SourcePosition,
+        },
+    };
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let group = DiagnosticGroup::InitializerOverrides;
+    let spelled = SourceVector {
+        length: 1,
+        ..SourceVector::default()
+    };
+    let token = |context: &mut Context<'_>| {
+        let source = context.push_source_vectors(std::slice::from_ref(&spelled));
+        context.retain_token_source(source)
+    };
+    let before = token(&mut context);
+    context.pragma_diagnostic_class("initializer-overrides", PragmaClass::Ignored, false);
+    let quiet = token(&mut context);
+    context.pragma_diagnostic_class("initializer-overrides", PragmaClass::Error, false);
+    let promoted = token(&mut context);
+    let copy = context.merge_vectors(quiet, promoted);
+    let anchor = |context: &mut Context<'_>, token| {
+        let anchor = context.create_retained_source_vectors(SourcePosition::default(), 0, 0);
+        context.record_retained_pragma_anchor(anchor, token);
+        anchor
+    };
+    let severity =
+        |context: &Context<'_>, source| context.configuration_at(source).diagnostic_severity(group);
+    assert_eq!(severity(&context, copy), None);
+    let at_before = anchor(&mut context, Some(before));
+    assert_eq!(severity(&context, at_before), Some(ErrorSeverity::Warning));
+    let at_quiet = anchor(&mut context, Some(quiet));
+    assert_eq!(severity(&context, at_quiet), None);
+    let at_end = anchor(&mut context, None);
+    assert_eq!(severity(&context, at_end), Some(ErrorSeverity::Error));
+    // Later anchors leave the earlier ones where they were.
+    assert_eq!(severity(&context, at_before), Some(ErrorSeverity::Warning));
+}
+
+#[test]
 fn expansion_locations_outlive_compaction_and_follow_copies() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
