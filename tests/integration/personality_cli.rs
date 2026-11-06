@@ -1418,6 +1418,22 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
     }
 
+    /// GCC compiles a computed goto in a function that takes no label's
+    /// address, and Clang refuses it.
+    #[test]
+    fn computed_goto_without_label_addresses_follows_each_compiler() {
+        let directory = Directory::new();
+        directory.write("g.c", "void go(void *p) { goto *p; }\n");
+        succeeds(&directory.bcc("--gcc-mode", &["-c", "g.c"]));
+        let output = directory.bcc("--clang-mode", &["-c", "g.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("computed goto in a function without label addresses"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]

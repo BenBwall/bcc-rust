@@ -141,6 +141,10 @@ the Clang identities, and none of them for `cl` or TCC
 bcc's own `-ffloatn-types` and `-fno-floatn-types`, which the GCC, Clang,
 TCC and clang-cl personalities pass on, override either default.
 
+A computed `goto` in a function that takes no label's address is GCC's to
+accept and Clang's to refuse; bcc follows the compiler it answers as. The jump
+has nowhere defined to go, so `-O2` treats it as unreachable.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
