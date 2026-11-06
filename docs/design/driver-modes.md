@@ -232,6 +232,15 @@ type needs more than 32-byte alignment, since that linker aligns a
 communal symbol by its size, which is rounded up to the alignment there;
 bcc's objects then link with GCC's `-fcommon` objects, an initialized
 definition winning),
+`-fstrict-volatile-bitfields` (GCC only and off by default, as on x86-64 in
+GCC; the last of it and `-fno-strict-volatile-bitfields` decides, Clang
+refuses both as unknown and TCC ignores both: every back end gives a
+`volatile` bit-field GCC's number and width of accesses, one aligned access
+of its declared type's width where that applies and GCC's ordinary access
+otherwise, and refuses at compile time what it cannot match, such as a whole
+128-bit field, an access beyond a known object, or an access that depends on
+the alignment GCC gives a definition of eight bytes or more or an automatic
+object; see `lowering/bit_fields/volatile_access.rs`),
 `-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
 `-fpack-struct` alone (every structure packed, the pragmas ignored with
 GCC's warning), the options that give up part of IEC 60559 semantics

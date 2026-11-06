@@ -9,6 +9,33 @@ use super::{
 
 const POISON: RuntimeValue = RuntimeValue::Poison;
 
+/// A volatile load reads the bytes as they are in memory: a byte never
+/// written is arbitrary, and the written ones keep their values, where the
+/// same load without `volatile` is poison as a whole.
+#[test]
+fn volatile_load_keeps_the_written_bytes_beside_unwritten_ones() {
+    let text = |flag: &str| {
+        format!(
+            "function @main() -> i32 external {{\n    slot0 = stack_slot 4, align 4\nblock0:\n    \
+             v0 = stack_addr slot0\n    v1 = iconst.i8 7\n    store.i8 v1, v0, align 4\n    v2 = \
+             load.i32{flag} v0, align 4\n    v3 = iconst.i32 255\n    v4 = and.i32 v2, v3\n    \
+             return v4\n}}\n"
+        )
+    };
+    assert_eq!(returned(&text(" volatile"), "main"), int(7));
+    assert_eq!(returned(&text(""), "main"), POISON);
+}
+
+/// Not a single byte written: still a value, which `freeze` need not fix.
+#[test]
+fn volatile_load_of_unwritten_memory_is_not_poison() {
+    let text =
+        "function @main() -> i32 external {\n    slot0 = stack_slot 4, align 4\nblock0:\n    v0 = \
+         stack_addr slot0\n    v1 = load.i32 volatile v0, align 4\n    v2 = iconst.i32 0\n    v3 \
+         = and.i32 v1, v2\n    return v3\n}\n";
+    assert_eq!(returned(text, "main"), int(0));
+}
+
 #[test]
 fn noundef_byval_pointer_does_not_require_defined_object_bytes() {
     let text = "abi lowered\nfunction @ignore(ptr byval(size 8, align 8) noundef) -> i32 internal \
