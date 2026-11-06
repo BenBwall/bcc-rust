@@ -1627,6 +1627,67 @@ mod tests {
         );
     }
 
+    /// `-ffunction-sections` and `-fdata-sections` give each definition a
+    /// section of its own, so that `--gc-sections` removes the unused ones.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_sections_let_the_linker_remove_unused_definitions() {
+        let directory = Directory::new();
+        directory.write(
+            "s.c",
+            "int unused_data = 7;\nint used_data = 3;\nint unused_function(void) { return 1; \
+             }\nint main(void) { return used_data - 3; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let sections = ["-ffunction-sections", "-fdata-sections"];
+            let object = [&sections[..], &["-c", "s.c", "-o", "s.o"]].concat();
+            succeeds(&directory.bcc(mode, &object));
+            let names = Command::new("objdump")
+                .args(["-h", directory.path("s.o").to_str().unwrap()])
+                .output();
+            // Without binutils the linked program below still has to run.
+            if let Ok(names) = names {
+                let names = stdout(&names);
+                for section in [".text.unused_function", ".data.unused_data", ".text.main"] {
+                    assert!(names.contains(section), "{mode}: {section}: {names}");
+                }
+            }
+            let program = [&sections[..], &["-Wl,--gc-sections", "s.c", "-o", "s"]].concat();
+            let output = directory.bcc(mode, &program);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
+            let bytes = std::fs::read(directory.path("s")).unwrap();
+            let has = |name: &str| {
+                bytes
+                    .windows(name.len())
+                    .any(|window| window == name.as_bytes())
+            };
+            assert!(!has("unused_function") && !has("unused_data"), "{mode}");
+            assert!(has("used_data"), "{mode}");
+            assert_eq!(
+                Command::new(directory.path("s")).status().unwrap().code(),
+                Some(0),
+                "{mode}"
+            );
+            // The last of a pair decides.
+            let last = [
+                "-ffunction-sections",
+                "-fno-function-sections",
+                "-c",
+                "s.c",
+                "-o",
+                "t.o",
+            ];
+            succeeds(&directory.bcc(mode, &last));
+            if let Ok(names) = Command::new("objdump")
+                .args(["-h", directory.path("t.o").to_str().unwrap()])
+                .output()
+            {
+                assert!(!stdout(&names).contains(".text.main"), "{mode}");
+            }
+        }
+    }
+
     /// What follows a string in its array's braces is excess: a warning from
     /// Clang, which drops it, and an error from GCC and TCC.
     #[test]
