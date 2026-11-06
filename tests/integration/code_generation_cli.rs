@@ -808,6 +808,24 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// `__has_builtin` sends a WebAssembly build to its fallback, as Clang's
+    /// does, rather than to an instruction no back end there can emit.
+    #[test]
+    fn x86_instruction_builtins_exist_only_on_x86() {
+        let source = "int main(void) {\n#if __has_builtin(__builtin_ia32_pause)\n  \
+                      __builtin_ia32_pause();\n#endif\n#if __has_builtin(__rdtsc) || \
+                      __has_builtin(__builtin_ia32_rdtsc) || \
+                      __has_builtin(__builtin_ia32_mfence)\n  return 1;\n#endif\n  return 0;\n}\n";
+        let output = bcc(source, &["--target=wasm32-unknown-unknown", "--emit=asm"]);
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let output = bcc(source, &["--target=wasm32-unknown-unknown", "-E", "-P"]);
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let preprocessed = text(&output.stdout);
+        assert!(preprocessed.contains("return 0"), "{preprocessed}");
+        assert!(!preprocessed.contains("return 1"), "{preprocessed}");
+        assert!(!preprocessed.contains("pause"), "{preprocessed}");
+    }
+
     /// curl's spin lock calls `__builtin_ia32_pause`. Each of these runs one
     /// instruction with no operands, and an optimizer must keep it. The native
     /// back end refuses the time-stamp counter, under either spelling.

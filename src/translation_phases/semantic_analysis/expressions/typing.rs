@@ -2760,7 +2760,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if known.is_some_and(|descriptor| {
                 descriptor.availability.feature
                     == Some(crate::configuration::Feature::GccOnlyBuiltins)
-                    && !descriptor.availability.accepted(self.context.configuration)
+                    && !descriptor.accepted(self.context.configuration)
             }) {
                 self.error(
                     SemanticErrorKind::UndeclaredIdentifier,
@@ -2771,7 +2771,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             let descriptor = known
                 .filter(|descriptor| descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall)
-                .filter(|descriptor| descriptor.availability.accepted(self.context.configuration))
+                .filter(|descriptor| descriptor.accepted(self.context.configuration))
                 .filter(|descriptor| self.builtin_prototype_available(descriptor, name));
             let ty = if let Some(descriptor) = descriptor {
                 self.descriptor_type(descriptor)

@@ -1257,7 +1257,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 descriptor.availability.naming == crate::builtins::NamingPolicy::Microsoft
                     && descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall
                     && self.context.configuration.msvc_compatibility()
-                    && descriptor.availability.accepted(self.context.configuration)
+                    && descriptor.accepted(self.context.configuration)
             });
         let Some(descriptor) = descriptor else {
             return super::BindingOrigin::User;

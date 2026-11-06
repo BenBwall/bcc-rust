@@ -1476,7 +1476,7 @@ fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
         SyntaxForm,
     };
     let Some(descriptor) = crate::builtins::lookup(spelling)
-        .filter(|descriptor| descriptor.availability.accepted(context.configuration))
+        .filter(|descriptor| descriptor.accepted(context.configuration))
     else {
         return false;
     };
