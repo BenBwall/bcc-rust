@@ -1343,9 +1343,9 @@
       padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); gap: 6px;
       background: var(--device); border-top: 2px solid var(--key-edge);
     }
+    /* The keys step the workbench, so they leave the screen with it. */
+    .workbench:not(.is-on-screen) .transport { display: none; }
     .transport .button { flex: 1; padding: 0 6px; height: 42px; }
-    main { padding-bottom: 72px; }
-    .site-footer { margin-bottom: 64px; }
     .deck { grid-template-columns: minmax(0, 1fr); }
     .deck-body { grid-template-columns: 136px max-content; min-height: 0; }
     .spool { display: none; }

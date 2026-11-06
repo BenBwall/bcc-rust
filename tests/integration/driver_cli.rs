@@ -507,7 +507,7 @@ mod tests {
         assert!(text.starts_with("# 1 \"main.c\"\n"), "{text}");
         assert!(text.contains("int helper(int);"), "{text}");
         assert!(text.contains("return helper(((20)+1)) - 40;"), "{text}");
-        assert!(text.contains("# 3 \"main.c\"\n"), "{text}");
+        assert!(text.contains("# 2 \"main.c\" 2\n"), "{text}");
         let plain = project.bcc(&["-E", "-P", "main.c"]);
         assert!(!stdout(&plain).contains('#'), "{}", stdout(&plain));
         // The output compiles again, with its diagnostics at the original
@@ -562,9 +562,9 @@ mod tests {
         // Clang joins with the host's separator and escapes the name as a
         // string literal's contents.
         let line_marker = if cfg!(windows) {
-            r#"# 1 "sys\\s.h" 3"#
+            r#"# 1 "sys\\s.h" 1 3"#
         } else {
-            r#"# 1 "sys/s.h" 3"#
+            r#"# 1 "sys/s.h" 1 3"#
         };
         assert!(text.contains(&format!("{line_marker}\n")), "{text}");
         let warnings = |output: &Output| {
@@ -578,7 +578,7 @@ mod tests {
         succeeds(&reread);
         assert_eq!(warnings(&reread), ["u.c:2", "u.c:3"], "{}", stderr(&reread));
         // Without the flag the same text is user code.
-        std::fs::write(project.path("plain.i"), text.replace("\" 3\n", "\"\n")).unwrap();
+        std::fs::write(project.path("plain.i"), text.replace("\" 1 3\n", "\" 1\n")).unwrap();
         let plain = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "plain.i"]);
         let header = if cfg!(windows) {
             r"sys\s.h:1"

@@ -506,7 +506,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` |
 | `/O1`, `/Os` / `/O2`, `/Ox`, `/Ot` / `/Od` | `-Os` / `-O2` / `-O0` |
 | `/W0`, `/w` / `/W1`-`/W3` / `/W4`, `/Wall` / `/WX` | `-w` / default / `-Wall -Wextra` / `-Werror`; each also sets the level of the warnings bcc reports with `cl`'s code (see Diagnostics) |
-| `/wdNNNN`, `/weNNNN`, `/w1NNNN`-`/w4NNNN` | for a warning bcc reports with `cl`'s code, `-Wno-GROUP`, `-Werror=GROUP` or its level; other numbers have no effect, and `/wo` none |
+| `/wdNNNN`, `/weNNNN`, `/w1NNNN`-`/w4NNNN` | for a warning bcc reports with `cl`'s code, `-Wno-GROUP`, `-Werror=GROUP` or its level; other numbers have no effect, and `/wo` none. `#pragma warning` reads the same numbers (language-standards.md, "Diagnostic pragmas") |
 | `/std:c11`, `/std:c17`, `/std:clatest` | `-std=c11`, `-std=c17`, `-std=c23` |
 | `/TC`, `/Tc FILE` | the inputs (or FILE) are C |
 | `/MD`, `/MDd`, `/MT`, `/MTd`, `/LD`, `/LDd` | the last runtime option wins: `_DLL` for `/MD*`, `_DEBUG` for `/M*d` and `/LDd`, and the link takes `msvcrt`, `msvcrtd` or `libcmtd` instead of `libcmt`; `/LD` links a DLL with `/MT`'s runtime unless `/MD` names another |
@@ -935,6 +935,15 @@ the x86-64 psABI requires, so `{double, long}` travels in two integer
 registers. bcc follows the psABI and agrees with GCC there, as both TCCs
 disagree with GCC; it does not copy TCC's classification.
 
+## Diagnostic pragmas
+
+Each personality reads the diagnostic pragmas its compiler does:
+`#pragma GCC diagnostic` for GCC, both spellings and `fatal` for Clang and
+clang-cl, `#pragma warning` for `cl` and clang-cl, none for TCC.
+`language-standards.md`, "Diagnostic pragmas", has the rules and the differences
+left from each compiler. `-Wfatal-errors` stops the GCC personality at its first
+error, with GCC's `compilation terminated.`; Clang's accepts it and goes on.
+
 ## Identity policy
 
 `--compiler-identity=gcc|clang|msvc|clang-cl|tcc`, which each personality
@@ -1042,6 +1051,15 @@ Besides those above:
   Adjacent string literals are joined, as phase 6 joins them. A macro's
   expansion keeps the spacing of its definition, so the text differs from
   GCC's in whitespace.
+- `-E` writes a line marker for every file entered and returned to, with
+  flags 1 and 2, and with no token needed between them, as GCC and Clang do.
+  A system header adds 3 and, under the GCC identity, 4. The markers still
+  differ in these ways: GCC's and Clang's first lines for `<built-in>` and the
+  command line are not written, the pseudo-file is `<command line>` under
+  every identity where GCC says `<command-line>`, a header is named as
+  bcc's search found it (`a.h` where Clang says `./a.h`), a resource header
+  is `<built-in>/limits.h`, and an `#include` late in a file writes no blank
+  lines before its marker. `cl`'s text has no flags 1 and 2.
 - Of a GNU line marker's flags, only 3 has an effect: it makes the lines
   up to the next marker a system header, as in GCC, so a `.i` file's system
   header sections keep their warnings withheld. Flags 1 and 2 (entering and

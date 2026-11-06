@@ -623,6 +623,8 @@ enum LanguageFlag {
     AllWarnings(bool),
     ExtraWarnings(bool),
     UnknownWarning,
+    /// `-Wfatal-errors` or `-Wno-fatal-errors`.
+    FatalErrors(bool),
     /// `-pedantic` or `-Wpedantic` (true), or `-Wno-pedantic` (false).
     Pedantic(bool),
     /// `-pedantic-errors`.
@@ -752,6 +754,8 @@ impl LanguageFlag {
             | "-Wextra" | "-W" => return Some(Self::ExtraWarnings(true)),
             | "-Wno-extra" => return Some(Self::ExtraWarnings(false)),
             | "-Wno-pedantic" => return Some(Self::Pedantic(false)),
+            | "-Wfatal-errors" => return Some(Self::FatalErrors(true)),
+            | "-Wno-fatal-errors" => return Some(Self::FatalErrors(false)),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
@@ -946,6 +950,7 @@ impl LanguageFlag {
             | Self::ExtraWarnings(enabled) => configuration.with_extra_warnings(enabled),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
+            | Self::FatalErrors(enabled) => configuration.with_fatal_errors(enabled),
             | Self::Pedantic(enabled) => configuration.with_pedantic(enabled),
             | Self::PedanticErrors => configuration.with_pedantic_errors(),
             | Self::PedanticAsError(true) => configuration.with_werror_pedantic(),

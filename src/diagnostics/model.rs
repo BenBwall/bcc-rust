@@ -24,6 +24,8 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct Diagnostic<'d> {
     pub(crate) severity:      ErrorSeverity,
+    /// Clang's `#pragma clang diagnostic fatal`, written as a `fatal error`.
+    pub(crate) fatal:         bool,
     pub(crate) message:       &'d str,
     /// The message ends with the ` [-WNAME]` of the warning option that
     /// controls it, which bcc appended (see [`Explanation::option_suffix`]).
@@ -149,6 +151,7 @@ impl<'d> Explanation<'d> {
     pub(crate) fn at(self, severity: ErrorSeverity, source: SourceVectors) -> Diagnostic<'d> {
         Diagnostic {
             severity,
+            fatal: false,
             message: self.message,
             option_suffix: self.option_suffix,
             code: self.code,

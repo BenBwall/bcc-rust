@@ -59,7 +59,8 @@ pub(crate) use context::{
     FileSystem,
     IncludeEntry,
     STDIN_NAME,
-    TextPragma,
+    TextEvent,
+    TextEventKind,
 };
 pub(crate) use errors::{
     ErrorSeverity,

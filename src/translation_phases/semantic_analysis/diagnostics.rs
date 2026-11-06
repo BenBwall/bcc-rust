@@ -56,19 +56,23 @@ impl Analyzer<'_, '_, '_> {
         let Some(severity) = self.context.group_severity(group, source_vectors) else {
             return;
         };
+        let at = source_vectors;
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
-        self.context
-            .append_pending_errors([TranslationError::Semantic(SemanticError {
+        self.context.classified_group_error(
+            group,
+            at,
+            TranslationError::Semantic(SemanticError {
                 extension_severity: Some(severity),
                 kind,
                 source_vectors,
                 name,
                 previous,
-            })]);
+            }),
+        );
     }
 
     /// [`Self::group_diagnostic`] for a warning GCC also withholds when a
@@ -105,6 +109,7 @@ impl Analyzer<'_, '_, '_> {
         }
         if !self.tainted {
             self.semantic_errors += 1;
+            let at = source_vectors;
             let source_vectors = self.context.file_location(source_vectors);
             let error = SemanticError {
                 extension_severity: None,
@@ -118,7 +123,7 @@ impl Analyzer<'_, '_, '_> {
                 usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
             if !self.context.withholds(severity, false, source_vectors) {
                 self.context
-                    .append_pending_errors([TranslationError::Semantic(error)]);
+                    .classified_error(at, TranslationError::Semantic(error));
             }
         }
     }
