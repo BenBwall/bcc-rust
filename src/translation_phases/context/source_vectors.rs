@@ -317,7 +317,7 @@ impl Context<'_> {
     /// Whether a macro expansion produced the first token of `source`, from
     /// its replacement list or from an argument: GCC's
     /// `from_macro_expansion_at`. `source` must not be empty.
-    pub(crate) fn from_macro_expansion(&self, source: SourceVectors) -> bool {
+    pub(crate) fn produced_by_macro_expansion(&self, source: SourceVectors) -> bool {
         let (arena, start) = SourceArena::decode(source);
         self.expansion_starts[arena as usize].get(start).is_some()
     }

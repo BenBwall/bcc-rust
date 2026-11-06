@@ -503,7 +503,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             located_at
         };
-        if self.context.from_macro_expansion(located_at)
+        if self.context.produced_by_macro_expansion(located_at)
             && (self.context.written_by_macro_body(located_at)
                 || self.context.written_by_macro_body(site))
         {
@@ -549,7 +549,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let known = match self.gcc_known_address(e) {
             | GccAddress::Declaration => true,
             | GccAddress::Folded =>
-                !site.is_some_and(|site| self.context.from_macro_expansion(site)),
+                !site.is_some_and(|site| self.context.produced_by_macro_expansion(site)),
             | GccAddress::Unknown => false,
         };
         if known {
@@ -585,7 +585,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 operator: U::Indirection,
                 operand_expression,
             } if decays => self.gcc_known_address(operand_expression),
-            | E::DirectMember { .. } | E::IndirectMember { .. } if decays => self.gcc_address_of(e),
+            | E::DirectMember { .. }
+            | E::IndirectMember { .. }
             | E::Binary {
                 operator: B::Subscript,
                 ..
