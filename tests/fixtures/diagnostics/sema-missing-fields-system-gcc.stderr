@@ -1,0 +1,70 @@
+sema-missing-fields-system-gcc.c:13:7: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+13 |     {1};
+   |       ^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:15:27: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+15 |     name_on_next_line = {1};
+   |                           ^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:17:1: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+17 | };
+   | ^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:19:7: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+19 |     {1};
+   |       ^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:21:47: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+21 | struct TAG before_tag; struct S after_tag = {1};
+   |                                               ^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:23:23: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+23 | KEYWORD S keyword = {1};
+   |                       ^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:24:17: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+24 | ALIAS alias = {1};
+   |                 ^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:25:19: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+25 | struct S braces = BRACED;
+   |                   ^^^^^^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:26:21: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+26 | struct S close = {1 CLOSE;
+   |                     ^^^^^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
+sema-missing-fields-system-gcc.c:27:1: warning: missing initializer for field 'b' of 'struct S' [-Wmissing-field-initializers]
+   |
+27 | ALIAS_DECLARATION
+   | ^^^^^^^^^^^^^^^^^ later members are left zero
+   |
+   = note: C99 §6.7.8p21: members with no initializer in a brace-enclosed list are initialized as if they had static storage duration
+
