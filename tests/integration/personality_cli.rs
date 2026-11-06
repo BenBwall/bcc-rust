@@ -7289,6 +7289,18 @@ mod tests {
     /// a memory-destination instruction is one read and one write.
     #[test]
     fn strict_volatile_bitfields_fall_back_on_gccs_accesses() {
+        const WANTED: &[(&str, &[&str])] = &[
+            ("a", &["l16", "s16"]),
+            ("ra", &["l32"]),
+            ("ca", &["l32", "l16", "s16"]),
+            ("b", &["l8", "s8", "l8", "s8"]),
+            ("c", &["l16", "s16", "l8", "s8"]),
+            ("rd", &["l8", "l8"]),
+            ("re", &["l32", "l32"]),
+            ("e", &["l32", "s32", "l32", "s32"]),
+            ("f", &["s64", "l64", "s64"]),
+            ("g", &["l16", "s16"]),
+        ];
         if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             return;
         }
@@ -7306,18 +7318,6 @@ mod tests {
              f(struct F *p) { p->a = 3; }\nstruct G { unsigned char b : 8; volatile unsigned a : \
              8; } __attribute__((packed));\nvoid g(struct G *p) { p->a = 3; }\n",
         );
-        const WANTED: &[(&str, &[&str])] = &[
-            ("a", &["l16", "s16"]),
-            ("ra", &["l32"]),
-            ("ca", &["l32", "l16", "s16"]),
-            ("b", &["l8", "s8", "l8", "s8"]),
-            ("c", &["l16", "s16", "l8", "s8"]),
-            ("rd", &["l8", "l8"]),
-            ("re", &["l32", "l32"]),
-            ("e", &["l32", "s32", "l32", "s32"]),
-            ("f", &["s64", "l64", "s64"]),
-            ("g", &["l16", "s16"]),
-        ];
         for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
             for level in ["-O0", "-O2"] {
                 let mut args = vec!["-fstrict-volatile-bitfields", level, "-S", "-o", "-", "f.c"];
