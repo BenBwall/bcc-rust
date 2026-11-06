@@ -402,7 +402,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | E::Unary {
                 operator: U::LogicalNot,
                 ..
-            } => true,
+            }
             | E::Binary {
                 operator:
                     B::LessThan
