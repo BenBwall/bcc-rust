@@ -54,9 +54,10 @@
 //!   regions an exit leaves: dynamic stack restores, and GNU cleanup calls from
 //!   `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
-//!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
-//!   to IR types; shared `crate::float_parsing::bits` turns folded floating
-//!   constants into IR bits.
+//!   `debug_locations.rs` what `-g` records beside it; `emit.rs` copies a
+//!   finished draft into the module; `types.rs` maps C types to IR types;
+//!   shared `crate::float_parsing::bits` turns folded floating constants into
+//!   IR bits.
 //! - Errors: `errors.rs`. Tests: `tests.rs` and `tests/`.
 //!
 //! C99: §5.1.2.3, pp. 13-15; PDF pp. 25-27 (program execution: lowering
@@ -98,6 +99,7 @@ mod wide_bit_int;
 mod work;
 
 // Construction
+mod debug_locations;
 mod emit;
 mod ssa;
 mod types;
@@ -252,6 +254,7 @@ fn lower_unit<'tu, 'ir>(
     };
     unit.retain_local_statics = options.retain_locals;
     unit.source_lines |= options.source_lines;
+    unit.begin_debug_info();
     // A freestanding program supplies its own library, so no library
     // function is a builtin there, as Clang's -ffreestanding implies
     // -fno-builtin. C99: §5.1.2.1, p. 11; PDF p. 23.
@@ -412,7 +415,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
 
     /// Performs one task, pushing any that follow from it.
     fn step(&mut self, task: Task<'tu>) -> Result<(), LoweringError> {
-        if self.unit.source_lines {
+        if self.unit.source_lines || self.draft.locating {
             self.track_line(task);
         }
         match task {
@@ -590,6 +593,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     record:              &'tu FunctionRecord<'tu>,
     /// The function's name, for naming its static locals.
     name:                &'a str,
+    /// The function's debug scope, when the module has debug information.
+    debug_scope:         Option<crate::ir::DebugScope>,
     draft:               Draft<'s>,
     scratch:             &'s Bump,
     #[cfg(feature = "recursive-lowering-study")]
@@ -711,10 +716,11 @@ impl LoweringOptions {
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Gives the instructions `task` emits the physical source line of the
     /// statement or expression it lowers, for the WebAssembly back end's
-    /// source map and the site's IR views. A task without syntax keeps the line
-    /// before it. Inside a macro expansion that is the file location of the
-    /// first token (`Context::file_vector`): the outermost invocation's line,
-    /// never the definition's, as in Clang's and GCC's line tables.
+    /// source map and the site's IR views, and its debug location for `-g`.
+    /// A task without syntax keeps the line before it. Inside a macro expansion
+    /// that is the file location of the first token (`Context::file_vector`):
+    /// the outermost invocation's line, never the definition's, as in Clang's
+    /// and GCC's line tables.
     fn track_line(&mut self, task: Task<'tu>) {
         let source = match task {
             | Task::Statement(statement)
@@ -730,8 +736,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return;
         }
         let vector = self.unit.context.file_vector(source);
-        if let Some(line) = self.home_line(vector) {
+        if self.unit.source_lines
+            && let Some(line) = self.home_line(vector)
+        {
             self.draft.line = line;
+        }
+        if self.draft.locating {
+            self.draft.location = self.debug_location(vector);
         }
     }
 

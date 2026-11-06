@@ -8,6 +8,7 @@
 mod always_inline;
 mod combine;
 mod dce;
+mod debug_info;
 mod draft;
 mod equivalence;
 mod fold;

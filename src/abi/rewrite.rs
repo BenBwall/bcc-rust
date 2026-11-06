@@ -292,6 +292,7 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
     fn inst(&mut self, inst: crate::ir::Inst) {
         let old = self.old;
         self.builder.set_line(old.inst_line(inst));
+        self.builder.set_location(old.inst_location(inst));
         let data = *old.inst(inst);
         let result = old.inst_result(inst);
         match data {
