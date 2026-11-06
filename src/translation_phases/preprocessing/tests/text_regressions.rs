@@ -15,6 +15,7 @@ use crate::{
         Context,
         ErrorSeverity,
         GetSeverity,
+        TextEventKind,
         TranslationError,
         preprocessing::Preprocessor,
     },
@@ -57,9 +58,12 @@ fn text_in(source: &str, configuration: CompilerConfiguration) -> Text {
         tokens.push(spelling.trim_end_matches('\0').to_owned());
     });
     let pragmas = context
-        .text_pragmas
+        .text_events
         .iter()
-        .map(|pragma| (pragma.position, pragma.text.to_owned()))
+        .filter_map(|event| match event.kind {
+            | TextEventKind::Pragma(text) => Some((event.position, text.to_owned())),
+            | TextEventKind::FileEntered | TextEventKind::FileReturned => None,
+        })
         .collect();
     let mut diagnostics = Vec::new();
     while let Some(error) = context.pop_pending_error() {

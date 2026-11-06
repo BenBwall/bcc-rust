@@ -57,7 +57,7 @@ use crate::{
     },
     pipeline::{
         PasteClass,
-        Pragmas,
+        TextEvents,
         TextOptions,
         TextWriter,
         avoid_paste,
@@ -374,7 +374,7 @@ fn phase_four(
         ..TextOptions::default()
     };
     let mut writer = TextWriter::new(&text_arena, text_options, main_file);
-    let mut pragmas = Pragmas::default();
+    let mut pragmas = TextEvents::default();
     let mut lines = OutputLines::default();
     // Each token is written as it is read, with its provenance still live,
     // so a large source keeps no token array.
