@@ -27,6 +27,8 @@ use crate::{
         IncludeEntry,
         SourcePosition,
         SourceVectors,
+        TextEvent,
+        TextEventKind,
         TranslationError,
         TranslationPhase,
         preprocessing::{
@@ -228,6 +230,15 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             },
             tokenizer,
         });
+        if self.state.as_text {
+            self.state.text_includes += 1;
+            self.context.text_events.push(TextEvent {
+                position: self.context.preprocessed_tokens,
+                file:     header_source_index,
+                line:     1,
+                kind:     TextEventKind::FileEntered,
+            });
+        }
         self.resume_at_line_start();
     }
 

@@ -151,6 +151,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     in_directive: false,
                     retain_placeholders: false,
                     as_text: context.phase_four_text,
+                    text_includes: 0,
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,

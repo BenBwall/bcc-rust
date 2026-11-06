@@ -83,19 +83,30 @@ use crate::{
     },
 };
 
-/// A pragma a text of phase 4 writes back where it was.
-/// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+/// What a text of phase 4 writes between two tokens.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct TextPragma<'tu> {
+pub(crate) struct TextEvent<'tu> {
     /// Its output-token ordinal ([`Context::preprocessed_tokens`] before
     /// the next token).
     pub(crate) position: usize,
     /// The source file being read and the line the reader was on.
     pub(crate) file:     u32,
     pub(crate) line:     u32,
-    /// `#pragma` and its tokens as spelled, each run of white space as one
-    /// space.
-    pub(crate) text:     &'tu str,
+    pub(crate) kind:     TextEventKind<'tu>,
+}
+
+/// One kind of [`TextEvent`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TextEventKind<'tu> {
+    /// A pragma, written back where it was: `#pragma` and its tokens as
+    /// spelled, each run of white space as one space.
+    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+    Pragma(&'tu str),
+    /// An `#include` opened `file`.
+    /// C99: §6.10.2 paragraph 3, p. 149; PDF p. 161.
+    FileEntered,
+    /// The reader returned to `file` from one it had included.
+    FileReturned,
 }
 
 #[expect(
@@ -167,8 +178,8 @@ pub(crate) struct Context<'tu> {
     /// What `#pragma GCC diagnostic` and `#pragma clang diagnostic` changed.
     diagnostic_pragmas: diagnostic_pragmas::DiagnosticPragmas<'tu>,
     /// The pragmas a text of phase 4 ([`Self::phase_four_text`]) writes back
-    /// where they were.
-    pub(crate) text_pragmas: ArenaVec<'tu, TextPragma<'tu>>,
+    /// where they were and the files it enters and leaves, in order.
+    pub(crate) text_events: ArenaVec<'tu, TextEvent<'tu>>,
     /// GCC's `#pragma scalar_storage_order` directives, in order, under the
     /// GCC identity only.
     pub(crate) storage_order_pragmas:
