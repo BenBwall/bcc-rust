@@ -1158,6 +1158,12 @@ pub(super) fn with_identity_macros<'a>(
         | crate::target::StackProtector::All =>
             _ = writeln!(out, "#define __SSP_ALL__ {}", if gcc { 2 } else { 3 }),
     }
+    if hardening.sanitize_address {
+        out.push_str("#define __SANITIZE_ADDRESS__ 1\n");
+    }
+    if hardening.sanitize_thread {
+        out.push_str("#define __SANITIZE_THREAD__ 1\n");
+    }
     let cet = u8::from(hardening.branch_protection) + 2 * u8::from(hardening.return_protection);
     if cet != 0 {
         _ = writeln!(out, "#define __CET__ {cet}");
@@ -1438,7 +1444,7 @@ fn identity_claim(identity: CompilerIdentity) -> &'static str {
 /// for the features bcc implements, after `__name__` normalization. A C11
 /// language feature is a feature where it is native and an extension wherever
 /// bcc accepts it, as in Clang. Every other name answers 0, including Clang
-/// features bcc lacks (sanitizers, blocks, nullability), so
+/// features bcc lacks (other sanitizers, blocks, nullability), so
 /// headers take their portable paths.
 /// Clang extension: Clang Language Extensions, "`__has_feature` and
 /// `__has_extension`".
@@ -1455,6 +1461,8 @@ fn clang_feature(configuration: CompilerConfiguration, name: &str, extension: bo
         // GNU `deprecated` takes an optional message in every mode.
         | "attribute_deprecated_with_message" | "attribute_overloadable" => return true,
         | "overloadable_unmarked" => return extension,
+        | "address_sanitizer" => return configuration.code_options().hardening.sanitize_address,
+        | "thread_sanitizer" => return configuration.code_options().hardening.sanitize_thread,
         | _ => return false,
     };
     if extension {

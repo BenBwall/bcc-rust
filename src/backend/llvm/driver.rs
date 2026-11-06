@@ -525,6 +525,7 @@ impl Toolchain {
         }
         _ = command
             .arg("-fuse-ld=lld")
+            .args(options.code.hardening.sanitizer_link_flag())
             .args(options.kind.link_flag())
             .args(inputs)
             .arg("-o")
@@ -648,6 +649,7 @@ impl Toolchain {
         }
         _ = command
             .arg("-fuse-ld=lld")
+            .args(options.code.hardening.sanitizer_link_flag())
             .args(options.kind.link_flag())
             .arg(operand(object).as_os_str())
             .arg("-o")

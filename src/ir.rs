@@ -246,6 +246,8 @@ pub(crate) struct Function<'ir> {
     pub(crate) inlining:           InlineControl,
     /// GNU `no_stack_protector`: no stack protector, whatever the options ask.
     pub(crate) no_stack_protector: bool,
+    /// GNU `no_sanitize`: the sanitizers that leave this function alone.
+    pub(crate) no_sanitize:        NoSanitize,
     /// For the private copy of an `always_inline` inline-only definition,
     /// the external function it copies. Direct calls name the copy so that
     /// bcc's optimizer, interpreter and native back end expand or run it;
@@ -303,3 +305,11 @@ impl EntryConvention {
               compiler, not its tests."
 )]
 mod tests;
+
+/// The sanitizers a function's `no_sanitize` attribute turns off.
+/// GNU extension: GCC manual, "Common Function Attributes".
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct NoSanitize {
+    pub(crate) address: bool,
+    pub(crate) thread:  bool,
+}

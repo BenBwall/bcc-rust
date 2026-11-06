@@ -451,6 +451,14 @@ impl Cli {
                 },
                 | "-fstack-clash-protection" => hardening.stack_clash = true,
                 | "-fno-stack-clash-protection" => hardening.stack_clash = false,
+                | "-fsanitize=address" => hardening.sanitize_address = true,
+                | "-fsanitize=thread" => hardening.sanitize_thread = true,
+                | "-fno-sanitize=address" => hardening.sanitize_address = false,
+                | "-fno-sanitize=thread" => hardening.sanitize_thread = false,
+                | "-fno-sanitize=all" => {
+                    hardening.sanitize_address = false;
+                    hardening.sanitize_thread = false;
+                },
                 | "-fno-omit-frame-pointer" => hardening.keep_frame_pointer = true,
                 | "-fomit-frame-pointer" => hardening.keep_frame_pointer = false,
                 | _ => {},
@@ -638,6 +646,19 @@ pub(super) fn is_hardening_option(text: &str) -> bool {
             | "-fcf-protection=none"
             | "-fstack-clash-protection"
             | "-fno-stack-clash-protection"
+    ) || is_sanitizer_option(text)
+}
+
+/// Whether `text` turns a sanitizer bcc can give on or off. GCC's and Clang's
+/// other sanitizers and lists of several stay refused.
+pub(super) fn is_sanitizer_option(text: &str) -> bool {
+    matches!(
+        text,
+        "-fsanitize=address"
+            | "-fsanitize=thread"
+            | "-fno-sanitize=address"
+            | "-fno-sanitize=thread"
+            | "-fno-sanitize=all"
     )
 }
 

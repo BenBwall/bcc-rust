@@ -81,6 +81,10 @@ pub(crate) struct Hardening {
     pub(crate) stack_clash:        bool,
     /// `-fno-omit-frame-pointer`: every function keeps a frame pointer.
     pub(crate) keep_frame_pointer: bool,
+    /// `-fsanitize=address`: LLVM's `AddressSanitizer` checks each access.
+    pub(crate) sanitize_address:   bool,
+    /// `-fsanitize=thread`: LLVM's `ThreadSanitizer` records each access.
+    pub(crate) sanitize_thread:    bool,
 }
 
 impl Hardening {
@@ -90,7 +94,20 @@ impl Hardening {
         return_protection:  false,
         stack_clash:        false,
         keep_frame_pointer: false,
+        sanitize_address:   false,
+        sanitize_thread:    false,
     };
+
+    /// What makes the bundled clang link the sanitizer's run-time library.
+    pub(crate) const fn sanitizer_link_flag(self) -> Option<&'static str> {
+        if self.sanitize_address {
+            Some("-fsanitize=address")
+        } else if self.sanitize_thread {
+            Some("-fsanitize=thread")
+        } else {
+            None
+        }
+    }
 }
 
 /// What code generation may assume where C leaves the behaviour

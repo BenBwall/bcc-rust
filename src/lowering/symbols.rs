@@ -256,6 +256,10 @@ impl Unit<'_, '_, '_> {
                 | Inlining::Always => InlineControl::Always,
             };
             function.no_stack_protector = attributes.no_stack_protector;
+            function.no_sanitize = crate::ir::NoSanitize {
+                address: attributes.no_sanitize_address,
+                thread:  attributes.no_sanitize_thread,
+            };
             function.entry = match attributes.machine_entry() {
                 | MachineEntry::C => EntryConvention::C,
                 | MachineEntry::Interrupt => EntryConvention::Interrupt,

@@ -166,6 +166,7 @@ impl<'ir> Module<'ir> {
             returns_twice: false,
             inlining: InlineControl::Default,
             no_stack_protector: false,
+            no_sanitize: super::NoSanitize::default(),
             inline_copy_of: None,
             entry: EntryConvention::C,
         });

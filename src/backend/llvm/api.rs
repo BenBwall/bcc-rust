@@ -1675,7 +1675,12 @@ impl<'id> Session<'id> {
     /// Adds the string attribute `key`=`value` to the function `function`.
     /// The run-time checks the options ask of a defined function, in Clang's
     /// attributes.
-    pub(super) fn hardening(&self, function: Val<'id>, no_stack_protector: bool) {
+    pub(super) fn hardening(
+        &self,
+        function: Val<'id>,
+        no_stack_protector: bool,
+        no_sanitize: crate::ir::NoSanitize,
+    ) {
         let hardening = self.code.hardening;
         let protector = match hardening.stack_protector {
             | StackProtector::Off => None,
@@ -1686,6 +1691,12 @@ impl<'id> Session<'id> {
         };
         if let Some(protector) = protector {
             self.attribute(function, u32::MAX, protector, 0, None, false);
+        }
+        if hardening.sanitize_address && !no_sanitize.address {
+            self.attribute(function, u32::MAX, "sanitize_address", 0, None, false);
+        }
+        if hardening.sanitize_thread && !no_sanitize.thread {
+            self.attribute(function, u32::MAX, "sanitize_thread", 0, None, false);
         }
         if hardening.stack_clash {
             self.string_attribute(function, "probe-stack", "inline-asm");
@@ -1869,6 +1880,27 @@ impl<'id> Session<'id> {
                 let error = unsafe { LLVMGetErrorMessage(result) };
                 let message = Message::copy_error(error);
                 return Err(message);
+            }
+        }
+        // Sanitizers instrument the optimized code, as Clang runs them last.
+        let sanitize = self.code.hardening;
+        for (requested, pipeline) in [
+            (sanitize.sanitize_address, c"asan"),
+            (sanitize.sanitize_thread, c"tsan-module,function(tsan)"),
+        ] {
+            if requested {
+                // SAFETY: Creates independently owned pass-builder options.
+                let options = PassOptions(unsafe { LLVMCreatePassBuilderOptions() });
+                // SAFETY: Live module, target machine and pass options, with a
+                // known pipeline.
+                let result =
+                    unsafe { LLVMRunPasses(self.module, pipeline.as_ptr(), machine.0, options.0) };
+                if !result.is_null() {
+                    // SAFETY: Consumes the LLVMErrorRef and returns a message
+                    // with error-specific disposal.
+                    let error = unsafe { LLVMGetErrorMessage(result) };
+                    return Err(Message::copy_error(error));
+                }
             }
         }
         self.verify()?;

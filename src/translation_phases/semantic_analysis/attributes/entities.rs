@@ -169,6 +169,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | Rule::NoStackProtector => self.no_stack_protector(subject, attribute),
+                | Rule::NoSanitize => self.no_sanitize(subject, attribute),
                 | _ => {},
             }
         }
@@ -440,6 +441,43 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         };
         let entity = self.entity_of(binding);
         self.attributes.entity(entity).no_stack_protector = true;
+    }
+
+    /// `no_sanitize_address`, `no_sanitize_thread` and `no_sanitize("name", …)`
+    /// on a function. An unknown or other sanitizer's name changes nothing
+    /// here, since bcc has only these. GCC reads a comma-separated list in one
+    /// string, and Clang takes that as one unknown name.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    fn no_sanitize(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        let Subject::Function { binding, .. } = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        let gcc = self.gcc_identity();
+        let mut address = attribute.name == "no_sanitize_address";
+        let mut thread = attribute.name == "no_sanitize_thread";
+        for token in attribute.arguments.unwrap_or_default() {
+            let TokenType::String(StringTokenType::String(id)) = token.kind else {
+                continue;
+            };
+            let Some(text) = self.context.literal_text_in(self.scratch, id, false) else {
+                continue;
+            };
+            let mut note = |name: &str| match name {
+                | "address" => address = true,
+                | "thread" => thread = true,
+                | _ => {},
+            };
+            if gcc {
+                text.split(',').for_each(&mut note);
+            } else {
+                note(text);
+            }
+        }
+        let entity = self.entity_of(binding);
+        let attributes = self.attributes.entity(entity);
+        attributes.no_sanitize_address |= address;
+        attributes.no_sanitize_thread |= thread;
     }
 
     /// Retains GNU `nonnull` parameter indices after checking each integer
