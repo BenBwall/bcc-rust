@@ -143,6 +143,10 @@ pub(crate) enum Construct {
     /// A function whose `_BitInt` results of more than 128 bits would need
     /// more stack than a default thread has.
     WideBitIntTemporaries,
+    /// An access to a `volatile` bit-field under
+    /// `-fstrict-volatile-bitfields` whose loads and stores would not be
+    /// GCC's. GNU extension: GCC Code Gen Options.
+    StrictVolatileBitField,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -221,6 +225,9 @@ impl Construct {
                 "conversions between complex types and _BitInt types of more than 128 bits",
             | Self::WideBitIntTemporaries =>
                 "functions whose wide _BitInt results need more than 6 MiB of stack",
+            | Self::StrictVolatileBitField =>
+                "this access to a volatile bit-field under -fstrict-volatile-bitfields, whose \
+                 loads and stores would not match GCC's",
         }
     }
 }
