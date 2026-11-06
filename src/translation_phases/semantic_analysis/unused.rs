@@ -126,15 +126,17 @@ pub(super) struct UnusedState<'s> {
     pub(super) tracking: bool,
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
-    pub(super) values:   bool,
-    variables:           ArenaVec<'s, Usage>,
-    file_scope:          ArenaMap<'s, StringCacheId, Usage>,
-    writes:              ArenaMap<'s, usize, WriteSite>,
+    pub(super) values: bool,
+    variables: ArenaVec<'s, Usage>,
+    file_scope: ArenaMap<'s, StringCacheId, Usage>,
+    writes: ArenaMap<'s, usize, WriteSite>,
+    /// The statements that give a statement expression its value.
+    statement_expression_values: ArenaMap<'s, usize, ()>,
     /// The commas that separate an attribute's arguments, which bcc parses as
     /// one expression: their left operands are arguments, not discarded.
-    separators:          ArenaMap<'s, usize, ()>,
+    separators: ArenaMap<'s, usize, ()>,
     /// Tags declared `unused`, whose variables both compilers exempt.
-    exempt_tags:         ArenaMap<'s, StringCacheId, ()>,
+    exempt_tags: ArenaMap<'s, StringCacheId, ()>,
 }
 
 impl<'s> UnusedState<'s> {
@@ -164,6 +166,7 @@ impl<'s> UnusedState<'s> {
             variables: ArenaVec::new_in(scratch),
             file_scope: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             writes: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            statement_expression_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             separators: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             exempt_tags: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
@@ -724,10 +727,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Schedules the check of a statement's discarded value for after its
+    /// Records the statement that gives a statement expression its value,
+    /// which discards nothing wherever the statement expression is.
+    /// GNU extension: GCC manual, "Statement Exprs".
+    pub(super) fn note_statement_expression_value(&mut self, statement: &'tu Statement<'tu>) {
+        if self.unused.tracking || self.unused.values {
+            _ = self
+                .unused
+                .statement_expression_values
+                .insert(std::ptr::from_ref(statement).addr(), ());
+        }
+    }
+
+    /// Schedules the check of the value `statement` discards for after its
     /// analysis.
     /// C99: §6.8.3p2, p. 132; PDF p. 144.
-    pub(super) fn discarded_statement_value(&mut self, expression: &'tu Expression<'tu>) {
+    pub(super) fn discarded_statement_value(
+        &mut self,
+        statement: &'tu Statement<'tu>,
+        expression: &'tu Expression<'tu>,
+    ) {
+        if self
+            .unused
+            .statement_expression_values
+            .contains_key(&std::ptr::from_ref(statement).addr())
+        {
+            return;
+        }
+        self.discarded_value(expression);
+    }
+
+    /// Schedules the check of a discarded value for after its analysis.
+    /// C99: §6.8.3p2, p. 132; PDF p. 144; §6.8.5.3p1, p. 136; PDF p. 148.
+    pub(super) fn discarded_value(&mut self, expression: &'tu Expression<'tu>) {
         if self.unused.tracking {
             self.note_discarded(expression);
         }

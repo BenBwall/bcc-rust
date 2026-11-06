@@ -77,9 +77,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match work {
             | StatementWork::AssemblyDone(statement, asm, jumps) =>
                 self.finish_assembly(statement, asm, jumps),
-            | StatementWork::DiscardedValue(expression, errors, dead) =>
+            | StatementWork::DiscardedValue(expression, errors, inhibited) =>
                 if errors == self.semantic_errors {
-                    self.check_discarded_value(expression, dead);
+                    self.check_discarded_value(expression, inhibited);
                 },
             | StatementWork::RetainTail(statement) => {
                 self.statement_effects(statement);

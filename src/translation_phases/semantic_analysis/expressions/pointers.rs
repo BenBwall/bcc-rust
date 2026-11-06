@@ -438,7 +438,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// literal, as in `assert(0 && "message")`, a compound literal, or a weak
     /// entity, whose address can be null. Clang wants one name or member, and
     /// leaves the address of a function alone as the way to silence it.
-    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.5.3.2p3, p. 79; PDF p. 91.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.5.3.2p3, pp. 78-79; PDF pp. 90-91.
     pub(super) fn pointer_bool_warning(&mut self, info: ExpressionInfo<'tu>) {
         use crate::translation_phases::parsing::syntax::{
             BinaryOperator as B,
