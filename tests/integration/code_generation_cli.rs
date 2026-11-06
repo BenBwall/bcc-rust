@@ -861,6 +861,64 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
         }
     }
 
+    /// A transparent union's parameter matches its members' types when function
+    /// types meet, as GCC and Clang have it: glibc's `getsockname` converts
+    /// to a pointer taking `struct sockaddr *`, and a declaration can precede
+    /// a definition written with the member's type.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn transparent_union_parameters_match_their_members_on_every_back_end() {
+        let source = r#"
+            typedef union { int *p; const char *c; } __attribute__((transparent_union)) U;
+            int f(U u) { return *u.p; }
+            int g(int *p);
+            int g(U u);
+            int g(int *p) { return *p + 1; }
+            _Static_assert(
+                __builtin_types_compatible_p(int (*)(U), int (*)(const char *)), "u");
+            int main(void) {
+                int x = 42;
+                int (*a)(int *) = f;
+                int (*b)(U) = f;
+                if (a(&x) != 42) return 1;
+                if (b(&x) != 42) return 2;
+                if (g(&x) != 43) return 3;
+                return 7;
+            }
+        "#;
+        let executable = temporary("transparent-union.exe");
+        for options in [
+            &["--opt=none"][..],
+            &["--opt=bcc"][..],
+            &["--opt=none", "--backend=native"][..],
+            &["--opt=bcc", "--backend=native"][..],
+        ] {
+            let built = bcc(
+                source,
+                &[options, &["-o", executable.to_str().unwrap()]].concat(),
+            );
+            assert!(
+                built.status.success(),
+                "{options:?}: {}",
+                text(&built.stderr)
+            );
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(7), "{options:?}");
+        }
+        for options in ["--opt=none", "--opt=bcc"] {
+            let output = bcc(source, &["--interpret", options]);
+            assert_eq!(output.status.code(), Some(7), "{}", text(&output.stderr));
+        }
+        for source in [
+            "typedef union { int *p; } __attribute__((transparent_union)) U;\nint f(U);\nint \
+             (*d)(long *) = f;\n",
+            "typedef union { int *p; } N;\nint f(N);\nint (*d)(int *) = f;\n",
+        ] {
+            let output = bcc(source, &["-fsyntax-only"]);
+            assert_eq!(output.status.code(), Some(1), "{source}");
+        }
+    }
+
     /// `__has_builtin` sends a WebAssembly build to its fallback, as Clang's
     /// does, rather than to an instruction no back end there can emit.
     #[test]
