@@ -809,6 +809,18 @@ impl CompilerConfiguration {
         self.default_pack
     }
 
+    /// `-Wfatal-errors` or `-Wno-fatal-errors`.
+    pub(crate) const fn with_fatal_errors(mut self, enabled: bool) -> Self {
+        self.fatal_errors = enabled;
+        self
+    }
+
+    /// Whether compilation stops at the first error, as GCC's
+    /// `-Wfatal-errors` asks; Clang accepts the option and goes on.
+    pub(crate) fn fatal_errors(self) -> bool {
+        self.fatal_errors && self.identity == super::CompilerIdentity::Gcc
+    }
+
     pub(crate) const fn with_suppress_warnings(mut self, enabled: bool) -> Self {
         self.suppress_warnings = enabled;
         self
@@ -926,6 +938,7 @@ impl CompilerConfiguration {
             pedantic_as_error: false,
             werror_pedantic: None,
             pedantic_disabled: false,
+            fatal_errors: false,
             accepted: 0,
             native: 0,
             repeated_specifier_warnings: true,

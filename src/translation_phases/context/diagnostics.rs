@@ -48,16 +48,29 @@ impl<'tu> Context<'tu> {
         ) {
             return;
         }
-        self.pending_errors
-            .push_back(TranslationError::Preprocessing(error));
+        let source = error.source_vectors;
+        let error = TranslationError::Preprocessing(error);
+        // A group that is off there reports nothing; `-Wno-cpp` silences
+        // `#warning` even where a system header would not.
+        if let Some(group) = error.group()
+            && self
+                .configuration_at(source)
+                .diagnostic_severity(group)
+                .is_none()
+        {
+            return;
+        }
+        self.classified_error(source, error);
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
         if !self.ignore_tokenizer_errors() {
-            self.pending_errors
-                .push_back(TranslationError::PreprocessorTokenizining(error));
+            self.classified_error(
+                SourceVectors::default(),
+                TranslationError::PreprocessorTokenizining(error),
+            );
         }
     }
 
@@ -87,16 +100,16 @@ impl<'tu> Context<'tu> {
     }
 
     /// The severity of a warning-group diagnostic at `source`, or `None`
-    /// when the group is off or a system header withholds it.
+    /// when the group is off there or a system header withholds it.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     pub(crate) fn group_severity(
         &self,
         group: DiagnosticGroup,
         source: SourceVectors,
     ) -> Option<ErrorSeverity> {
-        let severity = self.configuration.diagnostic_severity(group)?;
-        (self
-            .configuration
+        let configuration = self.configuration_at(source);
+        let severity = configuration.diagnostic_severity(group)?;
+        (configuration
             .reported_in_system_headers(group, severity)
             || !self.withholds(severity, true, source))
         .then_some(severity)
@@ -116,14 +129,14 @@ impl<'tu> Context<'tu> {
         if !self.ignore_tokenizer_errors()
             && !self.in_system_header(&vector)
             && self
-                .configuration
+                .configuration_at(SourceVectors::default())
                 .diagnostic_severity(DiagnosticGroup::NewlineEof)
                 .is_some()
         {
-            self.pending_errors
-                .push_back(TranslationError::InitialProcessing(
-                    InitialProcessorError::MissingFinalNewline(vector),
-                ));
+            self.classified_error(
+                SourceVectors::default(),
+                TranslationError::InitialProcessing(InitialProcessorError::MissingFinalNewline(vector)),
+            );
         }
     }
 
@@ -132,14 +145,14 @@ impl<'tu> Context<'tu> {
         if !self.ignore_tokenizer_errors()
             && !self.in_system_header(&vector)
             && self
-                .configuration
+                .configuration_at(SourceVectors::default())
                 .diagnostic_severity(DiagnosticGroup::NewlineEof)
                 .is_some()
         {
-            self.pending_errors
-                .push_back(TranslationError::InitialProcessing(
-                    InitialProcessorError::EscapedFinalNewline(vector),
-                ));
+            self.classified_error(
+                SourceVectors::default(),
+                TranslationError::InitialProcessing(InitialProcessorError::EscapedFinalNewline(vector)),
+            );
         }
     }
 

@@ -4,6 +4,8 @@
 //! C99: #pragma, §6.10.6, p. 159; PDF p. 171; _Pragma destringizing,
 //! §6.10.9 paragraph 1, p. 161; PDF p. 173.
 
+mod diagnostic;
+
 use std::fmt::Write as _;
 
 use super::super::{
@@ -49,8 +51,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// C99: §6.10.6 paragraphs 1-2, p. 159; PDF p. 171. `STDC` pragmas must
     /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
     /// `on-off-switch`; they are checked but have no effect yet. `#pragma
-    /// once`, `#pragma pack`, `#pragma GCC system_header` and `#pragma GCC
-    /// warning`/`error` are bcc's implementation-defined pragmas. `#pragma
+    /// once`, `#pragma pack`, `#pragma GCC system_header`, `#pragma GCC
+    /// warning`/`error` and the diagnostic pragmas are bcc's
+    /// implementation-defined pragmas. `#pragma
     /// weak` keeps only the name it makes weak, for the emission model of
     /// semantic analysis. Other pragmas
     /// are ignored (paragraph 1), and one that does not begin with an
@@ -210,6 +213,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             consumed_newline = true;
                             break 'base;
                         },
+                        | "clang" if self.pragma_names()[0] == Some("diagnostic") => {
+                            self.pragma_diagnostic_namespace(token);
+                            consumed_newline = true;
+                            break 'base;
+                        },
                         | "clang" => {
                             if !self.pragma_deprecated_macro() {
                                 let line_state = (self.last_was_newline, self.current_is_newline);
@@ -236,6 +244,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                     },
                                     | kind @ ("warning" | "error") => {
                                         self.pragma_gcc_message(operand, kind == "error");
+                                        consumed_newline = true;
+                                        break 'base;
+                                    },
+                                    | "diagnostic" => {
+                                        self.pragma_diagnostic();
                                         consumed_newline = true;
                                         break 'base;
                                     },

@@ -1001,8 +1001,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             )
                             .is_some()
                         {
-                            Context::raw_preprocessor_error(
+                            let classified = context.pragma_classification(
+                                DiagnosticGroup::UnknownEscapeSequence,
+                                token.source_vectors,
+                            );
+                            Context::raw_classified_preprocessor_error(
                                 &mut context.pending_errors,
+                                classified,
                                 PreprocessorError {
                                     error_type:     PreprocessorErrorType::UnknownEscapeSequence(c),
                                     source_vectors: token.source_vectors,
@@ -1068,13 +1073,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 .group_severity(DiagnosticGroup::InvalidSourceEncoding, token.source_vectors)
                 .is_some()
         {
-            Context::raw_preprocessor_error(
-                &mut context.pending_errors,
-                PreprocessorError {
-                    error_type,
-                    source_vectors: token.source_vectors,
-                },
-            );
+            context.preprocessor_error(PreprocessorError {
+                error_type,
+                source_vectors: token.source_vectors,
+            });
         }
         error
     }

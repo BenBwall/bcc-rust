@@ -31,6 +31,7 @@ mod language;
 
 // Feature policy
 mod diagnostics;
+mod warning_names;
 mod features;
 
 // Construction and accessors
@@ -39,6 +40,7 @@ mod options;
 pub(crate) use diagnostics::{
     DiagnosticFormat,
     DiagnosticGroup,
+    PragmaClass,
     WarningOption,
 };
 pub(crate) use features::{
@@ -46,6 +48,11 @@ pub(crate) use features::{
     FeatureOrigin,
 };
 pub(crate) use identity::RuleSet;
+pub(crate) use warning_names::{
+    clang_knows_warning,
+    gcc_knows_flag,
+    gcc_knows_warning,
+};
 pub(crate) use language::{
     CStandard,
     CompilerIdentity,
@@ -168,6 +175,8 @@ pub(crate) struct CompilerConfiguration {
     /// either was given ([`CompilerConfiguration::permerror_default`]).
     permissive: Option<bool>,
     warnings_as_errors: bool,
+    /// `-Wfatal-errors`: GCC stops at the first error it reports.
+    fatal_errors: bool,
     /// The compiler the identity macros claim.
     identity: CompilerIdentity,
     diagnostic_format: DiagnosticFormat,

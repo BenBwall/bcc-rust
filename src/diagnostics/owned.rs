@@ -114,6 +114,7 @@ impl OwnedDiagnostic {
         let mut help = ArenaVec::new_in(arena);
         help.extend(self.help.iter().map(String::as_str));
         Diagnostic {
+            fatal: false,
             severity: self.severity,
             message: &self.message,
             option_suffix: self.option_suffix,

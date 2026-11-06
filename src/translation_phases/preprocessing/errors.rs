@@ -536,6 +536,12 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// which GCC ignores with a `-Wpragmas` warning. C99: implementation-
     /// defined pragma behavior, §6.10.6p1, p. 159; PDF p. 171. GCC manual,
     /// "Scalar Storage Order Pragmas".
+    /// A `#pragma GCC diagnostic` or `#pragma clang diagnostic` that sets
+    /// nothing, or that names an option that controls nothing.
+    /// GCC: <https://gcc.gnu.org/onlinedocs/gcc/Diagnostic-Pragmas.html>.
+    /// C99: implementation-defined pragma behavior, §6.10.6 paragraph 1,
+    /// p. 159; PDF p. 171.
+    PragmaDiagnostic(PragmaDiagnosticProblem<'tu>),
     StorageOrderPragmaOperand {
         missing: bool,
     },
@@ -1365,6 +1371,8 @@ impl PreprocessorErrorType<'_> {
             | Self::SystemHeaderPragmaInMainFile =>
                 new("`#pragma GCC system_header` ignored in main file")
                     .label("only a header can be a system header"),
+            | Self::PragmaDiagnostic(problem) =>
+                new(problem.message(arena)).option_suffix().label(problem.label()),
             | Self::StorageOrderPragmaOperand { missing } => new(if *missing {
                 "missing `big-endian`, `little-endian`, or `default` after `#pragma \
                  scalar_storage_order` [-Wpragmas]"
@@ -1728,6 +1736,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_, policy) =>
                 crate::translation_phases::policy_severity(policy, crate::translation_phases::DiagnosticPolicy::Warning)
                     .unwrap_or(ErrorSeverity::Warning),
+            | PreprocessorErrorType::PragmaDiagnostic(PragmaDiagnosticProblem::ExpectedString) =>
+                ErrorSeverity::Error,
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
@@ -1739,6 +1749,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::UnknownDirective
             | PreprocessorErrorType::HashMustBeFollowedByIdentifier
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
+            | PreprocessorErrorType::PragmaDiagnostic(_)
             | PreprocessorErrorType::UnknownPragmaDirective
             | PreprocessorErrorType::UnknownEscapeSequence(_)
             | PreprocessorErrorType::IllegalCharacterEncoding { prefixed: false, .. }
@@ -1766,5 +1777,109 @@ impl Display for PreprocessorErrorType<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let arena = Bump::new();
         f.write_str(self.explain_in(&arena, None).message)
+    }
+}
+
+/// How a diagnostic pragma went wrong, each in its compiler's terms.
+/// GCC: <https://gcc.gnu.org/onlinedocs/gcc/Diagnostic-Pragmas.html>.
+/// C99: implementation-defined pragma behavior, §6.10.6 paragraph 1, p. 159;
+/// PDF p. 171.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PragmaDiagnosticProblem<'tu> {
+    /// GCC: nothing follows `diagnostic`.
+    GccMissingKind,
+    /// GCC: what follows `diagnostic` is no kind it knows.
+    GccExpectedKind,
+    /// GCC: no string literal follows the kind.
+    GccMissingOption,
+    /// GCC: the string names no option.
+    GccUnknownOption,
+    /// GCC: the string names an option that is no warning's.
+    GccNotWarningOption(&'tu str),
+    /// GCC: `ignored_attributes` without its operand.
+    GccMissingAttribute,
+    /// Clang: what follows `diagnostic` is no kind it knows.
+    ClangInvalidKind,
+    /// Clang: tokens after the pragma is complete.
+    ClangUnexpectedToken,
+    /// Clang: `pop` without a `push`.
+    ClangCouldNotPop,
+    /// Clang: the string does not begin `-W` or `-R`.
+    ClangInvalidOption,
+    /// Clang: the string names no warning group.
+    ClangUnknownGroup(&'tu str),
+    /// Clang: an error, no warning: no string literal follows the kind.
+    ExpectedString,
+}
+
+impl PragmaDiagnosticProblem<'_> {
+    /// The warning group that controls the problem, which each compiler
+    /// picks: `-Wpragmas` in GCC, `-Wunknown-pragmas` and
+    /// `-Wunknown-warning-option` in Clang.
+    pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
+        use crate::configuration::DiagnosticGroup as G;
+        match self {
+            | Self::GccMissingKind
+            | Self::GccExpectedKind
+            | Self::GccMissingOption
+            | Self::GccUnknownOption
+            | Self::GccNotWarningOption(_)
+            | Self::GccMissingAttribute => Some(G::Pragmas),
+            | Self::ClangInvalidKind
+            | Self::ClangUnexpectedToken
+            | Self::ClangCouldNotPop
+            | Self::ClangInvalidOption => Some(G::UnknownStdcPragma),
+            | Self::ClangUnknownGroup(_) => Some(G::UnknownWarningOption),
+            | Self::ExpectedString => None,
+        }
+    }
+
+    fn message<'d>(self, arena: &'d Bump) -> &'d str {
+        match self {
+            | Self::GccMissingKind =>
+                "missing `error`, `warning`, `ignored`, `push`, `pop`, or `ignored_attributes` \
+                 after `#pragma GCC diagnostic` [-Wpragmas]",
+            | Self::GccExpectedKind =>
+                "expected `error`, `warning`, `ignored`, `push`, `pop`, `ignored_attributes` \
+                 after `#pragma GCC diagnostic` [-Wpragmas]",
+            | Self::GccMissingOption =>
+                "missing option after `#pragma GCC diagnostic` kind [-Wpragmas]",
+            | Self::GccUnknownOption =>
+                "unknown option after `#pragma GCC diagnostic` kind [-Wpragmas]",
+            | Self::GccNotWarningOption(option) => format_in!(
+                arena,
+                "`{option}` is not an option that controls warnings [-Wpragmas]"
+            ),
+            | Self::GccMissingAttribute =>
+                "missing attribute name after `#pragma GCC diagnostic ignored_attributes` \
+                 [-Wpragmas]",
+            | Self::ClangInvalidKind =>
+                "pragma diagnostic expected `error`, `warning`, `ignored`, `fatal`, `push`, or \
+                 `pop` [-Wunknown-pragmas]",
+            | Self::ClangUnexpectedToken =>
+                "unexpected token in pragma diagnostic [-Wunknown-pragmas]",
+            | Self::ClangCouldNotPop =>
+                "pragma diagnostic pop could not pop, no matching push [-Wunknown-pragmas]",
+            | Self::ClangInvalidOption =>
+                "pragma diagnostic expected option name (e.g. \"-Wundef\") [-Wunknown-pragmas]",
+            | Self::ClangUnknownGroup(option) => format_in!(
+                arena,
+                "unknown warning group `{option}`, ignored [-Wunknown-warning-option]"
+            ),
+            | Self::ExpectedString => "expected string literal in pragma diagnostic",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            | Self::GccMissingKind | Self::GccExpectedKind | Self::ClangInvalidKind =>
+                "expected a kind of diagnostic pragma",
+            | Self::GccMissingOption | Self::ExpectedString => "expected a string literal",
+            | Self::GccUnknownOption | Self::ClangUnknownGroup(_) => "no such warning option",
+            | Self::GccNotWarningOption(_) | Self::ClangInvalidOption => "no warning option",
+            | Self::GccMissingAttribute => "expected an attribute name",
+            | Self::ClangUnexpectedToken => "unexpected token",
+            | Self::ClangCouldNotPop => "no matching `push`",
+        }
     }
 }

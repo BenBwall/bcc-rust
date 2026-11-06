@@ -2858,7 +2858,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let group = crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration;
                 if self
                     .context
-                    .configuration
+                    .configuration_at(name.source_vectors)
                     .diagnostic_severity(group)
                     .is_some()
                 {

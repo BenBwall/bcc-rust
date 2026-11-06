@@ -1257,7 +1257,18 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Implicit
                     | crate::configuration::DiagnosticGroup::ReturnMismatch
                     | crate::configuration::DiagnosticGroup::VoidReturnMismatch
-                    | crate::configuration::DiagnosticGroup::DeclarationMissingParameterType => "warning-group diagnostic",
+                    | crate::configuration::DiagnosticGroup::DeclarationMissingParameterType
+                    | crate::configuration::DiagnosticGroup::Pragmas
+                    | crate::configuration::DiagnosticGroup::Cpp
+                    | crate::configuration::DiagnosticGroup::PragmaMessages
+                    | crate::configuration::DiagnosticGroup::ExtraTokens
+                    | crate::configuration::DiagnosticGroup::DeprecatedPragma
+                    | crate::configuration::DiagnosticGroup::PragmaOnceOutsideHeader
+                    | crate::configuration::DiagnosticGroup::PragmaSystemHeaderOutsideHeader
+                    | crate::configuration::DiagnosticGroup::IncludeNextOutsideHeader
+                    | crate::configuration::DiagnosticGroup::IncludeNextAbsolutePath
+                    | crate::configuration::DiagnosticGroup::InvalidPpToken
+                    | crate::configuration::DiagnosticGroup::MacroRedefined => "warning-group diagnostic",
                 },
                 "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
             ),

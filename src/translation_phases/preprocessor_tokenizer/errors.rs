@@ -91,6 +91,7 @@ impl PreprocessorTokenizerErrorType {
         match self {
             | Self::Unnormalized { required: true } => Some(DiagnosticGroup::PedanticNormalized),
             | Self::Unnormalized { required: false } => Some(DiagnosticGroup::Normalized),
+            | Self::MissingTerminatingQuote(_) => Some(DiagnosticGroup::InvalidPpToken),
             | _ => None,
         }
     }
