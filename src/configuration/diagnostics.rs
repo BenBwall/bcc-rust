@@ -798,7 +798,7 @@ impl WarningSettings {
                 | DiagnosticGroup::UnusedButSetGlobal
                 | DiagnosticGroup::UnusedLabel
                 | DiagnosticGroup::UnusedValue
-                | DiagnosticGroup::UnusedComparison => all,
+                | DiagnosticGroup::UnusedComparison
                 | DiagnosticGroup::Main => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
                 | _ => None,
