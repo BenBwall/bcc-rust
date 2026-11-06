@@ -53,7 +53,7 @@ pub(super) fn print_parser_output<'tu>(
     let mut reporter = DiagnosticReporter::new(
         &reporter_arena,
         context.tu_arena(),
-        RenderColor::for_stderr(),
+        RenderColor::for_stderr(context.configuration.diagnostic_color()),
     );
     let stderr = &mut io::stderr();
     expect_stderr(reporter.report_pending(context, stderr));
@@ -105,7 +105,7 @@ pub(super) fn print_preprocessor_output<'tu>(
         TokenOutput {
             out:            &mut stderr,
             reporter_arena: &mut reporter_arena,
-            color:          RenderColor::for_stderr(),
+            color:          RenderColor::for_stderr(context.configuration.diagnostic_color()),
         },
     )
 }

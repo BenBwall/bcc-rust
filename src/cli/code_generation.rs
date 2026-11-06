@@ -111,7 +111,7 @@ pub(super) fn generate_code<'tu>(
     let mut reporter = DiagnosticReporter::new(
         &reporter_arena,
         context.tu_arena(),
-        RenderColor::for_stderr(),
+        RenderColor::for_stderr(context.configuration.diagnostic_color()),
     );
     let stderr = &mut io::stderr();
     drop(reporter.report_pending(context, stderr));

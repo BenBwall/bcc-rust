@@ -1688,6 +1688,83 @@ mod tests {
         }
     }
 
+    /// The options that choose what a diagnostic writes, each under the
+    /// compiler that knows it, with the last of a pair deciding.
+    #[test]
+    fn gnu_diagnostic_presentation_options() {
+        let directory = Directory::new();
+        directory.write("e.c", "int x;\nchar x;\nint y = 1.0 + \"\";\n");
+        let text = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, &[args, &["-c", "e.c", "-o", "e.o"]].concat());
+            stderr(&output)
+        };
+        let plain = text("--gcc-mode", &[]);
+        assert!(plain.contains("e.c:2:6: error: ") && plain.contains("    2 | char x;\n"));
+        for (mode, off) in [
+            ("--gcc-mode", "-fno-diagnostics-show-caret"),
+            ("--gcc-mode", "-fdiagnostics-plain-output"),
+            ("--clang-mode", "-fno-caret-diagnostics"),
+        ] {
+            let output = text(mode, &[off]);
+            assert!(output.contains("e.c:2:6: error: "), "{off}: {output}");
+            assert!(output.contains("e.c:1:5: note: "), "{off}: {output}");
+            assert!(
+                !output.contains('|') && !output.contains('^'),
+                "{off}: {output}"
+            );
+        }
+        assert!(
+            text(
+                "--gcc-mode",
+                &["-fdiagnostics-plain-output", "-fdiagnostics-show-caret"]
+            )
+            .contains(" char x;\n"),
+            "line numbers stay off, the caret comes back"
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = text(mode, &["-fno-show-column"]);
+            assert!(output.contains("e.c:2: error: "), "{output}");
+            assert!(output.contains("e.c:1: note: "), "{output}");
+            assert!(output.contains("    2 | char x;\n"), "{output}");
+            let output = text(mode, &["-fshow-column"]);
+            assert!(output.contains("e.c:2:6: error: "), "{output}");
+            let output = text(mode, &["-fdiagnostics-color=always"]);
+            assert!(output.contains('\u{1b}'), "{output}");
+            let output = text(
+                mode,
+                &["-fdiagnostics-color=always", "-fdiagnostics-color=never"],
+            );
+            assert!(!output.contains('\u{1b}'), "{output}");
+        }
+        // Clang's spelling, which GCC doesn't know, and GCC's, which Clang
+        // doesn't.
+        assert!(text("--clang-mode", &["-fcolor-diagnostics"]).contains('\u{1b}'));
+        assert!(
+            text("--gcc-mode", &["-fcolor-diagnostics"])
+                .contains("unrecognized command-line option")
+        );
+        assert!(text("--clang-mode", &["-fdiagnostics-plain-output"]).contains("unknown argument"));
+        // GCC keeps a space where line numbers would be; Clang doesn't.
+        let bare = text("--gcc-mode", &["-fno-diagnostics-show-line-numbers"]);
+        assert!(bare.contains("\n char x;\n      ^\n"), "{bare}");
+        let bare = text("--clang-mode", &["-fno-diagnostics-show-line-numbers"]);
+        assert!(bare.contains("\nchar x;\n     ^\n"), "{bare}");
+        // Without the option's name.
+        directory.write("w.c", "char *p = 1;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let named = |args: &[&str]| {
+                let output = directory.bcc(mode, &[args, &["-c", "w.c", "-o", "w.o"]].concat());
+                stderr(&output).contains("[-W")
+            };
+            assert!(named(&[]), "{mode}");
+            assert!(!named(&["-fno-diagnostics-show-option"]), "{mode}");
+            assert!(
+                named(&["-fno-diagnostics-show-option", "-fdiagnostics-show-option"]),
+                "{mode}"
+            );
+        }
+    }
+
     /// What follows a string in its array's braces is excess: a warning from
     /// Clang, which drops it, and an error from GCC and TCC.
     #[test]
