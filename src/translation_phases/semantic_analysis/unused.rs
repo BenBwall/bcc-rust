@@ -30,6 +30,7 @@ use super::{
     Linkage,
     ScopeKind,
     SemanticErrorKind,
+    ValueCategory,
     scopes::Namespace,
     types::{
         Scalar,
@@ -1057,6 +1058,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.unused_rule(UnusedRule::GccNoEffect, Self::gcc_statement_site(e), None);
             return;
         }
+        self.gcc_unused_effectful_value(e);
+    }
+
+    /// What GCC says of a discarded expression with side effects, as a
+    /// statement or a comma's left operand: of a comma, about its last right
+    /// operand, and otherwise `warn_if_unused_value`.
+    fn gcc_unused_effectful_value(&mut self, e: &'tu Expression<'tu>) {
         let e = Self::without_parentheses(e);
         if matches!(
             e.kind,
@@ -1106,25 +1114,83 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// GCC's `warn_if_unused_value`, for an expression with side effects:
-    /// the conservative part of it, which leaves out a cast and a conditional.
+    /// GCC's `warn_if_unused_value`, for an expression with side effects. It
+    /// looks through `NON_LVALUE_EXPR` and `NOP_EXPR`, which a cast is unless
+    /// it changes the representation, and a volatile read, an atomic read and
+    /// a conditional have an effect of their own. The right operand of `&&`
+    /// or `||` is compared with zero, unless it assigns.
+    /// C99: §6.5.13p3, p. 89; PDF p. 101; §6.5.14p3, p. 89; PDF p. 101.
     fn gcc_value_is_unused(&self, e: &'tu Expression<'tu>) -> bool {
-        if self.expression_info(e).ty.is_volatile() {
+        if self.is_effectful_read(e) {
             return false;
         }
         match e.kind {
+            | E::Parenthesized {
+                expression: operand,
+            }
+            | E::Unary {
+                operator: U::Plus,
+                operand_expression: operand,
+            } => self.gcc_value_is_unused(operand),
+            | E::Cast {
+                operand_expression, ..
+            } => {
+                // Folding drops a widening cast under another cast.
+                let mut operand = Self::without_parentheses(operand_expression);
+                while let E::Cast {
+                    operand_expression: inner,
+                    ..
+                } = operand.kind
+                {
+                    let inner = Self::without_parentheses(inner);
+                    if !self.gcc_cast_keeps_representation(
+                        self.expression_info(operand).ty,
+                        self.expression_info(inner).ty,
+                    ) {
+                        break;
+                    }
+                    operand = inner;
+                }
+                let (to, from) = (self.expression_info(e).ty, self.expression_info(operand).ty);
+                if self.is_void_or_unknown(e) {
+                    false
+                } else if self.gcc_cast_keeps_representation(to, from) {
+                    self.gcc_value_is_unused(operand)
+                } else {
+                    self.types.nodes[to.index] == TypeKind::Scalar(Scalar::Bool)
+                        || !matches!(
+                            operand.kind,
+                            E::Conditional(_)
+                                | E::Binary {
+                                    operator: B::Assignment,
+                                    ..
+                                }
+                        )
+                }
+            },
             | E::Binary {
                 operator: B::LogicalAnd | B::LogicalOr,
                 right_expression,
                 ..
-            } => matches!(
-                Self::without_parentheses(right_expression).kind,
-                E::Call { .. } | E::Identifier(_) | E::Constant(_)
-            ),
+            } => {
+                let right = Self::without_parentheses(right_expression);
+                match right.kind {
+                    | E::Binary {
+                        operator: B::LogicalAnd | B::LogicalOr,
+                        ..
+                    } => self.gcc_value_is_unused(right),
+                    | E::Binary { operator, .. } if Self::is_assignment(operator) => false,
+                    | E::Binary {
+                        operator: B::Comma, ..
+                    }
+                    | E::Conditional(_) => false,
+                    | _ => true,
+                }
+            },
             | E::Binary { operator, .. } => !Self::is_assignment(operator) && operator != B::Comma,
             | E::Unary { operator, .. } => matches!(
                 operator,
-                U::Plus | U::Minus | U::BitwiseNot | U::LogicalNot | U::Indirection
+                U::Minus | U::BitwiseNot | U::LogicalNot | U::Indirection
             ),
             | E::DirectMember { .. } | E::IndirectMember { .. } => true,
             | _ => false,
@@ -1307,24 +1373,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Self::operator_site(left),
                 );
             }
-        } else if !self.is_void_or_unknown(left) && !self.computes_more(left, true) {
+        } else if self.is_void_or_unknown(left) {
+        } else if !self.computes_more(left, true) {
             self.unused_rule(UnusedRule::GccCommaLeft, Self::operator_site(comma), None);
+        } else {
+            self.gcc_unused_effectful_value(left);
         }
     }
 
     /// Whether evaluating `e` does anything but compute its value: an
-    /// assignment, an update, a call, a volatile access, or a construct this
-    /// does not read. A `sizeof` of a variable length array evaluates its
-    /// operand and a cast to a variably modified type its bounds, which GCC
-    /// keeps quiet about however it is used; `evaluated_types` counts those.
-    /// C99: §5.1.2.3p2, p. 13; PDF p. 25; §6.5.3.4p2, p. 80; PDF p. 92;
-    /// §6.7.5.2p4-5, p. 117; PDF p. 129.
-    fn computes_more(&self, e: &'tu Expression<'tu>, evaluated_types: bool) -> bool {
+    /// assignment, an update, a call, a volatile access, an atomic read, or a
+    /// construct this does not read: GCC's `TREE_SIDE_EFFECTS`. An operand of
+    /// `&` is a place and not read. A `sizeof` of a variable length array
+    /// evaluates its operand and a cast to a variably modified type its
+    /// bounds, which GCC keeps quiet about however it is used;
+    /// `evaluated_types` counts those.
+    /// C99: §5.1.2.3p2, p. 13; PDF p. 25; §6.5.3.2p3, p. 78; PDF p. 90;
+    /// §6.5.3.4p2, p. 80; PDF p. 92; §6.7.5.2p4-5, p. 117; PDF p. 129.
+    pub(super) fn computes_more(&self, e: &'tu Expression<'tu>, evaluated_types: bool) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
-        work.push(e);
-        while let Some(e) = work.pop() {
+        work.push((e, true));
+        while let Some((e, read)) = work.pop() {
+            if read && self.is_effectful_read(e) {
+                return true;
+            }
             match e.kind {
-                | E::Parenthesized { expression } => work.push(expression),
+                | E::Parenthesized { expression } => work.push((expression, read)),
+                | E::Unary {
+                    operator: U::AddressOf,
+                    operand_expression,
+                } => work.push((operand_expression, false)),
+                | E::Unary {
+                    operator: U::Indirection,
+                    operand_expression,
+                } => work.push((operand_expression, true)),
                 | E::Unary {
                     operator,
                     operand_expression,
@@ -1332,22 +1414,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if matches!(
                         operator,
                         U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement
-                    ) || self.expression_info(e).ty.is_volatile()
-                    {
+                    ) {
                         return true;
                     }
-                    work.push(operand_expression);
+                    work.push((operand_expression, true));
                 },
                 | E::Binary {
                     operator,
                     left_expression,
                     right_expression,
                 } => {
-                    if Self::is_assignment(operator) || self.expression_info(e).ty.is_volatile() {
+                    if Self::is_assignment(operator) {
                         return true;
                     }
-                    work.push(left_expression);
-                    work.push(right_expression);
+                    work.push((left_expression, true));
+                    work.push((right_expression, true));
                 },
                 | E::Cast {
                     operand_expression, ..
@@ -1355,7 +1436,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if evaluated_types && self.types.variably_modified(self.expression_info(e).ty) {
                         return true;
                     }
-                    work.push(operand_expression);
+                    work.push((operand_expression, true));
                 },
                 | E::SizeofExpr(_) | E::SizeofType(_) =>
                     if evaluated_types && !self.expression_info(e).ice {
@@ -1363,24 +1444,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     },
                 | E::DirectMember {
                     base_expression, ..
-                }
+                } => work.push((base_expression, false)),
                 | E::IndirectMember {
                     base_expression, ..
-                } => {
-                    if self.expression_info(e).ty.is_volatile() {
-                        return true;
-                    }
-                    work.push(base_expression);
-                },
+                } => work.push((base_expression, true)),
                 | E::Conditional(c) => {
-                    work.push(c.condition_expression);
-                    work.push(c.then_expression);
-                    work.push(c.else_expression);
+                    work.push((c.condition_expression, true));
+                    work.push((c.then_expression, true));
+                    work.push((c.else_expression, true));
                 },
-                | E::Identifier(_) =>
-                    if self.expression_info(e).ty.is_volatile() {
-                        return true;
-                    },
+                | E::Identifier(_)
                 | E::Constant(_)
                 | E::StringLiteral(_)
                 | E::AlignofExpr(_)
@@ -1391,6 +1464,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         false
+    }
+
+    /// Whether a cast from `from` to `to` is a `NOP_EXPR`: to an integer type
+    /// no narrower, or between a pointer and an integer of its size.
+    /// C99: §6.3.1.3p1, p. 43; PDF p. 55; §6.3.2.3p5-6, p. 47; PDF p. 59.
+    fn gcc_cast_keeps_representation(&self, to: TypeId, from: TypeId) -> bool {
+        let pointer = |ty: TypeId| matches!(self.types.nodes[ty.index], TypeKind::Pointer(_));
+        let width = |ty: TypeId| match self.types.nodes[self.types.non_atomic(ty).index] {
+            | TypeKind::Pointer(_) => Some(self.types.target.pointer.size * 8),
+            | TypeKind::Scalar(Scalar::Bool) => None,
+            | _ => self.integer_type(ty).map(|(bits, _)| u64::from(bits)),
+        };
+        width(to)
+            .zip(width(from))
+            .is_some_and(|(to_bits, from_bits)| {
+                if pointer(to) {
+                    to_bits == from_bits
+                } else {
+                    to_bits >= from_bits
+                }
+            })
+    }
+
+    /// Whether reading the lvalue `e` is a side effect of its own: a volatile
+    /// access, or for GCC `really_atomic_lvalue`, whose read is a call to
+    /// `__atomic_load` unless a `register` object's address cannot be taken.
+    /// C99: §6.7.3p6, p. 109; PDF p. 121; C11: §6.2.6.1p9, p. 45; PDF p. 63.
+    fn is_effectful_read(&self, e: &'tu Expression<'tu>) -> bool {
+        let info = self.expression_info(e);
+        if matches!(info.category, ValueCategory::Rvalue) {
+            return false;
+        }
+        info.ty.is_volatile()
+            || (matches!(self.types.nodes[info.ty.index], TypeKind::Atomic(_)) && !info.register)
     }
 
     const fn is_assignment(operator: B) -> bool {
