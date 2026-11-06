@@ -1838,7 +1838,12 @@ mod tests {
             "void f(int n) {\n\x20   struct { char a; int b[n]; } v;\n\x20   \
              __builtin_clear_padding(&v);\n}\n",
         );
-        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "v.c"]);
+        // On Linux: MinGW's Microsoft record layout, the Windows default,
+        // refuses such a record on its own terms when it lowers.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["--target=x86_64-linux-gnu", "-fsyntax-only", "v.c"],
+        );
         assert_eq!(output.status.code(), Some(1));
         assert!(
             stderr(&output).contains(
