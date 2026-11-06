@@ -26,6 +26,7 @@ use rustc_hash::FxBuildHasher;
 use super::{
     Analyzer,
     BindingKind,
+    Integer,
     Linkage,
     ScopeKind,
     SemanticErrorKind,
@@ -78,6 +79,10 @@ use crate::{
 /// What this translation unit did with one variable, or with one file-scope
 /// name, which all its declarations share.
 #[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about the name's uses."
+)]
 struct Usage {
     /// GCC's `TREE_USED` and Clang's `isReferenced`.
     referenced: bool,
@@ -97,6 +102,10 @@ struct Usage {
 
 /// How a discarded assignment writes the identifier expression it names.
 #[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent rule of one of the two compilers."
+)]
 struct WriteSite {
     /// GCC does not count the reference as a read.
     gcc:            bool,
@@ -783,7 +792,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some((rule, site)) = self.clang_unused_result(e)
             && !self
                 .context
-                .from_macro_body(Self::operator_site(Self::without_parentheses(e)))
+                .written_by_macro_body(Self::operator_site(Self::without_parentheses(e)))
         {
             let rule = match Self::without_parentheses(e).kind {
                 | E::Binary {
@@ -814,12 +823,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let result =
             |e: &'tu Expression<'tu>| Some((UnusedRule::ClangResult, Self::operator_site(e)));
         match e.kind {
-            | E::Unary { operator, .. }
-                if matches!(
-                    operator,
-                    U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement
-                ) =>
-                None,
+            | E::Unary {
+                operator: U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement,
+                ..
+            } => None,
             | E::Unary {
                 operator: U::Extension,
                 operand_expression,
@@ -837,7 +844,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ) && self
                     .expression_info(right_expression)
                     .integer
-                    .is_some_and(|value| value.is_zero())
+                    .is_some_and(Integer::is_zero)
                 {
                     None
                 } else {
@@ -857,10 +864,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 _ = self.clang_unused_result(c.then_expression)?;
                 self.clang_unused_result(c.else_expression)
             },
-            | E::Cast {
-                operand_expression: _,
-                ..
-            } => {
+            | E::Cast { .. } => {
                 let ty = self.expression_info(e).ty;
                 if let TypeKind::Pointer(target) = self.types.nodes[ty.index]
                     && ty.qualifiers.is_empty()
@@ -935,7 +939,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if self.clang_unused_result(left).is_some()
                 && !self
                     .context
-                    .from_macro_body(Self::operator_site(Self::without_parentheses(left)))
+                    .written_by_macro_body(Self::operator_site(Self::without_parentheses(left)))
             {
                 self.unused_rule(UnusedRule::ClangCommaLeft, Self::operator_site(left), None);
             }

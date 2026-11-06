@@ -310,7 +310,7 @@ impl Context<'_> {
 
     /// Whether a macro's replacement list, not its argument or the file,
     /// wrote the first token of `source`. `source` must not be empty.
-    pub(crate) fn from_macro_body(&self, source: SourceVectors) -> bool {
+    pub(crate) fn written_by_macro_body(&self, source: SourceVectors) -> bool {
         self.invocation_site(source).is_some()
     }
 
