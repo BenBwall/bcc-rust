@@ -658,3 +658,237 @@ fn missing_fields_do_not_follow_reachability() {
         }
     }
 }
+
+/// Comparisons at the limits of the widest types, which must not overflow the
+/// host's arithmetic: a clamp whose constant is `__int128`'s last value stopped
+/// the compiler. GCC's comparison with its operand type's limit decides itself
+/// or names the one value there is.
+#[test]
+fn sign_compare_survives_the_limits_of_a_type() {
+    for (source, gcc, clang) in [
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a > MAX ? a : 0) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a >= MAX ? a : 0) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a < MAX ? 0 : a) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a <= MAX ? 0 : a) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (a < MIN ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (a <= MIN ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (a > MIN ? a : 0) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (a >= MIN ? a : 0) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (MAX < a ? a : 0) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (MIN > a ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (MAX >= a ? 0 : a) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a > 0 ? a : MAX) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a > MAX-1 ? a : MAX) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a >= MAX ? a : MAX) < b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(long long a,unsigned long long b){return (a > 9223372036854775807LL ? a : 0) < \
+             b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(long long a,unsigned long long b){return (a < (-9223372036854775807LL-1) ? 0 : \
+             a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define UMAX (~(unsigned __int128)0)
+int f(unsigned __int128 a,unsigned __int128 b){return (a > UMAX ? a : 0) < b;}",
+            0,
+            0,
+        ),
+        (
+            "int f(int a,unsigned b){return (a > 2147483647 ? a : 2147483647) < b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(int a,unsigned b){return (a < -2147483647-1 ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(int a,unsigned b){return (a >= 2147483647 ? a : 0) < b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(int a,unsigned b){return (a < 2147483647 ? 0 : a) < b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(int a,unsigned b){return (a <= -2147483647-1 ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(long long a,unsigned long long b){return (a > 9223372036854775807LL ? a : -1) \
+             < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(long long a,unsigned long long b){return (a >= 9223372036854775807LL ? a : -1) \
+             < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(__int128 a,unsigned __int128 b){return ((a & 1) << 127) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return ((a & MAX) << 1) < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(__int128 a,unsigned __int128 b){return ((a & 3) << 126) < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(__int128 a,unsigned __int128 b){return ((a & 3) << 125) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return ((a & 1) << 126) < b;}",
+            0,
+            1,
+        ),
+        ("int f(int a,unsigned b){return ((a & 1) << 31) < b;}", 1, 1),
+        ("int f(int a,unsigned b){return ((a & 1) << 30) < b;}", 0, 1),
+        ("int f(int a,unsigned b){return ((a & 3) << 30) < b;}", 1, 1),
+        (
+            "int f(_BitInt(200) a,unsigned _BitInt(200) b){return ((a & 1) << 190) < b;}",
+            0,
+            1,
+        ),
+    ] {
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::SignCompare
+            ),
+            gcc,
+            "GCC: {source}"
+        );
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Clang,
+                SemanticErrorKind::SignCompare
+            ),
+            clang,
+            "Clang: {source}"
+        );
+    }
+}
+
+/// What GCC folds to zero whatever the operand: `a % 1`, `a % -1` and `a * 0`.
+#[test]
+fn gcc_folds_an_operation_with_no_sign() {
+    for (source, gcc) in [
+        ("int f(int a, unsigned b) { return a % 1 < b; }", 0),
+        ("int f(int a, unsigned b) { return a % -1 < b; }", 0),
+        ("int f(int a, unsigned b) { return a * 0 < b; }", 0),
+        ("int f(int a, unsigned b) { return a % 2 < b; }", 1),
+        ("int f(int a, unsigned b) { return a / 1 < b; }", 1),
+    ] {
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::SignCompare
+            ),
+            gcc,
+            "{source}"
+        );
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Clang,
+                SemanticErrorKind::SignCompare
+            ),
+            1,
+            "{source}"
+        );
+    }
+}

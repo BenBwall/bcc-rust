@@ -646,6 +646,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | B::LogicalOr => true,
             | B::BitwiseAnd => self.cannot_be_negative(left) || self.cannot_be_negative(right),
             | B::Multiplication if self.same_operand(left, right) => true,
+            // GCC folds `a * 0`, `a % 1` and `a % -1` to zero.
+            | B::Multiplication if self.constant_is(right, |value| value == 0) => true,
+            | B::Modulo if self.constant_is(right, |value| value.abs_diff(0) == 1) => true,
             | B::BitwiseOr | B::BitwiseXor | B::Addition | B::Multiplication | B::Division =>
                 self.cannot_be_negative(left) && self.cannot_be_negative(right),
             | B::Modulo => self.cannot_be_negative(left),
@@ -664,15 +667,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ) {
                     | (Some(mask), Some(shift), Some((bits, _))) =>
                         (0..i128::from(bits)).contains(&shift)
-                            && mask
-                                .checked_shl(u32::try_from(shift).unwrap_or(u32::MAX))
-                                .is_some_and(|value| bits >= 128 || value < 1i128 << (bits - 1)),
+                            && i128::from(128 - mask.leading_zeros()) + shift < i128::from(bits),
                     | _ => false,
                 }
             },
             | B::Comma | B::Assignment => self.cannot_be_negative(right),
             | _ => false,
         }
+    }
+
+    fn constant_is(&self, e: &'tu Expression<'tu>, test: impl Fn(i128) -> bool) -> bool {
+        let info = self.expression_info(e);
+        info.ice && info.integer.and_then(Integer::to_i128).is_some_and(test)
     }
 
     /// The nonnegative constant `e` masks with, if it is such a bitwise and.
@@ -783,17 +789,48 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ),
             | _ => return false,
         };
+        // Against the limit of the operand's type, GCC's comparison decides
+        // itself, or names the one value there is.
+        if let Some((bits, true)) = self.integer_type(self.expression_info(value).ty)
+            && bits <= 128
+        {
+            let highest = i128::MAX >> (128 - bits);
+            let lowest = -highest - 1;
+            match operator {
+                | B::GreaterThan if compared >= highest =>
+                    return self.cannot_be_negative(else_value),
+                | B::LessThanOrEqual if compared >= highest =>
+                    return self.cannot_be_negative(then_value),
+                | B::LessThan if compared <= lowest => return self.cannot_be_negative(else_value),
+                | B::GreaterThanOrEqual if compared <= lowest =>
+                    return self.cannot_be_negative(then_value),
+                | B::GreaterThanOrEqual
+                    if compared == highest && self.same_operand(then_value, value) =>
+                    return self.cannot_be_negative(else_value),
+                | B::LessThan if compared == highest && self.same_operand(else_value, value) =>
+                    return self.cannot_be_negative(then_value),
+                | _ => {},
+            }
+        }
         // The bound is what the constant arm gives for every value up to
-        // `limit`.
+        // `limit`. Past the host's range the proof is declined.
         let (limit, bound) = match operator {
-            | B::LessThan if self.same_operand(else_value, value) => (compared - 1, then_value),
-            | B::LessThanOrEqual if self.same_operand(else_value, value) => (compared, then_value),
-            | B::GreaterThan if self.same_operand(then_value, value) => (compared, else_value),
+            | B::LessThan if self.same_operand(else_value, value) =>
+                (compared.checked_sub(1), then_value),
+            | B::LessThanOrEqual if self.same_operand(else_value, value) =>
+                (Some(compared), then_value),
+            | B::GreaterThan if self.same_operand(then_value, value) =>
+                (Some(compared), else_value),
             | B::GreaterThanOrEqual if self.same_operand(then_value, value) =>
-                (compared - 1, else_value),
+                (compared.checked_sub(1), else_value),
             | _ => return false,
         };
-        constant(bound).is_some_and(|bound| bound >= 0 && (bound == limit || bound == limit + 1))
+        let Some(limit) = limit else {
+            return false;
+        };
+        constant(bound).is_some_and(|bound| {
+            bound >= 0 && (bound == limit || limit.checked_add(1) == Some(bound))
+        })
     }
 
     /// GCC's `operand_equal_p`, for operands without side effects.
