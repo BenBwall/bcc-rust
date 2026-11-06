@@ -1628,6 +1628,34 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
     }
 
+    /// Only Clang reads `#pragma clang deprecated`. GCC keeps it in its `-E`
+    /// text, where the macro it names no longer exists, and compiles that.
+    #[test]
+    fn gcc_ignores_clang_macro_pragmas() {
+        let directory = Directory::new();
+        directory.write("m.c", "#pragma clang deprecated(GONE)\nint x;\n");
+        directory.write(
+            "t.c",
+            "#define OLD 1\n#pragma clang deprecated(OLD)\nint x = OLD;\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-Werror", "-c", "m.c"]);
+        succeeds(&output);
+        let output = directory.bcc("--gcc-mode", &["-Werror", "-c", "t.c"]);
+        succeeds(&output);
+        assert!(
+            !directory
+                .bcc("--clang-mode", &["-c", "m.c"])
+                .status
+                .success()
+        );
+        assert!(
+            !directory
+                .bcc("--clang-mode", &["-Werror", "-c", "t.c"])
+                .status
+                .success()
+        );
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]
