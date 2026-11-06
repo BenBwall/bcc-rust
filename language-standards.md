@@ -1311,11 +1311,15 @@ each setting in turn, a pragma in a header outlasts it, a macro's tokens count
 where they are produced rather than where its body was written, and a `_Pragma`
 in an expansion governs the tokens after it there, so `QUIET(x)` that wraps `x`
 in `push`, `ignored` and `pop` silences `x` in both compilers. A diagnostic reads
-the settings at its first token. A pragma outranks the command line: `warning`
+the settings at its first token, except as the next paragraph says. A pragma
+outranks the command line: `warning`
 keeps a warning from `-Werror` and `-Werror=X`, `error` makes one an error
 despite `-Wno-X` and `-Wno-error=X`, and only `-w` silences both. A pragma does
-not bring a warning out of a system header. `-Wall` in a pragma reaches the
-groups bcc models under it, except that GCC's `ignored "-Wall"` changes nothing;
+not bring a warning out of a system header. `-Wall`, `-Wunused` and `-Wextra` in
+a pragma reach the groups bcc models under them, except that GCC's `ignored` of
+one of them changes nothing, nor does its `ignored "-Wunused-variable"` reach
+`-Wunused-const-variable=`, and that its `-Wextra` turns a parameter's warning on
+only with `-Wunused`;
 `-Wpedantic` covers extension diagnostics of every phase, and Clang's
 `-Weverything` every group. It stops at what the option holds: a macro
 redefinition or a member that declares nothing stays what `-pedantic-errors` made
@@ -1324,6 +1328,20 @@ it. GCC's plain `_Complex` is under it and Clang's has no group; so is Clang's
 the command line's. `__extension__` silences what a pragma made a warning. `-E`
 keeps each pragma, a `_Pragma` as a line, so compiling its text has the same
 effect.
+
+The unused warnings wait for the end of a scope or of the unit, and each compiler
+asks the settings at its own place. Clang asks at the entity: the name of a
+variable, parameter, function or file-scope object (its first declaration), the
+definition of a label or the declaration of a `__label__` one, and the operator
+or statement of a discarded value, though that one waits for the function's end.
+GCC asks at the entity too (the last declaration of a file-scope object), except
+that it reads a local `-Wunused-variable` and `-Wunused-label` at the last token
+of their scope, by output-token order: the closing brace of the block, of the
+function for an ordinary label, or the end of a `for` statement for its
+declaration, whatever came after the declaration. So `QUIET(int x;)` silences an
+unused `x` in Clang and not in GCC, and a pragma just before the brace does the
+reverse. Clang's `-Wunused-but-set-global` is reported only if the group is on at
+the end of the unit, and classified at the declaration.
 
 bcc files every extension under `-Wpedantic`, including those each compiler gives
 a group of its own: GCC's `-Wlong-long` and `-Wdeclaration-after-statement`, and

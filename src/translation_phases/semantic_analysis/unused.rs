@@ -137,17 +137,28 @@ pub(super) struct UnusedState<'s> {
     separators: ArenaMap<'s, usize, ()>,
     /// Tags declared `unused`, whose variables both compilers exempt.
     exempt_tags: ArenaMap<'s, StringCacheId, ()>,
+    /// Where each scope that can hold a variable ends, kept only under GCC's
+    /// rules in a unit with diagnostic pragmas: see
+    /// [`Analyzer::note_scope_end`].
+    scope_ends: Option<ArenaMap<'s, usize, SourceVectors>>,
 }
 
 impl<'s> UnusedState<'s> {
-    pub(super) fn new(scratch: &'s Bump, configuration: CompilerConfiguration) -> Self {
+    /// `pragmas` says a diagnostic pragma may turn on what the command line
+    /// leaves off, so that only the report can tell.
+    pub(super) fn new(
+        scratch: &'s Bump,
+        configuration: CompilerConfiguration,
+        pragmas: bool,
+    ) -> Self {
         let on = |groups: &[G]| {
             !matches!(
                 configuration.compiler_identity(),
                 CompilerIdentity::Tcc | CompilerIdentity::Msvc
-            ) && groups
-                .iter()
-                .any(|&group| configuration.diagnostic_severity(group).is_some())
+            ) && (pragmas
+                || groups
+                    .iter()
+                    .any(|&group| configuration.diagnostic_severity(group).is_some()))
         };
         let tracking = on(&[
             G::UnusedVariable,
@@ -169,6 +180,8 @@ impl<'s> UnusedState<'s> {
             statement_expression_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             separators: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             exempt_tags: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            scope_ends: (pragmas && configuration.compiler_identity() == CompilerIdentity::Gcc)
+                .then(|| ArenaMap::with_hasher_in(FxBuildHasher, scratch)),
         }
     }
 
@@ -610,7 +623,55 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             return;
         };
-        self.unused_rule(rule, name.source_vectors, Some(name.name));
+        let settings_at = if gcc && rule == UnusedRule::Variable {
+            self.scope_end_or(self.scope, name.source_vectors)
+        } else {
+            name.source_vectors
+        };
+        self.unused_rule_read_at(rule, name.source_vectors, Some(name.name), settings_at);
+    }
+
+    /// Notes that `source`, a compound or `for` statement, ends the scope just
+    /// entered. GCC reports an unused variable and an unused label as it leaves
+    /// their scope, and its `warning` asks the settings at the current token
+    /// though it prints the entity's location: a pragma after the declaration
+    /// and before the closing brace governs them, unlike every other warning
+    /// here, which it asks at the entity.
+    /// GCC: `pop_scope` in `c-decl.cc`.
+    pub(super) fn note_scope_end(&mut self, source: SourceVectors) {
+        let scope = self.scope;
+        if let Some(ends) = &mut self.unused.scope_ends {
+            _ = ends.insert(scope, source);
+        }
+    }
+
+    /// Where the settings of a warning GCC reports on leaving `scope` hold:
+    /// the scope's last token, or `otherwise` for a scope with no end noted.
+    fn scope_end_or(&self, scope: usize, otherwise: SourceVectors) -> SourceVectors {
+        self.unused
+            .scope_ends
+            .as_ref()
+            .and_then(|ends| ends.get(&scope))
+            .map_or(otherwise, |&end| {
+                crate::translation_phases::context::Context::last_source_vector(end)
+            })
+    }
+
+    /// The scope a label belongs to, for [`Self::scope_end_or`]: the current
+    /// one for a local label, and the function's for any other.
+    /// GNU extension: GCC manual, "Local Labels".
+    /// C99: §6.2.1 paragraph 3, p. 29; PDF p. 41.
+    pub(super) fn label_scope(&self, local: bool) -> usize {
+        let mut scope = self.scope;
+        if !local && self.unused.scope_ends.is_some() {
+            while self.scopes[scope].kind != ScopeKind::Function {
+                let Some(parent) = self.scopes[scope].parent else {
+                    break;
+                };
+                scope = parent;
+            }
+        }
+        scope
     }
 
     /// Reports file-scope objects with internal linkage: GCC at the last
@@ -672,7 +733,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else if !data.ty.is_volatile() {
                     self.unused_rule(UnusedRule::GccFileObject, site, Some(data.name.name));
                 }
-            } else if !gcc && usage.references == 0 && self.in_main_file(site) {
+            } else if !gcc
+                && usage.references == 0
+                && self.in_main_file(site)
+                && self
+                    .context
+                    .final_configuration()
+                    .diagnostic_severity(G::UnusedButSetGlobal)
+                    .is_some()
+            {
+                // Clang looks for these only if the group is on at the end of
+                // the unit, and then classifies each at its declaration.
                 self.unused_rule(UnusedRule::ButSetGlobal, site, Some(data.name.name));
             }
         }
@@ -715,15 +786,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .any(|(_, name)| matches!(name, "unused" | "maybe_unused"))
     }
 
-    /// Reports a label nothing jumps to.
-    pub(super) fn report_unused_label(&mut self, name: Identifier) {
-        if self.unused.tracking {
-            let rule = if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
-                UnusedRule::GccLabel
-            } else {
-                UnusedRule::ClangLabel
-            };
-            self.unused_rule(rule, name.source_vectors, Some(name.name));
+    /// Reports a label nothing jumps to, defined at `definition`: GCC at the
+    /// definition under the settings at the end of `scope`, and Clang at the
+    /// name a local label's declaration gave it (`declared`) or else at the
+    /// definition, under the settings there.
+    pub(super) fn report_unused_label(
+        &mut self,
+        definition: Identifier,
+        declared: Option<Identifier>,
+        scope: usize,
+    ) {
+        if !self.unused.tracking {
+            return;
+        }
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+            let site = definition.source_vectors;
+            let settings_at = self.scope_end_or(scope, site);
+            self.unused_rule_read_at(
+                UnusedRule::GccLabel,
+                site,
+                Some(definition.name),
+                settings_at,
+            );
+        } else {
+            let name = declared.unwrap_or(definition);
+            self.unused_rule(UnusedRule::ClangLabel, name.source_vectors, Some(name.name));
         }
     }
 
@@ -1181,11 +1268,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Reports one warning. GCC's label warning goes by the invocation; its
     /// others go by the token's spelling too.
     fn unused_rule(&mut self, rule: UnusedRule, site: SourceVectors, name: Option<StringCacheId>) {
+        self.unused_rule_read_at(rule, site, name, site);
+    }
+
+    /// [`Self::unused_rule`] under the settings at `settings_at`.
+    fn unused_rule_read_at(
+        &mut self,
+        rule: UnusedRule,
+        site: SourceVectors,
+        name: Option<StringCacheId>,
+        settings_at: SourceVectors,
+    ) {
         let kind = SemanticErrorKind::Unused(rule);
         if rule == UnusedRule::GccLabel {
-            self.group_diagnostic(rule.group(), kind, site, name, None);
+            self.group_diagnostic_read_at(rule.group(), kind, site, name, None, settings_at);
         } else {
-            self.spelled_group_diagnostic(rule.group(), kind, site, name);
+            self.spelled_group_diagnostic(rule.group(), kind, site, name, settings_at);
         }
     }
 }

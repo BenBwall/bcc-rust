@@ -330,6 +330,17 @@ impl Context<'_> {
         source.length() != 0 && self.in_system_header(self.first_source_vector(source))
     }
 
+    /// The last vector of `source`, which belongs to its last token. An empty
+    /// range stays empty.
+    pub(crate) fn last_source_vector(source: SourceVectors) -> SourceVectors {
+        if source.length() == 0 {
+            return source;
+        }
+        let (arena, start) = SourceArena::decode(source);
+        let end = start + source.length();
+        arena.encode(end - 1, end)
+    }
+
     /// Whether `source`'s expansion location is in the main source file, not
     /// in a file it includes. `source` must not be empty.
     pub(crate) fn in_main_file(&self, source: SourceVectors) -> bool {

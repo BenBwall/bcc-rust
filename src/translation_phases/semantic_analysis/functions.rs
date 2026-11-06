@@ -480,6 +480,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.define_func_name(name);
         self.check_main_definition(f, ty);
+        self.note_scope_end(f.body.source_vectors);
         self.work.push(Work::PopScope);
         self.work.push(Work::Statement(f.body, false));
         self.work

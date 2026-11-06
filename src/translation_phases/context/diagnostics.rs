@@ -121,7 +121,19 @@ impl<'tu> Context<'tu> {
         group: DiagnosticGroup,
         source: SourceVectors,
     ) -> Option<ErrorSeverity> {
-        let configuration = self.configuration_at(source);
+        self.group_severity_read_at(group, source, source)
+    }
+
+    /// [`Self::group_severity`] of a diagnostic at `source` whose settings are
+    /// those at `settings_at`, for a warning a compiler reports at one place
+    /// and classifies at another.
+    pub(crate) fn group_severity_read_at(
+        &self,
+        group: DiagnosticGroup,
+        source: SourceVectors,
+        settings_at: SourceVectors,
+    ) -> Option<ErrorSeverity> {
+        let configuration = self.configuration_at(settings_at);
         let severity = configuration.diagnostic_severity(group)?;
         (configuration.reported_in_system_headers(group, severity)
             || !self.withholds(severity, true, source))
