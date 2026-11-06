@@ -1390,6 +1390,34 @@ mod tests {
         assert_eq!(output.status.code(), Some(1));
     }
 
+    /// GCC moves on from a member with no subobjects to the next one, inside
+    /// whatever encloses it, and counts the array of unknown bound from there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn excess_elements_leave_the_enclosing_object_in_place() {
+        let directory = Directory::new();
+        directory.write(
+            "n.c",
+            "extern int printf(const char *, ...);\n\
+             struct E { int z[0]; int y; };\n\
+             struct E unknown[] = {1, 2, 3, 4};\n\
+             struct { struct {} s; int y; } pairs[2] = {1, 2, 3, 4};\n\
+             int main(void) {\n\
+             \x20   struct { struct { int z[0]; int x; } s; int y; } t = {1, 2, 3};\n\
+             \x20   static struct { struct { int z[0]; int x; } s; int y; } u = {5, 6, 7};\n\
+             \x20   printf(\"%d %d %d %d %d %d %d %d\\n\", t.s.x, t.y, u.s.x, u.y,\n\
+             \x20          (int)(sizeof unknown / sizeof *unknown), unknown[1].y,\n\
+             \x20          pairs[0].y, pairs[1].y);\n\
+             \x20   return 0;\n\
+             }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["n.c", "-o", "n"]);
+        succeeds(&output);
+        let run = Command::new(directory.path("n")).output().unwrap();
+        // gcc 13.3 prints the same.
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]

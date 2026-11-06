@@ -660,17 +660,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     // Without explicit braces, descend until an expression can
                     // initialize the complete current subobject or a scalar
                     // leaf.
+                    let mut no_subobjects = false;
                     if let InitializerType::AssignmentExpression(e) = element.initializer.kind {
-                        if self.gcc_drops_element(target, e, element.source_vectors) {
-                            let next = self.advance_current(cursor);
-                            work.push(next_task(self.scratch.alloc(next), repeats));
-                            continue;
-                        }
                         while self.aggregate(target) && !self.whole_object_expression(target, e) {
                             #[cfg(test)]
                             self.review_step(3);
                             let next_index = self.first_subobject(target);
                             let Some(child) = self.subobject(target, next_index) else {
+                                no_subobjects = true;
                                 break;
                             };
                             if self.flexible_member(target, next_index).is_some() {
@@ -692,6 +689,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             );
                             target = child;
                         }
+                    }
+                    if no_subobjects && self.gcc_drops_element(target, element.source_vectors) {
+                        let next = self.advance_current(cursor);
+                        work.push(next_task(self.scratch.alloc(next), repeats));
+                        continue;
                     }
                     if let Some(flexible) = &mut flexible {
                         self.extend_flexible(flexible, &cursor, ty);
@@ -2112,30 +2114,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         Some(count)
     }
 
-    /// Whether brace elision takes `e` down to an aggregate with no subobjects,
-    /// under GCC, which reports it as excess and goes on to the next member.
-    /// Clang requires braces there, which the caller's checks report.
+    /// Whether an element brace elision took down to `target`, an aggregate
+    /// with no subobjects, is dropped: GCC reports it as excess and goes on to
+    /// the next member. Clang requires braces there, which the caller reports.
     /// C99: §6.7.8 paragraphs 2 and 20, pp. 125-127; PDF pp. 137-139.
-    fn gcc_drops_element(
-        &mut self,
-        mut target: TypeId,
-        e: &'tu Expression<'tu>,
-        source: SourceVectors,
-    ) -> bool {
-        if self.context.configuration.compiler_identity()
-            != crate::configuration::CompilerIdentity::Gcc
-        {
-            return false;
+    fn gcc_drops_element(&mut self, target: TypeId, source: SourceVectors) -> bool {
+        let gcc = self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Gcc;
+        if gcc {
+            _ = self.excess_element(target, source);
         }
-        while self.aggregate(target) && !self.whole_object_expression(target, e) {
-            let next_index = self.first_subobject(target);
-            let Some(child) = self.subobject(target, next_index) else {
-                _ = self.excess_element(target, source);
-                return true;
-            };
-            target = child;
-        }
-        false
+        gcc
     }
 
     /// Reports the elements that follow a string in the braces of the array it
