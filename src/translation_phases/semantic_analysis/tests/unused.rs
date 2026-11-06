@@ -417,6 +417,16 @@ fn options_hold_their_groups_as_each_compiler_does() {
         ),
         [U::Parameter]
     );
+    // GCC's `-Wunused` outranks `-Wall` in either order.
+    assert_eq!(
+        rules(
+            variable,
+            base(CompilerIdentity::Gcc)
+                .with_warning_option(DiagnosticGroup::Unused, off)
+                .with_all_warnings(true)
+        ),
+        []
+    );
     // GCC's own option wins in either order; Clang's `-Wall` later overrides.
     let earlier = |identity| {
         base(identity)

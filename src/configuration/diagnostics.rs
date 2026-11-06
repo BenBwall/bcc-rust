@@ -136,8 +136,16 @@ impl CompilerConfiguration {
             self.warning_options[group as usize].apply_all(enabled);
         }
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
-        for &group in DiagnosticGroup::UNUSED {
-            self.warning_options[group as usize].apply_all(enabled);
+        // GCC's `-Wunused`, given or refused in either order, outranks
+        // `-Wall`, as the groups' own options outrank it.
+        if self.identity.rules() == super::RuleSet::Clang
+            || self.warning_options[DiagnosticGroup::Unused as usize]
+                .enabled()
+                .is_none()
+        {
+            for &group in DiagnosticGroup::UNUSED {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
         }
         self
     }
