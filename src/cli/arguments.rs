@@ -393,16 +393,26 @@ impl Cli {
         failed
     }
 
-    /// The relocation model of the last `-fpic`-family flag, and the TLS
-    /// model.
+    /// The relocation model of the last `-fpic`-family flag, the TLS model,
+    /// and the last of `-f[no-]strict-volatile-bitfields`.
     fn code_options(&self) -> CodeOptions {
         CodeOptions {
-            relocation: self
+            relocation:                 self
                 .language_option
                 .iter()
                 .filter_map(|option| Relocation::parse(option))
                 .next_back(),
-            tls_model:  self.tls_model.unwrap_or_default(),
+            tls_model:                  self.tls_model.unwrap_or_default(),
+            strict_volatile_bit_fields: self
+                .language_option
+                .iter()
+                .rfind(|option| {
+                    matches!(
+                        option.as_str(),
+                        "-fstrict-volatile-bitfields" | "-fno-strict-volatile-bitfields"
+                    )
+                })
+                .is_some_and(|option| option == "-fstrict-volatile-bitfields"),
         }
     }
 
@@ -638,6 +648,10 @@ enum LanguageFlag {
     RelaxedFloatingPoint(RelaxedFloatingPoint, bool),
     /// `-fsignaling-nans` (true) or `-fno-signaling-nans`.
     SignalingNans(bool),
+    /// `--general-regs-only`, which GCC's `-mgeneral-regs-only` maps to.
+    GeneralRegsOnly,
+    /// `--user-interrupts`, which `-muintr` maps to.
+    UserInterrupts,
     /// `-ffast-math`, `-funsafe-math-optimizations` or
     /// `-ffinite-math-only` (true), or their `-fno-` forms, which give up
     /// or restore the options they imply, in order with the others, as in
@@ -668,7 +682,8 @@ enum LanguageFlag {
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
     /// `-f[no-]wrapv-pointer`, `-f[no-]delete-null-pointer-checks` or
-    /// `-f[no-]common`, which [`Cli::code_assumptions`] reads in order.
+    /// `-f[no-]common`, which [`Cli::code_assumptions`] reads in order, or
+    /// `-f[no-]strict-volatile-bitfields`, which [`Cli::code_options`] does.
     Code,
 }
 
@@ -780,6 +795,8 @@ impl LanguageFlag {
                 )),
             | "-fsignaling-nans" => return Some(Self::SignalingNans(true)),
             | "-fno-signaling-nans" => return Some(Self::SignalingNans(false)),
+            | "--general-regs-only" => return Some(Self::GeneralRegsOnly),
+            | "--user-interrupts" => return Some(Self::UserInterrupts),
             | "-fno-honor-nans" | "-fhonor-nans" =>
                 return Some(Self::RelaxedFloatingPoint(
                     RelaxedFloatingPoint::NoNans,
@@ -830,7 +847,9 @@ impl LanguageFlag {
             | "-fdelete-null-pointer-checks"
             | "-fno-delete-null-pointer-checks"
             | "-fcommon"
-            | "-fno-common" => return Some(Self::Code),
+            | "-fno-common"
+            | "-fstrict-volatile-bitfields"
+            | "-fno-strict-volatile-bitfields" => return Some(Self::Code),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpermissive" => return Some(Self::Permissive(true)),
             | "-fno-permissive" => return Some(Self::Permissive(false)),
@@ -932,6 +951,8 @@ impl LanguageFlag {
             | Self::RelaxedFloatingPoint(option, relaxed) =>
                 configuration.with_relaxed_floating_point(option, relaxed),
             | Self::SignalingNans(enabled) => configuration.with_signaling_nans(enabled),
+            | Self::GeneralRegsOnly => configuration.with_general_regs_only(true),
+            | Self::UserInterrupts => configuration.with_user_interrupts(true),
             | Self::FloatingPointGroup(group, relaxed) => group.apply(configuration, relaxed),
             | Self::ExcessPrecisionStandard(standard) =>
                 configuration.with_standard_excess_precision(standard),

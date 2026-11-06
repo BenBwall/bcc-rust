@@ -31,6 +31,31 @@
 //! subtract nor add. A function that calls, moves `%rsp`, reads or writes
 //! `%rsp` itself, saves a register area for `va_start` or has a slot aligned
 //! above 16 keeps the ordinary frame, as does every Win64 function.
+//!
+//! A handler ([`EntryConvention::Interrupt`]) saves every register it changes
+//! and, if it calls, every register a call may change, except the SSE ones
+//! under `-mgeneral-regs-only`. The processor may have entered it at any
+//! alignment, and an error code makes that vary, so after the pushes it rounds
+//! `%rsp` down to 16 bytes, keeps the entry `%rsp` in a slot of the frame for
+//! the epilogue, and addresses its frame from `%rbp`:
+//!
+//! ```text
+//!  processor's frame          rip, cs, rflags, rsp, ss from the entry `%rsp`,
+//!                             above an error code in an exception handler
+//!  pushes                     `%rbp` first, `%rax` always: it passes the
+//!                             entry `%rsp` to the body
+//!  padding                    what rounding `%rsp` down takes
+//!  entry `%rsp`               the frame's top slot
+//!  stack slots to outgoing    as above
+//! ```
+//!
+//! It keeps no frame in the red zone: another handler may interrupt it on the
+//! same stack. A function with [`EntryConvention::PreserveRegisters`] saves
+//! the same registers, except those it returns its value in, in the ordinary
+//! layout. A [`EntryConvention::Naked`] function saves nothing. It keeps what
+//! its body needs below the entry `%rsp`, whose value a read of a register
+//! variable in `%rsp` still gives ([`FrameObject::EntryStack`]); a body of
+//! assembly alone needs nothing, so the function has no code but its own.
 
 use super::{
     conv::{
@@ -49,9 +74,12 @@ use super::{
     regalloc::Allocation,
     support::Construct,
 };
-use crate::util::bump::{
-    ArenaVec,
-    Bump,
+use crate::{
+    ir::EntryConvention,
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 /// The bytes of the System V register save area: six general registers and
@@ -79,6 +107,10 @@ pub(crate) struct Frame<'a> {
     /// Whether the frame lies in the System V red zone, so the prologue
     /// leaves `%rsp` where the pushes put it.
     pub(crate) red_zone:  bool,
+    /// How the machine enters and leaves the function.
+    pub(crate) entry:     EntryConvention,
+    /// A handler's slot for the entry `%rsp`.
+    pub(crate) entry_rsp: u32,
     slots:                ArenaVec<'a, u32>,
     spills:               u32,
     outgoing_end:         u32,
@@ -102,7 +134,28 @@ impl<'a> Frame<'a> {
         conv: CallConv,
         arena: &'a Bump,
     ) -> Result<Self, Construct> {
-        let written = written(func);
+        if func.entry == EntryConvention::Naked
+            && (func.dynamic
+                || func.register_save
+                || func.slot_align > 16
+                || func.first_push.is_some())
+        {
+            return Err(Construct::NakedFrame);
+        }
+        let mut written = written(func);
+        let preserved = match func.entry {
+            | EntryConvention::C => conv.callee_saved,
+            | EntryConvention::Naked => PRegSet::EMPTY,
+            | EntryConvention::Interrupt | EntryConvention::PreserveRegisters => {
+                if func.calls {
+                    written = written.union(conv.caller_saved);
+                }
+                preserved_registers(func)
+            },
+        };
+        if func.entry == EntryConvention::Interrupt {
+            written = written.with(PReg::Rax);
+        }
         let frame_pointer = func.dynamic;
         let mut saved = ArenaVec::new_in(arena);
         let mut xmm = ArenaVec::new_in(arena);
@@ -112,7 +165,7 @@ impl<'a> Frame<'a> {
             saved.push(register);
         }
         for register in PReg::ALL {
-            let save = conv.callee_saved.contains(register)
+            let save = preserved.contains(register)
                 && func.first_push != Some(register)
                 && (written.contains(register) || (frame_pointer && register == PReg::Rbp));
             match (save, register.class()) {
@@ -151,8 +204,15 @@ impl<'a> Frame<'a> {
             end += u64::from(slot.size);
         }
         let pushes = 8 * u64::try_from(saved.len()).expect("at most 16 registers");
+        let mut entry_rsp = 0;
         let mut size = end.next_multiple_of(8);
-        if aligned && !(8 + pushes + size).is_multiple_of(16) {
+        if func.entry == EntryConvention::Interrupt {
+            entry_rsp = size;
+            size = (size + 8).next_multiple_of(16);
+        } else if func.entry == EntryConvention::Naked {
+            // A call sees the stack aligned as the function was entered.
+            size = size.next_multiple_of(16);
+        } else if aligned && !(8 + pushes + size).is_multiple_of(16) {
             size += 8;
         }
         let incoming = size + pushes + 8 + u64::from(conv.home_area);
@@ -166,7 +226,8 @@ impl<'a> Frame<'a> {
         // instruction moves `%rsp` under it or takes `%rsp` as a value. A
         // function with a slot aligned above 16 keeps the ordinary frame, as
         // LLVM's do: they realign `%rsp` through a frame pointer.
-        let red_zone = size > 0
+        let red_zone = func.entry != EntryConvention::Naked
+            && size > 0
             && size <= u64::from(conv.red_zone)
             && !func.calls
             && !frame_pointer
@@ -191,6 +252,8 @@ impl<'a> Frame<'a> {
                 0
             },
             red_zone,
+            entry: func.entry,
+            entry_rsp: narrow(entry_rsp),
             slots: slot_offsets,
             spills: narrow(spills),
             outgoing_end: narrow(outgoing_end),
@@ -208,6 +271,7 @@ impl<'a> Frame<'a> {
         let offset = match object {
             | FrameObject::Slot(slot) => self.slots[slot as usize],
             | FrameObject::Incoming(offset) => self.incoming + offset,
+            | FrameObject::EntryStack => self.size,
             | FrameObject::Home(offset) => self.home + offset,
             | FrameObject::Outgoing(offset) => return (PReg::Rsp, i64::from(offset)),
             | FrameObject::OutgoingEnd => return (PReg::Rsp, i64::from(self.outgoing_end)),
@@ -245,6 +309,31 @@ impl<'a> Frame<'a> {
     pub(crate) fn cfa_offset(&self) -> u32 {
         self.allocation() + 8 * u32::try_from(self.saved.len()).expect("at most 16 registers") + 8
     }
+}
+
+/// The registers a handler or a function with `no_caller_saved_registers`
+/// preserves: all but `%rsp`, the SSE ones where code uses none, and those a
+/// return reads, which hold its value.
+fn preserved_registers(func: &MFunction<'_>) -> PRegSet {
+    let mut preserved = PRegSet::EMPTY;
+    for register in PReg::ALL {
+        if register != PReg::Rsp && !(func.general_regs && register.class() == RegClass::Xmm) {
+            preserved = preserved.with(register);
+        }
+    }
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let MInst::Ret { .. } = inst {
+                let mut inst = *inst;
+                inst.visit_registers(|reg, _| {
+                    if let Reg::Phys(register) = *reg {
+                        preserved = preserved.without(register);
+                    }
+                });
+            }
+        }
+    }
+    preserved
 }
 
 /// Whether `func` neither calls nor names `%rsp` in any instruction, so

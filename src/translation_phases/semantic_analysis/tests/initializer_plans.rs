@@ -268,7 +268,7 @@ fn subobjects_keep_their_containers_qualifiers() {
 #[test]
 fn compound_literals_and_rejected_initializers() {
     with_source(
-        "int *p = (int[]){ 1, 2, 3 }; int bad[1] = { 1, 2 };",
+        "int *p = (int[]){ 1, 2, 3 }; int bad[1] = { [5] = 1 };",
         |context, s| {
             assert!(context.pending_error_count() > 0);
             // The compound literal's plan; the rejected array has none.
@@ -287,6 +287,24 @@ fn compound_literals_and_rejected_initializers() {
                     "zero 0+12 end 4\nstore 0 v0\nstore 4 v1\nstore 8 v2\n"
                 ]
             );
+        },
+    );
+}
+
+/// An element beyond the object is dropped: nothing evaluates or stores it.
+/// C99 §6.7.8p2 leaves it undefined; GCC and Clang warn and drop it.
+#[test]
+fn excess_elements_leave_no_operation() {
+    with_source(
+        "int f(void); void g(void) { int a[1] = { 1, f() }; }",
+        |_, s| {
+            let rendered = s
+                .initializers
+                .plans
+                .values()
+                .map(|plan| render(s, plan))
+                .collect::<Vec<_>>();
+            assert_eq!(rendered, ["zero 0+4 end 2\nstore 0 v0\n"]);
         },
     );
 }

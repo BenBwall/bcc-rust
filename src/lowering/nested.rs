@@ -615,7 +615,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 | super::work::Local::Slot(slot) =>
                     self.inst(InstData::StackAddr { slot }, Type::Ptr),
                 | super::work::Local::Address(address) => address,
-                | super::work::Local::Variable(_) =>
+                | super::work::Local::Variable(_) | super::work::Local::StackPointer =>
                     return Err(LoweringError::missing(
                         "a captured object is not in memory",
                         source,

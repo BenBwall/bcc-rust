@@ -1,0 +1,57 @@
+error: interrupt service routine can only have a pointer argument and an optional integer argument
+ --> sema-interrupt-gcc.c:2:16
+  |
+2 | __attribute__((interrupt)) void none(void);
+  |                ^^^^^^^^^ wrong number of parameters
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: interrupt service routine should have a pointer as the first argument
+ --> sema-interrupt-gcc.c:3:16
+  |
+3 | __attribute__((interrupt)) void not_pointer(int x);
+  |                ^^^^^^^^^ not a pointer
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: interrupt service routine should have 'unsigned long int' as the second argument
+ --> sema-interrupt-gcc.c:4:16
+  |
+4 | __attribute__((interrupt)) void not_word(void *p, int e);
+  |                ^^^^^^^^^ not a word-sized integer
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: interrupt service routine can only have a pointer argument and an optional integer argument
+ --> sema-interrupt-gcc.c:5:16
+  |
+5 | __attribute__((interrupt)) void three(void *p, unsigned long e, unsigned long z);
+  |                ^^^^^^^^^ wrong number of parameters
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: interrupt service routine must return 'void'
+ --> sema-interrupt-gcc.c:6:16
+  |
+6 | __attribute__((interrupt)) int returns(void *p);
+  |                ^^^^^^^^^ does not return void
+  |
+  = note: GCC x86 Function Attributes: a handler takes a pointer to the frame the processor pushed and, for an exception, a word-sized error code, and returns void
+
+error: interrupt service routine cannot be called directly
+  --> sema-interrupt-gcc.c:9:21
+   |
+ 9 | void caller(void) { handler(0); }
+   |                     ^^^^^^^^^^ only the processor enters a handler
+   |
+   = note: GCC x86 Function Attributes: only the processor enters a handler, which returns with iret
+
+error: interrupt and naked attributes are not compatible
+ --> sema-interrupt-gcc.c:7:40
+  |
+7 | __attribute__((interrupt, naked)) void both(void *p) {}
+  |                                        ^^^^ both attributes on one function
+  |
+  = note: GCC: a naked function has no epilogue, and a handler returns through its own
+
+7 errors generated.

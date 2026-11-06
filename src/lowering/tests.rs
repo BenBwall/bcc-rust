@@ -27,6 +27,7 @@ mod refusals;
 mod registry;
 mod resolved;
 mod review;
+mod strict_volatile_bit_fields;
 mod vectors;
 mod void_and_incomplete;
 

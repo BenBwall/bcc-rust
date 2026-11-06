@@ -37,6 +37,16 @@ pub(crate) struct SemanticError {
     pub(crate) previous:           Option<SourceVectors>,
 }
 
+/// What an excess initializer element lies beyond, as GCC and Clang word it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InitializedObject {
+    Array,
+    Struct,
+    Union,
+    Vector,
+    Scalar,
+}
+
 /// Symbolic semantic diagnostic, independent of rendered text.
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,6 +373,9 @@ pub(crate) enum SemanticErrorKind {
     NonConstantArrayInitializer,
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessInitializer,
+    /// An element beyond the object, which GCC and Clang warn about and drop.
+    /// C99: §6.7.8p2, p. 125; PDF p. 137.
+    ExcessElements(InitializedObject),
     /// A flexible array member given elements outside a static object's own
     /// structure; GNU C allows only that case, and Clang an empty list too.
     /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p2, p. 125; PDF p. 137.
@@ -690,6 +703,16 @@ pub(crate) enum SemanticErrorKind {
     /// C23 `constexpr` object and compound literal constraints.
     /// C23 (N3220): §6.7.2 paragraphs 2-6, p. 99; PDF p. 112.
     InvalidConstexpr(ConstexprFault),
+    /// The rules of x86 `interrupt` and `no_caller_saved_registers`, in each
+    /// compiler's words.
+    /// GNU extension: GCC manual, "x86 Function Attributes".
+    InvalidMachineEntry(MachineEntryFault),
+    /// Clang `-Wexcessive-regsave`: a handler or a function with
+    /// `no_caller_saved_registers` calls a function without that attribute,
+    /// so it saves every register the callee may change; `true` for a
+    /// handler.
+    /// Clang extension: Clang Attributes Reference, "interrupt (X86)".
+    ExcessiveRegsave(bool),
     /// Clang `-Wunknown-attributes`: an attribute name no rule knows.
     /// C23: §6.7.13.2p2, p. 143; PDF p. 156 (unrecognized attributes are
     /// ignored). GNU extension: GCC manual, "Attribute Syntax".
@@ -814,6 +837,7 @@ impl SemanticErrorKind {
                 Some(DiagnosticGroup::GnuFoldingConstant),
             | Self::NullPointerArithmetic => Some(DiagnosticGroup::GnuNullPointerArithmetic),
             | Self::UnknownAttribute => Some(DiagnosticGroup::UnknownAttributes),
+            | Self::ExcessiveRegsave(_) => Some(DiagnosticGroup::ExcessiveRegsave),
             | Self::IgnoredAttribute
             | Self::AttributeAfterDefinition
             | Self::UnsupportedDeclspec
@@ -829,7 +853,8 @@ impl SemanticErrorKind {
             | Self::FloatOverflow(_) => Some(DiagnosticGroup::Overflow),
             | Self::PedanticOverflow => Some(DiagnosticGroup::PedanticOverflow),
             | Self::LiteralConversion(_) => Some(DiagnosticGroup::LiteralConversion),
-            | Self::ExcessString => Some(DiagnosticGroup::ExcessInitializers),
+            | Self::ExcessString | Self::ExcessElements(_) =>
+                Some(DiagnosticGroup::ExcessInitializers),
             | _ => None,
         }
     }
@@ -881,6 +906,8 @@ impl SemanticErrorKind {
             | Self::InvalidAsm(fault) => fault.label(),
             | Self::InvalidInference(fault) => fault.label(),
             | Self::InvalidConstexpr(fault) => fault.label(),
+            | Self::InvalidMachineEntry(fault) => fault.label(),
+            | Self::ExcessiveRegsave(_) => "saves every register the callee may change",
             | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
             | Self::NoViableOverload => "no viable overload",
             | Self::AmbiguousOverload => "ambiguous overload",
@@ -971,7 +998,8 @@ impl SemanticErrorKind {
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
             | Self::NonConstantArrayInitializer => "not a constant array",
-            | Self::ExcessInitializer => "no subobject is left to initialize",
+            | Self::ExcessInitializer | Self::ExcessElements(_) =>
+                "no subobject is left to initialize",
             | Self::FlexibleArrayInitializer => "initializes a flexible array member",
             | Self::FlexibleArrayBraces => "not a brace-enclosed list",
             | Self::FlexibleArrayDesignator => "designates inside a flexible array member",
@@ -1203,6 +1231,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnknownWarningOption
                     | crate::configuration::DiagnosticGroup::UnknownAttributes
                     | crate::configuration::DiagnosticGroup::IgnoredAttributes
+                    | crate::configuration::DiagnosticGroup::ExcessiveRegsave
                     | crate::configuration::DiagnosticGroup::AttributeWarning
                     | crate::configuration::DiagnosticGroup::DllAttributeOnRedeclaration
                     | crate::configuration::DiagnosticGroup::InconsistentDllimport
@@ -1505,6 +1534,18 @@ impl SemanticErrorKind {
             | Self::InvalidAsm(fault) => fault.explanation(),
             | Self::InvalidInference(fault) => fault.explanation(),
             | Self::InvalidConstexpr(fault) => fault.explanation(),
+            | Self::InvalidMachineEntry(fault) => fault.explanation(),
+            | Self::ExcessiveRegsave(true) => (
+                "interrupt service routine should only call a function with attribute \
+                 'no_caller_saved_registers' or be compiled with '-mgeneral-regs-only'",
+                "Clang -Wexcessive-regsave: the handler saves every register the callee may change",
+            ),
+            | Self::ExcessiveRegsave(false) => (
+                "function with attribute 'no_caller_saved_registers' should only call a function \
+                 with attribute 'no_caller_saved_registers' or be compiled with \
+                 '-mgeneral-regs-only'",
+                "Clang -Wexcessive-regsave: the caller saves every register the callee may change",
+            ),
             | Self::ImmediateOutOfRange { .. } => (
                 "argument value is outside the valid range",
                 "Clang x86 intrinsics: the immediate operand must lie in the builtin's \
@@ -1912,6 +1953,17 @@ impl SemanticErrorKind {
                 "excess initializer for the current object",
                 "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
                  initialized entity",
+            ),
+            | Self::ExcessElements(object) => (
+                match object {
+                    | InitializedObject::Array => "excess elements in array initializer",
+                    | InitializedObject::Struct => "excess elements in struct initializer",
+                    | InitializedObject::Union => "excess elements in union initializer",
+                    | InitializedObject::Vector => "excess elements in vector initializer",
+                    | InitializedObject::Scalar => "excess elements in scalar initializer",
+                },
+                "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
+                 initialized entity; the element is dropped without being evaluated",
             ),
             | Self::FlexibleArrayInitializer => (
                 "initialization of flexible array member is not allowed",
@@ -2751,6 +2803,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::UnknownAttribute
                 | SemanticErrorKind::IgnoredAttribute
                 | SemanticErrorKind::IgnoredConvention
+                | SemanticErrorKind::ExcessiveRegsave(_)
                 | SemanticErrorKind::ReservedPriority
                 | SemanticErrorKind::AliasTypeMismatch
                 | SemanticErrorKind::SectionMismatch
@@ -2791,6 +2844,118 @@ impl GetPosition for SemanticError {
 impl GetSourceVectors for SemanticError {
     fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
+    }
+}
+
+/// Why a use of x86 `interrupt` or `no_caller_saved_registers` is refused.
+/// The `Gcc` and `Clang` faults are one compiler's checks of a handler's
+/// signature, in its words: Clang stops at the first it finds, GCC reports
+/// each.
+/// GNU extension: GCC manual, "x86 Function Attributes".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MachineEntryFault {
+    GccFirstParameter,
+    GccSecondParameter,
+    GccParameterCount,
+    GccResult,
+    ClangResult,
+    ClangParameterCount,
+    ClangFirstParameter,
+    ClangSecondParameter,
+    /// A direct call of a handler, which only the processor enters.
+    DirectCall,
+    /// GCC: `interrupt` with `naked`.
+    Naked,
+    /// GCC: a handler or a function with `no_caller_saved_registers` would
+    /// have to save SSE state, which `-mgeneral-regs-only` rules out.
+    GccInterruptNeedsGeneralRegisters,
+    GccExceptionNeedsGeneralRegisters,
+    GccNoCallerSavedNeedsGeneralRegisters,
+}
+
+impl MachineEntryFault {
+    /// The short label of the diagnostic.
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            | Self::GccFirstParameter | Self::ClangFirstParameter => "not a pointer",
+            | Self::GccSecondParameter | Self::ClangSecondParameter => "not a word-sized integer",
+            | Self::GccParameterCount | Self::ClangParameterCount => "wrong number of parameters",
+            | Self::GccResult | Self::ClangResult => "does not return void",
+            | Self::DirectCall => "only the processor enters a handler",
+            | Self::Naked => "both attributes on one function",
+            | Self::GccInterruptNeedsGeneralRegisters
+            | Self::GccExceptionNeedsGeneralRegisters
+            | Self::GccNoCallerSavedNeedsGeneralRegisters => "compiled with SSE enabled",
+        }
+    }
+
+    /// The message and note of the diagnostic.
+    pub(super) const fn explanation(self) -> (&'static str, &'static str) {
+        const SIGNATURE: &str = "GCC x86 Function Attributes: a handler takes a pointer to the \
+                                 frame the processor pushed and, for an exception, a word-sized \
+                                 error code, and returns void";
+        const ENTRY: &str = "GCC x86 Function Attributes: compile the function with \
+                             -mgeneral-regs-only, since GCC does not save SSE, MMX or x87 state";
+        match self {
+            | Self::GccFirstParameter => (
+                "interrupt service routine should have a pointer as the first argument",
+                SIGNATURE,
+            ),
+            | Self::GccSecondParameter => (
+                "interrupt service routine should have 'unsigned long int' as the second argument",
+                SIGNATURE,
+            ),
+            | Self::GccParameterCount => (
+                "interrupt service routine can only have a pointer argument and an optional \
+                 integer argument",
+                SIGNATURE,
+            ),
+            | Self::GccResult => ("interrupt service routine must return 'void'", SIGNATURE),
+            | Self::ClangResult => (
+                "x86-64 'interrupt' attribute only applies to functions that have a 'void' return \
+                 type",
+                SIGNATURE,
+            ),
+            | Self::ClangParameterCount => (
+                "x86-64 'interrupt' attribute only applies to functions that have only a pointer \
+                 parameter optionally followed by an integer parameter",
+                SIGNATURE,
+            ),
+            | Self::ClangFirstParameter => (
+                "x86-64 'interrupt' attribute only applies to functions that have a pointer as \
+                 the first parameter",
+                SIGNATURE,
+            ),
+            | Self::ClangSecondParameter => (
+                "x86-64 'interrupt' attribute only applies to functions that have a 'unsigned \
+                 long' type as the second parameter",
+                SIGNATURE,
+            ),
+            | Self::DirectCall => (
+                "interrupt service routine cannot be called directly",
+                "GCC x86 Function Attributes: only the processor enters a handler, which returns \
+                 with iret",
+            ),
+            | Self::Naked => (
+                "interrupt and naked attributes are not compatible",
+                "GCC: a naked function has no epilogue, and a handler returns through its own",
+            ),
+            | Self::GccInterruptNeedsGeneralRegisters => (
+                "sorry, unimplemented: SSE instructions aren't allowed in an interrupt service \
+                 routine",
+                ENTRY,
+            ),
+            | Self::GccExceptionNeedsGeneralRegisters => (
+                "sorry, unimplemented: SSE instructions aren't allowed in an exception service \
+                 routine",
+                ENTRY,
+            ),
+            | Self::GccNoCallerSavedNeedsGeneralRegisters => (
+                "sorry, unimplemented: SSE instructions aren't allowed in a function with the \
+                 'no_caller_saved_registers' attribute",
+                ENTRY,
+            ),
+        }
     }
 }
 

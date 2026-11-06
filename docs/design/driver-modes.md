@@ -181,7 +181,8 @@ to the options TCC itself implements; see [TCC](#tcc).
   (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on
   Linux, `-mno-ms-bitfields` on Windows, `-mregparm=`, `-mlong-double-64`
   outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
-  `-mgeneral-regs-only`; `cl /arch:AVX2`, which also changes macros),
+  `-mgeneral-regs-only` except as below; `cl /arch:AVX2`, which also changes
+  macros),
   language rules bcc does not follow (`-fsemantic-interposition`,
   `-frounding-math`, `cl /fp:strict`, `/volatile:ms`),
   run-time support bcc's code lacks (`-fsplit-stack`: bcc's functions run on
@@ -194,7 +195,12 @@ to the options TCC itself implements; see [TCC](#tcc).
   refused until someone audits it.
 
 Where bcc can do what the option asks cheaply, the personality maps it
-instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
+instead: GCC's `-mgeneral-regs-only` on Linux targets (GCC's macro changes, and
+every function's code keeps to general registers; floating code is refused with
+GCC's error where it has one, and by name where it would compile with general
+registers or libgcc routines x86-64 lacks: floating parameters, copies and
+comparisons), `-muintr`, on either personality on Linux targets (`__UINTR__`, and
+handlers return with `uiret`), `-fwrapv` (lowering marks signed arithmetic without `nsw`),
 `-ftrapv` (signed `+`, `-`, `*`, negation and `++`/`--` of `int` and
 wider check for overflow, and so does `abs`, `labs` or `llabs` of the most
 negative value while the library builtins are on (`__builtin_abs` and
@@ -226,6 +232,15 @@ type needs more than 32-byte alignment, since that linker aligns a
 communal symbol by its size, which is rounded up to the alignment there;
 bcc's objects then link with GCC's `-fcommon` objects, an initialized
 definition winning),
+`-fstrict-volatile-bitfields` (GCC only and off by default, as on x86-64 in
+GCC; the last of it and `-fno-strict-volatile-bitfields` decides, Clang
+refuses both as unknown and TCC ignores both: every back end gives a
+`volatile` bit-field GCC's number and width of accesses, one aligned access
+of its declared type's width where that applies and GCC's ordinary access
+otherwise, and refuses at compile time what it cannot match, such as a whole
+128-bit field, an access beyond a known object, or an access that depends on
+the alignment GCC gives a definition of eight bytes or more or an automatic
+object; see `lowering/bit_fields/volatile_access.rs`),
 `-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
 `-fpack-struct` alone (every structure packed, the pragmas ignored with
 GCC's warning), the options that give up part of IEC 60559 semantics

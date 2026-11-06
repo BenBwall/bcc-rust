@@ -801,6 +801,88 @@ mod tests {
         );
     }
 
+    /// An element beyond the object is a warning in GCC and Clang, each with
+    /// its own count, and is dropped without being evaluated. TCC and `cl`
+    /// refuse it. C99 §6.7.8p2.
+    #[test]
+    fn excess_initializer_elements_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "m.c",
+            "int a[2] = {1, 2, 3, 4};\nstruct S { int x; } s = {5, 6};\nunion U { int i; } u = \
+             {7, 8};\nint v = {9, 10};\n",
+        );
+        for (mode, first) in [("--gcc-mode", 4), ("--clang-mode", 3)] {
+            let output = directory.bcc(mode, &["-fsyntax-only", "m.c"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            assert_eq!(
+                text.matches("warning: excess elements").count(),
+                first + 1,
+                "{mode}: {text}"
+            );
+            for object in ["array", "struct", "union", "scalar"] {
+                assert!(
+                    text.contains(&format!("excess elements in {object} initializer")),
+                    "{text}"
+                );
+            }
+            let silent = directory.bcc(mode, &["-w", "-fsyntax-only", "m.c"]);
+            succeeds(&silent);
+            assert!(stderr(&silent).is_empty(), "{mode}: {}", stderr(&silent));
+            let strict = directory.bcc(mode, &["-pedantic-errors", "-fsyntax-only", "m.c"]);
+            assert_eq!(strict.status.code(), Some(1), "{mode}: {}", stderr(&strict));
+        }
+        directory.write(
+            "run.c",
+            "int f(void) { __builtin_trap(); }\nint main(void) { int d[1] = {1, f()}; return d[0] \
+             - 1; }\n",
+        );
+        for opt in ["--opt=none", "--opt=bcc"] {
+            let output = directory.bcc("", &["--interpret", opt, "run.c"]);
+            assert_eq!(output.status.code(), Some(0), "{opt}: {}", stderr(&output));
+        }
+        let output = directory.bcc("--tcc-mode", &["-c", "m.c"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        let output = directory.bcc("--msvc-mode", &["/c", "m.c"]);
+        assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    }
+
+    /// After an excess element Clang drops the rest of its list, so a later
+    /// designator applies nothing and names no error; GCC goes on applying
+    /// and checking them. C99 §6.7.8p2.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_later_designator_after_an_excess_element_follows_each_compiler() {
+        let directory = Directory::new();
+        for (source, gcc, clang) in [
+            ("int a[1] = {1, 2, [0] = 3};", 3, 1),
+            ("int a[2][1] = {{4, 5, [0] = 6}, {7, 8, [0] = 9}};", 6, 4),
+        ] {
+            directory.write(
+                "later.c",
+                &format!(
+                    "{source}\nint main(void) {{ return a[0]{}; }}\n",
+                    if source.contains("[2]") { "[0]" } else { "" }
+                ),
+            );
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                succeeds(&directory.bcc(mode, &["-w", "later.c", "-o", "later.exe"]));
+                let run = Command::new(directory.path("later.exe")).output().unwrap();
+                assert_eq!(run.status.code(), Some(expected), "{mode}: {source}");
+            }
+        }
+        directory.write("named.c", "struct S { int a; } s = {1, 2, .b = 3};\n");
+        assert_eq!(
+            directory
+                .bcc("--gcc-mode", &["-w", "-fsyntax-only", "named.c"])
+                .status
+                .code(),
+            Some(1)
+        );
+        succeeds(&directory.bcc("--clang-mode", &["-w", "-fsyntax-only", "named.c"]));
+    }
+
     /// `__BASE_FILE__` names the main source file as the command line
     /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
     #[test]
@@ -835,6 +917,135 @@ mod tests {
                 stdout(&output).contains("const char *f = \"m.c\";"),
                 "{mode}: {}",
                 stdout(&output)
+            );
+        }
+    }
+
+    /// A presumed file name that ends in a separator has an empty last
+    /// component for GCC, and `.` for Clang, or `/` if it is all separators.
+    #[test]
+    fn file_name_macro_splits_as_each_compiler_does() {
+        let directory = Directory::new();
+        for (name, gcc, clang) in [
+            ("foo/bar/", "\"\"", "\".\""),
+            ("foo//", "\"\"", "\".\""),
+            ("/", "\"\"", "\"/\""),
+            ("foo/.", "\".\"", "\".\""),
+            ("foo/..", "\"..\"", "\"..\""),
+            ("foo/bar.c", "\"bar.c\"", "\"bar.c\""),
+            ("", "\"\"", "\"\""),
+        ] {
+            directory.write("n.c", &format!("#line 1 \"{name}\"\n__FILE_NAME__\n"));
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-E", "-P", "n.c"]);
+                succeeds(&output);
+                assert_eq!(stdout(&output).trim(), expected, "{mode} {name:?}");
+            }
+        }
+    }
+
+    /// `__FILE_NAME__` is the last component of the presumed file name and
+    /// `__INCLUDE_LEVEL__` counts `#include`s from the main file, forced ones
+    /// included, in GCC and Clang. Microsoft's and TCC's compilers have
+    /// neither.
+    #[test]
+    fn file_name_and_include_level_follow_gcc_and_clang() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write(
+            "sub/h.h",
+            "h = __INCLUDE_LEVEL__ __FILE_NAME__\n#include \"i.h\"\n",
+        );
+        directory.write("sub/i.h", "i = __INCLUDE_LEVEL__ __FILE_NAME__ EARLY\n");
+        directory.write("forced.h", "f = __INCLUDE_LEVEL__ __FILE_NAME__\n");
+        directory.write(
+            "m.c",
+            "#define EARLY __INCLUDE_LEVEL__\n#include \"sub/h.h\"\nm = __INCLUDE_LEVEL__ \
+             __FILE_NAME__\n#line 9 \"zz/renamed.c\"\nr = __INCLUDE_LEVEL__ __FILE_NAME__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "-include", "forced.h", "m.c"]);
+            succeeds(&output);
+            assert_eq!(
+                stdout(&output),
+                "f = 1 \"forced.h\"\nh = 1 \"h.h\"\ni = 2 \"i.h\" 2\nm = 0 \"m.c\"\nr = 0 \
+                 \"renamed.c\"\n",
+                "{mode}"
+            );
+        }
+        directory.write("q.c", "__FILE_NAME__ __INCLUDE_LEVEL__\n");
+        for (mode, preprocess) in [("--msvc-mode", "/E"), ("--tcc-mode", "-E")] {
+            let output = directory.bcc(mode, &[preprocess, "q.c"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).contains("__FILE_NAME__ __INCLUDE_LEVEL__"),
+                "{mode}: {}",
+                stdout(&output)
+            );
+        }
+    }
+
+    /// `__TIMESTAMP__` spells the modification time of the file being read as
+    /// `asctime` does, in every personality but TCC's, and
+    /// `SOURCE_DATE_EPOCH` does not pin it.
+    #[test]
+    fn timestamp_is_the_modification_time_of_the_current_file() {
+        let directory = Directory::new();
+        directory.write("h.h", "__TIMESTAMP__\n");
+        directory.write(
+            "m.c",
+            "#include \"h.h\"\n#line 3 \"elsewhere.c\"\n__TIMESTAMP__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .current_dir(&directory.0)
+                .args([mode, "-E", "-P", "m.c"])
+                .env("SOURCE_DATE_EPOCH", "0")
+                .output()
+                .unwrap();
+            succeeds(&output);
+            let text = stdout(&output);
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines.len(), 2, "{mode}: {text}");
+            for line in lines {
+                // "Thu Nov  5 23:13:48 2026" within quotes.
+                let bytes = line.as_bytes();
+                assert_eq!(bytes.len(), 26, "{mode}: {line}");
+                assert_eq!(bytes[0], b'"');
+                assert_eq!(&line[20..21], " ", "{mode}: {line}");
+                assert!(!line.contains("??"), "{mode}: {line}");
+                assert!(!line.ends_with("1970\""), "{mode}: {line}");
+            }
+        }
+        directory.write("q.c", "__TIMESTAMP__\n");
+        let output = directory.bcc("--tcc-mode", &["-E", "-P", "q.c"]);
+        succeeds(&output);
+        assert!(
+            stdout(&output).contains("__TIMESTAMP__"),
+            "{}",
+            stdout(&output)
+        );
+    }
+
+    /// Unlike the names C99 §6.10.8 predefines, these extensions can be
+    /// redefined and undefined, with a warning, as in GCC and Clang.
+    #[test]
+    fn file_extension_macros_can_be_redefined() {
+        let directory = Directory::new();
+        directory.write(
+            "m.c",
+            "#define __BASE_FILE__ 1\n#define __FILE_NAME__ 2\n#define __INCLUDE_LEVEL__ \
+             3\n#define __TIMESTAMP__ 4\n__BASE_FILE__ __FILE_NAME__ __INCLUDE_LEVEL__ \
+             __TIMESTAMP__\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "1 2 3 4\n", "{mode}");
+            assert!(
+                stderr(&output).contains("warning"),
+                "{mode}: {}",
+                stderr(&output)
             );
         }
     }
@@ -6995,6 +7206,295 @@ mod tests {
             );
             succeeds(&output);
             assert_eq!(stderr(&output), "", "{mode}");
+        }
+    }
+
+    /// The memory accesses `function` makes through a pointer, in AT&T syntax,
+    /// as `l` or `s` and a width: not those of its own frame.
+    fn memory_accesses(assembly: &str, function: &str) -> Vec<String> {
+        let label = format!("{function}:");
+        let mut accesses = Vec::new();
+        for line in assembly
+            .lines()
+            .skip_while(|line| *line != label)
+            .skip(1)
+            .take_while(|line| !line.contains(".cfi_endproc") && !line.contains(".size"))
+        {
+            let mut words = line.split_whitespace();
+            let (Some(mnemonic), operands) = (words.next(), words.collect::<Vec<_>>().join(" "))
+            else {
+                continue;
+            };
+            let frame = operands.contains("(%rbp") || operands.contains("(%rsp");
+            if !operands.contains('(') || frame || mnemonic.starts_with("lea") {
+                continue;
+            }
+            let width = if let Some(extending) = mnemonic
+                .strip_prefix("movz")
+                .or_else(|| mnemonic.strip_prefix("movs"))
+            {
+                extending.chars().next()
+            } else {
+                mnemonic.chars().last()
+            };
+            let width = match width {
+                | Some('b') => 8,
+                | Some('w') => 16,
+                | Some('l') => 32,
+                | Some('q') => 64,
+                | _ => panic!("{line}"),
+            };
+            let destination = operands
+                .rsplit(' ')
+                .next()
+                .is_some_and(|last| last.contains('('));
+            if !destination {
+                accesses.push(format!("l{width}"));
+            } else if mnemonic.starts_with("mov") {
+                accesses.push(format!("s{width}"));
+            } else {
+                accesses.push(format!("l{width}"));
+                accesses.push(format!("s{width}"));
+            }
+        }
+        accesses
+    }
+
+    /// `-fstrict-volatile-bitfields` makes each back end read and write a
+    /// `volatile` bit-field with one access of its declared type: GCC's
+    /// option, off by default and the last of the pair winning, which Clang
+    /// does not know and TCC ignores. The widths are what GCC 14 emits.
+    #[test]
+    fn strict_volatile_bitfields_set_the_access_width() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "w.c",
+            "struct S { volatile unsigned a : 8, b : 8, c : 16; };\nint r(struct S *p) { return \
+             p->b; }\nvoid w(struct S *p) { p->b = 3; }\n",
+        );
+        let assembly = |mode: &str, options: &[&str]| {
+            let mut args = vec!["-O2", "-S", "-o", "-", "w.c"];
+            args.extend(options);
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        let strict = "-fstrict-volatile-bitfields";
+        let plain = "-fno-strict-volatile-bitfields";
+        for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+            let gcc = |options: &[&str]| assembly("--gcc-mode", &[options, backend].concat());
+            let wide = gcc(&[strict]);
+            // Two loads, one of which may fold into the mask, and a store.
+            let accesses: Vec<&str> = wide.lines().filter(|l| l.contains("(%rdi)")).collect();
+            assert_eq!(accesses.len(), 3, "{wide}");
+            assert!(
+                accesses.iter().all(|line| {
+                    let line = line.trim_start();
+                    line.contains("\t(%rdi)") || line.ends_with(", (%rdi)")
+                }),
+                "{wide}"
+            );
+            assert!(
+                accesses.iter().all(|line| line
+                    .trim_start()
+                    .split('\t')
+                    .next()
+                    .unwrap()
+                    .ends_with('l')
+                    && !line.contains("movz")),
+                "{wide}"
+            );
+            for narrow in [gcc(&[]), gcc(&[strict, plain])] {
+                assert!(narrow.contains("1(%rdi)"), "{narrow}");
+                assert!(!narrow.contains("movl\t(%rdi)"), "{narrow}");
+            }
+            assert_eq!(gcc(&[plain, strict]), wide);
+        }
+        let clang = directory.bcc("--clang-mode", &["-c", strict, "w.c"]);
+        assert!(!clang.status.success());
+        assert!(
+            stderr(&clang).contains(&format!("unknown argument: '{strict}'")),
+            "{}",
+            stderr(&clang)
+        );
+        // TCC ignores it, and so does clang-cl, with its usual warning.
+        let ignored = directory.bcc("--tcc-mode", &["-c", strict, "w.c", "-o", "t.o"]);
+        succeeds(&ignored);
+        assert_eq!(stderr(&ignored), "");
+        succeeds(&directory.bcc("--tcc-mode", &["-c", "w.c", "-o", "plain.o"]));
+        assert_eq!(
+            std::fs::read(directory.path("t.o")).unwrap(),
+            std::fs::read(directory.path("plain.o")).unwrap()
+        );
+        let clang_cl = directory.bcc("--clang-cl-mode", &["-c", strict, "w.c"]);
+        succeeds(&clang_cl);
+        assert!(
+            stderr(&clang_cl).contains("unknown argument ignored in clang-cl"),
+            "{}",
+            stderr(&clang_cl)
+        );
+    }
+
+    /// Where the option's single access does not apply, each back end and
+    /// level performs the accesses GCC 13.3 and 14.2 do, which a device sees:
+    /// a memory-destination instruction is one read and one write.
+    #[test]
+    fn strict_volatile_bitfields_fall_back_on_gccs_accesses() {
+        const WANTED: &[(&str, &[&str])] = &[
+            ("a", &["l16", "s16"]),
+            ("ra", &["l32"]),
+            ("ca", &["l32", "l16", "s16"]),
+            ("b", &["l8", "s8", "l8", "s8"]),
+            ("c", &["l16", "s16", "l8", "s8"]),
+            ("rd", &["l8", "l8"]),
+            ("re", &["l32", "l32"]),
+            ("e", &["l32", "s32", "l32", "s32"]),
+            ("f", &["s64", "l64", "s64"]),
+            ("g", &["l16", "s16"]),
+        ];
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "f.c",
+            "struct A { volatile unsigned a : 12; };\nvoid a(struct A *p) { p->a = 3; }\nunsigned \
+             ra(struct A *p) { return p->a; }\nvoid ca(struct A *p) { p->a += 1; }\nstruct B { \
+             char c; volatile unsigned a : 12; };\nvoid b(struct B *p) { p->a = 3; }\nstruct C { \
+             volatile unsigned a : 17; char c; };\nvoid c(struct C *p) { p->a = 3; }\nstruct D { \
+             volatile unsigned a : 12; } __attribute__((packed));\nunsigned rd(struct D *p) { \
+             return p->a; }\nstruct E { char x : 7; volatile unsigned y : 26; } \
+             __attribute__((packed, aligned(4)));\nunsigned re(struct E *p) { return p->y; \
+             }\nvoid e(struct E *p) { p->y = 3; }\nstruct F { volatile __int128 a : 70; };\nvoid \
+             f(struct F *p) { p->a = 3; }\nstruct G { unsigned char b : 8; volatile unsigned a : \
+             8; } __attribute__((packed));\nvoid g(struct G *p) { p->a = 3; }\n",
+        );
+        for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+            for level in ["-O0", "-O2"] {
+                let mut args = vec!["-fstrict-volatile-bitfields", level, "-S", "-o", "-", "f.c"];
+                args.extend(backend);
+                let output = directory.bcc("--gcc-mode", &args);
+                succeeds(&output);
+                let assembly = stdout(&output);
+                for (function, wanted) in WANTED {
+                    assert_eq!(
+                        &memory_accesses(&assembly, function),
+                        wanted,
+                        "{function} {level} {backend:?}\n{assembly}"
+                    );
+                }
+            }
+        }
+        // Without the option the same writes stay in the field's own bytes.
+        let output = directory.bcc("--gcc-mode", &["-O2", "-S", "-o", "-", "f.c"]);
+        succeeds(&output);
+        assert_eq!(memory_accesses(&stdout(&output), "ra"), ["l16"]);
+    }
+
+    /// What the back ends cannot make GCC's accesses is a clear error under
+    /// the option and compiles without it.
+    #[test]
+    fn strict_volatile_bitfields_refuse_what_they_cannot_match() {
+        let directory = Directory::new();
+        directory.write(
+            "r.c",
+            "struct S { volatile __int128 a : 128; };\nvoid w(struct S *p) { p->a = 3; }\n",
+        );
+        let strict = directory.bcc("--gcc-mode", &["-fstrict-volatile-bitfields", "-c", "r.c"]);
+        assert!(!strict.status.success());
+        assert!(
+            stderr(&strict).contains("r.c:2:")
+                && stderr(&strict).contains("volatile bit-field under -fstrict-volatile-bitfields"),
+            "{}",
+            stderr(&strict)
+        );
+        succeeds(&directory.bcc("--gcc-mode", &["-c", "r.c", "-o", "plain.o"]));
+    }
+
+    /// A wider access keeps the neighbors' bits and the field's value on
+    /// every back end, optimized or not, where GCC's runs agree. Memory that
+    /// was never written beside a written field stays out of the result,
+    /// though the load covers it.
+    #[test]
+    fn strict_volatile_bitfields_keep_every_value() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "v.c",
+            "struct T { volatile unsigned a : 8, b : 8, c : 16; };\nstruct N { char c; volatile \
+             int a : 8; volatile int b : 3; char d; };\nstruct P { char x; volatile unsigned y : \
+             31; } __attribute__((packed));\nunion U { struct T t; unsigned char bytes[4]; \
+             };\nstruct T global = {1, 2, 3};\nvolatile struct N neighbors = {1, -2, -3, \
+             4};\nstruct P packed;\nint check(void) {\n  /* Each field beside its neighbors. */\n  \
+             global.b = 0xab;\n  if (global.a != 1 || global.b != 0xab || global.c != 3) return \
+             1;\n  if ((global.c = 0x12345) != 0x2345 || global.a != 1) return 2;\n  \
+             global.a++;\n  if (global.a != 2 || global.b != 0xab) return 3;\n  /* The unit \
+             starts before the field; signed values extend. */\n  if (neighbors.a != -2 || \
+             neighbors.b != -3) return 4;\n  neighbors.a = 5;\n  if (neighbors.c != 1 || \
+             neighbors.a != 5 || neighbors.b != -3 || neighbors.d != 4) return 5;\n  if \
+             ((neighbors.b = 7) != -1) return 6;\n  /* A packed field keeps its ordinary access. \
+             */\n  packed.y = 0x7fffffff;\n  if (packed.y != 0x7fffffff || packed.x != 0) return \
+             7;\n  /* An automatic object with bytes nobody wrote. */\n  struct { volatile \
+             unsigned a : 8; char c; } local;\n  local.a = 0x5a;\n  if (local.a != 0x5a) return \
+             8;\n  union U u;\n  u.bytes[0] = 7;\n  u.t.b = 9;\n  if (u.bytes[0] != 7 || \
+             u.bytes[1] != 9 || u.t.b != 9) return 9;\n  return 0;\n}\nint main(void) { return \
+             check(); }\n",
+        );
+        let strict = "-fstrict-volatile-bitfields";
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            let built = Command::new("gcc")
+                .args(["-O2", strict, "v.c", "-o", "reference"])
+                .current_dir(&directory.0)
+                .output()
+                .unwrap();
+            succeeds(&built);
+            let run = Command::new(directory.path("reference")).output().unwrap();
+            assert_eq!(run.status.code(), Some(0), "gcc");
+        }
+        for options in [
+            &["-O0"][..],
+            &["-O2"],
+            &["--opt=bcc"],
+            &["--backend=native", "-O0"],
+            &["--backend=native", "-O2"],
+        ] {
+            let mut args = vec![strict, "v.c", "-o", "program"];
+            args.extend(options);
+            succeeds(&directory.bcc("", &args));
+            let run = Command::new(directory.path("program")).output().unwrap();
+            assert_eq!(run.status.code(), Some(0), "{options:?}");
+        }
+        for options in [&["-O0"][..], &["-O2"]] {
+            let mut args = vec![strict, "--interpret", "v.c"];
+            args.extend(options);
+            let run = directory.bcc("", &args);
+            assert_eq!(run.status.code(), Some(0), "interpreter {options:?}");
+        }
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for options in [&["-O0"][..], &["-O2"]] {
+            let mut args = vec![strict, "--target=wasm32-wasip1", "v.c", "-o", "v.wasm"];
+            args.extend(options);
+            succeeds(&directory.bcc("", &args));
+            let run = Command::new("node")
+                .arg("--no-warnings")
+                .arg(&runner)
+                .arg(directory.path("v.wasm"))
+                .output()
+                .unwrap();
+            assert_eq!(run.status.code(), Some(0), "wasm32 {options:?}");
         }
     }
 

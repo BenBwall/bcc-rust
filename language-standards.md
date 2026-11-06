@@ -67,7 +67,12 @@ MSVC flags affect neither version nor strictness. `__STDC__`,
 predefined in every mode. `__STDC_HOSTED__` is `1` in the default hosted
 execution environment and `0` with `-ffreestanding`; `-fhosted` restores
 hosted and the later flag wins. `CompilerConfiguration::default()` is hosted
-as well.
+as well. GCC's and Clang's `__FILE_NAME__` (the last component of `__FILE__`),
+`__INCLUDE_LEVEL__` and `__TIMESTAMP__` are predefined too. `--msvc-mode` has
+only `__TIMESTAMP__` of the three and `--tcc-mode` none. `__TIMESTAMP__` is the
+current source file's modification time, in local time, and neither
+`SOURCE_DATE_EPOCH` nor `#line` changes it. Unlike the C99 names, these and
+`__BASE_FILE__` may be redefined and undefined, with a warning.
 
 Compiler identity follows Clang's approach. Every language mode, including
 strict ISO modes, defines `__GNUC__` `4`, `__GNUC_MINOR__` `2` and
@@ -438,7 +443,7 @@ still follows the configured extension policy.
 | `stdatomic.h` | C11 atomic typedefs, `memory_order`, `atomic_flag`, initialization, fences, lock-free queries and all generic operation macros. Hosted, it defers to a following system header except with `_MSC_VER` in C mode, matching the pinned Clang resource header. C17 marks `ATOMIC_VAR_INIT` deprecated through `#pragma clang deprecated`; `_CLANG_DISABLE_CRT_DEPRECATION_WARNINGS` suppresses that marker. C23 removes `ATOMIC_VAR_INIT` and adds `atomic_char8_t` and `ATOMIC_CHAR8_T_LOCK_FREE`. No `__STDC_NO_ATOMICS__` is defined or interpreted, as in Clang. |
 | `stdbit.h` | C23's `<stdbit.h>` (§7.18): `__STDC_VERSION_STDBIT_H__` (`202311L`), `__STDC_ENDIAN_LITTLE__` (1234), `__STDC_ENDIAN_BIG__` (4321), `__STDC_ENDIAN_NATIVE__` (little), the 70 `stdc_*_u{c,s,i,l,ll}` functions and the 14 type-generic macros. Wherever the C library has the header (glibc 2.39 and later, whose macros use the `__builtin_stdc_*` builtins when the compiler has them) it defers to it, freestanding too, as GCC and Clang find it there. Otherwise it declares the functions with external linkage and defines each as a macro over its builtin, converting the argument as the prototype does; the same text is the `<stdbit.h>` of bcc's WASI C library, which defines the functions (`backend/wasm/runtime/stdbit.c`). Elsewhere a call that suppresses a macro needs a C library that defines them. Neither GCC nor Clang ships the header, so for the Clang and clang-cl identities the resource directory has none (`headers::provides`): without a C library's (`-nostdlibinc`), `#include <stdbit.h>` finds no header, as in Clang. |
 | `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
-| `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) are provided; MMX through SSE4.2 compile and run (see [x86 intrinsic headers](#x86-intrinsic-headers-2026-10-30)). |
+| `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `x86gprintrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) are provided; MMX through SSE4.2 compile and run (see [x86 intrinsic headers](#x86-intrinsic-headers-2026-10-30)). |
 
 Reserved `__builtin_va_arg`, `__builtin_va_start`, `__builtin_va_end`,
 `__builtin_va_copy`, `__builtin_va_list` and `__builtin_offsetof` support the
@@ -2253,13 +2258,38 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Implemented (call diagnostics) | GNU `error("message")`, `warning("message")`, including `gnu::` spelling; emitted direct calls after bcc and LLVM IR optimization, with `-Wattribute-warning` control |
 | Implemented (call contracts) | `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`, `enable_if`, `unavailable`; unsupported predicate shapes diagnose and unmodeled object-size origins remain unknown |
 | Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` and `gcc_struct`, which give the record Microsoft's or System V's bit-field layout whatever the target's, with each identity's rules where GCC and Clang differ (union bit-field alignment, zero-width fields in packed records, an attribute on an earlier declaration); under Clang's rules a `gcc_struct` record on an MSVC target is an error, as in Clang 23, but at its definition rather than where its layout is first needed |
-| Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
-| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage` |
+| Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `no_callee_saved_registers` and the other non-x86 conventions are refused |
+| Machine entries (Linux targets; refused by lowering on the others) | `interrupt` (handlers, below), `no_caller_saved_registers`, and under GCC's identity `naked` |
+| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked` under Clang's identity, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage` |
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
 | Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
 | Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
 | GCC identity only | `scalar_storage_order`: little-endian accepted, big-endian refused on records, ignored with a warning elsewhere (see above); unknown under the other identities |
 | Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver` and `persistent`, MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and target-specific names on other targets |
+
+An x86 `interrupt` function is a handler the processor enters: its first
+parameter points at the frame the processor pushed, and a second, in an exception
+handler, is the error code pushed below that frame. Each compiler's checks of the
+signature are its own, in its words: GCC takes any 64-bit integer as the second
+parameter and reports each fault, Clang takes an unsigned one and stops at the
+first, and neither allows a direct call. GCC also wants `-mgeneral-regs-only`
+of a handler or `no_caller_saved_registers` function it compiles, since it saves
+no SSE state ("sorry, unimplemented"), and refuses `interrupt` with `naked`;
+Clang saves SSE registers and warns of calls under `-Wexcessive-regsave`. Carets
+stand at the attribute, where GCC's stand at the declaration and Clang's at the
+offending part of it. A variadic handler, which both compilers accept, is refused.
+The LLVM back end marks a handler `x86_intrcc` with its frame `byval`, and the
+native back end gives it its own prologue and epilogue (`docs/design/native-backend.md`);
+both clear the direction flag, return with `iretq`, or `uiret` under `-muintr`,
+and keep the handler's own frame out of the red zone. The red zone of the code it
+interrupts is that code's to give up, by `-mno-red-zone`, which System V targets
+still refuse. The interpreter and the WebAssembly back end refuse handlers and
+naked functions by name.
+
+A `naked` function has no prologue or epilogue, and falls off its end into a
+trap, as GCC's does. GCC documents only basic `asm` in one; a C body also compiles,
+keeping what it needs below the entry stack pointer, and a read of a local register
+variable in `%rsp` gives the entry value. Assigning to such a variable is refused.
 
 GNU `error` and `warning` require one unevaluated string argument and apply
 only to functions. The first declaration supplies the contract; unannotated
@@ -3107,6 +3137,12 @@ characters that fit and is a warning in both compilers that
 `-pedantic-errors` makes an error (GCC prints it without an option, Clang
 under `-Wexcess-initializers`); bcc rejected it before. This covers string
 literals inside a compound literal (`(char[3]){"abcd"}`) too.
+
+So does an element beyond the object (`int a[2] = {1, 2, 3}`): the element is
+dropped unevaluated. GCC reports each such element and goes on applying the
+list's later designators (`int a[1] = {1, 2, [0] = 3}` gives 3); Clang reports
+a list's first and drops the rest of that list (it gives 1).
+`--tcc-mode` and `--msvc-mode` keep the error, as TCC and `cl` do.
 `Analyzer::copy_array_literal` holds the rules;
 `tests/fixtures/programs/array_compound_literals.c` runs the accepted forms
 on every back end against each compiler (`tests/integration/identity_programs.rs`),

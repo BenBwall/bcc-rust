@@ -154,6 +154,10 @@ pub(crate) struct CompilerConfiguration {
     /// Signaling NaNs are to be kept apart from quiet ones
     /// (`-fsignaling-nans`).
     signaling_nans: bool,
+    /// `-mgeneral-regs-only`.
+    general_regs_only: bool,
+    /// `-muintr`.
+    user_interrupts: bool,
     /// The structure packing in effect before any `#pragma pack`, and that
     /// `#pragma pack()` restores (`-fpack-struct=N`, `cl /ZpN`); 0 for
     /// none.

@@ -611,6 +611,8 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `FlexibleArrayBraces`, `FlexibleArrayDesignator` | [flexible designators](sema-flexible-designators.c) | A designated flexible array member initialized by a scalar, and a designator into its elements (which also lacks braces), each noting the member, as Clang reports them; a designated list stays valid. |
 | `InitializerOverride`, `PartialInitializerOverride` | [initializer overrides](sema-initializer-overrides.c) | Clang's `-Winitializer-overrides`: a repeated member, a write into an element an expression initialized (at its designator), another union member (at the element) and a repeated flexible array member list, each noting the earlier initializer. |
 | `TransparentUnionNotUnion`, `TransparentUnionNotDefinition`, `TransparentUnionPlacement` | [transparent_union applicability](sema-transparent-union-applicability.c) | `transparent_union` in a tag-only declaration's specifiers, on an object, on a union specifier that does not define the union, and on a structure. |
+| `InvalidMachineEntry` | [GCC handlers](sema-interrupt-gcc.c), [GCC without general registers](sema-interrupt-gcc-sse.c), [Clang handlers](sema-interrupt-clang.c) | A handler's signature in each compiler's words, a direct call, `interrupt` with `naked`, and GCC's refusal of a handler or `no_caller_saved_registers` function compiled with SSE. Clang's carets stand at the offending part of the declaration and GCC's at its start; both of these stand at the attribute. |
+| `ExcessiveRegsave` | [Clang handlers](sema-interrupt-clang.c) | Clang's `-Wexcessive-regsave`, from a handler and from a `no_caller_saved_registers` function. |
 | `DuplicateMember` | [member name](sema-duplicate-member.c) | Duplicate names in a record member namespace. |
 | `InvalidBitFieldWidth`, `InvalidBitFieldType`, `NamedZeroWidthBitField` | [bit-field](sema-bit-field.c) | Width, type and zero-width-name constraints, each with its own message. |
 | `InvalidParameter` | [parameter](sema-parameter.c) | Parameter storage and non-outermost array static/qualifiers. |
@@ -665,7 +667,7 @@ below; implicit functions are reported under `-Wimplicit-function-declaration`
 | `InvalidSwitchExpression` | [switch](sema2-switch.c) | Integer switch operand. |
 | `FailedAssertion` | [assertion](sema2-assertion.c) | Evaluated supported static assertion and its message (C11 mode). |
 | `InvalidInitializer` | [initializer](sema2-initializer.c) | Scalar assignment conversion and valid object initialization. |
-| `ExcessInitializer` | [excess](sema2-excess.c) | Scalar/aggregate/array current-object exhaustion. |
+| `ExcessElements` | [excess](sema2-excess.c) | Scalar/aggregate/array current-object exhaustion; GCC and Clang warn. `ExcessInitializer` is the error TCC and `cl` give. |
 | `InvalidDesignator` | [designator](sema2-designator.c) | Existing members and in-range nonnegative ICE array indices. |
 | `NonConstantInitializer` | [static-initializer](sema2-static-initializer.c) | Static arithmetic/address constant eligibility. |
 | `NonConstantInitializer`, `FoldedIntegerConstant`, `Extension(ConstantCompoundLiteral)` | [GCC](sema-static-compound-literal-gcc.c), [Clang](sema-static-compound-literal-clang.c) | Compound literals in static initializers and integer constants under each identity: GCC's whole-literal wrappers and their pedantic report, Clang's folded literal values, and the forms both reject. |

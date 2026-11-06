@@ -23,6 +23,7 @@ use std::fmt;
 use crate::{
     ir::{
         Entity,
+        EntryConvention,
         Symbol,
     },
     util::bump::{
@@ -33,6 +34,10 @@ use crate::{
 
 /// A function in machine IR: blocks in layout order, the number of virtual
 /// registers, allocation hints, and the frame objects selection created.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about the function that layout reads on its own."
+)]
 pub(crate) struct MFunction<'a> {
     pub(crate) blocks:           ArenaVec<'a, MBlockData<'a>>,
     /// One hint per virtual register: the register a copy connects it to.
@@ -64,6 +69,11 @@ pub(crate) struct MFunction<'a> {
     /// The largest alignment an IR stack slot asks for; a slot aligned
     /// above 16 bytes rounds its address up from `%rsp` at run time.
     pub(crate) slot_align:       u64,
+    /// How the machine enters and leaves the function.
+    pub(crate) entry:            EntryConvention,
+    /// Whether the code may use general registers alone
+    /// (`-mgeneral-regs-only`), so nothing saves the others.
+    pub(crate) general_regs:     bool,
     /// A callee-saved register the prologue pushes first, written or not:
     /// `%rbp` when the function takes its frame address, so the caller's
     /// `%rbp` is where a frame pointer would save it.
@@ -96,12 +106,46 @@ impl<'a> MFunction<'a> {
             outgoing_align:   16,
             register_save:    false,
             slot_align:       1,
+            entry:            EntryConvention::C,
+            general_regs:     false,
             first_push:       None,
             indirect:         ArenaVec::new_in(arena),
             labels:           ArenaVec::new_in(arena),
             indirect_symbols: ArenaVec::new_in(arena),
             asm:              ArenaVec::new_in(arena),
         }
+    }
+
+    /// Whether the function uses an SSE register or a virtual register of
+    /// that class, or the x87 stack.
+    pub(crate) fn uses_floating_registers(&self) -> bool {
+        self.classes.contains(&RegClass::Xmm)
+            || self
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| {
+                    // A call names every register it may change.
+                    if matches!(inst, MInst::Call { .. }) {
+                        return false;
+                    }
+                    let mut inst = *inst;
+                    let mut floating = false;
+                    inst.visit_registers(|reg, _| {
+                    floating |=
+                        matches!(*reg, Reg::Phys(register) if register.class() == RegClass::Xmm);
+                });
+                    floating
+                        || matches!(
+                            inst,
+                            MInst::X87Load { .. }
+                                | MInst::X87Store { .. }
+                                | MInst::X87Arith { .. }
+                                | MInst::X87Pop
+                                | MInst::X87Compare
+                                | MInst::X87ControlWord { .. }
+                        )
+                })
     }
 
     /// The blocks the terminator of `block` may transfer control to.
@@ -608,6 +652,8 @@ pub(crate) enum FrameObject {
     Slot(u32),
     /// The incoming stack arguments, by byte offset from the first one.
     Incoming(u32),
+    /// Where `%rsp` was when a naked function was entered.
+    EntryStack,
     /// The outgoing argument area at the bottom of the frame.
     Outgoing(u32),
     /// A spill slot the allocator assigned.

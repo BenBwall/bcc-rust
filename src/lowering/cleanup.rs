@@ -43,7 +43,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let address = match self.local(variable, source)? {
             | Local::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
             | Local::Address(address) => address,
-            | Local::Variable(_) =>
+            | Local::Variable(_) | Local::StackPointer =>
                 return Err(LoweringError::missing(
                     "a cleanup variable has no storage address",
                     source,

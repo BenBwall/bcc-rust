@@ -177,9 +177,14 @@ masking it clears bits and testing them decides nothing about the rest of the
 function, which is how GCC and Clang read such a program; an edge that carries
 no store still passes `poison`, which a merge folds away, as LLVM folds a `phi`
 with an `undef` operand. `--interpret` therefore no longer reports a plain read
-of an uninitialized scalar: it runs on the frozen value. The interpreter
-implements this exactly and is the specification the optimizer is tested
-against.
+of an uninitialized scalar: it runs on the frozen value. A `volatile` load
+never produces poison: it reads the bytes as they are in memory, where a byte
+never written or written with poison is arbitrary and the others keep their
+values, since what a volatile load returns is beyond the program's control and
+no pass may reason about it. LLVM's rule for a load is stricter on paper, but
+nothing in LLVM looks through a volatile load, and the machine has no poison.
+The interpreter implements this exactly and is the specification the optimizer
+is tested against.
 
 C lowering sets `nsw` on signed `+ - *`, because C99 §6.5p5 makes signed
 overflow undefined; unsigned arithmetic wraps and gets no flags. A signed left
@@ -534,7 +539,12 @@ bytes that hold the field with shifts and masks, from sema's byte offset, bit
 offset and width. A read loads exactly the field's bytes, a write loads (and
 `freeze`s) only the bytes it covers in part, and a `volatile` field is accessed
 with volatile loads and stores. The accesses stay inside the field's own bytes
-because a load of bytes never written is poison as a whole.
+because a load of bytes never written is poison as a whole. Only under
+`-fstrict-volatile-bitfields` does a `volatile` field get wider accesses: the
+ones GCC performs, one of its declared type's width where that works and GCC's
+ordinary access otherwise, or a refusal of the shapes it cannot match
+(`lowering/bit_fields/volatile_access.rs`). A volatile load's freedom from poison
+makes them sound.
 
 ### Module
 
@@ -2043,7 +2053,7 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
 `lowering/cleanup.rs`):
 
 - **Textual form.** Function headers end in
-  `linkage [align N] [returns_twice] [noinline|alwaysinline] [inline_copy_of @name] [hidden|protected] [section "name"] [used] [alias @target]`,
+  `linkage [align N] [returns_twice] [noinline|alwaysinline] [inline_copy_of @name] [interrupt|preserve_registers|naked] [hidden|protected] [section "name"] [used] [alias @target]`,
   global headers in `linkage [thread_local] [constant] size N, align N
   [hidden|protected] [section "name"] [used] [alias @target]`. Module lines `constructor @f priority N` and
   `destructor @f priority N` follow the globals. The verifier checks alias

@@ -150,6 +150,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.init_attribute(subject, specifier, attribute, rule == Rule::Constructor),
                 | Rule::Cleanup => self.cleanup_attribute(subject, attribute),
                 | Rule::ReturnsTwice => self.returns_twice_attribute(subject, attribute),
+                | Rule::Interrupt => self.interrupt_attribute(subject, attribute),
+                | Rule::NoCallerSaved => self.no_caller_saved_attribute(subject, attribute),
+                | Rule::Naked => self.naked_attribute(subject, attribute),
                 | Rule::Nonnull => self.nonnull_attribute(subject, specifier, attribute),
                 // On a typedef it names the type, which type construction
                 // checks; anything else declared is not a union type.
@@ -1153,6 +1156,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let tu = self.types.tu;
         self.finish_call_diagnostics();
         self.external_returns_twice();
+        self.check_machine_entries();
         let mut init_functions = ArenaVec::new_in(tu);
         for index in 0..self.definitions.len() {
             let definition = self.definitions[index];
@@ -1414,6 +1418,8 @@ fn follows_definition(rule: Rule, name: &str) -> bool {
         Rule::Representation
             | Rule::TransparentUnion
             | Rule::Convention(_)
+            | Rule::Interrupt
+            | Rule::NoCallerSaved
             | Rule::RecordLayout
             | Rule::Alias
             | Rule::CallDiagnostic
@@ -1428,6 +1434,9 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     pub(in crate::translation_phases::semantic_analysis) conventions:
         ArenaVec<'s, super::super::ConventionFacts>,
     pub(super) entities: ArenaMap<'s, EntityId, EntityAttributes<'tu>>,
+    /// Whether any entity has `interrupt` or `no_caller_saved_registers` yet:
+    /// until one does, a call has nothing to check.
+    pub(super) machine_entries: bool,
     pub(super) call_diagnostics:
         ArenaMap<'s, (usize, usize), super::call_diagnostics::ParsedDiagnostic>,
     sections: ArenaMap<'s, EntityId, SourceVectors>,
@@ -1477,6 +1486,7 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             refusals:           ArenaVec::new_in(scratch),
             conventions:        ArenaVec::new_in(scratch),
             entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            machine_entries:    false,
             call_diagnostics:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             sections:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             initializers:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),

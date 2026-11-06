@@ -281,6 +281,8 @@ pub(super) enum Operand {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Place {
     Variable(Var),
+    /// The stack pointer, as a GNU local register variable names it.
+    StackPointer,
     Memory(Value),
     /// A bit-field: the address of its storage unit and where in the unit
     /// the field is.
@@ -301,14 +303,37 @@ pub(super) struct BitFieldBits {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct BitField {
     /// The number of bytes the field touches.
-    pub(super) span:   u32,
+    pub(super) span:            u32,
     /// The field's lowest bit within the first byte.
-    pub(super) shift:  u32,
-    pub(super) width:  u32,
+    pub(super) shift:           u32,
+    pub(super) width:           u32,
     /// Whether the field is read with sign extension.
-    pub(super) signed: bool,
+    pub(super) signed:          bool,
     /// The alignment of the place's address.
-    pub(super) align:  Align,
+    pub(super) align:           Align,
+    /// What GCC's access to a `volatile` field depends on, under
+    /// `-fstrict-volatile-bitfields`.
+    pub(super) volatile_access: Option<VolatileAccess>,
+}
+
+/// What GCC's accesses to a `volatile` bit-field depend on under
+/// `-fstrict-volatile-bitfields`: `bit_fields/volatile_access.rs` makes a plan
+/// of loads and stores from it. Bits count from the start of the object the
+/// place is a part of, as far as constant offsets reach.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct VolatileAccess {
+    /// The field's first bit.
+    pub(super) position:     u64,
+    /// The field's width in bits.
+    pub(super) width:        u32,
+    /// The width in bits of the field's declared type.
+    pub(super) declared:     u32,
+    /// The bits the object is known to be aligned to, at most a word's.
+    pub(super) align:        u32,
+    /// The first bit of the region a write may touch.
+    pub(super) region_start: u64,
+    /// The bit after the region a write may touch.
+    pub(super) region_end:   u64,
 }
 
 /// An automatic object an initializer fills: a declared one, or the
@@ -327,6 +352,10 @@ pub(super) enum Local {
     /// A structure or union parameter: the copy the caller passed, at the
     /// address the entry block receives.
     Address(Value),
+    /// A GNU local register variable in the stack pointer, which each read
+    /// takes from there. GNU extension: GCC manual, "Local Register
+    /// Variables".
+    StackPointer,
 }
 
 /// Where `break` and `continue` go from inside a loop or switch.
