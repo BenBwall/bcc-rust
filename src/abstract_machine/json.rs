@@ -19,7 +19,7 @@ use super::{
 };
 
 impl State {
-    /// Encodes this observation as schema version 2 JSON.
+    /// Encodes this observation as schema version 3 JSON.
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut output = String::new();
@@ -39,9 +39,35 @@ impl Diagnostic {
 }
 
 pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
-    let mut output = String::from("{\"schema_version\":2,\"source\":");
+    let mut output = String::from("{\"schema_version\":3,\"source\":");
     string(&mut output, &program.source);
-    output.push_str(",\"states\":[");
+    output.push_str(",\"structures\":[");
+    for (index, structure) in program.structures.iter().enumerate() {
+        comma(&mut output, index);
+        output.push_str("{\"name\":");
+        string(&mut output, &structure.name);
+        write!(
+            output,
+            ",\"size\":{},\"align\":{},\"members\":[",
+            structure.size, structure.align
+        )
+        .expect("String write");
+        for (index, member) in structure.members.iter().enumerate() {
+            comma(&mut output, index);
+            output.push_str("{\"name\":");
+            string(&mut output, &member.name);
+            output.push_str(",\"type\":");
+            string(&mut output, &member.r#type);
+            write!(
+                output,
+                ",\"offset\":{},\"size\":{},\"padding\":{},\"first\":{}}}",
+                member.offset, member.size, member.padding, member.first
+            )
+            .expect("String write");
+        }
+        output.push_str("]}");
+    }
+    output.push_str("],\"states\":[");
     for (index, machine) in history.iter().enumerate() {
         comma(&mut output, index);
         state(&mut output, &machine.state);
@@ -53,7 +79,7 @@ pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
 fn state(output: &mut String, state: &State) {
     write!(
         output,
-        "{{\"schema_version\":2,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
+        "{{\"schema_version\":3,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
         state.step
     )
     .expect("String write");
@@ -180,11 +206,19 @@ fn clause(output: &mut String, clause: &Clause) {
 fn operand(output: &mut String, operand: &Operand) {
     match operand {
         | Operand::Value(entry) => value(output, entry),
-        | Operand::Address { target, offset } => write!(
-            output,
-            "{{\"kind\":\"lvalue\",\"target\":{target},\"offset\":{offset}}}"
-        )
-        .expect("String write"),
+        | Operand::Address {
+            target,
+            offset,
+            structure,
+        } => {
+            write!(
+                output,
+                "{{\"kind\":\"lvalue\",\"target\":{target},\"offset\":{offset},\"structure\":"
+            )
+            .expect("String write");
+            optional(output, *structure);
+            output.push('}');
+        },
     }
 }
 
@@ -208,6 +242,12 @@ fn object_json(output: &mut String, object: &Object) {
     string(output, &object.r#type);
     output.push_str(",\"storage_duration\":");
     string(output, object.storage_duration);
+    output.push_str(",\"function\":");
+    if let Some(function) = &object.function {
+        string(output, function);
+    } else {
+        output.push_str("null");
+    }
     output.push_str(",\"lifetime\":");
     string(output, object.lifetime);
     write!(output, ",\"parameter\":{}", object.parameter).expect("String write");
@@ -221,20 +261,40 @@ fn value(output: &mut String, input: &Value) {
         | Value::Indeterminate => output.push_str("{\"kind\":\"indeterminate\"}"),
         | Value::Integer(integer) =>
             write!(output, "{{\"kind\":\"integer\",\"value\":{integer}}}").expect("String write"),
-        | Value::Pointer { target, offset } => {
+        | Value::Pointer {
+            target,
+            offset,
+            first,
+            length,
+            structure,
+        } => {
             output.push_str("{\"kind\":\"pointer\",\"target\":");
-            if let Some(target) = target {
-                write!(output, "{target}").expect("String write");
-            } else {
-                output.push_str("null");
-            }
-            write!(output, ",\"offset\":{offset}}}").expect("String write");
+            optional(output, *target);
+            write!(
+                output,
+                ",\"offset\":{offset},\"first\":{first},\"length\":{length},\"structure\":"
+            )
+            .expect("String write");
+            optional(output, *structure);
+            output.push('}');
         },
         | Value::Array(elements) => {
             output.push_str("{\"kind\":\"array\",\"elements\":[");
             for (index, element) in elements.iter().enumerate() {
                 comma(output, index);
                 value(output, element);
+            }
+            output.push_str("]}");
+        },
+        | Value::Struct { structure, members } => {
+            write!(
+                output,
+                "{{\"kind\":\"struct\",\"structure\":{structure},\"members\":["
+            )
+            .expect("String write");
+            for (index, member) in members.iter().enumerate() {
+                comma(output, index);
+                value(output, member);
             }
             output.push_str("]}");
         },

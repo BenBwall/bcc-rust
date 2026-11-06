@@ -9,9 +9,12 @@
 //! C99: §6.5.6 paragraph 7, p. 83; PDF p. 95 (scalar pointer arithmetic).
 //! C99: §6.7.8 paragraph 21, p. 127; PDF p. 139 (partial initialization).
 //! C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91 (invalid indirection).
+//! C99: §6.2.6.1 paragraph 6, p. 38; PDF p. 50 (structure values).
+//! C99: §6.2.4 paragraph 3, p. 32; PDF p. 44 (static storage duration).
 
 use super::{
     clauses,
+    layout,
     machine::{
         Machine,
         ObjectMetadata,
@@ -21,6 +24,8 @@ use super::{
         MAX_CELLS,
         MAX_OBJECTS,
         Object,
+        Place,
+        Program,
         Type,
         Undefined,
         Value,
@@ -28,6 +33,9 @@ use super::{
 };
 
 impl Machine {
+    /// Create the automatic object `name` of type `ty` in the innermost
+    /// call, holding `value` (an aggregate starts with every scalar
+    /// indeterminate unless `value` is a whole structure).
     pub fn allocate(
         &mut self,
         name: &str,
@@ -36,42 +44,69 @@ impl Machine {
         value: Value,
         parameter: bool,
     ) -> Result<usize, Diagnostic> {
-        let cells = match ty {
-            | Type::Array(count) => count,
-            | _ => 1,
+        let value = match (ty, value) {
+            | (Type::Array(_) | Type::Struct(_), Value::Indeterminate) =>
+                ty.indeterminate(&self.structures),
+            | (Type::Pointer | Type::StructPointer(_), Value::Integer(0)) => Value::null(),
+            | (_, value) => value,
         };
+        let top = self.activations.len() - 1;
+        let frame = self.activations[top].id;
+        self.create(name, ty, frame, scope, value, parameter, None)
+    }
+
+    /// Create static object `index` of the program with its initial value.
+    pub fn allocate_static(
+        &mut self,
+        program: &Program,
+        index: usize,
+    ) -> Result<usize, Diagnostic> {
+        let object = &program.statics[index];
+        self.create(
+            &object.name,
+            object.ty,
+            0,
+            0,
+            object.value.clone(),
+            false,
+            object.function.clone(),
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One object's complete description."
+    )]
+    fn create(
+        &mut self,
+        name: &str,
+        ty: Type,
+        frame_id: usize,
+        scope: usize,
+        value: Value,
+        parameter: bool,
+        function: Option<String>,
+    ) -> Result<usize, Diagnostic> {
+        let cells = ty.leaves(&self.structures);
         if self.state.objects.len() >= MAX_OBJECTS || self.cells + cells > MAX_CELLS {
             return Err(Diagnostic::limit(
                 self.state.source_range,
                 "object or memory cell limit reached",
             ));
         }
-        let value = if let Type::Array(count) = ty {
-            let mut elements = Vec::new();
-            elements.resize(count, Value::Indeterminate);
-            Value::Array(elements)
-        } else if ty == Type::Pointer && value == Value::Integer(0) {
-            Value::Pointer {
-                target: None,
-                offset: 0,
-            }
-        } else {
-            value
-        };
-        let r#type = match ty {
-            | Type::Int => String::from("int"),
-            | Type::Char => String::from("char"),
-            | Type::Pointer => String::from("int *"),
-            | Type::Array(count) => format!("int[{count}]"),
-        };
-        let top = self.activations.len() - 1;
         let id = self.state.objects.len() + 1;
+        let static_storage = frame_id == 0;
         self.state.objects.push(Object {
             id,
             name: String::from(name),
-            r#type,
-            frame_id: self.activations[top].id,
-            storage_duration: "automatic",
+            r#type: ty.spelling(&self.structures),
+            frame_id,
+            storage_duration: if static_storage {
+                "static"
+            } else {
+                "automatic"
+            },
+            function,
             lifetime: "alive",
             parameter,
             value,
@@ -84,10 +119,7 @@ impl Machine {
     /// The value stored at a location, without lifetime or bounds checks.
     pub fn peek(&self, target: usize, offset: i32) -> Option<Value> {
         let object = self.state.objects.get(target.checked_sub(1)?)?;
-        match &object.value {
-            | Value::Array(elements) => elements.get(usize::try_from(offset).ok()?).cloned(),
-            | value => Some(value.clone()),
-        }
+        layout::leaf(&object.value, usize::try_from(offset).ok()?).cloned()
     }
 
     /// The declared type of an object.
@@ -97,14 +129,26 @@ impl Machine {
             .map(|metadata| metadata.ty)
     }
 
-    pub fn named(&self, name: &str) -> Result<usize, Diagnostic> {
+    /// The type of the scalar at leaf `offset` of an object.
+    pub fn leaf_type(&self, target: usize, offset: i32) -> Option<Type> {
+        self.object_type(target)?
+            .leaf_type(&self.structures, usize::try_from(offset).ok()?)
+    }
+
+    /// The object a name designates: an automatic object of the innermost
+    /// call, or a static object, which the program created before `main`.
+    pub fn named(&self, place: &Place) -> Result<usize, Diagnostic> {
+        let name = match place {
+            | Place::Static(index) => return Ok(index + 1),
+            | Place::Local(name) => name,
+        };
         let top = self.activations.len() - 1;
         self.state
             .objects
             .iter()
             .rev()
             .find(|object| {
-                object.name == name
+                object.name == *name
                     && object.frame_id == self.activations[top].id
                     && object.lifetime == "alive"
             })
@@ -115,10 +159,9 @@ impl Machine {
     pub fn read(&self, target: usize, offset: i32) -> Result<Value, Diagnostic> {
         let index = self.checked_location(target, offset)?;
         let object = &self.state.objects[target - 1];
-        let value = match &object.value {
-            | Value::Array(elements) => elements[index].clone(),
-            | value => value.clone(),
-        };
+        let value = layout::leaf(&object.value, index)
+            .cloned()
+            .unwrap_or(Value::Indeterminate);
         if value == Value::Indeterminate {
             // C99 indeterminate values may be unspecified or trap
             // representations; the machine stops conservatively, without
@@ -137,9 +180,28 @@ impl Machine {
         Ok(value)
     }
 
+    /// The value of the whole structure `structure` at leaf `offset`: a copy
+    /// of every member, indeterminate ones included, since a structure's
+    /// value is never a trap representation (C99 §6.2.6.1p6).
+    pub fn read_structure(
+        &self,
+        target: usize,
+        offset: i32,
+        structure: usize,
+    ) -> Result<Value, Diagnostic> {
+        let index = self.checked_location(target, offset)?;
+        let object = &self.state.objects[target - 1];
+        let ty = Type::Struct(structure);
+        let mut leaves = Vec::new();
+        layout::flatten(&object.value, &mut leaves);
+        let end = (index + ty.leaves(&self.structures)).min(leaves.len());
+        Ok(ty.shaped(&self.structures, &leaves[index..end]))
+    }
+
     /// Stores `value`, converted to the object's type, and returns the stored
     /// value. A `char` keeps the low 8 bits of an int as two's complement, the
-    /// implementation-defined result x86-64 compilers give.
+    /// implementation-defined result x86-64 compilers give. A structure is
+    /// stored member by member.
     /// C99: §6.3.1.3 paragraph 3, p. 43; PDF p. 55.
     pub fn store(
         &mut self,
@@ -148,14 +210,23 @@ impl Machine {
         mut value: Value,
     ) -> Result<Value, Diagnostic> {
         let index = self.checked_location(target, offset)?;
-        let object = &self.state.objects[target - 1];
-        if self.metadata[object.id - 1].ty == Type::Pointer && value == Value::Integer(0) {
-            value = Value::Pointer {
-                target: None,
-                offset: 0,
-            };
+        if let Value::Struct { .. } = value {
+            let mut leaves = Vec::new();
+            layout::flatten(&value, &mut leaves);
+            let object = &mut self.state.objects[target - 1].value;
+            for (at, leaf) in leaves.into_iter().enumerate() {
+                if let Some(slot) = layout::leaf_mut(object, index + at) {
+                    *slot = leaf;
+                }
+            }
+            return Ok(value);
         }
-        if self.metadata[object.id - 1].ty == Type::Char
+        let ty = self.leaf_type(target, offset);
+        if matches!(ty, Some(Type::Pointer | Type::StructPointer(_))) && value == Value::Integer(0)
+        {
+            value = Value::null();
+        }
+        if ty == Some(Type::Char)
             && let Value::Integer(integer) = value
         {
             #[expect(
@@ -165,29 +236,39 @@ impl Machine {
             let low = integer as i8;
             value = Value::Integer(i32::from(low));
         }
-        let valid = match self.metadata[object.id - 1].ty {
-            | Type::Pointer => matches!(value, Value::Pointer { .. }),
+        let valid = match ty {
+            | Some(Type::Pointer | Type::StructPointer(_)) =>
+                matches!(value, Value::Pointer { .. }),
             | _ => matches!(value, Value::Integer(_)),
         };
         if !valid {
             return Err(self.error("store type mismatch"));
         }
         self.check_pointer_lifetime(&value)?;
-        match &mut self.state.objects[target - 1].value {
-            | Value::Array(elements) => elements[index] = value.clone(),
-            | slot => *slot = value.clone(),
+        if let Some(slot) = layout::leaf_mut(&mut self.state.objects[target - 1].value, index) {
+            *slot = value.clone();
         }
         Ok(value)
     }
 
-    pub fn dereference(&self, pointer: &Value) -> Result<(usize, i32), Diagnostic> {
+    /// The location `pointer` points to and the structure type it
+    /// designates, if any. Pointing one past the end of its array, or
+    /// further out, designates nothing.
+    pub fn dereference(&self, pointer: &Value) -> Result<(usize, i32, Option<usize>), Diagnostic> {
         match *pointer {
             | Value::Pointer {
                 target: Some(target),
                 offset,
+                first,
+                length,
+                structure,
             } => {
+                if offset < first || offset >= first + length {
+                    let object = self.live_object(target)?;
+                    return Err(self.outside(object, offset, first, length));
+                }
                 let _index = self.checked_location(target, offset)?;
-                Ok((target, offset))
+                Ok((target, offset, structure))
             },
             | Value::Pointer { target: None, .. } => Err(Diagnostic::ub(
                 self.state.source_range,
@@ -195,56 +276,68 @@ impl Machine {
                 &clauses::INDIRECTION,
                 Undefined::NullIndirection,
             )),
-            | _ => Err(self.error("indirection requires an int pointer")),
+            | _ => Err(self.error("indirection requires a pointer")),
         }
     }
 
+    /// The undefined behavior of an access at leaf `offset` of `object`,
+    /// outside the array of `length` elements starting at leaf `first`.
+    fn outside(&self, object: &Object, offset: i32, first: i32, length: i32) -> Diagnostic {
+        let name = self.array_name(object.id, first);
+        let index = offset - first;
+        // Pointer arithmetic stops anything further out first.
+        let cause = if index == length {
+            Undefined::OnePastEnd
+        } else {
+            Undefined::PointerOutside
+        };
+        let array = matches!(self.object_type(object.id), Some(Type::Array(_))) || length > 1;
+        let message = if array && index == length {
+            format!(
+                "{name} has {length} elements, [0] to [{}], and this access is at [{index}], one \
+                 past the end: a pointer may point there, but no element is there to read or write",
+                length - 1
+            )
+        } else if array {
+            format!(
+                "{name} has {length} elements, [0] to [{}], and this access is at [{index}], \
+                 outside the array",
+                length - 1
+            )
+        } else if index == 1 {
+            // C99 §6.5.6p7: a single object acts as an array of one.
+            format!(
+                "{name} is a single object, which pointer arithmetic treats as an array of one \
+                 element, and this access is at [1], one past the end: a pointer may point there, \
+                 but no object is there to read or write"
+            )
+        } else {
+            format!(
+                "{name} is a single object, which pointer arithmetic treats as an array of one \
+                 element, and this access is at [{index}], outside it"
+            )
+        };
+        Diagnostic::ub(
+            self.state.source_range,
+            &message,
+            &clauses::POINTER_ARITHMETIC,
+            cause,
+        )
+    }
+
+    /// The scalar index of leaf `offset` in a live object.
     fn checked_location(&self, target: usize, offset: i32) -> Result<usize, Diagnostic> {
         let object = self.live_object(target)?;
-        let length = match self.metadata[object.id - 1].ty {
-            | Type::Array(count) => count,
-            | _ => 1,
-        };
+        let length = layout::count(&object.value);
         let index = usize::try_from(offset)
             .ok()
             .filter(|&offset| offset < length);
         index.ok_or_else(|| {
-            let name = &object.name;
-            // Pointer arithmetic stops anything further out first.
-            let cause = if usize::try_from(offset) == Ok(length) {
-                Undefined::OnePastEnd
-            } else {
-                Undefined::PointerOutside
-            };
-            let message = match self.metadata[object.id - 1].ty {
-                | Type::Array(_) if usize::try_from(offset) == Ok(length) => format!(
-                    "`{name}` has {length} elements, [0] to [{}], and this access is at \
-                     [{offset}], one past the end: a pointer may point there, but no element is \
-                     there to read or write",
-                    length - 1
-                ),
-                | Type::Array(_) => format!(
-                    "`{name}` has {length} elements, [0] to [{}], and this access is at \
-                     [{offset}], outside the array",
-                    length - 1
-                ),
-                // C99 §6.5.6p7: a single object acts as an array of one.
-                | _ if offset == 1 => format!(
-                    "`{name}` is a single object, which pointer arithmetic treats as an array of \
-                     one element, and this access is at [1], one past the end: a pointer may \
-                     point there, but no object is there to read or write"
-                ),
-                | _ => format!(
-                    "`{name}` is a single object, which pointer arithmetic treats as an array of \
-                     one element, and this access is at [{offset}], outside it"
-                ),
-            };
-            Diagnostic::ub(
-                self.state.source_range,
-                &message,
-                &clauses::POINTER_ARITHMETIC,
-                cause,
-            )
+            let total = i32::try_from(length).unwrap_or(i32::MAX);
+            match object.value {
+                | Value::Array(_) => self.outside(object, offset, 0, total),
+                | _ => self.outside(object, offset, 0, 1),
+            }
         })
     }
 
@@ -328,10 +421,12 @@ impl Machine {
                     Value::Pointer {
                         target: Some(a),
                         offset: x,
+                        ..
                     },
                     Value::Pointer {
                         target: Some(b),
                         offset: y,
+                        ..
                     },
                 ) = (&left, &right)
                     && a != b
@@ -341,7 +436,7 @@ impl Machine {
                         .error("comparison of offsets in distinct objects is outside the subset"));
                 }
                 Ok(Value::Integer(i32::from(
-                    (left == right) == (operator == "=="),
+                    left.same_address(&right) == (operator == "=="),
                 )))
             },
             | (pointer @ Value::Pointer { .. }, Value::Integer(0))
@@ -432,6 +527,9 @@ impl Machine {
         let Value::Pointer {
             target: Some(target),
             offset,
+            first,
+            length,
+            structure,
         } = *pointer
         else {
             return Err(Diagnostic::ub(
@@ -441,14 +539,11 @@ impl Machine {
                 Undefined::NullArithmetic,
             ));
         };
-        let object = self.live_object(target)?;
-        // C99 §6.5.6p7 treats a scalar as a one-element array here.
-        let length = match self.metadata[object.id - 1].ty {
-            | Type::Array(count) => count,
-            | _ => 1,
-        };
+        let _object = self.live_object(target)?;
+        // C99 §6.5.6p7 treats an object outside any array as an array of
+        // one element here.
         let result = i64::from(offset).checked_add(delta).filter(|&value| {
-            value >= 0 && usize::try_from(value).is_ok_and(|index| index <= length)
+            value >= i64::from(first) && value <= i64::from(first) + i64::from(length)
         });
         let Some(offset) = result else {
             return Err(Diagnostic::ub(
@@ -463,6 +558,9 @@ impl Machine {
         Ok(Value::Pointer {
             target: Some(target),
             offset,
+            first,
+            length,
+            structure,
         })
     }
 }
