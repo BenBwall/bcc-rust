@@ -141,6 +141,33 @@ the Clang identities, and none of them for `cl` or TCC
 bcc's own `-ffloatn-types` and `-fno-floatn-types`, which the GCC, Clang,
 TCC and clang-cl personalities pass on, override either default.
 
+GCC and Clang share a snippet: the source line under a gutter five wide, the
+caret and tildes under it, and nothing around them. bcc's labels, notes and help
+are left out; `-Xbcc --diagnostic-format=bcc` shows them, including the C99
+citations, the directories searched for a missing header and the advice naming
+`--max-nesting-depth`. What a diagnostic relates to, such as an earlier
+declaration, is a `note:` of its own with its own snippet.
+
+Most messages keep bcc's wording. The wording is each compiler's for an
+undeclared identifier, a missing expression, and the conversions in
+`semantic_analysis/compiler_wording.rs`. The differences left:
+
+- GCC's `In function 'f':` header and `each undeclared identifier` note, its
+  labels under an operand, and both compilers' `In file included from` lines
+  and macro expansion notes are not written.
+- Every range is a caret and tildes, where Clang marks a single token with the
+  caret alone and each side of an operator with tildes, and a range over several
+  lines starts each line with a caret.
+- A snippet's line number is the physical line, where Clang shows the one `#line`
+  gave. Tabs print as four spaces and each Unicode scalar counts as one cell, and
+  a column counts scalars, where GCC's counts display cells and Clang's bytes.
+- `-fdiagnostics-plain-output`, `-fno-diagnostics-show-caret`,
+  `-fno-caret-diagnostics` and `-fno-show-column` are accepted and change nothing,
+  and `-fdiagnostics-color=always` does not force color through a pipe;
+  `CLICOLOR_FORCE` does.
+- The whole unit is parsed before semantic analysis, so syntax errors come before
+  semantic ones, and recovery can find different errors after the first.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
@@ -332,8 +359,15 @@ options it implements, so the personality passes them through: `-c -S -E -o
 -fgnu89-inline -ffreestanding -ftls-model= -H -MG`. `-Wp,` is split and
 read as preprocessor options (Fedora's `-Wp,-D_FORTIFY_SOURCE=2`). `-s`,
 `-T`, `-u`, `-z` and `-e` become linker options. `-Wa,` and `-Xassembler`
-reach bcc's assembly inputs. `-g*`, `-pipe`, `-save-temps` and `--param`
-have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
+reach bcc's assembly inputs. `-save-temps` and `-save-temps=cwd|obj` keep
+each C source's `.i` and `.s`, named after the output (`o/x.i` for `-c g.c -o
+o/x.o`, `o/p.v1-g.i` and `o/p.v1-g.o` for a program `o/p.v1`), and
+`-save-temps=cwd` leaves the directory out. bcc writes them after the program
+compiles, from separate runs that read the saved `.i`, and never over the
+command's own output. So a failed compile leaves none, where GCC keeps the
+`.i`; a source read from standard input saves nothing; and `-fsyntax-only`
+writes nothing, where GCC and Clang write the `.i`.
+`-g*`, `-pipe` and `--param` have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
 refused: it implies `-ffast-math`, which defines `__FAST_MATH__` and links
 `crtfastmath`, which bcc does not do.
 
@@ -399,6 +433,10 @@ Scripts read the version at the end of the first line; Meson recognizes GCC
 by the Foundation's name, which the disclaimer contains.
 
 ## Clang
+
+`-save-temps` names what it keeps after the input: `g.i` and `g.s` in the
+working directory, or beside the output under `-save-temps=obj`. Clang's `.bc`
+is not written, because bcc makes no bitcode file.
 
 **Command line.** GCC's, plus `--target=`/`-target`, `-isysroot`,
 `-Xclang`, `--driver-mode=`, and `-fdiagnostics-format=`. Clang errors on an
