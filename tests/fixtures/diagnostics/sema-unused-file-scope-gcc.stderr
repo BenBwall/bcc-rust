@@ -1,0 +1,28 @@
+sema-unused-file-scope-gcc.c:1:12: warning: 'unused_object' defined but not used [-Wunused-variable]
+  |
+1 | static int unused_object;
+  |            ^^^^^^^^^^^^^ never used
+  |
+  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
+
+sema-unused-file-scope-gcc.c:2:18: warning: 'unused_constant' defined but not used [-Wunused-const-variable=]
+  |
+2 | static const int unused_constant = 1;
+  |                  ^^^^^^^^^^^^^^^ never used
+  |
+  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
+
+sema-unused-file-scope-gcc.c:4:13: warning: 'unused_function' defined but not used [-Wunused-function]
+  |
+4 | static void unused_function(void) {}
+  |             ^^^^^^^^^^^^^^^ never used
+  |
+  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
+
+sema-unused-file-scope-gcc.c:5:13: warning: 'undefined_function' declared 'static' but never defined [-Wunused-function]
+  |
+5 | static void undefined_function(void);
+  |             ^^^^^^^^^^^^^^^^^^ never defined
+  |
+  = note: C99 §6.9p3: an unused internal function declaration need not be defined; this warning identifies a likely missing body
+

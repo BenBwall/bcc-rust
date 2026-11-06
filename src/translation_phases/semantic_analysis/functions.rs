@@ -394,6 +394,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         None,
                     );
                     if let Some(prototype) = parameter.binding {
+                        if self.unused.tracking {
+                            self.inherit_unused_exemption(prototype, self.bindings.len() - 1);
+                        }
                         if let Some(&alignment) = self.binding_alignments.get(&prototype) {
                             _ = self
                                 .binding_alignments
@@ -1023,6 +1026,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entities.sort_unstable_by_key(|entity| entity.latest);
         for entity in entities {
             let b = self.bindings[entity.latest];
+            if let Some(definition) = entity.definition
+                && b.linkage == Linkage::Internal
+                && b.kind == BindingKind::Function
+            {
+                self.report_unused_function(b.name, definition);
+            }
             if b.linkage == Linkage::Internal
                 && entity.definition.is_none()
                 && !self.types.unanalyzed(b.ty)
@@ -1045,6 +1054,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+        self.report_unused_file_scope();
         for i in 0..self.definitions.len() {
             let definition = self.definitions[i];
             if matches!(

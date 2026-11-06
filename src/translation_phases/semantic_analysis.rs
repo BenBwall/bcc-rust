@@ -77,6 +77,7 @@ mod initializers;
 mod predefined;
 mod statements;
 mod traversal;
+mod unused;
 
 // Types and constant values
 mod constants;
@@ -807,6 +808,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | TypeSpecifiers::Enum(enumeration) => enumeration.attributes,
                     | _ => None,
                 };
+                if self.unused.tracking
+                    && let TypeSpecifiers::StructOrUnion(record) = s
+                {
+                    self.note_record_specifier(record);
+                }
                 self.check_extension_chain(attributes);
                 self.attribute_chain_operands(attributes);
             },
@@ -1263,7 +1269,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     );
                 }
                 self.declaration_attributes(
-                    attributes::Subject::Parameter,
+                    attributes::Subject::Parameter(binding),
                     p.declaration_specifiers.extensions,
                     p.declarator,
                 );
@@ -2168,6 +2174,7 @@ struct Analyzer<'a, 'tu, 's> {
     functions:               functions::State<'tu, 's>,
     va_list_type:            Option<TypeId>,
     statements:              statements::State<'tu, 's>,
+    unused:                  unused::UnusedState<'s>,
     control:                 builder::Builder<'tu, 's>,
     function_extensions:     FunctionExtensions<'tu>,
     /// Checked statement-level `asm` facts, by statement identity.

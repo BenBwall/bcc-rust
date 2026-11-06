@@ -75,6 +75,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 if operator == BinaryOperator::Comma {
                     self.discard_expression_result(left_expression);
+                    if self.unused.tracking {
+                        self.note_discarded(left_expression);
+                    }
                 }
                 let live = match operator {
                     | BinaryOperator::LogicalAnd => Some(true),
@@ -526,6 +529,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(e) = f.iteration_expression {
                     if let ExpressionSlot::Parsed(expression) = e {
                         self.discard_expression_result(expression);
+                        self.discarded_statement_value(expression);
                     }
                     self.expression_slot(e);
                 }
@@ -542,6 +546,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | ForInitializer::Expression(e) => {
                             if let ExpressionSlot::Parsed(expression) = e {
                                 self.discard_expression_result(expression);
+                                self.discarded_statement_value(expression);
                             }
                             self.expression_slot(e);
                         },
@@ -598,6 +603,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let ExpressionSlot::Parsed(expression) = e {
                     if !value_statement {
                         self.discard_expression_result(expression);
+                        self.discarded_statement_value(expression);
                     }
                     self.begin_expression_statement(s, expression);
                 }

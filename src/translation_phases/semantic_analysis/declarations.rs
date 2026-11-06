@@ -859,6 +859,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             Linkage::None
         };
+        if self.unused.tracking {
+            self.note_declared_type(self.bindings.len(), spec, kind, name);
+        }
         let thread = self.thread_storage(spec.extensions);
         if thread && function && !typedef {
             self.error(

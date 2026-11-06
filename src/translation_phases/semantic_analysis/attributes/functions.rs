@@ -59,6 +59,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && let Some(argument) =
                         list.arguments.iter().find(|a| a.index == attribute.index)
                 {
+                    self.note_attribute_argument(argument.expression);
                     operands.push(argument.expression);
                 }
             }

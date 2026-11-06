@@ -1190,9 +1190,26 @@ Unmodeled `__builtin_*` calls receive opaque function results rather
 than invented implicit-int return types; explicit visible prototypes still govern
 known calls. Opaque results suppress dependent return-conversion errors.
 
+#### Unused entities and values
+
+`unused.rs` implements `-Wunused-variable`, `-Wunused-parameter`,
+`-Wunused-but-set-variable`, `-Wunused-but-set-parameter`, `-Wunused-label`,
+`-Wunused-function`, `-Wunused-const-variable`, `-Wunused-value` and Clang's
+`-Wunused-comparison` and `-Wunused-but-set-global`, in the GCC and Clang
+words and on each compiler's own count: GCC's used and read flags, Clang's
+references minus discarded assignments, so `a++;` is a read in GCC and only a
+set in Clang. `-Wall` and `-Wunused` hold these groups; `-Wextra` holds the
+parameter groups, in GCC only together with `-Wunused`. A discarded value warns
+by default in Clang alone. Scope exit reports variables and the end of the
+translation unit reports file-scope objects and functions. With every group that
+needs them off no uses are recorded. `-Wunused-local-typedefs` is accepted and
+reports nothing, as are `const`/`pure` calls under `-Wunused-value`,
+`-Wunused-result`, and a value in a statement expression's last statement,
+which Clang reads.
+
 #### Remaining backend and quality work
 
-- Optional fallthrough/missing-return warnings and unused-label warnings are
+- Optional fallthrough/missing-return warnings are
   intentionally deferred. There is no CFG or claim of reachability analysis;
   infinite loops, noreturn attributes, exhaustive switches and goto cycles
   therefore receive no speculative fallthrough warnings.

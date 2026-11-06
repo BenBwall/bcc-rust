@@ -62,6 +62,19 @@ impl CompilerConfiguration {
     ) -> Self {
         let clang = self.identity.rules() == super::RuleSet::Clang;
         self.warning_options[group as usize].apply(option, clang);
+        if group == DiagnosticGroup::Unused {
+            // `-Wunused` holds its groups as `-Wall` does; an option that
+            // only sets their severity is an ordinary parent's.
+            for &child in DiagnosticGroup::UNUSED {
+                match option {
+                    | WarningOption::Enable(enabled) =>
+                        self.warning_options[child as usize].apply_all(enabled),
+                    | WarningOption::Error(_) =>
+                        self.warning_options[child as usize].apply(option, clang),
+                }
+            }
+            return self;
+        }
         if group == DiagnosticGroup::UnknownPragmas {
             self.warning_options[DiagnosticGroup::UnknownStdcPragma as usize].apply(option, clang);
         }
@@ -85,6 +98,10 @@ impl CompilerConfiguration {
             | DiagnosticGroup::IncompatiblePointerTypes =>
                 &[DiagnosticGroup::GccConditionalPointerMismatch],
             | DiagnosticGroup::Normalized => &[DiagnosticGroup::PedanticNormalized],
+            | DiagnosticGroup::UnusedVariable if clang => &[DiagnosticGroup::UnusedConstVariable],
+            | DiagnosticGroup::UnusedButSetVariable if clang =>
+                &[DiagnosticGroup::UnusedButSetGlobal],
+            | DiagnosticGroup::UnusedValue if clang => &[DiagnosticGroup::UnusedComparison],
             | _ => &[],
         };
         for &child in children {
@@ -117,6 +134,27 @@ impl CompilerConfiguration {
             DiagnosticGroup::VoidReturnMismatch,
         ] {
             self.warning_options[group as usize].apply_all(enabled);
+        }
+        self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
+        for &group in DiagnosticGroup::UNUSED {
+            self.warning_options[group as usize].apply_all(enabled);
+        }
+        self
+    }
+
+    /// `-Wextra` (true) or `-Wno-extra` at its argv position, for the groups
+    /// bcc models under it. Clang's holds the parameter groups directly;
+    /// GCC's holds them only with `-Wunused`, which
+    /// [`Self::diagnostic_severity`] asks when it reads them.
+    pub(crate) fn with_extra_warnings(mut self, enabled: bool) -> Self {
+        self.warning_options[DiagnosticGroup::Extra as usize].apply_all(enabled);
+        if self.identity.rules() == super::RuleSet::Clang {
+            for group in [
+                DiagnosticGroup::UnusedParameter,
+                DiagnosticGroup::UnusedButSetParameter,
+            ] {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
         }
         self
     }
@@ -180,6 +218,16 @@ impl CompilerConfiguration {
             (group.default() == GroupDefault::Permerror).then(|| self.permerror_default(group));
         let enabled = match permerror {
             | Some(default) => default.is_some(),
+            | None if group.default() == GroupDefault::ClangWarning =>
+                self.identity.rules() == super::RuleSet::Clang,
+            | None if matches!(
+                group,
+                DiagnosticGroup::UnusedParameter | DiagnosticGroup::UnusedButSetParameter
+            ) && self.identity.rules() != super::RuleSet::Clang =>
+                self.warning_options[DiagnosticGroup::Extra as usize].all() == Some(true)
+                    && self.warning_options[DiagnosticGroup::Unused as usize]
+                        .enabled_with_all(DiagnosticGroup::Unused, false)
+                        == Some(true),
             | None =>
                 group.enabled_by_default()
                     || (group.default() == GroupDefault::Extension
@@ -509,6 +557,31 @@ diagnostic_groups! {
     /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and
     /// `-Werror=` options unless they have their own.
     Conversion => Some("conversion"), Ignored, false;
+    /// `-Wextra`, which reports nothing itself.
+    Extra => Some("extra"), Ignored, false;
+    /// `-Wunused`, which reports nothing itself and holds
+    /// [`DiagnosticGroup::UNUSED`]. `-Wall` holds it.
+    Unused => Some("unused"), Ignored, false;
+    /// A local variable, or a file-scope object in Clang's words, that
+    /// nothing refers to; in Clang it holds the const group.
+    UnusedVariable => Some("unused-variable"), Ignored, false;
+    /// An internal `const` object in the main file that nothing refers to.
+    UnusedConstVariable => Some("unused-const-variable"), Ignored, false;
+    /// A parameter of a definition that nothing refers to, under `-Wextra`.
+    UnusedParameter => Some("unused-parameter"), Ignored, false;
+    /// A variable only ever assigned to.
+    UnusedButSetVariable => Some("unused-but-set-variable"), Ignored, false;
+    /// Clang: an internal object only ever assigned to.
+    UnusedButSetGlobal => Some("unused-but-set-global"), Ignored, false;
+    /// A parameter only ever assigned to, under `-Wextra`.
+    UnusedButSetParameter => Some("unused-but-set-parameter"), Ignored, false;
+    /// A label nothing jumps to.
+    UnusedLabel => Some("unused-label"), Ignored, false;
+    /// A statement's discarded value that computed nothing it needed: a
+    /// warning by default in Clang, and under `-Wall` in GCC.
+    UnusedValue => Some("unused-value"), ClangWarning, false;
+    /// Clang: a discarded comparison, also a warning by default.
+    UnusedComparison => Some("unused-comparison"), ClangWarning, false;
 }
 
 /// A group's severity when no option names it.
@@ -521,9 +594,24 @@ enum GroupDefault {
     Warning,
     Ignored,
     Extension,
+    /// A warning by default under Clang's rules, and otherwise off.
+    ClangWarning,
 }
 
 impl DiagnosticGroup {
+    /// The groups `-Wunused` and so `-Wall` hold. `-Wunused-parameter` and
+    /// `-Wunused-but-set-parameter` are `-Wextra`'s.
+    pub(crate) const UNUSED: &[Self] = &[
+        Self::UnusedFunction,
+        Self::UnusedVariable,
+        Self::UnusedConstVariable,
+        Self::UnusedButSetVariable,
+        Self::UnusedButSetGlobal,
+        Self::UnusedLabel,
+        Self::UnusedValue,
+        Self::UnusedComparison,
+    ];
+
     /// Whether Clang's `-Wconversion` holds this group.
     const fn converts(self) -> bool {
         matches!(
@@ -552,8 +640,10 @@ impl DiagnosticGroup {
     pub(crate) const fn default_severity(self) -> ErrorSeverity {
         match self.default() {
             | GroupDefault::Error | GroupDefault::Permerror => ErrorSeverity::Error,
-            | GroupDefault::Warning | GroupDefault::Ignored | GroupDefault::Extension =>
-                ErrorSeverity::Warning,
+            | GroupDefault::Warning
+            | GroupDefault::Ignored
+            | GroupDefault::Extension
+            | GroupDefault::ClangWarning => ErrorSeverity::Warning,
         }
     }
 
@@ -611,6 +701,11 @@ impl WarningSettings {
         self.get(Self::ENABLED)
     }
 
+    /// What the last `-Wall`, or the option standing for it here, said.
+    const fn all(self) -> Option<bool> {
+        self.get(Self::ALL)
+    }
+
     const fn error(self) -> Option<bool> {
         self.get(Self::ERROR)
     }
@@ -644,7 +739,16 @@ impl WarningSettings {
             match group {
                 | DiagnosticGroup::ImplicitFunctionDeclaration
                 | DiagnosticGroup::ImplicitLibraryFunction
-                | DiagnosticGroup::ImplicitInt => all,
+                | DiagnosticGroup::ImplicitInt
+                | DiagnosticGroup::Unused
+                | DiagnosticGroup::UnusedFunction
+                | DiagnosticGroup::UnusedVariable
+                | DiagnosticGroup::UnusedConstVariable
+                | DiagnosticGroup::UnusedButSetVariable
+                | DiagnosticGroup::UnusedButSetGlobal
+                | DiagnosticGroup::UnusedLabel
+                | DiagnosticGroup::UnusedValue
+                | DiagnosticGroup::UnusedComparison => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
                 | _ => None,
             }

@@ -308,6 +308,18 @@ impl Context<'_> {
             .unwrap_or_else(|| self.first_source_vector(source))
     }
 
+    /// Whether a macro's replacement list, not its argument or the file,
+    /// wrote the first token of `source`. `source` must not be empty.
+    pub(crate) fn from_macro_body(&self, source: SourceVectors) -> bool {
+        self.invocation_site(source).is_some()
+    }
+
+    /// Whether `source`'s expansion location is in the main source file, not
+    /// in a file it includes. `source` must not be empty.
+    pub(crate) fn in_main_file(&self, source: SourceVectors) -> bool {
+        self.physical_source_file(self.expansion_location(source).source_file_index) == 0
+    }
+
     /// The outermost invocation that produced the first token of `source`,
     /// unless a file spells that token.
     fn invocation_site(&self, source: SourceVectors) -> Option<&SourceVector> {

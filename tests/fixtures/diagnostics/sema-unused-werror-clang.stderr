@@ -1,0 +1,8 @@
+sema-unused-werror-clang.c:1:20: error: unused variable 'unused' [-Wunused-variable]
+  |
+1 | void g(void) { int unused; }
+  |                    ^^^^^^ never used
+  |
+  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
+
+1 error generated.

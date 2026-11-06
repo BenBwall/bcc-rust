@@ -107,6 +107,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .and_then(NonZeroU8::new);
                     }
                     info.binding = Some(index);
+                    if self.unused.tracking {
+                        self.note_identifier_use(index, e);
+                    }
                     if self.function_extensions.function(index).is_none()
                         && !self.overload_previous.contains_key(&index)
                     {
@@ -393,6 +396,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 left_expression,
                 right_expression,
             } => {
+                if self.unused.values && operator == BinaryOperator::Comma {
+                    self.check_comma_left(left_expression, e);
+                }
                 info = self.type_binary(
                     e,
                     operator,

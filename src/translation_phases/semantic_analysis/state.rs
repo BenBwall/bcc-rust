@@ -33,6 +33,7 @@ use crate::{
 impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
     pub(super) fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
         let tu = context.tu_arena();
+        let configuration = context.configuration;
         let target = context.configuration.layout();
         let pack_alignments = super::packing::states(context, scratch);
         let mut analyzer = Self {
@@ -108,6 +109,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             functions: functions::State::new(scratch),
             va_list_type: None,
             statements: statements::State::new(scratch),
+            unused: super::unused::UnusedState::new(scratch, configuration),
             control: super::facts::builder::Builder::new(scratch),
             function_extensions: super::FunctionExtensions::new(tu),
             assembly: ArenaMap::with_hasher_in(FxBuildHasher, tu),

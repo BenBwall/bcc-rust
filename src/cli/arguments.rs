@@ -611,7 +611,7 @@ enum LanguageFlag {
     WarningsAsErrors(bool),
     WarningGroup(DiagnosticGroup, WarningOption),
     AllWarnings(bool),
-    ExtraWarnings,
+    ExtraWarnings(bool),
     UnknownWarning,
     /// `-pedantic` or `-Wpedantic` (true), or `-Wno-pedantic` (false).
     Pedantic(bool),
@@ -738,7 +738,8 @@ impl LanguageFlag {
             | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
             | "-Wall" => return Some(Self::AllWarnings(true)),
             | "-Wno-all" => return Some(Self::AllWarnings(false)),
-            | "-Wextra" | "-Wno-extra" => return Some(Self::ExtraWarnings),
+            | "-Wextra" | "-W" => return Some(Self::ExtraWarnings(true)),
+            | "-Wno-extra" => return Some(Self::ExtraWarnings(false)),
             | "-Wno-pedantic" => return Some(Self::Pedantic(false)),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
@@ -875,6 +876,17 @@ impl LanguageFlag {
                 (name, WarningOption::Error(false))
             } else if let Some(name) = text.strip_prefix("no-") {
                 (name, WarningOption::Enable(false))
+            } else if let Some(level) = text.strip_prefix("unused-const-variable=") {
+                // GCC's level: 0 is off; level 1, which `-Wunused` gives C, and
+                // level 2 differ in headers, which bcc does not report.
+                return Some(if matches!(level, "0" | "1" | "2") {
+                    Self::WarningGroup(
+                        DiagnosticGroup::UnusedConstVariable,
+                        WarningOption::Enable(level != "0"),
+                    )
+                } else {
+                    Self::UnknownWarning
+                });
             } else if let Some(level) = text.strip_prefix("normalized=") {
                 // GCC's level: `none` turns the check off, and the others
                 // all report the one case bcc detects.
@@ -908,19 +920,12 @@ impl LanguageFlag {
 
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
-            | Self::UnknownWarning
-            | Self::ExtraWarnings
-            | Self::Relocation
-            | Self::Code
-            | Self::Builtins => configuration,
+            | Self::UnknownWarning | Self::Relocation | Self::Code | Self::Builtins =>
+                configuration,
             // GCC's and Clang's `-Wall` hold `-Wimplicit` and
             // `-Wreturn-mismatch`, each in its own way.
-            | Self::AllWarnings(enabled) => configuration
-                .with_warning_option(
-                    DiagnosticGroup::UnusedFunction,
-                    WarningOption::Enable(enabled),
-                )
-                .with_all_warnings(enabled),
+            | Self::AllWarnings(enabled) => configuration.with_all_warnings(enabled),
+            | Self::ExtraWarnings(enabled) => configuration.with_extra_warnings(enabled),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::Pedantic(enabled) => configuration.with_pedantic(enabled),

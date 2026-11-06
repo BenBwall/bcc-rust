@@ -1,0 +1,7 @@
+sema-unused-label-gcc.c:2:5: warning: label 'unused' defined but not used [-Wunused-label]
+  |
+2 |     unused:
+  |     ^^^^^^ never jumped to
+  |
+  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
+

@@ -57,7 +57,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | Subject::Object { binding, .. } if self.points_to_function(binding) => {},
             // `typedef __attribute__((interrupt)) void handler(void *);`
             // declares functions whose entry bcc would not see.
-            | Subject::Typedef =>
+            | Subject::Typedef(_) =>
                 self.refuse(UnsupportedAttribute::CallingConvention, attribute.source),
             | _ => self.ignored(attribute),
         }
@@ -79,7 +79,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.attributes.machine_entries = true;
             },
             | Subject::Object { binding, .. } if self.points_to_function(binding) => {},
-            | Subject::Typedef =>
+            | Subject::Typedef(_) =>
                 self.refuse(UnsupportedAttribute::CallingConvention, attribute.source),
             | _ => self.ignored(attribute),
         }
