@@ -892,3 +892,155 @@ fn gcc_folds_an_operation_with_no_sign() {
         );
     }
 }
+
+/// `{ 0 }` against GCC 14.2 and Clang 23.1.1. GCC folds its one element and
+/// wants an integer zero before or after the conversion to the member, so a
+/// cast's converted value counts where the operand does not, and `0.0` counts
+/// for an `int` but not for a `float`. Clang wants an integer literal, as
+/// written.
+#[test]
+fn the_zero_initializer_is_the_folded_value_for_gcc() {
+    const TYPES: &str = "struct S{int a,b;};struct N{struct S s;int c;};struct P{void*p;int \
+                         b;};struct F{float f;int b;};struct E3{int a,b,c;};struct C{char a;int \
+                         b;};struct B{_Bool a;int b;};enum En{Z,O};struct EE{enum En e;int \
+                         b;};struct CX{_Complex int c;int b;};struct D{double d;int b;};int \
+                         g;void fn(void);";
+    for (source, gcc, clang) in [
+        ("struct S x={0};", 0, 0),
+        ("struct S x={(0)};", 0, 1),
+        ("struct S x={0u};", 0, 0),
+        ("struct S x={0LL};", 0, 0),
+        ("struct S x={'\\0'};", 0, 1),
+        ("struct S x={L'\\0'};", 0, 1),
+        ("struct S x={0x0};", 0, 0),
+        ("struct S x={00};", 0, 0),
+        ("struct S x={-0};", 0, 1),
+        ("struct S x={!1};", 0, 1),
+        ("struct S x={1-1};", 0, 1),
+        ("struct S x={Z};", 0, 1),
+        ("struct S x={O};", 1, 1),
+        ("struct S x={sizeof(int)-4};", 0, 1),
+        ("struct S x={(char)0};", 0, 1),
+        ("struct S x={(unsigned char)256};", 0, 1),
+        ("struct S x={(unsigned char)-256};", 0, 1),
+        ("struct S x={(signed char)0x100};", 0, 1),
+        ("struct S x={(int)0.5};", 0, 1),
+        ("struct S x={(int)-0.5};", 0, 1),
+        ("struct S x={(int)0.0};", 0, 1),
+        ("struct S x={(int)1.5};", 1, 1),
+        ("struct S x={(int)(1ULL<<32)};", 0, 1),
+        ("struct S x={(int)((1ULL<<32)+1)};", 1, 1),
+        ("struct S x={(short)65536};", 0, 1),
+        ("struct S x={(_Bool)0};", 0, 1),
+        ("struct S x={(_Bool)0.5};", 1, 1),
+        ("struct S x={(_Bool)2};", 1, 1),
+        ("struct S x={(_Bool)0.0};", 0, 1),
+        ("struct S x={0.0};", 0, 1),
+        ("struct S x={0.0f};", 0, 1),
+        ("struct S x={(float)0};", 0, 1),
+        ("struct S x={(int)0.0f};", 0, 1),
+        ("struct S x={(double)0};", 0, 1),
+        ("struct S x={(int)(char)256};", 0, 1),
+        ("struct S x={((int)0)};", 0, 1),
+        ("struct S x={(int)(0)};", 0, 1),
+        ("struct S x={(long)(void*)0};", 0, 1),
+        ("struct S x={(int)(long)(void*)0};", 0, 1),
+        ("struct S x={(int)1e30};", 1, 1),
+        ("struct S x={(unsigned)1e30};", 1, 1),
+        ("struct S x={1};", 1, 1),
+        ("struct P x={(void*)0};", 0, 1),
+        ("struct P x={0};", 0, 0),
+        ("struct P x={(char*)0};", 0, 1),
+        ("struct P x={(void*)(char*)0};", 0, 1),
+        ("struct P x={(void*)1};", 1, 1),
+        ("struct F x={0.0f};", 1, 1),
+        ("struct F x={0};", 0, 0),
+        ("struct F x={(float)0};", 1, 1),
+        ("struct F x={(int)0.5};", 0, 1),
+        ("struct D x={0.0};", 1, 1),
+        ("struct D x={0};", 0, 0),
+        ("struct C x={'\\0'};", 0, 1),
+        ("struct C x={0};", 0, 0),
+        ("struct B x={0};", 0, 0),
+        ("struct B x={(_Bool)0};", 0, 1),
+        ("struct B x={(_Bool)0.5};", 1, 1),
+        ("struct EE x={Z};", 0, 1),
+        ("struct EE x={0};", 0, 0),
+        ("struct EE x={(enum En)0};", 0, 1),
+        ("struct N x={0};", 0, 0),
+        ("struct N x={{1},0};", 1, 1),
+        ("struct N x={{(char)256,0}};", 1, 1),
+        ("struct N x={{(int)0.5,1}};", 1, 1),
+        ("struct E3 x={0,0};", 1, 1),
+        ("struct E3 x={(int)0.5,0};", 1, 1),
+        ("struct E3 x={0,(int)0.5};", 1, 1),
+        ("struct E3 x={0,1};", 1, 1),
+        ("struct E3 x={1,0};", 1, 1),
+        ("struct E3 x={(char)256,(char)0};", 1, 1),
+        ("struct E3 x={0,0,0};", 0, 0),
+        ("void h(void){struct S x={(int)0.5};(void)x;}", 0, 1),
+        (
+            "void h(struct S);void i(void){h((struct S){(int)0.5});}",
+            0,
+            1,
+        ),
+        ("struct S x[2]={{(int)0.5},{1,2}};", 0, 1),
+        (
+            "void h(void){struct S x={(unsigned char)256};(void)x;}",
+            0,
+            1,
+        ),
+        (
+            "void h(struct S);void i(void){h((struct S){(unsigned char)256});}",
+            0,
+            1,
+        ),
+        ("struct S x[2]={{(unsigned char)256},{1,2}};", 0, 1),
+        ("void h(void){struct S x={0.0};(void)x;}", 0, 1),
+    ] {
+        let source = format!("{TYPES}{source}");
+        assert_eq!(
+            reports(
+                &source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::MissingFieldInitializer
+            ),
+            gcc,
+            "GCC: {source}"
+        );
+        assert_eq!(
+            reports(
+                &source,
+                CompilerIdentity::Clang,
+                SemanticErrorKind::MissingFieldInitializer
+            ),
+            clang,
+            "Clang: {source}"
+        );
+    }
+    // The member through elided braces, past an unnamed one. Clang's elided
+    // lists are not modeled; see the module's documentation.
+    for (source, gcc) in [
+        (
+            "struct S { int a, b; }; struct N { struct S s; int c; }; struct N x = {0.5};",
+            0,
+        ),
+        ("struct A { int a[2]; int b; }; struct A x = {0.5};", 0),
+        (
+            "struct B { int : 3; int a; int b; }; struct B x = {0.5};",
+            0,
+        ),
+        ("struct B { _Bool a; int b; }; struct B x = {0.5};", 1),
+        ("struct B { _Bool a; int b; }; struct B x = {0.0};", 0),
+    ] {
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::MissingFieldInitializer
+            ),
+            gcc,
+            "{source}"
+        );
+    }
+}

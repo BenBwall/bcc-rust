@@ -37,6 +37,7 @@ use crate::{
                 TypeSpecifiers,
             },
             syntax::{
+                Constant,
                 Expression,
                 ExpressionType as E,
             },
@@ -146,7 +147,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             next += 1;
         }
         let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
-        if designators || (gcc && designated) || list.elements.is_empty() || self.zero_idiom(list) {
+        if designators
+            || (gcc && designated)
+            || list.elements.is_empty()
+            || self.zero_idiom(
+                list,
+                members
+                    .iter()
+                    .find(|member| Self::initializable(member))
+                    .map(|member| member.ty),
+            )
+        {
             return;
         }
         let Some(member) = members[next.min(members.len())..]
@@ -262,34 +273,69 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && matches!(self.types.nodes[info.ty.index], TypeKind::Tag(_))
     }
 
-    /// `{ 0 }`: Clang wants the literal, and GCC any constant zero, a null
-    /// pointer's cast included.
-    fn zero_idiom(&self, list: &'tu BracedInitializerList<'tu>) -> bool {
+    /// `{ 0 }`, with `first` the type of the member it initializes. Clang wants
+    /// an integer literal, as written (`isIdiomaticZeroInitializer`). GCC wants
+    /// one element whose folded value is an integer zero, before or after it is
+    /// converted to the member: `(unsigned char)256` and `(int)0.5` are, `0.0`
+    /// is for an `int` and not for a `float`.
+    /// C99: §6.7.8p21, p. 127; PDF p. 139.
+    fn zero_idiom(&self, list: &'tu BracedInitializerList<'tu>, first: Option<TypeId>) -> bool {
         let [item] = list.elements.as_slice() else {
             return false;
         };
-        let InitializerType::AssignmentExpression(mut e) = item.initializer.kind else {
+        let InitializerType::AssignmentExpression(e) = item.initializer.kind else {
             return false;
         };
         if item.designation.is_some() {
             return false;
         }
-        let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
+        if self.context.configuration.compiler_identity() != CompilerIdentity::Gcc {
+            return matches!(e.kind, E::Constant(Constant::Integer(_)))
+                && self
+                    .expression_info(e)
+                    .integer
+                    .is_some_and(super::Integer::is_zero);
+        }
+        self.folds_to_integer_zero(e)
+            || (self.expression_info(e).floating()).is_some_and(|value| {
+                first.is_some_and(|first| {
+                    self.floating_converts_to_zero(value, self.first_scalar(first))
+                })
+            })
+    }
+
+    /// GCC's `integer_zerop` on `e` as it folds: a cast to an integer has
+    /// converted a constant, and a pointer's or an integer's cast of a null
+    /// pointer stays one.
+    fn folds_to_integer_zero(&self, e: &'tu Expression<'tu>) -> bool {
+        let e = Self::without_parentheses(e);
+        let info = self.expression_info(e);
+        if let Some(value) = info.integer {
+            return value.is_zero();
+        }
+        match e.kind {
+            | E::Cast {
+                operand_expression, ..
+            } if matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(_))
+                || self.integer_type(info.ty).is_some() =>
+                self.folds_to_integer_zero(operand_expression),
+            | _ => false,
+        }
+    }
+
+    /// The scalar a brace-eliding initializer reaches first in `ty`.
+    /// C99: §6.7.8p20, p. 127; PDF p. 139.
+    fn first_scalar(&self, mut ty: TypeId) -> TypeId {
         loop {
-            match e.kind {
-                | E::Parenthesized { expression } => e = expression,
-                | E::Cast {
-                    operand_expression, ..
-                } if gcc => e = operand_expression,
-                | _ => break,
+            match self.types.nodes[ty.index] {
+                | TypeKind::Array(element, _) => ty = element,
+                | TypeKind::Tag(id) => match self.types.tags[id].members.get().first() {
+                    | Some(member) => ty = member.ty,
+                    | None => return ty,
+                },
+                | _ => return ty,
             }
         }
-        if !gcc && !matches!(e.kind, E::Constant(_)) {
-            return false;
-        }
-        self.expression_info(e)
-            .integer
-            .is_some_and(super::Integer::is_zero)
     }
 
     /// Each compiler's words, for `ty`'s `member`.
