@@ -458,15 +458,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     });
                     // The parser already reports the C23 spelling under a
                     // pedantic policy. Do not emit the same requirement twice.
+                    let source = syntax.map_or(f.declarator.source_vectors, |p| p.source_vectors);
                     if parser_exempt
-                        || self.context.configuration.extension_policy()
+                        || self.context.configuration_at(source).extension_policy()
                             == crate::configuration::ExtensionPolicy::Allow
                     {
                         self.extension_error(
                             crate::configuration::Feature::UnnamedDefinitionParameters,
                             crate::translation_phases::DiagnosticPolicy::Warning,
                             SemanticErrorKind::UnnamedDefinitionParameter,
-                            syntax.map_or(f.declarator.source_vectors, |p| p.source_vectors),
+                            source,
                             None,
                         );
                     }
@@ -479,6 +480,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.define_func_name(name);
         self.check_main_definition(f, ty);
+        self.note_scope_end(f.body.source_vectors);
         self.work.push(Work::PopScope);
         self.work.push(Work::Statement(f.body, false));
         self.work

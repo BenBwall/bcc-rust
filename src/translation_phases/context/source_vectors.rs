@@ -189,6 +189,12 @@ impl Context<'_> {
         );
         let (arena, start) = SourceArena::decode(source);
         let range = start as usize..(start + source.length()) as usize;
+        if target == SourceArena::Retained
+            && source.length() != 0
+            && self.records_retained_pragma_copies()
+        {
+            self.record_retained_pragma_copy(end - source.length(), source);
+        }
         if source.length() != 0
             && let Some(site) = self.expansion_starts[arena as usize].get(start)
         {
@@ -322,6 +328,17 @@ impl Context<'_> {
     /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
     pub(crate) fn spelled_in_system_header(&self, source: SourceVectors) -> bool {
         source.length() != 0 && self.in_system_header(self.first_source_vector(source))
+    }
+
+    /// The last vector of `source`, which belongs to its last token. An empty
+    /// range stays empty.
+    pub(crate) fn last_source_vector(source: SourceVectors) -> SourceVectors {
+        if source.length() == 0 {
+            return source;
+        }
+        let (arena, start) = SourceArena::decode(source);
+        let end = start + source.length();
+        arena.encode(end - 1, end)
     }
 
     /// Whether `source`'s expansion location is in the main source file, not

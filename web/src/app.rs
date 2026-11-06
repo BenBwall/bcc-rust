@@ -108,6 +108,8 @@ pub fn App() -> impl IntoView {
         // The page lives as long as the listener.
         let _handle = window_event_listener(ev::keydown, move |event| state.shortcut(&event));
     });
+    let on_screen = RwSignal::new(false);
+    Effect::new(move || watch_workbench(on_screen));
     view! {
         <a class="skip-link" href="#workbench">"Skip to the workbench"</a>
         <Header state />
@@ -115,7 +117,12 @@ pub fn App() -> impl IntoView {
             <Hero state />
             <Lessons state />
             <EngineNotice state />
-            <section class="workbench" id="workbench" aria-label="Workbench">
+            <section
+                class="workbench"
+                class:is-on-screen=move || on_screen.get()
+                id="workbench"
+                aria-label="Workbench"
+            >
                 <Toolbar state />
                 <SiteError state />
                 <div class="workbench-grid">
@@ -1963,6 +1970,30 @@ fn publish_height(toolbar: NodeRef<leptos::html::Div>) {
         closure.forget();
         true
     });
+}
+
+/// Keeps `on_screen` up to date with whether any of the workbench is in the
+/// viewport. On a phone the execution keys are fixed to the screen's edge, and
+/// away from the workbench they would cover the page and step nothing in sight.
+fn watch_workbench(on_screen: RwSignal<bool>) {
+    let Some(workbench) = document().get_element_by_id("workbench") else {
+        return;
+    };
+    let closure = wasm_bindgen::closure::Closure::<dyn FnMut(js_sys::Array)>::new(
+        move |entries: js_sys::Array| {
+            if let Ok(latest) = entries
+                .at(-1)
+                .dyn_into::<web_sys::IntersectionObserverEntry>()
+            {
+                on_screen.set(latest.is_intersecting());
+            }
+        },
+    );
+    if let Ok(observer) = web_sys::IntersectionObserver::new(closure.as_ref().unchecked_ref()) {
+        observer.observe(&workbench);
+    }
+    // The workbench lives as long as the page.
+    closure.forget();
 }
 
 #[component]

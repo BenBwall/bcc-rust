@@ -219,7 +219,9 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     && !self.reported_empty_translation_unit
                     && !self.context.pragma_content
                     && crate::translation_phases::policy_severity(
-                        self.context.configuration.extension_policy(),
+                        self.context
+                            .configuration_at(crate::translation_phases::SourceVectors::default())
+                            .extension_policy(),
                         crate::translation_phases::DiagnosticPolicy::Extension,
                     )
                     .is_some()

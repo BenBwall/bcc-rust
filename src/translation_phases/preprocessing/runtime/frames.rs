@@ -24,6 +24,8 @@ use super::super::{
 use crate::{
     translation_phases::{
         SourceVector,
+        TextEvent,
+        TextEventKind,
         preprocessor_tokenizer::{
             TokenSource,
             TokenSpacing,
@@ -51,6 +53,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// `if-section` grammar of §6.10 paragraph 1, p. 145; PDF p. 157.
     pub(in crate::translation_phases::preprocessing) fn pop_tokenizer_frame(&mut self) {
         let frame = self.tokenizer_stack.pop();
+        let was_source_file = matches!(
+            frame,
+            Some(TokenizerFrame {
+                frame_type: TokenizerFrameType::SourceFile { .. },
+                ..
+            })
+        );
         if let Some(TokenizerFrame {
             frame_type:
                 TokenizerFrameType::SourceFile {
@@ -73,6 +82,24 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
         if let Some(last) = self.tokenizer_stack.last() {
             self.tokenizer = last.tokenizer.clone();
+        }
+        if was_source_file && self.state.text_includes > 0 {
+            self.state.text_includes -= 1;
+            self.record_text_return();
+        }
+    }
+
+    /// Records for a text of phase 4 that the reader returned from an included
+    /// file to the one that names it, on the line after the `#include`.
+    #[inline(never)]
+    fn record_text_return(&mut self) {
+        if let Some((file, position)) = self.reading_position() {
+            self.context.text_events.push(TextEvent {
+                position: self.context.preprocessed_tokens,
+                file,
+                line: position.line + 1,
+                kind: TextEventKind::FileReturned,
+            });
         }
     }
 }

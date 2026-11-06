@@ -1,0 +1,78 @@
+pragma-diagnostic-malformed-gcc.c:1:23: warning: missing `error`, `warning`, `ignored`, `push`, `pop`, or `ignored_attributes` after `#pragma GCC diagnostic` [-Wpragmas]
+  |
+1 | #pragma GCC diagnostic
+  |                       ^ expected a kind of diagnostic pragma
+
+pragma-diagnostic-malformed-gcc.c:2:24: warning: expected `error`, `warning`, `ignored`, `push`, `pop`, `ignored_attributes` after `#pragma GCC diagnostic` [-Wpragmas]
+  |
+2 | #pragma GCC diagnostic bogus
+  |                        ^^^^^ expected a kind of diagnostic pragma
+
+pragma-diagnostic-malformed-gcc.c:3:31: warning: missing option after `#pragma GCC diagnostic` kind [-Wpragmas]
+  |
+3 | #pragma GCC diagnostic ignored
+  |                               ^ expected a string literal
+
+pragma-diagnostic-malformed-gcc.c:4:32: warning: missing option after `#pragma GCC diagnostic` kind [-Wpragmas]
+  |
+4 | #pragma GCC diagnostic ignored -Wundef
+  |                                ^ expected a string literal
+
+pragma-diagnostic-malformed-gcc.c:5:32: warning: unknown option after `#pragma GCC diagnostic` kind [-Wpragmas]
+  |
+5 | #pragma GCC diagnostic ignored "-Wnosuch"
+  |                                ^^^^^^^^^^ no such warning option
+
+pragma-diagnostic-malformed-gcc.c:6:32: warning: `Wundef` is not an option that controls warnings [-Wpragmas]
+  |
+6 | #pragma GCC diagnostic ignored "Wundef"
+  |                                ^^^^^^^^ no warning option
+
+pragma-diagnostic-malformed-gcc.c:7:32: warning: `-Werror=undef` is not an option that controls warnings [-Wpragmas]
+  |
+7 | #pragma GCC diagnostic ignored "-Werror=undef"
+  |                                ^^^^^^^^^^^^^^^ no warning option
+
+pragma-diagnostic-malformed-gcc.c:8:32: warning: `-pedantic` is not an option that controls warnings [-Wpragmas]
+  |
+8 | #pragma GCC diagnostic ignored "-pedantic"
+  |                                ^^^^^^^^^^^ no warning option
+
+pragma-diagnostic-malformed-gcc.c:9:32: warning: missing option after `#pragma GCC diagnostic` kind [-Wpragmas]
+   |
+ 9 | #pragma GCC diagnostic warning L"-Wundef"
+   |                                ^^^^^^^^^^ expected a string literal
+
+pragma-diagnostic-malformed-gcc.c:10:24: warning: expected `error`, `warning`, `ignored`, `push`, `pop`, `ignored_attributes` after `#pragma GCC diagnostic` [-Wpragmas]
+   |
+10 | #pragma GCC diagnostic fatal "-Wundef"
+   |                        ^^^^^ expected a kind of diagnostic pragma
+
+pragma-diagnostic-malformed-gcc.c:14:42: warning: missing attribute name after `#pragma GCC diagnostic ignored_attributes` [-Wpragmas]
+   |
+14 | #pragma GCC diagnostic ignored_attributes
+   |                                          ^ expected an attribute name
+
+pragma-diagnostic-malformed-gcc.c:18:32: warning: unknown option after `#pragma GCC diagnostic` kind [-Wpragmas]
+   |
+18 | #pragma GCC diagnostic ignored "-Wno-undef"
+   |                                ^^^^^^^^^^^^ no such warning option
+
+<pragma string>:1:24: warning: unknown option after `#pragma GCC diagnostic` kind [-Wpragmas]
+  |
+1 | GCC diagnostic ignored "-Wnosuch"
+  |                        ^^^^^^^^^^ no such warning option
+
+pragma-diagnostic-malformed-gcc.c:22:5: warning: `LOUD` is not defined; it evaluates to 0
+   |
+22 | #if LOUD
+   |     ^^^^ not a macro
+   |
+   = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
+   = help: use `defined(LOUD)` to test whether it is defined
+
+pragma-diagnostic-malformed-gcc.c:29:32: warning: missing option after `#pragma GCC diagnostic` kind [-Wpragmas]
+   |
+29 | #pragma GCC diagnostic warning OPTION
+   |                                ^^^^^^ expected a string literal
+

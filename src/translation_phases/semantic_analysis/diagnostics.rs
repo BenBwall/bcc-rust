@@ -50,10 +50,28 @@ impl Analyzer<'_, '_, '_> {
         name: Option<StringCacheId>,
         previous: Option<SourceVectors>,
     ) {
+        self.group_diagnostic_read_at(group, kind, source_vectors, name, previous, source_vectors);
+    }
+
+    /// [`Self::group_diagnostic`] under the settings at `settings_at`, which
+    /// is where a compiler that reports `kind` later, at another place, asks
+    /// them.
+    pub(super) fn group_diagnostic_read_at(
+        &mut self,
+        group: crate::configuration::DiagnosticGroup,
+        kind: SemanticErrorKind,
+        source_vectors: SourceVectors,
+        name: Option<StringCacheId>,
+        previous: Option<SourceVectors>,
+        settings_at: SourceVectors,
+    ) {
         if self.tainted {
             return;
         }
-        let Some(severity) = self.context.group_severity(group, source_vectors) else {
+        let Some(severity) =
+            self.context
+                .group_severity_read_at(group, source_vectors, settings_at)
+        else {
             return;
         };
         let source_vectors = self.context.file_location(source_vectors);
@@ -61,32 +79,37 @@ impl Analyzer<'_, '_, '_> {
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
-        self.context
-            .append_pending_errors([TranslationError::Semantic(SemanticError {
+        self.context.classified_group_error(
+            group,
+            settings_at,
+            TranslationError::Semantic(SemanticError {
                 extension_severity: Some(severity),
                 kind,
                 source_vectors,
                 name,
                 previous,
-            })]);
+            }),
+        );
     }
 
     /// [`Self::group_diagnostic`] for a warning GCC also withholds when a
     /// system header spells its token, as a system macro's body does; most of
     /// GCC's type-conversion warnings move to the invocation instead, and
-    /// Clang goes by the invocation alone.
+    /// Clang goes by the invocation alone. The settings are those at
+    /// `settings_at`, as for [`Self::group_diagnostic_read_at`].
     pub(super) fn spelled_group_diagnostic(
         &mut self,
         group: crate::configuration::DiagnosticGroup,
         kind: SemanticErrorKind,
         source_vectors: SourceVectors,
         name: Option<StringCacheId>,
+        settings_at: SourceVectors,
     ) {
         if self.context.configuration.compiler_identity()
             != crate::configuration::CompilerIdentity::Gcc
             || !self.context.spelled_in_system_header(source_vectors)
         {
-            self.group_diagnostic(group, kind, source_vectors, name, None);
+            self.group_diagnostic_read_at(group, kind, source_vectors, name, None, settings_at);
         }
     }
 
@@ -105,6 +128,7 @@ impl Analyzer<'_, '_, '_> {
         }
         if !self.tainted {
             self.semantic_errors += 1;
+            let at = source_vectors;
             let source_vectors = self.context.file_location(source_vectors);
             let error = SemanticError {
                 extension_severity: None,
@@ -118,7 +142,7 @@ impl Analyzer<'_, '_, '_> {
                 usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
             if !self.context.withholds(severity, false, source_vectors) {
                 self.context
-                    .append_pending_errors([TranslationError::Semantic(error)]);
+                    .classified_error(at, TranslationError::Semantic(error));
             }
         }
     }

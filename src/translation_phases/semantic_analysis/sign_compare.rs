@@ -115,6 +115,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 SemanticErrorKind::SignCompare,
                 site,
                 Some(name),
+                site,
             );
         } else {
             // Clang's `DiagRuntimeBehavior`.
@@ -552,6 +553,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 SemanticErrorKind::SignCompare,
                 signed.expression.source_vectors,
                 Some(name),
+                signed.expression.source_vectors,
             );
         }
     }

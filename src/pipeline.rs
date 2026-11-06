@@ -58,7 +58,7 @@ pub(crate) use preprocessed_text::{
     avoid_paste,
 };
 pub(crate) use preprocessed_text::{
-    Pragmas,
+    TextEvents,
     TextOptions,
     TextWriter,
 };

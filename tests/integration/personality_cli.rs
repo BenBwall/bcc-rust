@@ -1279,6 +1279,145 @@ mod tests {
         }
     }
 
+    /// `-E` marks every change of file, with the compiler's flags, and the
+    /// tokens of two files never join: two includes of a one-line header
+    /// used to print `xx`.
+    #[test]
+    fn gnu_line_markers_mark_each_file_change() {
+        let directory = Directory::new();
+        directory.write("a.h", "x\n");
+        directory.write("empty.h", "");
+        directory.write("dup.c", "#include \"a.h\"\n#include \"a.h\"\nend\n");
+        directory.write("e.c", "#include \"empty.h\"\nz\n");
+        let text = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(
+            text("--clang-mode", &["-E", "dup.c"]),
+            "# 1 \"dup.c\"\n# 1 \"a.h\" 1\nx\n# 2 \"dup.c\" 2\n# 1 \"a.h\" 1\nx\n# 3 \"dup.c\" \
+             2\nend\n"
+        );
+        assert!(
+            text("--clang-mode", &["-E", "e.c"]).ends_with("# 1 \"empty.h\" 1\n# 2 \"e.c\" 2\nz\n")
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            assert_eq!(text(mode, &["-E", "-P", "dup.c"]), "x\nx\nend\n", "{mode}");
+            assert!(
+                text(mode, &["-E", "dup.c"]).contains("# 2 \"dup.c\" 2\n"),
+                "{mode}"
+            );
+        }
+        // Clang writes flag 3 for a system header and GCC adds 4.
+        #[cfg(not(windows))]
+        {
+            std::fs::create_dir(directory.path("sys")).unwrap();
+            directory.write("sys/s.h", "int s;\n");
+            directory.write("u.c", "#include <s.h>\nint u;\n");
+            for (mode, flags) in [("--clang-mode", "1 3"), ("--gcc-mode", "1 3 4")] {
+                let output = text(mode, &["-E", "-isystem", "sys", "u.c"]);
+                assert!(
+                    output.contains(&format!("# 1 \"sys/s.h\" {flags}\nint s;\n# 2 \"u.c\" 2\n")),
+                    "{mode}: {output}"
+                );
+                // The text reads back, in the same mode.
+                directory.write("u.i", &output);
+                succeeds(&directory.bcc(mode, &["-fsyntax-only", "u.i"]));
+            }
+        }
+    }
+
+    /// What follows a string in its array's braces is excess: a warning from
+    /// Clang, which drops it, and an error from GCC and TCC.
+    #[test]
+    fn excess_elements_after_a_braced_string() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "char w[] = {\"ab\", \"c\", \"d\"};\nint n[sizeof w == 3 ? 1 : -1];\n",
+        );
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "a.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output)
+                .matches("warning: excess elements in char array initializer")
+                .count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-fsyntax-only", "-Wno-excess-initializers", "a.c"],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output)
+                .matches("error: excess elements in char array initializer")
+                .count(),
+            2,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "a.c"]);
+        assert!(!output.status.success());
+    }
+
+    /// GCC reads an element for an aggregate with no subobjects as excess and
+    /// goes on to the next member, where Clang requires braces.
+    #[test]
+    fn excess_element_for_a_zero_length_array_member() {
+        let directory = Directory::new();
+        directory.write(
+            "z.c",
+            "struct { int a; int z[0]; int y; } t = {1, 2, 3};\nint n[sizeof t == 8 ? 1 : -1];\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "z.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output)
+                .matches("warning: excess elements in array initializer")
+                .count(),
+            1,
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "z.c"]);
+        assert_eq!(output.status.code(), Some(1));
+    }
+
+    /// GCC moves on from a member with no subobjects to the next one, inside
+    /// whatever encloses it, and counts the array of unknown bound from there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn excess_elements_leave_the_enclosing_object_in_place() {
+        let directory = Directory::new();
+        directory.write(
+            "n.c",
+            "extern int printf(const char *, ...);\n\
+             struct E { int z[0]; int y; };\n\
+             struct E unknown[] = {1, 2, 3, 4};\n\
+             struct { struct {} s; int y; } pairs[2] = {1, 2, 3, 4};\n\
+             int main(void) {\n\
+             \x20   struct { struct { int z[0]; int x; } s; int y; } t = {1, 2, 3};\n\
+             \x20   static struct { struct { int z[0]; int x; } s; int y; } u = {5, 6, 7};\n\
+             \x20   printf(\"%d %d %d %d %d %d %d %d\\n\", t.s.x, t.y, u.s.x, u.y,\n\
+             \x20          (int)(sizeof unknown / sizeof *unknown), unknown[1].y,\n\
+             \x20          pairs[0].y, pairs[1].y);\n\
+             \x20   return 0;\n\
+             }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["n.c", "-o", "n"]);
+        succeeds(&output);
+        let run = Command::new(directory.path("n")).output().unwrap();
+        // gcc 13.3 prints the same.
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "2 3 6 7 2 4 2 4\n");
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]

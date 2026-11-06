@@ -426,18 +426,46 @@ fn explained(
     tip: RwSignal<Option<Tip>>,
     card: NodeRef<leptos::html::Article>,
 ) -> AnyView {
-    explained_pieces(text, seen)
-        .into_iter()
-        .map(|(code, piece)| match piece {
+    let mut pieces = explained_pieces(text, seen).into_iter().peekable();
+    let mut views = Vec::new();
+    while let Some((code, piece)) = pieces.next() {
+        views.push(match piece {
             | Piece::Text(text) if code && names.iter().any(|name| name == text) =>
                 view! { <code class=format!("is-object {}", palette::class(text))>{text.to_owned()}</code> }
                     .into_any(),
             | Piece::Text(text) if code => view! { <code>{text.to_owned()}</code> }.into_any(),
             | Piece::Text(text) => prose(text),
-            | Piece::Term(written, term) => term_button(written.to_owned(), term, tip, card),
-        })
-        .collect_view()
-        .into_any()
+            | Piece::Term(written, term) => {
+                let button = term_button(written.to_owned(), term, tip, card);
+                // A button is one unit to line breaking, so a line could
+                // otherwise start with the comma that follows it.
+                let mark = match pieces.peek_mut() {
+                    | Some((false, Piece::Text(next))) => {
+                        let (mark, rest) = next.split_at(closing_marks(next));
+                        *next = rest;
+                        mark
+                    },
+                    | _ => "",
+                };
+                if mark.is_empty() {
+                    button
+                } else {
+                    pieces.next_if(|(_, piece)| matches!(piece, Piece::Text("")));
+                    view! { <span class="nowrap">{button}{mark.to_owned()}</span> }.into_any()
+                }
+            },
+        });
+    }
+    views.collect_view().into_any()
+}
+
+/// The length of the punctuation at the start of `text` that closes the words
+/// before it.
+fn closing_marks(text: &str) -> usize {
+    text.len()
+        - text
+            .trim_start_matches([',', '.', ';', ':', '!', '?', ')'])
+            .len()
 }
 
 /// `text` with its first letter capitalized, as the start of a sentence.
@@ -645,6 +673,7 @@ fn chip(part: &FlowPart) -> AnyView {
 #[cfg(test)]
 mod tests {
     use super::{
+        closing_marks,
         explained_pieces,
         lead,
     };
@@ -652,6 +681,14 @@ mod tests {
         glossary::Piece,
         snapshot::StepEvent,
     };
+
+    #[test]
+    fn closing_marks_stay_with_the_word_before_them() {
+        assert_eq!(closing_marks(", even if"), 1);
+        assert_eq!(closing_marks("). Then"), 2);
+        assert_eq!(closing_marks(" is read"), 0);
+        assert_eq!(closing_marks(""), 0);
+    }
 
     #[test]
     fn the_card_leads_with_the_summary() {

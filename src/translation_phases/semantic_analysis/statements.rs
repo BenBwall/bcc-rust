@@ -113,6 +113,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     crate::translation_phases::parsing::syntax::StatementType::Compound { .. }
                 );
                 if self.enter_statement_block(compound) {
+                    self.note_scope_end(statement.source_vectors);
                     self.work.push(Work::PopScope);
                 }
                 if let Some(outside) = outside {
@@ -493,6 +494,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 point: None,
                 local: true,
                 function: self.functions.current.map_or(usize::MAX, |f| f.id),
+                scope: self.label_scope(true),
                 name,
                 definition: None,
                 used: None,
@@ -521,6 +523,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             point: None,
             local: false,
             function,
+            scope: self.label_scope(false),
             name,
             definition: None,
             used: None,
@@ -651,7 +654,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && !label.exempt
                 && let Some(definition) = label.definition
             {
-                self.report_unused_label(definition);
+                self.report_unused_label(
+                    definition,
+                    label.local.then_some(label.name),
+                    label.scope,
+                );
             }
         }
         for i in 0..self.statements.jumps.len() {
@@ -1195,6 +1202,8 @@ struct Label {
     point:      Option<ControlPoint>,
     local:      bool,
     function:   usize,
+    /// The scope it belongs to, as far as GCC's warning about it cares.
+    scope:      usize,
     name:       Identifier,
     definition: Option<Identifier>,
     used:       Option<Identifier>,

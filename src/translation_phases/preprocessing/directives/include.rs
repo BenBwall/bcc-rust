@@ -27,6 +27,8 @@ use crate::{
         IncludeEntry,
         SourcePosition,
         SourceVectors,
+        TextEvent,
+        TextEventKind,
         TranslationError,
         TranslationPhase,
         preprocessing::{
@@ -102,7 +104,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         // A backslash in a `"…"` name is undefined by C99 §6.4.7p3; reading
         // it as a path character is an extension (§4p6).
         if let Some(source_vectors) = header.backslash {
-            let policy = self.context.configuration.extension_policy();
+            let policy = self
+                .context
+                .configuration_at(source_vectors)
+                .extension_policy();
             self.context.preprocessor_extension(
                 Feature::QuotedHeaderBackslash,
                 crate::translation_phases::DiagnosticPolicy::Extension,
@@ -225,6 +230,15 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             },
             tokenizer,
         });
+        if self.state.as_text {
+            self.state.text_includes += 1;
+            self.context.text_events.push(TextEvent {
+                position: self.context.preprocessed_tokens,
+                file:     header_source_index,
+                line:     1,
+                kind:     TextEventKind::FileEntered,
+            });
+        }
         self.resume_at_line_start();
     }
 
@@ -576,7 +590,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         kept.extend(
             self.context
                 .split_off_pending_errors(reported)
-                .filter(|error| !matches!(error, TranslationError::Extension(_))),
+                .filter(|error| !matches!(error.unclassified(), TranslationError::Extension(_))),
         );
         self.context.append_pending_errors(kept);
     }
@@ -744,7 +758,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             line:   vector.line,
             column: vector.column,
         };
-        let allow_backslash = self.context.configuration.extension_policy()
+        let allow_backslash = self
+            .context
+            .configuration_at(token.source_vectors)
+            .extension_policy()
             != ExtensionPolicy::Deny
             || self
                 .context

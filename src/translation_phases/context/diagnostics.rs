@@ -48,16 +48,43 @@ impl<'tu> Context<'tu> {
         ) {
             return;
         }
-        self.pending_errors
-            .push_back(TranslationError::Preprocessing(error));
+        let source = error.source_vectors;
+        let error = TranslationError::Preprocessing(error);
+        // A group that is off there reports nothing; `-Wno-cpp` silences
+        // `#warning` even where a system header would not.
+        if let Some(group) = error.group()
+            && self
+                .configuration_at(source)
+                .diagnostic_severity(group)
+                .is_none()
+        {
+            return;
+        }
+        self.classified_error(source, error);
+    }
+
+    /// A preprocessor diagnostic of `-Wpedantic` that its caller gave the
+    /// severity the settings at its place ask for.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn pedantic_preprocessor_error(&mut self, error: PreprocessorError<'tu>) {
+        if !self.withholds(
+            error.severity(),
+            error.error_type.is_extension(),
+            error.source_vectors,
+        ) {
+            self.classified_extension(error.source_vectors, TranslationError::Preprocessing(error));
+        }
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
         if !self.ignore_tokenizer_errors() {
-            self.pending_errors
-                .push_back(TranslationError::PreprocessorTokenizining(error));
+            self.classified_error(
+                SourceVectors::default(),
+                TranslationError::PreprocessorTokenizining(error),
+            );
         }
     }
 
@@ -76,7 +103,7 @@ impl<'tu> Context<'tu> {
         loop {
             let error = self.pending_errors.pop_front()?;
             self.relocated_errors = self.relocated_errors.saturating_sub(1);
-            if matches!(&error, TranslationError::Extension(x) if x.suppressed.get()) {
+            if error.is_suppressed() {
                 self.suppressed_errors -= 1;
             } else {
                 self.drained_errors +=
@@ -87,17 +114,28 @@ impl<'tu> Context<'tu> {
     }
 
     /// The severity of a warning-group diagnostic at `source`, or `None`
-    /// when the group is off or a system header withholds it.
+    /// when the group is off there or a system header withholds it.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     pub(crate) fn group_severity(
         &self,
         group: DiagnosticGroup,
         source: SourceVectors,
     ) -> Option<ErrorSeverity> {
-        let severity = self.configuration.diagnostic_severity(group)?;
-        (self
-            .configuration
-            .reported_in_system_headers(group, severity)
+        self.group_severity_read_at(group, source, source)
+    }
+
+    /// [`Self::group_severity`] of a diagnostic at `source` whose settings are
+    /// those at `settings_at`, for a warning a compiler reports at one place
+    /// and classifies at another.
+    pub(crate) fn group_severity_read_at(
+        &self,
+        group: DiagnosticGroup,
+        source: SourceVectors,
+        settings_at: SourceVectors,
+    ) -> Option<ErrorSeverity> {
+        let configuration = self.configuration_at(settings_at);
+        let severity = configuration.diagnostic_severity(group)?;
+        (configuration.reported_in_system_headers(group, severity)
             || !self.withholds(severity, true, source))
         .then_some(severity)
     }
@@ -116,14 +154,16 @@ impl<'tu> Context<'tu> {
         if !self.ignore_tokenizer_errors()
             && !self.in_system_header(&vector)
             && self
-                .configuration
+                .configuration_at(SourceVectors::default())
                 .diagnostic_severity(DiagnosticGroup::NewlineEof)
                 .is_some()
         {
-            self.pending_errors
-                .push_back(TranslationError::InitialProcessing(
-                    InitialProcessorError::MissingFinalNewline(vector),
-                ));
+            self.classified_error(
+                SourceVectors::default(),
+                TranslationError::InitialProcessing(InitialProcessorError::MissingFinalNewline(
+                    vector,
+                )),
+            );
         }
     }
 
@@ -132,14 +172,16 @@ impl<'tu> Context<'tu> {
         if !self.ignore_tokenizer_errors()
             && !self.in_system_header(&vector)
             && self
-                .configuration
+                .configuration_at(SourceVectors::default())
                 .diagnostic_severity(DiagnosticGroup::NewlineEof)
                 .is_some()
         {
-            self.pending_errors
-                .push_back(TranslationError::InitialProcessing(
-                    InitialProcessorError::EscapedFinalNewline(vector),
-                ));
+            self.classified_error(
+                SourceVectors::default(),
+                TranslationError::InitialProcessing(InitialProcessorError::EscapedFinalNewline(
+                    vector,
+                )),
+            );
         }
     }
 
@@ -147,7 +189,7 @@ impl<'tu> Context<'tu> {
     /// as the header delimiter, even though phase 3 lexed it as an escape.
     pub(crate) fn withdraw_quoted_header_lexer_error(&mut self, source: &SourceVector) {
         self.pending_errors.retain(|error| {
-            !matches!(error, TranslationError::PreprocessorTokenizining(error) if error.is_unclosed_header_string_at(source))
+            !matches!(error.unclassified(), TranslationError::PreprocessorTokenizining(error) if error.is_unclosed_header_string_at(source))
         });
         // Retaining can remove a diagnostic from the relocated prefix.
         // Rechecking already-retained ranges during the next compaction is
@@ -167,7 +209,7 @@ impl<'tu> Context<'tu> {
                 .pending_errors
                 .iter()
                 .filter(|error| {
-                    !matches!(error, TranslationError::Extension(x) if x.suppressed.get())
+                    !error.is_suppressed()
                         && error.configured_severity(self) == ErrorSeverity::Error
                 })
                 .count()
@@ -190,9 +232,17 @@ impl<'tu> Context<'tu> {
     /// Whether a preprocessing error was queued at or after position
     /// `start`.
     pub(crate) fn preprocessing_error_since(&self, start: usize) -> bool {
-        self.pending_errors.iter().skip(start).any(|error| {
-            matches!(error, TranslationError::Preprocessing(error) if error.severity() == ErrorSeverity::Error)
-        })
+        self.pending_errors
+            .iter()
+            .skip(start)
+            .any(|error| match error {
+                | TranslationError::Preprocessing(error) =>
+                    error.severity() == ErrorSeverity::Error,
+                | TranslationError::Classified(classified) =>
+                    classified.severity == ErrorSeverity::Error
+                        && matches!(*classified.error, TranslationError::Preprocessing(_)),
+                | _ => false,
+            })
     }
 
     /// Marks one arena-stable occurrence without scanning the diagnostic FIFO.

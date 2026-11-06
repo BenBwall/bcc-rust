@@ -41,6 +41,8 @@ use std::{
     },
 };
 
+use crate::configuration::CL_CODED_WARNINGS;
+
 mod command_files;
 
 use command_files::CommandFileError;
@@ -1221,24 +1223,6 @@ fn ignored(invocation: &Invocation, option: &str, why: &str) {
     }
 }
 
-/// The warnings the command line names by `cl`'s code, each with its level
-/// and the group of bcc's own options that controls it. `cl`'s command line
-/// shows level 1 by default. C4047 and C4133 are warnings in `cl`, where the
-/// identity's Clang rules make the groups errors. Microsoft Learn: "/w,
-/// /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd, /we, /wo, /Wv,
-/// /WX (Warning level)" and each warning's page, as for C4090 and C4113.
-const CODED_WARNINGS: [(u16, u8, &str); 7] = [
-    (4013, 3, "implicit-function-declaration"),
-    (4047, 1, "int-conversion"),
-    (4133, 1, "incompatible-pointer-types"),
-    // After C4133, whose group holds theirs. bcc keeps its own words for
-    // these two, but `/wd`, `/we` and the levels name them.
-    (4090, 1, "incompatible-pointer-types-discards-qualifiers"),
-    (4113, 1, "incompatible-function-pointer-types"),
-    (4311, 1, "pointer-to-int-cast"),
-    (4312, 1, "int-to-pointer-cast"),
-];
-
 /// What `/wd`, `/we`, `/wo` or `/w1`-`/w4` says of one warning.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WarningSetting {
@@ -1284,7 +1268,7 @@ impl State {
     /// and C4133 are warnings unless `/WX` makes every warning an error.
     fn coded_warning_options(&self) -> Vec<OsString> {
         let mut options = Vec::new();
-        for (code, level, group) in CODED_WARNINGS {
+        for (code, level, group) in CL_CODED_WARNINGS {
             let setting = self
                 .warning_settings
                 .iter()

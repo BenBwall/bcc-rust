@@ -379,6 +379,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 if new_scope {
                     self.enter(ScopeKind::Block);
+                    self.note_scope_end(s.source_vectors);
                     self.work.push(Work::PopScope);
                     if let Some(outside) = outside {
                         self.work
@@ -537,6 +538,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::For(f) => {
                 if self.enter_statement_block(false) {
+                    self.note_scope_end(s.source_vectors);
                     self.work.push(Work::PopScope);
                 }
                 if let Some(outside) = outside {

@@ -1,0 +1,1 @@
+char *twice = 1;
