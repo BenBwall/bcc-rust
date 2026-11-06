@@ -370,6 +370,35 @@ void promoted(void) { careful(); }
         }
     }
 
+    /// What `-E` makes of a `_Pragma` is what it makes of the directive: the
+    /// string's operand is a string there too, and the pragma takes effect.
+    #[test]
+    fn a_pragma_operator_is_read_under_preprocessing() {
+        let quoted = "_Pragma(\"GCC diagnostic warning \\\"-Wundef\\\"\")\nint x;\n";
+        let in_macro = "#define Q(x) _Pragma(#x)\nQ(GCC diagnostic warning \"-Wundef\")\nint x;\n";
+        for mode in MODES {
+            for (name, source) in [("quoted", quoted), ("macro", in_macro)] {
+                let root = directory(&format!("operator-{name}{}", &mode[2..]));
+                fs::write(root.join("input.c"), source).unwrap();
+                let text = run(&root, &[mode, "-E", "-Werror", "-o", "input.i", "input.c"]);
+                let stderr = String::from_utf8_lossy(&text.stderr);
+                assert!(text.status.success(), "{mode} {name}: {stderr}");
+                assert_eq!(stderr, "", "{mode} {name}");
+                let written = fs::read_to_string(root.join("input.i")).unwrap();
+                assert!(
+                    written.contains("#pragma GCC diagnostic warning \"-Wundef\""),
+                    "{mode} {name}: {written}"
+                );
+            }
+            let root = directory(&format!("operator-applies{}", &mode[2..]));
+            let source =
+                "_Pragma(\"GCC diagnostic error \\\"-Wundef\\\"\")\n#if X\n#endif\nint x;\n";
+            fs::write(root.join("input.c"), source).unwrap();
+            let text = run(&root, &[mode, "-E", "-o", "input.i", "input.c"]);
+            assert_eq!(lines(&text), ["2 error"], "{mode}");
+        }
+    }
+
     /// `cl` applies the warning numbers bcc gives its warnings, and reads no
     /// other compiler's diagnostic pragma.
     #[test]
