@@ -245,6 +245,9 @@ impl CompilerConfiguration {
                 .fold(self.with_pragma_pedantic(class), |configuration, &group| {
                     configuration.with_pragma_group(group, class)
                 }),
+            // GCC's `-Waddress` and Clang's group around
+            // `-Wpointer-bool-conversion`, the part of them bcc reports.
+            | "address" => self.with_pragma_group(DiagnosticGroup::PointerBoolConversion, class),
             | _ => DiagnosticGroup::parse(name)
                 .map_or(self, |group| self.with_pragma_group(group, class)),
         }
