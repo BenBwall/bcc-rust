@@ -828,8 +828,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && !self.declares_alias(b.name.name)
             {
                 let mut ty = b.ty;
+                let refused =
+                    b.linkage == Linkage::Internal && self.internal_tentative_is_refused(ty);
                 if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index]
-                    && b.linkage == Linkage::External
+                    && !refused
                     && !self.types.unanalyzed(ty)
                 {
                     self.error(
@@ -845,7 +847,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.bindings[index].ty = ty;
                 }
                 if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
-                    if b.linkage != Linkage::Internal {
+                    if !refused {
                         self.error(
                             SemanticErrorKind::IncompleteTentativeDefinition,
                             b.name.source_vectors,
@@ -1707,12 +1709,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         && !self.types.unanalyzed(binding.ty)
                         && !self.complete_object(binding.ty)
                     {
-                        self.error(
-                            SemanticErrorKind::IncompleteInternalTentative,
-                            binding.name.source_vectors,
-                            Some(binding.name.name),
-                            None,
-                        );
+                        self.incomplete_internal_tentative(binding.name, binding.ty);
                     }
                 }
             }
@@ -1760,6 +1757,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return true;
             }
         }
+    }
+
+    /// C99 §6.9.2p3 says a tentative definition with internal linkage shall
+    /// not have an incomplete type, outside any constraint. GCC and Clang
+    /// take one, so `static const char doc[];` can come before the definition,
+    /// and complete it at the end of the unit as §6.9.2p2 does for external
+    /// linkage. Clang reports it only under `-pedantic`.
+    fn incomplete_internal_tentative(&mut self, name: Identifier, ty: TypeId) {
+        let configuration = self.context.configuration;
+        if self.internal_tentative_is_refused(ty) {
+            self.error(
+                SemanticErrorKind::IncompleteInternalTentative,
+                name.source_vectors,
+                Some(name.name),
+                None,
+            );
+        } else if configuration.reports_incomplete_internal_tentative() {
+            self.context.report_extension_since(
+                "a tentative definition with internal linkage and an incomplete type",
+                crate::configuration::FeatureOrigin::Gnu,
+                name.source_vectors,
+            );
+        }
+    }
+
+    fn internal_tentative_is_refused(&self, ty: TypeId) -> bool {
+        let array = matches!(
+            self.types.nodes[ty.index],
+            TypeKind::Array(_, ArrayBound::Incomplete)
+        );
+        self.context
+            .configuration
+            .refuses_incomplete_internal_tentative(array)
     }
 
     /// A Microsoft `selectany` declaration without an initializer defines
