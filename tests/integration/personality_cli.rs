@@ -275,11 +275,8 @@ mod tests {
         assert_eq!(stderr(&round_trip), "");
     }
 
-    /// GCC warns of an unclosed quote in a skipped group, compiling as well
-    /// as under `-E`, and `-pedantic-errors` makes it an error; Clang and
-    /// TCC do not.
     /// GCC and Clang take `static int a[];` and `static struct S s;`, which
-    /// C99 §6.9.2p3 forbids; CPython's `PyDoc_VAR` relies on it.
+    /// C99 §6.9.2p3 forbids; Python's `PyDoc_VAR` relies on it.
     #[test]
     fn incomplete_internal_tentative_definitions_follow_each_compiler() {
         let directory = Directory::new();
@@ -332,6 +329,9 @@ mod tests {
         }
     }
 
+    /// GCC warns of an unclosed quote in a skipped group, compiling as well
+    /// as under `-E`, and `-pedantic-errors` makes it an error; Clang and
+    /// TCC do not.
     #[test]
     fn unclosed_quotes_in_skipped_groups_warn_as_gcc_does() {
         let directory = Directory::new();
