@@ -6,6 +6,7 @@
 //! inputs are read-only despite `*mut`.
 
 mod call_diagnostics;
+mod debug_info;
 
 use std::{
     cell::RefCell,
@@ -21,6 +22,12 @@ use std::{
     sync::Once,
 };
 
+pub(super) use debug_info::{
+    CompileUnit,
+    DebugBuilder,
+    FunctionDescription,
+    Meta,
+};
 use llvm_sys::{
     LLVMDLLStorageClass,
     LLVMDiagnosticSeverity,

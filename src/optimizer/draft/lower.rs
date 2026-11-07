@@ -4,12 +4,14 @@ use super::{
     Constant,
     Draft,
     Edge,
+    PROVISIONAL_LOCATIONS,
     Term,
 };
 use crate::{
     ir::{
         Bits64,
         Block,
+        DebugLoc,
         Entity,
         FuncId,
         FunctionBuilder,
@@ -38,6 +40,12 @@ impl<'s> Draft<'_, 's> {
     /// parameters, then its instructions' results. Stack slots that remain
     /// keep their order.
     pub(in crate::optimizer) fn lower(&self, module: &mut Module<'_>, func: FuncId) {
+        let inlined = self.resolve_inlined_locations(module.debug_info_mut().0);
+        let finished = |location: Option<DebugLoc>| match location {
+            | Some(id) if id.index() >= PROVISIONAL_LOCATIONS =>
+                inlined[id.index() - PROVISIONAL_LOCATIONS],
+            | location => location,
+        };
         let mut builder = FunctionBuilder::new(module, func);
         let mut numbering = Numbering {
             blocks: ArenaVec::with_capacity_in(self.blocks.len(), self.scratch),
@@ -92,9 +100,11 @@ impl<'s> Draft<'_, 's> {
             let data = self.block(block);
             for &inst in &data.insts {
                 if !self.is_removed(inst) {
+                    builder.set_location(finished(self.location(inst)));
                     self.emit_inst(&mut builder, &numbering, inst);
                 }
             }
+            builder.set_location(finished(data.term_location));
             self.emit_terminator(&mut builder, &numbering, &data.term);
         }
         builder.finish();

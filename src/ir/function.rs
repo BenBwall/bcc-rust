@@ -13,6 +13,7 @@ use super::{
         Block,
         BlockLabel,
         ConstId,
+        DebugLoc,
         Entity,
         FuncId,
         Inst,
@@ -60,6 +61,10 @@ pub(crate) struct Body<'ir> {
     /// source map, the site's IR views); passes that rebuild a body do not
     /// keep them.
     pub(super) lines:            Table<'ir, Inst, u32>,
+    /// The debug location of each instruction, up to the last that has one.
+    /// Empty unless the module records them (`debug_info.rs`), and kept by
+    /// the passes that rebuild a body.
+    pub(super) locations:        ArenaVec<'ir, Option<DebugLoc>>,
 }
 
 impl<'ir> Body<'ir> {
@@ -116,6 +121,16 @@ impl<'ir> Body<'ir> {
     /// The source line `inst` came from, or 0 when it is unknown.
     pub(crate) fn inst_line(&self, inst: Inst) -> u32 {
         self.lines.get(inst).copied().unwrap_or(0)
+    }
+
+    /// The debug location of `inst`, if it has one.
+    pub(crate) fn inst_location(&self, inst: Inst) -> Option<DebugLoc> {
+        self.locations.get(inst.index()).copied().flatten()
+    }
+
+    /// Whether any instruction has a debug location.
+    pub(crate) fn has_locations(&self) -> bool {
+        !self.locations.is_empty()
     }
 
     pub(crate) fn inst_result(&self, inst: Inst) -> Option<Value> {
@@ -384,6 +399,7 @@ impl<'ir> Body<'ir> {
             constants:        Table::new_in(arena),
             call_diagnostics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             lines:            Table::new_in(arena),
+            locations:        ArenaVec::new_in(arena),
         }
     }
 }

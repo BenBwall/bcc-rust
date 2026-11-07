@@ -374,6 +374,7 @@ fn merge_into_predecessors(draft: &mut Draft<'_, '_>, report: &mut OptimizationR
                 ArenaVec::new_in(scratch),
             );
             let term = std::mem::replace(&mut draft.block_mut(successor).term, Term::Unreachable);
+            let term_location = draft.block(successor).term_location;
             draft.block_mut(successor).alive = false;
             for (&param, &arg) in params.iter().zip(&args) {
                 draft.replace(param, arg);
@@ -381,6 +382,7 @@ fn merge_into_predecessors(draft: &mut Draft<'_, '_>, report: &mut OptimizationR
             let merged = draft.block_mut(block);
             merged.insts.extend_from_slice(&insts);
             merged.term = term;
+            merged.term_location = term_location;
             changed = true;
         }
     }

@@ -107,6 +107,9 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
         let mut values = ArenaVec::new_in(self.arena);
         values.resize(body.value_count(), None);
         api.position(blocks[entry.index()].ok_or(std::fmt::Error)?);
+        if let Some(debug) = self.debug {
+            debug.attach(id, self.functions[id.index()]);
+        }
         let mut slots = ArenaVec::new_in(self.arena);
         // LLVM 23 lays out a handler's frame 8 bytes off when the processor
         // pushed an error code and the handler realigns its stack, so that an
@@ -163,6 +166,12 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 continue;
             }
             api.position(blocks[block.index()].ok_or(std::fmt::Error)?);
+            // A phi's copies run where the block starts, so they report the
+            // block's first line rather than line 0 between two statements.
+            if let Some(debug) = self.debug {
+                let first = body.block_insts(block).first();
+                debug.set_location(id, first.and_then(|&inst| body.inst_location(inst)), false);
+            }
             for &param in body.block_params(block) {
                 let value = api.phi(api.ty(body.value_type(param)));
                 if fast_math != llvm_sys::LLVMFastMathNone {
@@ -171,6 +180,9 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 api.set_name(value, &named(param, self.arena));
                 values[param.index()] = Some(value);
             }
+        }
+        if self.debug.is_some() {
+            api.set_debug_location(None);
         }
         let cfg = ControlFlowGraph::compute(body, self.arena);
         let dom = DominatorTree::compute(body, &cfg, self.arena);
@@ -206,6 +218,13 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 _ = api.call(ty, asm, &[]);
             }
             for &inst in body.block_insts(block) {
+                if let Some(debug) = self.debug {
+                    let call = matches!(
+                        body.inst(inst),
+                        InstData::Call { .. } | InstData::CallIndirect { .. }
+                    );
+                    debug.set_location(id, body.inst_location(inst), call);
+                }
                 let value = builder.inst(inst)?;
                 if fast_math != llvm_sys::LLVMFastMathNone
                     && let Some(value) = value
@@ -234,6 +253,9 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                     api.incoming(phi, arg, blocks[edge.pred.index()].ok_or(std::fmt::Error)?);
                 }
             }
+        }
+        if self.debug.is_some() {
+            api.set_debug_location(None);
         }
         if self.strict {
             api.strict_calls(self.functions[id.index()]);

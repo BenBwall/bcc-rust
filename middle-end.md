@@ -654,6 +654,32 @@ block3:
 }
 ```
 
+Debug information prints only behind `--ir-debug-locations`, so `-g` leaves
+`--emit=ir` and every golden test unchanged. It adds the tables after the
+target lines, and ` dbg locN` after an instruction that has a location; the
+parser accepts both forms and printing a parsed module reproduces either. Each
+table is numbered from 0 in order, the files and scopes come before the
+locations that name them, and a location names only earlier locations:
+
+```text
+debug file file0 @a.c
+debug file file1 @"dir/in c.h"
+debug unit file0 language c11 level 2 dwarf 4 optimized
+debug scope scope0 @add name @add file file0 line 7 scope_line 8
+debug loc loc0 file0 line 9 column 11 scope scope0
+debug loc loc1 file1 line 3 column 3 scope scope1 at loc0
+
+function @add(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = iadd.i32 nsw v0, v1 dbg loc0
+    return v2 dbg loc0
+}
+```
+
+`at` names the call an inlined location's instruction was copied for. The
+verifier checks that a location exists and that its chain of calls ends in the
+function holding the instruction.
+
 ### Verifier
 
 The verifier runs after lowering, after every pass in debug and test builds, and
@@ -669,6 +695,8 @@ on every parsed test input. It checks:
 - labels name distinct blocks other than the entry; `block_addr` names an
   existing label; an `indirect_br` lists distinct labeled blocks; a label
   relocation names a label of a defined function;
+- a debug location exists, and its chain of inlined calls ends in this
+  function;
 - the profile's constraints: no `va_arg` post-ABI; each aggregate kind only in
   its profile, on a `ptr` parameter, results on parameter 0 of a signature
   without a result, and layout scalars within the aggregate; each extension
@@ -1208,6 +1236,10 @@ path's facts no longer guard them. Each differing join argument consumes one
 rewrite; a partial bisect run retains the branch and the unconverted arguments.
 A select of integer one and zero becomes a zero extension.
 
+Debug locations (`-g`) follow the instructions through a draft, as
+[below](#debug-information-2026-11-06) describes. No pass reads one to decide
+anything, and a test compares the output of every pass with and without them.
+
 `known-bits` follows `sccp` and walks the dominator tree with explicit enter/leave
 frames. Scoped known-zero masks and signed ordering facts come from unambiguous
 branch edges, with rollback on leaving a subtree; multi-entry block parameters
@@ -1401,6 +1433,9 @@ script queries the installed `llvm-config` for the link closure. Binding-only
 llvm-sys features avoid Cargo's dependency/bootstrap ordering problem. Linux
 source tool distributions include libraries and llvm-config, and compatible
 prebuilt installations can supply both directly.
+
+With `-g`, `src/backend/llvm/debug_info.rs` writes the module's debug tables as
+metadata; see [Debug information](#debug-information-2026-11-06).
 
 ### Interpreter
 
@@ -1694,6 +1729,11 @@ bcc-rust -S x.c [-o x.s|-o -]       write the assembly to x.s, or stdout
 bcc-rust x.c y.o -lm -o app         compile x.c to a temporary object and link
                                     it with y.o and -lm, in order
 bcc-rust --print-default-passes     print the default pass list and exit
+    [-g|-g0|-g1|-g2|-g3|-gdwarf-N]  debug information, read in order; also
+                                    --debug-level=N and --dwarf-version=N
+    [-gno-column-info]              line tables without columns
+    [--ir-debug-locations]          with --emit=ir or --emit=ir-abi, print the
+                                    debug tables and instruction locations
 ```
 
 The driver runs one job per input in command-line order (`src/cli/driver.rs`):
@@ -3001,3 +3041,102 @@ scalar parts also print GCC's output on wasm32 (`--target=wasm32-wasip1`,
 `-O0` and `-O2`, run with `scripts/wasm/run.mjs`), apart from `unsigned
 long` being 32 bits there; `_Float16`, `__bf16` and `__float128` do not
 exist on wasm32.
+
+## Debug information (2026-11-06)
+
+`-g` writes DWARF through the LLVM back end. This records line tables and
+functions: each defined function has a `DISubprogram` and each instruction with
+a source position a `DILocation`, so `addr2line` and a debugger's `bt` and
+`break file:line` work at every optimization level.
+
+**Options.** `src/cli/arguments.rs` reads the options in order, as measured
+against GCC 14.2 and Clang 23: `-g0` turns debug information off; `-gN` sets the
+level; `-g`, `-ggdb` and `-gdwarf[-N]` turn it on at level 2 and keep a level
+already asked for; `-gtoggle` (GCC) flips the result last. So `-gdwarf-4 -g0`
+writes none and `-g0 -gdwarf-4` writes DWARF 4. Options that only shape the
+output (`-gsplit-dwarf`, `-gz`, `-gstrict-dwarf`, `-grecord-gcc-switches`,
+`-gcodeview`) do not ask for debug information alone, in GCC or Clang, and bcc
+ignores them. The default is DWARF 5, as in both. `-g3` writes what `-g2` does:
+no `.debug_macro`.
+
+**The tables.** `src/ir/debug_info.rs` holds the unit, files, scopes (one
+subprogram per function) and interned locations on the module. A body maps an
+instruction to a location in a side table that stays empty without `-g`, so the
+instruction record does not grow and a compilation without it pays nothing but
+a few empty tables. The configuration leaves `debug_info` unset when the back
+end would not use it, so lowering records nothing for the native back end, the
+WebAssembly back end or the interpreter.
+
+**Locations in lowering.** `FunctionLowerer::track_line` already kept the
+current statement's physical line for the WebAssembly source map; it also keeps
+the debug location. `SourceVector` holds the logical file and line `#line` and
+`#include` give the token, and `Context::file_vector` the outermost invocation
+inside a macro expansion, which is what GCC and Clang report. A task with no
+syntax keeps the location before it. The implicit return is the closing brace.
+Entry code before the first statement has no location, so it is reported at the
+function's scope line, the line of its `{`, as Clang and GCC do.
+
+**The passes.** A draft keeps a location for each instruction and terminator;
+lowering it writes them back. The rules follow LLVM's "how to update debug
+info":
+
+- An instruction a pass adds takes the location of the code it goes before: a
+  select formed at a branch takes the branch's.
+- An instruction moved to another block loses its location (`licm`, and the
+  arms `simplify-cfg` speculates): it now runs where its line would not, and a
+  debugger would step to that line on a path that never reaches it.
+- Inlining gives a copy its callee location with the call's as `at`
+  (`DebugInfo::inlined`). The module's tables are out of reach while passes
+  borrow the module, so `inline.rs` hands out provisional ids that
+  `Draft::lower` turns into interned ones. An inlined frame comes out as
+  `DW_TAG_inlined_subroutine`, which `addr2line -i` walks.
+- ABI lowering copies each instruction's location to what it expands to.
+
+**LLVM.** `DebugEmitter` builds the unit (`DW_AT_producer` is `bcc-rust` and its
+version, whatever personality's options it read; `DW_AT_language` is C89, C99 or
+C11, the codes GCC 14.2 and Clang 23 write for the standards), a `DIFile` per
+file, a `DISubprogram` per scope, and every `DILocation`. A location whose file
+is not its scope's file goes through a `DILexicalBlockFile`, since a
+`DILocation` has no file of its own. A phi takes its block's first location, so
+its copies are not line 0 between statements. LLVM requires a location on a
+call between two functions with subprograms, so a call without one gets line 0.
+`-g1` uses LLVM's line-tables-only emission kind.
+
+`-g` does not change the machine code: only the back end reads locations, and
+LLVM's passes and code generator ignore debug metadata. A test compares
+`objdump -d` with and without `-g` at each optimization level. CFI is another
+matter: a function without `uwtable` gets `.debug_frame` from `-g`, which is not
+code.
+
+**Windows.** Debug information on an MSVC target is CodeView, Clang's default
+there, through LLVM's own writer behind the `CodeView` module flag; `-gdwarf-N`
+selects DWARF instead. MinGW gets DWARF, as with Clang and GCC. `/Zi`, `/Z7` and
+`/ZI` all put CodeView in the object, as clang-cl does, and a link passes `-g`
+to the bundled clang, which asks `lld-link` for `-debug`. This has been checked
+by the object's sections (`.debug$S`, `.debug_info`) from Linux and not run on
+Windows.
+
+**Other back ends.** The native and WebAssembly back ends warn that they write
+no debug information and ignore `-g`. The interpreter ignores it silently, as it
+writes no output a debugger could read. Assembly inputs get `-g` when clang
+assembles them, as GCC and Clang pass it on.
+
+**Compared with GCC 14.2 and Clang 23.** On the programs in
+`tests/integration/debug_info.rs` the file and line of each row at `-O2` match
+Clang's, the inlined subroutines too. What differs:
+
+- At `-O0` bcc keeps scalar locals in SSA values, so a line that only
+  initializes one (`int s = 0;`) has no row, and the code generator's reloads
+  between statements appear as line 0 rows. GCC and Clang keep every local in
+  memory at `-O0`.
+- A location is the position of the first token of its expression, where GCC and
+  Clang use the operator of a binary expression. This changes columns, and the
+  line of a binary expression written over several lines. As in
+  `Context::file_vector`, a macro invoked within another macro's argument
+  reports the outermost invocation.
+- GCC gives a closing brace a row after a `return`; bcc and Clang do not.
+- Without variables or types, `ptype` and `info locals` have nothing to show.
+- `-g3` writes no macros, `-gsplit-dwarf` writes no `.dwo`, `-gz` compresses
+  nothing and `-fdebug-prefix-map=` maps nothing.
+- A compiled `.i` names the `.i` in `DW_AT_name`, where GCC names the file of
+  its first line marker.

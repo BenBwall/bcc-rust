@@ -37,7 +37,8 @@
 //! - Representation: `entities.rs` defines the `u32` entities and their dense
 //!   tables; `types.rs` the value types; `instructions.rs` the opcodes, the
 //!   instruction record and its flags; `function.rs` a function body and its
-//!   queries; `module.rs` signatures, globals, symbols and result types.
+//!   queries; `module.rs` signatures, globals, symbols and result types;
+//!   `debug_info.rs` the source locations and scopes `-g` keeps beside them.
 //! - Construction: `builder.rs` builds a body one instruction at a time.
 //! - Textual form: `printer.rs` writes it; `parser.rs` reads it, with
 //!   `parser/lexer.rs` splitting it into tokens.
@@ -52,6 +53,7 @@
 
 // Representation
 mod bits;
+mod debug_info;
 mod entities;
 mod function;
 mod inline_asm;
@@ -77,6 +79,14 @@ pub(crate) use bits::{
 };
 pub(crate) use builder::FunctionBuilder;
 pub(crate) use cfg::ControlFlowGraph;
+pub(crate) use debug_info::{
+    DebugInfo,
+    DebugLanguage,
+    DebugLevel,
+    DebugUnit,
+    SourceLocation,
+    Subprogram,
+};
 pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
     AccessTag,
@@ -84,6 +94,9 @@ pub(crate) use entities::{
     Block,
     BlockLabel,
     ConstId,
+    DebugFile,
+    DebugLoc,
+    DebugScope,
     Entity,
     FuncId,
     GlobalId,
@@ -221,6 +234,8 @@ pub(crate) struct Module<'ir> {
     user_interrupts:       bool,
     /// The descriptors of the functions' `asm` instructions.
     inline_asm:            Table<'ir, AsmId, InlineAsm<'ir>>,
+    /// What `-g` asks a back end to describe; empty without it.
+    debug_info:            DebugInfo<'ir>,
 }
 
 /// A function of a module. It is defined if it has a body.

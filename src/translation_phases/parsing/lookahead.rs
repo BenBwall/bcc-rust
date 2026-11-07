@@ -383,6 +383,21 @@ impl Parser<'_, '_, '_> {
             || self.declaration_starter(following)
     }
 
+    /// Whether the token after the current one is an attribute or an `asm`
+    /// label. With a type already present, a typedef spelling before one is the
+    /// declarator, as in `int T __attribute__((unused));` in an inner scope.
+    /// GNU extension: GCC manual, "Attribute Syntax" and "Asm Labels".
+    /// C99: §6.2.1 paragraph 4, p. 28; PDF p. 40.
+    pub(super) fn declarator_suffix_follows(&mut self) -> bool {
+        let Some(following) = self.cursor.following() else {
+            return false;
+        };
+        matches!(
+            following.kind,
+            TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Asm)
+        )
+    }
+
     /// Detects the parenthesized-pointer shape that forces a typedef spelling
     /// to remain a specifier rather than become the declarator name.
     ///
