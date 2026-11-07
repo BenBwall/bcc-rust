@@ -1,0 +1,12 @@
+sema-sign-compare-gcc.c:2:15: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+    2 |     int r = a < b;
+      |               ^
+sema-sign-compare-gcc.c:3:12: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+    3 |     r += a == b;
+      |            ^~
+sema-sign-compare-gcc.c:4:12: warning: comparison of integer expressions of different signedness: 'int' and 'long unsigned int' [-Wsign-compare]
+    4 |     r += a < c;
+      |            ^
+sema-sign-compare-gcc.c:8:16: warning: operand of '?:' changes signedness from 'int' to 'unsigned int' due to unsignedness of other operand [-Wsign-compare]
+    8 |     return d ? a : b;
+      |                ^

@@ -1,0 +1,16 @@
+sema-unused-file-scope-clang.c:1:12: warning: unused variable 'unused_object' [-Wunused-variable]
+    1 | static int unused_object;
+      |            ^~~~~~~~~~~~~
+sema-unused-file-scope-clang.c:2:18: warning: unused variable 'unused_constant' [-Wunused-const-variable]
+    2 | static const int unused_constant = 1;
+      |                  ^~~~~~~~~~~~~~~
+sema-unused-file-scope-clang.c:3:12: warning: variable 'written' set but not used [-Wunused-but-set-global]
+    3 | static int written;
+      |            ^~~~~~~
+sema-unused-file-scope-clang.c:4:13: warning: unused function 'unused_function' [-Wunused-function]
+    4 | static void unused_function(void) {}
+      |             ^~~~~~~~~~~~~~~
+sema-unused-file-scope-clang.c:5:13: warning: unused function 'undefined_function' [-Wunused-function]
+    5 | static void undefined_function(void);
+      |             ^~~~~~~~~~~~~~~~~~
+5 warnings generated.

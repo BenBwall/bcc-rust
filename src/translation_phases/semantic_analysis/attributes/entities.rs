@@ -55,6 +55,7 @@ use super::{
     written::WrittenAttribute,
 };
 use crate::{
+    configuration::CompilerIdentity,
     translation_phases::{
         SourceVectors,
         preprocessing::{
@@ -86,8 +87,10 @@ pub(in crate::translation_phases::semantic_analysis) enum Subject {
         /// The declarator's suffix-list identity, keying its cleanup.
         declarator: usize,
     },
-    Typedef,
-    Parameter,
+    /// The binding of a declared typedef, which an `unused` attribute exempts.
+    Typedef(Option<usize>),
+    /// The binding of a declared parameter, for the same.
+    Parameter(Option<usize>),
     Member,
 }
 
@@ -102,10 +105,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     ) {
         let linked = self.attribute_entity(subject);
         for attribute in self.written_attributes(specifier) {
+            self.note_attribute_references(subject, specifier, attribute);
             // GCC ignores `scalar_storage_order` with a warning on anything
             // declared but a typedef, which `storage_order.rs` checks.
             if self.is_storage_order(specifier.syntax, attribute) {
-                if !matches!(subject, Subject::Typedef)
+                if !matches!(subject, Subject::Typedef(_))
                     && self.storage_order_argument(attribute).is_ok()
                 {
                     self.ignored(attribute);
@@ -120,10 +124,36 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             ) else {
                 continue;
             };
-            if follows_definition(rule, attribute.name)
-                && self.ignored_after_definition(linked, attribute.name, attribute.source)
+            let ignored = follows_definition(rule, attribute.name)
+                && self.ignored_after_definition(linked, attribute.name, attribute.source);
+            // Clang's warning says what it means: it ignored the attribute.
+            if self.unused.tracking
+                && (!ignored
+                    || self.context.configuration.compiler_identity() == CompilerIdentity::Gcc)
+                && (rule == Rule::Cleanup
+                    || rule == Rule::Used
+                    || rule == Rule::Constructor
+                    || rule == Rule::Destructor
+                    || matches!(attribute.name, "unused" | "maybe_unused"))
+                && let Subject::Function { binding, .. }
+                | Subject::Object { binding, .. }
+                | Subject::Parameter(Some(binding)) = subject
             {
+                self.exempt_from_unused(binding);
+            }
+            if self.unused.tracking
+                && let Subject::Typedef(Some(binding)) = subject
+            {
+                self.note_typedef_attribute(binding, attribute.name);
+            }
+            if ignored {
                 continue;
+            }
+            if attribute.name == "weakref"
+                && let Subject::Function { binding, .. } | Subject::Object { binding, .. } = subject
+            {
+                let entity = self.entity_of(binding);
+                self.attributes.entity(entity).weak_reference = true;
             }
             match rule {
                 | Rule::CallDiagnostic => self.apply_call_diagnostic(subject, specifier, attribute),
@@ -156,7 +186,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::Nonnull => self.nonnull_attribute(subject, specifier, attribute),
                 // On a typedef it names the type, which type construction
                 // checks; anything else declared is not a union type.
-                | Rule::TransparentUnion if !matches!(subject, Subject::Typedef) => self.error(
+                | Rule::TransparentUnion if !matches!(subject, Subject::Typedef(_)) => self.error(
                     SemanticErrorKind::TransparentUnionNotUnion,
                     attribute.source,
                     None,
@@ -171,6 +201,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | Rule::NoStackProtector => self.no_stack_protector(subject, attribute),
+                | Rule::NoInstrument => self.no_instrument(subject, attribute),
                 | Rule::NoSanitize => self.no_sanitize(subject, attribute),
                 | _ => {},
             }
@@ -212,6 +243,57 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if self.bindings[binding].linkage != Linkage::None =>
                 Some((self.entity_of(binding), self.earlier_definition(binding))),
             | _ => None,
+        }
+    }
+
+    /// The references an attribute's arguments make, which analyzing them
+    /// does not always record. Both compilers parse an argument as an
+    /// expression, so `cleanup(c)` and `malloc(d)` refer to their functions;
+    /// GCC does so for an attribute it does not know too. A string names its
+    /// target for GCC's `alias` and `weakref` and both compilers' `ifunc`.
+    fn note_attribute_references(
+        &mut self,
+        subject: Subject,
+        specifier: &'tu AttributeSpecifier<'tu>,
+        attribute: WrittenAttribute<'_>,
+    ) {
+        if !self.unused.tracking {
+            return;
+        }
+        let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
+        let known = rule(
+            specifier.syntax,
+            attribute.namespace,
+            attribute.name,
+            self.context.configuration.target(),
+        )
+        .is_some();
+        for token in attribute.arguments.unwrap_or_default() {
+            match token.kind {
+                | TokenType::Identifier if known || gcc => {
+                    if let Some(entry) = self.lookup(Namespace::Ordinary, token.contents)
+                        && matches!(
+                            self.bindings[entry.binding].kind,
+                            BindingKind::Function | BindingKind::Object | BindingKind::Parameter
+                        )
+                    {
+                        self.note_reference(entry.binding, false, false);
+                    }
+                },
+                | TokenType::String(StringTokenType::String(id))
+                    if attribute.name == "ifunc"
+                        || (gcc && matches!(attribute.name, "alias" | "weakref")) =>
+                    if let Some(target) = self.context.literal_text_in(self.scratch, id, false) {
+                        self.exempt_symbol_target(target);
+                    },
+                | _ => {},
+            }
+        }
+        if gcc
+            && attribute.name == "weakref"
+            && let Subject::Function { binding, .. } = subject
+        {
+            self.note_weak_reference(binding);
         }
     }
 
@@ -301,7 +383,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.attributes
             .entities
             .get(&entity)
-            .is_some_and(|attributes| attributes.weak)
+            .is_some_and(|attributes| attributes.weak || attributes.weak_reference)
     }
 
     /// GCC `weak`: external entities only; Clang rejects internal and
@@ -324,8 +406,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     );
                 }
             },
-            | Subject::Parameter => {},
-            | Subject::Typedef | Subject::Member => self.ignored(attribute),
+            | Subject::Parameter(_) => {},
+            | Subject::Typedef(_) | Subject::Member => self.ignored(attribute),
         }
     }
 
@@ -369,7 +451,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.select_any_definition(binding);
                 }
             },
-            | Subject::Typedef => {},
+            | Subject::Typedef(_) => {},
             | _ => self.error(
                 SemanticErrorKind::SelectAnySubject,
                 attribute.source,
@@ -450,6 +532,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if attributes.inlining != Inlining::Never {
             attributes.inlining = inlining;
         }
+    }
+
+    /// GCC's and Clang's `no_instrument_function` on a function, which it
+    /// keeps out of `-pg`; elsewhere it is ignored with a warning.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    fn no_instrument(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        let Subject::Function { binding, .. } = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        let entity = self.entity_of(binding);
+        self.attributes.entity(entity).no_instrument = true;
     }
 
     /// GCC's and Clang's `no_stack_protector` on a function, which it keeps
@@ -790,7 +887,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 },
             // Clang ignores visibility silently on members, parameters and
             // local variables, and with a warning on typedefs.
-            | Subject::Typedef => self.ignored(attribute),
+            | Subject::Typedef(_) => self.ignored(attribute),
             | _ => {},
         }
     }
@@ -1341,7 +1438,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 );
                 continue;
             }
-            if !request.emitted {
+            // Both compilers resolve an alias as they generate code.
+            if !request.emitted || self.context.configuration.syntax_only() {
                 continue;
             }
             let target = match names.resolve(request.target) {

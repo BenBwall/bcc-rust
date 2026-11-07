@@ -77,6 +77,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match work {
             | StatementWork::AssemblyDone(statement, asm, jumps) =>
                 self.finish_assembly(statement, asm, jumps),
+            | StatementWork::DiscardedValue(expression, errors, inhibited) =>
+                if errors == self.semantic_errors {
+                    self.check_discarded_value(expression, inhibited);
+                },
             | StatementWork::RetainTail(statement) => {
                 self.statement_effects(statement);
                 self.retain_statement_tail(statement);
@@ -109,6 +113,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     crate::translation_phases::parsing::syntax::StatementType::Compound { .. }
                 );
                 if self.enter_statement_block(compound) {
+                    self.note_scope_end(statement.source_vectors);
                     self.work.push(Work::PopScope);
                 }
                 if let Some(outside) = outside {
@@ -429,6 +434,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             } else {
                 self.statements.labels[index].definition = Some(name);
+                self.statements.labels[index].exempt = self.label_is_exempt(statement);
                 self.statements.labels[index].point = self.control.point();
                 let id = self.statements.labels[index].id;
                 self.control.labels[id.0].definition = Some(statement);
@@ -488,9 +494,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 point: None,
                 local: true,
                 function: self.functions.current.map_or(usize::MAX, |f| f.id),
+                scope: self.label_scope(true),
                 name,
                 definition: None,
                 used: None,
+                exempt: false,
             });
             self.install(name, Namespace::Label, index);
         }
@@ -515,9 +523,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             point: None,
             local: false,
             function,
+            scope: self.label_scope(false),
             name,
             definition: None,
             used: None,
+            exempt: false,
         });
         _ = self
             .statements
@@ -638,6 +648,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     usage.source_vectors,
                     Some(label.name.name),
                     None,
+                );
+            }
+            if label.used.is_none()
+                && !label.exempt
+                && let Some(definition) = label.definition
+            {
+                self.report_unused_label(
+                    definition,
+                    label.local.then_some(label.name),
+                    label.scope,
                 );
             }
         }
@@ -1136,6 +1156,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
 #[derive(Clone, Copy)]
 pub(super) enum StatementWork<'tu> {
+    /// C99: §6.8.3p2, p. 132; PDF p. 144.
+    DiscardedValue(&'tu Expression<'tu>, usize, bool),
     RestoreStatementExpression {
         region:   Option<RegionId>,
         previous: Option<RegionId>,
@@ -1182,9 +1204,13 @@ struct Label {
     point:      Option<ControlPoint>,
     local:      bool,
     function:   usize,
+    /// The scope it belongs to, as far as GCC's warning about it cares.
+    scope:      usize,
     name:       Identifier,
     definition: Option<Identifier>,
     used:       Option<Identifier>,
+    /// An `unused` attribute follows the label.
+    exempt:     bool,
 }
 
 /// A goto target and the variably modified scope path at its use.

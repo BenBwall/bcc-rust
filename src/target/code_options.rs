@@ -98,6 +98,8 @@ pub(crate) struct Hardening {
     pub(crate) sanitize_address:   bool,
     /// `-fsanitize=thread`: LLVM's `ThreadSanitizer` records each access.
     pub(crate) sanitize_thread:    bool,
+    /// `-pg`: each function calls `mcount` on entry, for `gprof`.
+    pub(crate) profile:            bool,
 }
 
 impl Hardening {
@@ -109,17 +111,19 @@ impl Hardening {
         keep_frame_pointer: false,
         sanitize_address:   false,
         sanitize_thread:    false,
+        profile:            false,
     };
 
-    /// What makes the bundled clang link the sanitizer's run-time library.
-    pub(crate) const fn sanitizer_link_flag(self) -> Option<&'static str> {
-        if self.sanitize_address {
-            Some("-fsanitize=address")
-        } else if self.sanitize_thread {
-            Some("-fsanitize=thread")
-        } else {
-            None
-        }
+    /// What makes the bundled clang link the run-time support these need: a
+    /// sanitizer's library, or the profiling startup file.
+    pub(crate) fn link_flags(self) -> impl Iterator<Item = &'static str> {
+        [
+            self.sanitize_address.then_some("-fsanitize=address"),
+            self.sanitize_thread.then_some("-fsanitize=thread"),
+            self.profile.then_some("-pg"),
+        ]
+        .into_iter()
+        .flatten()
     }
 }
 

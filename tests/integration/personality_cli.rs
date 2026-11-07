@@ -1784,6 +1784,63 @@ mod tests {
         }
     }
 
+    /// `-pg` builds a program `gprof` can read: each function calls `mcount`
+    /// unless it says otherwise, and a run writes `gmon.out`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_profiling_instruments_and_links() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "__attribute__((noinline)) int f(int x) { return x + 1; \
+             }\n__attribute__((no_instrument_function)) int g(int x) { return x + 2; }\nint \
+             main(void) { return f(1) + g(1) == 5 ? 0 : 1; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let text = stdout(&directory.bcc(mode, &["-pg", "-O1", "-S", "a.c", "-o", "-"]));
+            let calls = text.matches("mcount").count();
+            assert!(calls >= 2, "{mode}: {text}");
+            let g = text
+                .split("\ng:")
+                .nth(1)
+                .and_then(|rest| rest.split(".size").next());
+            assert!(
+                g.is_some_and(|body| !body.contains("mcount")),
+                "{mode}: {text}"
+            );
+            let plain = stdout(&directory.bcc(mode, &["-O1", "-S", "a.c", "-o", "-"]));
+            assert!(!plain.contains("mcount"), "{mode}");
+            // A run writes the profile, where the toolchain has `gcrt1.o`.
+            let build = directory.bcc(mode, &["-pg", "-O1", "a.c", "-o", "a"]);
+            if build.status.success() {
+                assert_eq!(stderr(&build), "", "{mode}");
+                drop(std::fs::remove_file(directory.path("gmon.out")));
+                let run = Command::new(directory.path("a"))
+                    .current_dir(directory.path("."))
+                    .status()
+                    .unwrap();
+                assert_eq!(run.code(), Some(0), "{mode}");
+                assert!(directory.path("gmon.out").exists(), "{mode}");
+            } else {
+                assert!(stderr(&build).contains("gcrt1"), "{}", stderr(&build));
+            }
+            // Each compiler refuses it with no frame pointer, unless taken
+            // back.
+            let both = ["-pg", "-fomit-frame-pointer", "-c", "a.c", "-o", "a.o"];
+            assert!(!directory.bcc(mode, &both).status.success(), "{mode}");
+            let back = [
+                "-pg",
+                "-fomit-frame-pointer",
+                "-fno-omit-frame-pointer",
+                "-c",
+                "a.c",
+                "-o",
+                "a.o",
+            ];
+            succeeds(&directory.bcc(mode, &back));
+        }
+    }
+
     /// A distribution's hardening options do what they say on Linux, with the
     /// macros each compiler numbers its own way.
     #[cfg(target_os = "linux")]
@@ -3140,6 +3197,186 @@ mod tests {
         }
     }
 
+    /// GCC checks what the end of a unit leaves unused as it compiles the
+    /// unit, not under `-fsyntax-only`; Clang does either way. `-Werror` and a
+    /// diagnostic pragma cannot bring a report back that was never made. Both
+    /// resolve an alias as they generate code.
+    #[test]
+    fn end_of_unit_checks_wait_for_code_generation() {
+        let directory = Directory::new();
+        for (source, syntax_gcc, syntax_clang, real_gcc, real_clang) in [
+            ("static int x;\n", true, false, false, false),
+            ("static const int x = 1;\n", true, false, false, false),
+            ("static void f(void) {}\n", true, false, false, false),
+            (
+                "#pragma GCC diagnostic error \"-Wunused-function\"\nstatic void f(void) {}\n",
+                true,
+                false,
+                false,
+                false,
+            ),
+            // Reported as the file scope closes, either way.
+            ("static void f(void);\n", false, false, false, false),
+            ("void f(void) { int a; }\n", false, false, false, false),
+            (
+                "static int x; void f(void) { extern int x; }\n",
+                false,
+                false,
+                false,
+                false,
+            ),
+            ("int x;\n", true, true, true, true),
+        ] {
+            directory.write("end.c", source);
+            for (mode, stage, clean) in [
+                (
+                    "--gcc-mode",
+                    ["-fsyntax-only", "-Wall"].as_slice(),
+                    syntax_gcc,
+                ),
+                (
+                    "--clang-mode",
+                    ["-fsyntax-only", "-Wall"].as_slice(),
+                    syntax_clang,
+                ),
+                (
+                    "--gcc-mode",
+                    ["-S", "-o", "end.s", "-Wall"].as_slice(),
+                    real_gcc,
+                ),
+                (
+                    "--clang-mode",
+                    ["-S", "-o", "end.s", "-Wall"].as_slice(),
+                    real_clang,
+                ),
+            ] {
+                let mut args = stage.to_vec();
+                args.extend(["-Wextra", "-Werror", "end.c"]);
+                let output = directory.bcc(mode, &args);
+                assert_eq!(
+                    output.status.success(),
+                    clean,
+                    "{mode} {stage:?} {source}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+        directory.write(
+            "alias.c",
+            "void f(void) __attribute__((alias(\"missing\")));\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            succeeds(&directory.bcc(mode, &["-fsyntax-only", "alias.c"]));
+            assert!(
+                !directory
+                    .bcc(mode, &["-S", "-o", "alias.s", "alias.c"])
+                    .status
+                    .success()
+            );
+        }
+    }
+
+    /// GCC withholds its unused warnings when a system header spells the
+    /// token, as a system macro's body does, but not when the user wrote it
+    /// as an argument; its label warning goes by the invocation. Clang goes
+    /// by the invocation for all, and skips a value a macro's body wrote.
+    #[test]
+    fn unused_warnings_follow_each_compilers_system_macro_rule() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sys")).unwrap();
+        directory.write(
+            "sys/sys.h",
+            "#define NOOP(x) ((x) + 1)\n#define LOCAL int macro_local;\n#define STATICFN static \
+             void macro_fn(void) {}\n#define STATICOBJ static int macro_obj;\n#define PARAM void \
+             macro_param(int p) {}\n#define PAREN(x) (x)\n#define SET int s; s = 1;\n#define \
+             WRAP(x) x\n#define LABEL lab:;\n",
+        );
+        for (source, in_gcc, in_clang) in [
+            ("void f(int x) { NOOP(x); }", false, false),
+            ("void f(int x) { PAREN(x); }", false, true),
+            ("void f(void) { LOCAL }", false, true),
+            ("void f(void) { SET }", false, true),
+            ("STATICFN", false, true),
+            ("STATICOBJ", false, true),
+            ("PARAM", false, true),
+            ("void f(int x) { WRAP(x + 1); }", true, true),
+            ("void f(int x) { PAREN(x + 1); }", true, true),
+            ("void f(void) { WRAP(int inner;) }", true, true),
+            ("void f(void) { LABEL }", true, true),
+        ] {
+            directory.write("use.c", &format!("#include <sys.h>\n{source}\n"));
+            for (mode, warns) in [("--gcc-mode", in_gcc), ("--clang-mode", in_clang)] {
+                let output = directory.bcc(
+                    mode,
+                    &[
+                        "-isystem",
+                        "sys",
+                        "-fsyntax-only",
+                        "-Wall",
+                        "-Wextra",
+                        "use.c",
+                    ],
+                );
+                succeeds(&output);
+                assert_eq!(
+                    stderr(&output).contains("[-Wunused"),
+                    warns,
+                    "{mode} {source}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
+    /// GCC also withholds its comparison and initializer warnings when a
+    /// system header spells the operator or the closing brace; Clang goes by
+    /// the invocation.
+    #[test]
+    fn extra_warnings_follow_each_compilers_system_macro_rule() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sys")).unwrap();
+        directory.write(
+            "sys/sys.h",
+            "#define LT(a, b) ((a) < (b))\n#define CHOOSE(c, a, b) ((c) ? (a) : (b))\n#define \
+             INIT(v) struct S v = {1}\n#define WRAP(x) x\nstruct S { int a; int b; };\n",
+        );
+        for (source, in_gcc, in_clang) in [
+            ("int f(int a, unsigned b) { return LT(a, b); }", false, true),
+            (
+                "unsigned f(int c, int a, unsigned b) { return CHOOSE(c, a, b); }",
+                false,
+                false,
+            ),
+            ("void f(void) { INIT(v); (void)v; }", false, true),
+            (
+                "int f(int a, unsigned b) { return WRAP(a < b); }",
+                true,
+                true,
+            ),
+            (
+                "int f(int a, unsigned b) { return WRAP(a) < WRAP(b); }",
+                true,
+                true,
+            ),
+            ("struct S s = { WRAP(1) };", true, true),
+        ] {
+            directory.write("use.c", &format!("#include <sys.h>\n{source}\n"));
+            for (mode, warns) in [("--gcc-mode", in_gcc), ("--clang-mode", in_clang)] {
+                let output = directory.bcc(
+                    mode,
+                    &["-isystem", "sys", "-fsyntax-only", "-Wextra", "use.c"],
+                );
+                succeeds(&output);
+                assert_eq!(
+                    stderr(&output).contains("warning"),
+                    warns,
+                    "{mode} {source}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
     /// Plain `_Complex` means `_Complex double` to GCC and Clang: Clang
     /// warns, GCC only under `-pedantic`, and `-pedantic-errors` refuses it
     /// in both (gcc.c-torture/execute/20070614-1.c).
@@ -4182,6 +4419,33 @@ mod tests {
                 let run = Command::new(directory.path("a")).status().unwrap();
                 assert_eq!(run.code(), Some(0), "{mode} {optimization}");
             }
+        }
+    }
+
+    /// clang-cl takes Clang's options, which bcc reads or treats as its Clang
+    /// personality does, without its own argument parser showing through.
+    #[test]
+    fn clang_cl_treats_clang_options_as_clang_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int add(int a, int b) { return a + b; }\n");
+        let run =
+            |args: &[&str]| directory.bcc("--clang-cl-mode", &[args, &["/c", "a.c"]].concat());
+        for option in ["/GR", "/GR-", "/Zl", "/Y-"] {
+            let output = run(&[option]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{option}");
+        }
+        let output = run(&["-fms-compatibility"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = run(&["-fsyntax-only"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        assert!(run(&["-march=native"]).status.success());
+        for option in ["-m32", "-fbogus-option"] {
+            let text = stderr(&run(&[option]));
+            assert!(!text.contains("unexpected argument"), "{option}: {text}");
+            assert!(!text.contains("Usage:"), "{option}: {text}");
         }
     }
 

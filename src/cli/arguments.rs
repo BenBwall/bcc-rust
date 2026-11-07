@@ -369,6 +369,7 @@ impl Cli {
             )
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
+            .with_syntax_only(self.driver.syntax_only)
             .with_compiler_identity(self.compiler_identity.into())
             .with_compiler_extensions(self.compiler_extensions)
             .with_default_math_errno()
@@ -483,6 +484,7 @@ impl Cli {
                     hardening.sanitize_address = false;
                     hardening.sanitize_thread = false;
                 },
+                | "-pg" => hardening.profile = true,
                 | "-fno-omit-frame-pointer" => hardening.keep_frame_pointer = true,
                 | "-fomit-frame-pointer" => hardening.keep_frame_pointer = false,
                 | _ => {},
@@ -733,6 +735,7 @@ pub(super) fn is_hardening_option(text: &str) -> bool {
             | "-fcf-protection=none"
             | "-fstack-clash-protection"
             | "-fno-stack-clash-protection"
+            | "-pg"
     ) || is_sanitizer_option(text)
 }
 
@@ -859,7 +862,7 @@ enum LanguageFlag {
     WarningsAsErrors(bool),
     WarningGroup(DiagnosticGroup, WarningOption),
     AllWarnings(bool),
-    ExtraWarnings,
+    ExtraWarnings(bool),
     UnknownWarning,
     /// `-Wfatal-errors` or `-Wno-fatal-errors`.
     FatalErrors(bool),
@@ -992,7 +995,8 @@ impl LanguageFlag {
             | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
             | "-Wall" => return Some(Self::AllWarnings(true)),
             | "-Wno-all" => return Some(Self::AllWarnings(false)),
-            | "-Wextra" | "-Wno-extra" => return Some(Self::ExtraWarnings),
+            | "-Wextra" | "-W" => return Some(Self::ExtraWarnings(true)),
+            | "-Wno-extra" => return Some(Self::ExtraWarnings(false)),
             | "-Wno-pedantic" => return Some(Self::Pedantic(false)),
             | "-Wfatal-errors" => return Some(Self::FatalErrors(true)),
             | "-Wno-fatal-errors" => return Some(Self::FatalErrors(false)),
@@ -1146,6 +1150,17 @@ impl LanguageFlag {
                 (name, WarningOption::Error(false))
             } else if let Some(name) = text.strip_prefix("no-") {
                 (name, WarningOption::Enable(false))
+            } else if let Some(level) = text.strip_prefix("unused-const-variable=") {
+                // GCC's level: 0 is off; level 1, which `-Wunused` gives C, and
+                // level 2 differ in headers, which bcc does not report.
+                return Some(if matches!(level, "0" | "1" | "2") {
+                    Self::WarningGroup(
+                        DiagnosticGroup::UnusedConstVariable,
+                        WarningOption::Enable(level != "0"),
+                    )
+                } else {
+                    Self::UnknownWarning
+                });
             } else if let Some(level) = text.strip_prefix("normalized=") {
                 // GCC's level: `none` turns the check off, and the others
                 // all report the one case bcc detects.
@@ -1160,11 +1175,16 @@ impl LanguageFlag {
             } else {
                 (text, WarningOption::Enable(true))
             };
-            return Some(
-                DiagnosticGroup::parse(name).map_or(Self::UnknownWarning, |group| {
-                    Self::WarningGroup(group, option)
-                }),
-            );
+            // GCC's `-Waddress` and Clang's group around
+            // `-Wpointer-bool-conversion`, the part of them bcc reports.
+            let group = if name == "address" {
+                Some(DiagnosticGroup::PointerBoolConversion)
+            } else {
+                DiagnosticGroup::parse(name)
+            };
+            return Some(group.map_or(Self::UnknownWarning, |group| {
+                Self::WarningGroup(group, option)
+            }));
         }
         let (name, enabled) = text
             .strip_prefix("-fms-")
@@ -1180,19 +1200,14 @@ impl LanguageFlag {
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
             | Self::UnknownWarning
-            | Self::ExtraWarnings
             | Self::Relocation
             | Self::Code
             | Self::Presentation
             | Self::Builtins => configuration,
             // GCC's and Clang's `-Wall` hold `-Wimplicit` and
             // `-Wreturn-mismatch`, each in its own way.
-            | Self::AllWarnings(enabled) => configuration
-                .with_warning_option(
-                    DiagnosticGroup::UnusedFunction,
-                    WarningOption::Enable(enabled),
-                )
-                .with_all_warnings(enabled),
+            | Self::AllWarnings(enabled) => configuration.with_all_warnings(enabled),
+            | Self::ExtraWarnings(enabled) => configuration.with_extra_warnings(enabled),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::FatalErrors(enabled) => configuration.with_fatal_errors(enabled),

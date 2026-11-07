@@ -308,6 +308,7 @@ fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
         attributes,
         EntityAttributes {
             weak:                false,
+            weak_reference:      false,
             section:             None,
             used:                false,
             code_alignment:      0,
@@ -318,6 +319,7 @@ fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
             declared_alignment:  false,
             inlining:            Inlining::Default,
             target_vector_abi:   false,
+            no_instrument:       false,
             no_stack_protector:  false,
             no_sanitize_address: false,
             no_sanitize_thread:  false,
