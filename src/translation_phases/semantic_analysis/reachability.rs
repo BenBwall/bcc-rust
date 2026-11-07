@@ -660,7 +660,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         condition: Option<&'tu Expression<'tu>>,
         ranges: &[(super::Integer, super::Integer)],
     ) -> bool {
-        let Some(condition) = condition else {
+        // GCC never takes the enumeration as complete; it records the
+        // enumerators only for its `-Wswitch` checks.
+        let Some(condition) = condition.filter(|_| {
+            self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang
+        }) else {
             return false;
         };
         // The usual arithmetic conversions leave a conditional's result an
