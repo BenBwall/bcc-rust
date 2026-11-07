@@ -405,9 +405,23 @@ impl Cli {
     /// and the last of `-f[no-]strict-volatile-bitfields`,
     /// `-f[no-]function-sections` and `-f[no-]data-sections`.
     fn code_options(&self) -> CodeOptions {
-        let mut x86_features = crate::target::X86Features::default();
-        for option in &self.language_option {
-            x86_features.apply(option);
+        let mut x86_features = crate::target::X86Features::for_compiler(
+            CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
+        );
+        // WebAssembly has no such features: `x86_options_for_wasm` refuses
+        // them.
+        if !self.target.is_wasm() {
+            // Clang's driver reads only the last of `-msse4.2`, `-msse4` and
+            // `-mno-sse4.2`, where it stands.
+            let sse4_2 =
+                |option: &String| matches!(option.as_str(), "-msse4.2" | "-msse4" | "-mno-sse4.2");
+            let last = self.language_option.iter().rposition(sse4_2);
+            let gcc = CompilerIdentity::from(self.compiler_identity) == CompilerIdentity::Gcc;
+            for (index, option) in self.language_option.iter().enumerate() {
+                if gcc || !sse4_2(option) || Some(index) == last {
+                    x86_features.apply(option);
+                }
+            }
         }
         CodeOptions {
             x86_features,
@@ -503,6 +517,60 @@ impl Cli {
             .rfind(|option| Relocation::parse(option).is_some())
             .filter(|option| Relocation::parse(option) != Some(Relocation::Static))
             .map(String::as_str)
+    }
+
+    /// Reports the x86 feature options a WebAssembly target has no use for,
+    /// which leave no macros behind ([`Self::code_options`]). Clang refuses
+    /// each in its own words, but for `-msse4.2` and `-msse4`, which it leaves
+    /// unused, and reads `-mno-sse4` as `-mno-sse4.1`. GCC has no WebAssembly
+    /// target; a GCC for a processor without these options says what it says of
+    /// any option it doesn't know, and of a processor it doesn't know.
+    /// Returns whether any was an error.
+    pub(super) fn report_x86_options_on_wasm(&self) -> bool {
+        use super::driver::{
+            Severity,
+            report,
+        };
+        if !self.target.is_wasm() {
+            return false;
+        }
+        let gcc = CompilerIdentity::from(self.compiler_identity) == CompilerIdentity::Gcc;
+        let triple = self.target.triple();
+        let mut failed = false;
+        for option in &self.language_option {
+            let option = option.as_str();
+            if !crate::target::is_feature_option(option) {
+                continue;
+            }
+            if !gcc && matches!(option, "-msse4.2" | "-msse4") {
+                report(
+                    self,
+                    Severity::Warning,
+                    format_args!(
+                        "argument unused during compilation: '{option}' \
+                         [-Wunused-command-line-argument]"
+                    ),
+                );
+                continue;
+            }
+            failed = true;
+            let message = match (gcc, option.strip_prefix("-march=")) {
+                | (true, Some(architecture)) =>
+                    format!("bad value '{architecture}' for '-march=' switch"),
+                | (true, None) => format!("unrecognized command-line option '{option}'"),
+                | (false, Some(_)) => format!("unsupported option '-march=' for target '{triple}'"),
+                | (false, None) => {
+                    let option = if option == "-mno-sse4" {
+                        "-mno-sse4.1"
+                    } else {
+                        option
+                    };
+                    format!("unsupported option '{option}' for target '{triple}'")
+                },
+            };
+            report(self, Severity::Error, format_args!("{message}"));
+        }
+        failed
     }
 
     /// The library functions code generation may treat as builtins, from
@@ -882,6 +950,7 @@ impl LanguageFlag {
             | "-fsignaling-nans" => return Some(Self::SignalingNans(true)),
             | "-fno-signaling-nans" => return Some(Self::SignalingNans(false)),
             | "--general-regs-only" => return Some(Self::GeneralRegsOnly),
+            | crate::target::UNKNOWN_VECTOR_ABI => return Some(Self::Code),
             | "--user-interrupts" => return Some(Self::UserInterrupts),
             | "-fno-honor-nans" | "-fhonor-nans" =>
                 return Some(Self::RelaxedFloatingPoint(

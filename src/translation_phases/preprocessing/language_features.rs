@@ -1158,7 +1158,8 @@ pub(super) fn with_identity_macros<'a>(
         for name in ["", "F", "F32", "F32x", "F64"] {
             _ = writeln!(out, "#define __FP_FAST_FMA{name} 1");
         }
-    } else if identity != CompilerIdentity::Gcc && x86.has_compare_and_swap_16() {
+    }
+    if x86.has_compare_and_swap_16() {
         out.push_str("#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 1\n");
     }
     // The widest `_BitInt` the identity's compiler accepts, which

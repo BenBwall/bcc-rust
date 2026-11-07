@@ -56,6 +56,7 @@ pub(crate) use model::{
 };
 pub(crate) use x86_features::{
     Cpu,
+    UNKNOWN_VECTOR_ABI,
     X86Features,
     is_feature_option,
 };

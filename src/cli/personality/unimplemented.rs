@@ -30,6 +30,9 @@ pub(super) enum Treatment {
     Warn(&'static str),
     /// Refused with an error that gives the reason.
     Reject(&'static str),
+    /// An x86 option on a target that isn't x86, refused as the compiler
+    /// refuses it.
+    WrongTarget,
 }
 
 /// The treatment of `option`, a `-f` or `-m` option its compiler knows,
@@ -674,6 +677,15 @@ fn machine(option: &str, target: Target) -> Treatment {
         | Some(feature) => (true, feature),
         | None => (false, name),
     };
+    if target.is_wasm()
+        && (option.starts_with("-march=")
+            || BASELINE.contains(&feature)
+            || feature.starts_with("avx")
+            || feature.starts_with("amx")
+            || EXTENSIONS.contains(&feature))
+    {
+        return Treatment::WrongTarget;
+    }
     // bcc's code uses no MMX register, and its MMX intrinsics work in SSE
     // registers, as GCC's and Clang's do on x86-64; the option changes only
     // whether `__MMX__` is defined, which the GCC and Clang personalities
