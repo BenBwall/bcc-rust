@@ -8,8 +8,9 @@
 //! tap it, on a touch screen). When both point somewhere, the one that
 //! moved last wins: a pointer resting over an editor does not hide what
 //! the arrow keys select, and the cursor's link shows again once the
-//! pointer moves away. Each cursor move is also announced to screen
-//! readers, politely and only once the cursor rests.
+//! pointer moves away. The sentence that says what the line links to is on
+//! the page as it moves ([`State::link_reading`]); each cursor move is also
+//! announced to screen readers, politely and only once the cursor rests.
 
 // `State` is the page's bundle of `Copy` signal handles, passed by value as
 // everywhere in `app.rs`.
@@ -22,7 +23,11 @@ use super::{
     Mode,
     State,
 };
-use crate::pipeline;
+use crate::pipeline::{
+    self,
+    Links,
+    Stage,
+};
 
 /// How long the cursor must rest on a line before its link is announced,
 /// so holding an arrow key reads out only where it stops.
@@ -152,6 +157,21 @@ pub(super) fn announce(state: State) {
 }
 
 impl State {
+    /// What the line the reader points at links to, in a sentence, or how to
+    /// ask, in a view with links.
+    pub(super) fn link_reading(self) -> Option<String> {
+        if self.mode.get() != Mode::Pipeline {
+            return None;
+        }
+        let pointing = self.pointing;
+        let (side, line) = match (pointing.line(Side::Source), pointing.line(Side::Output)) {
+            | (0, 0) => return Some("Point at a line to read what it links to.".to_owned()),
+            | (0, output) => (Side::Output, output),
+            | (source, _) => (Side::Source, source),
+        };
+        self.describe_link(side, line)
+    }
+
     /// What `line` of `side` links to in the view on screen, as a sentence,
     /// or `None` in a view without links.
     fn describe_link(self, side: Side, line: usize) -> Option<String> {
@@ -160,12 +180,13 @@ impl State {
             | Mode::Pipeline => {
                 let stage = self.stage.get();
                 let headers = self.headers.get();
+                let optimized = self.optimize.get();
                 self.compilation.with(|compilation| {
                     let compilation = compilation.as_ref()?;
-                    let links = self.editor_text.with(|source| {
-                        pipeline::links(stage, compilation, source, headers)
-                    });
-                    (!links.is_empty()).then(|| {
+                    self.links.with(|links| {
+                        if links.is_empty() {
+                            return None;
+                        }
                         let linked = match side {
                             | Side::Source => links.outputs_for(line),
                             | Side::Output => links.sources_for(line),
@@ -173,14 +194,30 @@ impl State {
                         // The machine code and the views that label their
                         // lines with source lines show no line numbers to
                         // refer to.
-                        let numbered = stage != pipeline::Stage::MachineCode
+                        let numbered = stage != Stage::MachineCode
                             && pipeline::gutter(stage, compilation, headers).is_empty();
                         let view = View {
                             name: stage.view_name(),
                             exact: links.is_exact(),
                             numbered,
                         };
-                        describe(side, line, &linked, view)
+                        let origins = match side {
+                            | Side::Source => {
+                                let removed = linked.is_empty()
+                                    && optimized
+                                    && self.other_level.with(|plain| {
+                                        plain.as_ref().is_some_and(|plain| {
+                                            plain.origins(stage).iter().any(|origin| {
+                                                origin.line == line || origin.call == line
+                                            })
+                                        })
+                                    });
+                                Origins::of_source_line(links, line, &linked, removed)
+                            },
+                            | Side::Output =>
+                                Origins::of_output_line(links, line, stage, optimized),
+                        };
+                        Some(describe(side, line, &linked, view, origins))
                     })
                 })
             },
@@ -195,7 +232,7 @@ impl State {
                     exact:    true,
                     numbered: true,
                 };
-                Some(describe(side, line, &linked, view))
+                Some(describe(side, line, &linked, view, Origins::default()))
             }),
         }
     }
@@ -212,9 +249,73 @@ struct View {
     numbered: bool,
 }
 
+/// What a back-end stage's debug locations add to a link sentence.
+#[derive(Clone, Copy, Debug, Default)]
+struct Origins {
+    /// Of a source line's output lines, how many are the body of a function
+    /// inlined for a call on it.
+    inlined_here:   usize,
+    /// How many are copies of it, inlined into a caller.
+    copies:         usize,
+    /// A source line with code at `-O0` and none here at `-O2`.
+    removed:        bool,
+    /// The source line of the call an output line was inlined for.
+    call:           Option<usize>,
+    /// Why no source line can claim an output line that is code.
+    unclaimed:      Option<&'static str>,
+    /// An output line that is no code but a function's label or brace.
+    whole_function: bool,
+}
+
+impl Origins {
+    fn of_source_line(links: &Links, line: usize, linked: &[usize], removed: bool) -> Self {
+        let mut origins = Self {
+            removed,
+            ..Self::default()
+        };
+        for &output in linked {
+            let origin = links.origin(output);
+            if origin.call == line && origin.line != line {
+                origins.inlined_here += 1;
+            } else if origin.call != 0 && origin.line == line {
+                origins.copies += 1;
+            }
+        }
+        origins
+    }
+
+    fn of_output_line(links: &Links, line: usize, stage: Stage, optimized: bool) -> Self {
+        let origin = links.origin(line);
+        Self {
+            call: (origin.call != 0).then_some(origin.call),
+            unclaimed: (origin.code && origin.line == 0).then(|| unclaimed_reason(stage, optimized)),
+            whole_function: links.has_origins()
+                && !origin.code
+                && !links.sources_for(line).is_empty(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Why a line of `stage`'s output is code that no source line can claim. bcc
+/// gives a merged or moved instruction no line rather than one of several it
+/// could name.
+const fn unclaimed_reason(stage: Stage, optimized: bool) -> &'static str {
+    match (stage, optimized) {
+        | (Stage::Asm | Stage::MachineCode, false) =>
+            "the back end added it, to move a value or to reach the next block",
+        | (Stage::Asm | Stage::MachineCode, true) =>
+            "the optimizer moved or merged what it came from, or the back end added it to move a \
+             value",
+        | (_, false) => "the compiler added it for the function as a whole",
+        | (_, true) =>
+            "the optimizer moved or merged it, or the compiler added it for the function as a whole",
+    }
+}
+
 /// A sentence saying that `line` of `side` links to the `linked` lines of
 /// the other side, the output being `view`.
-fn describe(side: Side, line: usize, linked: &[usize], view: View) -> String {
+fn describe(side: Side, line: usize, linked: &[usize], view: View, origins: Origins) -> String {
     let View {
         name,
         exact,
@@ -234,13 +335,55 @@ fn describe(side: Side, line: usize, linked: &[usize], view: View) -> String {
         format!("This line of the {name}")
     };
     match (side, linked.is_empty(), exact) {
+        | (Side::Source, true, _) if origins.removed => format!(
+            "Source line {line} has no code left in the {name} at -O2: the optimizer folded it away \
+             or merged it into another line's code."
+        ),
         | (Side::Source, true, _) => format!("Nothing in the {name} came from source line {line}."),
-        | (Side::Source, false, true) => format!("Source line {line} became {outputs} of the {name}."),
+        | (Side::Source, false, true) => {
+            let parts = [
+                (origins.inlined_here, "the inlined body of the function it calls"),
+                (origins.copies, "copies inlined into a caller"),
+            ];
+            let notes: Vec<String> = parts
+                .iter()
+                .filter(|&&(count, _)| count > 0)
+                .map(|&(count, what)| {
+                    if count == linked.len() {
+                        what.to_owned()
+                    } else {
+                        format!("{count} of them {what}")
+                    }
+                })
+                .collect();
+            if notes.is_empty() {
+                format!("Source line {line} became {outputs} of the {name}.")
+            } else {
+                format!(
+                    "Source line {line} became {outputs} of the {name}: {}.",
+                    notes.join(", and ")
+                )
+            }
+        },
         | (Side::Source, false, false) => {
             format!("Source line {line} is in a function, on {outputs} of the {name}.")
         },
-        | (Side::Output, true, _) => format!("{this} has no source line."),
-        | (Side::Output, false, true) => format!("{this} came from source {lines}."),
+        | (Side::Output, true, _) => match origins.unclaimed {
+            | Some(reason) => format!("{this} has no single source line: {reason}."),
+            | None => format!("{this} has no source line."),
+        },
+        | (Side::Output, false, true) => match origins.call {
+            // The callee's own line can equal the call's (a header's function,
+            // or a callee written on the caller's line), so no file is named.
+            | Some(call) if linked == [call] => format!(
+                "{this} came from a function inlined for the call on source line {call}."
+            ),
+            | Some(call) =>
+                format!("{this} came from source {lines}, inlined for the call on line {call}."),
+            | None if origins.whole_function =>
+                format!("{this} stands for the whole function, source {lines}."),
+            | None => format!("{this} came from source {lines}."),
+        },
         | (Side::Output, false, false) => format!("{this} is in a function from source {lines}."),
     }
 }
@@ -318,6 +461,7 @@ mod tests {
 
     #[test]
     fn links_read_as_sentences() {
+        let plain = Origins::default();
         let ir = View {
             name:     "bcc IR",
             exact:    true,
@@ -334,33 +478,94 @@ mod tests {
             numbered: false,
         };
         assert_eq!(
-            describe(Side::Source, 5, &[12, 13, 14], ir),
+            describe(Side::Source, 5, &[12, 13, 14], ir, plain),
             "Source line 5 became lines 12 to 14 of the bcc IR."
         );
         assert_eq!(
-            describe(Side::Source, 2, &[], ir),
+            describe(Side::Source, 2, &[], ir, plain),
             "Nothing in the bcc IR came from source line 2."
         );
         assert_eq!(
-            describe(Side::Output, 14, &[5], ir),
+            describe(Side::Output, 14, &[5], ir, plain),
             "Line 14 of the bcc IR came from source line 5."
         );
         assert_eq!(
-            describe(Side::Output, 1, &[], asm),
+            describe(Side::Output, 1, &[], asm, plain),
             "Line 1 of the x86-64 assembly has no source line."
         );
         assert_eq!(
-            describe(Side::Source, 7, &[3, 4, 5, 6], asm),
+            describe(Side::Source, 7, &[3, 4, 5, 6], asm, plain),
             "Source line 7 is in a function, on lines 3 to 6 of the x86-64 assembly."
         );
         // The machine code shows offsets, not line numbers.
         assert_eq!(
-            describe(Side::Output, 8, &[3, 4, 9], machine),
+            describe(Side::Output, 8, &[3, 4, 9], machine, plain),
             "This line of the machine code is in a function from source lines 3 to 4 and 9."
         );
         assert_eq!(
-            describe(Side::Source, 3, &[6, 7, 8], machine),
+            describe(Side::Source, 3, &[6, 7, 8], machine, plain),
             "Source line 3 is in a function, on 3 lines of the machine code."
+        );
+    }
+
+    /// The sentences say plainly what the debug locations cannot name.
+    #[test]
+    fn links_say_what_no_line_can_claim() {
+        let said = |side, line, linked: &[usize], origins| {
+            let asm = View {
+                name:     "x86-64 assembly",
+                exact:    true,
+                numbered: true,
+            };
+            describe(side, line, linked, asm, origins)
+        };
+        let none = Origins::default();
+        let unclaimed = Some(unclaimed_reason(Stage::Asm, false));
+        assert_eq!(
+            said(Side::Output, 9, &[], Origins { unclaimed, ..none }),
+            "Line 9 of the x86-64 assembly has no single source line: the back end added it, to \
+             move a value or to reach the next block."
+        );
+        assert_eq!(
+            said(Side::Source, 8, &[], Origins {
+                removed: true,
+                ..none
+            }),
+            "Source line 8 has no code left in the x86-64 assembly at -O2: the optimizer folded it \
+             away or merged it into another line's code."
+        );
+        let call = Some(8);
+        assert_eq!(
+            said(Side::Output, 14, &[3], Origins { call, ..none }),
+            "Line 14 of the x86-64 assembly came from source line 3, inlined for the call on line 8."
+        );
+        assert_eq!(
+            said(Side::Output, 14, &[8], Origins { call, ..none }),
+            "Line 14 of the x86-64 assembly came from a function inlined for the call on source \
+             line 8."
+        );
+        assert_eq!(
+            said(Side::Source, 3, &[4, 5, 14, 15], Origins {
+                copies: 2,
+                ..none
+            }),
+            "Source line 3 became lines 4 to 5 and 14 to 15 of the x86-64 assembly: 2 of them copies \
+             inlined into a caller."
+        );
+        assert_eq!(
+            said(Side::Source, 8, &[14, 15], Origins {
+                inlined_here: 2,
+                ..none
+            }),
+            "Source line 8 became lines 14 to 15 of the x86-64 assembly: the inlined body of the \
+             function it calls."
+        );
+        assert_eq!(
+            said(Side::Output, 1, &[2, 3, 4], Origins {
+                whole_function: true,
+                ..none
+            }),
+            "Line 1 of the x86-64 assembly stands for the whole function, source lines 2 to 4."
         );
     }
 
