@@ -520,6 +520,11 @@ impl Toolchain {
         _ = command
             .arg(concat_os("--target=", options.target.triple().as_ref()))
             .args(options.opt.map(OptLevel::flag));
+        // Clang passes `-debug` to the MSVC linker for this; elsewhere the
+        // linker keeps the sections by itself.
+        if options.code.debug_info && options.target == Target::WindowsMsvc {
+            _ = command.arg("-g");
+        }
         if let Some(sysroot) = &self.sysroot {
             _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
         }

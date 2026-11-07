@@ -67,6 +67,7 @@ pub(super) fn normalize_language_arguments(
     let mut opaque_value = true; // argv[0]
     let mut positional = false;
     let mut arguments = arguments.into_iter();
+    let mut debug = DebugFlags::default();
     while let Some(argument) = arguments.next() {
         if opaque_value || positional {
             opaque_value = false;
@@ -147,6 +148,8 @@ pub(super) fn normalize_language_arguments(
             || SINGLE_DASH_LINKER_OPTIONS.contains(&text)
         {
             normalized.push(format!("--link-option={text}").into());
+        } else if debug.read(text, &mut normalized) {
+            // Read in order: `-g0` undoes an earlier `-g`.
         } else if text == "-O" {
             normalized.push("--optimization=O1".into());
         } else if let Some(value) = text.strip_prefix("-O") {
@@ -359,9 +362,11 @@ impl Cli {
             })
             .with_code_options(self.code_options())
             .with_optimization(self.code_generation.optimization_macros())
+            .with_debug_info(self.code_generation.debug_options(self.target))
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
             .with_compiler_identity(self.compiler_identity.into())
+            .with_compiler_extensions(self.compiler_extensions)
             .with_default_math_errno()
             .with_diagnostic_format(self.diagnostic_format.into())
             .with_diagnostic_presentation(self.diagnostic_presentation())
@@ -410,6 +415,7 @@ impl Cli {
                 .filter_map(|option| Relocation::parse(option))
                 .next_back(),
             tls_model:                  self.tls_model.unwrap_or_default(),
+            debug_info:                 self.code_generation.debug_options(self.target).is_some(),
             strict_volatile_bit_fields: self.last_of(
                 "-fstrict-volatile-bitfields",
                 "-fno-strict-volatile-bitfields",
@@ -427,6 +433,7 @@ impl Cli {
         if !matches!(self.target, Target::LinuxGnu | Target::LinuxMusl) {
             return hardening;
         }
+        let gcc = self.compiler_identity == Identity::Gcc;
         for option in &self.language_option {
             match option.as_str() {
                 | "-fstack-protector" => hardening.stack_protector = StackProtector::Basic,
@@ -437,12 +444,14 @@ impl Cli {
                     hardening.branch_protection = true;
                     hardening.return_protection = true;
                 },
+                // GCC adds to what earlier options asked for, and Clang
+                // replaces it.
                 | "-fcf-protection=branch" => {
                     hardening.branch_protection = true;
-                    hardening.return_protection = false;
+                    hardening.return_protection &= gcc;
                 },
                 | "-fcf-protection=return" => {
-                    hardening.branch_protection = false;
+                    hardening.branch_protection &= gcc;
                     hardening.return_protection = true;
                 },
                 | "-fcf-protection=none" => {
@@ -1347,5 +1356,74 @@ impl TypedValueParser for SourceDateEpochParser {
             .range(SOURCE_DATE_EPOCH_RANGE)
             .parse_ref(cmd, arg, value)
             .map(|seconds| SourceDateEpoch(Some(seconds)))
+    }
+}
+
+/// GCC's and Clang's `-g` options as the driver's, read in order as they do:
+/// `-g0` turns debug information off and any other level turns it on, a plain
+/// `-g`, `-ggdb` or `-gdwarf-N` keeps a level already asked for, and
+/// `-gtoggle`, which the compilers apply last, flips the result.
+#[derive(Default)]
+struct DebugFlags {
+    level:   u8,
+    toggled: bool,
+}
+
+impl DebugFlags {
+    /// Translates `text` if it is a debug option the driver acts on.
+    #[expect(
+        clippy::disallowed_types,
+        clippy::disallowed_macros,
+        reason = "Startup argv normalization owns OS strings beside clap."
+    )]
+    fn read(&mut self, text: &str, normalized: &mut Vec<std::ffi::OsString>) -> bool {
+        match text {
+            | "-g" | "-ggdb" => self.keep_or_default(normalized),
+            | "-gdwarf" => {
+                self.keep_or_default(normalized);
+                normalized.push("--dwarf-version=5".into());
+            },
+            | "-gline-tables-only" | "-gmlt" => self.set(1, normalized),
+            | "-gtoggle" => {
+                self.toggled = !self.toggled;
+                normalized.push("--debug-toggle".into());
+            },
+            | "-gcolumn-info" => normalized.push("--debug-columns".into()),
+            | "-gno-column-info" => normalized.push("--no-debug-columns".into()),
+            | _ =>
+                if let Some(version) = text.strip_prefix("-gdwarf-") {
+                    self.keep_or_default(normalized);
+                    normalized.push(format!("--dwarf-version={version}").into());
+                } else if let Some(level) = text
+                    .strip_prefix("-ggdb")
+                    .or_else(|| text.strip_prefix("-g"))
+                    .and_then(|level| level.parse().ok())
+                {
+                    self.set(level, normalized);
+                } else {
+                    return false;
+                },
+        }
+        true
+    }
+
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Startup argv normalization owns OS strings beside clap."
+    )]
+    fn keep_or_default(&mut self, normalized: &mut Vec<std::ffi::OsString>) {
+        if self.level == 0 {
+            self.set(2, normalized);
+        }
+    }
+
+    #[expect(
+        clippy::disallowed_types,
+        clippy::disallowed_macros,
+        reason = "Startup argv normalization owns OS strings beside clap."
+    )]
+    fn set(&mut self, level: u8, normalized: &mut Vec<std::ffi::OsString>) {
+        self.level = level;
+        normalized.push(format!("--debug-level={level}").into());
     }
 }

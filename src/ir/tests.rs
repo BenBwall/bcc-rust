@@ -5,6 +5,7 @@
 mod aggregates;
 mod atomics;
 mod builder;
+mod debug_info;
 mod dominators;
 mod extensions;
 mod inline_asm;

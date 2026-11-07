@@ -260,6 +260,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         return Err(MainError::Reported(1));
     }
     let mut common = vec![invocation.program.clone()];
+    common.push("--compiler-extensions".into());
     common.push(
         match personality {
             | Personality::Gcc => "--compiler-identity=gcc",
@@ -771,8 +772,8 @@ const LINK_ONLY_OPTIONS: [&str; 8] = [
 
 /// GCC options that need no translation and cannot change the program bcc
 /// builds: driver conveniences and reports.
-/// `-g*` (debug information, which bcc does not emit) and the `-f` and `-m`
-/// options in `unimplemented.rs` are ignored too.
+/// The `-f` and `-m` options in `unimplemented.rs` are ignored too, and so are
+/// the `-g` options that [`State::debug_option`] does not act on.
 const IGNORED_OPTIONS: [&str; 3] = ["-pipe", "-Q", "-time"];
 
 /// Which `-save-temps` the command line gives.
@@ -1479,6 +1480,56 @@ impl State<'_> {
         }
     }
 
+    /// Passes on a `-g` option that asks for debug information, which the
+    /// driver reads in order (`arguments.rs`), and diagnoses a level or
+    /// DWARF version the compiler refuses. Options that shape the output
+    /// bcc does not write (`-gsplit-dwarf`, `-gz`, `-gstrict-dwarf`,
+    /// `-gcodeview` and others) neither ask for it nor change anything, as
+    /// measured against GCC 14.2 and Clang 23: alone, none writes a
+    /// `.debug_info` section.
+    fn debug_option(&mut self, text: &str) {
+        let gcc = self.compiler == Compiler::Gcc;
+        let level = text
+            .strip_prefix("-ggdb")
+            .or_else(|| text.strip_prefix("-g"))
+            .filter(|digits| {
+                !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+            });
+        if let Some(level) = level {
+            if level.parse::<u32>().is_ok_and(|level| level <= 3) {
+                self.out.push(text.into());
+            } else if gcc {
+                self.error(format_args!("debug output level '{level}' is too high"));
+            } else {
+                self.error(format_args!("unknown argument: '{text}'"));
+            }
+            return;
+        }
+        if let Some(version) = text.strip_prefix("-gdwarf-") {
+            let last = if gcc { 5 } else { 6 };
+            if version
+                .parse::<u32>()
+                .is_ok_and(|version| (2..=last).contains(&version))
+            {
+                self.out.push(text.into());
+            } else if gcc {
+                self.error(format_args!("dwarf version {version} is not supported"));
+            } else {
+                self.error(format_args!("unknown argument: '{text}'"));
+            }
+            return;
+        }
+        let acts = match text {
+            | "-g" | "-ggdb" | "-gdwarf" | "-gcolumn-info" | "-gno-column-info" => true,
+            | "-gline-tables-only" | "-gmlt" => !gcc,
+            | "-gtoggle" => gcc,
+            | _ => false,
+        };
+        if acts {
+            self.out.push(text.into());
+        }
+    }
+
     /// Translates an option with its operand.
     fn with_operand(&mut self, option: &'static str, operand: &OsStr) {
         let lossy = operand.to_string_lossy();
@@ -1673,7 +1724,11 @@ impl State<'_> {
             self.save_temps = Some(SaveTemps::OutputDirectory);
             return;
         }
-        if IGNORED_OPTIONS.contains(&text) || text.starts_with("-g") {
+        if text.starts_with("-g") {
+            self.debug_option(text);
+            return;
+        }
+        if IGNORED_OPTIONS.contains(&text) {
             return;
         }
         if text.starts_with("-Wa,") {

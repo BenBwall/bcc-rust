@@ -466,6 +466,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             let mut note = |name: &str| match name {
                 | "address" => address = true,
                 | "thread" => thread = true,
+                | "all" => (address, thread) = (true, true),
                 | _ => {},
             };
             if gcc {

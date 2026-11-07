@@ -81,6 +81,16 @@ impl CompilerConfiguration {
     }
 }
 
+/// The debug information a unit asks for (`-g`, `-gN`, `-gdwarf-N`).
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct DebugOptions {
+    pub(crate) level:         crate::ir::DebugLevel,
+    /// The DWARF version; `None` leaves the default.
+    pub(crate) dwarf_version: Option<u8>,
+    /// Whether locations hold columns (`-gno-column-info` clears it).
+    pub(crate) columns:       bool,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -122,6 +132,9 @@ pub(crate) struct CompilerConfiguration {
     source_date_epoch: Option<i64>,
     hosted: bool,
     optimization: (bool, bool),
+    /// What `-g` asks for; `None` without it, or where the back end writes
+    /// no debug information.
+    debug_info: Option<DebugOptions>,
     gnu89_inline: Option<bool>,
     /// Whether plain `char` is signed, overriding the target's choice, as
     /// `-fsigned-char` and `-funsigned-char` do.
@@ -176,6 +189,10 @@ pub(crate) struct CompilerConfiguration {
     /// none.
     default_pack: u32,
     suppress_warnings: bool,
+    /// A language mode keeps the extensions GCC's and Clang's drivers keep in
+    /// it, which `-std=c99` does not turn off. See
+    /// [`CompilerConfiguration::with_compiler_extensions`].
+    compiler_extensions: bool,
     /// The last of `-fpermissive` (GCC's permerrors are warnings) and
     /// `-fno-permissive` (GCC's C89 permerror warnings are errors too), if
     /// either was given ([`CompilerConfiguration::permerror_default`]).

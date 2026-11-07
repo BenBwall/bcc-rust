@@ -1700,6 +1700,15 @@ mod tests {
                 }
                 names
             };
+            directory.write(
+                "a.c",
+                "__attribute__((no_sanitize(\"all\"))) int a(int *p) { return *p; }\n",
+            );
+            let args = ["-fsanitize=address", "-O1", "-S", "a.c", "-o", "-"];
+            assert!(
+                !stdout(&directory.bcc(mode, &args)).contains("__asan_report"),
+                "{mode}"
+            );
             assert_eq!(
                 checked("-fsanitize=address", "__asan_report"),
                 ["plain", "c"],
@@ -1749,6 +1758,17 @@ mod tests {
                     "n.o",
                 ],
             ));
+            // On a nested function too, which only GCC has.
+            if mode == "--gcc-mode" {
+                directory.write(
+                    "i.c",
+                    "int f(int *p) {\n    __attribute__((no_sanitize_address)) int inner(int *q) \
+                     {\n        return *q;\n    }\n    return inner(p);\n}\n",
+                );
+                let args = ["-fsanitize=address", "-S", "i.c", "-o", "-"];
+                let output = stdout(&directory.bcc(mode, &args));
+                assert!(!output.contains("__asan_report"), "{output}");
+            }
             // The rest stay refused, and off Linux too.
             let refused = |args: &[&str]| {
                 !directory
@@ -1836,6 +1856,14 @@ mod tests {
                 macro_of(&["-fcf-protection=return"], "#define __CET__ 2\n"),
                 "{mode}"
             );
+            // GCC adds to what an earlier option asked for, and Clang replaces
+            // it.
+            let both = ["-fcf-protection=branch", "-fcf-protection=return"];
+            let added = if mode == "--gcc-mode" { 3 } else { 2 };
+            assert!(
+                macro_of(&both, &format!("#define __CET__ {added}\n")),
+                "{mode}"
+            );
             let (strong, all) = if mode == "--gcc-mode" { (3, 2) } else { (2, 3) };
             assert!(
                 macro_of(
@@ -1864,6 +1892,22 @@ mod tests {
                 1,
                 "{mode}: {output}"
             );
+            // On a nested function too, which only GCC has.
+            if mode == "--gcc-mode" {
+                directory.write(
+                    "i.c",
+                    "void g(char *);\nvoid f(void) {\n    __attribute__((no_stack_protector)) \
+                     void inner(void) {\n        char b[32];\n        g(b);\n    }\n    \
+                     inner();\n}\n",
+                );
+                let args = ["-fstack-protector-all", "-S", "i.c", "-o", "-"];
+                let output = stdout(&directory.bcc(mode, &args));
+                assert_eq!(
+                    output.matches("callq\t__stack_chk_fail").count(),
+                    1,
+                    "{output}"
+                );
+            }
             // The program stops at a smashed canary, and runs without one.
             directory.write(
                 "o.c",
@@ -2047,6 +2091,129 @@ mod tests {
             assert!(
                 named(&["-fno-diagnostics-show-option", "-fdiagnostics-show-option"]),
                 "{mode}"
+            );
+        }
+    }
+
+    /// The `-g` options, read in order as GCC 14.2 and Clang 23 read them:
+    /// whether each command line writes debug information.
+    #[test]
+    fn debug_options_are_read_in_order() {
+        let directory = Directory::new();
+        directory.write("t.c", "int t(int a) { return a + 1; }\n");
+        let writes = |mode: &str, flags: &[&str]| {
+            let mut args = vec![
+                "--target=x86_64-unknown-linux-gnu",
+                "-c",
+                "t.c",
+                "-o",
+                "t.o",
+            ];
+            args.extend_from_slice(flags);
+            let output = directory.bcc(mode, &args);
+            assert!(
+                output.status.success(),
+                "{mode} {flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::fs::read(directory.path("t.o"))
+                .unwrap()
+                .windows(b".debug_info".len())
+                .any(|window| window == b".debug_info")
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for (flags, expected) in [
+                (&[][..], false),
+                (&["-g"], true),
+                (&["-g0"], false),
+                (&["-g1"], true),
+                (&["-g2"], true),
+                (&["-g3"], true),
+                (&["-ggdb"], true),
+                (&["-ggdb3"], true),
+                (&["-gdwarf"], true),
+                (&["-gdwarf-4"], true),
+                (&["-g", "-g0"], false),
+                (&["-g0", "-g"], true),
+                (&["-gdwarf-4", "-g0"], false),
+                (&["-g0", "-gdwarf-4"], true),
+                // These shape debug information; alone they do not ask for it.
+                (&["-gsplit-dwarf"], false),
+                (&["-gcolumn-info"], false),
+                (&["-gno-column-info"], false),
+                (&["-gstrict-dwarf"], false),
+                (&["-gz"], false),
+                (&["-grecord-gcc-switches"], false),
+            ] {
+                assert_eq!(writes(mode, flags), expected, "{mode} {flags:?}");
+            }
+        }
+        assert!(writes("--gcc-mode", &["-gtoggle"]));
+        assert!(!writes("--gcc-mode", &["-g", "-gtoggle"]));
+        assert!(!writes("--gcc-mode", &["-gtoggle", "-g"]));
+        assert!(writes("--clang-mode", &["-gline-tables-only"]));
+        assert!(writes("--clang-mode", &["-gmlt"]));
+        assert!(writes("--clang-mode", &["-gdwarf-6"]));
+    }
+
+    /// TCC takes `-g` as GCC does.
+    #[test]
+    fn tcc_debug_option_writes_debug_information() {
+        let directory = Directory::new();
+        directory.write("t.c", "int t(int a) { return a + 1; }\n");
+        let output = directory.bcc("--tcc-mode", &["-g", "-c", "t.c", "-o", "t.o"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let object = std::fs::read(directory.path("t.o")).unwrap();
+        assert!(object.windows(7).any(|window| window == b".debug_"));
+    }
+
+    /// A level or DWARF version the compiler refuses, in its words.
+    #[test]
+    fn debug_levels_and_versions_out_of_range_are_errors() {
+        let directory = Directory::new();
+        directory.write("t.c", "int t(void) { return 0; }\n");
+        for (mode, flag, message) in [
+            ("--gcc-mode", "-g4", "debug output level '4' is too high"),
+            (
+                "--gcc-mode",
+                "-gdwarf-1",
+                "dwarf version 1 is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-gdwarf-6",
+                "dwarf version 6 is not supported",
+            ),
+            ("--clang-mode", "-g4", "unknown argument: '-g4'"),
+            ("--clang-mode", "-gdwarf-1", "unknown argument: '-gdwarf-1'"),
+        ] {
+            let output = directory.bcc(mode, &[flag, "-c", "t.c", "-o", "t.o"]);
+            assert!(!output.status.success(), "{mode} {flag}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(message), "{mode} {flag}: {stderr}");
+        }
+    }
+
+    /// `/Zi`, `/Z7` and `/ZI` put `CodeView` in the object, as with clang-cl.
+    #[test]
+    fn msvc_debug_options_write_codeview() {
+        let directory = Directory::new();
+        directory.write("t.c", "int t(int a) { return a + 1; }\n");
+        for flag in ["/Zi", "/Z7", "/ZI"] {
+            let output = directory.bcc("--msvc-mode", &[flag, "/c", "t.c", "/Fot.obj"]);
+            assert!(
+                output.status.success(),
+                "{flag}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let object = std::fs::read(directory.path("t.obj")).unwrap();
+            assert!(
+                object.windows(8).any(|window| window == b".debug$S"),
+                "{flag}"
             );
         }
     }
@@ -2305,6 +2472,30 @@ mod tests {
             "{}",
             stderr(&output)
         );
+    }
+
+    /// With a type present, a typedef name before an attribute or `asm` label
+    /// is the declarator, and without one it stays the type.
+    #[test]
+    fn typedef_names_before_attributes_follow_the_declaration() {
+        let directory = Directory::new();
+        directory.write(
+            "t.c",
+            "typedef int U;\ntypedef int U __attribute__((unused));\ntypedef int V;\nconst V \
+             __attribute__((unused)) c = 1;\nV __attribute__((unused)) d = 2;\nint main(void) \
+             {\n    int U __attribute__((unused)) = 3;\n    long V __asm__(\"inner\");\n    \
+             (void)V;\n    return U - c - d;\n}\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-O1", "-c", "t.c", "-o", "t.o"]);
+            succeeds(&output);
+        }
+        // The type stays one when another declarator follows the attribute.
+        directory.write("e.c", "typedef int T;\nint T __attribute__((unused)) x;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-c", "e.c", "-o", "e.o"]);
+            assert!(!output.status.success(), "{mode}");
+        }
     }
 
     /// `-save-temps` keeps the intermediate files, named as each compiler
@@ -6775,6 +6966,95 @@ mod tests {
         }
     }
 
+    /// GCC and Clang have their feature-test operators in every language mode,
+    /// and neither calls them extensions under `-pedantic`.
+    #[test]
+    fn gnu_feature_tests_exist_in_every_language_mode() {
+        let directory = Directory::new();
+        directory.write(
+            "q.c",
+            "#ifndef __has_include\n#error include\n#endif\n#ifndef __has_c_attribute\n#error \
+             attribute\n#endif\n#if !__has_include(<stddef.h>) || \
+             __has_include(\"missing.h\")\n#error found\n#endif\n#if \
+             !__has_c_attribute(nodiscard)\n#error nodiscard\n#endif\n#if \
+             !__has_attribute(unused) || !__has_builtin(__builtin_expect)\n#error \
+             gnu\n#endif\nint x;\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for standard in ["-std=c89", "-std=c99", "-std=c11", "-std=gnu17", "-std=c23"] {
+                let output = directory.bcc(
+                    mode,
+                    &[
+                        standard,
+                        "-pedantic-errors",
+                        "-Wall",
+                        "-c",
+                        "q.c",
+                        "-o",
+                        "q.o",
+                    ],
+                );
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {standard}");
+            }
+        }
+        // `-std=c99` leaves these on in both, and `-pedantic-errors` refuses
+        // them.
+        for (name, source) in [
+            ("v.c", "void g(void);\nvoid f(void) { return g(); }\n"),
+            ("b.c", "int x = 0b101;\n"),
+            (
+                "r.c",
+                "int f(int x) { switch (x) { case 1 ... 2: return 1; } return 0; }\n",
+            ),
+            (
+                "o.c",
+                "#define M(a, ...) a __VA_OPT__(,) __VA_ARGS__\nint M(x);\n",
+            ),
+        ] {
+            directory.write(name, source);
+            for mode in ["--gcc-mode", "--clang-mode"] {
+                for standard in ["-std=c99", "-std=c11"] {
+                    let object = "e.o";
+                    succeeds(&directory.bcc(mode, &[standard, "-c", name, "-o", object]));
+                    assert!(
+                        !directory
+                            .bcc(
+                                mode,
+                                &[standard, "-pedantic-errors", "-c", name, "-o", object]
+                            )
+                            .status
+                            .success(),
+                        "{mode} {standard} {name}"
+                    );
+                }
+            }
+        }
+        // Before `*`, C89 keeps its division, in Clang too.
+        directory.write("d.c", "int main(void) { return 4//**/2\n; }\n");
+        let args = ["-std=c89", "d.c", "-o", "d"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        let status = Command::new(directory.path("d")).status().unwrap();
+        assert_eq!(status.code(), Some(2));
+        // `//` in C89 is Clang's alone.
+        directory.write("c.c", "// comment\nint x;\n");
+        let args = ["-std=c89", "-c", "c.c", "-o", "c.o"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        assert!(!directory.bcc("--gcc-mode", &args).status.success());
+        // GCC 14 has no `__has_embed`, and Clang does.
+        directory.write(
+            "e.c",
+            "#ifdef __has_embed\nint has;\n#else\nint has_not;\n#endif\n",
+        );
+        let text = |mode: &str| {
+            let output = directory.bcc(mode, &["-std=c99", "-E", "-P", "e.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(text("--gcc-mode").trim(), "int has_not;");
+        assert_eq!(text("--clang-mode").trim(), "int has;");
+    }
+
     /// Clang's warnings about unused arguments follow its warning options:
     /// `-w` and `-Wno-unused-command-line-argument` silence them, and
     /// `-Werror` or `-Werror=unused-command-line-argument` make them errors
@@ -8346,8 +8626,9 @@ mod tests {
         succeeds(&output);
         assert!(
             stderr(&output).ends_with(&line(&format!(
-                "\"--compiler-identity=clang\" \"--diagnostic-format=clang\" \
-                 \"--target={triple}\" \"--driver-name=clang\" \"a.c\" \"-c\""
+                "\"--compiler-extensions\" \"--compiler-identity=clang\" \
+                 \"--diagnostic-format=clang\" \"--target={triple}\" \"--driver-name=clang\" \
+                 \"a.c\" \"-c\""
             ))),
             "{}",
             stderr(&output)
@@ -8363,8 +8644,8 @@ mod tests {
         // GCC's `-v` quotes nothing, its `-###` only what the shell needs.
         assert!(
             text.contains(&format!(
-                " {exe} -v --compiler-identity=gcc --diagnostic-format=gcc --target={triple} \
-                 --driver-name=gcc a.c -c\n"
+                " {exe} -v --compiler-extensions --compiler-identity=gcc --diagnostic-format=gcc \
+                 --target={triple} --driver-name=gcc a.c -c\n"
             )),
             "{text}"
         );
@@ -9018,8 +9299,9 @@ mod tests {
         let text = stderr(&output);
         assert!(
             text.ends_with(&format!(
-                " \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \"--target={}\" \
-                 \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n",
+                " --compiler-extensions \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
+                 \"--target={}\" \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \
+                 \"--output=o\\$.o\"\n",
                 HOST_TARGET.0
             )),
             "{text}"
