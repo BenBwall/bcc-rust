@@ -7578,6 +7578,58 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// Reaching the end of a function, under the options each compiler has for
+    /// it. Each row was measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_return_type_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write("a.c", "int f(int x) { if (x) return 1; }\n");
+        let warns = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stderr(&output).contains("[-Wreturn-type]")
+        };
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], false),
+            ("--gcc-mode", &["-Wall"][..], true),
+            ("--gcc-mode", &["-Wreturn-type"][..], true),
+            ("--gcc-mode", &["-Wall", "-Wno-return-type"][..], false),
+            ("--clang-mode", &[][..], true),
+            ("--clang-mode", &["-Wno-return-type"][..], false),
+            ("--clang-mode", &["-w"][..], false),
+        ] {
+            assert_eq!(warns(mode, args), expected, "{mode} {args:?}");
+        }
+        // Clang's analysis stops at the unit's first error, where GCC's goes
+        // on.
+        directory.write(
+            "e.c",
+            "int f(int x) { if (x) return 1; }\nint g(void) { return h; }\nint k(void) { }\n",
+        );
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "e.c"]);
+        let text = stderr(&output);
+        assert!(text.contains("e.c:1:"), "{text}");
+        assert!(!text.contains("e.c:3:"), "{text}");
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "e.c"]);
+        let text = stderr(&output);
+        assert!(text.contains("e.c:1:"), "{text}");
+        // `main` falls off its end with a value from C99 on, and GCC holds a
+        // hosted one to C89 too.
+        directory.write("m.c", "int main(void) { }\n");
+        let args = ["-Wall", "-std=c89", "-fsyntax-only", "m.c"];
+        assert!(stderr(&directory.bcc("--gcc-mode", &args)).contains("control reaches"));
+        assert_eq!(stderr(&directory.bcc("--clang-mode", &args)), "");
+        let args = ["-Wall", "-std=c99", "-fsyntax-only", "m.c"];
+        assert_eq!(stderr(&directory.bcc("--gcc-mode", &args)), "");
+        let args = ["-ffreestanding", "-fsyntax-only", "m.c"];
+        assert!(stderr(&directory.bcc("--clang-mode", &args)).contains("does not return"));
+    }
+
     /// What a `switch` handles, under the options each compiler has for it.
     /// Each row was measured against GCC 14.2 and Clang 23.1.
     #[test]

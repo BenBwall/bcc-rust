@@ -66,9 +66,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn implicit_return_type(&mut self, f: &'tu FunctionDefinition<'tu>) {
         if f.declaration_specifiers.implicit_int
             && let Some(name) = f.declarator.identifier()
+            && !self.gcc_implicit_return_type(name)
         {
             self.implicit_int(SemanticErrorKind::ImplicitIntReturn, name);
         }
+    }
+
+    /// C89 lets a definition name no return type, which GCC's `-Wreturn-type`
+    /// reports in place of its `-Wimplicit-int`, if it is on.
+    /// C90: §6.5.2 as C99's Foreword records it, p. xii; PDF p. 12.
+    fn gcc_implicit_return_type(&mut self, name: Identifier) -> bool {
+        let configuration = self.context.configuration;
+        let reports = configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Gcc
+            && (configuration.standard() as u8) < CStandard::C99 as u8
+            && self
+                .context
+                .group_severity(DiagnosticGroup::ReturnType, name.source_vectors)
+                .is_some();
+        if reports {
+            self.return_flow_warning(
+                DiagnosticGroup::ReturnType,
+                name.source_vectors,
+                "return type defaults to 'int'",
+            );
+        }
+        reports
     }
 
     /// Reports a prototype parameter whose specifiers name no type, named

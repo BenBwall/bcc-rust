@@ -140,6 +140,8 @@ pub(super) struct UnusedState<'s> {
     pub(super) values: bool,
     /// Whether a warning about what a `switch` handles may be on.
     pub(super) switches: bool,
+    /// Whether a warning about reaching a function's end may be on.
+    pub(super) return_flow: bool,
     /// Whether `-Wsign-compare` is on.
     pub(super) sign_compare: bool,
     /// Whether `-Wmissing-field-initializers` is on.
@@ -201,6 +203,7 @@ impl<'s> UnusedState<'s> {
                 G::SwitchDefault,
                 G::SwitchOutsideRange,
             ]),
+            return_flow: on(&[G::ReturnType, G::InvalidNoreturn, G::GccNoreturn]),
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,
