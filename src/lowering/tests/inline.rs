@@ -903,10 +903,6 @@ fn h_first_after(extra: &str, probe: &str, config: CompilerConfiguration) -> boo
 /// does emit put h first (#113). Each expectation matches Clang 23's
 /// `-O0 -Xclang -disable-llvm-passes` module.
 #[test]
-#[expect(
-    clippy::large_stack_arrays,
-    reason = "each row holds a whole configuration, which its warning settings enlarged"
-)]
 fn always_inline_order_skips_unselected_switch_arms_and_code_after_noreturn_calls() {
     let c99 = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow);
     let gnu = c99.with_gnu_extensions(true);
