@@ -377,6 +377,18 @@ pub(crate) enum SemanticErrorKind {
     /// Clang: Microsoft's `__annotation` takes wide string literals only.
     /// MSVC extension: Microsoft Learn, "__annotation".
     AnnotationArgument,
+    /// `__builtin_cpu_supports` or `__builtin_cpu_is` of anything but a string
+    /// literal. GCC manual, "x86 Built-in Functions".
+    CpuBuiltinNotLiteral,
+    /// GCC: a name `__builtin_cpu_supports` or `__builtin_cpu_is` doesn't know.
+    CpuBuiltinParameter,
+    /// Clang: a name `__builtin_cpu_is` doesn't know.
+    CpuNameUnknown,
+    /// Clang: a name `__builtin_cpu_supports` doesn't know, which it warns
+    /// about and answers 0.
+    CpuFeatureUnknown,
+    /// Clang: a runtime processor query on a target without such processors.
+    CpuBuiltinTarget,
     /// C99: §6.5.2.5p1, p. 75; PDF p. 87.
     InvalidCompoundLiteral,
     /// An array of register storage converted to a pointer, which GCC and
@@ -1034,6 +1046,10 @@ impl SemanticErrorKind {
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
             | Self::AnnotationArgument => "not a wide string literal",
+            | Self::CpuBuiltinNotLiteral => "not a string literal",
+            | Self::CpuBuiltinParameter | Self::CpuNameUnknown | Self::CpuFeatureUnknown =>
+                "not a name this builtin knows",
+            | Self::CpuBuiltinTarget => "not on this target",
             | Self::SelectAnySubject => "not a data item with external linkage",
             | Self::InvalidArgumentType => "argument does not convert to the parameter type",
             | Self::InvalidCompoundLiteral => "invalid compound literal type",
@@ -2023,6 +2039,27 @@ impl SemanticErrorKind {
                 "Clang: Microsoft's `selectany` lets several translation units define one \
                  external object",
             ),
+            | Self::CpuBuiltinNotLiteral => (
+                "expression is not a string literal",
+                "GCC \"x86 Built-in Functions\": the feature or processor is named by a string \
+                 literal",
+            ),
+            | Self::CpuBuiltinParameter => (
+                "parameter to builtin not valid",
+                "GCC \"x86 Built-in Functions\" lists the names",
+            ),
+            | Self::CpuNameUnknown => (
+                "invalid cpu name for builtin",
+                "Clang: `__builtin_cpu_is` takes the names in LLVM's `X86TargetParser.def`",
+            ),
+            | Self::CpuFeatureUnknown => (
+                "invalid cpu feature string for builtin",
+                "Clang: `__builtin_cpu_supports` of an unknown feature answers 0",
+            ),
+            | Self::CpuBuiltinTarget => (
+                "builtin is not supported on this target",
+                "Clang: runtime processor detection reads x86's `__cpu_model`",
+            ),
             | Self::AnnotationArgument => (
                 "argument to `__annotation` must be a wide string literal",
                 "Clang: Microsoft's `__annotation` records wide strings in the debug \
@@ -2773,8 +2810,18 @@ impl SemanticError {
     /// diagnostic formats.
     fn gnu_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
         use crate::configuration::DiagnosticFormat as Format;
+        if context.configuration.diagnostic_format() == Format::Gcc
+            && self.kind == SemanticErrorKind::CpuBuiltinNotLiteral
+        {
+            return Some("parameter to builtin must be a string constant or literal");
+        }
         let name = context.string_cache.at(self.name?);
         match (context.configuration.diagnostic_format(), self.kind) {
+            | (_, SemanticErrorKind::CpuBuiltinParameter) =>
+                Some(format_in!(arena, "parameter to builtin not valid: {name}")),
+            | (_, SemanticErrorKind::CpuNameUnknown) => Some("invalid cpu name for builtin"),
+            | (_, SemanticErrorKind::CpuFeatureUnknown) =>
+                Some("invalid cpu feature string for builtin"),
             | (Format::Gcc, SemanticErrorKind::UndeclaredIdentifier) => Some(format_in!(
                 arena,
                 "'{name}' undeclared (first use in this function)"
@@ -3059,6 +3106,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::AtomicBufferQualifiers
                 | SemanticErrorKind::UnknownAttribute
                 | SemanticErrorKind::IgnoredAttribute
+                | SemanticErrorKind::CpuFeatureUnknown
                 | SemanticErrorKind::IgnoredConvention
                 | SemanticErrorKind::ExcessiveRegsave(_)
                 | SemanticErrorKind::ReservedPriority

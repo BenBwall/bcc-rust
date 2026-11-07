@@ -2013,6 +2013,48 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Parameter(T::Scalar(S::LongDouble)))],
         1,
     ),
+    // Runtime processor detection, which reads libgcc's or compiler-rt's
+    // `__cpu_model`. `__builtin_cpu_init` has this type in GCC and returns
+    // nothing in Clang (`cpu_builtin`).
+    descriptor(
+        Id::CpuInit,
+        "__builtin_cpu_init",
+        B::CpuInit,
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    descriptor(
+        Id::CpuSupports,
+        "__builtin_cpu_supports",
+        B::CpuQuery(false),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Pointer(S::Char, true)))],
+        1,
+    ),
+    descriptor(
+        Id::CpuIs,
+        "__builtin_cpu_is",
+        B::CpuQuery(true),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Pointer(S::Char, true)))],
+        1,
+    ),
     // Clang's x86 `__rdtsc` builtin, declared for every x86 target and
     // language mode: `unsigned long long __rdtsc(void)`.
     descriptor(
@@ -2369,7 +2411,12 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
-        | B::ReadTimestamp | B::X86Instruction(_) | B::DebugTrap | B::ClearCache => (
+        | B::ReadTimestamp
+        | B::X86Instruction(_)
+        | B::DebugTrap
+        | B::ClearCache
+        | B::CpuInit
+        | B::CpuQuery(_) => (
             TypeRule::Fixed,
             BuiltinEffectClass::Write,
             None,
