@@ -722,6 +722,7 @@ fn default_coff_writer_assembles_a_refused_listing_with_clang() {
         Target::WindowsMsvc,
         OutputKind::Object,
         ObjectWriter::DirectOrAssembler,
+        crate::target::Hardening::NONE,
     )
     .unwrap();
     assert_eq!(
