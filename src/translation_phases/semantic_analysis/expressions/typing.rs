@@ -332,6 +332,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info
     }
 
+    /// A left shift into the sign bit, which C99 §6.5.7p4 leaves undefined.
+    /// C99: §6.5.7 paragraph 4, p. 84; PDF p. 96.
+    fn report_sign_bit_shift(&mut self, e: &'tu Expression<'tu>) {
+        if !self.tainted {
+            self.context.report_extension(
+                crate::configuration::Feature::SignBitShifts,
+                "left shift into the sign bit",
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+            );
+        }
+    }
+
+    /// Whether `offset` can move an address constant: an integer constant
+    /// expression, or a value that only folding exceptional operands gave.
+    /// C99: §6.6 paragraph 7, p. 96; PDF p. 108.
+    fn folded_offset(offset: ExpressionInfo<'tu>) -> bool {
+        (offset.ice || offset.folding.exceptional()) && offset.integer.is_some()
+    }
+
     /// C99: §6.5.5-§6.5.17, pp. 82-94; PDF pp. 94-106.
     pub(super) fn type_binary(
         &mut self,
@@ -473,9 +492,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 info.static_address = self.address_value(pointer)
                     && if std::ptr::eq(pointer.expression, left.expression) {
-                        (right.ice || right.folding.exceptional()) && right.integer.is_some()
+                        Self::folded_offset(right)
                     } else {
-                        (left.ice || left.folding.exceptional()) && left.integer.is_some()
+                        Self::folded_offset(left)
                     };
                 // Array decay retains the designated register object, which
                 // GCC subscripts; reading a register pointer does not
@@ -510,10 +529,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if self.integer_type(rt).is_some() {
                         self.report_void_arithmetic(e, target);
                         info.ty = lt;
-                        if self.address_value(left)
-                            && (right.ice || right.folding.exceptional())
-                            && right.integer.is_some()
-                        {
+                        if self.address_value(left) && Self::folded_offset(right) {
                             if op == B::Addition && Self::pointer_value(left) == Some(0) {
                                 self.error(
                                     SemanticErrorKind::NullPointerArithmetic,
@@ -560,10 +576,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.report_void_arithmetic(e, target);
                     }
                     info.ty = rt;
-                    if self.address_value(right)
-                        && (left.ice || left.folding.exceptional())
-                        && left.integer.is_some()
-                    {
+                    if self.address_value(right) && Self::folded_offset(left) {
                         if Self::pointer_value(right) == Some(0) {
                             self.error(
                                 SemanticErrorKind::NullPointerArithmetic,
@@ -837,12 +850,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 self.fold_exceptional_binary(e, op, l, r, &mut info);
             }
-            if sign_bit && !self.tainted {
-                self.context.report_extension(
-                    crate::configuration::Feature::SignBitShifts,
-                    "left shift into the sign bit",
-                    e.operator_source_vectors.unwrap_or(e.source_vectors),
-                );
+            if sign_bit {
+                self.report_sign_bit_shift(e);
             }
             if let Some((bits, signed)) = self.integer_type(info.ty) {
                 info.integer = info.integer.map(|v| self.wide.convert(v, bits, signed));
