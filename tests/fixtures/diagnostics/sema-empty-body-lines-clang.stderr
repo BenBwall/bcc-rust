@@ -1,0 +1,61 @@
+sema-empty-body-lines-clang.c:7:11: warning: for loop has empty body [-Wempty-body]
+    7 |   for (;;);
+      |           ^
+sema-empty-body-lines-clang.c:7:11: note: put the semicolon on a separate line to silence this warning
+    7 |   for (;;);
+      |           ^
+sema-empty-body-lines-clang.c:12:16: warning: for loop has empty body [-Wempty-body]
+   12 |   for (x = 0;;);
+      |                ^
+sema-empty-body-lines-clang.c:12:16: note: put the semicolon on a separate line to silence this warning
+   12 |   for (x = 0;;);
+      |                ^
+sema-empty-body-lines-clang.c:15:5: warning: for loop has empty body [-Wempty-body]
+   15 |   ;);
+      |     ^
+sema-empty-body-lines-clang.c:15:5: note: put the semicolon on a separate line to silence this warning
+   15 |   ;);
+      |     ^
+sema-empty-body-lines-clang.c:18:4: warning: while loop has empty body [-Wempty-body]
+   18 |   );
+      |    ^
+sema-empty-body-lines-clang.c:18:4: note: put the semicolon on a separate line to silence this warning
+   18 |   );
+      |    ^
+sema-empty-body-lines-clang.c:21:4: warning: if statement has empty body [-Wempty-body]
+   21 |   );
+      |    ^
+sema-empty-body-lines-clang.c:21:4: note: put the semicolon on a separate line to silence this warning
+   21 |   );
+      |    ^
+sema-empty-body-lines-clang.c:23:7: warning: if statement has empty body [-Wempty-body]
+   23 |      );
+      |       ^
+sema-empty-body-lines-clang.c:23:7: note: put the semicolon on a separate line to silence this warning
+   23 |      );
+      |       ^
+sema-empty-body-lines-clang.c:26:13: warning: switch statement has empty body [-Wempty-body]
+   26 |   switch (x);
+      |             ^
+sema-empty-body-lines-clang.c:26:13: note: put the semicolon on a separate line to silence this warning
+   26 |   switch (x);
+      |             ^
+sema-empty-body-lines-clang.c:31:8: warning: if statement has empty body [-Wempty-body]
+   31 |   IF(x);
+      |        ^
+sema-empty-body-lines-clang.c:31:8: note: put the semicolon on a separate line to silence this warning
+   31 |   IF(x);
+      |        ^
+sema-empty-body-lines-clang.c:32:10: warning: while loop has empty body [-Wempty-body]
+   32 |   LOOP(x);
+      |          ^
+sema-empty-body-lines-clang.c:32:10: note: put the semicolon on a separate line to silence this warning
+   32 |   LOOP(x);
+      |          ^
+sema-empty-body-lines-clang.c:34:20: warning: for loop has empty body [-Wempty-body]
+   34 |   for (;;) /* c */ ;
+      |                    ^
+sema-empty-body-lines-clang.c:34:20: note: put the semicolon on a separate line to silence this warning
+   34 |   for (;;) /* c */ ;
+      |                    ^
+10 warnings generated.

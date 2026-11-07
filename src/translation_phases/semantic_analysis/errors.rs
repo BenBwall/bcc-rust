@@ -3081,6 +3081,9 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FlexibleArrayDesignator =>
                     "initialized flexible array member is here",
                 | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
+                | SemanticErrorKind::ShadowOrBody(
+                    crate::configuration::DiagnosticGroup::EmptyBody,
+                ) => "put the semicolon on a separate line to silence this warning",
                 | SemanticErrorKind::ShadowOrBody(_)
                     if context.configuration.compiler_identity()
                         == crate::configuration::CompilerIdentity::Gcc =>
