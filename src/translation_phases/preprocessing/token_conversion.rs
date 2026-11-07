@@ -683,6 +683,17 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             } else {
                 self.parse_hexadecimal_integer(token, representation)
             }
+        } else if is_binary
+            && self.context.configuration.compiler_identity() == CompilerIdentity::Tcc
+            && contents.contains(['.', 'p', 'P'])
+            && let Some(hexadecimal) = binary_float_as_hexadecimal(contents)
+        {
+            // TCC's binary floating constant, `0b1.01p3`, is the hexadecimal
+            // constant with the same bits.
+            let (text, length) = hexadecimal;
+            let text = core::str::from_utf8(&text[..length]).unwrap_or("0x0p0");
+            let contents = self.context.string_cache.intern(text);
+            self.parse_hexadecimal_float(PreprocessorToken { contents, ..token })
         } else if is_binary {
             if self.context.configuration.accepts(Feature::BinaryConstants) {
                 self.context.report_extension(
@@ -2107,4 +2118,77 @@ const fn spelled_only_in_text(kind: PreprocessorTokenType) -> bool {
             | PreprocessorTokenType::UnavailableUniversalIdentifier
             | PreprocessorTokenType::Defined
     )
+}
+
+/// The longest binary floating constant [`binary_float_as_hexadecimal`]
+/// rewrites; a longer one stays an invalid binary integer.
+const BINARY_FLOAT_LIMIT: usize = 512;
+
+/// TCC's binary floating constant `contents`, written as the hexadecimal
+/// floating constant with the same value: binary digits, an optional point,
+/// a required binary exponent, and a suffix. `None` for anything else.
+/// TCC extension: `tccpp.c`, `parse_number`.
+fn binary_float_as_hexadecimal(contents: &str) -> Option<([u8; BINARY_FLOAT_LIMIT], usize)> {
+    let digits = contents.get(2..)?;
+    let exponent_at = digits.find(['p', 'P'])?;
+    let (mantissa, rest) = digits.split_at(exponent_at);
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if (whole.is_empty() && fraction.is_empty())
+        || !whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|b| b == b'0' || b == b'1')
+        || contents.len() + 8 > BINARY_FLOAT_LIMIT
+    {
+        return None;
+    }
+    let mut text = [0_u8; BINARY_FLOAT_LIMIT];
+    let mut length = 0;
+    let mut push = |byte: u8| {
+        text[length] = byte;
+        length += 1;
+    };
+    push(b'0');
+    push(b'x');
+    // Whole digits group from the point leftward, fraction digits rightward.
+    let lead = (4 - whole.len() % 4) % 4;
+    let whole_bits = core::iter::repeat_n(b'0', lead).chain(whole.bytes());
+    if whole.is_empty() {
+        push(b'0');
+    }
+    let mut nibble = 0_u8;
+    for (index, bit) in whole_bits.enumerate() {
+        nibble = nibble * 2 + (bit - b'0');
+        if index % 4 == 3 {
+            push(hex_digit(nibble));
+            nibble = 0;
+        }
+    }
+    if !fraction.is_empty() {
+        push(b'.');
+        let trail = (4 - fraction.len() % 4) % 4;
+        for (index, bit) in fraction
+            .bytes()
+            .chain(core::iter::repeat_n(b'0', trail))
+            .enumerate()
+        {
+            nibble = nibble * 2 + (bit - b'0');
+            if index % 4 == 3 {
+                push(hex_digit(nibble));
+                nibble = 0;
+            }
+        }
+    }
+    for byte in rest.bytes() {
+        push(byte);
+    }
+    Some((text, length))
+}
+
+const fn hex_digit(value: u8) -> u8 {
+    if value < 10 {
+        b'0' + value
+    } else {
+        b'a' + value - 10
+    }
 }
