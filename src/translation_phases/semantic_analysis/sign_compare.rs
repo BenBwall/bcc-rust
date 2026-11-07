@@ -831,51 +831,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let same =
             || first.value.is_none() && second.value.is_none() && self.same_operand(left, right);
-        match operator {
-            | B::Multiplication => match (first.value, second.value) {
-                | (Some(0), _) => constant(0),
-                | (_, Some(0)) => constant(0),
-                | (Some(1), _) => Some(second),
-                | (_, Some(1)) => Some(first),
-                | _ => None,
-            },
-            | B::BitwiseXor if same() => constant(0),
-            | B::BitwiseOr | B::BitwiseAnd if same() => Some(first),
-            | B::Addition | B::BitwiseXor | B::BitwiseOr => match (first.value, second.value) {
-                | (Some(0), _) => Some(second),
-                | (_, Some(0)) => Some(first),
-                | (Some(-1), _) if operator == B::BitwiseOr => constant(-1),
-                | (_, Some(-1)) if operator == B::BitwiseOr => constant(-1),
-                | _ => None,
-            },
-            | B::BitwiseAnd if self.complements(left, right) => constant(0),
-            | B::BitwiseAnd => match (first.value, second.value) {
-                | (Some(0), _) => constant(0),
-                | (_, Some(0)) => constant(0),
-                | (Some(-1), _) => Some(second),
-                | (_, Some(-1)) => Some(first),
-                | _ => None,
-            },
-            | B::Subtraction if same() => constant(0),
-            | B::Subtraction => (second.value == Some(0)).then_some(first),
-            | B::Division if same() => constant(1),
-            | B::Division => match (first.value, second.value) {
-                | (Some(0), None) => constant(0),
-                | (_, Some(1)) => Some(first),
-                | _ => None,
-            },
-            | B::Modulo if same() => constant(0),
-            | B::Modulo => match (first.value, second.value) {
-                | (Some(0), None) => constant(0),
-                | (_, Some(1 | -1)) => constant(0),
-                | _ => None,
-            },
-            | B::RightShift if same() => constant(0),
-            | B::LeftShift | B::RightShift => match (first.value, second.value) {
-                | (Some(0), _) => constant(0),
-                | (_, Some(0)) => Some(first),
-                | _ => None,
-            },
+        match (operator, first.value, second.value) {
+            | (B::BitwiseXor | B::Subtraction | B::Modulo | B::RightShift, ..) if same() =>
+                constant(0),
+            | (B::Division, ..) if same() => constant(1),
+            | (B::BitwiseOr | B::BitwiseAnd, ..) if same() => Some(first),
+            | (B::BitwiseAnd, ..) if self.complements(left, right) => constant(0),
+            // One operand decides the result.
+            | (B::Multiplication | B::BitwiseAnd, Some(0), _)
+            | (B::Multiplication | B::BitwiseAnd, _, Some(0))
+            | (B::Division | B::Modulo, Some(0), None)
+            | (B::Modulo, _, Some(1 | -1))
+            | (B::LeftShift | B::RightShift, Some(0), _) => constant(0),
+            | (B::BitwiseOr, Some(-1), _) | (B::BitwiseOr, _, Some(-1)) => constant(-1),
+            // One operand leaves the other as it was.
+            | (B::Multiplication, Some(1), _)
+            | (B::Addition | B::BitwiseXor | B::BitwiseOr, Some(0), _)
+            | (B::BitwiseAnd, Some(-1), _) => Some(second),
+            | (B::Multiplication | B::Division, _, Some(1))
+            | (
+                B::Addition
+                | B::Subtraction
+                | B::BitwiseXor
+                | B::BitwiseOr
+                | B::LeftShift
+                | B::RightShift,
+                _,
+                Some(0),
+            )
+            | (B::BitwiseAnd, _, Some(-1)) => Some(first),
             | _ => None,
         }
     }
