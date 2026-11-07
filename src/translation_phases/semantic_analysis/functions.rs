@@ -500,6 +500,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match work {
             | FunctionWork::Finish(previous, loops, switch, sizeof, targets) => {
                 self.report_reachable_warnings();
+                self.check_return_flow();
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());
@@ -2567,7 +2568,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// emits inline functions as external definitions or the function is
     /// exported, which makes a MinGW inline body an external `weak_odr`
     /// one, as `external_function_kind` keeps it.
-    fn is_inline_definition(&mut self, binding: usize) -> bool {
+    pub(super) fn is_inline_definition(&mut self, binding: usize) -> bool {
         self.context.configuration.target().c99_inline_definitions()
             && self.inline_only_declarations(binding)
             && self.dll_storage(binding) != Some(super::DllStorage::Export)

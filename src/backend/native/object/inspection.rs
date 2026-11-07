@@ -20,12 +20,13 @@ pub(crate) struct FunctionCode<'a> {
 }
 
 /// One instruction: its offset from the function's start, its encoding,
-/// and the listing line it encodes.
+/// the listing line it encodes, and that line's 0-based number.
 #[derive(Clone, Copy)]
 pub(crate) struct InstructionCode<'a> {
     pub(crate) offset: u64,
     pub(crate) bytes:  &'a [u8],
     pub(crate) text:   &'a str,
+    pub(crate) line:   usize,
 }
 
 /// Encodes the private ELF listing and returns its functions in address
@@ -39,7 +40,8 @@ pub(crate) fn functions<'a>(text: &'a str, arena: &'a Bump) -> Result<&'a [Funct
     let mut lines = text
         .lines()
         .map(str::trim)
-        .filter(|line| is_instruction(line));
+        .enumerate()
+        .filter(|(_, line)| is_instruction(line));
     let mut instructions = ArenaVec::new_in(&scratch);
     for item in &object.items {
         let length = match item.kind {
@@ -53,8 +55,8 @@ pub(crate) fn functions<'a>(text: &'a str, arena: &'a Bump) -> Result<&'a [Funct
             },
             | _ => continue,
         };
-        let line = lines.next().unwrap_or_default();
-        instructions.push((item.section, item.offset, length, line));
+        let (number, line) = lines.next().unwrap_or_default();
+        instructions.push((item.section, item.offset, length, line, number));
     }
     let mut functions = ArenaVec::new_in(&scratch);
     for symbol in &object.symbols {
@@ -74,11 +76,12 @@ pub(crate) fn functions<'a>(text: &'a str, arena: &'a Bump) -> Result<&'a [Funct
         let code = arena.alloc_slice_fill_iter(
             instructions
                 .iter()
-                .filter(|&&(at, offset, _, _)| at == section && (start..end).contains(&offset))
-                .map(|&(_, offset, length, line)| InstructionCode {
+                .filter(|&&(at, offset, ..)| at == section && (start..end).contains(&offset))
+                .map(|&(_, offset, length, line, number)| InstructionCode {
                     offset: offset - start,
                     bytes:  arena.alloc_slice_copy(slice(offset, offset + length)),
                     text:   arena.alloc_str(line),
+                    line:   number,
                 }),
         );
         functions.push((

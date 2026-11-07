@@ -4854,6 +4854,665 @@ mod tests {
         );
     }
 
+    /// `-m` options and `-march=` define each compiler's macros and let LLVM
+    /// use the instructions, with what a feature needs turned on and what needs
+    /// it turned off.
+    #[test]
+    fn gnu_target_features_define_macros_and_generate_code() {
+        let directory = Directory::new();
+        directory.write("m.c", "");
+        directory.write(
+            "p.c",
+            "int f(unsigned x) { return __builtin_popcount(x); }\nvoid g(int *restrict a, int \
+             *restrict b) { for (int i = 0; i < 64; i++) a[i] += b[i]; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let has = |options: &[&str], name: &str| {
+                let args = [options, &["-E", "-dM", "m.c"]].concat();
+                stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
+            };
+            for name in [
+                "__AVX2__",
+                "__AVX__",
+                "__SSE4_2__",
+                "__SSE3__",
+                "__POPCNT__",
+                "__XSAVE__",
+            ] {
+                assert!(has(&["-mavx2"], name), "{mode} {name}");
+            }
+            assert!(!has(&[], "__AVX2__"), "{mode}");
+            assert!(!has(&["-mavx2"], "__BMI__"), "{mode}");
+            // Turning a feature off takes what needs it along.
+            assert!(!has(&["-mavx2", "-mno-avx"], "__AVX2__"), "{mode}");
+            assert!(has(&["-mavx2", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-mavx2", "-mno-avx2"], "__AVX2__"), "{mode}");
+            assert!(has(&["-msse4"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-msse4", "-mno-sse4"], "__SSE4_1__"), "{mode}");
+            assert!(has(&["-msse4", "-mno-sse4"], "__SSSE3__"), "{mode}");
+            assert!(has(&["-march=x86-64-v2"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-march=x86-64-v2"], "__AVX__"), "{mode}");
+            for name in [
+                "__AVX2__",
+                "__FMA__",
+                "__BMI2__",
+                "__MOVBE__",
+                "__LAHF_SAHF__",
+            ] {
+                assert!(has(&["-march=x86-64-v3"], name), "{mode} {name}");
+            }
+            assert_eq!(
+                has(&["-mfma"], "__FP_FAST_FMA"),
+                mode == "--gcc-mode",
+                "{mode}"
+            );
+            assert!(
+                has(&["-march=x86-64-v2"], "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16"),
+                "{mode}"
+            );
+            assert!(
+                !has(
+                    &["-march=x86-64-v2", "-march=x86-64"],
+                    "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16"
+                ),
+                "{mode}"
+            );
+            // The last `-march=` names defaults; explicit options outrank them.
+            assert!(
+                !has(&["-march=x86-64-v3", "-march=x86-64"], "__AVX2__"),
+                "{mode}"
+            );
+            assert!(
+                has(&["-mavx2", "-march=x86-64-v3", "-march=x86-64"], "__AVX2__"),
+                "{mode}"
+            );
+            assert!(
+                has(&["-march=x86-64-v3", "-march=x86-64", "-mavx2"], "__AVX2__"),
+                "{mode}"
+            );
+            assert!(
+                !has(&["-mno-avx", "-march=x86-64-v3"], "__AVX2__"),
+                "{mode}"
+            );
+            assert!(has(&["-mno-avx", "-march=x86-64-v3"], "__BMI2__"), "{mode}");
+            // POPCNT and CRC32 come with SSE4.2, which doesn't need them.
+            for options in [&["-mavx2", "-mno-popcnt"], &["-mno-popcnt", "-mavx2"]] {
+                assert!(has(options, "__AVX2__"), "{mode} {options:?}");
+                assert!(!has(options, "__POPCNT__"), "{mode} {options:?}");
+                assert!(has(options, "__CRC32__"), "{mode} {options:?}");
+            }
+            assert!(has(&["-mavx", "-mno-crc32"], "__AVX__"), "{mode}");
+            assert!(!has(&["-mavx", "-mno-crc32"], "__CRC32__"), "{mode}");
+            // AVX needs XSAVE in GCC; in Clang it comes along unless refused.
+            assert_eq!(
+                has(&["-mavx", "-mno-xsave"], "__AVX__"),
+                mode == "--clang-mode"
+            );
+            assert_eq!(
+                has(&["-mavx2", "-mno-avx"], "__XSAVE__"),
+                mode == "--gcc-mode"
+            );
+            let assembly = |options: &[&str]| {
+                let args = [options, &["-O2", "-S", "p.c", "-o", "-"]].concat();
+                let output = directory.bcc(mode, &args);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {options:?}");
+                stdout(&output)
+            };
+            assert!(!assembly(&[]).contains("popcnt"), "{mode}");
+            assert!(assembly(&["-mpopcnt"]).contains("popcnt"), "{mode}");
+            assert!(assembly(&["-mavx2"]).contains("vpaddd"), "{mode}");
+            assert!(assembly(&["-march=x86-64-v3"]).contains("vpaddd"), "{mode}");
+            assert!(
+                !assembly(&["-mavx2", "-mno-avx2", "-mno-avx"]).contains("vpaddd"),
+                "{mode}"
+            );
+            // The processor would have them; `-mno-avx` has to tell LLVM.
+            assert!(
+                !assembly(&["-march=x86-64-v3", "-mno-avx"]).contains("vpaddd"),
+                "{mode}"
+            );
+            assert!(assembly(&["-march=x86-64-v3", "-mno-avx"]).contains("paddd"));
+            assert!(
+                !assembly(&["-march=x86-64-v3", "-mno-popcnt"]).contains("popcnt"),
+                "{mode}"
+            );
+            assert!(
+                !assembly(&["-march=x86-64-v3", "-march=x86-64"]).contains("popcnt"),
+                "{mode}"
+            );
+            // `native` is the running processor, whatever that has.
+            succeeds(&directory.bcc(mode, &["-march=native", "-O2", "-c", "p.c", "-o", "p.o"]));
+        }
+    }
+
+    /// x86 feature options on a WebAssembly target are refused in each
+    /// compiler's words and leave no macros behind. Clang leaves `-msse4.2` and
+    /// `-msse4` unused; GCC has no such target, and says what a GCC for another
+    /// processor says of options it doesn't know.
+    #[test]
+    fn x86_feature_options_are_refused_on_webassembly() {
+        let directory = Directory::new();
+        directory.write("m.c", "");
+        let run = |mode: &str, option: &str| {
+            directory.bcc(
+                mode,
+                &[
+                    "--target=wasm32-unknown-unknown",
+                    option,
+                    "-E",
+                    "-dM",
+                    "m.c",
+                ],
+            )
+        };
+        let triple = "wasm32-unknown-unknown";
+        for (option, words) in [
+            ("-mavx2", "-mavx2".to_owned()),
+            ("-mno-avx2", "-mno-avx2".to_owned()),
+            ("-mno-sse4", "-mno-sse4.1".to_owned()),
+            ("-mavx512f", "-mavx512f".to_owned()),
+            ("-mmmx", "-mmmx".to_owned()),
+            ("-march=x86-64-v3", "-march=".to_owned()),
+            ("-march=haswell", "-march=".to_owned()),
+        ] {
+            let output = run("--clang-mode", option);
+            assert_eq!(output.status.code(), Some(1), "{option}");
+            assert!(
+                stderr(&output).contains(&format!(
+                    "unsupported option '{words}' for target '{triple}'"
+                )),
+                "{}",
+                stderr(&output)
+            );
+            assert!(!stdout(&output).contains("__AVX"), "{option}");
+            let output = run("--gcc-mode", option);
+            assert_eq!(output.status.code(), Some(1), "{option}");
+            let wanted = option.strip_prefix("-march=").map_or_else(
+                || format!("unrecognized command-line option '{option}'"),
+                |name| format!("bad value '{name}' for '-march=' switch"),
+            );
+            assert!(stderr(&output).contains(&wanted), "{}", stderr(&output));
+        }
+        for option in ["-msse4.2", "-msse4"] {
+            let output = run("--clang-mode", option);
+            succeeds(&output);
+            assert!(
+                stderr(&output)
+                    .contains(&format!("argument unused during compilation: '{option}'")),
+                "{}",
+                stderr(&output)
+            );
+            assert!(!stdout(&output).contains("__SSE4"), "{option}");
+        }
+    }
+
+    /// An option with a later opposite doesn't count at all in either compiler:
+    /// `-mavx -mno-avx` leaves no SSE4.2, while `-mavx2 -mno-avx` does, and an
+    /// earlier `-mno-avx` turned around by `-mavx` doesn't stop `-march=` from
+    /// turning on what needs AVX.
+    #[test]
+    fn a_later_opposite_option_cancels_the_earlier() {
+        let directory = Directory::new();
+        directory.write("m.c", "");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let has = |options: &[&str], name: &str| {
+                let args = [options, &["-E", "-dM", "m.c"]].concat();
+                stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
+            };
+            assert!(!has(&["-mavx", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(has(&["-mavx2", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-mssse3", "-mno-ssse3"], "__SSE3__"), "{mode}");
+            assert!(
+                has(&["-mno-avx", "-mavx", "-march=x86-64-v3"], "__FMA__"),
+                "{mode}"
+            );
+            assert!(!has(&["-msse4.2", "-mno-sse4.2"], "__SSE4_1__"), "{mode}");
+            assert!(has(&["-mno-sse4.1", "-msse4.2"], "__SSE4_1__"), "{mode}");
+            assert!(!has(&["-msse4.2", "-mno-sse4.1"], "__SSE4_1__"), "{mode}");
+        }
+        // Clang reads `-msse4` as `-msse4.2`, GCC as an option of its own.
+        let has = |mode: &str, options: &[&str], name: &str| {
+            let args = [options, &["-E", "-dM", "m.c"]].concat();
+            stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
+        };
+        assert!(!has(
+            "--clang-mode",
+            &["-msse4", "-mno-sse4.2"],
+            "__SSE4_1__"
+        ));
+        assert!(has("--gcc-mode", &["-msse4", "-mno-sse4.2"], "__SSE4_1__"));
+    }
+
+    /// With AVX, 32-byte vectors and their wrappers travel in YMM registers, so
+    /// bcc's objects link with GCC's and Clang's both ways, at `-O0` and `-O2`.
+    /// Skipped without AVX on the machine or a reference compiler.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn avx_vectors_cross_objects_of_each_compiler() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let directory = Directory::new();
+        let types = "typedef int V __attribute__((vector_size(32)));\ntypedef int W \
+                     __attribute__((vector_size(16)));\ntypedef struct { V v; } S;\ntypedef union \
+                     { V v; float f; } U;\ntypedef struct { double d[4]; } M;\n";
+        directory.write(
+            "lib.c",
+            &format!(
+                "#include <stdarg.h>\n{types}\nV add(V a, V b) {{ return a + b; }}\nW small(W a, \
+                 double d) {{ return a + (int)d; }}\nS wrap(int i, S s, V v) {{ s.v += v + i; \
+                 return s; }}\nU un(U u) {{ u.v += u.v; return u; }}\nM mem(M m) {{ m.d[3] += 1; \
+                 return m; }}\nint last(V a, V b, V c, V d, V e, V f, V g, V h, V i, int k) {{ \
+                 return a[0] + h[7] + i[1] + k; }}\nint var(int n, ...) {{ va_list ap; \
+                 va_start(ap, n); V v = va_arg(ap, V); int i = va_arg(ap, int); S s = va_arg(ap, \
+                 S); va_end(ap); return v[7] + i + s.v[1]; }}\n"
+            ),
+        );
+        directory.write(
+            "client.c",
+            &format!(
+                "#include <stdio.h>\n{types}V add(V, V); W small(W, double); S wrap(int, S, V); U \
+                 un(U); M mem(M); int last(V, V, V, V, V, V, V, V, V, int); int var(int,                  ...);\nint main(void) {{ V a = {{1, 2, 3, 4, 5, 6, 7, 8}}, b = {{10, 20, 30, 40,                  50, 60, 70, 80}}; V r = add(a, b); W w = small((W){{1, 2, 3, 4}}, 5.0); S s =                  wrap(1, (S){{a}}, b); U u = un((U){{.v = a}}); M m = mem((M){{{{1, 2, 3, 4}}}});                  printf(\"%d %d %d %d %g %d %d\\n\", r[7], w[3], s.v[7], u.v[3], m.d[3], last(a,                  a, a, a, a, a, a, a, a, 100), var(1, a, 9, (S){{b}})); return 0; }}\n"
+            ),
+        );
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        let references = [("--gcc-mode", "gcc"), ("--clang-mode", clang)];
+        for (mode, compiler) in references {
+            let available = Command::new(compiler).arg("--version").output();
+            if !available.is_ok_and(|output| output.status.success()) {
+                continue;
+            }
+            for flags in [["-O0", "-mavx2"], ["-O2", "-march=x86-64-v3"]] {
+                let reference = |source: &str, object: &str| {
+                    let output = Command::new(compiler)
+                        .current_dir(directory.path("."))
+                        .args(flags)
+                        .args(["-w", "-c", source, "-o", object])
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{}", stderr(&output));
+                };
+                let bcc = |source: &str, object: &str| {
+                    let args = [&flags[..], &["-w", "-c", source, "-o", object]].concat();
+                    succeeds(&directory.bcc(mode, &args));
+                };
+                reference("lib.c", "r-lib.o");
+                reference("client.c", "r-client.o");
+                bcc("lib.c", "b-lib.o");
+                bcc("client.c", "b-client.o");
+                for (library, client) in [
+                    ("b-lib.o", "r-client.o"),
+                    ("r-lib.o", "b-client.o"),
+                    ("b-lib.o", "b-client.o"),
+                ] {
+                    succeeds(&directory.bcc(mode, &[library, client, "-o", "mixed"]));
+                    let run = Command::new(directory.path("mixed")).output().unwrap();
+                    assert_eq!(
+                        String::from_utf8_lossy(&run.stdout),
+                        "88 9 89 8 5 111 37\n",
+                        "{mode} {flags:?} {library} {client}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Both compilers place a vector on the stack by its size, whatever
+    /// `aligned` its typedef says, in every direction across objects, named or
+    /// not. Skipped without AVX on the machine or a reference compiler.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn aligned_vector_typedefs_keep_their_stack_slots() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let directory = Directory::new();
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        for attributes in [
+            "vector_size(32), aligned(1)",
+            "vector_size(32), aligned(64)",
+            "vector_size(16), aligned(1)",
+            "vector_size(8), aligned(32)",
+            "vector_size(64), aligned(8)",
+            "vector_size(128), aligned(1)",
+        ] {
+            let types = format!(
+                "typedef int T __attribute__(({attributes}));\n#define N (int)(sizeof(T) / \
+                 sizeof(int))\n"
+            );
+            directory.write(
+                "lib.c",
+                &format!(
+                    "#include <stdarg.h>\n{types}int low(long a, long b, long c, long d, long e, \
+                     long f, long g, T v0, T v1, T v2, T v3, T v4, T v5, T v6, T v7, T v8, long \
+                     z) {{ return g != 7 || z != 99 || v0[0] != 1 || v8[N - 1] != N || (unsigned \
+                     long)&v8 % _Alignof(T) != 0; }}\nint var(long g, ...) {{ va_list ap; \
+                     va_start(ap, g); int bad = g != 1; for (int i = 2; i <= 7; i++) bad |= \
+                     va_arg(ap, long) != i; for (int i = 0; i < 9; i++) {{ T v = va_arg(ap, T); \
+                     bad |= v[N - 1] != N; }} bad |= va_arg(ap, long) != 99; va_end(ap); return \
+                     bad; }}\n"
+                ),
+            );
+            directory.write(
+                "client.c",
+                &format!(
+                    "{types}int low(long, long, long, long, long, long, long, T, T, T, T, T, T, \
+                     T, T, T, long); int var(long, ...);\nint main(void) {{ T v; for (int i = 0; \
+                     i < N; i++) v[i] = i + 1; return low(1, 2, 3, 4, 5, 6, 7, v, v, v, v, v, v, \
+                     v, v, v, 99) || var(1L, 2L, 3L, 4L, 5L, 6L, 7L, v, v, v, v, v, v, v, v, v, \
+                     99L); }}\n"
+                ),
+            );
+            for (mode, compiler) in [("--gcc-mode", "gcc"), ("--clang-mode", clang)] {
+                let available = Command::new(compiler).arg("--version").output();
+                if !available.is_ok_and(|output| output.status.success()) {
+                    continue;
+                }
+                for flags in [&["-O0", "-mavx2"][..], &["-O2"]] {
+                    let reference = |source: &str, object: &str| {
+                        let output = Command::new(compiler)
+                            .current_dir(directory.path("."))
+                            .args(flags)
+                            .args(["-w", "-c", source, "-o", object])
+                            .output()
+                            .unwrap();
+                        assert!(output.status.success(), "{}", stderr(&output));
+                    };
+                    let bcc = |source: &str, object: &str| {
+                        let args = [flags, &["-w", "-c", source, "-o", object]].concat();
+                        succeeds(&directory.bcc(mode, &args));
+                    };
+                    reference("lib.c", "r-lib.o");
+                    reference("client.c", "r-client.o");
+                    bcc("lib.c", "b-lib.o");
+                    bcc("client.c", "b-client.o");
+                    for (library, client) in [
+                        ("b-lib.o", "r-client.o"),
+                        ("r-lib.o", "b-client.o"),
+                        ("b-lib.o", "b-client.o"),
+                    ] {
+                        succeeds(&directory.bcc(mode, &[library, client, "-o", "mixed"]));
+                        let run = Command::new(directory.path("mixed")).output().unwrap();
+                        assert_eq!(
+                            run.status.code(),
+                            Some(0),
+                            "{attributes} {mode} {flags:?} {library} {client}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// What the driver leaves out is still read in order: an option outside the
+    /// table refuses a vector its convention changes until AVX is off in that
+    /// compiler or the option's own opposite follows, wherever the options
+    /// stand. Each row was measured with `-dM -E` on GCC 14.2 and Clang 23.1.1.
+    #[test]
+    fn unknown_vector_options_refuse_as_each_compiler_reads_them() {
+        let directory = Directory::new();
+        directory.write(
+            "v.c",
+            "typedef int V __attribute__((vector_size(32)));\nV add(V a, V b) { return a + b; }\n",
+        );
+        let reads = |mode: &str, options: &[&str]| {
+            let args = [options, &["-w", "-c", "v.c", "-o", "v.o"]].concat();
+            let output = directory.bcc(mode, &args);
+            let refused = stderr(&output).contains("ignores changes how it travels");
+            assert_eq!(output.status.success(), !refused, "{}", stderr(&output));
+            refused
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for options in [
+                &["-mavx512f", "-mno-avx512bw"][..],
+                &["-mavx512bw", "-mno-avx512f"],
+                &["-mavx512f", "-mavx512bw", "-mno-avx512f"],
+                &["-mxop", "-mno-fma4"],
+                &["-mavx512f", "-mno-avx2"],
+                &["-mavx512f", "-mno-avx", "-mavx"],
+                &["-mno-avx", "-mavx512f"],
+                &["-march=haswell"],
+                &["-march=haswell", "-mno-bmi"],
+            ] {
+                assert!(reads(mode, options), "{mode} {options:?}");
+            }
+            for options in [
+                &["-mavx512f", "-mno-avx512f"][..],
+                &["-mavx512f", "-mno-avx"],
+                &["-mavx512f", "-mno-sse4.2"],
+                &["-mavx", "-mavx512f", "-mno-avx"],
+                &["-march=haswell", "-mno-avx"],
+                &["-mno-avx", "-march=haswell"],
+                &["-march=haswell", "-march=x86-64"],
+            ] {
+                assert!(!reads(mode, options), "{mode} {options:?}");
+            }
+            for options in [
+                &["-mavx512f", "-mno-xsave"][..],
+                &["-march=haswell", "-mno-xsave"],
+            ] {
+                assert_eq!(
+                    reads(mode, options),
+                    mode == "--clang-mode",
+                    "{mode} {options:?}"
+                );
+            }
+        }
+        assert!(!reads("--gcc-mode", &["-mavx256-split-unaligned-load"]));
+        assert!(reads("--gcc-mode", &["-msse5"]));
+        // clang-cl returns the vector in YMM0 under these, as `clang
+        // --driver-mode=cl` was measured to, and takes the same options.
+        for (options, refused) in [
+            (&["-mavx512f"][..], true),
+            (&["-mavx512f", "-mno-avx512bw"], true),
+            (&["-march=haswell"], true),
+            (&["-mavx512f", "-mno-avx512f"], false),
+            (&["-mavx512f", "-mno-avx"], false),
+            (&["-mavx2"], false),
+        ] {
+            let args = [options, &["/c", "v.c"]].concat();
+            let output = directory.bcc("--clang-cl-mode", &args);
+            assert_eq!(
+                stderr(&output).contains("ignores changes how it travels"),
+                refused,
+                "{options:?}: {}",
+                stderr(&output)
+            );
+            assert_eq!(output.status.success(), !refused, "{options:?}");
+        }
+    }
+
+    /// `__builtin_cpu_supports` and `__builtin_cpu_is` read libgcc's data as
+    /// each compiler does: GCC gives the bit where it stands and Clang 1, and
+    /// each words a bad name its own way. A function with a `target` attribute
+    /// that the query guards runs, computed in software.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn cpu_builtins_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "dispatch.c",
+            "#include <immintrin.h>\n#include <stdio.h>\n__attribute__((target(\"avx2\"))) static \
+             int sum(const int *p) {\n__m256i v = _mm256_loadu_si256((const __m256i \
+             *)p);\n__m256i w = _mm256_add_epi32(v, v);\nint o[8]; _mm256_storeu_si256((__m256i \
+             *)o, w);\nreturn o[0] + o[7];\n}\nint main(void) { int d[8] = {1,2,3,4,5,6,7,8};\nif \
+             (__builtin_cpu_supports(\"avx2\")) printf(\"%d\\n\", sum(d)); else puts(\"none\"); \
+             return 0; }\n",
+        );
+        directory.write(
+            "compare.c",
+            "#include <stdio.h>\n#define S(n) printf(n \" %d\\n\", \
+             __builtin_cpu_supports(n))\n#define I(n) printf(n \" %d\\n\", \
+             __builtin_cpu_is(n))\nint main(void) { S(\"cmov\"); S(\"mmx\"); S(\"popcnt\"); \
+             S(\"sse4.2\"); S(\"avx\"); S(\"avx2\"); S(\"fma\"); S(\"bmi2\"); S(\"avx512f\"); \
+             S(\"avx512vl\"); S(\"avx512vbmi2\"); S(\"gfni\"); S(\"aes\"); S(\"f16c\"); \
+             S(\"lzcnt\"); S(\"movbe\"); S(\"rdrnd\"); S(\"sha\"); S(\"xsave\"); S(\"x86-64\"); \
+             S(\"x86-64-v2\"); S(\"x86-64-v3\"); S(\"x86-64-v4\"); I(\"intel\"); I(\"amd\"); \
+             I(\"corei7\"); I(\"amdfam19h\"); I(\"znver4\"); I(\"haswell\"); return 0; }\n",
+        );
+        directory.write(
+            "bad.c",
+            "int f(const char *s) {\nint a = __builtin_cpu_supports(\"bogus\");\nint b = \
+             __builtin_cpu_supports(s);\nint c = __builtin_cpu_is(s);\nreturn a + b + c + \
+             __builtin_cpu_is(\"bogus\");\n}\n",
+        );
+        directory.write(
+            "unknown.c",
+            "int main(void) { return __builtin_cpu_supports(\"bogus\"); }\n",
+        );
+        directory.write(
+            "has.c",
+            "#if __has_builtin(__builtin_cpu_supports) && __has_builtin(__builtin_cpu_is) && \
+             __has_builtin(__builtin_cpu_init)\nyes\n#else\nno\n#endif\n",
+        );
+        let sum = if std::is_x86_feature_detected!("avx2") {
+            "18\n"
+        } else {
+            "none\n"
+        };
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        for (mode, compiler) in [("--gcc-mode", "gcc"), ("--clang-mode", clang)] {
+            for flags in [
+                &["-O0"][..],
+                &["-O2"],
+                &["-O2", "-static"],
+                &["-O0", "-fPIE", "-pie"],
+            ] {
+                let mut args = flags.to_vec();
+                args.extend(["-w", "dispatch.c", "-o", "dispatch"]);
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("dispatch")).output().unwrap();
+                assert_eq!(
+                    String::from_utf8_lossy(&run.stdout),
+                    sum,
+                    "{mode} {flags:?}"
+                );
+            }
+            // The feature bits of the table, against the compiler's own code.
+            succeeds(&directory.bcc(mode, &["-w", "compare.c", "-o", "ours"]));
+            let reference = Command::new(compiler)
+                .current_dir(directory.path("."))
+                .args(["-w", "compare.c", "-o", "theirs"])
+                .output();
+            if reference.is_ok_and(|output| output.status.success()) {
+                let ours = Command::new(directory.path("ours")).output().unwrap();
+                let theirs = Command::new(directory.path("theirs")).output().unwrap();
+                assert_eq!(
+                    String::from_utf8_lossy(&ours.stdout),
+                    String::from_utf8_lossy(&theirs.stdout),
+                    "{mode}"
+                );
+            }
+            let output = directory.bcc(mode, &["-E", "has.c"]);
+            assert!(stdout(&output).contains("yes"), "{mode}");
+            let output = directory.bcc(mode, &["--target=wasm32-unknown-unknown", "-E", "has.c"]);
+            assert!(stdout(&output).contains("no"), "{mode}");
+            let output = directory.bcc(
+                mode,
+                &[
+                    "--target=wasm32-unknown-unknown",
+                    "-S",
+                    "unknown.c",
+                    "-o",
+                    "unknown.s",
+                ],
+            );
+            assert_eq!(output.status.code(), Some(1), "{mode}");
+            assert!(
+                stderr(&output).contains("error: builtin is not supported on this target"),
+                "{}",
+                stderr(&output)
+            );
+        }
+        let value = |mode: &str, name: &str, expected: &str| {
+            directory.write(
+                "value.c",
+                &format!(
+                    "#include <stdio.h>\nint main(void) {{ printf(\"%d\\n\",                      \
+                     __builtin_cpu_supports(\"{name}\")); return 0; }}\n"
+                ),
+            );
+            succeeds(&directory.bcc(mode, &["-w", "value.c", "-o", "value"]));
+            let run = Command::new(directory.path("value")).output().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout),
+                expected,
+                "{mode} {name}"
+            );
+        };
+        value("--gcc-mode", "sse2", "16\n");
+        value("--clang-mode", "sse2", "1\n");
+        // GCC reads a C string; Clang all of it, which names no feature.
+        value("--gcc-mode", "sse2\\0junk", "16\n");
+        value("--gcc-mode", "sse2\\0\\377", "16\n");
+        value("--clang-mode", "sse2\\0junk", "0\n");
+        directory.write(
+            "utf8.c",
+            "#include <stdio.h>\nint main(void) { printf(\"%d\\n\", \
+             __builtin_cpu_supports(u8\"sse2\")); return 0; }\n",
+        );
+        for (mode, expected) in [("--gcc-mode", "16\n"), ("--clang-mode", "1\n")] {
+            succeeds(&directory.bcc(mode, &["-w", "utf8.c", "-o", "utf8"]));
+            let run = Command::new(directory.path("utf8")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{mode}");
+        }
+        directory.write(
+            "empty.c",
+            "int main(void) { return __builtin_cpu_supports(\"\\0sse2\"); }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-c", "empty.c", "-o", "empty.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("error: parameter to builtin not valid: \n"),
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--gcc-mode", &["-c", "bad.c", "-o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        let words = stderr(&output);
+        assert!(
+            words.contains("error: parameter to builtin not valid: bogus"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: parameter to builtin must be a string constant or literal"),
+            "{words}"
+        );
+        let output = directory.bcc("--clang-mode", &["-c", "bad.c", "-o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        let words = stderr(&output);
+        assert!(
+            words.contains("warning: invalid cpu feature string for builtin"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: invalid cpu name for builtin"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: expression is not a string literal"),
+            "{words}"
+        );
+        // Clang's unknown feature warns and answers 0.
+        let output = directory.bcc("--clang-mode", &["unknown.c", "-o", "unknown"]);
+        succeeds(&output);
+        assert!(stderr(&output).contains("invalid cpu feature string"));
+        let run = Command::new(directory.path("unknown")).status().unwrap();
+        assert_eq!(run.code(), Some(0));
+        // `__builtin_cpu_init` is `int` in GCC and `void` in Clang.
+        directory.write(
+            "init.c",
+            "#include <stdio.h>\nint main(void) { printf(\"%zu\\n\", \
+             sizeof(__builtin_cpu_init()));              return 0; }\n",
+        );
+        for (mode, expected) in [("--gcc-mode", "4\n"), ("--clang-mode", "1\n")] {
+            succeeds(&directory.bcc(mode, &["-w", "init.c", "-o", "init"]));
+            let run = Command::new(directory.path("init")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{mode}");
+        }
+    }
+
     /// `-masm=intel` writes Intel syntax and reads `asm` statements in it. The
     /// checks name no register, since the argument's differs on Windows.
     #[test]
@@ -7050,6 +7709,58 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// Reaching the end of a function, under the options each compiler has for
+    /// it. Each row was measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_return_type_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write("a.c", "int f(int x) { if (x) return 1; }\n");
+        let warns = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stderr(&output).contains("[-Wreturn-type]")
+        };
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], false),
+            ("--gcc-mode", &["-Wall"][..], true),
+            ("--gcc-mode", &["-Wreturn-type"][..], true),
+            ("--gcc-mode", &["-Wall", "-Wno-return-type"][..], false),
+            ("--clang-mode", &[][..], true),
+            ("--clang-mode", &["-Wno-return-type"][..], false),
+            ("--clang-mode", &["-w"][..], false),
+        ] {
+            assert_eq!(warns(mode, args), expected, "{mode} {args:?}");
+        }
+        // Clang's analysis stops at the unit's first error, where GCC's goes
+        // on.
+        directory.write(
+            "e.c",
+            "int f(int x) { if (x) return 1; }\nint g(void) { return h; }\nint k(void) { }\n",
+        );
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "e.c"]);
+        let text = stderr(&output);
+        assert!(text.contains("e.c:1:"), "{text}");
+        assert!(!text.contains("e.c:3:"), "{text}");
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "e.c"]);
+        let text = stderr(&output);
+        assert!(text.contains("e.c:1:"), "{text}");
+        // `main` falls off its end with a value from C99 on, and GCC holds a
+        // hosted one to C89 too.
+        directory.write("m.c", "int main(void) { }\n");
+        let args = ["-Wall", "-std=c89", "-fsyntax-only", "m.c"];
+        assert!(stderr(&directory.bcc("--gcc-mode", &args)).contains("control reaches"));
+        assert_eq!(stderr(&directory.bcc("--clang-mode", &args)), "");
+        let args = ["-Wall", "-std=c99", "-fsyntax-only", "m.c"];
+        assert_eq!(stderr(&directory.bcc("--gcc-mode", &args)), "");
+        let args = ["-ffreestanding", "-fsyntax-only", "m.c"];
+        assert!(stderr(&directory.bcc("--clang-mode", &args)).contains("does not return"));
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();
@@ -8702,8 +9413,9 @@ mod tests {
             "-o",
             "x.o",
         ]));
-        // A newer processor warns: baseline code runs on it.
-        for option in ["-march=native", "-march=x86-64-v3", "-mavx2"] {
+        // A processor or feature bcc doesn't model warns: baseline code runs on
+        // it.
+        for option in ["-march=haswell", "-march=x86-64-v4", "-mavx512f"] {
             let output = linux(&["-c", option, "x.c", "-o", "x.o"]);
             succeeds(&output);
             assert!(

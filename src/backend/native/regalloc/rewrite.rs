@@ -47,6 +47,7 @@ use crate::{
             Base,
             FrameObject,
             Index,
+            InstSource,
             MFunction,
             MInst,
             Mem,
@@ -122,6 +123,8 @@ fn rewrite_blocks<'a>(
     for (block, data) in func.blocks.iter_mut().enumerate() {
         let mut out = ArenaVec::with_capacity_in(data.insts.len(), arena);
         let mut block_origins = ArenaVec::new_in(arena);
+        let mut sources = ArenaVec::new_in(arena);
+        let tracked = !data.sources.is_empty();
         for (index, &inst) in data.insts.iter().enumerate() {
             while let Some(edit) = edits.first()
                 && (edit.block as usize, edit.index as usize) == (block, index)
@@ -145,9 +148,16 @@ fn rewrite_blocks<'a>(
                 let start = out.len();
                 parallel_copy(&mut moves, &mut out);
                 block_origins.extend((start..out.len()).map(|_| INSERTED));
+                if tracked {
+                    sources.resize(out.len(), InstSource::Allocator);
+                }
             }
             let start = out.len();
             let program = rewrite_inst(inst, position, allocation, classes, &mut out);
+            // The spill code around an instruction serves that instruction.
+            if tracked {
+                sources.resize(out.len(), data.sources[index]);
+            }
             if origins.is_some() {
                 let origin = u32::try_from(index).expect("instruction numbers fit u32");
                 // The spill code around the program's instruction is the
@@ -160,6 +170,8 @@ fn rewrite_blocks<'a>(
         }
         data.insts.clear();
         data.insts.extend_from_slice(&out);
+        data.sources.clear();
+        data.sources.extend_from_slice(&sources);
         if let Some(origins) = origins.as_deref_mut() {
             origins.push(block_origins);
         }
@@ -453,7 +465,7 @@ fn copy_through_memory(inst: MInst, location: &impl Fn(VReg, Role) -> Location) 
 /// placeholders of copies within a spill slot.
 fn remove_identity_copies(func: &mut MFunction<'_>) {
     for block in &mut func.blocks {
-        block.insts.retain(|inst| match *inst {
+        block.retain_insts(|_, inst| match *inst {
             | MInst::Mov {
                 width: Width::B64,
                 dst,

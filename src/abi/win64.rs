@@ -66,7 +66,11 @@ pub(super) fn argument(layout: AggregateLayout<'_>) -> ArgPlan<'_> {
 /// 16, 32, or 64 bits. ... Otherwise, the caller must allocate memory for
 /// the return value and pass a pointer to it as the first argument."
 pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
-    // A vector in XMM0, or XMM0 and XMM1, as Clang returns GNU vectors.
+    // A vector in XMM0, or XMM0 and XMM1, as Clang returns GNU vectors, or in
+    // the YMM registers AVX adds.
+    if layout.flags.contains(AggregateFlags::WIDE) {
+        return ResultPlan::wide(layout);
+    }
     if layout.flags.contains(AggregateFlags::VECTOR) {
         return match layout.scalars {
             | [] => ResultPlan::Memory(layout),
@@ -74,10 +78,13 @@ pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
                 layout,
                 registers: ResultRegisters {
                     complex:       false,
-                    second_offset: rest.first().map_or(8, |second| second.offset),
+                    second_offset: rest
+                        .first()
+                        .map_or(8, |second| u16::try_from(second.offset).unwrap_or(u16::MAX)),
                     first:         first.ty,
                     second:        rest.first().map(|second| second.ty),
                     align:         layout.align,
+                    whole:         0,
                 },
             },
         };
@@ -91,6 +98,7 @@ pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
                 first,
                 second: None,
                 align: layout.align,
+                whole: 0,
             },
         },
         | None => ResultPlan::Memory(layout),

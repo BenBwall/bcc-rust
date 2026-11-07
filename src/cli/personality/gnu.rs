@@ -54,7 +54,11 @@ use crate::{
             kind_of_language,
         },
     },
-    target::Target,
+    target::{
+        Target,
+        UNKNOWN_VECTOR_ABI,
+        X86Features,
+    },
 };
 
 /// Translates a GCC or Clang command line.
@@ -81,6 +85,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         verbose: false,
         dry_run: false,
         machine: Vec::new(),
+        x86_options: Vec::new(),
         position: 0,
         ofast: Ofast::Absent,
         ofast_at: Vec::new(),
@@ -301,6 +306,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if machine.user_interrupts {
         common.push("-D__UINTR__=1".into());
         common.push("--user-interrupts".into());
+    }
+    let x86 = X86Features::from_options(
+        &state.x86_options.iter().map(String::as_str),
+        compiler == Compiler::Clang,
+    );
+    if x86.unknown_vector_abi() == Some(32) {
+        common.push(UNKNOWN_VECTOR_ABI.into());
     }
     // GCC applies a final `-Ofast`'s `-ffast-math` before every other
     // option, so any floating-point option overrides it; Clang applies it
@@ -544,6 +556,8 @@ struct State<'a> {
     /// The known `-m` options bcc does not implement, judged once the
     /// target is known, since `--target` may come after them.
     machine: Vec<String>,
+    /// The `-m` and `-march=` options in order, for how vectors travel.
+    x86_options: Vec<String>,
     /// The position on the command line of the argument being read.
     position: usize,
     /// Where `-Ofast` stands among the `-O` options.
@@ -1597,6 +1611,9 @@ impl State<'_> {
 
     /// Translates an option without an operand.
     fn flag(&mut self, text: &str) {
+        if text.starts_with("-m") {
+            self.x86_options.push(text.into());
+        }
         if matches!(text, "-MD" | "-MMD") {
             if self.dependency_mode.as_deref() != Some(OsStr::new("-MMD")) {
                 self.dependency_mode = Some(text.into());
@@ -1687,6 +1704,8 @@ impl State<'_> {
                     | "-Wno-format-type-confusion"
                     | "-Wgcc-compat"
                     | "-Wno-gcc-compat"
+                    | "-Winvalid-noreturn"
+                    | "-Wno-invalid-noreturn"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an
@@ -1913,6 +1932,26 @@ impl State<'_> {
                 .invocation
                 .warning(format_args!("'{option}' is ignored: {why}")),
             | Treatment::Reject(why) => self.unsupported(option, why),
+            | Treatment::WrongTarget => match self.compiler {
+                | Compiler::Gcc => match option.strip_prefix("-march=") {
+                    | Some(architecture) => self.error(format_args!(
+                        "bad value '{architecture}' for '-march=' switch"
+                    )),
+                    | None =>
+                        self.error(format_args!("unrecognized command-line option '{option}'")),
+                },
+                | Compiler::Clang => {
+                    let option = if option.starts_with("-march=") {
+                        "-march="
+                    } else {
+                        option
+                    };
+                    self.error(format_args!(
+                        "unsupported option '{option}' for target '{}'",
+                        target.triple()
+                    ));
+                },
+            },
         }
     }
 

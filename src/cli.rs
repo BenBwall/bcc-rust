@@ -141,6 +141,9 @@ fn run_driver(args: &Cli, matches: &clap::ArgMatches) -> Result<i32, MainError> 
             target: args.target.triple(),
         });
     }
+    if args.report_x86_options_on_wasm() {
+        return Ok(1);
+    }
     if let Some(conflict) = args.code_generation.back_end_conflict() {
         driver::report(args, driver::Severity::Error, format_args!("{conflict}"));
         return Ok(1);
