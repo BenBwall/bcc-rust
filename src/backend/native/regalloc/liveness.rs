@@ -238,11 +238,7 @@ impl<'a> Liveness<'a> {
                 flags_read = reads || (flags_read && !writes);
                 transfer(&mut inst, &mut live);
             }
-            let mut index = 0;
-            data.insts.retain(|_| {
-                index += 1;
-                keep[index - 1]
-            });
+            data.retain_insts(|index, _| keep[index]);
         }
         removed
     }
