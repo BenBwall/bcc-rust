@@ -152,8 +152,8 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::ImplicitIntTypeName
                 | semantic_analysis::SemanticErrorKind::ReturnMismatch
                 | semantic_analysis::SemanticErrorKind::VoidReturnMismatch
-                | semantic_analysis::SemanticErrorKind::DeclarationMissingParameterType =>
-                    error.kind.group(),
+                | semantic_analysis::SemanticErrorKind::DeclarationMissingParameterType
+                | semantic_analysis::SemanticErrorKind::UndefinedInternal(_) => error.kind.group(),
                 | semantic_analysis::SemanticErrorKind::CallAttributeWarning =>
                     Some(G::AttributeWarning),
                 | semantic_analysis::SemanticErrorKind::PredefinedOutsideFunction =>
@@ -169,6 +169,8 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::ExcessElements(_) =>
                     Some(G::ExcessInitializers),
                 | semantic_analysis::SemanticErrorKind::FloatOverflow(_) => Some(G::Overflow),
+                | semantic_analysis::SemanticErrorKind::ExceptionalConstant(group, _) =>
+                    Some(group),
                 | semantic_analysis::SemanticErrorKind::PedanticOverflow =>
                     Some(G::PedanticOverflow),
                 | semantic_analysis::SemanticErrorKind::LiteralConversion(_) =>

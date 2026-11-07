@@ -57,6 +57,7 @@ pub(super) fn declare<'id, 'a, 'm>(
         let signature = module.signature(function.signature);
         let ty = function::signature_type(api, signature, arena);
         if function.attributes.alias.is_some()
+            || function.attributes.ifunc.is_some()
             || module.inline_copy_target(id).is_some()
             || (function.inline_copy_of.is_some() && function.body.is_none())
         {
@@ -151,6 +152,18 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
         sections(api, value, global.attributes);
         globals.push(value);
+    }
+    // A resolver is a function of this unit, defined by now.
+    for (id, function) in module.functions() {
+        if let Some(Symbol::Function(resolver)) = function.attributes.ifunc {
+            let ty = function::signature_type(api, module.signature(function.signature), arena);
+            let value = api.ifunc(function.name, ty, functions[resolver.index()]);
+            if function.linkage == IrLinkage::Internal {
+                api.linkage(value, Linkage::Internal);
+            }
+            visibility(api, value, function.attributes);
+            functions[id.index()] = value;
+        }
     }
     // Verified alias targets are definitions, never aliases themselves.
     for (id, function) in module.functions() {

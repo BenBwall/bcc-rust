@@ -196,6 +196,8 @@ impl CompilerConfiguration {
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
             | DiagnosticGroup::Parentheses if clang => DiagnosticGroup::CLANG_PARENTHESES,
             | DiagnosticGroup::Parentheses => &[DiagnosticGroup::DanglingElse],
+            | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
+            | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
             | _ => &[],
         };
         for &child in children {
@@ -592,11 +594,14 @@ impl CompilerConfiguration {
         group: DiagnosticGroup,
         severity: ErrorSeverity,
     ) -> bool {
-        severity == ErrorSeverity::Error
-            && self.identity == super::CompilerIdentity::Gcc
-            && group.default() == GroupDefault::Permerror
-            && (self.permerror_default(group) == Some(ErrorSeverity::Error)
-                || self.pedantic_error(group))
+        // GCC asks about an undefined internal function at the unit's end,
+        // where no system header is, though it names the declaration.
+        group == DiagnosticGroup::GccUndefinedInternal
+            || severity == ErrorSeverity::Error
+                && self.identity == super::CompilerIdentity::Gcc
+                && group.default() == GroupDefault::Permerror
+                && (self.permerror_default(group) == Some(ErrorSeverity::Error)
+                    || self.pedantic_error(group))
     }
 
     /// Whether `-pedantic-errors` makes `group` an error: Clang's
@@ -850,9 +855,10 @@ diagnostic_groups! {
     DllAttributeOnRedeclaration => Some("dll-attribute-on-redeclaration"), Warning, false;
     /// A redeclaration of an imported entity without `dllimport`.
     InconsistentDllimport => Some("inconsistent-dllimport"), Warning, false;
-    /// A static function used but defined nowhere in the unit. Clang's name;
-    /// GCC gives the warning no option.
+    /// A static function used but defined nowhere in the unit, Clang's.
     UndefinedInternal => Some("undefined-internal"), Warning, false;
+    /// GCC's warning about the same function, which no option controls.
+    GccUndefinedInternal => None, Warning, false;
     /// A static function declared but neither defined nor used.
     UnusedFunction => Some("unused-function"), Ignored, false;
     /// An initializer that replaces an earlier one for the same subobject
@@ -881,6 +887,33 @@ diagnostic_groups! {
     /// `-pedantic-errors`, and controlled by `-Woverflow`'s options, which
     /// disable it or set its severity but never enable it alone.
     PedanticOverflow => Some("overflow"), Extension, true;
+    /// Clang: a signed constant operation out of its type's range. GCC's is
+    /// [`Self::Overflow`].
+    IntegerOverflow => Some("integer-overflow"), Warning, false;
+    /// A shift count not below the width of the shifted type.
+    ShiftCountOverflow => Some("shift-count-overflow"), Warning, false;
+    /// A negative shift count.
+    ShiftCountNegative => Some("shift-count-negative"), Warning, false;
+    /// A nonnegative constant shifted left past the sign bit: Clang's option,
+    /// and the parent of GCC's spelling.
+    ShiftOverflow => Some("shift-overflow"), Warning, false;
+    /// GCC's report of [`Self::ShiftOverflow`], which names the option with
+    /// the level it takes.
+    GccShiftOverflow => Some("shift-overflow="), Warning, false;
+    /// Clang: a negative constant shifted left. GCC reports it only under
+    /// `-Wextra`, which is not modeled.
+    ShiftNegativeValue => Some("shift-negative-value"), Warning, false;
+    /// An ordinary multi-character constant.
+    Multichar => Some("multichar"), Warning, false;
+    /// Clang: a declaration that declares nothing.
+    MissingDeclarations => Some("missing-declarations"), Warning, false;
+    /// GCC's report of the same, which no option controls but `-w`.
+    GccEmptyDeclaration => None, Warning, false;
+    /// GCC's word for a zero divisor, which also sets Clang's
+    /// [`Self::DivisionByZero`], as Clang takes it as an alias.
+    DivByZero => Some("div-by-zero"), Warning, false;
+    /// Clang: an integer divided by a constant zero.
+    DivisionByZero => Some("division-by-zero"), Warning, false;
     /// GCC: an identifier not in Normalization Form C, before C23, which
     /// does not require the form: a warning no pedantic option changes.
     Normalized => Some("normalized"), Warning, false;

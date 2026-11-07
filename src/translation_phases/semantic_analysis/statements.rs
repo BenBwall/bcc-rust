@@ -899,7 +899,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.semantic_errors,
             ));
             self.work.push(Work::Eval(expression));
-            self.work.push(Work::Expression(expression));
+            self.constant_expression(
+                expression,
+                super::exceptional_constants::ConstantSite::CaseLabel,
+            );
         }
     }
 

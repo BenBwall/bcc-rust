@@ -33,6 +33,7 @@ use super::{
 use crate::{
     diagnostics::format_in,
     ir::{
+        AggregateFlags,
         AggregateLayout,
         AggregateParam,
         Align,
@@ -725,6 +726,38 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 .is_some_and(|attributes| attributes.inlining == Inlining::Always)
     }
 
+    /// The function whose address a C expression or static initializer takes.
+    /// That address can reach another object, which calls it as its own
+    /// compiler would, whatever the function's linkage.
+    pub(super) fn addressed_function(
+        &mut self,
+        binding: usize,
+    ) -> Result<FuncId, LoweringErrorKind> {
+        self.check_reachable_function(binding)?;
+        self.function(binding)
+    }
+
+    /// Refuses a function that another object can call when bcc would pass or
+    /// return its arguments otherwise ([`Self::check_foreign_vectors`]).
+    fn check_reachable_function(&self, binding: usize) -> Result<(), LoweringErrorKind> {
+        let TypeKind::Function {
+            result,
+            parameters,
+            variadic,
+            prototype,
+            ..
+        } = self.sema.types.kind(self.sema.bindings[binding].ty)
+        else {
+            return Ok(());
+        };
+        self.check_foreign_vectors(
+            parameters.iter().copied(),
+            result,
+            variadic && prototype,
+            self.target_vector_abi(binding),
+        )
+    }
+
     /// The function a function binding names, declaring it on first use
     /// with the signature of the binding's type.
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
@@ -732,10 +765,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         if let Some(func) = self.nested_function(binding) {
             return Ok(func);
         }
+        if let Some(weakref) = self.weakref(binding) {
+            return self.weak_function(binding, weakref);
+        }
         if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {
             return Err(LoweringErrorKind::MissingFact(
                 "lowering referenced an omitted internal function",
             ));
+        }
+        if data.linkage != Linkage::Internal {
+            self.check_reachable_function(binding)?;
         }
         let name = self.symbol_name(binding);
         // Builtin aliases describe the C binding, never the exact assembler
@@ -752,6 +791,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             // to that unrelated definition (C99 §7.1.3p1; GNU extension).
             if runtime.is_some() && self.module.function(func).linkage == IrLinkage::Internal {
                 return Err(LoweringErrorKind::Unsupported(Construct::Builtin));
+            }
+            // A `weakref` left this symbol weak, and this use is a reference
+            // of its own.
+            if self.module.function(func).linkage == IrLinkage::Weak
+                && self.module.function(func).body.is_none()
+            {
+                self.module.function_mut(func).linkage = self.ir_linkage(binding);
             }
             return Ok(func);
         }
@@ -786,6 +832,70 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             _ = self.pack_addresses.insert(func, record);
         }
         Ok(func)
+    }
+
+    /// The `weakref` declared on `binding`'s entity, if it has one. It has
+    /// internal linkage, so its name says which declarations are the entity's.
+    /// GNU extension: GCC manual, "Common Function Attributes", weakref.
+    fn weakref(&self, binding: usize) -> Option<(Option<usize>, StringCacheId)> {
+        let weakrefs = self.sema.symbols.weakrefs;
+        if weakrefs.is_empty() {
+            return None;
+        }
+        let data = self.sema.bindings[binding];
+        if data.linkage != Linkage::Internal {
+            return None;
+        }
+        weakrefs
+            .iter()
+            .find(|weakref| self.sema.bindings[weakref.binding].name.name == data.name.name)
+            .map(|weakref| (weakref.target, weakref.name))
+    }
+
+    /// The function a `weakref` names: its target's own symbol if this unit
+    /// declares one, so its uses are ordinary, else a weak undefined symbol.
+    fn weak_function(
+        &mut self,
+        binding: usize,
+        (target, name): (Option<usize>, StringCacheId),
+    ) -> Result<FuncId, LoweringErrorKind> {
+        if let Some(target) = target {
+            return self.function(target);
+        }
+        let name = self.context.string_cache.at(name);
+        match self.module.symbol(name) {
+            | Some(Symbol::Function(func)) => Ok(func),
+            | Some(Symbol::Global(_)) =>
+                Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel)),
+            | None => {
+                let signature = self.signature_for_binding(binding)?;
+                Ok(self
+                    .module
+                    .declare_function(name, signature, IrLinkage::Weak))
+            },
+        }
+    }
+
+    /// The object a `weakref` names, as [`Self::weak_function`] finds a
+    /// function.
+    fn weak_object(
+        &mut self,
+        binding: usize,
+        (target, name): (Option<usize>, StringCacheId),
+    ) -> Result<GlobalId, LoweringErrorKind> {
+        if let Some(target) = target {
+            return self.object(target);
+        }
+        let name = self.context.string_cache.at(name);
+        match self.module.symbol(name) {
+            | Some(Symbol::Global(global)) => Ok(global),
+            | Some(Symbol::Function(_)) =>
+                Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel)),
+            | None => {
+                let declaration = self.global_declaration(binding, IrLinkage::Weak)?;
+                Ok(self.module.declare_global(name, declaration))
+            },
+        }
     }
 
     /// An external declaration without a prototype or a known definition.
@@ -894,8 +1004,103 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             crate::abi::Convention::of(self.target),
             self.rules(),
             result,
+            self.avx(),
             scratch,
         )
+    }
+
+    /// Whether AVX changes how vectors of 32 bytes and more travel.
+    fn avx(&self) -> bool {
+        self.context.configuration.code_options().x86_features.avx()
+    }
+
+    /// Whether `binding` has a `target` attribute that changes how vectors of
+    /// 32 bytes and more travel.
+    pub(super) fn target_vector_abi(&self, binding: usize) -> bool {
+        self.sema
+            .entity_attributes(binding)
+            .is_some_and(|attributes| attributes.target_vector_abi)
+    }
+
+    /// Refuses what GCC or Clang would pass or return otherwise than bcc, for a
+    /// function another object can reach, or a call of one: a vector of 32
+    /// bytes or more where a `target` attribute (`target_attribute`) or an
+    /// option bcc only warns about gives it YMM or ZMM registers bcc doesn't
+    /// use, and under GCC's convention a variadic function's named one in YMM,
+    /// since LLVM keeps such a function's named vectors on the stack, as
+    /// Clang's convention says (`CC_X86_64_C` has `CCIfNotVarArg`). An internal
+    /// function whose address nothing takes has only bcc's callers and keeps
+    /// bcc's convention.
+    /// GCC `classify_argument` and `function_arg_64`; System V AMD64 psABI
+    /// §3.2.3.
+    pub(super) fn check_foreign_vectors(
+        &self,
+        named: impl Iterator<Item = TypeId> + Clone,
+        result: TypeId,
+        variadic: bool,
+        target_attribute: bool,
+    ) -> Result<(), LoweringErrorKind> {
+        let types = &self.sema.types;
+        let unknown = self
+            .context
+            .configuration
+            .code_options()
+            .x86_features
+            .unknown_vector_abi();
+        let smallest = if target_attribute { Some(32) } else { unknown };
+        if let Some(smallest) = smallest {
+            for ty in named.clone().chain([result]) {
+                let bytes = super::wide_vectors::widest_vector(types, ty)?;
+                if bytes >= smallest {
+                    return Err(LoweringErrorKind::Unsupported(Construct::ForeignVectorAbi));
+                }
+            }
+        }
+        if variadic && self.rules() == crate::configuration::RuleSet::Gcc {
+            for ty in named {
+                if self.travels_whole(ty)? {
+                    return Err(LoweringErrorKind::Unsupported(
+                        Construct::VariadicNamedVector,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether an argument of type `ty` travels whole in a YMM register when it
+    /// is named and one is free.
+    pub(super) fn travels_whole(&self, ty: TypeId) -> Result<bool, LoweringErrorKind> {
+        let types = &self.sema.types;
+        if !self.avx() || crate::abi::Convention::of(self.target) != crate::abi::Convention::SystemV
+        {
+            return Ok(false);
+        }
+        if super::vectors::shape(types, ty).is_some() {
+            return Ok(self
+                .vector_abi_layout(ty, false, self.tables)?
+                .flags
+                .contains(AggregateFlags::WIDE));
+        }
+        super::wide_vectors::record_travels_whole(types, ty, self.rules())
+    }
+
+    /// `layout`, for a record value of type `ty`, marked if AVX lets the record
+    /// travel whole in a YMM register. A transparent union's first member
+    /// decides for an argument, which `first` names.
+    fn with_wide_record<'s>(
+        &self,
+        ty: TypeId,
+        mut layout: AggregateLayout<'s>,
+    ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
+        if self.avx()
+            && crate::abi::Convention::of(self.target) == crate::abi::Convention::SystemV
+            && super::wide_vectors::record_travels_whole(&self.sema.types, ty, self.rules())?
+        {
+            layout.flags |= AggregateFlags::WIDE;
+            layout.scalars = &[];
+        }
+        Ok(layout)
     }
 
     /// Whose rules the claimed compiler identity follows where GCC's and
@@ -951,7 +1156,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 let layout = if super::vectors::shape(types, result).is_some() {
                     self.vector_abi_layout(result, true, scratch)?
                 } else {
-                    types::object_layout(types, result, self.rules(), scratch)?
+                    self.with_wide_record(
+                        result,
+                        types::object_layout(types, result, self.rules(), scratch)?,
+                    )?
                 };
                 aggregates.push(AggregateParam {
                     index: 0,
@@ -988,12 +1196,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     let layout = if super::vectors::shape(types, parameter).is_some() {
                         self.vector_abi_layout(parameter, false, scratch)?
                     } else {
-                        types::argument_layout(
-                            types,
-                            self.target,
+                        self.with_wide_record(
                             parameter,
-                            self.rules(),
-                            scratch,
+                            types::argument_layout(
+                                types,
+                                self.target,
+                                parameter,
+                                self.rules(),
+                                scratch,
+                            )?,
                         )?
                     };
                     aggregates.push(AggregateParam {
@@ -1044,6 +1255,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         if let Some(&global) = self.statics.get(&binding) {
             return Ok(global);
         }
+        if let Some(weakref) = self.weakref(binding) {
+            return self.weak_object(binding, weakref);
+        }
         let data = self.sema.bindings[binding];
         if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {
             return Err(LoweringErrorKind::MissingFact(
@@ -1075,6 +1289,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             | Some(Symbol::Global(global)) => {
                 if self.generated_globals.contains(&global) {
                     return Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel));
+                }
+                // A `weakref` left this symbol weak, and this use is a
+                // reference of its own.
+                if self.module.global(global).linkage == IrLinkage::Weak
+                    && self.module.global(global).init.is_none()
+                {
+                    self.module.global_mut(global).linkage = self.ir_linkage(binding);
                 }
                 Ok(global)
             },
@@ -1869,12 +2090,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             return self.static_bit_field_literal(bytes, start, field, literal, literal_ty);
         }
         let integer = info.integer.filter(|_| {
-            representation == Repr::Pointer
+            matches!(representation, Repr::Pointer | Repr::Bool)
                 || !matches!(
                     self.sema.types.kind(info.ty),
                     TypeKind::Pointer(_) | TypeKind::Array(..)
                 )
         });
+
         // A wide bit-precise object stores its limbs, its padding bits
         // extended from its width.
         if let Some((width, signed)) = super::wide_bit_int::wide_bit_int(&self.sema.types, ty) {
@@ -2021,6 +2243,16 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 let bits = floats::to_integer(&folded.real, width, signed);
                 Some(bits.ok_or_else(unsupported)?.cast_signed())
             }
+        } else if representation == Repr::Bool
+            && (info.constant == ConstantClass::Address
+                || matches!(
+                    self.sema.types.kind(info.ty),
+                    TypeKind::Pointer(_) | TypeKind::Array(..) | TypeKind::Function { .. }
+                ))
+        {
+            // An address semantic analysis found known not to be null
+            // converts to true, with no relocation (C99 §6.3.1.2p1).
+            Some(1)
         } else {
             None
         };
@@ -2231,7 +2463,10 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let source = expression.source_vectors;
                     let kind = self.sema.types.kind(data.ty);
                     let symbol = if matches!(kind, TypeKind::Function { .. }) {
-                        Symbol::Function(self.function(binding).map_err(|kind| at(kind, source))?)
+                        Symbol::Function(
+                            self.addressed_function(binding)
+                                .map_err(|kind| at(kind, source))?,
+                        )
                     } else if data.duration
                         == crate::translation_phases::semantic_analysis::Duration::Static
                         && (place || matches!(kind, TypeKind::Array(..)))

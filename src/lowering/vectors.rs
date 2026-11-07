@@ -795,11 +795,15 @@ pub(super) fn member_leaf(
 /// to GCC; and without AVX, a 32-byte result comes back in XMM0 and XMM1
 /// from Clang (LLVM legalizes `<8 x float>`) but through memory from GCC.
 /// A 64-byte result, which Clang returns in XMM0-XMM3, takes GCC's memory.
+/// With AVX (`avx`), a 32-byte vector travels whole in a YMM register for both,
+/// as a named argument and as a result, and Clang returns a 64-byte result in
+/// YMM0 and YMM1. A 32-byte vector of `__int128` lanes is memory for both, with
+/// AVX or without.
 ///
 /// Microsoft x64, as Clang passes GNU vectors there (MSVC has none): an
 /// argument by reference, except a lone `float` or `double` in its XMM
 /// register; a result of up to 16 bytes in XMM0 and of 32 bytes in XMM0
-/// and XMM1.
+/// and XMM1, or with AVX in YMM0, and of 64 bytes with AVX in YMM0 and YMM1.
 ///
 /// WebAssembly: Clang passes a lone `float` or `double` as that value and
 /// splits every other vector argument into its lanes, which bcc does not:
@@ -811,16 +815,35 @@ pub(super) fn abi_layout<'s>(
     convention: Convention,
     rules: RuleSet,
     result: bool,
+    avx: bool,
     scratch: &'s Bump,
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
     let shape = shape(types, ty).ok_or(LoweringErrorKind::MissingFact(
         "a vector parameter has no vector type",
     ))?;
+    let gcc = rules == RuleSet::Gcc;
+    let int128 = super::wide_vectors::int128_lanes(types, ty);
+    // What AVX gives a register of its own.
+    let wide = avx
+        && !int128
+        && match convention {
+            | Convention::SystemV => shape.size == 32 || (shape.size == 64 && result && !gcc),
+            | Convention::Win64 => result && (shape.size == 32 || shape.size == 64),
+            | Convention::Wasm32 => false,
+        };
+    if wide {
+        return Ok(AggregateLayout {
+            size:    shape.size,
+            align:   shape.align,
+            flags:   AggregateFlags::VECTOR | AggregateFlags::WIDE,
+            scalars: &[],
+            first:   None,
+        });
+    }
     let one = |ty: Type| -> &'s [AggregateScalar] {
         scratch.alloc_slice_copy(&[AggregateScalar { offset: 0, ty }])
     };
     let lone = |want: Type| shape.count == 1 && shape.lane == Repr::Float { ty: want };
-    let gcc = rules == RuleSet::Gcc;
     let scalars: &'s [AggregateScalar] = match convention {
         | Convention::SystemV => match shape.size {
             | 4 if lone(Type::F32) && gcc => &[],
@@ -830,7 +853,7 @@ pub(super) fn abi_layout<'s>(
             | 1 | 2 | 4 => one(int_type(u32::try_from(8 * shape.size).unwrap_or(32))),
             | 8 => one(Type::F64),
             | 16 => one(Type::F128),
-            | 32 if result && !gcc => scratch.alloc_slice_copy(&[
+            | 32 if result && !gcc && !avx && !int128 => scratch.alloc_slice_copy(&[
                 AggregateScalar {
                     offset: 0,
                     ty:     Type::F128,
@@ -851,7 +874,7 @@ pub(super) fn abi_layout<'s>(
             | 1..=4 => one(Type::F32),
             | 8 => one(Type::F64),
             | 16 => one(Type::I128),
-            | 32 => scratch.alloc_slice_copy(&[
+            | 32 if !avx => scratch.alloc_slice_copy(&[
                 AggregateScalar {
                     offset: 0,
                     ty:     Type::I128,

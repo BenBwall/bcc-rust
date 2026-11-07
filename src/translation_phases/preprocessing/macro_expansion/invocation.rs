@@ -354,7 +354,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         } else if variadic && count == names.len() {
             // C99 §6.10.3p4 requires an argument for `...`; omitting it is
             // an extension (§4p6), which the extension policy governs.
-            if !self.context.configuration.accepts(Feature::MsVaArgs) {
+            if !self.context.configuration.accepts(Feature::MsVaArgs)
+                && !self
+                    .context
+                    .configuration
+                    .silent_extension(Feature::OmittedVariadicArguments)
+            {
                 self.context.preprocessor_extension(
                     Feature::OmittedVariadicArguments,
                     crate::translation_phases::DiagnosticPolicy::Extension,
