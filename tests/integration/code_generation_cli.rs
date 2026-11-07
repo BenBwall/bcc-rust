@@ -1195,7 +1195,7 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
     /// against glibc writes, to stdout and to stderr.
     #[test]
     fn host_library_functions_match_glibc() {
-        interpreter_matches_glibc("host_library.c", &["--interpret-allow-fs"]);
+        interpreter_matches_glibc("host_library.c", &["--interpret-allow-fs", "-w"]);
     }
 
     /// `tests/fixtures/programs/stdio_writes.c` checks when writes reach a
@@ -1206,7 +1206,7 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
     /// must write what the program built against glibc 2.39 to 2.43 writes.
     #[test]
     fn stdio_writes_match_glibc() {
-        interpreter_matches_glibc("stdio_writes.c", &["--interpret-allow-fs"]);
+        interpreter_matches_glibc("stdio_writes.c", &["--interpret-allow-fs", "-w"]);
     }
 
     /// At a normal end, after `main` returns or the program calls `exit`,
@@ -1235,7 +1235,7 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
   {ending} }}
 "
             );
-            let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+            let output = bcc(&source, &["--interpret", "--interpret-allow-fs", "-w"]);
             assert!(
                 matches!(output.status.code(), Some(0 | 134)),
                 "{ending}: {}",
@@ -1321,7 +1321,7 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         }
         interpreter_writes(
             "stdio_modern_glibc.c",
-            &["--interpret-allow-fs"],
+            &["--interpret-allow-fs", "-w"],
             &expected,
             errors,
         );
@@ -1334,7 +1334,7 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
     /// the interpreter must print what glibc prints.
     #[test]
     fn errno_and_its_messages_match_glibc() {
-        interpreter_matches_glibc("errno_cases.c", &["--interpret-allow-fs"]);
+        interpreter_matches_glibc("errno_cases.c", &["--interpret-allow-fs", "-w"]);
     }
 
     /// `tests/fixtures/programs/wide_stdio.c` uses wide streams, `fwide`,
@@ -1343,7 +1343,7 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
     /// print what glibc prints.
     #[test]
     fn wide_streams_match_glibc() {
-        interpreter_matches_glibc("wide_stdio.c", &["--interpret-allow-fs"]);
+        interpreter_matches_glibc("wide_stdio.c", &["--interpret-allow-fs", "-w"]);
     }
 
     /// `tests/fixtures/programs/gamma_functions.c` calls the `lgamma`
@@ -1363,7 +1363,7 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
     /// and print what glibc prints.
     #[test]
     fn wide_stream_positions_match_glibc() {
-        interpreter_matches_glibc("wide_stream_positions.c", &["--interpret-allow-fs"]);
+        interpreter_matches_glibc("wide_stream_positions.c", &["--interpret-allow-fs", "-w"]);
     }
 
     /// glibc aborts a `SEEK_CUR` seek while a wide stream reads its backup
@@ -1383,7 +1383,7 @@ int main(void) { char name[20]; tmpnam(name); FILE *w = fopen(name, \"w\"); fput
   printf(\"before\\n\"); fflush(stdout); fseek(f, 0, 0); ungetwc('Z', f); printf(\"set\\n\");
   fflush(stdout); fseek(f, 0, 1); printf(\"after\\n\"); return 0; }
 ";
-        let output = bcc(source, &["--interpret", "--interpret-allow-fs"]);
+        let output = bcc(source, &["--interpret", "--interpret-allow-fs", "-w"]);
         assert_eq!(output.status.code(), Some(134), "{}", text(&output.stderr));
         assert_eq!(text(&output.stdout), "before\nset\n");
     }
@@ -1458,7 +1458,7 @@ int main(void) {{ const char *name = \"{path_text}\"; int last = -1, fd, e[4], r
   printf(\"%d %d %d %d %d %d\\n\", r[0], e[0], r[1], r[2], r[3], e[3]); return 0; }}
 "
         );
-        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs", "-w"]);
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
         assert_eq!(
             text(&output.stdout),
@@ -1534,7 +1534,7 @@ int main(void) {{ const char *name = \"{path_text}\"; struct stat st; int p[2];
         let stderr = text(&output.stderr);
         assert!(stderr.contains("refused 3 host file accesses"), "{stderr}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept\n");
-        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs", "-w"]);
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
         assert_eq!(text(&output.stdout), "3 0 0 0 0 0 0\n");
         assert!(!path.exists());
@@ -1611,7 +1611,10 @@ unsigned fputwc(wchar_t, FILE *); int fputc(int, FILE *);
             let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
             _ = command
                 .arg(&source)
-                .args(["--interpret", optimize, "--interpret-allow-fs"])
+                // A mode no `case` names draws Clang's warning about the
+                // constant condition, which the reference build leaves out
+                // with `-w` as well.
+                .args(["--interpret", optimize, "--interpret-allow-fs", "-w"])
                 .args(&defines);
             assert_eq!(
                 run(&mut command),
@@ -1731,7 +1734,7 @@ int main(void) {{ const char *name = \"{path_text}\";
             "{stderr}"
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept\n");
-        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs", "-w"]);
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
         assert_eq!(text(&output.stdout), "1 1 0\n");
         assert!(!text(&output.stderr).contains("refused"));
@@ -1769,7 +1772,7 @@ int fclose(FILE *); FILE *freopen(const char *, const char *, FILE *);
             (
                 "fputs(\"A\", stdout); FILE *f = freopen(\"/nonexistent-bcc/x\", \"w\", stdout);
   fputs(f ? \"F\" : \"B\", stderr);",
-                &["--interpret-allow-fs"][..],
+                &["--interpret-allow-fs", "-w"][..],
                 "AB",
             ),
         ] {
@@ -1896,7 +1899,7 @@ FILE *fopen(const char *, const char *); FILE *freopen(const char *, const char 
             ),
         ] {
             let source = format!("{prelude}int main(void) {{ {body} }}\n");
-            let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+            let output = bcc(&source, &["--interpret", "--interpret-allow-fs", "-w"]);
             let stderr = text(&output.stderr);
             assert_eq!(output.status.code(), Some(70), "{body}: {stderr}");
             assert!(stderr.contains("not an open FILE"), "{body}: {stderr}");

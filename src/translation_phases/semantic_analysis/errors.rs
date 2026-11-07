@@ -119,6 +119,8 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
     /// The words are the diagnostic's name.
+    /// C99: §6.8.4.2p5, p. 134; PDF p. 146.
+    SwitchCases(crate::configuration::DiagnosticGroup),
     /// C99: §6.9.1p12, p. 142; PDF p. 154.
     ReturnFlow(crate::configuration::DiagnosticGroup),
     /// The words are the diagnostic's name.
@@ -1126,6 +1128,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::SwitchCases(_) => "this switch may not handle every value",
             | Self::ReturnFlow(_) => "control can reach this point",
             | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
@@ -1339,6 +1342,11 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::Switch
+                    | crate::configuration::DiagnosticGroup::SwitchEnum
+                    | crate::configuration::DiagnosticGroup::SwitchDefault
+                    | crate::configuration::DiagnosticGroup::SwitchOutsideRange
+                    | crate::configuration::DiagnosticGroup::ConstantSwitchCondition
                     | crate::configuration::DiagnosticGroup::ReturnType
                     | crate::configuration::DiagnosticGroup::InvalidNoreturn
                     | crate::configuration::DiagnosticGroup::GccNoreturn
@@ -1753,6 +1761,10 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::SwitchCases(_) => (
+                "switch cases",
+                "C99 §6.8.4.2p5: a value no case matches goes to default, or past the switch",
             ),
             | Self::ReturnFlow(_) => (
                 "control reaches the end of the function",
@@ -2624,7 +2636,9 @@ impl SemanticErrorKind {
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
         match self {
-            | Self::PointerConstraint(group) | Self::ReturnFlow(group) => Some(group),
+            | Self::PointerConstraint(group)
+            | Self::SwitchCases(group)
+            | Self::ReturnFlow(group) => Some(group),
             | Self::UndefinedInternal(group) => group,
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
@@ -2974,6 +2988,7 @@ impl ToDiagnostic for SemanticError {
             self.kind,
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::SwitchCases(_)
                 | SemanticErrorKind::ReturnFlow(_)
         ) {
             self.name.map_or(message, |name| {
