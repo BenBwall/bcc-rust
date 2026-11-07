@@ -1238,6 +1238,29 @@ flag does not serve here: it reports code generation's insertion point, which
 stays after `__builtin_trap` and exists in a loop that never runs. What the walk
 does not read stays silent. Local labels are told apart by their declaration.
 
+#### Comparisons and initializers under `-Wextra`
+
+`sign_compare.rs` implements `-Wsign-compare` and GCC's word for the same
+conversion in a conditional's operand. `missing_fields.rs` implements
+`-Wmissing-field-initializers`, walking a braced list against the types without
+modeling brace elision, so a list that elides braces reports nothing at its
+level. A typedef name is spelled from its canonical type, as everywhere in bcc.
+
+The compilers decide whether a signed operand can be negative differently, so
+each has its own reading: `folded_sign` follows GCC's nonnegative test on its
+folded tree, computing from the operands what `fold` leaves (unary plus, a constant
+condition, a zero product, identical operands that cancel, and clamps that fold
+to `MAX_EXPR`) and what `tree_expr_nonnegative_warnv_p` proves of it (masks moved
+through casts and shifts, a sum only of zero extensions, the bit-counting
+builtins), with `shorten_compare`'s constant results, and `clang_range` ports Clang's `TryGetExprRange` for both operands, with its
+tautology check. Neither warns in an operand that is not evaluated, and Clang not
+in what `reachability.rs` finds unreachable either, where GCC warns. GCC withholds
+the sign warning when a system header spells the operator. It reports a missing
+field at `input_location`, which only the first token of a line and the token
+after a tag's keyword move, so a system header's macro that spells the tag hides
+the warning for the rest of that line, and the initializer's own spelling does
+not matter.
+
 #### Remaining backend and quality work
 
 - Optional fallthrough/missing-return warnings are

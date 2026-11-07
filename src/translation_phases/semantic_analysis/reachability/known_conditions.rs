@@ -184,7 +184,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     ) -> Option<bool> {
         let first = self.bound(left)?;
         let second = self.bound(right)?;
-        if !self.same_operand(first.operand, second.operand)
+        if !self.same_comparison_operand(first.operand, second.operand)
             || self.enumerator_tag(first.constant) != self.enumerator_tag(second.constant)
         {
             return None;
@@ -284,7 +284,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// `Expr::isSameComparisonOperand`, for what can be read twice without
     /// differing: a name, a member of one, and a subscript.
-    fn same_operand(&self, a: &'tu Expression<'tu>, b: &'tu Expression<'tu>) -> bool {
+    fn same_comparison_operand(&self, a: &'tu Expression<'tu>, b: &'tu Expression<'tu>) -> bool {
         let a = Self::without_parentheses(a);
         let b = Self::without_parentheses(b);
         match (a.kind, b.kind) {
@@ -311,7 +311,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     base_expression: second,
                     member: second_member,
                 },
-            ) => first_member.name == second_member.name && self.same_operand(first, second),
+            ) =>
+                first_member.name == second_member.name
+                    && self.same_comparison_operand(first, second),
             | (
                 E::Binary {
                     operator: B::Subscript,
@@ -324,8 +326,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     right_expression: second_index,
                 },
             ) =>
-                self.same_operand(first_base, second_base)
-                    && self.same_operand(first_index, second_index),
+                self.same_comparison_operand(first_base, second_base)
+                    && self.same_comparison_operand(first_index, second_index),
             | (E::Constant(_), E::Constant(_)) => {
                 let value = self.expression_info(a).integer.and_then(Integer::to_i128);
                 value.is_some()

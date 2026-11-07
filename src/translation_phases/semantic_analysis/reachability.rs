@@ -172,12 +172,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         group: DiagnosticGroup,
         kind: SemanticErrorKind,
         site: SourceVectors,
+        name: Option<StringCacheId>,
     ) {
         if self.tainted {
             return;
         }
         let Some(function) = self.functions.current else {
-            self.group_diagnostic(group, kind, site, None, None);
+            self.group_diagnostic(group, kind, site, name, None);
             return;
         };
         self.reachability.deferred.push(DeferredWarning {
@@ -186,7 +187,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             group,
             kind,
             site,
-            name: None,
+            name,
         });
     }
 

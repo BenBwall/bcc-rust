@@ -126,13 +126,24 @@ struct WriteSite {
     clang_compound: bool,
 }
 
-/// Working state for the warnings this module implements.
+/// Working state for the warnings this module implements, and whether
+/// the other warnings an identifier-free check serves are on.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag gates an independent group of warnings."
+)]
 pub(super) struct UnusedState<'s> {
     /// Whether a warning that needs identifier uses recorded is on.
     pub(super) tracking: bool,
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether `-Wsign-compare` is on.
+    pub(super) sign_compare: bool,
+    /// Whether `-Wmissing-field-initializers` is on.
+    pub(super) missing_fields: bool,
+    /// Where GCC's `input_location` last moved to a tag.
+    pub(super) last_tag: Option<SourceVectors>,
     variables: ArenaVec<'s, Usage>,
     file_scope: ArenaMap<'s, StringCacheId, Usage>,
     writes: ArenaMap<'s, usize, WriteSite>,
@@ -182,6 +193,9 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            sign_compare: on(&[G::SignCompare]),
+            missing_fields: on(&[G::MissingFieldInitializers]),
+            last_tag: None,
             variables: ArenaVec::new_in(scratch),
             file_scope: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             writes: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -1226,7 +1240,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let Some(comparison) = comparison {
                 self.unused_rule(comparison, site, None);
             } else {
-                self.warn_if_reachable(anchor, rule.group(), SemanticErrorKind::Unused(rule), site);
+                self.warn_if_reachable(
+                    anchor,
+                    rule.group(),
+                    SemanticErrorKind::Unused(rule),
+                    site,
+                    None,
+                );
             }
         }
     }
@@ -1371,6 +1391,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     rule.group(),
                     SemanticErrorKind::Unused(rule),
                     Self::operator_site(left),
+                    None,
                 );
             }
         } else if self.is_void_or_unknown(left) {
@@ -1491,7 +1512,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// access, or for GCC `really_atomic_lvalue`, whose read is a call to
     /// `__atomic_load` unless a `register` object's address cannot be taken.
     /// C99: §6.7.3p6, p. 109; PDF p. 121; C11: §6.2.6.1p9, p. 45; PDF p. 63.
-    fn is_effectful_read(&self, e: &'tu Expression<'tu>) -> bool {
+    pub(super) fn is_effectful_read(&self, e: &'tu Expression<'tu>) -> bool {
         let info = self.expression_info(e);
         if matches!(info.category, ValueCategory::Rvalue) {
             return false;
@@ -1500,7 +1521,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             || (matches!(self.types.nodes[info.ty.index], TypeKind::Atomic(_)) && !info.register)
     }
 
-    const fn is_assignment(operator: B) -> bool {
+    pub(super) const fn is_assignment(operator: B) -> bool {
         matches!(
             operator,
             B::Assignment

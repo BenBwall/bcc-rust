@@ -801,6 +801,457 @@ int still(void) { return promoted_still(); }
         assert_readings("unused-readings", UNUSED_READINGS);
     }
 
+    /// `-Wsign-compare` and `-Wmissing-field-initializers` read their settings
+    /// at the operator or initializer in both compilers, though Clang waits
+    /// for the end of the function to know the comparison can run. GCC rejects
+    /// a pragma inside an expression or an initializer.
+    #[test]
+    fn comparison_and_field_warnings_read_the_settings_each_compiler_reads() {
+        assert_readings("extra-readings", COMPARE_READINGS);
+    }
+
+    /// Clang reads a comparison's settings at the operator and a missing
+    /// field's at the closing brace, which pragmas inside them can tell.
+    #[test]
+    fn clang_reads_inside_a_comparison_and_an_initializer() {
+        let ignored = "#pragma GCC diagnostic ignored \"-Wsign-compare\"\n";
+        let flags = ["-Wall", "-Wextra"];
+        let header = "int f(int a, unsigned b) {\n  return a";
+        let before_operator = format!("{header}\n{ignored}  < b;\n}}\n");
+        let after_operator = format!("{header} <\n{ignored}  b;\n}}\n");
+        for (source, expected) in [
+            (before_operator.as_str(), &[][..]),
+            (after_operator.as_str(), &["2 warning"][..]),
+        ] {
+            let reported = compile("clang-inside", "--clang-mode", &flags, source);
+            assert_eq!(reported, expected, "{source}");
+        }
+        let ignored = "#pragma GCC diagnostic ignored \"-Wmissing-field-initializers\"\n";
+        let header = "struct S { int a; int b; };\nstruct S s = {\n  1\n";
+        let before_brace = format!("{header}{ignored}}};\n");
+        let reported = compile("clang-inside", "--clang-mode", &flags, &before_brace);
+        assert!(reported.is_empty(), "{reported:?}");
+    }
+
+    const COMPARE_READINGS: &[Reading] = &[
+        // A comparison reads at the operator in both, though Clang waits for
+        // the end of the function.
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+  return a < b;
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+  return a < b;
+#pragma GCC diagnostic error \"-Wsign-compare\"
+}
+",
+            flags:  &[],
+            gcc:    &[],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+  return a < b;
+}
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+  return a < b;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+#pragma GCC diagnostic error \"-Wsign-compare\"
+  return a < b;
+}
+",
+            flags:  &[],
+            gcc:    &["3 error"],
+            clang:  &["3 error"],
+        },
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+#pragma GCC diagnostic warning \"-Wsign-compare\"
+  return a < b;
+}
+",
+            flags:  &["-Wall", "-Wextra", "-Werror"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+#pragma GCC diagnostic warning \"-Wsign-compare\"
+  return a < b;
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+}
+",
+            flags:  &["-Wno-sign-compare"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // Around the statement only.
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+  return a < b;
+#pragma GCC diagnostic pop
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // A macro around the statement.
+        Reading {
+            source: "\
+#define QUIET(...) _Pragma(\"GCC diagnostic push\") _Pragma(\"GCC diagnostic ignored \
+                     \\\"-Wsign-compare\\\"\") __VA_ARGS__ _Pragma(\"GCC diagnostic pop\")
+int f(int a, unsigned b) {
+  QUIET(return a < b;)
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // A condition is read before its body.
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+#pragma GCC diagnostic warning \"-Wsign-compare\"
+  if (a < b)
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+    return 1;
+  return 0;
+}
+",
+            flags:  &[],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        Reading {
+            source: "\
+void f(unsigned b) {
+#pragma GCC diagnostic warning \"-Wsign-compare\"
+  for (int i = 0; i < b; i++)
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+    ;
+}
+",
+            flags:  &[],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // Unreachable: Clang never reports it.
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+  return 0;
+#pragma GCC diagnostic error \"-Wsign-compare\"
+  return a < b;
+}
+",
+            flags:  &[],
+            gcc:    &["4 error"],
+            clang:  &[],
+        },
+        // GCC's `?:` reads at the operand it converts.
+        Reading {
+            source: "\
+unsigned f(int c, int a, unsigned b) {
+#pragma GCC diagnostic error \"-Wsign-compare\"
+  return c ? a : b;
+}
+",
+            flags:  &[],
+            gcc:    &["3 error"],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+unsigned f(int c, int a, unsigned b) {
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+  return c ? a : b;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+unsigned f(int c, int a, unsigned b) {
+  return c ? a : b;
+#pragma GCC diagnostic ignored \"-Wsign-compare\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &[],
+        },
+        // `-w` silences what a pragma turned on.
+        Reading {
+            source: "\
+int f(int a, unsigned b) {
+#pragma GCC diagnostic error \"-Wsign-compare\"
+  return a < b;
+}
+",
+            flags:  &["-w"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // `-Wextra` in a pragma holds it, unlike `-Wall` and `-Wunused`.
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wextra\"
+int f(int a, unsigned b) {
+  return a < b;
+}
+",
+            flags:  &[],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wextra\"
+int f(int a, unsigned b) {
+  return a < b;
+}
+",
+            flags:  &[],
+            gcc:    &["3 error"],
+            clang:  &["3 error"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wextra\"
+int f(int a, unsigned b) {
+  return a < b;
+}
+",
+            flags:  &["-Wall", "-Wextra", "-Werror"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // GCC's `ignored` says nothing about what it holds.
+        Reading {
+            source: "\
+#pragma GCC diagnostic ignored \"-Wextra\"
+int f(int a, unsigned b) {
+  return a < b;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wall\"
+int f(int a, unsigned b) {
+  return a < b;
+}
+",
+            flags:  &[],
+            gcc:    &[],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wall\"
+int f(int a, unsigned b) {
+  return a < b;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wunused\"
+int f(int a, unsigned b) {
+  return a < b;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // A missing field reads at the initializer, not at the end of the unit.
+        Reading {
+            source: "\
+struct S { int a; int b; };
+struct S s = { 1 };
+#pragma GCC diagnostic ignored \"-Wmissing-field-initializers\"
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic ignored \"-Wmissing-field-initializers\"
+struct S s = { 1 };
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic error \"-Wmissing-field-initializers\"
+struct S s = { 1 };
+",
+            flags:  &[],
+            gcc:    &["3 error"],
+            clang:  &["3 error"],
+        },
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic warning \"-Wmissing-field-initializers\"
+struct S s = { 1 };
+",
+            flags:  &["-Wall", "-Wextra", "-Werror"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic warning \"-Wmissing-field-initializers\"
+struct S s = { 1 };
+",
+            flags:  &["-Wno-missing-field-initializers"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic warning \"-Wmissing-field-initializers\"
+struct S s = { 1 };
+#pragma GCC diagnostic ignored \"-Wmissing-field-initializers\"
+",
+            flags:  &[],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // Around the declaration only.
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wmissing-field-initializers\"
+struct S s = { 1 };
+#pragma GCC diagnostic pop
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // A macro around the declaration.
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#define QUIET(...) _Pragma(\"GCC diagnostic push\") _Pragma(\"GCC diagnostic ignored \
+                     \\\"-Wmissing-field-initializers\\\"\") __VA_ARGS__ _Pragma(\"GCC diagnostic \
+                     pop\")
+QUIET(struct S s = { 1 };)
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // At block scope, the end of the function does not matter.
+        Reading {
+            source: "\
+struct S { int a; int b; };
+void f(void) {
+  struct S s = { 1 };
+  (void)s;
+#pragma GCC diagnostic ignored \"-Wmissing-field-initializers\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // `-Wextra` in a pragma holds it too.
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic warning \"-Wextra\"
+struct S s = { 1 };
+",
+            flags:  &[],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic error \"-Wextra\"
+struct S s = { 1 };
+",
+            flags:  &[],
+            gcc:    &["3 error"],
+            clang:  &["3 error"],
+        },
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic ignored \"-Wextra\"
+struct S s = { 1 };
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+struct S { int a; int b; };
+#pragma GCC diagnostic warning \"-Wall\"
+struct S s = { 1 };
+",
+            flags:  &[],
+            gcc:    &[],
+            clang:  &[],
+        },
+    ];
+
     const UNUSED_READINGS: &[Reading] = &[
         // A pragma after the declaration, before the brace: GCC only.
         Reading {

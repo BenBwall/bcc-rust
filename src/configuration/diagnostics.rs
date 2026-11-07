@@ -263,6 +263,12 @@ impl CompilerConfiguration {
     /// [`Self::diagnostic_severity`] asks when it reads them.
     pub(crate) fn with_extra_warnings(mut self, enabled: bool) -> Self {
         self.warning_options[DiagnosticGroup::Extra as usize].apply_all(enabled);
+        for group in [
+            DiagnosticGroup::SignCompare,
+            DiagnosticGroup::MissingFieldInitializers,
+        ] {
+            self.warning_options[group as usize].apply_all(enabled);
+        }
         if self.identity.rules() == super::RuleSet::Clang {
             for group in [
                 DiagnosticGroup::UnusedParameter,
@@ -331,7 +337,8 @@ impl CompilerConfiguration {
                 // which a pragma naming `-Wunused` does not say, but it sets
                 // their class.
                 | DiagnosticGroup::Unused =>
-                    configuration = configuration.with_pragma_extra_class(class),
+                    configuration =
+                        configuration.with_pragma_class_of(DiagnosticGroup::PARAMETERS, class),
                 // `warning` also takes back an error, as `-Wno-error=` does
                 // not for this child.
                 | DiagnosticGroup::UnusedVariable if class == PragmaClass::Warning => {
@@ -362,18 +369,18 @@ impl CompilerConfiguration {
     /// line does ([`Self::with_extra_warnings`]).
     fn with_pragma_extra(self, class: PragmaClass) -> Self {
         self.with_extra_warnings(class != PragmaClass::Ignored)
-            .with_pragma_extra_class(class)
+            .with_pragma_class_of(DiagnosticGroup::UNDER_EXTRA, class)
     }
 
-    /// Sets whether the groups under `-Wextra` are errors, without enabling
-    /// them: what enables them is the option's own business.
-    fn with_pragma_extra_class(mut self, class: PragmaClass) -> Self {
+    /// Sets whether `groups` are errors, without enabling them: what enables
+    /// them is the option's own business.
+    fn with_pragma_class_of(mut self, groups: &[DiagnosticGroup], class: PragmaClass) -> Self {
         let error = match class {
             | PragmaClass::Ignored => return self,
             | PragmaClass::Warning => false,
             | PragmaClass::Error => true,
         };
-        for &group in DiagnosticGroup::UNDER_EXTRA {
+        for &group in groups {
             self.warning_options[group as usize].set(WarningSettings::ERROR, Some(error));
         }
         self
@@ -870,6 +877,11 @@ diagnostic_groups! {
     /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and
     /// `-Werror=` options unless they have their own.
     Conversion => Some("conversion"), Ignored, false;
+    /// A signed operand the usual arithmetic conversions make unsigned, under
+    /// `-Wextra`.
+    SignCompare => Some("sign-compare"), Ignored, false;
+    /// A braced list that leaves later members zero, under `-Wextra`.
+    MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds
@@ -927,6 +939,8 @@ enum GroupDefault {
 }
 
 impl DiagnosticGroup {
+    /// The groups GCC's `-Wunused` holds only with `-Wextra` too.
+    const PARAMETERS: &[Self] = &[Self::UnusedParameter, Self::UnusedButSetParameter];
     /// The groups bcc models under `-Wall`, as a pragma naming it reaches
     /// them.
     const UNDER_ALL: &[Self] = &[
@@ -939,7 +953,12 @@ impl DiagnosticGroup {
     ];
     /// The groups bcc models under `-Wextra`, as a pragma naming it reaches
     /// them.
-    const UNDER_EXTRA: &[Self] = &[Self::UnusedParameter, Self::UnusedButSetParameter];
+    const UNDER_EXTRA: &[Self] = &[
+        Self::SignCompare,
+        Self::MissingFieldInitializers,
+        Self::UnusedParameter,
+        Self::UnusedButSetParameter,
+    ];
     /// The groups `-Wunused` and so `-Wall` hold. `-Wunused-parameter` and
     /// `-Wunused-but-set-parameter` are `-Wextra`'s.
     pub(crate) const UNUSED: &[Self] = &[
@@ -1088,6 +1107,8 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitFunctionDeclaration
                 | DiagnosticGroup::ImplicitLibraryFunction
                 | DiagnosticGroup::ImplicitInt
+                | DiagnosticGroup::SignCompare
+                | DiagnosticGroup::MissingFieldInitializers
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
                 | DiagnosticGroup::UnusedVariable

@@ -75,8 +75,10 @@ mod implicit;
 mod inference;
 mod initializers;
 mod main_function;
+mod missing_fields;
 mod predefined;
 mod reachability;
+mod sign_compare;
 mod statements;
 mod traversal;
 mod unused;
@@ -813,6 +815,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | TypeSpecifiers::Enum(enumeration) => enumeration.attributes,
                     | _ => None,
                 };
+                if self.unused.missing_fields {
+                    self.note_tag_specifier(s);
+                }
                 self.check_extension_chain(attributes);
                 self.attribute_chain_operands(attributes);
             },

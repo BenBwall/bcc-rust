@@ -405,9 +405,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.expression_info(left_expression),
                     self.expression_info(right_expression),
                 );
+                self.check_compared_signs(e, operator, left_expression, right_expression);
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
                 info = self.type_conditional(e, c);
+                if self.unused.sign_compare && matches!(e.kind, E::Conditional(_)) {
+                    self.check_conditional_sign(c.then_expression, c.else_expression);
+                }
             },
             | E::SizeofType(name) | E::AlignofType(name) => {
                 let ty = self

@@ -703,6 +703,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.cast_to(value, self.expression_info(expression).ty)
     }
 
+    /// Whether the floating `value` becomes an integer zero when it is
+    /// converted to `ty`.
+    /// C99: §6.3.1.4p1, p. 43; PDF p. 55; §6.3.1.2p1, p. 43; PDF p. 55.
+    pub(in crate::translation_phases::semantic_analysis) fn floating_converts_to_zero(
+        &self,
+        value: Floating,
+        ty: TypeId,
+    ) -> bool {
+        matches!(
+            self.cast_to(Value::Floating(value), ty),
+            Some(Value::Integer(integer)) if integer.is_zero()
+        )
+    }
+
     /// [`Self::cast_value`] to type `ty`, as a conversion by assignment.
     fn cast_to(&self, value: Value, ty: TypeId) -> Option<Value> {
         let ty = self.types.non_atomic(ty);

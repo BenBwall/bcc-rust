@@ -3271,6 +3271,55 @@ mod tests {
         }
     }
 
+    /// GCC also withholds its comparison and initializer warnings when a
+    /// system header spells the operator or the closing brace; Clang goes by
+    /// the invocation.
+    #[test]
+    fn extra_warnings_follow_each_compilers_system_macro_rule() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sys")).unwrap();
+        directory.write(
+            "sys/sys.h",
+            "#define LT(a, b) ((a) < (b))\n#define CHOOSE(c, a, b) ((c) ? (a) : (b))\n#define \
+             INIT(v) struct S v = {1}\n#define WRAP(x) x\nstruct S { int a; int b; };\n",
+        );
+        for (source, in_gcc, in_clang) in [
+            ("int f(int a, unsigned b) { return LT(a, b); }", false, true),
+            (
+                "unsigned f(int c, int a, unsigned b) { return CHOOSE(c, a, b); }",
+                false,
+                false,
+            ),
+            ("void f(void) { INIT(v); (void)v; }", false, true),
+            (
+                "int f(int a, unsigned b) { return WRAP(a < b); }",
+                true,
+                true,
+            ),
+            (
+                "int f(int a, unsigned b) { return WRAP(a) < WRAP(b); }",
+                true,
+                true,
+            ),
+            ("struct S s = { WRAP(1) };", true, true),
+        ] {
+            directory.write("use.c", &format!("#include <sys.h>\n{source}\n"));
+            for (mode, warns) in [("--gcc-mode", in_gcc), ("--clang-mode", in_clang)] {
+                let output = directory.bcc(
+                    mode,
+                    &["-isystem", "sys", "-fsyntax-only", "-Wextra", "use.c"],
+                );
+                succeeds(&output);
+                assert_eq!(
+                    stderr(&output).contains("warning"),
+                    warns,
+                    "{mode} {source}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
     /// Plain `_Complex` means `_Complex double` to GCC and Clang: Clang
     /// warns, GCC only under `-pedantic`, and `-pedantic-errors` refuses it
     /// in both (gcc.c-torture/execute/20070614-1.c).
