@@ -196,6 +196,11 @@ impl CompilerConfiguration {
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
             | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
             | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
+            // Clang's `-Wconversion` holds these groups; GCC's holds none of
+            // them, so its options leave them alone.
+            | DiagnosticGroup::Conversion if clang => DiagnosticGroup::CLANG_CONVERSION,
+            | DiagnosticGroup::ImplicitIntFloatConversion =>
+                &[DiagnosticGroup::ImplicitConstIntFloatConversion],
             | _ => &[],
         };
         for &child in children {
@@ -485,21 +490,7 @@ impl CompilerConfiguration {
     /// default errors, just as Clang does.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 permits warning diagnostics.
     pub(crate) fn diagnostic_severity(self, group: DiagnosticGroup) -> Option<ErrorSeverity> {
-        let mut option = self.warning_options[group as usize];
-        if option == WarningSettings::DEFAULT
-            && group == DiagnosticGroup::ImplicitConstIntFloatConversion
-        {
-            option = self.warning_options[DiagnosticGroup::ImplicitIntFloatConversion as usize];
-        }
-        // Clang's `-Wconversion` holds these groups; a child without an
-        // option of its own takes the parent's. GCC's `-Wconversion` holds
-        // none of Clang's groups, so its options leave them alone.
-        if option == WarningSettings::DEFAULT
-            && group.converts()
-            && self.float_conversion_rules() == super::RuleSet::Clang
-        {
-            option = self.warning_options[DiagnosticGroup::Conversion as usize];
-        }
+        let option = self.warning_options[group as usize];
         let permerror =
             (group.default() == GroupDefault::Permerror).then(|| self.permerror_default(group));
         let enabled = match permerror {
@@ -1018,19 +1009,18 @@ impl DiagnosticGroup {
         Self::UnusedComparison,
     ];
 
-    /// Whether Clang's `-Wconversion` holds this group.
-    const fn converts(self) -> bool {
-        matches!(
-            self,
-            Self::NullConversion
-                | Self::NonLiteralNullConversion
-                | Self::PointerBoolConversion
-                | Self::ConstantConversion
-                | Self::LiteralConversion
-                | Self::ImplicitConstIntFloatConversion
-                | Self::ImplicitIntFloatConversion
-        )
-    }
+    /// The groups Clang's `-Wconversion` holds, which each of its options
+    /// sets in turn, so that a later option outranks an earlier one whether
+    /// it names the parent or the child.
+    const CLANG_CONVERSION: &[Self] = &[
+        Self::NullConversion,
+        Self::NonLiteralNullConversion,
+        Self::PointerBoolConversion,
+        Self::ConstantConversion,
+        Self::LiteralConversion,
+        Self::ImplicitConstIntFloatConversion,
+        Self::ImplicitIntFloatConversion,
+    ];
 
     /// Whether only GCC has the group, so that Clang reports its option as
     /// unknown.
