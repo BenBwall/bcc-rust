@@ -2687,6 +2687,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Only a cast to `void *` itself makes one: `(const void *)0` is a null
+    /// pointer of a qualified type, as GCC, Clang and TCC read it.
     /// C99: §6.3.2.3p3, p. 47; PDF p. 59.
     /// C23: §6.3.2.4p1-2, p. 51; PDF p. 64 includes null pointer values.
     pub(in crate::translation_phases::semantic_analysis) fn null_pointer_constant(
@@ -2695,7 +2697,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> bool {
         self.nullptr_type(info.ty)
             || (info.ice && info.integer.is_some_and(Integer::is_zero))
-            || (matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(target) if matches!(self.types.nodes[target.index], TypeKind::Scalar(Scalar::Void)))
+            || (matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(target) if target.qualifiers.is_empty() && matches!(self.types.nodes[target.index], TypeKind::Scalar(Scalar::Void)))
                 && info.constant == ConstantClass::Address
                 && info.integer.is_some_and(Integer::is_zero))
     }

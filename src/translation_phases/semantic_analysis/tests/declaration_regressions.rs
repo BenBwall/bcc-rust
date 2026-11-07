@@ -4,6 +4,7 @@ use super::*;
 use crate::configuration::{
     CStandard,
     CompilerConfiguration,
+    CompilerIdentity,
     ExtensionPolicy,
 };
 
@@ -558,4 +559,38 @@ fn anonymous_member_designators_preserve_index_order_and_offsets() {
             assert_eq!(leaf.path.iter().collect::<Vec<_>>(), [1, 1, 0]);
         },
     );
+}
+
+/// C17 (DR 423) declares a function to return the unqualified version of its
+/// result type. GCC applies that from C11 on and TCC always, so a
+/// redeclaration that differs only in result qualifiers is compatible
+/// there; Clang and GCC's C99 keep the qualifiers and refuse it.
+#[test]
+fn result_qualifiers_follow_each_compiler_and_revision() {
+    let source = "const int f(void); int f(void) { return 0; }\nvolatile int g(void); int g(void) \
+                  { return 0; }\nint *restrict h(void); int *h(void) { return 0; \
+                  }\n_Static_assert(__builtin_types_compatible_p(__typeof__(f), int(void)), \"\");";
+    for (identity, standard, accepted) in [
+        (CompilerIdentity::Tcc, CStandard::C99, true),
+        (CompilerIdentity::Tcc, CStandard::C17, true),
+        (CompilerIdentity::Gcc, CStandard::C99, false),
+        (CompilerIdentity::Gcc, CStandard::C11, true),
+        (CompilerIdentity::Gcc, CStandard::C23, true),
+        (CompilerIdentity::Clang, CStandard::C17, false),
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_compiler_identity(identity),
+            |context, _| {
+                let errors = context.take_pending_errors();
+                assert_eq!(
+                    errors.is_empty(),
+                    accepted,
+                    "{identity:?} {standard:?}: {errors:?}"
+                );
+            },
+        );
+    }
 }
