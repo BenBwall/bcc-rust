@@ -13,3 +13,9 @@ sema-unused-typedefs-gcc.c:8:32: warning: typedef 'C' locally defined but not us
 sema-unused-typedefs-gcc.c:9:30: warning: typedef 'A' locally defined but not used [-Wunused-local-typedefs]
     9 | void f8(int n) { typedef int A[n]; }
       |                              ^
+sema-unused-typedefs-gcc.c:20:13: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+   20 | typedef int T;
+      |             ^
+sema-unused-typedefs-gcc.c:25:17: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+   25 |   { typedef int T; }
+      |                 ^

@@ -854,8 +854,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
     }
 
-    /// Reports a typedef a block declares and nothing names. GCC asks the
-    /// settings at the end of the block, as for a variable.
+    /// Reports a typedef a block declares and nothing names. Unlike a
+    /// variable's, GCC's warning asks the settings at the typedef: it reports
+    /// at the end of the function through `warning_at`, which looks the
+    /// pragmas up at the location it is given, so a `push` and `pop` around
+    /// the declaration silence it.
     /// GCC: `maybe_warn_unused_local_typedefs`; Clang:
     /// `Sema::DiagnoseUnusedDecl`.
     /// C99: §6.7.7, p. 123; PDF p. 135.
@@ -870,8 +873,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             UnusedRule::ClangLocalTypedef
         };
-        let settings_at = self.scope_end_or(self.scope, name.source_vectors);
-        self.unused_rule_read_at(rule, name.source_vectors, Some(name.name), settings_at);
+        self.unused_rule_read_at(
+            rule,
+            name.source_vectors,
+            Some(name.name),
+            name.source_vectors,
+        );
     }
 
     /// Notes a type specifier that names the typedef `binding`.

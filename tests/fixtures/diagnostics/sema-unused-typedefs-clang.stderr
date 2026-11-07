@@ -16,4 +16,10 @@ sema-unused-typedefs-clang.c:9:30: warning: unused typedef 'A' [-Wunused-local-t
 sema-unused-typedefs-clang.c:11:44: warning: unused typedef 'T' [-Wunused-local-typedef]
    11 | void g1(void) { typedef int T; typedef int T; }
       |                                            ^
-6 warnings generated.
+sema-unused-typedefs-clang.c:20:13: warning: unused typedef 'T' [-Wunused-local-typedef]
+   20 | typedef int T;
+      |             ^
+sema-unused-typedefs-clang.c:25:17: warning: unused typedef 'T' [-Wunused-local-typedef]
+   25 |   { typedef int T; }
+      |                 ^
+8 warnings generated.
