@@ -2252,6 +2252,8 @@ mod tests {
             ("(-(-((_BitInt(200))1<<198)*2))<0", true, true),
             ("((_BitInt(200))1<<-1)==0", false, true),
             ("((_BitInt(200))1>>-1)==2", false, true),
+            ("(1>>-((_BitInt(256))1<<200))==(-2147483647-1)", false, true),
+            ("(1<<-((_BitInt(256))1<<200))==0", false, true),
             ("((unsigned _BitInt(200))1<<200)==0", true, false),
             ("((_BitInt(8))127+(_BitInt(8))1)==-128", true, true),
             ("((_BitInt(8))1<<8)==0", true, false),
