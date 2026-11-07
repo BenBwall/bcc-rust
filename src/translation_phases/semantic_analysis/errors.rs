@@ -121,6 +121,22 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.7.8p21, p. 127; PDF p. 139.
     MissingFieldInitializer,
+    /// A format string that does not match its call, in the group's words,
+    /// which are the diagnostic's name; the earlier place, when there is
+    /// one, is the one `note` names.
+    /// C99: §7.19.6.1p2,p9, pp. 274, 280; PDF pp. 286, 292;
+    /// §7.19.6.2p2,p13, pp. 282, 287; PDF pp. 294, 299.
+    Format(
+        crate::configuration::DiagnosticGroup,
+        super::format::FormatNote,
+    ),
+    /// A GNU `format` attribute whose operands do not fit its function, in
+    /// the compiler's words, which are the diagnostic's name.
+    /// GNU extension: GCC manual, "Common Function Attributes", `format`.
+    FormatAttribute,
+    /// GCC: a GNU `format` attribute without three operands, the count it
+    /// has; the words are the diagnostic's name.
+    FormatAttributeCount(u8),
     /// C99: §6.9.2p3, p. 143; PDF p. 155.
     IncompleteInternalTentative,
     /// C99: §6.9p3,p5, p. 140; PDF p. 152.
@@ -1093,6 +1109,21 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::MissingFieldInitializer => "later members are left zero",
+            | Self::Format(group, _) => {
+                use crate::configuration::DiagnosticGroup as G;
+                match group {
+                    | G::FormatExtraArgs => "no conversion uses this argument",
+                    | G::FormatInsufficientArgs => "no argument for this conversion",
+                    | G::FormatZeroLength => "empty format string",
+                    | G::FormatSecurity | G::FormatNonliteral => "not a string literal",
+                    | G::FormatInvalidSpecifier => "no such conversion",
+                    | G::FormatContainsNul => "null character in the format",
+                    | G::MissingFormatAttribute => "format passed on",
+                    | G::GccAttributes | G::IgnoredAttributes | G::GccCompat => "this attribute",
+                    | _ => "does not match the format",
+                }
+            },
+            | Self::FormatAttribute | Self::FormatAttributeCount(_) => "this attribute",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
                 "still incomplete at the end of the translation unit",
@@ -1291,6 +1322,20 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
+                    | crate::configuration::DiagnosticGroup::Format
+                    | crate::configuration::DiagnosticGroup::Format2
+                    | crate::configuration::DiagnosticGroup::FormatExtraArgs
+                    | crate::configuration::DiagnosticGroup::FormatZeroLength
+                    | crate::configuration::DiagnosticGroup::FormatContainsNul
+                    | crate::configuration::DiagnosticGroup::FormatSecurity
+                    | crate::configuration::DiagnosticGroup::FormatNonliteral
+                    | crate::configuration::DiagnosticGroup::FormatInvalidSpecifier
+                    | crate::configuration::DiagnosticGroup::FormatInsufficientArgs
+                    | crate::configuration::DiagnosticGroup::GccAttributes
+                    | crate::configuration::DiagnosticGroup::MissingFormatAttribute
+                    | crate::configuration::DiagnosticGroup::FormatPedantic
+                    | crate::configuration::DiagnosticGroup::FormatTypeConfusion
+                    | crate::configuration::DiagnosticGroup::GccCompat
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
                     | crate::configuration::DiagnosticGroup::UnusedVariable
@@ -1691,6 +1736,16 @@ impl SemanticErrorKind {
                 "comparison of integers of different signs",
                 "C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand \
                  unsigned, so a negative value compares as a large one",
+            ),
+            | Self::FormatAttribute | Self::FormatAttributeCount(_) => (
+                "invalid format attribute",
+                "GNU format attribute: the format operand must name a character pointer \
+                 parameter, and the first data operand `...` or zero",
+            ),
+            | Self::Format(..) => (
+                "format string does not match its arguments",
+                "C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, \
+                 or whose argument does not have the correct type, has undefined behavior",
             ),
             | Self::MissingFieldInitializer => (
                 "missing field initializer",
@@ -2531,7 +2586,7 @@ impl SemanticErrorKind {
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
         match self {
-            | Self::PointerConstraint(group) => Some(group),
+            | Self::PointerConstraint(group) | Self::Format(group, _) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
@@ -2844,7 +2899,11 @@ impl ToDiagnostic for SemanticError {
             )
         } else if matches!(
             self.kind,
-            SemanticErrorKind::SignCompare | SemanticErrorKind::MissingFieldInitializer
+            SemanticErrorKind::SignCompare
+                | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::Format(..)
+                | SemanticErrorKind::FormatAttribute
+                | SemanticErrorKind::FormatAttributeCount(_)
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
@@ -2899,7 +2958,11 @@ impl ToDiagnostic for SemanticError {
             if let Some(group) = group.and_then(crate::configuration::DiagnosticGroup::name) {
                 suffixed = true;
                 // GCC's option takes a level, and it says so.
-                let level = if self.kind == SemanticErrorKind::Unused(UnusedRule::GccFileConstant) {
+                let level = if self.kind == SemanticErrorKind::Unused(UnusedRule::GccFileConstant)
+                    || (self.kind.group() == Some(crate::configuration::DiagnosticGroup::Format)
+                        && context.configuration.diagnostic_format()
+                            == crate::configuration::DiagnosticFormat::Gcc)
+                {
                     "="
                 } else {
                     ""
@@ -2975,6 +3038,9 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FlexibleArrayDesignator =>
                     "initialized flexible array member is here",
                 | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
+                | SemanticErrorKind::Format(_, note) => note.words(context, arena),
+                | SemanticErrorKind::FormatAttributeCount(count) =>
+                    format_in!(arena, "expected 3, found {count}"),
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);

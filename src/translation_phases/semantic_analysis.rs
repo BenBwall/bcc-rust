@@ -70,6 +70,7 @@ mod declarations;
 mod emission;
 mod expressions;
 mod facts;
+mod format;
 mod functions;
 mod implicit;
 mod inference;
@@ -555,6 +556,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.record_bound_origins(bounds, BoundEvaluationSite::Declaration(id));
                 if let Some(binding) = binding {
                     let subject = self.declaration_subject(binding, d, s, initialized);
+                    self.attributes.declaration_start = Some(s.source_vectors);
                     self.declaration_attributes(subject, s.extensions, Some(d));
                     self.declaration_dll(subject, s, initialized);
                 }

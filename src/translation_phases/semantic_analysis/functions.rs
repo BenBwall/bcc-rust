@@ -165,6 +165,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 binding,
                 definition: true,
             };
+            self.attributes.declaration_start = Some(f.declaration_specifiers.source_vectors);
             self.declaration_attributes(
                 subject,
                 f.declaration_specifiers.extensions,

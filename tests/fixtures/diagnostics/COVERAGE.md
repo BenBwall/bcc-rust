@@ -730,6 +730,7 @@ pinned by the `.args` sidecars.
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
 | `MissingFieldInitializer` | [GCC](sema-missing-fields-gcc.c), [Clang](sema-missing-fields-clang.c), [GCC with a system macro](sema-missing-fields-system-gcc.c) |
+| `Format`, `FormatAttribute` | [GCC](sema-format-gcc.c) under `-Wall -Wformat=2`, [Clang](sema-format-clang.c) by default: argument types, too few and too many arguments, an invalid conversion, a non-literal and an empty format, a null character, concatenation, a conditional, flags, `scanf`, and the attribute's own checks. Lines match GCC 14.2 and Clang 23.1 but for the order of GCC's two warnings on line 10 |
 | `Unused` | GCC's words: [variables and parameters](sema-unused-variables-gcc.c), [file scope](sema-unused-file-scope-gcc.c), [labels](sema-unused-label-gcc.c), [values](sema-unused-value-gcc.c); Clang's: [variables and parameters](sema-unused-variables-clang.c), [file scope](sema-unused-file-scope-clang.c), [labels](sema-unused-label-clang.c), [values](sema-unused-value-clang.c); [`-Werror`](sema-unused-werror-clang.c) |
 | `InlineInternalReference` | [inline-reference](sema3-inline-reference.c) |
 | `InlineStaticObject` | [inline-object](sema3-inline-object.c) |

@@ -3541,6 +3541,122 @@ mod tests {
         }
     }
 
+    /// The format checks of each compiler and the groups its options turn
+    /// on: GCC's `-Wall` is its `-Wformat`, whose groups report only while
+    /// it is on and which `-Wformat=2` extends with `-Wformat-security`;
+    /// Clang reports the whole group by default, each part on its own.
+    #[test]
+    fn format_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int printf(const char *, ...);\nvoid f(long l, char *s, int i) {\n    \
+             printf(\"%d\\n\", l);\n    printf(\"%d\\n\", i, i);\n    printf(\"\", i);\n    \
+             printf(s);\n    printf(\"%d %d\\n\", i);\n    printf(\"%y\\n\");\n    \
+             printf(\"a\\0b\");\n}\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            let text = stderr(&output);
+            let mut flags: Vec<String> = text
+                .lines()
+                .filter(|line| line.starts_with("a.c:"))
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.dedup();
+            flags.join(" ")
+        };
+        let gcc = "format-contains-nul format-extra-args format-zero-length format=";
+        let clang = "format format-extra-args format-insufficient-args format-invalid-specifier \
+                     format-security format-zero-length";
+        // Each row was measured against GCC 14.2 and Clang 23.1.
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], ""),
+            ("--gcc-mode", &["-Wall"][..], gcc),
+            ("--gcc-mode", &["-Wformat"][..], gcc),
+            (
+                "--gcc-mode",
+                &["-Wformat=2"][..],
+                "format-contains-nul format-extra-args format-security format-zero-length format=",
+            ),
+            ("--gcc-mode", &["-Wformat=2", "-Wformat"][..], gcc),
+            ("--gcc-mode", &["-Wall", "-Wno-format"][..], ""),
+            ("--gcc-mode", &["-Wno-format", "-Wall"][..], ""),
+            ("--gcc-mode", &["-Wformat-security"][..], ""),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Wformat-security"][..],
+                "format-contains-nul format-extra-args format-security format-zero-length format=",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wno-format-extra-args", "-Wall"][..],
+                "format-contains-nul format-zero-length format=",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Werror=format"][..],
+                "error=format-contains-nul error=format-extra-args error=format-zero-length \
+                 error=format=",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Werror", "-Wno-error=format"][..],
+                "error=format-contains-nul error=format-extra-args error=format-zero-length \
+                 format=",
+            ),
+            ("--clang-mode", &[][..], clang),
+            ("--clang-mode", &["-Wno-format"][..], ""),
+            ("--clang-mode", &["-Wformat=0"][..], ""),
+            ("--clang-mode", &["-Wno-format", "-Wall"][..], clang),
+            ("--clang-mode", &["-Wall", "-Wno-format"][..], ""),
+            ("--clang-mode", &["-Wformat=2"][..], clang),
+            (
+                "--clang-mode",
+                &["-Wno-format", "-Wformat-security"][..],
+                "format-security",
+            ),
+            (
+                "--clang-mode",
+                &["-Wno-format-security"][..],
+                "format format-extra-args format-insufficient-args format-invalid-specifier \
+                 format-zero-length",
+            ),
+            (
+                "--clang-mode",
+                &["-Werror=format"][..],
+                "error,-Wformat error,-Wformat-extra-args error,-Wformat-insufficient-args \
+                 error,-Wformat-invalid-specifier error,-Wformat-security \
+                 error,-Wformat-zero-length",
+            ),
+            ("--clang-mode", &["-Werror", "-Wno-error=format"][..], clang),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
+        // Each compiler's own groups are unknown to the other.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wformat-invalid-specifier", "-fsyntax-only", "a.c"],
+        );
+        assert!(!output.status.success(), "{}", stderr(&output));
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-Wformat-contains-nul", "-fsyntax-only", "a.c"],
+        );
+        assert!(
+            stderr(&output).contains("unknown warning option '-Wformat-contains-nul'"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// Plain `_Complex` means `_Complex double` to GCC and Clang: Clang
     /// warns, GCC only under `-pedantic`, and `-pedantic-errors` refuses it
     /// in both (gcc.c-torture/execute/20070614-1.c).

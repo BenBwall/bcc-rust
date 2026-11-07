@@ -46,6 +46,7 @@ mod call_diagnostics;
 mod catalog;
 mod dll;
 mod entities;
+mod formats;
 mod functions;
 mod jumps;
 mod layout;

@@ -2104,6 +2104,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Keeps the initializer of `binding` when it is a `const`,
     /// non-volatile object, whose value Clang's evaluator may read.
     /// C99: §6.7.3 paragraph 3, p. 108; PDF p. 120.
+    /// The initializer of the `const` non-volatile array or structure
+    /// `binding`, if it has one.
+    pub(in crate::translation_phases::semantic_analysis) fn constant_aggregate(
+        &self,
+        binding: usize,
+    ) -> Option<&'tu Initializer<'tu>> {
+        self.functions
+            .emission
+            .constant_aggregates
+            .get(&binding)
+            .copied()
+    }
+
+    /// The initializer of the `const` non-volatile scalar object `binding`,
+    /// if it has one.
+    pub(in crate::translation_phases::semantic_analysis) fn constant_scalar(
+        &self,
+        binding: usize,
+    ) -> Option<&'tu Expression<'tu>> {
+        self.functions
+            .emission
+            .constant_initializers
+            .get(&binding)
+            .copied()
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn record_constant_initializer(
         &mut self,
         binding: usize,

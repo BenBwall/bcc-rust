@@ -1664,8 +1664,8 @@ impl State<'_> {
                 self.eval_method = true;
             }
         }
-        // Clang's own floating-point options, which bcc implements and GCC
-        // does not know.
+        // Clang's own floating-point and warning options, which bcc
+        // implements and GCC does not know.
         let clang_only = self.compiler == Compiler::Gcc
             && matches!(
                 text,
@@ -1677,6 +1677,16 @@ impl State<'_> {
                     | "-fno-approx-func"
                     | "-Wmain-return-type"
                     | "-Wno-main-return-type"
+                    | "-Wformat-invalid-specifier"
+                    | "-Wno-format-invalid-specifier"
+                    | "-Wformat-insufficient-args"
+                    | "-Wno-format-insufficient-args"
+                    | "-Wformat-pedantic"
+                    | "-Wno-format-pedantic"
+                    | "-Wformat-type-confusion"
+                    | "-Wno-format-type-confusion"
+                    | "-Wgcc-compat"
+                    | "-Wno-gcc-compat"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an

@@ -187,6 +187,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::NoCallerSaved => self.no_caller_saved_attribute(subject, attribute),
                 | Rule::Naked => self.naked_attribute(subject, attribute),
                 | Rule::Nonnull => self.nonnull_attribute(subject, specifier, attribute),
+                | Rule::Format => self.format_attribute(subject, attribute),
+                | Rule::FormatArg => self.format_arg_attribute(subject, attribute),
                 // On a typedef it names the type, which type construction
                 // checks; anything else declared is not a union type.
                 | Rule::TransparentUnion if !matches!(subject, Subject::Typedef(_)) => self.error(
@@ -1796,6 +1798,9 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     pub(super) pending_dll: ArenaVec<'s, (DllStorage, SourceVectors)>,
     /// Each entity's DLL storage so far.
     pub(super) dll: ArenaMap<'s, EntityId, DllState>,
+    /// Where the declaration whose attributes apply begins, which GCC
+    /// reports a `format` attribute's faults at.
+    pub(in crate::translation_phases::semantic_analysis) declaration_start: Option<SourceVectors>,
 }
 
 impl<'tu, 's> AttributeState<'tu, 's> {
@@ -1826,6 +1831,7 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             initializing_jumps: ArenaVec::new_in(scratch),
             pending_dll:        ArenaVec::new_in(scratch),
             dll:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            declaration_start:  None,
         }
     }
 
