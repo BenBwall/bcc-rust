@@ -111,12 +111,10 @@ fn with_options(
     let configuration =
         crate::configuration::CompilerConfiguration::default().with_compiler_identity(compiler);
     let mut code = configuration.code_options();
-    code.x86_features = crate::target::X86Features::for_compiler(
+    code.x86_features = crate::target::X86Features::from_options(
+        options.iter().copied(),
         compiler != crate::configuration::CompilerIdentity::Gcc,
     );
-    for option in options {
-        code.x86_features.apply(option);
-    }
     configuration.with_code_options(code)
 }
 

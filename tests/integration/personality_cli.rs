@@ -3726,7 +3726,7 @@ mod tests {
                 mode == "--clang-mode"
             );
             assert_eq!(
-                has(&["-mavx", "-mno-avx"], "__XSAVE__"),
+                has(&["-mavx2", "-mno-avx"], "__XSAVE__"),
                 mode == "--gcc-mode"
             );
             let assembly = |options: &[&str]| {
@@ -3824,24 +3824,41 @@ mod tests {
         }
     }
 
-    /// Clang's driver reads only the last of `-msse4.2`, `-msse4` and
-    /// `-mno-sse4.2`, where it stands.
+    /// An option with a later opposite doesn't count at all in either compiler:
+    /// `-mavx -mno-avx` leaves no SSE4.2, while `-mavx2 -mno-avx` does, and an
+    /// earlier `-mno-avx` turned around by `-mavx` doesn't stop `-march=` from
+    /// turning on what needs AVX.
     #[test]
-    fn clang_reads_the_last_sse4_2_option() {
+    fn a_later_opposite_option_cancels_the_earlier() {
         let directory = Directory::new();
         directory.write("m.c", "");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let has = |options: &[&str], name: &str| {
+                let args = [options, &["-E", "-dM", "m.c"]].concat();
+                stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
+            };
+            assert!(!has(&["-mavx", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(has(&["-mavx2", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-mssse3", "-mno-ssse3"], "__SSE3__"), "{mode}");
+            assert!(
+                has(&["-mno-avx", "-mavx", "-march=x86-64-v3"], "__FMA__"),
+                "{mode}"
+            );
+            assert!(!has(&["-msse4.2", "-mno-sse4.2"], "__SSE4_1__"), "{mode}");
+            assert!(has(&["-mno-sse4.1", "-msse4.2"], "__SSE4_1__"), "{mode}");
+            assert!(!has(&["-msse4.2", "-mno-sse4.1"], "__SSE4_1__"), "{mode}");
+        }
+        // Clang reads `-msse4` as `-msse4.2`, GCC as an option of its own.
         let has = |mode: &str, options: &[&str], name: &str| {
             let args = [options, &["-E", "-dM", "m.c"]].concat();
             stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
         };
-        let options = ["-msse4.2", "-mno-sse4.2"];
-        assert!(!has("--clang-mode", &options, "__SSE4_1__"));
-        assert!(has("--gcc-mode", &options, "__SSE4_1__"));
-        assert!(has(
+        assert!(!has(
             "--clang-mode",
-            &["-mno-sse4.1", "-msse4.2"],
+            &["-msse4", "-mno-sse4.2"],
             "__SSE4_1__"
         ));
+        assert!(has("--gcc-mode", &["-msse4", "-mno-sse4.2"], "__SSE4_1__"));
     }
 
     /// With AVX, 32-byte vectors and their wrappers travel in YMM registers, so

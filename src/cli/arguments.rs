@@ -411,26 +411,16 @@ impl Cli {
     /// and the last of `-f[no-]strict-volatile-bitfields`,
     /// `-f[no-]function-sections` and `-f[no-]data-sections`.
     fn code_options(&self) -> CodeOptions {
-        let mut x86_features = crate::target::X86Features::for_compiler(
-            CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
-        );
         // WebAssembly has no such features: `report_x86_options_on_wasm`
         // refuses them.
-        if !self.target.is_wasm() {
-            // Clang's driver reads only the last of `-msse4.2`, `-msse4` and
-            // `-mno-sse4.2`, where it stands.
-            let sse4_2 = |option: &str| matches!(option, "-msse4.2" | "-msse4" | "-mno-sse4.2");
-            let last = self
-                .language_option
-                .iter()
-                .rposition(|option| sse4_2(option));
-            let gcc = CompilerIdentity::from(self.compiler_identity) == CompilerIdentity::Gcc;
-            for (index, option) in self.language_option.iter().enumerate() {
-                if gcc || !sse4_2(option) || Some(index) == last {
-                    x86_features.apply(option);
-                }
-            }
-        }
+        let x86_features = if self.target.is_wasm() {
+            crate::target::X86Features::NONE
+        } else {
+            crate::target::X86Features::from_options(
+                self.language_option.iter().map(std::ops::Deref::deref),
+                CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
+            )
+        };
         CodeOptions {
             x86_features,
             hardening: self.hardening(),

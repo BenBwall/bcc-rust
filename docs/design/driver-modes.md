@@ -198,8 +198,9 @@ the instructions. Each turns on what it needs and `-mno-` turns off what needs i
 and LLVM hears `-avx` as well as `+avx2`, since the processor `-march=` names may have
 what the command line took away. POPCNT and CRC32 come with SSE4.2 by default and
 aren't needed by it, so `-mavx -mno-popcnt` keeps AVX. AVX needs XSAVE in GCC, while
-Clang's `-mno-xsave` leaves AVX on; Clang also reads only the last of `-msse4.2`,
-`-msse4` and `-mno-sse4.2`. The last `-march=` names defaults, which replace the
+Clang's `-mno-xsave` leaves AVX on. An option with a later opposite doesn't count at all
+in either compiler, so `-mavx -mno-avx` turns nothing on while `-mavx2 -mno-avx` leaves
+SSE4.2. The last `-march=` names defaults, which replace the
 previous `-march=`'s, and an explicit option outranks them wherever it stands:
 `-mno-avx -march=x86-64-v3` has no AVX, and `-mavx2 -march=x86-64` keeps AVX2.
 Random combinations of these options defined the same feature macros as GCC 13, GCC

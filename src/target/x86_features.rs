@@ -132,11 +132,34 @@ impl X86Features {
     };
 
     /// No options yet, under GCC's rules or Clang's.
-    pub(crate) const fn for_compiler(clang: bool) -> Self {
+    const fn for_compiler(clang: bool) -> Self {
         Self {
             clang,
             ..Self::NONE
         }
+    }
+
+    /// The features of a command line's `options`. An option with a later
+    /// opposite doesn't count at all, as both compilers read them, so `-mavx
+    /// -mno-avx` turns nothing on while `-mavx2 -mno-avx` leaves SSE4.2.
+    /// GCC's `prune_options` and Clang's driver.
+    pub(crate) fn from_options<'o>(
+        options: impl Iterator<Item = &'o str> + Clone,
+        clang: bool,
+    ) -> Self {
+        let mut features = Self::for_compiler(clang);
+        for (index, option) in options.clone().enumerate() {
+            let overridden = opposite_family(option, clang).is_some_and(|family| {
+                options
+                    .clone()
+                    .skip(index + 1)
+                    .any(|later| opposite_family(later, clang) == Some(family))
+            });
+            if !overridden {
+                features.apply(option);
+            }
+        }
+        features
     }
 
     /// Reads one option, if it is one of these. A later `-march=` replaces an
@@ -309,6 +332,24 @@ impl X86Features {
             .filter(move |(index, _)| enabled & (1 << index) != 0)
             .map(|(_, feature)| feature)
     }
+}
+
+/// What a table option and its opposite have in common, so that the later one
+/// overrides the earlier. `-msse4` and `-mno-sse4` aren't opposites in GCC; in
+/// Clang they are `-msse4.2` and `-mno-sse4.1`.
+fn opposite_family(option: &str, clang: bool) -> Option<(&str, bool)> {
+    let name = option.strip_prefix("-m")?;
+    let (negative, feature) = match name.strip_prefix("no-") {
+        | Some(feature) => (true, feature),
+        | None => (false, name),
+    };
+    _ = find(feature)?;
+    Some(match (feature, clang, negative) {
+        | ("sse4", true, true) => ("sse4.1", false),
+        | ("sse4", true, false) => ("sse4.2", false),
+        | ("sse4", false, _) => ("sse4", negative),
+        | _ => (feature, false),
+    })
 }
 
 /// The features that need any of `bits`.
