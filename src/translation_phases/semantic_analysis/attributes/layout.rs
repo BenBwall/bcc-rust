@@ -197,6 +197,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }) {
                 continue;
             }
+            self.note_attribute_argument(argument.expression);
             self.work
                 .push(super::super::Work::Expression(argument.expression));
         }

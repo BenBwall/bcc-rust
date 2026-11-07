@@ -1195,9 +1195,75 @@ Unmodeled `__builtin_*` calls receive opaque function results rather
 than invented implicit-int return types; explicit visible prototypes still govern
 known calls. Opaque results suppress dependent return-conversion errors.
 
+#### Unused entities and values
+
+`unused.rs` implements `-Wunused-variable`, `-Wunused-parameter`,
+`-Wunused-but-set-variable`, `-Wunused-but-set-parameter`, `-Wunused-label`,
+`-Wunused-function`, `-Wunused-const-variable`, `-Wunused-value` and Clang's
+`-Wunused-comparison` and `-Wunused-but-set-global`, in the GCC and Clang
+words and on each compiler's own count: GCC's used and read flags, Clang's
+references minus discarded assignments, so `a++;` is a read in GCC and only a
+set in Clang. `-Wall` and `-Wunused` hold these groups; `-Wextra` holds the
+parameter groups, in GCC only together with `-Wunused`. A discarded value warns
+by default in Clang alone. Scope exit reports variables and the end of the
+translation unit reports file-scope objects and functions. With every group that
+needs them off no uses are recorded. `-Wunused-local-typedefs` is accepted and
+reports nothing, as are `const`/`pure` calls under `-Wunused-value`,
+`-Wunused-result`, and a value in a statement expression's last statement,
+which Clang reads.
+
+An attribute's identifier arguments count as references, so a `cleanup` or
+`malloc` function is used; a string names its target for `ifunc` and, in GCC,
+`alias` and `weakref`. GCC also withholds these warnings when a system header
+spells the token they point at, as a system macro's body does, its label warning
+aside; Clang goes by the invocation. A `sizeof` of a variable length array and a
+cast to a variably modified type have an effect for GCC, and so does reading an
+atomic lvalue that is not `register`, which is a call to `__atomic_load`; an
+operand of `&` is not read. A comma's left operand takes the same checks as a
+statement. Clang's discarded-value
+warnings, comparisons aside, stay out of what `Analyzer::evaluation_inhibited`
+says is not evaluated and of what `reachability.rs` finds unreachable.
+
+`reachability.rs` answers `DiagIfReachable` and `DiagRuntimeBehavior`: a warning
+that asks waits until its function is analyzed, and then a walk in execution
+order reports it if it reaches the warning's expression. The walk follows what
+Clang's CFG builder does. `reachability/known_conditions.rs` holds
+`tryEvaluateBool`, with the evaluator ignoring side effects (`(g(), 0)`, `x && 0`)
+and the tautologies it recognizes (`x & 0`, `(x & 8) == 1`, `x == 1 && x == 2`). A
+constant switch reaches only its matching case, a switch whose labels cover its
+enumeration leaves `default` and its end no edge, an unreferenced label starts
+nothing, and `__builtin_trap` and `__builtin_assume(0)` end the path. A simple
+assignment runs its right operand first and a compound one its left. The `dead`
+flag does not serve here: it reports code generation's insertion point, which
+stays after `__builtin_trap` and exists in a loop that never runs. What the walk
+does not read stays silent. Local labels are told apart by their declaration.
+
+#### Comparisons and initializers under `-Wextra`
+
+`sign_compare.rs` implements `-Wsign-compare` and GCC's word for the same
+conversion in a conditional's operand. `missing_fields.rs` implements
+`-Wmissing-field-initializers`, walking a braced list against the types without
+modeling brace elision, so a list that elides braces reports nothing at its
+level. A typedef name is spelled from its canonical type, as everywhere in bcc.
+
+The compilers decide whether a signed operand can be negative differently, so
+each has its own reading: `folded_sign` follows GCC's nonnegative test on its
+folded tree, computing from the operands what `fold` leaves (unary plus, a constant
+condition, a zero product, identical operands that cancel, and clamps that fold
+to `MAX_EXPR`) and what `tree_expr_nonnegative_warnv_p` proves of it (masks moved
+through casts and shifts, a sum only of zero extensions, the bit-counting
+builtins), with `shorten_compare`'s constant results, and `clang_range` ports Clang's `TryGetExprRange` for both operands, with its
+tautology check. Neither warns in an operand that is not evaluated, and Clang not
+in what `reachability.rs` finds unreachable either, where GCC warns. GCC withholds
+the sign warning when a system header spells the operator. It reports a missing
+field at `input_location`, which only the first token of a line and the token
+after a tag's keyword move, so a system header's macro that spells the tag hides
+the warning for the rest of that line, and the initializer's own spelling does
+not matter.
+
 #### Remaining backend and quality work
 
-- Optional fallthrough/missing-return warnings and unused-label warnings are
+- Optional fallthrough/missing-return warnings are
   intentionally deferred. There is no CFG or claim of reachability analysis;
   infinite loops, noreturn attributes, exhaustive switches and goto cycles
   therefore receive no speculative fallthrough warnings.

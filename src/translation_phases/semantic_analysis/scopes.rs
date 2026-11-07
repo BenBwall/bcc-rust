@@ -67,6 +67,9 @@ impl Analyzer<'_, '_, '_> {
 
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
     pub(super) fn leave(&mut self) {
+        if self.unused.tracking {
+            self.report_unused_in_scope();
+        }
         let mut next = self.scope_entries[self.scope].head.get();
         while let Some(link) = next {
             next = link.next;

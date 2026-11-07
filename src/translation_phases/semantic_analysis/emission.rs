@@ -50,7 +50,10 @@ mod switches;
 mod labels;
 
 pub(super) use branches::Position;
-pub(super) use folding::floating_integer;
+pub(super) use folding::{
+    Value,
+    floating_integer,
+};
 pub(super) use labels::expression_children;
 use rustc_hash::FxBuildHasher;
 
@@ -126,12 +129,14 @@ pub(super) struct State<'tu, 's> {
     /// The values the evaluator found, by expression address, with the
     /// depth of a query that `folding::DEPTH` cut short and the weak
     /// horizon of one that read a weak name.
-    folded: ArenaMap<'s, usize, folding::Memo<Option<folding::Value>>>,
+    folded: ArenaMap<'s, usize, folding::Memo<Option<Value>>>,
     /// A conditional's arm boundaries and insertion states, resolved after
     /// its result type distinguishes scalar from complex/aggregate emission.
     conditional_marks: ArenaMap<'s, usize, [(usize, Option<usize>, usize); 3]>,
     /// The evaluation in progress was cut short by `folding::DEPTH`.
     depth_cut: bool,
+    /// [`Analyzer::evaluate_ignoring_side_effects`] is evaluating.
+    ignore_side_effects: bool,
     /// Whether an expression holds a label, by address.
     labeled_expressions: ArenaMap<'s, usize, bool>,
     /// Whether Clang's evaluator may fold an expression differently from
@@ -186,7 +191,7 @@ pub(super) struct State<'tu, 's> {
     plan_covers: ArenaMap<'s, usize, folding::Memo<Option<folding::Cover<'s>>>>,
     /// Cached constant-array strlen queries, including failed scans, with
     /// the same depth and weak-horizon dependencies as other folds.
-    array_lengths: ArenaMap<'s, (usize, u64, super::TypeId), folding::Memo<Option<folding::Value>>>,
+    array_lengths: ArenaMap<'s, (usize, u64, super::TypeId), folding::Memo<Option<Value>>>,
     /// The elements of each string literal the evaluator reads, by literal
     /// and encoding.
     literal_units: ArenaMap<'s, (u32, u8), &'s [u32]>,
@@ -244,6 +249,7 @@ impl<'s> State<'_, 's> {
             folded: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             conditional_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             depth_cut: false,
+            ignore_side_effects: false,
             refolds: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             discarded_results: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             aggregate_initializer_arms: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

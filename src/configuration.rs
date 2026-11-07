@@ -197,6 +197,8 @@ pub(crate) struct CompilerConfiguration {
     /// none.
     default_pack: u32,
     suppress_warnings: bool,
+    /// Under `-fsyntax-only`, no code will be generated.
+    syntax_only: bool,
     /// A language mode keeps the extensions GCC's and Clang's drivers keep in
     /// it, which `-std=c99` does not turn off. See
     /// [`CompilerConfiguration::with_compiler_extensions`].

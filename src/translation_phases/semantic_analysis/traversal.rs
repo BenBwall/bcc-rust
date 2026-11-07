@@ -75,6 +75,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 if operator == BinaryOperator::Comma {
                     self.discard_expression_result(left_expression);
+                    if self.unused.tracking {
+                        self.note_discarded(left_expression);
+                    }
                 }
                 let live = match operator {
                     | BinaryOperator::LogicalAnd => Some(true),
@@ -100,10 +103,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(
                         self.functions.dead,
                     )));
+                    self.work
+                        .push(Work::FunctionWork(FunctionWork::RestoreSkippedOperand(
+                            self.functions.skipped_operand,
+                        )));
                 }
                 self.work.push(Work::Expression(right_expression));
                 if let Some(live) = live.filter(|_| !branch) {
                     self.dead_arm(left_expression, live, Some(right_expression));
+                }
+                // Before the dead-arm work runs, as this is a stack: its limit
+                // on optional locals applies to the work right after it, the
+                // right operand.
+                if let Some(live) = live {
+                    self.work.push(Work::FunctionWork(FunctionWork::DecidedOperand(
+                        left_expression,
+                        live,
+                    )));
+                }
+                if live.is_some() && !branch {
                     self.begin_condition_references(left_expression);
                 }
                 self.work.push(Work::Expression(left_expression));
@@ -199,6 +217,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .push(Work::FunctionWork(FunctionWork::RestoreOrphan(
                         self.functions.emission.orphan,
                     )));
+                // Only the selected association is evaluated, which is not
+                // known until they are all typed; warnings about evaluation
+                // err toward silence in any of them.
+                self.work
+                    .push(Work::FunctionWork(FunctionWork::RestoreSkippedOperand(
+                        self.functions.skipped_operand,
+                    )));
+                self.functions.skipped_operand = true;
                 // Marks around each operand let the selection skip the
                 // references code generation does not emit.
                 for association in g.associations.iter().rev() {
@@ -353,6 +379,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 if new_scope {
                     self.enter(ScopeKind::Block);
+                    self.note_scope_end(s.source_vectors);
                     self.work.push(Work::PopScope);
                     if let Some(outside) = outside {
                         self.work
@@ -432,7 +459,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(condition) = condition {
                     self.dead_statement_arm(s, condition, true, Some(then_statement));
                 }
-                self.work.push(Work::Condition(condition_expression, false));
+                self.work.push(Work::Condition(
+                    condition_expression,
+                    false,
+                    s.source_vectors,
+                ));
                 if let Some(condition) = condition {
                     self.begin_condition_references(condition);
                     self.branch_condition(condition);
@@ -472,7 +503,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )));
                 self.work
                     .push(Work::FunctionWork(FunctionWork::RestoreDead(true)));
-                self.work.push(Work::Condition(condition_expression, true));
+                self.work.push(Work::Condition(
+                    condition_expression,
+                    true,
+                    s.source_vectors,
+                ));
                 if let Some(condition) = super::statements::slot_expression(condition_expression) {
                     self.begin_condition_references(condition);
                 }
@@ -498,19 +533,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.functions.dead,
                 )));
                 if matches!(s.kind, S::DoWhile { .. }) {
-                    self.work.push(Work::Condition(condition_expression, false));
+                    self.work.push(Work::Condition(
+                        condition_expression,
+                        false,
+                        s.source_vectors,
+                    ));
                     self.expression_slot(condition_expression);
                     self.work
                         .push(Work::StatementWork(W::LoopBody(s, body_statement)));
                 } else {
                     self.work
                         .push(Work::StatementWork(W::LoopBody(s, body_statement)));
-                    self.work.push(Work::Condition(condition_expression, false));
+                    self.work.push(Work::Condition(
+                        condition_expression,
+                        false,
+                        s.source_vectors,
+                    ));
                     self.expression_slot(condition_expression);
                 }
             },
             | S::For(f) => {
                 if self.enter_statement_block(false) {
+                    self.note_scope_end(s.source_vectors);
                     self.work.push(Work::PopScope);
                 }
                 if let Some(outside) = outside {
@@ -526,11 +570,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(e) = f.iteration_expression {
                     if let ExpressionSlot::Parsed(expression) = e {
                         self.discard_expression_result(expression);
+                        self.discarded_value(expression);
                     }
                     self.expression_slot(e);
                 }
                 if let Some(e) = f.condition_expression {
-                    self.work.push(Work::Condition(e, false));
+                    self.work.push(Work::Condition(e, false, s.source_vectors));
                     self.expression_slot(e);
                 }
                 if let Some(initializer) = f.initializer {
@@ -542,6 +587,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | ForInitializer::Expression(e) => {
                             if let ExpressionSlot::Parsed(expression) = e {
                                 self.discard_expression_result(expression);
+                                self.discarded_value(expression);
                             }
                             self.expression_slot(e);
                         },
@@ -598,6 +644,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let ExpressionSlot::Parsed(expression) = e {
                     if !value_statement {
                         self.discard_expression_result(expression);
+                        self.discarded_statement_value(s, expression);
                     }
                     self.begin_expression_statement(s, expression);
                 }

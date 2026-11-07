@@ -1,0 +1,4 @@
+sema-unused-label-clang.c:2:5: warning: unused label 'unused' [-Wunused-label]
+    2 |     unused:
+      |     ^~~~~~
+1 warning generated.
