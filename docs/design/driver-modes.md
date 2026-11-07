@@ -202,6 +202,10 @@ the program loads and chooses the function. Elsewhere it is an unknown attribute
 as in Clang. The native back end and the interpreter have no such thing, so a call
 there is an undefined symbol.
 
+`-pg` on Linux makes each function call `mcount` and links the profiling startup
+file, so a run writes `gmon.out` for `gprof`, and `no_instrument_function` keeps a
+function out. `-p` still warns.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`

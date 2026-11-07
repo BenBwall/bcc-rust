@@ -65,6 +65,8 @@ pub(crate) struct EntityAttributes<'tu> {
     /// GNU `weak`: a definition yields to a strong one at link time; an
     /// undefined declaration may stay undefined, with a null address.
     pub(crate) weak:                bool,
+    /// GCC's `weakref`, whose target may be missing at run time.
+    pub(crate) weak_reference:      bool,
     /// GNU `section("name")`, from the declaration that wrote it.
     pub(crate) section:             Option<&'tu str>,
     /// GNU `used`: emit the definition even if nothing references it.
@@ -93,6 +95,8 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) declared_alignment:  bool,
     /// GNU `noinline`/`noipa` or `always_inline` on a function.
     pub(crate) inlining:            Inlining,
+    /// GNU `no_instrument_function` on a function.
+    pub(crate) no_instrument:       bool,
     /// GNU `no_stack_protector` on a function.
     pub(crate) no_stack_protector:  bool,
     /// GNU `no_sanitize` naming `AddressSanitizer` on a function.

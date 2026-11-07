@@ -1711,6 +1711,7 @@ impl<'id> Session<'id> {
         function: Val<'id>,
         no_stack_protector: bool,
         no_sanitize: crate::ir::NoSanitize,
+        no_instrument: bool,
     ) {
         let hardening = self.code.hardening;
         let protector = match hardening.stack_protector {
@@ -1732,8 +1733,11 @@ impl<'id> Session<'id> {
         if hardening.stack_clash {
             self.string_attribute(function, "probe-stack", "inline-asm");
         }
-        if hardening.keep_frame_pointer {
+        if hardening.keep_frame_pointer || hardening.profile {
             self.string_attribute(function, "frame-pointer", "all");
+        }
+        if hardening.profile && !no_instrument {
+            self.string_attribute(function, "instrument-function-entry-inlined", "mcount");
         }
     }
 

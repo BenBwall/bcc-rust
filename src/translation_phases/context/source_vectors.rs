@@ -314,6 +314,47 @@ impl Context<'_> {
             .unwrap_or_else(|| self.first_source_vector(source))
     }
 
+    /// Whether a macro expansion produced the first token of `source`, from
+    /// its replacement list or from an argument: GCC's
+    /// `from_macro_expansion_at`. `source` must not be empty.
+    pub(crate) fn produced_by_macro_expansion(&self, source: SourceVectors) -> bool {
+        let (arena, start) = SourceArena::decode(source);
+        self.expansion_starts[arena as usize].get(start).is_some()
+    }
+
+    /// Whether a macro's replacement list, not its argument or the file,
+    /// wrote the first token of `source`. `source` must not be empty.
+    pub(crate) fn written_by_macro_body(&self, source: SourceVectors) -> bool {
+        self.invocation_site(source).is_some()
+    }
+
+    /// Whether the first token of `source` is spelled in a system header, the
+    /// question GCC asks of a warning's location rather than where the
+    /// outermost macro was invoked (`linemap_location_in_system_header_p`):
+    /// a system macro's body counts wherever it is invoked, and an argument
+    /// the user wrote does not.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    pub(crate) fn spelled_in_system_header(&self, source: SourceVectors) -> bool {
+        source.length() != 0 && self.in_system_header(self.first_source_vector(source))
+    }
+
+    /// The last vector of `source`, which belongs to its last token. An empty
+    /// range stays empty.
+    pub(crate) fn last_source_vector(source: SourceVectors) -> SourceVectors {
+        if source.length() == 0 {
+            return source;
+        }
+        let (arena, start) = SourceArena::decode(source);
+        let end = start + source.length();
+        arena.encode(end - 1, end)
+    }
+
+    /// Whether `source`'s expansion location is in the main source file, not
+    /// in a file it includes. `source` must not be empty.
+    pub(crate) fn in_main_file(&self, source: SourceVectors) -> bool {
+        self.physical_source_file(self.expansion_location(source).source_file_index) == 0
+    }
+
     /// The outermost invocation that produced the first token of `source`,
     /// unless a file spells that token.
     fn invocation_site(&self, source: SourceVectors) -> Option<&SourceVector> {

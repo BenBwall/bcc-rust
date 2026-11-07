@@ -155,6 +155,7 @@ fn declare_items<'t>(
                         && crate::builtins::returns_twice(name.text_name(scratch)?));
                 module.function_mut(func).inlining = header.inlining;
                 module.function_mut(func).no_stack_protector = header.no_stack_protector;
+                module.function_mut(func).no_instrument = header.no_instrument;
                 module.function_mut(func).no_sanitize = header.no_sanitize;
                 module.function_mut(func).entry = header.entry;
                 if let Some(external) = header.inline_copy_of {
@@ -567,6 +568,7 @@ fn parse_function_header<'t, 's>(
         })
         .unwrap_or_default();
     let no_stack_protector = cursor.eat(TokenKind::Ident("no_stack_protector"));
+    let no_instrument = cursor.eat(TokenKind::Ident("no_instrument"));
     let no_sanitize = super::NoSanitize {
         address: cursor.eat(TokenKind::Ident("no_sanitize_address")),
         thread:  cursor.eat(TokenKind::Ident("no_sanitize_thread")),
@@ -597,6 +599,7 @@ fn parse_function_header<'t, 's>(
         returns_twice,
         inlining,
         no_stack_protector,
+        no_instrument,
         no_sanitize,
         inline_copy_of,
         entry,
@@ -612,6 +615,7 @@ struct FunctionHeader<'t, 's> {
     returns_twice:      bool,
     inlining:           InlineControl,
     no_stack_protector: bool,
+    no_instrument:      bool,
     no_sanitize:        super::NoSanitize,
     inline_copy_of:     Option<Token<'t>>,
     entry:              EntryConvention,

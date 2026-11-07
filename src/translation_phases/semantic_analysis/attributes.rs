@@ -413,8 +413,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         && specifiers.storage_class.is_none()),
                 declarator: declarator.kind.as_slice().as_ptr().addr(),
             },
-            | super::BindingKind::Parameter => Subject::Parameter,
-            | super::BindingKind::Typedef | super::BindingKind::Enumerator => Subject::Typedef,
+            | super::BindingKind::Parameter => Subject::Parameter(Some(binding)),
+            | super::BindingKind::Typedef | super::BindingKind::Enumerator =>
+                Subject::Typedef(Some(binding)),
         }
     }
 }

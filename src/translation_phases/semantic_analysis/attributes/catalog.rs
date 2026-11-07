@@ -68,6 +68,8 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     Ifunc,
     /// GNU `no_stack_protector`: no stack protector, whatever the options ask.
     NoStackProtector,
+    /// GNU `no_instrument_function`: `-pg` leaves the function alone.
+    NoInstrument,
     /// GNU `no_sanitize` and its `_address` and `_thread` spellings: a function
     /// a sanitizer leaves alone.
     NoSanitize,
@@ -275,6 +277,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "address_space" => Rule::Unsupported(U::AddressSpace),
         | "noinline" | "noipa" => Rule::NoInline,
         | "no_stack_protector" => Rule::NoStackProtector,
+        | "no_instrument_function" => Rule::NoInstrument,
         | "no_sanitize" | "no_sanitize_address" | "no_sanitize_thread" => Rule::NoSanitize,
         | "selectany" => Rule::SelectAny,
         | "common" => Rule::Common(true),
@@ -375,7 +378,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "musttail"
         | "no_builtin"
         | "no_icf"
-        | "no_instrument_function"
         | "no_profile_instrument_function"
         | "no_reorder"
         | "no_address_safety_analysis"

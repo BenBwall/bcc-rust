@@ -236,6 +236,9 @@ impl<'ir> Module<'ir> {
             if function.no_stack_protector {
                 f.write_str(" no_stack_protector")?;
             }
+            if function.no_instrument {
+                f.write_str(" no_instrument")?;
+            }
             if function.no_sanitize.address {
                 f.write_str(" no_sanitize_address")?;
             }

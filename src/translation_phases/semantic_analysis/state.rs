@@ -33,8 +33,10 @@ use crate::{
 impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
     pub(super) fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
         let tu = context.tu_arena();
+        let configuration = context.configuration;
         let target = context.configuration.layout();
         let pack_alignments = super::packing::states(context, scratch);
+        let pragmas = context.has_diagnostic_pragmas();
         let mut analyzer = Self {
             references: ArenaVec::new_in(tu),
             #[cfg(test)]
@@ -109,6 +111,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             functions: functions::State::new(scratch),
             va_list_type: None,
             statements: statements::State::new(scratch),
+            unused: super::unused::UnusedState::new(scratch, configuration, pragmas),
+            reachability: super::reachability::ReachabilityState::new(scratch),
             control: super::facts::builder::Builder::new(scratch),
             function_extensions: super::FunctionExtensions::new(tu),
             assembly: ArenaMap::with_hasher_in(FxBuildHasher, tu),

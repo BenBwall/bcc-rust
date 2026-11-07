@@ -3,7 +3,10 @@
 
 use std::fmt;
 
-use super::main_function::MainRule;
+use super::{
+    main_function::MainRule,
+    unused::UnusedRule,
+};
 use crate::{
     diagnostics::{
         Diagnostic,
@@ -110,6 +113,14 @@ pub(crate) enum SemanticErrorKind {
     DefinitionStarArray,
     /// C99: §5.1.2.2.1p1, p. 12; PDF p. 24.
     Main(MainRule),
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    Unused(UnusedRule),
+    /// The words are the diagnostic's name.
+    /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
+    SignCompare,
+    /// The words are the diagnostic's name.
+    /// C99: §6.7.8p21, p. 127; PDF p. 139.
+    MissingFieldInitializer,
     /// C99: §6.9.2p3, p. 143; PDF p. 155.
     IncompleteInternalTentative,
     /// C99: §6.9p3,p5, p. 140; PDF p. 152.
@@ -1078,7 +1089,10 @@ impl SemanticErrorKind {
             | Self::UnnamedDefinitionParameter => "parameter has no name",
             | Self::IncompleteDefinitionParameter => "incomplete parameter type",
             | Self::DefinitionStarArray => "`[*]` is not allowed in a definition",
+            | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
+            | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
                 "still incomplete at the end of the translation unit",
@@ -1275,6 +1289,19 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Normalized
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
+                    | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::MissingFieldInitializers
+                    | crate::configuration::DiagnosticGroup::Unused
+                    | crate::configuration::DiagnosticGroup::Extra
+                    | crate::configuration::DiagnosticGroup::UnusedVariable
+                    | crate::configuration::DiagnosticGroup::UnusedConstVariable
+                    | crate::configuration::DiagnosticGroup::UnusedParameter
+                    | crate::configuration::DiagnosticGroup::UnusedButSetVariable
+                    | crate::configuration::DiagnosticGroup::UnusedButSetGlobal
+                    | crate::configuration::DiagnosticGroup::UnusedButSetParameter
+                    | crate::configuration::DiagnosticGroup::UnusedLabel
+                    | crate::configuration::DiagnosticGroup::UnusedValue
+                    | crate::configuration::DiagnosticGroup::UnusedComparison
                     | crate::configuration::DiagnosticGroup::Main
                     | crate::configuration::DiagnosticGroup::MainExtension
                     | crate::configuration::DiagnosticGroup::MainReturnType
@@ -1659,6 +1686,21 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::SignCompare => (
+                "comparison of integers of different signs",
+                "C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand \
+                 unsigned, so a negative value compares as a large one",
+            ),
+            | Self::MissingFieldInitializer => (
+                "missing field initializer",
+                "C99 §6.7.8p21: members with no initializer in a brace-enclosed list are \
+                 initialized as if they had static storage duration",
+            ),
+            | Self::Unused(rule) => (
+                rule.words().0,
+                "C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code \
+                 that likely does not do what was meant",
             ),
             | Self::Main(rule) => (
                 rule.words(),
@@ -2490,6 +2532,10 @@ impl SemanticErrorKind {
         use crate::configuration::DiagnosticGroup as G;
         match self {
             | Self::PointerConstraint(group) => Some(group),
+            | Self::Unused(rule) => Some(rule.group()),
+            | Self::SignCompare => Some(G::SignCompare),
+            | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
+            | Self::UnusedStaticFunction => Some(G::UnusedFunction),
             | Self::Main(rule) => rule.group(),
             | Self::ImplicitFunctionDeclaration => Some(G::ImplicitFunctionDeclaration),
             | Self::ImplicitLibraryFunction(_) => Some(G::ImplicitLibraryFunction),
@@ -2593,6 +2639,10 @@ impl SemanticError {
                 arena,
                 "parameter '{name}' was not declared, defaults to 'int'{iso}"
             ),
+            | (F::Gcc, SemanticErrorKind::UnusedStaticFunction) =>
+                format_in!(arena, "'{name}' declared 'static' but never defined"),
+            | (F::Clang, SemanticErrorKind::UnusedStaticFunction) =>
+                format_in!(arena, "unused function '{name}'"),
             | (F::Gcc, SemanticErrorKind::ReturnMismatch) =>
                 "'return' with no value, in function returning non-void",
             | (F::Gcc, SemanticErrorKind::VoidReturnMismatch) =>
@@ -2792,6 +2842,21 @@ impl ToDiagnostic for SemanticError {
                 arena,
                 "argument value {value} is outside the valid range [{low}, {high}]"
             )
+        } else if matches!(
+            self.kind,
+            SemanticErrorKind::SignCompare | SemanticErrorKind::MissingFieldInitializer
+        ) {
+            self.name.map_or(message, |name| {
+                arena.alloc_str(context.string_cache.at(name))
+            })
+        } else if let SemanticErrorKind::Unused(rule) = self.kind {
+            let (before, after) = rule.words();
+            match self.name.map(|name| context.string_cache.at(name)) {
+                | Some(name) if before.is_empty() => format_in!(arena, "'{name}' {after}"),
+                | Some(name) if after.is_empty() => format_in!(arena, "{before} '{name}'"),
+                | Some(name) => format_in!(arena, "{before} '{name}' {after}"),
+                | None => before,
+            }
         } else if let SemanticErrorKind::Main(MainRule::ClangSurplusParameters(count)) = self.kind {
             format_in!(
                 arena,
@@ -2833,9 +2898,15 @@ impl ToDiagnostic for SemanticError {
         let message =
             if let Some(group) = group.and_then(crate::configuration::DiagnosticGroup::name) {
                 suffixed = true;
+                // GCC's option takes a level, and it says so.
+                let level = if self.kind == SemanticErrorKind::Unused(UnusedRule::GccFileConstant) {
+                    "="
+                } else {
+                    ""
+                };
                 match self.promoted_option(context, arena) {
-                    | Some(option) => format_in!(arena, "{message} [{option}]"),
-                    | None => format_in!(arena, "{message} [-W{group}]"),
+                    | Some(option) => format_in!(arena, "{message} [{option}{level}]"),
+                    | None => format_in!(arena, "{message} [-W{group}{level}]"),
                 }
             } else if self.severity() == ErrorSeverity::Error
                 && group == Some(crate::configuration::DiagnosticGroup::MainSpecifier)

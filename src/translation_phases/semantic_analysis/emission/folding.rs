@@ -66,6 +66,7 @@ use crate::{
     translation_phases::{
         parsing::{
             declaration_syntax::{
+                Declaration,
                 DeclarationSpecifiers,
                 Declarator,
                 Initializer,
@@ -141,6 +142,26 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         condition: &'tu Expression<'tu>,
     ) -> Option<bool> {
         self.folded_integer(condition).map(|value| !value.is_zero())
+    }
+
+    /// Clang's `Expr::EvaluateAsRValue`, which `EM_IgnoreSideEffects` lets
+    /// pass what a constant result does not depend on: the left operand of a
+    /// comma, and the left operand of `X && 0` and `X || 1`. Each such result
+    /// holds only here, so none is memoized.
+    /// C99: §6.5.13p3, p. 89; PDF p. 101; §6.5.14p3, p. 89; PDF p. 101;
+    /// §6.5.17p2, p. 94; PDF p. 106.
+    pub(in crate::translation_phases::semantic_analysis) fn evaluate_ignoring_side_effects(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) -> Option<Value> {
+        let outer = self.begin_memo();
+        self.functions.emission.ignore_side_effects = true;
+        let value = self.compute_value(expression, 0);
+        self.functions.emission.ignore_side_effects = false;
+        let emission = &mut self.functions.emission;
+        emission.depth_cut = outer.0;
+        emission.weak_read = outer.1;
+        value
     }
 
     /// Clang's `Expr::isEvaluatable`: whether `expression` evaluates to a
@@ -231,6 +252,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// The value of `expression` as Clang's evaluator computes it, if it
     /// does; memoized, since conditions nest (see [`Memo`]).
     fn evaluate_value(&mut self, expression: &'tu Expression<'tu>, depth: u32) -> Option<Value> {
+        if self.functions.emission.ignore_side_effects {
+            return self.compute_value(expression, depth);
+        }
         let key = std::ptr::from_ref(expression).addr();
         if let Some(&memo) = self.functions.emission.folded.get(&key)
             && self.memo_holds(&memo, depth)
@@ -311,7 +335,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 left_expression,
                 right_expression,
             } => {
-                _ = self.evaluate_value(left_expression, depth)?;
+                let left = self.evaluate_value(left_expression, depth);
+                if left.is_none() && !self.functions.emission.ignore_side_effects {
+                    return None;
+                }
                 self.evaluate_value(right_expression, depth)
             },
             | ExpressionType::Binary {
@@ -319,8 +346,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 left_expression,
                 right_expression,
             } => {
-                let left = self.evaluate_value(left_expression, depth)?.truth()?;
-                if left == (operator == BinaryOperator::LogicalOr) {
+                let deciding = operator == BinaryOperator::LogicalOr;
+                let Some(left) = self
+                    .evaluate_value(left_expression, depth)
+                    .and_then(Value::truth)
+                else {
+                    if !self.functions.emission.ignore_side_effects {
+                        return None;
+                    }
+                    let right = self.evaluate_value(right_expression, depth)?.truth()?;
+                    return (right == deciding)
+                        .then(|| Value::Integer(Integer::int(i128::from(right))));
+                };
+                if left == deciding {
                     Some(Value::Integer(Integer::int(i128::from(left))))
                 } else {
                     let right = self.evaluate_value(right_expression, depth)?.truth()?;
@@ -427,6 +465,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 };
                 let (last, rest) = self.statement_expression_value_item(items.as_slice())?;
                 for item in rest {
+                    if self.functions.emission.ignore_side_effects {
+                        if !self.item_evaluates_ignoring_side_effects(*item, depth) {
+                            return None;
+                        }
+                        continue;
+                    }
                     match *item {
                         | BlockItem::Statement(statement) => match statement.kind {
                             | StatementType::Null => {},
@@ -459,6 +503,61 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         value.map(|value| match value {
             | Value::Integer(integer) => self.converted_value(Value::Integer(integer), expression),
             | other => other,
+        })
+    }
+
+    /// Clang's `EvaluateStmt`, under `EM_IgnoreSideEffects`, for a statement
+    /// expression's item before its last: an expression statement always
+    /// passes, a declaration's initializer must evaluate, and a selection
+    /// needs its condition and then what it selects.
+    fn item_evaluates_ignoring_side_effects(&mut self, item: BlockItem<'tu>, depth: u32) -> bool {
+        let statement = match item {
+            | BlockItem::Statement(statement) => statement,
+            | BlockItem::Declaration(declaration) =>
+                return self.declaration_evaluates_ignoring_side_effects(declaration, depth),
+            | BlockItem::FunctionDefinition(_) => return false,
+        };
+        match statement.kind {
+            | StatementType::Null | StatementType::Expression(_) => true,
+            | StatementType::Declaration(declaration) =>
+                self.declaration_evaluates_ignoring_side_effects(declaration, depth),
+            | StatementType::Compound { items } => items
+                .iter()
+                .all(|&item| self.item_evaluates_ignoring_side_effects(item, depth)),
+            | StatementType::If {
+                condition_expression: ExpressionSlot::Parsed(condition),
+                then_statement,
+                else_statement,
+            } => match self.evaluate_value(condition, depth).and_then(Value::truth) {
+                | Some(true) => self.item_evaluates_ignoring_side_effects(
+                    BlockItem::Statement(then_statement),
+                    depth,
+                ),
+                | Some(false) => else_statement.is_none_or(|statement| {
+                    self.item_evaluates_ignoring_side_effects(
+                        BlockItem::Statement(statement),
+                        depth,
+                    )
+                }),
+                | None => false,
+            },
+            | _ => false,
+        }
+    }
+
+    fn declaration_evaluates_ignoring_side_effects(
+        &mut self,
+        declaration: &'tu Declaration<'tu>,
+        depth: u32,
+    ) -> bool {
+        declaration.init_declarators.iter().all(|init| {
+            init.initializer.is_none_or(|initializer| {
+                matches!(
+                    initializer.kind,
+                    InitializerType::AssignmentExpression(expression)
+                        if self.evaluate_value(expression, depth).is_some()
+                )
+            })
         })
     }
 
@@ -604,6 +703,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.cast_to(value, self.expression_info(expression).ty)
     }
 
+    /// Whether the floating `value` becomes an integer zero when it is
+    /// converted to `ty`.
+    /// C99: §6.3.1.4p1, p. 43; PDF p. 55; §6.3.1.2p1, p. 43; PDF p. 55.
+    pub(in crate::translation_phases::semantic_analysis) fn floating_converts_to_zero(
+        &self,
+        value: Floating,
+        ty: TypeId,
+    ) -> bool {
+        matches!(
+            self.cast_to(Value::Floating(value), ty),
+            Some(Value::Integer(integer)) if integer.is_zero()
+        )
+    }
+
     /// [`Self::cast_value`] to type `ty`, as a conversion by assignment.
     fn cast_to(&self, value: Value, ty: TypeId) -> Option<Value> {
         let ty = self.types.non_atomic(ty);
@@ -614,6 +727,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .map(|truth| Value::Integer(Integer::int(i128::from(truth)).cast(8, false))),
             | TypeKind::Pointer(_) => match value {
                 | Value::Integer(zero) if zero.is_zero() => Some(Value::Integer(zero)),
+                // An integer's address, which is no result of a constant
+                // expression but has a truth and compares.
+                | Value::Integer(_) if self.functions.emission.ignore_side_effects => Some(value),
                 | Value::Address(..) | Value::CastString(..) => Some(value),
                 // A conversion to a pointer to another type invalidates the
                 // evaluator's designator: the literal is no longer read
@@ -2057,7 +2173,7 @@ pub(in crate::translation_phases::semantic_analysis) enum Value {
 
 impl Value {
     /// The truth of a scalar value, if known.
-    fn truth(self) -> Option<bool> {
+    pub(in crate::translation_phases::semantic_analysis) fn truth(self) -> Option<bool> {
         match self {
             | Self::Integer(integer) => Some(!integer.is_zero()),
             | Self::Address(..) | Self::String(..) | Self::CastString(..) => Some(true),

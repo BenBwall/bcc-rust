@@ -1,0 +1,4 @@
+sema-unused-werror-clang.c:1:20: error: unused variable 'unused' [-Werror,-Wunused-variable]
+    1 | void g(void) { int unused; }
+      |                    ^~~~~~
+1 error generated.
