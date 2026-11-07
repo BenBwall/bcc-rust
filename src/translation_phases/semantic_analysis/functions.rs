@@ -1064,18 +1064,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(&usage) = used.get(&self.function_identity(entity.latest)) {
                     // A constraint, which GCC and Clang diagnose with a
                     // warning: another object can't supply it, so the link
-                    // fails instead.
+                    // fails instead. Both report it at the declaration, under
+                    // the settings there; Clang notes the first use.
                     if self.context.configuration.compiler_extensions() {
-                        self.group_diagnostic(
-                            crate::configuration::DiagnosticGroup::UndefinedInternal,
-                            SemanticErrorKind::UndefinedInternal,
-                            usage.source_vectors,
+                        let gcc = self.context.configuration.compiler_identity()
+                            == crate::configuration::CompilerIdentity::Gcc;
+                        let group = if gcc {
+                            crate::configuration::DiagnosticGroup::GccUndefinedInternal
+                        } else {
+                            crate::configuration::DiagnosticGroup::UndefinedInternal
+                        };
+                        // Clang's locations are points, which it marks with a
+                        // caret alone.
+                        let (site, used) = if gcc {
+                            (b.name.source_vectors, None)
+                        } else {
+                            (
+                                self.context.retain_source_start(b.name.source_vectors),
+                                Some(self.context.retain_source_start(usage.source_vectors)),
+                            )
+                        };
+                        self.group_diagnostic_read_at(
+                            group,
+                            SemanticErrorKind::UndefinedInternal(Some(group)),
+                            site,
                             Some(b.name.name),
-                            Some(b.name.source_vectors),
+                            used,
+                            b.name.source_vectors,
                         );
                     } else {
                         self.error(
-                            SemanticErrorKind::UndefinedInternal,
+                            SemanticErrorKind::UndefinedInternal(None),
                             usage.source_vectors,
                             Some(b.name.name),
                             Some(b.name.source_vectors),

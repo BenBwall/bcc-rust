@@ -129,8 +129,10 @@ pub(crate) enum SemanticErrorKind {
     TentativeArrayAssumedOne,
     /// C99: §6.9.2p2, p. 143; PDF p. 155.
     IncompleteTentativeDefinition,
+    /// A function with internal linkage used but not defined: the
+    /// constraint's error, or the warning of a group, at the declaration.
     /// C99: §6.9p3, p. 140; PDF p. 152.
-    UndefinedInternal,
+    UndefinedInternal(Option<crate::configuration::DiagnosticGroup>),
     /// C99: §6.9p3, p. 140; PDF p. 152.
     UnusedStaticFunction,
     /// C99: §6.7.4p3, p. 112; PDF p. 124.
@@ -1126,7 +1128,8 @@ impl SemanticErrorKind {
             | Self::IncompleteTentativeDefinition =>
                 "still incomplete at the end of the translation unit",
             | Self::TentativeArrayAssumedOne => "array assumed to have one element",
-            | Self::UndefinedInternal => "used here but never defined",
+            | Self::UndefinedInternal(None) => "used here but never defined",
+            | Self::UndefinedInternal(Some(_)) => "declared here but never defined",
             | Self::UnusedStaticFunction => "never defined",
             | Self::InlineInternalReference => "internal identifier in an inline definition",
             | Self::InlineStaticObject => "modifiable static object in an inline definition",
@@ -1309,6 +1312,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
                     | crate::configuration::DiagnosticGroup::UndefinedInternal
+                    | crate::configuration::DiagnosticGroup::GccUndefinedInternal
                     | crate::configuration::DiagnosticGroup::InitializerOverrides
                     | crate::configuration::DiagnosticGroup::GnuFoldingConstant
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
@@ -1783,7 +1787,7 @@ impl SemanticErrorKind {
                 "C99 §6.9.2p2: a tentative definition without an external definition behaves as a \
                  zero-initialized file-scope definition",
             ),
-            | Self::UndefinedInternal => (
+            | Self::UndefinedInternal(_) => (
                 "used internal identifier has no definition",
                 "C99 §6.9p3: an internal-linkage identifier used outside a constant sizeof \
                  operand has exactly one definition in the translation unit",
@@ -2609,6 +2613,7 @@ impl SemanticErrorKind {
         use crate::configuration::DiagnosticGroup as G;
         match self {
             | Self::PointerConstraint(group) => Some(group),
+            | Self::UndefinedInternal(group) => group,
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
@@ -2676,6 +2681,20 @@ impl SemanticError {
                 );
                 return Some((message, Some("builtin-declaration-mismatch")));
             },
+            // GCC's warning has no option, so `-Werror` names only itself.
+            | (F::Gcc, SemanticErrorKind::UndefinedInternal(Some(_))) => {
+                let message = format_in!(arena, "'{name}' used but never defined");
+                let message = if self.severity() == ErrorSeverity::Error {
+                    format_in!(arena, "{message} [-Werror]")
+                } else {
+                    message
+                };
+                return Some((message, None));
+            },
+            | (F::Clang, SemanticErrorKind::UndefinedInternal(Some(_))) => format_in!(
+                arena,
+                "function '{name}' has internal linkage but is not defined"
+            ),
             | (F::Clang, SemanticErrorKind::ImplicitFunctionDeclaration) if c99 => format_in!(
                 arena,
                 "call to undeclared function '{name}'; ISO C99 and later do not support implicit \
@@ -2827,9 +2846,9 @@ impl SemanticError {
                 arena,
                 "'{name}' undeclared (first use in this function)"
             )),
-            | (Format::Gcc, SemanticErrorKind::UndefinedInternal) =>
+            | (Format::Gcc, SemanticErrorKind::UndefinedInternal(_)) =>
                 Some(format_in!(arena, "'{name}' used but never defined")),
-            | (Format::Clang, SemanticErrorKind::UndefinedInternal) => Some(format_in!(
+            | (Format::Clang, SemanticErrorKind::UndefinedInternal(_)) => Some(format_in!(
                 arena,
                 "function '{name}' has internal linkage but is not defined"
             )),
@@ -3072,6 +3091,7 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FlexibleArrayDesignator =>
                     "initialized flexible array member is here",
                 | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
+                | SemanticErrorKind::UndefinedInternal(Some(_)) => "used here",
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);

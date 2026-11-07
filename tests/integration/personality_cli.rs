@@ -7610,6 +7610,95 @@ mod tests {
         assert_eq!(stderr(&output), "");
     }
 
+    /// Where each compiler reports an undefined static function and what
+    /// controls it (PR #318's review): both at the declaration, Clang under
+    /// the settings there, with a note at the first use and its own option,
+    /// and GCC under no option, even in a system header. Each row was
+    /// measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_undefined_static_functions_follow_each_compilers_controls() {
+        let directory = Directory::new();
+        directory.write("u.c", "static int f(void);\nint g(void){return f();}\n");
+        directory.write(
+            "pragma.c",
+            "#pragma GCC diagnostic push\n#pragma GCC diagnostic ignored \
+             \"-Wundefined-internal\"\nstatic int f(void);\n#pragma GCC diagnostic pop\nint \
+             g(void) { return f(); }\n",
+        );
+        directory.write(
+            "system.c",
+            "# 1 \"h.h\" 1 3\nstatic int f(void);\nstatic int g(void) { return f(); }\n# 1 \
+             \"system.c\" 2\nint h(void) { return g(); }\n",
+        );
+        let run = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            (output.status.success(), stderr(&output))
+        };
+        let (ok, text) = run(
+            "--clang-mode",
+            &[
+                "-Werror",
+                "-Wno-error=undefined-internal",
+                "-fsyntax-only",
+                "u.c",
+            ],
+        );
+        assert!(ok, "{text}");
+        assert!(
+            text.starts_with(
+                "u.c:1:12: warning: function 'f' has internal linkage but is not defined \
+                 [-Wundefined-internal]\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("u.c:2:20: note: used here\n"), "{text}");
+        let (ok, text) = run("--clang-mode", &["-Werror", "-fsyntax-only", "u.c"]);
+        assert!(!ok);
+        assert!(
+            text.contains("is not defined [-Werror,-Wundefined-internal]"),
+            "{text}"
+        );
+        assert_eq!(
+            run("--clang-mode", &["-Werror", "-fsyntax-only", "pragma.c"]),
+            (true, String::new())
+        );
+        assert_eq!(
+            run("--clang-mode", &["-Werror", "-fsyntax-only", "system.c"]),
+            (true, String::new())
+        );
+        let (ok, text) = run("--gcc-mode", &["-Werror", "-fsyntax-only", "u.c"]);
+        assert!(!ok);
+        assert!(
+            text.starts_with("u.c:1:12: error: 'f' used but never defined [-Werror]\n"),
+            "{text}"
+        );
+        assert!(!text.contains("note:"), "{text}");
+        let (ok, text) = run(
+            "--gcc-mode",
+            &["-Wno-undefined-internal", "-fsyntax-only", "u.c"],
+        );
+        assert!(ok);
+        assert!(
+            text.contains("warning: 'f' used but never defined\n"),
+            "{text}"
+        );
+        let (ok, text) = run(
+            "--gcc-mode",
+            &["-Wundefined-internal", "-fsyntax-only", "u.c"],
+        );
+        assert!(!ok);
+        assert!(
+            text.contains("unrecognized command-line option '-Wundefined-internal'"),
+            "{text}"
+        );
+        let (ok, text) = run("--gcc-mode", &["-Werror", "-fsyntax-only", "system.c"]);
+        assert!(!ok);
+        assert!(
+            text.contains("h.h:1:12: error: 'f' used but never defined [-Werror]"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();
