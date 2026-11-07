@@ -105,8 +105,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .attributes
                 .pending_dll
                 .push((storage, attribute.source)),
-            | Subject::Parameter => {},
-            | Subject::Typedef | Subject::Member => self.ignored(attribute),
+            | Subject::Parameter(_) => {},
+            | Subject::Typedef(_) | Subject::Member => self.ignored(attribute),
         }
     }
 

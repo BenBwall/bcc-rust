@@ -77,9 +77,13 @@ mod implicit;
 mod inference;
 mod initializers;
 mod main_function;
+mod missing_fields;
 mod predefined;
+mod reachability;
+mod sign_compare;
 mod statements;
 mod traversal;
+mod unused;
 
 // Types and constant values
 mod address_truth;
@@ -739,7 +743,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
             | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
             | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
-            | Work::Condition(slot, integer) => self.check_condition(slot, integer),
+            | Work::Condition(slot, integer, statement) =>
+                self.check_condition(slot, integer, statement),
             | Work::RequireConstant(e, assertion, before) => {
                 let value = self.integers.pop().flatten();
                 if self.semantic_errors == before && !self.unanalyzed_constant(e) {
@@ -853,6 +858,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | TypeSpecifiers::Enum(enumeration) => enumeration.attributes,
                     | _ => None,
                 };
+                if self.unused.missing_fields {
+                    self.note_tag_specifier(s);
+                }
                 self.check_extension_chain(attributes);
                 self.attribute_chain_operands(attributes);
             },
@@ -1318,7 +1326,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     );
                 }
                 self.declaration_attributes(
-                    attributes::Subject::Parameter,
+                    attributes::Subject::Parameter(binding),
                     p.declaration_specifiers.extensions,
                     p.declarator,
                 );
@@ -1790,6 +1798,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     Duration::None,
                     retained,
                 );
+                self.note_enumerator(tag, item.name, retained);
                 self.work.push(Work::EnumMembers(
                     tag,
                     list,
@@ -2040,7 +2049,9 @@ enum Work<'tu, 's> {
     /// A `constexpr` declaration or compound literal has been analyzed.
     EndUnderspecified,
     InitializeDone(usize, &'tu Initializer<'tu>),
-    Condition(ExpressionSlot<'tu>, bool),
+    /// A controlling expression, whether it must be an integer, and the
+    /// statement it controls.
+    Condition(ExpressionSlot<'tu>, bool, SourceVectors),
     RequireConstant(
         &'tu Expression<'tu>,
         Option<&'tu super::parsing::StaticAssertion<'tu>>,
@@ -2283,6 +2294,8 @@ struct Analyzer<'a, 'tu, 's> {
     functions:               functions::State<'tu, 's>,
     va_list_type:            Option<TypeId>,
     statements:              statements::State<'tu, 's>,
+    unused:                  unused::UnusedState<'s>,
+    reachability:            reachability::ReachabilityState<'s>,
     control:                 builder::Builder<'tu, 's>,
     function_extensions:     FunctionExtensions<'tu>,
     /// Checked statement-level `asm` facts, by statement identity.

@@ -6,4 +6,12 @@ warning: comparison between pointer and integer [-Wpointer-integer-compare]
   |
   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
-1 warning generated.
+warning: equality comparison result unused [-Wunused-comparison]
+ --> sema2-comparison.c:1:24
+  |
+1 | void f(void) {int *p; p==1;}
+  |                        ^^ result is discarded
+  |
+  = note: C99 §5.1.1.3p1: a conforming program may do this; this warning identifies code that likely does not do what was meant
+
+2 warnings generated.

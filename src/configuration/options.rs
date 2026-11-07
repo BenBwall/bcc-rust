@@ -917,6 +917,17 @@ impl CompilerConfiguration {
         self.suppress_warnings
     }
 
+    /// `-fsyntax-only`: no code will be generated, so what each compiler
+    /// checks only then goes unreported.
+    pub(crate) const fn with_syntax_only(mut self, enabled: bool) -> Self {
+        self.syntax_only = enabled;
+        self
+    }
+
+    pub(crate) const fn syntax_only(self) -> bool {
+        self.syntax_only
+    }
+
     /// GCC's `-fpermissive`, which makes its C type-safety errors
     /// warnings again, or `-fno-permissive`, which makes those it only
     /// warns about in C89 errors too; other identities' compilers ignore
@@ -1061,6 +1072,7 @@ impl CompilerConfiguration {
             general_regs_only: false,
             user_interrupts: false,
             suppress_warnings: false,
+            syntax_only: false,
             compiler_extensions: false,
             permissive: None,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,

@@ -241,7 +241,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.real_imag(e, op, operand);
         }
         let ty = if op == U::LogicalNot {
-            self.boolean_conversion_warning(operand);
+            self.boolean_conversion_warning(operand, e.source_vectors);
             // C99 §6.5.3.3p5: `!E` compares E with 0, like `&&` and `||`,
             // and converts nothing; an `int` conversion would read `!0.5`
             // as `!0`.
@@ -330,6 +330,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.mark_unfolded_binary128(&mut info);
         }
         info
+    }
+
+    /// A left shift into the sign bit, which C99 §6.5.7p4 leaves undefined.
+    /// C99: §6.5.7 paragraph 4, p. 84; PDF p. 96.
+    fn report_sign_bit_shift(&mut self, e: &'tu Expression<'tu>) {
+        if !self.tainted {
+            self.context.report_extension(
+                crate::configuration::Feature::SignBitShifts,
+                "left shift into the sign bit",
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+            );
+        }
+    }
+
+    /// Whether `offset` can move an address constant: an integer constant
+    /// expression, or a value that only folding exceptional operands gave.
+    /// C99: §6.6 paragraph 7, p. 96; PDF p. 108.
+    fn folded_offset(offset: ExpressionInfo<'tu>) -> bool {
+        (offset.ice || offset.folding.exceptional()) && offset.integer.is_some()
     }
 
     /// C99: §6.5.5-§6.5.17, pp. 82-94; PDF pp. 94-106.
@@ -473,9 +492,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 info.static_address = self.address_value(pointer)
                     && if std::ptr::eq(pointer.expression, left.expression) {
-                        (right.ice || right.folding.exceptional()) && right.integer.is_some()
+                        Self::folded_offset(right)
                     } else {
-                        (left.ice || left.folding.exceptional()) && left.integer.is_some()
+                        Self::folded_offset(left)
                     };
                 // Array decay retains the designated register object, which
                 // GCC subscripts; reading a register pointer does not
@@ -510,10 +529,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if self.integer_type(rt).is_some() {
                         self.report_void_arithmetic(e, target);
                         info.ty = lt;
-                        if self.address_value(left)
-                            && (right.ice || right.folding.exceptional())
-                            && right.integer.is_some()
-                        {
+                        if self.address_value(left) && Self::folded_offset(right) {
                             if op == B::Addition && Self::pointer_value(left) == Some(0) {
                                 self.error(
                                     SemanticErrorKind::NullPointerArithmetic,
@@ -560,10 +576,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.report_void_arithmetic(e, target);
                     }
                     info.ty = rt;
-                    if self.address_value(right)
-                        && (left.ice || left.folding.exceptional())
-                        && left.integer.is_some()
-                    {
+                    if self.address_value(right) && Self::folded_offset(left) {
                         if Self::pointer_value(right) == Some(0) {
                             self.error(
                                 SemanticErrorKind::NullPointerArithmetic,
@@ -598,8 +611,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
             },
             | B::LogicalAnd | B::LogicalOr => {
-                self.boolean_conversion_warning(left);
-                self.boolean_conversion_warning(right);
+                // GCC takes the left operand's location from its first token,
+                // Clang from the operator.
+                let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
+                let left_site = if self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Clang
+                {
+                    operator
+                } else {
+                    left.expression.source_vectors
+                };
+                self.boolean_conversion_warning(left, left_site);
+                self.boolean_conversion_warning(right, operator);
                 if !self.scalar_type(lt) || !self.scalar_type(rt) {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidLogicalOperands);
                 }
@@ -827,12 +850,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 self.fold_exceptional_binary(e, op, l, r, &mut info);
             }
-            if sign_bit && !self.tainted {
-                self.context.report_extension(
-                    crate::configuration::Feature::SignBitShifts,
-                    "left shift into the sign bit",
-                    e.operator_source_vectors.unwrap_or(e.source_vectors),
-                );
+            if sign_bit {
+                self.report_sign_bit_shift(e);
             }
             if let Some((bits, signed)) = self.integer_type(info.ty) {
                 info.integer = info.integer.map(|v| self.wide.convert(v, bits, signed));
@@ -885,7 +904,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !self.scalar_type(ct) {
             return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
         }
-        self.boolean_conversion_warning(condition);
+        // Clang's `?:` hides its condition behind an opaque value.
+        if matches!(e.kind, ExpressionType::Conditional(_))
+            || self.context.configuration.compiler_identity().rules()
+                != crate::configuration::RuleSet::Clang
+        {
+            self.boolean_conversion_warning(
+                condition,
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+            );
+        }
         let ty = if self.arithmetic(lt) && self.arithmetic(rt) {
             self.common_arithmetic(left, right, lt, rt)
         } else if self.vector(lt).is_some() && self.vector(rt).is_some() {
@@ -1337,6 +1365,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             let ty = self.types.recovery_type(&[target, from]);
             return Self::expression_result(e, ty);
+        }
+        // GCC's cast to `_Bool` asks for a truth value, as a condition does.
+        if matches!(
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Scalar(Scalar::Bool)
+        ) && self.context.configuration.compiler_identity().rules()
+            != crate::configuration::RuleSet::Clang
+        {
+            self.gcc_address_warning(operand.expression, None);
         }
         // GNU: a structure or union cast to its own type is its value, an
         // rvalue, as GCC accepts it ("ISO C forbids casting nonscalar to
@@ -2989,6 +3026,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         mut slot: ExpressionSlot<'tu>,
         integer: bool,
+        statement: crate::translation_phases::SourceVectors,
     ) {
         while let ExpressionSlot::Selection(header) = slot {
             let Some(e) = header.expression else {
@@ -3000,7 +3038,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let info = self.expression_info(e);
             let ty = self.converted(info);
             if !integer {
-                self.boolean_conversion_warning(info);
+                // GCC locates the conversion at the condition, and Clang at
+                // the keyword.
+                let site = if self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Clang
+                {
+                    statement
+                } else {
+                    e.source_vectors
+                };
+                self.boolean_conversion_warning(info, site);
             }
             if !self.types.unanalyzed(ty)
                 && if integer {

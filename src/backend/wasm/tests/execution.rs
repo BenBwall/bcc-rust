@@ -13,6 +13,10 @@ use std::{
         Command,
         Stdio,
     },
+    sync::atomic::{
+        AtomicUsize,
+        Ordering,
+    },
 };
 
 use crate::{
@@ -127,11 +131,15 @@ fn runner() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs")
 }
 
-/// A fresh scratch directory for one module.
+/// A fresh path for one module. Tests run in parallel and name modules after
+/// the same programs, so one would otherwise overwrite another's module between
+/// writing it and running it.
 fn scratch_path(name: &str) -> PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
     let directory = std::env::temp_dir().join(format!("bcc-wasm-tests-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
-    directory.join(format!("{name}.wasm"))
+    let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+    directory.join(format!("{name}-{unique}.wasm"))
 }
 
 /// Validates `bytes` with Node's engine, returning the engine's complaint.
