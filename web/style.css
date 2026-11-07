@@ -467,6 +467,8 @@
   .swatch-next { border: 1px dashed var(--screen-dim); }
   .swatch-target { width: 10px; height: 10px; background: #e2b45c; }
   .swatch-link { background: color-mix(in srgb, var(--flow) 30%, transparent); outline: 1px solid var(--flow); }
+  .swatch-inlined { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--flow) 55%, transparent) 0 2px, transparent 2px 4px); outline: 1px dashed var(--flow); }
+  .swatch-unclaimed { width: 3px; height: 12px; background: repeating-linear-gradient(0deg, var(--accent) 0 2px, transparent 2px 4px); }
   .swatch-squiggle { height: 4px; align-self: flex-end; margin-bottom: 4px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='4'%3E%3Cpath d='M0 3.5l3-3 3 3' fill='none' stroke='%23ff6b5b' stroke-width='1.2'/%3E%3C/svg%3E") repeat-x; }
   /* As tall as the program, at most what the window leaves below the
      control strip beside the pane's header and legend. */
@@ -931,6 +933,12 @@
   .stage-note.is-link::before { content: "↔ "; color: var(--flow-ink); }
   .stage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .stage-toolbar .stage-note { flex: 1 1 260px; }
+  /* What the line the reader points at links to. Its room is kept, so the
+     editor below does not move under the pointer as the sentence changes. */
+  .link-reading { margin-top: 10px; min-height: calc(2 * 1.55em + 12px); padding: 6px 12px; border-left: 3px solid var(--flow); background: var(--screen); color: var(--screen-ink); font-size: 12px; line-height: 1.55; }
+  .link-reading.is-source { margin-top: 0; min-height: calc(4 * 1.55em + 16px); padding: 8px 16px; border-left: 0; border-top: 1px solid var(--screen-rule); font-size: 11px; }
+  .link-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; padding-top: 8px; color: var(--ink-3); font-size: 10.5px; letter-spacing: .04em; }
+  .link-legend span { display: inline-flex; align-items: center; gap: 7px; }
   .toggle-chip {
     display: inline-flex; align-items: center; gap: 8px; height: 30px; margin-top: 10px; padding: 0 10px;
     border: 2px solid var(--key-edge); background: var(--key); color: var(--key-ink); box-shadow: 0 2px 0 var(--key-edge);
@@ -1184,6 +1192,13 @@
   .monaco-editor .target-line { background: #2a2210; }
   .monaco-editor .target-glyph::before { content: ""; display: block; width: 9px; height: 9px; margin: 6px auto 0; background: #e2b45c; }
   .monaco-editor .link-line { background: color-mix(in srgb, var(--flow) 16%, transparent); }
+  /* A copy inlined from another function: the same blue, striped, so it reads
+     apart without color too. */
+  .monaco-editor .link-inlined { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--flow) 24%, transparent) 0 6px, color-mix(in srgb, var(--flow) 8%, transparent) 6px 12px); }
+  /* The call an inlined instruction was copied for. */
+  .monaco-editor .link-call { background: color-mix(in srgb, var(--flow) 7%, transparent); box-shadow: inset 3px 0 0 var(--flow); }
+  /* Code no source line can claim, in the strip beside the line numbers. */
+  .monaco-editor .link-unclaimed { width: 3px !important; margin-left: 3px; background: repeating-linear-gradient(0deg, var(--accent) 0 2px, transparent 2px 4px); }
   /* The cursor's line in the editor with the focus: where the links come
      from when the keyboard moves through the code. */
   .monaco-editor.focused .margin-view-overlays .current-line-margin { box-shadow: inset 3px 0 0 var(--accent); }
@@ -1394,6 +1409,8 @@
     .stage-item { flex: none; scroll-snap-align: start; }
     .stage-button { width: auto; white-space: nowrap; }
     .source-legend { gap: 2px 12px; padding: 8px 12px; font-size: 10px; }
+    .link-reading { min-height: calc(3 * 1.55em + 12px); }
+    .link-reading.is-source { min-height: calc(3 * 1.55em + 12px); padding: 6px 12px; }
     .source-pane > .code-editor {
       --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(154px, calc(100svh - var(--toolbar-height) - 560px)));
     }
@@ -1423,7 +1440,7 @@
     .toolbar .button { height: 30px; }
     .knob-reading { display: none; }
     .knob-dial { width: 24px; height: 24px; }
-    .source-legend { display: none; }
+    .source-legend, .link-reading.is-source { display: none; }
     .source-pane.is-wasm > .pane-header, .source-pane.is-wasm .wat-header { display: none; }
     .wat-editor { min-height: 0; }
   }

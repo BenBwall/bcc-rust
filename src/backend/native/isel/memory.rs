@@ -303,12 +303,17 @@ impl Selector<'_, '_, '_> {
             &mut self.func.blocks[entry.index()].insts,
             ArenaVec::new_in(self.arena),
         );
+        let rest_sources = std::mem::replace(
+            &mut self.func.blocks[entry.index()].sources,
+            ArenaVec::new_in(self.arena),
+        );
         self.current = entry;
         for index in 0..self.bases.len() {
             let (symbol, reg) = self.bases[index];
             self.address_into(reg, AddrBase::Symbol(symbol), 0);
         }
         self.func.blocks[entry.index()].insts.extend(rest);
+        self.func.blocks[entry.index()].sources.extend(rest_sources);
     }
 
     /// An `i64` offset as a scaled index: the multiplicand of an `imul` by

@@ -1,0 +1,102 @@
+sema-switch-gcc.c:4:19: warning: switch missing default case [-Wswitch-default]
+    4 | int a(enum e x) { switch (x) { case A: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:4:19: warning: enumeration value 'B' not handled in switch [-Wswitch]
+    4 | int a(enum e x) { switch (x) { case A: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:4:19: warning: enumeration value 'C' not handled in switch [-Wswitch]
+    4 | int a(enum e x) { switch (x) { case A: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:5:19: warning: switch missing default case [-Wswitch-default]
+    5 | int b(enum e x) { switch (x) { case A: case B: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:5:19: warning: enumeration value 'C' not handled in switch [-Wswitch]
+    5 | int b(enum e x) { switch (x) { case A: case B: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:6:19: warning: enumeration value 'B' not handled in switch [-Wswitch-enum]
+    6 | int c(enum e x) { switch (x) { case A: return 1; default: return 0; } }
+      |                   ^~~~~~
+sema-switch-gcc.c:6:19: warning: enumeration value 'C' not handled in switch [-Wswitch-enum]
+    6 | int c(enum e x) { switch (x) { case A: return 1; default: return 0; } }
+      |                   ^~~~~~
+sema-switch-gcc.c:7:19: warning: switch missing default case [-Wswitch-default]
+    7 | int d(enum e x) { switch (x) { case A: case B: case C: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:8:19: warning: switch missing default case [-Wswitch-default]
+    8 | int e(enum e x) { switch (x) { case A: case B: case C: case 5: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:8:56: warning: case value '5' not in enumerated type 'enum e' [-Wswitch]
+    8 | int e(enum e x) { switch (x) { case A: case B: case C: case 5: return 1; } return 0; }
+      |                                                        ^~~~
+sema-switch-gcc.c:9:19: warning: enumeration value 'B' not handled in switch [-Wswitch-enum]
+    9 | int f(enum e x) { switch (x) { case A: case 7: return 1; default: return 0; } }
+      |                   ^~~~~~
+sema-switch-gcc.c:9:19: warning: enumeration value 'C' not handled in switch [-Wswitch-enum]
+    9 | int f(enum e x) { switch (x) { case A: case 7: return 1; default: return 0; } }
+      |                   ^~~~~~
+sema-switch-gcc.c:9:40: warning: case value '7' not in enumerated type 'enum e' [-Wswitch]
+    9 | int f(enum e x) { switch (x) { case A: case 7: return 1; default: return 0; } }
+      |                                        ^~~~
+sema-switch-gcc.c:10:16: warning: switch missing default case [-Wswitch-default]
+   10 | int g(int x) { switch (x) { case A: return 1; } return 0; }
+      |                ^~~~~~
+sema-switch-gcc.c:11:19: warning: switch missing default case [-Wswitch-default]
+   11 | int h(enum f x) { switch (x) { case X: case Y: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:11:19: warning: enumeration value 'Z' not handled in switch [-Wswitch]
+   11 | int h(enum f x) { switch (x) { case X: case Y: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:12:19: warning: switch missing default case [-Wswitch-default]
+   12 | int i(enum f x) { switch (x) { case X: case Y: case Z: case X | Y: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:12:56: warning: case value '3' not in enumerated type 'enum f' [-Wswitch]
+   12 | int i(enum f x) { switch (x) { case X: case Y: case Z: case X | Y: return 1; } return 0; }
+      |                                                        ^~~~
+sema-switch-gcc.c:13:19: warning: switch missing default case [-Wswitch-default]
+   13 | int k(enum e x) { switch ((int)x) { case A: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:14:19: warning: switch missing default case [-Wswitch-default]
+   14 | int l(enum e x) { switch (x + 0) { case A: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:15:19: warning: switch missing default case [-Wswitch-default]
+   15 | int m(enum g x) { switch (x) { case G1: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:16:19: warning: switch missing default case [-Wswitch-default]
+   16 | int n(enum e x) { switch (x) { case A ... B: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:16:19: warning: enumeration value 'C' not handled in switch [-Wswitch]
+   16 | int n(enum e x) { switch (x) { case A ... B: return 1; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:17:19: warning: switch missing default case [-Wswitch-default]
+   17 | int o(enum e x) { switch (x) { } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:17:19: warning: enumeration value 'A' not handled in switch [-Wswitch]
+   17 | int o(enum e x) { switch (x) { } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:17:19: warning: enumeration value 'B' not handled in switch [-Wswitch]
+   17 | int o(enum e x) { switch (x) { } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:17:19: warning: enumeration value 'C' not handled in switch [-Wswitch]
+   17 | int o(enum e x) { switch (x) { } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:18:19: warning: switch missing default case [-Wswitch-default]
+   18 | int p(enum e x) { switch (x) { case A: case B: break; case C: break; case C+1: break; } return 0; }
+      |                   ^~~~~~
+sema-switch-gcc.c:18:70: warning: case value '3' not in enumerated type 'enum e' [-Wswitch]
+   18 | int p(enum e x) { switch (x) { case A: case B: break; case C: break; case C+1: break; } return 0; }
+      |                                                                      ^~~~
+sema-switch-gcc.c:19:26: warning: switch missing default case [-Wswitch-default]
+   19 | int q(unsigned char x) { switch (x) { case 300: return 1; case -1: return 2; } return 0; }
+      |                          ^~~~~~
+sema-switch-gcc.c:19:39: warning: case label value exceeds maximum value for type [-Wswitch-outside-range]
+   19 | int q(unsigned char x) { switch (x) { case 300: return 1; case -1: return 2; } return 0; }
+      |                                       ^~~~
+sema-switch-gcc.c:19:59: warning: case label value is less than minimum value for type [-Wswitch-outside-range]
+   19 | int q(unsigned char x) { switch (x) { case 300: return 1; case -1: return 2; } return 0; }
+      |                                                           ^~~~
+sema-switch-gcc.c:20:18: warning: switch missing default case [-Wswitch-default]
+   20 | int r(_Bool x) { switch (x) { case 2: return 1; } return 0; }
+      |                  ^~~~~~
+sema-switch-gcc.c:20:31: warning: case label value exceeds maximum value for type [-Wswitch-outside-range]
+   20 | int r(_Bool x) { switch (x) { case 2: return 1; } return 0; }
+      |                               ^~~~

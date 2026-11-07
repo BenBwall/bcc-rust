@@ -1,0 +1,25 @@
+sema-switch-constant-clang.c:7:23: warning: no case matching constant switch condition '1'
+    7 | int b(void) { switch ((enum e)B) { case A: return 1; } return 0; }
+      |                       ^~~~~~~~~
+sema-switch-constant-clang.c:8:23: warning: no case matching constant switch condition '7'
+    8 | int c(void) { switch ((enum e)7) { case A: case B: return 1; } return 0; }
+      |                       ^~~~~~~~~
+sema-switch-constant-clang.c:9:23: warning: no case matching constant switch condition '1'
+    9 | int d(void) { switch (global) { case A: return 1; } return 0; }
+      |                       ^~~~~~
+sema-switch-constant-clang.c:10:47: warning: no case matching constant switch condition '2'
+   10 | int e(void) { const enum e local = C; switch (local) { case A: return 1; } return 0; }
+      |                                               ^~~~~
+sema-switch-constant-clang.c:12:25: warning: no case matching constant switch condition '3'
+   12 | int g(void) { switch (2 + 1) { case 0: return 1; } return 0; }
+      |                         ^
+sema-switch-constant-clang.c:14:37: warning: case value not in enumerated type 'enum u' [-Wswitch]
+   14 | int i(enum u x) { switch (x) { case -2: case -1: case 0: return 1; } return 0; }
+      |                                     ^~
+sema-switch-constant-clang.c:16:37: warning: overflow converting case value to switch condition type (8589934591 to 4294967295) [-Wswitch]
+   16 | int k(enum u x) { switch (x) { case 0x1ffffffffLL: case 0: return 1; } return 0; }
+      |                                     ^~~~~~~~~~~~~
+sema-switch-constant-clang.c:21:27: warning: enumeration value 'M3' not handled in switch [-Wswitch]
+   21 | int p(enum m x) { switch (x) { case M1: return 1; } return 0; }
+      |                           ^
+8 warnings generated.

@@ -3102,7 +3102,11 @@ instruction to a location in a side table that stays empty without `-g`, so the
 instruction record does not grow and a compilation without it pays nothing but
 a few empty tables. The configuration leaves `debug_info` unset when the back
 end would not use it, so lowering records nothing for the native back end, the
-WebAssembly back end or the interpreter.
+WebAssembly back end or the interpreter. The explorer is the exception: it asks
+for the `-g1` tables with physical lines (`DebugOptions::physical`), so that
+every view links to the source line by line, and has the native back end follow
+each machine instruction to the IR instruction it was selected for
+(`native::emit_assembly_listing`). Neither changes a line of the code.
 
 **Locals in memory.** GCC and Clang keep every named local in memory at `-O0`,
 which is what lets a debugger read and set one at any line. bcc keeps a scalar
