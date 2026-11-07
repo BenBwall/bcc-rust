@@ -379,6 +379,14 @@ pub(crate) enum BuiltinOperation {
     /// (`__builtin_ia32_pause` and the fences): the instruction's text. GCC
     /// manual, "x86 Built-in Functions".
     X86Instruction(&'static str),
+    /// GCC and Clang `__builtin_cpu_init`: runs the constructor that fills
+    /// `__cpu_model`, for code that runs before constructors do. It returns
+    /// `int` in GCC and nothing in Clang. GCC manual, "x86 Built-in Functions".
+    CpuInit,
+    /// GCC and Clang `__builtin_cpu_supports`: whether the running processor
+    /// has a feature (`false`), and `__builtin_cpu_is`: whether it is a kind of
+    /// processor (`true`). GCC manual, "x86 Built-in Functions".
+    CpuQuery(bool),
     /// Microsoft `__debugbreak`: a breakpoint trap after which execution
     /// may continue. MSVC extension: Microsoft Learn, "__debugbreak".
     /// <https://learn.microsoft.com/en-us/cpp/intrinsics/debugbreak>

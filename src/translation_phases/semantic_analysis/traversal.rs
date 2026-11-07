@@ -59,6 +59,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 || matches!(e.kind, E::Countof(_)),
         );
         let branch = self.begin_branch_operand(e);
+        self.enter_expression(e);
         self.work.push(Work::ExpressionDone(e));
         match e.kind {
             | E::Parenthesized { expression }
@@ -108,6 +109,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             self.functions.skipped_operand,
                         )));
                 }
+                if let Some(live) = live {
+                    self.work.push(Work::SkippedOperand(left_expression, live, false));
+                }
                 self.work.push(Work::Expression(right_expression));
                 if let Some(live) = live.filter(|_| !branch) {
                     self.dead_arm(left_expression, live, Some(right_expression));
@@ -120,6 +124,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         left_expression,
                         live,
                     )));
+                    self.work.push(Work::SkippedOperand(left_expression, live, true));
                 }
                 if live.is_some() && !branch {
                     self.begin_condition_references(left_expression);
@@ -136,6 +141,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         e, 2, outer, self.functions.elided,
                     )));
                 for (arm, live, mark) in [(c.else_expression, false, 1), (c.then_expression, true, 0)] {
+                    self.work.push(Work::SkippedOperand(c.condition_expression, live, false));
                     if branch {
                         self.work.push(Work::Expression(arm));
                     } else {
@@ -147,6 +153,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             outer_elided: self.functions.elided,
                         }));
                     }
+                    self.work.push(Work::SkippedOperand(c.condition_expression, live, true));
                     self.work.push(Work::FunctionWork(FunctionWork::ConditionalMark(
                         e, mark, outer, self.functions.elided,
                     )));
@@ -207,6 +214,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // even when its body jumps away.
                 self.begin_statement_expression(s);
                 self.enter_statement_expression(e.source_vectors);
+                self.begin_nested_full_expressions();
                 self.work.push(Work::Statement(s, true));
             },
             | E::Generic(g) => {
@@ -230,7 +238,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 for association in g.associations.iter().rev() {
                     self.work
                         .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
+                    if let Some(name) = association.type_name {
+                        self.work.push(Work::GenericAssociation(g, name, false));
+                    }
                     self.work.push(Work::Expression(association.expression));
+                    if let Some(name) = association.type_name {
+                        self.work.push(Work::GenericAssociation(g, name, true));
+                    }
                     self.work
                         .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
                     if let Some(name) = association.type_name {
@@ -239,7 +253,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 self.work
                     .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
+                self.work.push(Work::Unevaluated(false));
                 self.syntax_operand(g.controlling);
+                self.work.push(Work::Unevaluated(true));
                 self.work
                     .push(Work::FunctionWork(FunctionWork::GenericMark(g)));
             },
@@ -581,6 +597,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(initializer) = f.initializer {
                     match initializer {
                         | ForInitializer::Declaration(d) => {
+                            self.report_for_declaration(d.source_vectors);
                             self.for_declaration(d);
                             self.work.push(Work::Declaration(d));
                         },
@@ -705,5 +722,96 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | ExpressionSlot::Missing(_) => {},
         }
+    }
+}
+
+impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Counts `e` in its full expression, and enters the unevaluated
+    /// operand it may be: GCC silences the type name of a `sizeof` too,
+    /// where Clang evaluates a bound as any other.
+    /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92; §6.8 paragraph 4, p. 131;
+    /// PDF p. 143 (full expressions).
+    fn enter_expression(&mut self, e: &'tu Expression<'tu>) {
+        if self.expression_depth == 0 {
+            self.full_expression_start = self.pending_overflows.len();
+        }
+        self.expression_depth += 1;
+        if self.silences_evaluation_warnings(e) {
+            self.inhibited_evaluations += 1;
+        }
+    }
+
+    /// Undoes [`Self::enter_expression`], and checks a finished full
+    /// expression.
+    pub(super) fn leave_expression(&mut self, e: &'tu Expression<'tu>) {
+        if self.silences_evaluation_warnings(e) {
+            self.inhibited_evaluations -= 1;
+        }
+        self.expression_depth -= 1;
+        if self.expression_depth == 0 {
+            self.finish_full_expression(e, self.full_expression_start);
+        }
+    }
+
+    fn silences_evaluation_warnings(&self, e: &'tu Expression<'tu>) -> bool {
+        match e.kind {
+            | ExpressionType::SizeofExpr(_) | ExpressionType::AlignofExpr(_) => true,
+            | ExpressionType::SizeofType(_) | ExpressionType::AlignofType(_) =>
+                self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Gcc,
+            | _ => false,
+        }
+    }
+
+    /// Schedules `expression`, which a context requires to be constant.
+    /// C99: §6.6 paragraph 2, p. 95; PDF p. 107.
+    pub(super) fn constant_expression(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        site: super::exceptional_constants::ConstantSite,
+    ) {
+        self.work.push(Work::ConstantContextEnd(site));
+        self.work.push(Work::Expression(expression));
+        self.work.push(Work::ConstantContext);
+    }
+
+    /// Whether GCC finds the association of type `name` in `generic` no
+    /// match for its controlling operand, whose evaluation warnings it then
+    /// silences, as it does not for `default`.
+    /// C11: §6.5.1.1 paragraph 3, p. 79; PDF p. 97.
+    pub(super) fn unmatched_association(
+        &mut self,
+        generic: &'tu crate::translation_phases::parsing::GenericSelection<'tu>,
+        name: &'tu crate::translation_phases::parsing::declaration_syntax::TypeName<'tu>,
+    ) -> bool {
+        if self.context.configuration.compiler_identity().rules()
+            != crate::configuration::RuleSet::Gcc
+        {
+            return false;
+        }
+        let controlling = match generic.controlling {
+            | super::SyntaxOperand::Expression(operand) => self.expression_info(operand).ty,
+            | super::SyntaxOperand::Type(name) => self
+                .resolved_type_names
+                .get(&super::type_name_identity(name))
+                .copied()
+                .unwrap_or_else(|| self.types.unknown()),
+        };
+        let ty = self
+            .resolved_type_names
+            .get(&super::type_name_identity(name))
+            .copied()
+            .unwrap_or_else(|| self.types.unknown());
+        self.types.composite(controlling, ty).is_none()
+    }
+
+    /// Starts the full expressions inside the current one, which a pushed
+    /// continuation ends.
+    pub(super) fn begin_nested_full_expressions(&mut self) {
+        self.work.push(Work::RestoreFullExpression(
+            self.expression_depth,
+            self.full_expression_start,
+        ));
+        self.expression_depth = 0;
     }
 }

@@ -94,6 +94,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
+                self.report_c90_func(name);
                 let (found, self_reference) = self.identifier_lookup(name);
                 if let Some(index) = found {
                     let binding = self.bindings[index];
@@ -228,6 +229,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.constant = ConstantClass::Arithmetic;
             },
             | E::Constant(Constant::Char(value)) => {
+                if let CharacterTokenType::MultiChar(packed) = value {
+                    self.report_multicharacter_constant(e, packed);
+                }
                 // C11 §6.4.4.4p11: `u` and `U` constants have `char16_t` and
                 // `char32_t` type; C23 §6.4.4.5p12: `u8` (a C23 construct in
                 // every mode) has `char8_t`.
@@ -413,38 +417,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.check_conditional_sign(c.then_expression, c.else_expression);
                 }
             },
-            | E::SizeofType(name) | E::AlignofType(name) => {
-                let ty = self
-                    .resolved_type_names
-                    .get(&super::type_name_identity(name))
-                    .copied()
-                    .unwrap_or_else(|| self.types.unknown());
-                info = self.type_sizeof(e, ty, None, matches!(e.kind, E::AlignofType(_)));
-                if matches!(e.kind, E::SizeofType(_))
-                    && let Some(site) = self.type_name_sites.get(&super::type_name_identity(name))
-                {
-                    // C99 6.5.3.4p2: constant sizeof does not execute its
-                    // type operand, even when a pointer is VM through its
-                    // pointee. The declaration/cast site still retains
-                    // typeof's operand evaluation independently.
-                    _ = self.size_query_sites.insert(
-                        std::ptr::from_ref(e).addr(),
-                        super::SizeQueryFacts {
-                            formula: None,
-                            operand: None,
-                            site:    super::BoundSiteFacts {
-                                bounds: if info.ice { &[] } else { site.bounds },
-                                ty,
-                                operand_evaluations: if info.ice {
-                                    &[]
-                                } else {
-                                    site.operand_evaluations
-                                },
-                            },
-                        },
-                    );
-                }
-            },
+            | E::SizeofType(name) | E::AlignofType(name) => info = self.sizeof_type_result(e, name),
             | E::SizeofExpr(operand) | E::AlignofExpr(operand) => {
                 let operand_syntax = operand;
                 let operand = self.expression_info(operand);
@@ -638,6 +611,51 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.retain_expression(info);
     }
+
+    /// The result of `sizeof` or `_Alignof` of the type name `name`.
+    /// C99: §6.5.3.4, p. 80; PDF p. 92.
+    fn sizeof_type_result(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        name: &'tu crate::translation_phases::parsing::declaration_syntax::TypeName<'tu>,
+    ) -> ExpressionInfo<'tu> {
+        let ty = self
+            .resolved_type_names
+            .get(&super::type_name_identity(name))
+            .copied()
+            .unwrap_or_else(|| self.types.unknown());
+        let info = self.type_sizeof(
+            e,
+            ty,
+            None,
+            matches!(e.kind, ExpressionType::AlignofType(_)),
+        );
+        if matches!(e.kind, ExpressionType::SizeofType(_))
+            && let Some(site) = self.type_name_sites.get(&super::type_name_identity(name))
+        {
+            // C99 6.5.3.4p2: constant sizeof does not execute its
+            // type operand, even when a pointer is VM through its
+            // pointee. The declaration/cast site still retains
+            // typeof's operand evaluation independently.
+            _ = self.size_query_sites.insert(
+                std::ptr::from_ref(e).addr(),
+                super::SizeQueryFacts {
+                    formula: None,
+                    operand: None,
+                    site:    super::BoundSiteFacts {
+                        bounds: if info.ice { &[] } else { site.bounds },
+                        ty,
+                        operand_evaluations: if info.ice {
+                            &[]
+                        } else {
+                            site.operand_evaluations
+                        },
+                    },
+                },
+            );
+        }
+        info
+    }
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -733,6 +751,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.6 paragraph 10, p. 96; PDF p. 108.
     fn operand_folding(&self, e: &'tu Expression<'tu>, info: &mut ExpressionInfo<'tu>) {
         use ExpressionType as E;
+        if self.context.configuration.folds_exceptional_constants()
+            && let Some(folding) = self.carried_exceptional(e, info)
+        {
+            info.folding = folding;
+            info.ice = false;
+            return;
+        }
         // C99 §6.6p10 permits additional constant forms. Preserve the
         // GNU-folded address difference and compound literal value
         // through enclosing arithmetic, a literal's read over an

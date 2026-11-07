@@ -41,6 +41,8 @@ pub(crate) struct SymbolFacts<'tu> {
     pub(crate) init_functions: &'tu [InitFunctionFacts],
     /// Every alias declaration, resolved to the definition it names.
     pub(crate) aliases: &'tu [AliasFacts],
+    /// Every `weakref`, with the binding of its target if this unit has one.
+    pub(crate) weakrefs: &'tu [WeakrefFacts],
     /// Accepted attributes and conventions whose meaning code generation
     /// does not implement; lowering refuses each one at its provenance.
     pub(crate) refusals: &'tu [AttributeRefusal],
@@ -101,6 +103,12 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) no_sanitize_address: bool,
     /// GNU `no_sanitize` naming `ThreadSanitizer` on a function.
     pub(crate) no_sanitize_thread:  bool,
+    /// GNU `target` on a function, with text that makes GCC or Clang pass
+    /// vectors of 32 bytes or more otherwise than the command line does. bcc
+    /// ignores the attribute (`lowering/wide_vectors.rs` refuses what that
+    /// would miscompile).
+    /// GNU extension: GCC manual, "x86 Function Attributes".
+    pub(crate) target_vector_abi:   bool,
     /// x86 `interrupt`: an interrupt or exception handler.
     /// GNU extension: GCC manual, "x86 Function Attributes".
     pub(crate) interrupt:           bool,
@@ -218,6 +226,17 @@ pub(crate) struct AliasFacts {
     pub(crate) binding: usize,
     pub(crate) target:  usize,
     pub(crate) source:  SourceVectors,
+    /// The target is a resolver that chooses the definition at load time.
+    pub(crate) ifunc:   bool,
+}
+
+/// A `weakref` declaration on `binding`, naming the symbol `name`, and the
+/// binding of that symbol when this unit declares it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WeakrefFacts {
+    pub(crate) binding: usize,
+    pub(crate) name:    StringCacheId,
+    pub(crate) target:  Option<usize>,
 }
 
 /// A function to run before (`Constructor`) or after (`Destructor`) the
@@ -254,10 +273,6 @@ pub(crate) struct AttributeRefusal {
 pub(crate) enum UnsupportedAttribute {
     /// A calling convention other than the target's default C convention.
     CallingConvention,
-    /// GNU `ifunc`: a symbol resolved by a function at load time.
-    Ifunc,
-    /// GNU `weakref`: a weak reference to another symbol.
-    Weakref,
     /// GNU/MSVC `naked`: a body without prologue or epilogue.
     Naked,
     /// Clang `cpu_dispatch`/`cpu_specific`/`target_version` multiversioning.
@@ -286,8 +301,6 @@ impl UnsupportedAttribute {
     pub(crate) const fn description(self) -> &'static str {
         match self {
             | Self::CallingConvention => "calling conventions",
-            | Self::Ifunc => "the `ifunc` attribute",
-            | Self::Weakref => "the `weakref` attribute",
             | Self::Naked => "naked functions",
             | Self::Multiversioning => "function multiversioning attributes",
             | Self::InitFunctionParameters => "constructors and destructors with parameters",
