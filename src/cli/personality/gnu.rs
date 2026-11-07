@@ -1696,6 +1696,8 @@ impl State<'_> {
                     | "-Wno-main-return-type"
                     | "-Wundefined-internal"
                     | "-Wno-undefined-internal"
+                    | "-Winvalid-noreturn"
+                    | "-Wno-invalid-noreturn"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an
