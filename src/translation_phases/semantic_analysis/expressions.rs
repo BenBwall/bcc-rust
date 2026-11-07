@@ -417,38 +417,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.check_conditional_sign(c.then_expression, c.else_expression);
                 }
             },
-            | E::SizeofType(name) | E::AlignofType(name) => {
-                let ty = self
-                    .resolved_type_names
-                    .get(&super::type_name_identity(name))
-                    .copied()
-                    .unwrap_or_else(|| self.types.unknown());
-                info = self.type_sizeof(e, ty, None, matches!(e.kind, E::AlignofType(_)));
-                if matches!(e.kind, E::SizeofType(_))
-                    && let Some(site) = self.type_name_sites.get(&super::type_name_identity(name))
-                {
-                    // C99 6.5.3.4p2: constant sizeof does not execute its
-                    // type operand, even when a pointer is VM through its
-                    // pointee. The declaration/cast site still retains
-                    // typeof's operand evaluation independently.
-                    _ = self.size_query_sites.insert(
-                        std::ptr::from_ref(e).addr(),
-                        super::SizeQueryFacts {
-                            formula: None,
-                            operand: None,
-                            site:    super::BoundSiteFacts {
-                                bounds: if info.ice { &[] } else { site.bounds },
-                                ty,
-                                operand_evaluations: if info.ice {
-                                    &[]
-                                } else {
-                                    site.operand_evaluations
-                                },
-                            },
-                        },
-                    );
-                }
-            },
+            | E::SizeofType(name) | E::AlignofType(name) => info = self.sizeof_type_result(e, name),
             | E::SizeofExpr(operand) | E::AlignofExpr(operand) => {
                 let operand_syntax = operand;
                 let operand = self.expression_info(operand);
@@ -641,6 +610,51 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.retain_statement_expression(e, block, info.ty);
         }
         self.retain_expression(info);
+    }
+
+    /// The result of `sizeof` or `_Alignof` of the type name `name`.
+    /// C99: §6.5.3.4, p. 80; PDF p. 92.
+    fn sizeof_type_result(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        name: &'tu crate::translation_phases::parsing::declaration_syntax::TypeName<'tu>,
+    ) -> ExpressionInfo<'tu> {
+        let ty = self
+            .resolved_type_names
+            .get(&super::type_name_identity(name))
+            .copied()
+            .unwrap_or_else(|| self.types.unknown());
+        let info = self.type_sizeof(
+            e,
+            ty,
+            None,
+            matches!(e.kind, ExpressionType::AlignofType(_)),
+        );
+        if matches!(e.kind, ExpressionType::SizeofType(_))
+            && let Some(site) = self.type_name_sites.get(&super::type_name_identity(name))
+        {
+            // C99 6.5.3.4p2: constant sizeof does not execute its
+            // type operand, even when a pointer is VM through its
+            // pointee. The declaration/cast site still retains
+            // typeof's operand evaluation independently.
+            _ = self.size_query_sites.insert(
+                std::ptr::from_ref(e).addr(),
+                super::SizeQueryFacts {
+                    formula: None,
+                    operand: None,
+                    site:    super::BoundSiteFacts {
+                        bounds: if info.ice { &[] } else { site.bounds },
+                        ty,
+                        operand_evaluations: if info.ice {
+                            &[]
+                        } else {
+                            site.operand_evaluations
+                        },
+                    },
+                },
+            );
+        }
+        info
     }
 }
 
