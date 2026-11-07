@@ -41,6 +41,8 @@ pub(crate) struct SymbolFacts<'tu> {
     pub(crate) init_functions: &'tu [InitFunctionFacts],
     /// Every alias declaration, resolved to the definition it names.
     pub(crate) aliases: &'tu [AliasFacts],
+    /// Every `weakref`, with the binding of its target if this unit has one.
+    pub(crate) weakrefs: &'tu [WeakrefFacts],
     /// Accepted attributes and conventions whose meaning code generation
     /// does not implement; lowering refuses each one at its provenance.
     pub(crate) refusals: &'tu [AttributeRefusal],
@@ -222,6 +224,15 @@ pub(crate) struct AliasFacts {
     pub(crate) ifunc:   bool,
 }
 
+/// A `weakref` declaration on `binding`, naming the symbol `name`, and the
+/// binding of that symbol when this unit declares it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WeakrefFacts {
+    pub(crate) binding: usize,
+    pub(crate) name:    StringCacheId,
+    pub(crate) target:  Option<usize>,
+}
+
 /// A function to run before (`Constructor`) or after (`Destructor`) the
 /// program's entry, with GCC's default priority 65535 when none is written.
 #[derive(Debug, Clone, Copy)]
@@ -256,8 +267,6 @@ pub(crate) struct AttributeRefusal {
 pub(crate) enum UnsupportedAttribute {
     /// A calling convention other than the target's default C convention.
     CallingConvention,
-    /// GNU `weakref`: a weak reference to another symbol.
-    Weakref,
     /// GNU/MSVC `naked`: a body without prologue or epilogue.
     Naked,
     /// Clang `cpu_dispatch`/`cpu_specific`/`target_version` multiversioning.
@@ -286,7 +295,6 @@ impl UnsupportedAttribute {
     pub(crate) const fn description(self) -> &'static str {
         match self {
             | Self::CallingConvention => "calling conventions",
-            | Self::Weakref => "the `weakref` attribute",
             | Self::Naked => "naked functions",
             | Self::Multiversioning => "function multiversioning attributes",
             | Self::InitFunctionParameters => "constructors and destructors with parameters",

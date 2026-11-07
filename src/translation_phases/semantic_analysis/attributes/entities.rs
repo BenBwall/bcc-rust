@@ -41,6 +41,7 @@ use super::{
             SymbolFacts,
             UnsupportedAttribute,
             Visibility,
+            WeakrefFacts,
         },
         types::{
             Scalar,
@@ -174,6 +175,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::Weak => self.weak_attribute(subject, attribute),
                 | Rule::Alias => self.alias_attribute(subject, attribute, false),
                 | Rule::Ifunc => self.ifunc_attribute(subject, attribute),
+                | Rule::Weakref => self.weakref_attribute(subject, attribute),
                 | Rule::Section => self.section_attribute(subject, attribute),
                 | Rule::Used => self.used_attribute(subject, attribute),
                 | Rule::Visibility => self.visibility_attribute(subject, attribute),
@@ -728,6 +730,44 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let entity = self.entity_of(binding);
                 self.attributes.entity(entity).returns_twice = true;
             }
+        }
+    }
+
+    /// GCC's and Clang's `weakref("target")` or `weakref` beside an `alias`, on
+    /// a declaration with internal linkage: another name for `target`, whose
+    /// uses are weak unless this unit declares the target itself.
+    /// GNU extension: GCC manual, "Common Function Attributes", weakref.
+    fn weakref_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        let (Subject::Function { binding, .. } | Subject::Object { binding, .. }) = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        if self.bindings[binding].linkage != Linkage::Internal {
+            self.error(
+                SemanticErrorKind::WeakrefLinkage,
+                attribute.source,
+                Some(self.bindings[binding].name.name),
+                None,
+            );
+            return;
+        }
+        let entity = self.entity_of(binding);
+        self.attributes.entity(entity).weak = true;
+        // With no target, the `alias` beside it names one.
+        if attribute.arguments.is_some() {
+            let identity = self.function_identity(binding);
+            _ = self.attributes.alias_names.insert(identity, binding);
+            let Some(target) = self.string_argument(attribute) else {
+                return;
+            };
+            let target = self.context.string_cache.intern(target);
+            self.attributes
+                .weakrefs
+                .push(WeakrefRequest { binding, target });
+        } else {
+            self.attributes
+                .bare_weakrefs
+                .push((binding, attribute.source));
         }
     }
 
@@ -1398,16 +1438,106 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             conventions: tu.alloc_slice_copy(&self.attributes.conventions),
             init_functions: init_functions.leak(),
             aliases: &[],
+            weakrefs: &[],
             refusals: tu.alloc_slice_copy(&self.attributes.refusals),
         }
     }
 
     /// Resolves target strings against emitted symbols after ABI finalization.
     /// Semantic overload identities are deliberately not linker spellings.
+    /// Resolves each `weakref`, whose target need not exist: a declaration of
+    /// it in this unit makes the uses ordinary ones. A bare `weakref` takes the
+    /// `alias` beside it. Clang requires that `alias`, and without one GCC is
+    /// left with a declaration.
+    fn finish_weakrefs(&mut self, symbols: &mut SymbolFacts<'tu>) {
+        let tu = self.types.tu;
+        for index in 0..self.attributes.bare_weakrefs.len() {
+            let (binding, source) = self.attributes.bare_weakrefs[index];
+            let alias = self
+                .attributes
+                .aliases
+                .iter()
+                .position(|request| request.binding == binding);
+            match alias {
+                | Some(alias) => {
+                    let request = self.attributes.aliases.remove(alias);
+                    self.attributes.weakrefs.push(WeakrefRequest {
+                        binding,
+                        target: request.target,
+                    });
+                },
+                | None if !self.gcc_identity() => self.error(
+                    SemanticErrorKind::WeakrefAlias,
+                    source,
+                    Some(self.bindings[binding].name.name),
+                    None,
+                ),
+                | None => {},
+            }
+        }
+        let mut weakrefs = ArenaVec::new_in(tu);
+        let mut cycle_reported = false;
+        for index in 0..self.attributes.weakrefs.len() {
+            let request = self.attributes.weakrefs[index];
+            let cycle = self.weakref_cycle(request.target);
+            if cycle && self.gcc_identity() && !cycle_reported {
+                cycle_reported = true;
+                self.error(
+                    SemanticErrorKind::AliasCycle,
+                    self.bindings[request.binding].name.source_vectors,
+                    Some(self.bindings[request.binding].name.name),
+                    None,
+                );
+            }
+            // A target this unit only declares is what the weakref names, and
+            // so stays weak unless something else refers to it. One in a cycle
+            // has nothing to reach, which Clang leaves to the run.
+            let target = self
+                .linked_entity(request.target)
+                .filter(|&(target, defined)| {
+                    !cycle
+                        && target != request.binding
+                        && (defined || self.is_weakref_name(self.bindings[target].name.name))
+                })
+                .map(|(target, _)| target);
+            weakrefs.push(WeakrefFacts {
+                binding: request.binding,
+                name: request.target,
+                target,
+            });
+        }
+        symbols.weakrefs = weakrefs.leak();
+    }
+
+    /// Whether a declaration of `name` is itself a `weakref`.
+    fn is_weakref_name(&self, name: StringCacheId) -> bool {
+        self.attributes
+            .weakrefs
+            .iter()
+            .any(|request| self.bindings[request.binding].name.name == name)
+    }
+
+    /// Whether following `weakref`s from `name` never reaches anything else.
+    fn weakref_cycle(&self, mut name: StringCacheId) -> bool {
+        for _ in 0..=self.attributes.weakrefs.len() {
+            let next = self
+                .attributes
+                .weakrefs
+                .iter()
+                .find(|request| self.bindings[request.binding].name.name == name);
+            let Some(next) = next else {
+                return false;
+            };
+            name = next.target;
+        }
+        true
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn finish_aliases(
         &mut self,
         symbols: &mut SymbolFacts<'tu>,
     ) {
+        self.finish_weakrefs(symbols);
         if self.attributes.aliases.is_empty() {
             return;
         }
@@ -1638,6 +1768,8 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Constructor and destructor priorities requested for an entity.
     initializers: ArenaMap<'s, EntityId, (Option<u16>, Option<u16>)>,
     aliases: ArenaVec<'s, AliasRequest>,
+    weakrefs: ArenaVec<'s, WeakrefRequest>,
+    bare_weakrefs: ArenaVec<'s, (usize, SourceVectors)>,
     /// Stable linked semantic identities with an alias request, one each.
     alias_names: ArenaMap<'s, StringCacheId, usize>,
     /// Validated cleanups by declarator identity, waiting for the end of
@@ -1686,6 +1818,8 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             sections:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             initializers:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             aliases:            ArenaVec::new_in(scratch),
+            weakrefs:           ArenaVec::new_in(scratch),
+            bare_weakrefs:      ArenaVec::new_in(scratch),
             alias_names:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             pending_cleanups:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             before_definition:  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -1710,8 +1844,15 @@ impl<'tu, 's> AttributeState<'tu, 's> {
     }
 }
 
+/// A `weakref` declaration and the name of its target.
+#[derive(Debug, Clone, Copy)]
+struct WeakrefRequest {
+    binding: usize,
+    target:  StringCacheId,
+}
+
 /// An alias declaration and the name of its target.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct AliasRequest {
     binding: usize,
     target:  StringCacheId,
