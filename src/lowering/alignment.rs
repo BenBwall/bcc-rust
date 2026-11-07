@@ -162,6 +162,11 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
         };
         let address = self.ptr_add(base, offset);
         self.retain_alignment(address, align);
+        if let Some(stride) = stride
+            && self.draft.constant(offset).is_none()
+        {
+            self.note_stride(base, address, stride);
+        }
         Ok(address)
     }
 

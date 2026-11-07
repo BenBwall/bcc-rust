@@ -37,6 +37,7 @@ mod predefined;
 
 // Code generation options
 mod code_options;
+pub(crate) mod sanitizers;
 
 // ELF named-section policy shared by semantics and code generation
 pub(crate) mod sections;

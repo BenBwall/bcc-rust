@@ -201,9 +201,80 @@ has nowhere defined to go, so `-O2` treats it as unreachable.
 On Linux with the LLVM back end, `-fsanitize=address` and `-fsanitize=thread`
 instrument the code and link the bundled clang's run-time library, and
 `no_sanitize`, `no_sanitize_address` and `no_sanitize_thread` keep a function out.
-The two can't be combined, as in both compilers. Other sanitizers, and lists of
-several in one option, are refused. `-fsanitize=undefined` needs checks written
-during lowering, which bcc doesn't have.
+The two can't be combined, as in both compilers; `--backend=native` refuses them,
+since it writes no such instrumentation.
+
+### UndefinedBehaviorSanitizer
+
+On Linux, `-fsanitize=undefined` and its checks' names work on every back end:
+lowering writes each check into the code (`middle-end.md`, "UndefinedBehaviorSanitizer").
+A failed check calls the run-time library the compiler bcc answers as links:
+GCC's `libubsan`, or the bundled clang's `libclang_rt.ubsan_standalone`, whose
+reports are the compilers' own. With `-fsanitize=address` or `-fsanitize=thread`
+as well, the bundled clang's library for that sanitizer reports in both modes,
+since a second sanitizer run time in the process would not work. The report names
+the place, the types and the values as that compiler's build of the program
+would: on the programs in `tests/integration/undefined_sanitizer.rs` and the
+corpus behind them, every report is GCC 13's or Clang 23's, file, line, column,
+types and values, through the LLVM back end and `--backend=native`.
+
+- The groups differ, and each mode expands its compiler's (measured): both hold
+  `shift` (`shift-base`, `shift-exponent`), `integer-divide-by-zero`,
+  `unreachable`, `vla-bound`, `null`, `return`, `signed-integer-overflow`,
+  `bool`, `enum`, the array bounds check (GCC's `bounds`, Clang's
+  `array-bounds`), `alignment`, `object-size`, `nonnull-attribute`,
+  `returns-nonnull-attribute`, `vptr`, `pointer-overflow` and `builtin`; Clang's
+  also holds `float-cast-overflow` and `function`. `return`, `enum` and `vptr`
+  check nothing in C, in either compiler, and neither does bcc.
+- `-fno-sanitize=`, `-fsanitize-recover[=]`, `-fno-sanitize-recover[=]`,
+  `-fsanitize-trap[=]`, `-fno-sanitize-trap[=]` and
+  `-fsanitize-undefined-trap-on-error` apply in order. A check recovers by
+  default, except `unreachable`, as in both. A trapping check runs `ud2`, as
+  GCC's `__builtin_trap` does (Clang's `llvm.ubsantrap` is `ud1` with a code);
+  either ends the program with `SIGILL`, and needs no library.
+- A name the compiler does not know there gets its error
+  (`unrecognized argument to '-fsanitize=' option`, `unsupported argument ... to
+  option '-fsanitize='`, and `-fsanitize-recover=unreachable`'s). A check bcc
+  does not write is refused by name: Clang's `function`, `local-bounds`,
+  `implicit-conversion` and the `integer` group, GCC's `bounds-strict`, and
+  `float-divide-by-zero`; so are `-fsanitize-minimal-runtime` and
+  `-fsanitize-undefined-strip-path-components=`. Clang's `-fsanitize=undefined`
+  leaves out `function`, which checks calls through a function pointer of the
+  wrong type.
+- `no_sanitize("undefined")`, `no_sanitize("check")` and GCC's
+  `no_sanitize_undefined` keep a function out. `__has_feature
+  (undefined_behavior_sanitizer)` answers 1, in both modes as in GCC 14 and Clang.
+- Where a report points follows each compiler. Clang's is the expression's
+  location (an operator, a member's name, where a subscript or a converted
+  operand starts). GCC checks most operations after gimplification: an operation
+  computed straight into a register (a local scalar whose address is never taken)
+  reports at the `=` or the declared name, a call's argument at the call, and any
+  other at its operator; its shift, division, bounds and conversion checks report
+  at the operator, and a conversion of a name where the statement starts. GCC
+  orders a commutative operation's operands with a constant second.
+- GCC checks the room left in an object only for a local or global object at
+  `-O0` (all objects when optimizing); Clang only when optimizing, in the same
+  report as `null` and `alignment`, and not for an element whose index it checked.
+- `-fwrapv` drops the overflow checks and `shift-base` in both; GCC still checks
+  `INT_MIN / -1`.
+
+What differs:
+
+- A type is spelled from its canonical type: where both compilers name a typedef
+  (`'size_t [2]'`, `'myint' (aka 'int')`), bcc names what it stands for.
+- GCC's folding removes some checks before they run (`m + 1 > 0` becomes
+  `m > -1`), and both compilers' optimizers drop checks after an earlier report
+  told them an address was aligned or a pointer non-null; bcc keeps those
+  checks, so after a report the run may report more than theirs.
+- A `_BitInt` of a width other than a standard type's is not checked, where
+  Clang checks it; nor is an operation on a GNU complex integer, a vector, or a
+  16-bit floating type, or a conversion to a 128-bit integer.
+- `-fsanitize=bounds` in the Clang mode checks arrays only, without Clang's
+  `local-bounds`.
+- The interpreter refuses checks that report through the library, which it does
+  not have; it runs trapping ones. The musl and Windows targets refuse
+  `-fsanitize=undefined`, as they do the other sanitizers: the bundled libraries
+  are glibc's.
 
 The feature-test operators (`__has_include`, `__has_c_attribute`,
 `__has_attribute`, `__has_builtin`, `__has_feature`, `__has_extension`, and

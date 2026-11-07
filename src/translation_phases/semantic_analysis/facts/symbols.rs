@@ -64,75 +64,85 @@ impl<'tu> SymbolFacts<'tu> {
 pub(crate) struct EntityAttributes<'tu> {
     /// GNU `weak`: a definition yields to a strong one at link time; an
     /// undefined declaration may stay undefined, with a null address.
-    pub(crate) weak:                bool,
+    pub(crate) weak:                  bool,
     /// GCC's `weakref`, whose target may be missing at run time.
-    pub(crate) weak_reference:      bool,
+    pub(crate) weak_reference:        bool,
     /// GNU `section("name")`, from the declaration that wrote it.
-    pub(crate) section:             Option<&'tu str>,
+    pub(crate) section:               Option<&'tu str>,
     /// GNU `used`: emit the definition even if nothing references it.
-    pub(crate) used:                bool,
+    pub(crate) used:                  bool,
     /// GNU `aligned` on a function: the alignment of its code, in bytes.
-    pub(crate) code_alignment:      u32,
+    pub(crate) code_alignment:        u32,
     /// GNU `visibility`, from the declaration that wrote it.
-    pub(crate) visibility:          Option<Visibility>,
+    pub(crate) visibility:            Option<Visibility>,
     /// Calls may return a second time, after a `longjmp`: GNU
     /// `returns_twice`, or a linked function that the external-symbol
     /// contract (`builtins::external_contract`) lists, as `_setjmp` is.
     /// Lowering marks the IR function, which the optimizer and back ends
     /// read. C99: §7.13.2.1 paragraph 4, p. 244; PDF p. 256.
-    pub(crate) returns_twice:       bool,
+    pub(crate) returns_twice:         bool,
     /// GNU `nonnull`: zero-based parameter positions, or None when absent.
     /// An empty slice applies to every pointer parameter. These facts are
     /// diagnostic only.
-    pub(crate) nonnull:             Option<&'tu [usize]>,
+    pub(crate) nonnull:               Option<&'tu [usize]>,
+    /// Where the first `nonnull` was written, which Clang's
+    /// `UndefinedBehaviorSanitizer` report points to.
+    pub(crate) nonnull_site:          Option<SourceVectors>,
+    /// GNU `returns_nonnull` on a function returning a pointer, and where it
+    /// was written: the result is never null, which
+    /// `-fsanitize=returns-nonnull-attribute` checks.
+    pub(crate) returns_nonnull:       Option<SourceVectors>,
     /// GNU error/warning contract, retained from the first declaration.
-    pub(crate) call_diagnostic:     Option<FunctionCallDiagnostic>,
+    pub(crate) call_diagnostic:       Option<FunctionCallDiagnostic>,
     /// A declaration of the object specifies its alignment, by GNU
     /// `aligned` or `_Alignas`, rather than a typedef: that alignment is the
     /// object's own, which the System V rule for large arrays does not raise
     /// (as in Clang, `ASTContext::getDeclAlign`).
     /// C11: §6.7.5p6, p. 127; PDF p. 145.
-    pub(crate) declared_alignment:  bool,
+    pub(crate) declared_alignment:    bool,
     /// GNU `noinline`/`noipa` or `always_inline` on a function.
-    pub(crate) inlining:            Inlining,
+    pub(crate) inlining:              Inlining,
     /// GNU `no_instrument_function` on a function.
-    pub(crate) no_instrument:       bool,
+    pub(crate) no_instrument:         bool,
     /// GNU `no_stack_protector` on a function.
-    pub(crate) no_stack_protector:  bool,
+    pub(crate) no_stack_protector:    bool,
     /// GNU `no_sanitize` naming `AddressSanitizer` on a function.
-    pub(crate) no_sanitize_address: bool,
+    pub(crate) no_sanitize_address:   bool,
     /// GNU `no_sanitize` naming `ThreadSanitizer` on a function.
-    pub(crate) no_sanitize_thread:  bool,
+    pub(crate) no_sanitize_thread:    bool,
+    /// GNU `no_sanitize` naming `UndefinedBehaviorSanitizer`'s checks, or
+    /// `no_sanitize_undefined`, on a function: the checks it leaves out.
+    pub(crate) no_sanitize_undefined: crate::target::sanitizers::UbChecks,
     /// x86 `interrupt`: an interrupt or exception handler.
     /// GNU extension: GCC manual, "x86 Function Attributes".
-    pub(crate) interrupt:           bool,
+    pub(crate) interrupt:             bool,
     /// x86 `no_caller_saved_registers`: the function preserves every
     /// register it returns no value in.
     /// GNU extension: GCC manual, "x86 Function Attributes".
-    pub(crate) no_caller_saved:     bool,
+    pub(crate) no_caller_saved:       bool,
     /// GNU `naked`: the function has no prologue or epilogue.
     /// GNU extension: GCC manual, "x86 Function Attributes".
-    pub(crate) naked:               bool,
+    pub(crate) naked:                 bool,
     /// Microsoft `selectany` on an external object: its definitions in
     /// different translation units are one, and the linker keeps any.
-    pub(crate) select_any:          bool,
+    pub(crate) select_any:            bool,
     /// GNU `common` (true) or `nocommon` (false) on an object: whether a
     /// tentative definition is a common symbol whatever `-f[no-]common`
     /// says. `common` on any declaration wins over `nocommon`, as in Clang.
     /// GNU extension: GCC manual, "Common Variable Attributes".
-    pub(crate) common:              Option<bool>,
+    pub(crate) common:                Option<bool>,
     /// Windows DLL storage after every declaration: `Export` when the
     /// entity's declarations export it, which applies to a definition this
     /// unit emits; `Import` when this unit's last reference named an
     /// imported declaration, which applies to an undefined symbol, as
     /// Clang's code generation fixes it.
     /// MSVC extension: Microsoft Learn, "dllexport, dllimport".
-    pub(crate) dll:                 Option<DllStorage>,
+    pub(crate) dll:                   Option<DllStorage>,
     /// The COMDAT linkage of an external inline definition that the
     /// Microsoft ABI, or a MinGW `dllexport`, lets every unit repeat, as
     /// Clang's `basicGVALinkageForFunction` assigns it.
     /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19.
-    pub(crate) inline_odr:          Option<InlineOdr>,
+    pub(crate) inline_odr:            Option<InlineOdr>,
 }
 
 impl EntityAttributes<'_> {
