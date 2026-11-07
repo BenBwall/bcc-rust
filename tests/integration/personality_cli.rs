@@ -7766,6 +7766,42 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         }
     }
 
+    /// A prototype's `float` for a K&R `float` parameter: GCC and TCC accept
+    /// it silently and Clang with a warning, and callers pass the prototype's
+    /// type. TCC's own `133_old_func` test calls such a function.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn knr_definitions_keep_a_prototypes_unpromoted_types() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "#include <stdio.h>\nvoid func(float a, short s);\nvoid func(a, s)\nfloat a; short \
+             s;\n{ printf(\"%g %d\\n\", a, s); }\nint main(void) { func(2.5f, 7); func(10.0, 3); \
+             return 0; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["a.c", "-o", "a"]);
+            succeeds(&output);
+            let warned = stderr(&output).contains("[-Wknr-promoted-parameter]");
+            assert_eq!(
+                warned,
+                mode == "--clang-mode",
+                "{mode}: {}",
+                stderr(&output)
+            );
+            let run = Command::new(directory.path("a")).output().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout),
+                "2.5 7\n10 3\n",
+                "{mode}"
+            );
+        }
+        // A declaration that is not a definition still conflicts.
+        directory.write("b.c", "void g(float);\nvoid g();\n");
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "b.c"]);
+        assert!(!output.status.success());
+    }
+
     /// A call to a static function defined nowhere is a warning in GCC and
     /// Clang, and the link is what fails.
     #[test]
@@ -11906,6 +11942,50 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
                 defines(&stdout(&output), "CR_DECIMAL_DIG").is_none(),
                 "{mode}"
             );
+        }
+    }
+
+    /// TCC's `libtcc1.a` defines the `<stdatomic.h>` fences and flag
+    /// operations, so a TCC program may take their addresses (tcc's
+    /// `tests2/151_atomic_header.c`); under `--tcc-mode` each unit carries
+    /// the ones it references as weak definitions, which a program's own
+    /// definition replaces. GCC and Clang leave them to libatomic.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tcc_programs_reach_the_libtcc1_atomic_functions() {
+        let directory = Directory::new();
+        directory.write(
+            "flags.c",
+            "#include <stdatomic.h>\n#include <stdio.h>\nint main(void) {\n  atomic_flag f = \
+             ATOMIC_FLAG_INIT;\n  _Bool (*set)(volatile atomic_flag *) = \
+             &atomic_flag_test_and_set;\n  void (*clear)(volatile atomic_flag *, memory_order) = \
+             &atomic_flag_clear_explicit;\n  void (*thread)(memory_order) = \
+             &atomic_thread_fence;\n  void (*signal)(memory_order) = &atomic_signal_fence;\n  int \
+             a = set(&f), b = set(&f);\n  clear(&f, memory_order_release);\n  int c = \
+             (atomic_flag_test_and_set)(&f);\n  thread(memory_order_seq_cst);\n  \
+             signal(memory_order_acquire);\n  printf(\"%d %d %d\\n\", a, b, c);\n  return 0;\n}\n",
+        );
+        succeeds(&directory.bcc("--tcc-mode", &["flags.c", "-o", "flags.exe"]));
+        let run = Command::new(directory.path("flags.exe")).output().unwrap();
+        assert_eq!(stdout(&run), "0 1 0\n");
+        directory.write(
+            "use.c",
+            "#include <stdatomic.h>\nint main(void) {\n  void (*p)(memory_order) = \
+             atomic_signal_fence;\n  p(memory_order_acquire);\n  \
+             (atomic_signal_fence)(memory_order_release);\n  return 0;\n}\n",
+        );
+        directory.write(
+            "own.c",
+            "#include <stdio.h>\nvoid atomic_signal_fence(int order) { printf(\"own %d\\n\", \
+             order); }\n",
+        );
+        succeeds(&directory.bcc("--tcc-mode", &["use.c", "own.c", "-o", "own.exe"]));
+        let run = Command::new(directory.path("own.exe")).output().unwrap();
+        assert_eq!(stdout(&run), "own 2\nown 3\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["use.c", "-o", "use.exe"]);
+            assert!(!output.status.success(), "{mode}");
+            assert!(stderr(&output).contains("atomic_signal_fence"), "{mode}");
         }
     }
 }

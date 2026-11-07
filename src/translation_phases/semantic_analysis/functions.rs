@@ -123,7 +123,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             }
         } else {
+            self.functions.old_style_definition = f
+                .declarator
+                .kind
+                .iter()
+                .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { .. }))
+                || !f.declaration_list.is_empty();
             self.bind_declaration(f.declarator, f.declaration_specifiers, declared_type, false);
+            self.functions.old_style_definition = false;
         }
         let binding = name
             .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
@@ -1402,6 +1409,96 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Promoted signatures use the identical defining suffix as body bindings.
     /// C99: §6.7.5.3p15, pp. 119-120; PDF pp. 131-132; §6.9.1p6,
     /// p. 141; PDF p. 153. Implicit int is a pre-C99 extension.
+    /// GCC, Clang and TCC take a parameter an identifier list declares with
+    /// the type a preceding prototype gives it, when that is the type it was
+    /// declared with before promotion: `void f(float); void f(a) float a;`,
+    /// which C99 §6.7.5.3p15 makes incompatible. Callers pass what the
+    /// prototype says, so the definition receives that. Each such parameter's
+    /// position and promoted type go to `kept`, which Clang warns about.
+    /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
+    fn keep_prototype_parameters(
+        &mut self,
+        binding: Option<usize>,
+        parameters: &mut [TypeId],
+        original_types: &[TypeId],
+        kept: &mut ArenaVec<'_, (usize, TypeId)>,
+    ) {
+        let Some(index) = binding else {
+            return;
+        };
+        let TypeKind::Function {
+            parameters: prior,
+            prototype: true,
+            ..
+        } = self.types.nodes[self.bindings[index].ty.index]
+        else {
+            return;
+        };
+        if prior.len() != parameters.len() {
+            return;
+        }
+        for (ordinal, slot) in parameters.iter_mut().enumerate() {
+            let declared = original_types.get(ordinal).copied().unwrap_or(*slot);
+            if self.types.composite(prior[ordinal], *slot).is_none()
+                && prior[ordinal].unqualified() == declared.unqualified()
+            {
+                kept.push((ordinal, *slot));
+                *slot = prior[ordinal];
+            }
+        }
+    }
+
+    /// Clang's `-Wknr-promoted-parameter` for a parameter
+    /// [`Self::keep_prototype_parameters`] kept.
+    fn warn_knr_promoted_parameter(
+        &mut self,
+        parameter: Option<usize>,
+        promoted: TypeId,
+        ordinal: usize,
+        function: Option<usize>,
+    ) {
+        if self.context.configuration.compiler_identity().rules()
+            != crate::configuration::RuleSet::Clang
+        {
+            return;
+        }
+        let (Some(parameter), Some(function)) = (parameter, function) else {
+            return;
+        };
+        let TypeKind::Function {
+            parameters: prior, ..
+        } = self.types.nodes[self.bindings[function].ty.index]
+        else {
+            return;
+        };
+        let (Some(from), Some(to)) = (
+            self.type_spelling(promoted, false),
+            prior
+                .get(ordinal)
+                .and_then(|&ty| self.type_spelling(ty, false)),
+        ) else {
+            return;
+        };
+        let text = crate::diagnostics::format_in!(
+            self.scratch,
+            "promoted type '{from}' of K&R function parameter is not compatible with the \
+             parameter type '{to}' declared in a previous prototype"
+        );
+        let name = self.context.string_cache.intern(text);
+        let previous = self
+            .functions
+            .entities
+            .get(&self.function_identity(function))
+            .map(|entity| self.bindings[entity.latest].name.source_vectors);
+        self.group_diagnostic(
+            crate::configuration::DiagnosticGroup::KnrPromotedParameter,
+            SemanticErrorKind::KnrPromotedParameter,
+            self.bindings[parameter].name.source_vectors,
+            Some(name),
+            previous,
+        );
+    }
+
     pub(super) fn old_signature(&mut self, function: &'tu FunctionDefinition<'tu>) {
         let Some(current) = self.functions.current else {
             return;
@@ -1506,6 +1603,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+        let mut mismatched = ArenaVec::new_in(self.scratch);
+        self.keep_prototype_parameters(
+            current.binding,
+            &mut parameters,
+            &original_types,
+            &mut mismatched,
+        );
         self.function_records[current.id].parameter_sites = self.types.tu.alloc_slice_copy(&sites);
         self.function_records[current.id].parameter_facts =
             self.types
@@ -1533,6 +1637,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         }
                     },
                 ));
+        let kept_prototype = !mismatched.is_empty();
+        for (ordinal, promoted) in mismatched {
+            self.warn_knr_promoted_parameter(
+                parameter_bindings[ordinal],
+                promoted,
+                ordinal,
+                current.binding,
+            );
+        }
         let Some(index) = current.binding else {
             return;
         };
@@ -1547,10 +1660,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         let parameters = self.types.tu.alloc_slice_copy(&parameters);
+        // A parameter the prototype's type was kept for compares with it
+        // as one prototype parameter with another.
         let defined = self.types.intern(TypeKind::Function {
             result,
             parameters,
-            prototype: false,
+            prototype: kept_prototype,
             variadic: false,
         });
         // C99 §6.7.5.3p15: a definition's identifier list, including an empty
@@ -3061,6 +3176,9 @@ pub(super) struct State<'tu, 's> {
     /// The skipped state around the innermost switch, which its case
     /// labels resume.
     pub(super) switch_dead: bool,
+    /// A function definition with an identifier list is being declared, so
+    /// its parameters' types are not known yet.
+    pub(super) old_style_definition: bool,
     /// The emission model's state ([`super::emission`]).
     pub(super) emission: super::emission::State<'tu, 's>,
     /// The skipped state at the end of each enclosing `if` statement's
@@ -3111,6 +3229,7 @@ impl<'s> State<'_, 's> {
             elided: false,
             unvisited: false,
             switch_dead: false,
+            old_style_definition: false,
             emission: super::emission::State::new(scratch),
             arm_ends: ArenaVec::new_in(scratch),
             generated_breaks: ArenaVec::new_in(scratch),

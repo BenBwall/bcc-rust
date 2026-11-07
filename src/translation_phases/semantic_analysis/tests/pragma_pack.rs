@@ -3,7 +3,10 @@
 
 use super::*;
 use crate::{
-    configuration::CompilerConfiguration,
+    configuration::{
+        CompilerConfiguration,
+        CompilerIdentity,
+    },
     target::Target,
 };
 
@@ -142,4 +145,62 @@ fn pragma_pack_includes_keep_translation_order() {
         .map(|tag| tag.layout.get().unwrap().size)
         .collect();
     assert_eq!(layouts, [5, 5, 6]);
+}
+
+/// Under `#pragma pack`, GCC (and TCC, tcc's `tests2/95_bitfields.c`)
+/// starts a bit-field with an `aligned` request larger than the pack at the
+/// pack's boundary; Clang leaves it at the bit cursor. The record alignment
+/// is the capped request in both.
+#[test]
+fn pragma_pack_caps_a_bit_field_alignment_request_as_each_compiler_does() {
+    let source = r"
+#define A __attribute__((aligned(16)))
+#pragma pack(push, 1)
+struct A2 { int x: 12; char y: 6; long long z: 63; A char a: 4; long long b: 2; };
+struct A3 { unsigned x: 5, y: 5, : 0, z: 5; char a: 5; A short b: 5; };
+struct B1 { char c: 3; A int : 3; char d; };
+#pragma pack(pop)
+#pragma pack(push, 4)
+struct C1 { char c: 3; A char a: 3; char d; };
+struct C2 { char c: 3; __attribute__((aligned(2))) int a: 3; char d; };
+#pragma pack(pop)
+";
+    // TCC gives an `aligned` bit-field its request as its alignment, even
+    // below the type's and past a pack it does not exceed (`C1` is 3 bytes,
+    // aligned to 1, and `C2` aligned to 2), which bcc does not model; only
+    // its `pack(1)` records are checked.
+    let layouts: [(CompilerIdentity, &[(u64, u64)]); 3] = [
+        (
+            CompilerIdentity::Gcc,
+            &[(12, 1), (7, 1), (3, 1), (8, 4), (4, 4)],
+        ),
+        (CompilerIdentity::Tcc, &[(12, 1), (7, 1), (3, 1)]),
+        (
+            CompilerIdentity::Clang,
+            &[(11, 1), (6, 1), (2, 1), (4, 4), (4, 4)],
+        ),
+    ];
+    for (identity, layouts) in layouts {
+        with_configuration(
+            source,
+            CompilerConfiguration::default().with_compiler_identity(identity),
+            |context, sema| {
+                assert_eq!(
+                    context.pending_error_count(),
+                    0,
+                    "{:?}",
+                    context.take_pending_errors()
+                );
+                let tags = sema.types.tags.iter().filter(|t| t.kind == TagKind::Struct);
+                for (tag, &(size, align)) in tags.zip(layouts) {
+                    assert_eq!(
+                        tag.layout.get(),
+                        Some(Layout { size, align }),
+                        "{identity:?}: {:?}",
+                        tag.name
+                    );
+                }
+            },
+        );
+    }
 }
