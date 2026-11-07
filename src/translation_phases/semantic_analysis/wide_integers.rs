@@ -133,7 +133,60 @@ impl WideIntegers<'_> {
         if matches!(op, B::Division | B::Modulo) && right.is_zero() {
             return None;
         }
-        self.with_scratch(|scratch| self.arithmetic(op, left, right, scratch))
+        self.with_scratch(|scratch| self.arithmetic(op, left, right, true, scratch))
+    }
+
+    /// `left op right` (`+`, `-`, `*`, `/` or `%`, with a nonzero divisor) at
+    /// the integer type of `bits` width and `signed`ness, reduced modulo
+    /// 2^`bits` where the type does not hold the result: what GCC and Clang
+    /// fold an overflow to.
+    /// C99: §6.6 paragraph 4, p. 95; PDF p. 107 (the constraint they relax).
+    pub(crate) fn wrapping_binary(
+        &self,
+        op: BinaryOperator,
+        left: Integer,
+        right: Integer,
+        bits: u32,
+        signed: bool,
+    ) -> Integer {
+        let (left, right) = (
+            self.convert(left, bits, signed),
+            self.convert(right, bits, signed),
+        );
+        if bits <= 128 {
+            return left.wrapping_binary(op, right);
+        }
+        self.with_scratch(|scratch| self.arithmetic(op, left, right, false, scratch))
+            .expect("a wrapping operation has a value")
+    }
+
+    /// `left` shifted by `count` (below `bits`) at the integer type of
+    /// `bits` width and `signed`ness, wrapping, whatever its sign.
+    /// C99: §6.5.7 paragraphs 3-5, p. 85; PDF p. 97.
+    pub(crate) fn wrapping_shift(
+        &self,
+        op: BinaryOperator,
+        left: Integer,
+        count: u32,
+        bits: u32,
+        signed: bool,
+    ) -> Integer {
+        let left = self.convert(left, bits, signed);
+        if bits <= 128 {
+            return left.wrapping_shift_by(op, count);
+        }
+        self.with_scratch(|scratch| {
+            let length = limb_count(bits + count) + 1;
+            let number = load(self, left, length, scratch);
+            let out = zeroed(scratch, length);
+            if op == BinaryOperator::RightShift {
+                limbs::shift_right(number, u64::from(count), out);
+            } else {
+                limbs::shift_left(number, u64::from(count), out);
+            }
+            self.finish(out, bits, signed, false, scratch)
+        })
+        .expect("a wrapping shift has a value")
     }
 
     /// `left op right` for operands converted to their common type, whose
@@ -149,6 +202,7 @@ impl WideIntegers<'_> {
         op: BinaryOperator,
         left: Integer,
         right: Integer,
+        checked: bool,
         scratch: &Bump,
     ) -> Option<Integer> {
         use BinaryOperator as B;
@@ -178,7 +232,7 @@ impl WideIntegers<'_> {
                 if negative {
                     limbs::negate(product);
                 }
-                return self.finish(product, bits, signed, true, scratch);
+                return self.finish(product, bits, signed, checked, scratch);
             },
             | B::Division | B::Modulo => {
                 let (dividend_negative, divisor_negative) = (magnitude(a), magnitude(b));
@@ -191,16 +245,16 @@ impl WideIntegers<'_> {
                 if dividend_negative {
                     limbs::negate(remainder);
                 }
-                let quotient = self.finish(quotient, bits, signed, true, scratch)?;
+                let quotient = self.finish(quotient, bits, signed, checked, scratch)?;
                 return if op == B::Division {
                     Some(quotient)
                 } else {
-                    self.finish(remainder, bits, signed, true, scratch)
+                    self.finish(remainder, bits, signed, checked, scratch)
                 };
             },
             | _ => return None,
         }
-        self.finish(out, bits, signed, true, scratch)
+        self.finish(out, bits, signed, checked, scratch)
     }
 
     /// The unary operator `op` applied to `value`, exactly; `None` where
@@ -660,6 +714,40 @@ pub(crate) trait WideStore<'tu> {
             scale,
             ty,
         )
+    }
+
+    /// The magnitude of `value`, with its sign, in hexadecimal, as GCC
+    /// prints a constant no `long` holds.
+    fn hexadecimal(&self, value: Integer, arena: &'tu Bump) -> &'tu str {
+        let mut text = crate::util::bump::ArenaString::new_in(arena);
+        let raw = value.value.cast_unsigned();
+        let narrow = [
+            u64::try_from(raw & u128::from(u64::MAX)).unwrap_or(0),
+            u64::try_from(raw >> 64).unwrap_or(0),
+        ];
+        let limbs: &[u64] = match value.wide {
+            | Some(id) => self.stored(id),
+            | None => &narrow,
+        };
+        let number = Magnitude::new(limbs, value.signed);
+        if number.negative {
+            text.push('-');
+        }
+        text.push_str("0x");
+        let mut started = false;
+        for index in (0..=limbs.len()).rev() {
+            let limb = number.limb(index);
+            if started {
+                _ = fmt::Write::write_fmt(&mut text, format_args!("{limb:016x}"));
+            } else if limb != 0 {
+                _ = fmt::Write::write_fmt(&mut text, format_args!("{limb:x}"));
+                started = true;
+            }
+        }
+        if !started {
+            text.push('0');
+        }
+        text.into_str()
     }
 
     /// `value` in decimal.

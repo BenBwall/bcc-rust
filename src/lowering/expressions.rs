@@ -136,7 +136,28 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             info.category,
             ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
         );
-        if (info.ice || saturated)
+        // An exceptional constant's value reaches code as it does a static
+        // object (C99 §6.6p4), but Clang's code computes poison from an
+        // undefined shift or division where its evaluator has a value. A
+        // program can read anything then; bcc reads zero.
+        let exceptional = info.folding.exceptional();
+        let poison = exceptional
+            && info.folding
+                != crate::translation_phases::semantic_analysis::ConstantFolding::Wrapped
+            && self.unit.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang;
+        if poison
+            && !info.runtime_query
+            && !lvalue
+            && let Ok(representation @ (Repr::Int { .. } | Repr::Bool)) =
+                repr(&self.unit.sema.types, info.ty)
+        {
+            let ty = representation.value_type().expect("integers have values");
+            let value = self.iconst(ty, 0);
+            self.push_item(Operand::Value(value), info.ty);
+            return Ok(());
+        }
+        if (info.ice || saturated || exceptional)
             && !info.runtime_query
             && !lvalue
             && let Some(value) = info.integer
@@ -154,7 +175,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         // A wide one is a constant object of its limbs.
-        if info.ice
+        if (info.ice || exceptional)
             && !info.runtime_query
             && !lvalue
             && let Some(value) = info.integer

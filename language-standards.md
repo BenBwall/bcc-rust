@@ -253,10 +253,12 @@ signed `<<` wraps in every mode: GCC documents that it does not treat its
 overflow as undefined, and Clang emits a plain shift. Constant expressions
 fold it to the same two's-complement value (`static int s = -1 << 4;` is
 -16, `3 << 31` is `INT_MIN`), reported as a GNU extension only under the
-pedantic policy, as GCC accepts them; Clang's default `-Wshift-negative-value`
-and `-Wshift-overflow` warnings are not reproduced, and such a shift stays an
-integer constant expression, where GCC treats an array bound of it as
-variable. `-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect
+pedantic policy, as GCC accepts them; plain bcc reproduces neither of Clang's
+default `-Wshift-negative-value` and `-Wshift-overflow` warnings, and such a
+shift stays an integer constant expression there. Under `--gcc-mode` and
+`--clang-mode` the shift follows its compiler instead
+([exceptional constants](#exceptional-integer-constants-2026-11-07)).
+`-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect
 before any `#pragma pack`, which `#pragma pack()` restores, as GCC documents
 and `cl /ZpN` does. `-fpack-struct` without a value instead packs every
 structure and union as the `packed` attribute does (an `aligned` member keeps
@@ -3229,8 +3231,9 @@ or `_Static_assert` rejects it, as GCC does, where Clang folds the
 saturated value. A conversion in function code keeps its run-time
 evaluation. GCC's pedantic warning for signed integer overflow in a static
 initializer (`(int)1e10 + 1`) and Clang's `-Winteger-overflow` and
-`-Wbitfield-constant-conversion` are not reproduced; bcc still rejects the
-first, and its `__builtin_constant_p((int)1e10 + 1)` is 0 where Clang's is 1.
+`-Wbitfield-constant-conversion` on such a converted value are not reproduced;
+bcc still rejects the first, and its `__builtin_constant_p((int)1e10 + 1)` is 0
+where Clang's is 1.
 
 GCC's pedantic report is a pedantic child of `-Woverflow` (as GCC's
 `pedwarn` with `OPT_Woverflow` is): only `-pedantic` reports it, and
@@ -3757,3 +3760,67 @@ Deviations:
   Clang does for a declaration.
 - GCC reports a `register` array's conversion at the start of the
   function that contains it; bcc reports it at the operand.
+
+## Exceptional integer constants (2026-11-07)
+
+C99 §6.6p4 makes a constant expression that overflows or divides by zero a
+constraint violation, and plain bcc refuses one with `ConstantOverflow`. Both
+compilers fold most of them with a warning, so `--compiler-extensions`, which
+only the GNU personalities pass, turns on `exceptional_constants.rs`; the
+identity could not tell, since plain bcc has Clang's. Values were measured with
+GCC 13.3 (running programs) and GCC 14.2's `cc1` and Clang 23.1:
+
+| `int x = E;` | GCC | Clang |
+| --- | --- | --- |
+| `2147483647+1` | -2147483648, `-Woverflow` | -2147483648, `-Winteger-overflow` |
+| `(-2147483647-1)/-1`, `%-1` | -2147483648, 0, `-Woverflow` | -2147483648, 0, silently |
+| `1<<40`, `1u<<32`, `(char)1<<40` | 0 | -2147483648 (count clamped to width - 1) |
+| `1>>40`, `-1>>40` | 0, -1 | 0, -1 |
+| `1LL<<64` | 0 | -9223372036854775808 |
+| `1<<-1`, `1>>-1` | not constant | 0, 2 (shifts the other way) |
+| `-1>>-1`, `0<<-1` | -1, 0 (the operand decides) | -2, 0 |
+| `1<<(1LL<<33)` | 1 (the count converts to `int`) | -2147483648 |
+| `1/0`, `1%0` | not constant | not constant |
+
+What each context makes of a value:
+
+| Context | GCC | Clang |
+| --- | --- | --- |
+| Static initializer | any value; under `-pedantic` "overflow in constant expression" or "initializer element is not a constant expression" | any value |
+| Enumerator, `case`, `_Static_assert`, bit-field width | any value; under `-pedantic` the overflow report, or "... is not an integer constant expression" in the context's words | any value; under `-pedantic` `-Wgnu-folding-constant`, but not for a `case` |
+| Array bound | only a wrapped value that is negative stays a constant, and is refused; anything else is variable length, so an error at file scope | folds with `-Wgnu-folding-constant` in every scope, except a minimum over -1, which is variable length |
+| `_Alignas`, `_BitInt` width | only arithmetic that wrapped; a shift or comparison is no constant | any value, except `_Alignas` of a minimum over -1 |
+| Code | the folded value | a wrapped value; poison from an undefined shift or minimum over -1, which reads as any value there, and bcc reads 0 |
+
+GCC's result stays a constant through arithmetic and conversions, but a
+comparison, `!`, `&&`, `||` or `?:` makes it what its parser no longer reads as
+one (`ConstantFolding::Wrapped` against `Undefined`). A shift into or past the
+sign bit (`1<<31`, `-1<<1`) is such a value too from C99 on, and a plain
+integer constant expression before it; Clang keeps `1<<31` as one, and its
+`-1<<1` wraps.
+
+Warnings follow the same split as the compilers' own code paths. GCC warns as it
+parses an operator, unless the operand is under `sizeof`, `_Alignof`, `typeof`,
+a `_Generic` controlling expression or an association of another type, or is
+what a constant `&&`, `||` or `?:` skips; unreachable code still warns. Clang
+reports shift counts and zero divisors with `DiagRuntimeBehavior`, so not in a
+constant context or in code it can tell is unreachable, and overflow from a
+single evaluation of each full expression (`Sema::CheckForIntOverflow`), so
+that `y ? 2147483647+1 : 0` says nothing and `y + (2147483647+1)` does. The
+groups are `-Woverflow` (GCC), `-Winteger-overflow` (Clang),
+`-Wshift-count-overflow`, `-Wshift-count-negative`, `-Wshift-overflow` (GCC
+prints `-Wshift-overflow=`), Clang's `-Wshift-negative-value`, GCC's
+`-Wdiv-by-zero` and Clang's `-Wdivision-by-zero`, which also answers to
+`-Wno-div-by-zero`. `-Wno-overflow` does not reach Clang's warning.
+
+Known differences that remain: `1LL<<(1ULL<<63)`, a 64-bit left operand with
+that count, is no constant under GCC and 1 here; Clang's code shifts
+`1<<(1LL<<33)` by the low bits of the count, where bcc reads 0; GCC's second
+"overflow in constant expression" on `1?(2147483647+1):2` under `-pedantic`,
+Clang's `-Wgnu-folding-constant` on `_Alignas` under `-pedantic` and on a
+`__builtin_choose_expr` operand it does not select are not reproduced; Clang's
+silence in the body of `while (0)` is not, since bcc's unreachable-code model
+does not cover it; a `case` label's `?:` warns under Clang's overflow check here
+but not there; Clang's refusal of `struct { int b : 4; } t = { 1 << 40 };` and
+GCC's `-Wextra` `-Wshift-negative-value` are not modeled; and
+`int *p = (int *)(2147483647 + 1);` keeps a false `-Wint-to-pointer-cast`.

@@ -35,6 +35,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.integers.push(None);
             return;
         }
+        if info.folding.exceptional() {
+            self.evaluate_exceptional(expression, info);
+            return;
+        }
         if self.type_generic_constant(expression) && !info.folded_address() {
             self.integers
                 .push(if info.ice { info.integer } else { None });
@@ -69,11 +73,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
             } else if !info.ice && !self.tainted {
-                self.context.report_extension(
-                    crate::configuration::Feature::ConstantFolding,
-                    "folded integer constant expression",
-                    expression.source_vectors,
-                );
+                if self.context.configuration.folds_exceptional_constants() {
+                    self.report_folded_constant(expression);
+                } else {
+                    self.context.report_extension(
+                        crate::configuration::Feature::ConstantFolding,
+                        "folded integer constant expression",
+                        expression.source_vectors,
+                    );
+                }
             }
             self.integers.push(info.integer);
             return;
@@ -960,6 +968,46 @@ impl Integer {
             | _ => return None,
         };
         l.checked(value)
+    }
+
+    /// `self op right`, operands of one integer type of at most 128 bits,
+    /// reduced modulo the type's width; a nonzero divisor is required.
+    /// C99: §6.3.1.3 paragraph 3, p. 43; PDF p. 55 (the wrap is GCC's and
+    /// Clang's).
+    pub(crate) fn wrapping_binary(self, op: BinaryOperator, right: Self) -> Self {
+        use BinaryOperator as B;
+        let (a, b) = (self.value.cast_unsigned(), right.value.cast_unsigned());
+        let value = match op {
+            | B::Addition => a.wrapping_add(b),
+            | B::Subtraction => a.wrapping_sub(b),
+            | B::Multiplication => a.wrapping_mul(b),
+            | B::Division => return self.cast_value(self.signed_division(right, true)),
+            | B::Modulo => return self.cast_value(self.signed_division(right, false)),
+            | _ => a,
+        };
+        self.cast_value(value.cast_signed())
+    }
+
+    /// The quotient or remainder that made [`Self::binary`] give up: only a
+    /// signed minimum over -1 does, and it wraps to itself, or to 0.
+    fn signed_division(self, right: Self, quotient: bool) -> i128 {
+        match (quotient, self.value.checked_div(right.value)) {
+            | (true, Some(value)) => value,
+            | (true, None) => self.value,
+            | (false, _) => self.value.checked_rem(right.value).unwrap_or(0),
+        }
+    }
+
+    /// The value shifted by `count`, below its width, wrapping.
+    /// C99: §6.5.7 paragraphs 3-5, p. 85; PDF p. 97.
+    pub(crate) fn wrapping_shift_by(self, op: BinaryOperator, count: u32) -> Self {
+        self.cast_value(if op == BinaryOperator::LeftShift {
+            (self.value.cast_unsigned() << count).cast_signed()
+        } else if self.signed {
+            self.value >> count
+        } else {
+            ((self.value.cast_unsigned() & self.mask()) >> count).cast_signed()
+        })
     }
 
     /// The unary operator on a value of at most 128 bits; `None` for a

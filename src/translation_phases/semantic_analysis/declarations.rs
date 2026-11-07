@@ -162,7 +162,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let S::Extended(syntax @ super::ExtendedType::Typeof { operand, .. }) = spec {
             self.enter_reference_context(Some(syntax));
             self.work.push(Work::TypeofDone(syntax));
+            self.work.push(Work::Unevaluated(false));
             self.syntax_operand(*operand);
+            self.work.push(Work::Unevaluated(true));
             return;
         }
         if let Some(s) = scalar {
@@ -383,7 +385,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut extension = spec.extensions;
         while let Some(item) = extension {
             if let SpecifierExtensionKind::Alignment(operand) = item.kind {
+                self.work.push(Work::ConstantContextEnd(
+                    super::exceptional_constants::ConstantSite::default(),
+                ));
                 self.syntax_operand(operand);
+                self.work.push(Work::ConstantContext);
             }
             extension = item.next;
         }
@@ -434,7 +440,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let info = self.expression_info(width);
         // Typing folds the width; it is an integer constant expression
         // when no operand reads an object, even an unevaluated one.
-        let value = if info.ice && self.valid_ice_operands(width) {
+        let wrapped = gcc && info.folding == super::expressions::ConstantFolding::Wrapped;
+        let value = if wrapped || (info.ice && self.valid_ice_operands(width)) {
             info.integer
         } else if !gcc
             && info.constant == super::ConstantClass::Arithmetic
@@ -591,7 +598,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::RuntimeBound(self.runtime_bound));
                     self.work.push(Work::Eval(expression));
                     self.work.push(Work::RuntimeBound(true));
-                    self.work.push(Work::Expression(expression));
+                    self.constant_expression(
+                        expression,
+                        super::exceptional_constants::ConstantSite::Other,
+                    );
                 } else if is_pointer && !parameter {
                     // Already diagnosed; no dependent variably modified error.
                     self.values.push(self.types.unknown());
