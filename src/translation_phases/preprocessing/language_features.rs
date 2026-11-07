@@ -1149,6 +1149,19 @@ pub(super) fn with_identity_macros<'a>(
             _ = write!(out, "#define __PIE__ {level}\n#define __pie__ {level}\n");
         }
     }
+    // What `-mavx2` and `-march=` ask for.
+    let x86 = configuration.code_options().x86_features;
+    for feature in x86.macros() {
+        _ = writeln!(out, "#define {feature} 1");
+    }
+    if identity == CompilerIdentity::Gcc && x86.fast_fma() {
+        for name in ["", "F", "F32", "F32x", "F64"] {
+            _ = writeln!(out, "#define __FP_FAST_FMA{name} 1");
+        }
+    }
+    if x86.has_compare_and_swap_16() {
+        out.push_str("#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 1\n");
+    }
     // The compilers number their protector macros differently.
     let hardening = configuration.code_options().hardening;
     let gcc = identity == CompilerIdentity::Gcc;
@@ -1505,6 +1518,15 @@ fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
     else {
         return false;
     };
+    // Clang says it has no processor queries on WebAssembly, and refuses a call
+    // in words of its own (`cpu_builtin`).
+    if matches!(
+        descriptor.operation,
+        crate::builtins::BuiltinOperation::CpuInit | crate::builtins::BuiltinOperation::CpuQuery(_)
+    ) && context.configuration.target().is_wasm()
+    {
+        return false;
+    }
     if descriptor.syntax != SyntaxForm::OrdinaryCall {
         let id = context.string_cache.intern(spelling);
         return KeywordTokenType::classify(id, context.configuration).is_some();

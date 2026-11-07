@@ -103,6 +103,226 @@ fn vector_parameters_record_each_compilers_registers() {
     }
 }
 
+/// A configuration claiming `compiler` with `options` on the command line.
+fn with_options(
+    compiler: crate::configuration::CompilerIdentity,
+    options: &[&str],
+) -> crate::configuration::CompilerConfiguration {
+    let configuration =
+        crate::configuration::CompilerConfiguration::default().with_compiler_identity(compiler);
+    let mut code = configuration.code_options();
+    code.x86_features = crate::target::X86Features::from_options(
+        &options.iter().copied(),
+        compiler != crate::configuration::CompilerIdentity::Gcc,
+    );
+    configuration.with_code_options(code)
+}
+
+/// With AVX, vectors of 32 bytes and the records each compiler lets wrap one
+/// travel whole, as `gcc -mavx2 -S` and `clang -mavx2 -S` were measured to pass
+/// them; the rest stay in memory. Without AVX nothing does.
+#[test]
+fn avx_lets_vectors_and_their_wrappers_travel_whole() {
+    use crate::configuration::CompilerIdentity;
+    let types = "typedef int V __attribute__((vector_size(32))); typedef double D                  __attribute__((vector_size(32))); typedef int W __attribute__((vector_size(16)));                  typedef int N __attribute__((vector_size(8))); typedef double L                  __attribute__((vector_size(8))); typedef __int128 T                  __attribute__((vector_size(32))); ";
+    // The declarator of `x`, and whether GCC and Clang pass it whole.
+    for (declaration, gcc, clang) in [
+        ("V x", true, true),
+        ("T x", false, false),
+        ("struct { V v; } x", true, true),
+        ("struct { struct { V v; } s; } x", true, true),
+        ("struct { D v[1]; } x", true, true),
+        ("struct { union { D v; } u; } x", true, true),
+        ("struct { V v; int :0; } x", true, true),
+        ("struct __attribute__((packed)) { V v; } x", true, true),
+        ("struct { V v; int z[0]; } x", true, false),
+        ("struct { V v; int z[]; } x", true, false),
+        ("struct { V v; struct {} e; } x", true, false),
+        ("struct { struct {} e; V v; } x", true, false),
+        ("struct { W a; W b; } x", false, false),
+        ("struct { double a[4]; } x", false, false),
+        ("struct { V v; int i; } x", false, false),
+        ("union { V v; float f; } x", true, true),
+        ("union { D v; N n; } x", true, true),
+        ("union { D v; W w; } x", true, true),
+        ("union { __float128 q; D v; } x", true, true),
+        ("union { D v; _Complex float c; } x", true, true),
+        ("union { D v; L l; } x", false, false),
+        ("union { D v; int i; } x", false, false),
+        ("union { D v; double d[2]; } x", false, false),
+        ("union { D v; _Complex double c; } x", false, false),
+        ("union { D v; long double l; } x", false, false),
+        ("union { D v; double d[4]; } x", false, true),
+        ("union { W a[2]; D v; } x", false, true),
+        ("union { V v; int a[8]; } x", false, true),
+        ("union { D v; struct { double d[4]; } s; } x", false, false),
+        ("union { char c[32]; float f[8]; } x", false, false),
+    ] {
+        for (compiler, wanted) in [
+            (CompilerIdentity::Gcc, gcc),
+            (CompilerIdentity::Clang, clang),
+        ] {
+            let source = format!("{types}void f({declaration}) {{ (void)&x; }}");
+            let text = lower_with(&source, with_options(compiler, &["-mavx2"])).expect("lowers");
+            assert_eq!(
+                text.contains(", wide"),
+                wanted,
+                "{compiler:?} {declaration}\n{text}"
+            );
+            let text = lower_with(&source, with_options(compiler, &[])).expect("lowers");
+            assert!(
+                !text.contains(", wide"),
+                "{compiler:?} {declaration}\n{text}"
+            );
+        }
+    }
+}
+
+/// With AVX both compilers return 32 bytes in a register of their own, and
+/// Clang 64 bytes in two; on Windows Clang's are the only ones measured.
+#[test]
+fn avx_vector_results_follow_each_compiler() {
+    use crate::configuration::CompilerIdentity;
+    let source = "typedef int V __attribute__((vector_size(32))); typedef int W \
+                  __attribute__((vector_size(64))); V f(V *p) { return *p; } W g(W *p) { return \
+                  *p; }";
+    let result = |bytes: u32, wide: bool, align: u32| {
+        format!(
+            "ptr result(size {bytes}, align {align}, vector{})",
+            if wide { ", wide" } else { "" }
+        )
+    };
+    let gcc = lower_with(source, with_options(CompilerIdentity::Gcc, &["-mavx2"])).expect("lowers");
+    assert!(gcc.contains(&result(32, true, 32)), "{gcc}");
+    assert!(gcc.contains(&result(64, false, 64)), "{gcc}");
+    let clang =
+        lower_with(source, with_options(CompilerIdentity::Clang, &["-mavx2"])).expect("lowers");
+    assert!(clang.contains(&result(32, true, 32)), "{clang}");
+    assert!(clang.contains(&result(64, true, 64)), "{clang}");
+}
+
+/// What a `target` attribute or an option bcc only warns about would change
+/// across objects is refused, and what stays among bcc's own functions isn't.
+#[test]
+fn foreign_vector_conventions_are_refused() {
+    use crate::configuration::CompilerIdentity;
+    let refused = |source: &str, compiler, options: &[&str], part: &str| {
+        let errors = lower_with(
+            &format!("typedef int V __attribute__((vector_size(32))); {source}"),
+            with_options(compiler, options),
+        )
+        .expect_err(source);
+        assert!(
+            errors.iter().any(|error| error.contains(part)),
+            "{errors:?}"
+        );
+    };
+    let accepted = |source: &str, compiler, options: &[&str]| {
+        let lowered = lower_with(
+            &format!("typedef int V __attribute__((vector_size(32))); {source}"),
+            with_options(compiler, options),
+        );
+        assert!(lowered.is_ok(), "{source}: {lowered:?}");
+    };
+    for compiler in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let foreign = "ignores changes how it travels";
+        let definition = "V f(V a) { return a; }";
+        refused(definition, compiler, &["-mavx512f"], foreign);
+        refused(definition, compiler, &["-march=haswell"], foreign);
+        accepted(definition, compiler, &["-mavx512f", "-mno-avx"]);
+        accepted(definition, compiler, &["-march=haswell", "-march=x86-64"]);
+        let local = "static V f(V a) { return a; } V *g(V *p) { *p = f(*p); return p; }";
+        accepted(local, compiler, &["-mavx512f"]);
+        // An address taken reaches other objects, whatever the linkage.
+        for escaping in [
+            "static V f(V a) { return a; } V (*p)(V) = f;",
+            "static V f(V a) { return a; } V (*g(void))(V) { return f; }",
+            "void e(V (*)(V)); static V f(V a) { return a; } void g(void) { e(&f); }",
+        ] {
+            refused(escaping, compiler, &["-mavx512f"], foreign);
+            accepted(escaping, compiler, &["-mavx2"]);
+        }
+        // An option outside the table leaves AVX on until AVX goes, or until
+        // its own later opposite.
+        for options in [
+            &["-mavx512f", "-mno-avx512bw"][..],
+            &["-mavx512bw", "-mno-avx512f"],
+            &["-mavx512f", "-mavx512bw", "-mno-avx512f"],
+            &["-mxop", "-mno-fma4"],
+            &["-mavx512f", "-mno-avx2"],
+            &["-mavx512f", "-mno-avx", "-mavx"],
+            &["-mno-avx", "-mavx512f"],
+        ] {
+            refused(definition, compiler, options, foreign);
+        }
+        for options in [
+            &["-mavx512f", "-mno-avx512f"][..],
+            &["-mavx512f", "-mno-sse4.2"],
+            &["-mavx256-split-unaligned-load"],
+        ] {
+            accepted(definition, compiler, options);
+        }
+        let target = "__attribute__((target(\"avx2\"))) V f(V a) { return a; }";
+        refused(target, compiler, &[], foreign);
+        accepted(target, compiler, &["-mavx2"]);
+        let target = "__attribute__((target(\"no-avx\"))) V f(V a) { return a; }";
+        refused(target, compiler, &["-mavx2"], foreign);
+        accepted(target, compiler, &[]);
+        let local = "__attribute__((target(\"avx2\"))) static V f(V a) { return a; } V *g(V *p) { \
+                     *p = f(*p); return p; }";
+        accepted(local, compiler, &[]);
+        let escaping =
+            "__attribute__((target(\"avx2\"))) static V f(V a) { return a; } V (*p)(V) = f;";
+        refused(escaping, compiler, &[], foreign);
+        let call = "V e(V); __attribute__((target(\"avx2\"))) void g(V *p) { *p = e(*p); }";
+        refused(call, compiler, &[], foreign);
+        accepted(
+            "__attribute__((target(\"avx2\"))) int f(int a) { return a; }",
+            compiler,
+            &[],
+        );
+    }
+    let variadic = "int f(int n, V a, ...) { return a[n]; }";
+    let named = "a named 32-byte vector parameter";
+    refused(variadic, CompilerIdentity::Gcc, &["-mavx2"], named);
+    accepted(variadic, CompilerIdentity::Clang, &["-mavx2"]);
+    accepted(variadic, CompilerIdentity::Gcc, &[]);
+    accepted(
+        "static int f(int n, V a, ...) { return a[n]; } int g(V *p) { return f(0, *p); }",
+        CompilerIdentity::Gcc,
+        &["-mavx2"],
+    );
+    for escaping in [
+        "static int f(V a, ...) { return a[7]; } int (*p)(V, ...) = f;",
+        "int e(int (*)(V, ...)); static int f(V a, ...) { return a[7]; } int g(void) { return \
+         e(f); }",
+    ] {
+        refused(escaping, CompilerIdentity::Gcc, &["-mavx2"], named);
+        accepted(escaping, CompilerIdentity::Clang, &["-mavx2"]);
+    }
+    // XSAVE: AVX needs it in GCC only.
+    let definition = "V f(V a) { return a; }";
+    let foreign = "ignores changes how it travels";
+    refused(
+        definition,
+        CompilerIdentity::Clang,
+        &["-mavx512f", "-mno-xsave"],
+        foreign,
+    );
+    accepted(
+        definition,
+        CompilerIdentity::Gcc,
+        &["-mavx512f", "-mno-xsave"],
+    );
+    // A `target` string ends at a NUL, as GCC reads it.
+    refused(
+        "__attribute__((target(\"no-avx\\0junk\"))) V f(V a) { return a; }",
+        CompilerIdentity::Gcc,
+        &["-mavx2"],
+        foreign,
+    );
+}
+
 /// The vector builtins lowering does not expand are refused by name rather
 /// than called.
 #[test]

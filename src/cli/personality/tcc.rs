@@ -890,6 +890,12 @@ impl Parser<'_> {
                     .warning(format_args!("'{text}' is ignored: {why}"));
                 Ok(())
             },
+            | Treatment::WrongTarget => {
+                self.invocation.error(format_args!(
+                    "'{text}' is not supported: the target isn't x86-64"
+                ));
+                Err(MainError::Reported(1))
+            },
             | Treatment::Reject(why) => {
                 self.invocation
                     .error(format_args!("'{text}' is not supported: {why}"));

@@ -1656,6 +1656,7 @@ impl<'t> Cursor<'_, 't> {
             | "aggregate" => ParamAbi::Aggregate,
             | "result" => ParamAbi::Result,
             | "byval" => ParamAbi::ByVal,
+            | "vector_register" => ParamAbi::VectorRegister,
             | "indirect" => ParamAbi::Indirect,
             | "sret" => ParamAbi::Sret,
             | "registers" => return self.result_registers().map(Some),
@@ -1745,7 +1746,7 @@ impl<'t> Cursor<'_, 't> {
         self.expect(TokenKind::Comma, "`,`")?;
         let second = if matches!(
             self.peek().kind,
-            TokenKind::Ident("align" | "offset" | "complex")
+            TokenKind::Ident("align" | "offset" | "complex" | "whole")
         ) {
             None
         } else {
@@ -1756,7 +1757,7 @@ impl<'t> Cursor<'_, 't> {
         let second_offset = if self.eat(TokenKind::Ident("offset")) {
             let (token, offset) = self.unsigned()?;
             let offset =
-                u32::try_from(offset).map_err(|_| token.error(ParseErrorKind::NumberTooLarge))?;
+                u16::try_from(offset).map_err(|_| token.error(ParseErrorKind::NumberTooLarge))?;
             self.expect(TokenKind::Comma, "`,`")?;
             offset
         } else {
@@ -1766,6 +1767,15 @@ impl<'t> Cursor<'_, 't> {
         if complex {
             self.expect(TokenKind::Comma, "`,`")?;
         }
+        let whole = if self.eat(TokenKind::Ident("whole")) {
+            let (token, bytes) = self.unsigned()?;
+            let bytes =
+                u8::try_from(bytes).map_err(|_| token.error(ParseErrorKind::NumberTooLarge))?;
+            self.expect(TokenKind::Comma, "`,`")?;
+            bytes
+        } else {
+            0
+        };
         let align = self.align()?;
         self.expect(TokenKind::RParen, "`)`")?;
         Ok(ParamAbi::Registers(ResultRegisters {
@@ -1774,6 +1784,7 @@ impl<'t> Cursor<'_, 't> {
             second_offset,
             complex,
             align,
+            whole,
         }))
     }
 }
