@@ -51,6 +51,9 @@ pub(crate) struct CodeOptions {
     /// §6.7.3 paragraph 6, p. 109; PDF p. 121 leaves what makes up an access
     /// to a volatile object implementation-defined.
     pub(crate) strict_volatile_bit_fields: bool,
+    /// `-masm=intel`: assembly is written, and `asm` statements read, in
+    /// Intel syntax. GCC manual, "x86 Options".
+    pub(crate) intel_syntax:               bool,
     /// Each function has a section of its own, which the linker's
     /// `--gc-sections` can remove: `-ffunction-sections`.
     pub(crate) function_sections:          bool,

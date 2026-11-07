@@ -234,7 +234,11 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 // over what the caller left there. Make room for the frame, as
                 // that prologue would have.
                 let ty = api.signature(api.void(), &[], false);
-                let template = format_in!(self.arena, "leaq -{naked_frame}(%rsp), %rsp");
+                let template = if api.intel_syntax() {
+                    format_in!(self.arena, "lea rsp, [rsp - {naked_frame}]")
+                } else {
+                    format_in!(self.arena, "leaq -{naked_frame}(%rsp), %rsp")
+                };
                 let asm = api.inline_asm(ty, template, "", true);
                 _ = api.call(ty, asm, &[]);
             }

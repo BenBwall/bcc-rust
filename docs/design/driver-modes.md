@@ -249,6 +249,10 @@ answers 0. WebAssembly refuses all three, `builtin is not supported on this targ
 `clang_rt.builtins` on the link line, as Clang does; `--interpret` stops at the unresolved
 `__cpu_model`.
 
+`-masm=intel` writes assembly in Intel syntax and reads `asm` statements in it,
+taking the second alternative of a `{att|intel}` group, on the LLVM back end. The
+native back end writes AT&T syntax whatever it is given.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
