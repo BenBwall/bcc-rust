@@ -544,6 +544,10 @@ impl<'ir> Module<'ir> {
         self.functions.iter()
     }
 
+    pub(crate) fn global_mut(&mut self, global: GlobalId) -> &mut Global<'ir> {
+        &mut self.globals[global]
+    }
+
     pub(crate) fn global(&self, global: GlobalId) -> &Global<'ir> {
         &self.globals[global]
     }

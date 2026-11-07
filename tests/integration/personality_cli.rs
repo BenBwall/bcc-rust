@@ -1950,6 +1950,54 @@ mod tests {
             let args = ["-c", "e.c", "-o", "e.o"];
             assert!(!directory.bcc(mode, &args).status.success(), "{mode}");
         }
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            // A declaration of the target leaves it weak, for a function and
+            // for an object, as both compilers do.
+            for source in [
+                "extern int t(void);\nstatic int w(void) __attribute__((weakref(\"t\")));\nint \
+                 main(void) { return w ? w() : 0; }\n",
+                "extern int t;\nstatic int w __attribute__((weakref(\"t\")));\nint main(void) { \
+                 return &w ? 1 : 0; }\n",
+            ] {
+                directory.write("d.c", source);
+                succeeds(&directory.bcc(mode, &["d.c", "-o", "d"]));
+                let run = Command::new(directory.path("d")).status().unwrap();
+                assert_eq!(run.code(), Some(0), "{mode} {source}");
+            }
+            // A use of the target itself is an ordinary reference, which the
+            // link then needs.
+            for source in [
+                "extern int t(void);\nstatic int w(void) __attribute__((weakref(\"t\")));\nint \
+                 main(void) { t(); return w ? w() : 0; }\n",
+                "extern int t;\nstatic int w __attribute__((weakref(\"t\")));\nint main(void) { \
+                 return t + (&w ? 1 : 0); }\n",
+            ] {
+                directory.write("r.c", source);
+                let output = directory.bcc(mode, &["r.c", "-o", "r"]);
+                assert!(!output.status.success(), "{mode} {source}");
+            }
+        }
+        // Another declaration of the same function has the same weakref.
+        directory.write(
+            "t.c",
+            "static int w(void) __attribute__((weakref(\"absent\")));\nstatic int w(void);\nint \
+             main(void) { return w ? 1 : 0; }\n",
+        );
+        succeeds(&directory.bcc("--gcc-mode", &["t.c", "-o", "t"]));
+        let run = Command::new(directory.path("t")).status().unwrap();
+        assert_eq!(run.code(), Some(0));
+        // A cycle reaches nothing: GCC refuses it, and Clang's program faults
+        // when it calls one, so bcc has to finish either way.
+        directory.write(
+            "y.c",
+            "static int a(void) __attribute__((weakref(\"b\")));\nstatic int b(void) \
+             __attribute__((weakref(\"a\")));\nint main(void) { return a(); }\n",
+        );
+        let args = ["-c", "y.c", "-o", "y.o"];
+        let output = directory.bcc("--gcc-mode", &args);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("cycle"), "{}", stderr(&output));
+        succeeds(&directory.bcc("--clang-mode", &args));
         // Clang wants a target; GCC is left with a declaration.
         directory.write("n.c", "static int w(void) __attribute__((weakref));\n");
         let args = ["-c", "n.c", "-o", "n.o"];

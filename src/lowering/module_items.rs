@@ -756,6 +756,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             if runtime.is_some() && self.module.function(func).linkage == IrLinkage::Internal {
                 return Err(LoweringErrorKind::Unsupported(Construct::Builtin));
             }
+            // A `weakref` left this symbol weak, and this use is a reference
+            // of its own.
+            if self.module.function(func).linkage == IrLinkage::Weak
+                && self.module.function(func).body.is_none()
+            {
+                self.module.function_mut(func).linkage = self.ir_linkage(binding);
+            }
             return Ok(func);
         }
         if self.module.symbol(name).is_some() {
@@ -791,14 +798,21 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         Ok(func)
     }
 
-    /// The `weakref` declared on `binding`, if it has one.
+    /// The `weakref` declared on `binding`'s entity, if it has one. It has
+    /// internal linkage, so its name says which declarations are the entity's.
     /// GNU extension: GCC manual, "Common Function Attributes", weakref.
     fn weakref(&self, binding: usize) -> Option<(Option<usize>, StringCacheId)> {
-        self.sema
-            .symbols
-            .weakrefs
+        let weakrefs = self.sema.symbols.weakrefs;
+        if weakrefs.is_empty() {
+            return None;
+        }
+        let data = self.sema.bindings[binding];
+        if data.linkage != Linkage::Internal {
+            return None;
+        }
+        weakrefs
             .iter()
-            .find(|weakref| weakref.binding == binding)
+            .find(|weakref| self.sema.bindings[weakref.binding].name.name == data.name.name)
             .map(|weakref| (weakref.target, weakref.name))
     }
 
@@ -1138,6 +1152,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             | Some(Symbol::Global(global)) => {
                 if self.generated_globals.contains(&global) {
                     return Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel));
+                }
+                // A `weakref` left this symbol weak, and this use is a
+                // reference of its own.
+                if self.module.global(global).linkage == IrLinkage::Weak
+                    && self.module.global(global).init.is_none()
+                {
+                    self.module.global_mut(global).linkage = self.ir_linkage(binding);
                 }
                 Ok(global)
             },

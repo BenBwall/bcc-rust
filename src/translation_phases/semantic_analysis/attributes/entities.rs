@@ -1476,12 +1476,30 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             }
         }
         let mut weakrefs = ArenaVec::new_in(tu);
+        let mut cycle_reported = false;
         for index in 0..self.attributes.weakrefs.len() {
             let request = self.attributes.weakrefs[index];
+            let cycle = self.weakref_cycle(request.target);
+            if cycle && self.gcc_identity() && !cycle_reported {
+                cycle_reported = true;
+                self.error(
+                    SemanticErrorKind::AliasCycle,
+                    self.bindings[request.binding].name.source_vectors,
+                    Some(self.bindings[request.binding].name.name),
+                    None,
+                );
+            }
+            // A target this unit only declares is what the weakref names, and
+            // so stays weak unless something else refers to it. One in a cycle
+            // has nothing to reach, which Clang leaves to the run.
             let target = self
                 .linked_entity(request.target)
-                .map(|(binding, _)| binding)
-                .filter(|&target| target != request.binding);
+                .filter(|&(target, defined)| {
+                    !cycle
+                        && target != request.binding
+                        && (defined || self.is_weakref_name(self.bindings[target].name.name))
+                })
+                .map(|(target, _)| target);
             weakrefs.push(WeakrefFacts {
                 binding: request.binding,
                 name: request.target,
@@ -1489,6 +1507,30 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             });
         }
         symbols.weakrefs = weakrefs.leak();
+    }
+
+    /// Whether a declaration of `name` is itself a `weakref`.
+    fn is_weakref_name(&self, name: StringCacheId) -> bool {
+        self.attributes
+            .weakrefs
+            .iter()
+            .any(|request| self.bindings[request.binding].name.name == name)
+    }
+
+    /// Whether following `weakref`s from `name` never reaches anything else.
+    fn weakref_cycle(&self, mut name: StringCacheId) -> bool {
+        for _ in 0..=self.attributes.weakrefs.len() {
+            let next = self
+                .attributes
+                .weakrefs
+                .iter()
+                .find(|request| self.bindings[request.binding].name.name == name);
+            let Some(next) = next else {
+                return false;
+            };
+            name = next.target;
+        }
+        true
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn finish_aliases(
