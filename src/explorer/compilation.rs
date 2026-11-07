@@ -31,6 +31,7 @@ use super::{
     ExplorerDiagnostic,
     ExplorerFunctionBytes,
     ExplorerInstruction,
+    ExplorerLineOrigin,
     ExplorerOptions,
     ExplorerOutput,
     ExplorerWasm,
@@ -51,6 +52,7 @@ use crate::{
     configuration::{
         CompilerConfiguration,
         DEFAULT_MAX_NESTING_DEPTH,
+        DebugOptions,
         ExtensionPolicy,
         LanguageMode,
     },
@@ -61,6 +63,7 @@ use crate::{
     },
     headers::HeaderSearch,
     ir::{
+        DebugLevel,
         Module,
         Profile,
         verify_module,
@@ -72,7 +75,6 @@ use crate::{
         InlineCopies,
         MiddleEndError,
         analyze_translation_unit,
-        lower_translation_unit_with_lines,
         lower_translation_unit_with_locals,
         parse_translation_unit,
     },
@@ -121,6 +123,19 @@ pub(super) fn compile_views(
     let configuration = match configure(options) {
         | Ok(configuration) => configuration,
         | Err(message) => return (failed(format_args!("{message}")), None),
+    };
+    // Every output's lines link to the source through the debug locations,
+    // which change no instruction. LLVM IR is printed without them, as
+    // `--emit=llvm` prints it.
+    let configuration = if views == Views::All {
+        configuration.with_debug_info(Some(DebugOptions {
+            level:         DebugLevel::Lines,
+            dwarf_version: None,
+            columns:       false,
+            physical:      true,
+        }))
+    } else {
+        configuration
     };
     let mut output = ExplorerOutput::default();
     if views == Views::All {
@@ -303,7 +318,7 @@ impl<'tu> Stages<'_, '_, 'tu> {
         } else {
             self.assembly(&unit, &sema, &arena, optimizer)
         };
-        if let Some(asm) = &asm {
+        if let Some((asm, _)) = &asm {
             self.output.machine_code = self.machine_code(asm);
         }
         if wasm_target {
@@ -318,7 +333,7 @@ impl<'tu> Stages<'_, '_, 'tu> {
             [
                 Some(ir.as_str()),
                 Some(ir_abi.as_str()),
-                asm.as_deref(),
+                asm.as_ref().map(|(asm, _)| asm.as_str()),
                 wat,
             ],
         );
@@ -345,12 +360,22 @@ impl<'tu> Stages<'_, '_, 'tu> {
         self.output.ir_abi = Some(ir_abi);
         self.output.ir_lines = ir_lines;
         self.output.ir_abi_lines = ir_abi_lines;
-        self.output.asm = asm;
+        if let Some((asm, mut asm_lines)) = asm {
+            line_map::only_within(
+                &mut asm_lines,
+                self.output
+                    .line_map
+                    .iter()
+                    .filter_map(|mapping| mapping.asm),
+            );
+            self.output.asm = Some(asm);
+            self.output.asm_lines = asm_lines;
+        }
     }
 
-    /// `--emit=ir` or `--emit=ir-abi` with `--backend=native`, with the
-    /// source line of each line of it (`line_map::ir_lines`). Recording the
-    /// lines changes no instruction, so the text is the command line's.
+    /// `--emit=ir` or `--emit=ir-abi` with `--backend=native`, with where
+    /// each line of it came from (`line_map::ir_lines`). The debug locations
+    /// change no instruction, so the text is the command line's.
     fn print_module(
         &mut self,
         unit: &ParsedTranslationUnit<'tu>,
@@ -358,20 +383,19 @@ impl<'tu> Stages<'_, '_, 'tu> {
         arena: &Bump,
         optimizer: Option<&OptimizerOptions<'_>>,
         profile: Profile,
-    ) -> Option<(String, Vec<u32>)> {
+    ) -> Option<(String, Vec<ExplorerLineOrigin>)> {
         self.stage.set("middle-end");
         let context = &*self.context;
         let printed = crate::pipeline::with_optional_retention(true, |retain_locals| {
-            let diagnosed = lower_translation_unit_with_lines(
+            let diagnosed = lower(
                 context,
                 unit,
                 sema,
                 arena,
                 optimizer,
                 profile,
-                (InlineCopies::Resolve, retain_locals),
-            )
-            .map_err(Failure::MiddleEnd)?;
+                retain_locals,
+            )?;
             verify(&diagnosed.module)?;
             let text = diagnosed.module.to_string();
             let lines = line_map::ir_lines(&diagnosed.module, &text);
@@ -380,14 +404,16 @@ impl<'tu> Stages<'_, '_, 'tu> {
         self.accept(printed)
     }
 
-    /// `--emit=asm --backend=native`.
+    /// `--emit=asm --backend=native`, with where each line of it came from
+    /// (`line_map::asm_lines`). Neither the debug locations nor following them
+    /// through the back end changes an instruction.
     fn assembly(
         &mut self,
         unit: &ParsedTranslationUnit<'tu>,
         sema: &SemanticTranslationUnit<'tu>,
         arena: &Bump,
         optimizer: Option<&OptimizerOptions<'_>>,
-    ) -> Option<String> {
+    ) -> Option<(String, Vec<ExplorerLineOrigin>)> {
         let context = &*self.context;
         let target = context.configuration.target();
         let code = context.configuration.code_options();
@@ -407,18 +433,26 @@ impl<'tu> Stages<'_, '_, 'tu> {
             }
             verify(&diagnosed.module)?;
             let mut text = ArenaString::new_in(arena);
-            native::emit_assembly_with(&diagnosed.module, target, code, &mut text)
-                .map_err(|error| Failure::Message(error.to_string()))?;
-            Ok((text.to_string(), calls))
+            let mut listed = Vec::new();
+            native::emit_assembly_listing(
+                &diagnosed.module,
+                target,
+                code,
+                &mut text,
+                &mut |line| listed.push(line),
+            )
+            .map_err(|error| Failure::Message(error.to_string()))?;
+            let lines = line_map::asm_lines(&diagnosed.module, &text, &listed);
+            Ok((text.to_string(), lines, calls))
         });
         self.stage.set("back-end");
-        let (text, calls) = self.accept(printed)?;
+        let (text, lines, calls) = self.accept(printed)?;
         self.stage.set("middle-end");
         for call in calls {
             call.report(self.context);
             self.flush();
         }
-        Some(text)
+        Some((text, lines))
     }
 
     /// The WebAssembly back end's module, as `--emit=wasm` and
@@ -530,6 +564,7 @@ impl<'tu> Stages<'_, '_, 'tu> {
                                 offset: u32::try_from(instruction.offset).unwrap_or(u32::MAX),
                                 bytes:  instruction.bytes.to_vec(),
                                 asm:    instruction.text.to_owned(),
+                                line:   u32::try_from(instruction.line + 1).unwrap_or(0),
                             })
                             .collect(),
                     })
