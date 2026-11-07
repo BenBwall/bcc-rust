@@ -1,0 +1,21 @@
+sema-empty-body-gcc.c:3:9: warning: suggest braces around empty body in an 'if' statement [-Wempty-body]
+    3 |   if (x);
+      |         ^
+sema-empty-body-gcc.c:4:10: warning: suggest braces around empty body in an 'if' statement [-Wempty-body]
+    4 |   if (x) ;
+      |          ^
+sema-empty-body-gcc.c:6:5: warning: suggest braces around empty body in an 'if' statement [-Wempty-body]
+    6 |     ;
+      |     ^
+sema-empty-body-gcc.c:15:6: warning: suggest braces around empty body in 'do' statement [-Wempty-body]
+   15 |   do ; while (x);
+      |      ^
+sema-empty-body-gcc.c:16:20: warning: suggest braces around empty body in an 'else' statement [-Wempty-body]
+   16 |   if (x) g(); else ;
+      |                    ^
+sema-empty-body-gcc.c:17:19: warning: suggest braces around empty body in an 'else' statement [-Wempty-body]
+   17 |   if (x) g(); else;
+      |                   ^
+sema-empty-body-gcc.c:19:18: warning: suggest braces around empty body in an 'if' statement [-Wempty-body]
+   19 |   if (x) /* c */ ;
+      |                  ^

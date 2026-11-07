@@ -1078,6 +1078,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         value: Option<Integer>,
     ) {
         let visible = self.lookup(Namespace::Ordinary, name.name);
+        self.check_shadow(name, ty, kind, linkage, visible);
         // The built-in typedef names are declared at file scope: an object
         // or function there by the same name redeclares one as a different
         // kind of symbol, as GCC and Clang report it. Clang also refuses an

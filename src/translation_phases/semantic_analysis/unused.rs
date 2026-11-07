@@ -138,6 +138,10 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about a hidden declaration may be on.
+    pub(super) shadow: bool,
+    /// Whether `-Wempty-body` may be on.
+    pub(super) empty_body: bool,
     /// Whether `-Wsign-compare` is on.
     pub(super) sign_compare: bool,
     /// Whether `-Wmissing-field-initializers` is on.
@@ -193,6 +197,8 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            shadow: on(&[G::Shadow, G::ShadowLocal, G::ShadowCompatibleLocal]),
+            empty_body: on(&[G::EmptyBody]),
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,

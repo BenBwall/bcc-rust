@@ -81,6 +81,7 @@ mod main_function;
 mod missing_fields;
 mod predefined;
 mod reachability;
+mod shadowing;
 mod sign_compare;
 mod statements;
 mod traversal;

@@ -390,6 +390,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.work.push(Work::StatementWork(W::RetainTail(s)));
         match s.kind {
             | S::Compound { items } => {
+                self.check_empty_loop_bodies(items.as_slice());
                 if !new_scope {
                     self.work.push(Work::StatementWork(W::FinishStatement(s)));
                 }
@@ -446,6 +447,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 then_statement,
                 else_statement,
             } => {
+                self.check_empty_body(s);
                 if self.enter_statement_block(false) {
                     self.work.push(Work::PopScope);
                 }
@@ -490,6 +492,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 condition_expression,
                 body_statement,
             } => {
+                self.check_empty_body(s);
                 if self.enter_statement_block(false) {
                     self.work.push(Work::PopScope);
                 }
@@ -537,6 +540,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 condition_expression,
                 body_statement,
             } => {
+                self.check_empty_body(s);
                 if self.enter_statement_block(false) {
                     self.work.push(Work::PopScope);
                 }
