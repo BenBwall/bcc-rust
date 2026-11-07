@@ -47,7 +47,9 @@ impl<'tu> Context<'tu> {
         spelling: &str,
         source: SourceVectors,
     ) {
-        self.report_extension_since(spelling, feature.origin(), source);
+        if !self.configuration.silent_extension(feature) {
+            self.report_extension_since(spelling, feature.origin(), source);
+        }
     }
 
     /// Reports syntax from `origin` under the extension policy. GNU/MSVC

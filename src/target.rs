@@ -39,6 +39,11 @@ mod predefined;
 mod code_options;
 pub(crate) mod sanitizers;
 
+mod x86_features;
+
+// What `__builtin_cpu_supports` and `__builtin_cpu_is` read
+mod cpu_model;
+
 // ELF named-section policy shared by semantics and code generation
 pub(crate) mod sections;
 
@@ -50,11 +55,22 @@ pub(crate) use code_options::{
     StackProtector,
     TlsModel,
 };
+pub(crate) use cpu_model::{
+    cpu_feature_bit,
+    cpu_processor,
+    cpu_query_name,
+};
 pub(crate) use model::{
     Layout,
     RecordPassing,
     Scalar,
     TargetLayout,
+};
+pub(crate) use x86_features::{
+    Cpu,
+    UNKNOWN_VECTOR_ABI,
+    X86Features,
+    is_feature_option,
 };
 
 impl Target {

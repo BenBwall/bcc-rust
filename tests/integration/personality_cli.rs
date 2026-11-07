@@ -2178,6 +2178,697 @@ mod tests {
         );
     }
 
+    /// Constant arithmetic C99 §6.6p4 gives no value, in a static object and
+    /// in code, with the values GCC 13.3 and Clang 23.1 give it (`None`: no
+    /// constant). A static `int` or `long long` prints each.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exceptional_constants_fold_to_each_compilers_value() {
+        use std::fmt::Write as _;
+        const MIN: &str = "-2147483648";
+        const MIN64: &str = "-9223372036854775808";
+        type Row = (&'static str, Option<&'static str>, Option<&'static str>);
+        let ints: [Row; 37] = [
+            ("2147483647+1", Some(MIN), Some(MIN)),
+            ("-2147483647-2", Some("2147483647"), Some("2147483647")),
+            ("-(-2147483647-1)", Some(MIN), Some(MIN)),
+            ("2147483647*2", Some("-2"), Some("-2")),
+            ("(-2147483647-1)/-1", Some(MIN), Some(MIN)),
+            ("(-2147483647-1)%-1", Some("0"), Some("0")),
+            ("1<<40", Some("0"), Some(MIN)),
+            ("1<<32", Some("0"), Some(MIN)),
+            ("1u<<32", Some("0"), Some(MIN)),
+            ("(1<<40)+0", Some("0"), Some(MIN)),
+            ("~0<<40", Some("0"), Some(MIN)),
+            ("1>>40", Some("0"), Some("0")),
+            ("-1>>40", Some("-1"), Some("-1")),
+            ("-5>>33", Some("-1"), Some("-1")),
+            ("1<<-1", None, Some("0")),
+            ("1>>-1", None, Some("2")),
+            ("4<<-1", None, Some("2")),
+            ("4>>-1", None, Some("8")),
+            ("1<<-40", None, Some("0")),
+            ("-1<<-1", None, Some("-1")),
+            ("-1>>-1", Some("-1"), Some("-2")),
+            ("0<<-1", Some("0"), Some("0")),
+            ("1<<(1LL<<33)", Some("1"), Some(MIN)),
+            ("1<<(unsigned)4294967295u", None, Some(MIN)),
+            ("1?(2147483647+1):2", Some(MIN), Some(MIN)),
+            ("0?2:(1<<40)", Some("0"), Some(MIN)),
+            ("(2147483647+1)/2", Some("-1073741824"), Some("-1073741824")),
+            ("(1<<40)==0", Some("1"), Some("0")),
+            ("(1<<40)!=0", Some("0"), Some("1")),
+            ("0||(1<<40)", Some("0"), Some("1")),
+            ("!(1<<40)", Some("1"), Some("0")),
+            ("~(1<<40)", Some("-1"), Some("2147483647")),
+            ("(1<<40)|1", Some("1"), Some("-2147483647")),
+            ("(char)1<<40", Some("0"), Some(MIN)),
+            ("1<<31", Some(MIN), Some(MIN)),
+            ("3<<31", Some(MIN), Some(MIN)),
+            ("-1<<1", Some("-2"), Some("-2")),
+        ];
+        let longs: [Row; 6] = [
+            ("1LL<<64", Some("0"), Some(MIN64)),
+            ("1ULL>>64", Some("0"), Some("0")),
+            ("-1LL>>64", Some("-1"), Some("-1")),
+            ("9223372036854775807LL*2", Some("-2"), Some("-2")),
+            ("-(-9223372036854775807LL-1)", Some(MIN64), Some(MIN64)),
+            ("1LL>>-1", None, Some("2")),
+        ];
+        let directory = Directory::new();
+        for (mode, gcc) in [("--gcc-mode", true), ("--clang-mode", false)] {
+            let select = |row: &Row| if gcc { row.1 } else { row.2 };
+            let mut source = String::from("int printf(const char *, ...);\n");
+            let mut body = String::new();
+            let mut expected = String::new();
+            let tables = [("int", "%d", &ints[..]), ("long long", "%lld", &longs[..])];
+            for (table, (ty, format, rows)) in tables.into_iter().enumerate() {
+                for (index, row) in rows.iter().enumerate() {
+                    let probe = format!("{ty} x = {};\n", row.0);
+                    directory.write("probe.c", &probe);
+                    let output = directory.bcc(mode, &["-w", "-fsyntax-only", "probe.c"]);
+                    assert_eq!(
+                        output.status.success(),
+                        select(row).is_some(),
+                        "{mode} {}: {}",
+                        row.0,
+                        stderr(&output)
+                    );
+                    if let Some(value) = select(row) {
+                        writeln!(source, "{ty} v{table}_{index} = {};", row.0).unwrap();
+                        writeln!(body, "printf(\"{format}\\n\", v{table}_{index});").unwrap();
+                        expected.push_str(value);
+                        expected.push('\n');
+                    }
+                }
+            }
+            writeln!(source, "int main(void) {{\n{body}return 0;\n}}").unwrap();
+            directory.write("statics.c", &source);
+            succeeds(&directory.bcc(mode, &["-w", "statics.c", "-o", "statics"]));
+            let run = Command::new(directory.path("statics")).output().unwrap();
+            assert_eq!(stdout(&run), expected, "{mode}");
+
+            // Code reads what GCC folds. Clang's code computes poison from
+            // an undefined shift or division, which reads as whatever a
+            // register held (551572928 in one run of its build), so that
+            // column is `None`; bcc reads 0.
+            let code: [(&str, &str, Option<&str>); 9] = [
+                ("2147483647+1", MIN, Some(MIN)),
+                ("-(-2147483647-1)", MIN, Some(MIN)),
+                ("1<<40", "0", None),
+                ("-1>>40", "-1", None),
+                ("(1<<40)+1", "1", None),
+                ("(-2147483647-1)/-1", MIN, None),
+                ("(-2147483647-1)%-1", "0", None),
+                ("(2147483647+1)>>1", "-1073741824", Some("-1073741824")),
+                ("1?(2147483647+1):2", MIN, Some(MIN)),
+            ];
+            let mut source = String::from("int printf(const char *, ...);\nint main(void) {\n");
+            for (expression, ..) in code {
+                writeln!(source, "printf(\"%d\\n\", {expression});").unwrap();
+            }
+            source.push_str("return 0;\n}\n");
+            directory.write("code.c", &source);
+            succeeds(&directory.bcc(mode, &["-w", "code.c", "-o", "code"]));
+            let run = Command::new(directory.path("code")).output().unwrap();
+            let run = stdout(&run);
+            let lines: Vec<&str> = run.lines().collect();
+            assert_eq!(lines.len(), code.len(), "{mode}: {run}");
+            for (line, (expression, gcc_value, clang_value)) in lines.iter().zip(code) {
+                let expected = if gcc {
+                    gcc_value
+                } else {
+                    clang_value.unwrap_or("0")
+                };
+                assert_eq!(*line, expected, "{mode} {expression}");
+            }
+        }
+    }
+
+    /// What GCC 14.2 and Clang 23.1 say of exceptional constants in each
+    /// context (`W`: warns, `E`: refuses), by the first words of the reports.
+    #[test]
+    fn exceptional_constants_warn_in_each_compilers_words() {
+        const GCC_ADD: &str =
+            "integer overflow in expression of type 'int' results in '-2147483648' [-Woverflow]";
+        const CLANG_ADD: &str =
+            "overflow in expression; result is -2'147'483'648 with type 'int' [-Winteger-overflow]";
+        const GCC_SHL: &str = "left shift count >= width of type [-Wshift-count-overflow]";
+        const GCC_SHR: &str = "right shift count >= width of type [-Wshift-count-overflow]";
+        const CLANG_COUNT: &str = "shift count >= width of type [-Wshift-count-overflow]";
+        const GCC_NEGATIVE: &str = "left shift count is negative [-Wshift-count-negative]";
+        const CLANG_NEGATIVE: &str = "shift count is negative [-Wshift-count-negative]";
+        const GCC_ZERO: &str = "division by zero [-Wdiv-by-zero]";
+        const CLANG_ZERO: &str = "division by zero is undefined [-Wdivision-by-zero]";
+        const FOLDED: &str = "variable length array folded to constant array as an extension \
+                              [-Wgnu-folding-constant]";
+        type Row = (
+            &'static str,
+            bool,
+            &'static [&'static str],
+            bool,
+            &'static [&'static str],
+        );
+        let table: [Row; 27] = [
+            ("int x=2147483647+1;", true, &[GCC_ADD], true, &[CLANG_ADD]),
+            (
+                "int x=-(-2147483647-1);",
+                true,
+                &[
+                    "integer overflow in expression '-2147483648' of type 'int' results in \
+                     '-2147483648' [-Woverflow]",
+                ],
+                true,
+                &[CLANG_ADD],
+            ),
+            (
+                "long long x=9223372036854775807LL*2;",
+                true,
+                &[
+                    "integer overflow in expression of type 'long long int' results in '-2' \
+                     [-Woverflow]",
+                ],
+                true,
+                &[
+                    "overflow in expression; result is -2 with type 'long long' \
+                     [-Winteger-overflow]",
+                ],
+            ),
+            ("int x=(-2147483647-1)/-1;", true, &[GCC_ADD], true, &[]),
+            ("int x=1<<40;", true, &[GCC_SHL], true, &[CLANG_COUNT]),
+            ("int x=1>>40;", true, &[GCC_SHR], true, &[CLANG_COUNT]),
+            (
+                "int x=1<<-1;",
+                false,
+                &[GCC_NEGATIVE],
+                true,
+                &[CLANG_NEGATIVE],
+            ),
+            ("int x=1/0;", false, &[GCC_ZERO], false, &[CLANG_ZERO]),
+            (
+                "enum{A=2147483647+1};",
+                true,
+                &[GCC_ADD],
+                true,
+                &[CLANG_ADD],
+            ),
+            ("enum{A=1<<40};", true, &[GCC_SHL], true, &[]),
+            ("enum{A=1<<-1};", false, &[GCC_NEGATIVE], true, &[]),
+            ("enum{A=1/0};", false, &[GCC_ZERO], false, &[]),
+            (
+                "_Static_assert(2147483647+1<0,\"x\");",
+                true,
+                &[GCC_ADD],
+                true,
+                &[CLANG_ADD],
+            ),
+            ("int a[(1<<40)+1];", false, &[GCC_SHL], false, &[FOLDED]),
+            (
+                "int a[2147483647+1>0?1:2];",
+                false,
+                &[GCC_ADD],
+                true,
+                &[CLANG_ADD, FOLDED],
+            ),
+            (
+                "void f(void){int a[(1>>40)+1];(void)a;}",
+                true,
+                &[GCC_SHR],
+                true,
+                &[FOLDED],
+            ),
+            ("int x=sizeof(2147483647+1);", true, &[], true, &[]),
+            ("int x=sizeof(1/0);", true, &[], true, &[]),
+            ("int x=0&&(2147483647+1);", true, &[], true, &[]),
+            ("int x=0&&(1/0);", true, &[], true, &[]),
+            ("int x=1?2:(1<<-1);", true, &[], true, &[]),
+            ("int x=1?(2147483647+1):2;", true, &[GCC_ADD], true, &[]),
+            (
+                "int f(int y){return y<<40;}",
+                true,
+                &[GCC_SHL],
+                true,
+                &[CLANG_COUNT],
+            ),
+            (
+                "int f(int y){return y/0;}",
+                true,
+                &[GCC_ZERO],
+                true,
+                &[CLANG_ZERO],
+            ),
+            (
+                "int f(int y){return y?2147483647+1:0;}",
+                true,
+                &[GCC_ADD],
+                true,
+                &[],
+            ),
+            (
+                "int f(int y){return y+(2147483647+1);}",
+                true,
+                &[GCC_ADD],
+                true,
+                &[CLANG_ADD],
+            ),
+            (
+                "int f(int y){if(0)y=1<<40;return y;}",
+                true,
+                &[GCC_SHL],
+                true,
+                &[],
+            ),
+        ];
+        let directory = Directory::new();
+        for (source, gcc_accepts, gcc_words, clang_accepts, clang_words) in table {
+            directory.write("c.c", &format!("{source}\n"));
+            for (mode, accepts, words) in [
+                ("--gcc-mode", gcc_accepts, gcc_words),
+                ("--clang-mode", clang_accepts, clang_words),
+            ] {
+                let output = directory.bcc(mode, &["-fsyntax-only", "c.c"]);
+                let text = stderr(&output);
+                assert_eq!(output.status.success(), accepts, "{mode} {source}: {text}");
+                let warnings = text
+                    .lines()
+                    .filter(|line| line.contains(": warning: "))
+                    .count();
+                assert_eq!(warnings, words.len(), "{mode} {source}: {text}");
+                for word in words {
+                    assert!(text.contains(word), "{mode} {source}: {text}");
+                }
+            }
+        }
+    }
+
+    /// Wider types and bit-precise ones of any width fold the same way, as
+    /// assertions accepted by GCC 14.2 and by Clang 23.1 show.
+    #[test]
+    fn exceptional_constants_fold_at_every_width() {
+        let table = [
+            ("((_BitInt(200))1<<200)==0", true, false),
+            ("((_BitInt(200))1<<200)<0", false, true),
+            ("((_BitInt(200))-1>>200)==-1", true, true),
+            ("(((_BitInt(200))1<<198)*4)==0", true, true),
+            ("(-(-((_BitInt(200))1<<198)*2))<0", true, true),
+            ("((_BitInt(200))1<<-1)==0", false, true),
+            ("((_BitInt(200))1>>-1)==2", false, true),
+            ("(1>>-((_BitInt(256))1<<200))==(-2147483647-1)", false, true),
+            ("(1<<-((_BitInt(256))1<<200))==0", false, true),
+            ("((unsigned _BitInt(200))1<<200)==0", true, false),
+            ("((_BitInt(8))127+(_BitInt(8))1)==-128", true, true),
+            ("((_BitInt(8))1<<8)==0", true, false),
+            ("((_BitInt(8))1<<8)==-128", false, true),
+            ("((_BitInt(8))-128/(_BitInt(8))-1)==-128", true, true),
+            ("((__int128)1<<130)==0", true, false),
+            ("((__int128)1<<130)<0", false, true),
+            ("(((__int128)1<<126)*4)==0", true, true),
+        ];
+        let directory = Directory::new();
+        for (condition, gcc, clang) in table {
+            directory.write("c.c", &format!("_Static_assert({condition},\"x\");\n"));
+            for (mode, accepts) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-w", "-fsyntax-only", "c.c"]);
+                assert_eq!(
+                    output.status.success(),
+                    accepts,
+                    "{mode} {condition}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
+    /// The options and pragmas that silence or promote each warning, and
+    /// that plain bcc keeps refusing these constants.
+    #[test]
+    fn exceptional_constant_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "c.c",
+            "int a=2147483647+1;\nint b=1<<40;\nint c=-1>>-1;\nint f(int y){return y/0+(y<<-1);}\n",
+        );
+        let warnings = |mode: &str, flags: &[&str]| {
+            let mut arguments = flags.to_vec();
+            arguments.extend(["-fsyntax-only", "c.c"]);
+            let output = directory.bcc(mode, &arguments);
+            (output.status.success(), stderr(&output))
+        };
+        for (mode, overflow, division) in [
+            ("--gcc-mode", "overflow", "div-by-zero"),
+            ("--clang-mode", "integer-overflow", "division-by-zero"),
+        ] {
+            let (ok, text) = warnings(mode, &[]);
+            assert!(ok, "{text}");
+            assert!(text.contains(&format!("[-W{overflow}]")), "{text}");
+            assert!(text.contains(&format!("[-W{division}]")), "{text}");
+            let silence = format!("-Wno-{overflow}");
+            let (ok, text) = warnings(mode, &[&silence]);
+            assert!(ok && !text.contains(&format!("[-W{overflow}]")), "{text}");
+            let (ok, text) = warnings(mode, &["-Wno-shift-count-overflow"]);
+            assert!(ok && !text.contains("[-Wshift-count-overflow]"), "{text}");
+            let (ok, text) = warnings(mode, &["-Wno-shift-count-negative"]);
+            assert!(ok && !text.contains("[-Wshift-count-negative]"), "{text}");
+            let (ok, text) = warnings(mode, &["-Wno-div-by-zero"]);
+            assert!(ok && !text.contains(&format!("[-W{division}]")), "{text}");
+            let (ok, text) = warnings(mode, &["-w"]);
+            assert!(ok && text.is_empty(), "{text}");
+            let (ok, text) = warnings(mode, &["-Werror"]);
+            assert!(!ok && text.contains("error: "), "{text}");
+            assert!(text.contains(overflow), "{text}");
+            directory.write(
+                "p.c",
+                &format!(
+                    "#pragma GCC diagnostic ignored \"-W{overflow}\"\nint a=2147483647+1;\n                     #pragma GCC diagnostic error \"-Wshift-count-overflow\"\nint b=1<<40;\n"
+                ),
+            );
+            let output = directory.bcc(mode, &["-fsyntax-only", "p.c"]);
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{text}");
+            assert!(!text.contains(&format!("[-W{overflow}]")), "{text}");
+            assert!(text.contains("shift count"), "{text}");
+        }
+        // GCC's option does not reach Clang's warning, or Clang's GCC's.
+        let (_, text) = warnings("--clang-mode", &["-Wno-overflow"]);
+        assert!(text.contains("[-Winteger-overflow]"), "{text}");
+        let (_, text) = warnings("--gcc-mode", &["-Wno-integer-overflow"]);
+        assert!(text.contains("[-Woverflow]"), "{text}");
+        // Plain bcc keeps the constraint of C99 §6.6p4.
+        for source in ["int x=2147483647+1;", "int x=1<<40;", "int x=1/0;"] {
+            directory.write("plain.c", &format!("{source}\n"));
+            let output = directory.bcc("", &["plain.c"]);
+            assert!(!output.status.success(), "{source}");
+            assert!(
+                stderr(&output).contains("constant expression overflows"),
+                "{source}: {}",
+                stderr(&output)
+            );
+        }
+    }
+
+    /// What an address's truth gives a static object, with the values GCC
+    /// 13.3 and Clang 23.1 store (`None`: refused). No symbol is referenced,
+    /// so `g` and `f` need no definition.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn address_truth_folds_in_static_initializers() {
+        type Row = (
+            &'static str,
+            &'static str,
+            Option<&'static str>,
+            Option<&'static str>,
+        );
+        let table: [Row; 33] = [
+            ("extern int g;", "_Bool x=&g;", Some("1"), Some("1")),
+            (
+                "extern int g;",
+                "struct{_Bool b;}s={&g};_Bool x=1;",
+                Some("1"),
+                Some("1"),
+            ),
+            ("void f(void);", "_Bool x=f;", Some("1"), Some("1")),
+            ("void f(void);", "_Bool x=&f;", Some("1"), Some("1")),
+            ("", "_Bool x=(void*)0;", Some("0"), Some("0")),
+            ("", "_Bool x=(void*)1;", Some("1"), Some("1")),
+            ("int a[3];", "_Bool x=a;", Some("1"), Some("1")),
+            ("int a[3];", "_Bool x=a+1;", None, Some("1")),
+            ("int a[3];", "_Bool x=&a[1];", None, Some("1")),
+            ("int a[3];", "_Bool x=&a[0];", None, Some("1")),
+            ("", "_Bool x=\"x\";", None, Some("1")),
+            ("extern int g;", "_Bool x=(char*)&g;", Some("1"), Some("1")),
+            ("extern int g;", "_Bool x=(long)&g;", None, Some("1")),
+            (
+                "__attribute__((weak)) int g;",
+                "_Bool x=&g;",
+                Some("1"),
+                None,
+            ),
+            (
+                "extern int g __attribute__((weak));",
+                "_Bool x=&g;",
+                None,
+                None,
+            ),
+            (
+                "void f(void) __attribute__((weak));",
+                "_Bool x=f;",
+                None,
+                None,
+            ),
+            ("extern int g;", "int x=!&g;", Some("0"), Some("0")),
+            ("extern int g;", "int x=&g?1:2;", Some("1"), Some("1")),
+            ("extern int g;", "int x=!!&g;", Some("1"), Some("1")),
+            ("extern int g;", "int x=&g==0;", Some("0"), Some("0")),
+            ("extern int g;", "int x=&g!=0;", Some("1"), Some("1")),
+            ("static int g;", "int x=&g&&1;", Some("1"), Some("1")),
+            ("void f(void);", "int x=!f;", Some("0"), Some("0")),
+            ("int a[3];", "int x=(a+1)!=0;", Some("1"), Some("1")),
+            ("", "int x=\"x\"==0;", Some("0"), Some("0")),
+            ("", "int x=(void*)0?1:2;", Some("2"), Some("2")),
+            ("int g,h;", "int x=&g==&h;", Some("0"), Some("0")),
+            ("int g;", "int x=&g<&g;", Some("0"), Some("0")),
+            ("int g;", "int x=&g>0;", Some("1"), None),
+            ("int g;", "int x=(long)&g!=0;", Some("1"), None),
+            ("int g;", "int x=(!&g)+5;", Some("5"), Some("5")),
+            ("int y;int g;", "int x=!&g&&y;", Some("0"), Some("0")),
+            ("int y;int g;", "int x=y&&&g;", None, None),
+        ];
+        let directory = Directory::new();
+        for (declarations, definition, gcc, clang) in table {
+            directory.write(
+                "c.c",
+                &format!(
+                    "int printf(const char *, ...);\n{declarations}\n{definition}\nint main(void) \
+                     {{ printf(\"%d\", (int)x); return 0; }}\n"
+                ),
+            );
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-w", "c.c", "-o", "c"]);
+                assert_eq!(
+                    output.status.success(),
+                    expected.is_some(),
+                    "{mode} {declarations} {definition}: {}",
+                    stderr(&output)
+                );
+                if let Some(expected) = expected {
+                    let run = Command::new(directory.path("c")).output().unwrap();
+                    assert_eq!(stdout(&run), expected, "{mode} {definition}");
+                }
+            }
+        }
+        // A constant context reads it too, where the compiler folds it.
+        for (source, gcc, clang) in [
+            ("int g;enum{A=!&g};", true, true),
+            ("int g;_Static_assert(&g!=0,\"x\");", true, true),
+            ("int g;_Static_assert(!!&g,\"x\");", true, true),
+            ("int g;_Static_assert(&g,\"x\");", false, true),
+            ("int g;void h(int x){switch(x){case !&g:;}}", true, true),
+            ("int g;struct{int b:!&g+1;}s;", true, true),
+            ("void h(void){int g;int a[!&g+1];(void)a;}", true, true),
+        ] {
+            directory.write("c.c", &format!("{source}\n"));
+            for (mode, accepts) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-w", "-fsyntax-only", "c.c"]);
+                assert_eq!(
+                    output.status.success(),
+                    accepts,
+                    "{mode} {source}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+        // Plain bcc stores `_Bool b = &g;` as the constraint allows, and
+        // keeps refusing the other forms, which only §6.6p10 could admit.
+        directory.write(
+            "c.c",
+            "extern int g;\n_Bool b = &g;\nint main(void) { return !b; }\n",
+        );
+        succeeds(&directory.bcc("", &["-w", "c.c", "-o", "c"]));
+        assert!(
+            Command::new(directory.path("c"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        directory.write("c.c", "extern int g;\nint i = !&g;\n");
+        assert!(!directory.bcc("", &["-w", "c.c"]).status.success());
+    }
+
+    /// `-pedantic` at each standard, as GCC 14.2 and Clang 23.1 answer: whether
+    /// the program is accepted, and whether it says anything then.
+    #[test]
+    fn pedantic_reports_follow_each_compiler() {
+        const ALL: &[&str] = &["c89", "c99", "c11", "gnu89", "gnu17", "c23"];
+        const GNU: &[&str] = &["gnu89", "gnu17"];
+        const C89: &[&str] = &["c89", "gnu89"];
+        const ISO_BEFORE_C23: &[&str] = &["c89", "c99", "c11"];
+        const BEFORE_C23: &[&str] = &["c89", "c99", "c11", "gnu89", "gnu17"];
+        /// What a compiler does with a program.
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum Answer {
+            Silent,
+            Warns,
+            Refuses,
+        }
+        use Answer::{
+            Refuses,
+            Silent,
+            Warns,
+        };
+        type Row = (&'static str, &'static [&'static str], Answer, Answer);
+        let table: &[Row] = &[
+            // Refusals of what bcc takes.
+            ("void f(void){for(int i=0;i<1;i++);}", C89, Refuses, Warns),
+            ("int a[]={};", ALL, Refuses, Warns),
+            ("void f(void){int a[]={};(void)a;}", ALL, Refuses, Warns),
+            ("void f(void){int a={};(void)a;}", &["gnu17"], Warns, Warns),
+            ("#foo\nint x;", ALL, Refuses, Refuses),
+            ("#if 0\n#foo\n#endif\nint x;", ALL, Silent, Silent),
+            ("#elifdef A\nint x;", ISO_BEFORE_C23, Refuses, Refuses),
+            ("#assert a(b)\nint x;", ALL, Warns, Refuses),
+            ("#unassert a\nint x;", ALL, Warns, Refuses),
+            ("_Decimal64 d;", BEFORE_C23, Warns, Refuses),
+            ("_Decimal64 d;", &["c23"], Silent, Refuses),
+            ("_Decimal32 d;", BEFORE_C23, Warns, Refuses),
+            ("int a[(1,2)];", GNU, Refuses, Warns),
+            ("enum{A=(1,2)};", GNU, Refuses, Warns),
+            ("enum{A=(1,2)};", &["c99"], Refuses, Warns),
+            (
+                "void f(int x){switch(x){case (1,2):;}}",
+                &["gnu17"],
+                Refuses,
+                Warns,
+            ),
+            ("_Static_assert((1,2),\"x\");", &["gnu17"], Refuses, Warns),
+            // What neither, or only one, reports.
+            ("__float128 q;", ALL, Silent, Silent),
+            ("int c=__COUNTER__;", ALL, Silent, Warns),
+            ("#define M(a,b) a\nint M(x,);", C89, Silent, Warns),
+            (
+                "int x=1<<31;",
+                &["c99", "c11", "gnu17", "c23"],
+                Warns,
+                Silent,
+            ),
+            ("int x=1<<31;", C89, Silent, Silent),
+            ("int $x;", &["c99", "c11", "gnu17", "c23"], Silent, Warns),
+            ("typeof(1) x;", GNU, Silent, Warns),
+            ("#if 0\n#elifdef A\n#endif\nint x;", GNU, Silent, Warns),
+            (
+                "#define A\n#if 0\n#elifdef A\n#endif\nint x;",
+                GNU,
+                Warns,
+                Warns,
+            ),
+            ("#if 0\n#elifndef A\n#endif\nint x;", GNU, Warns, Warns),
+            ("int x=0x1p3;", &["gnu89"], Silent, Warns),
+            ("inline int f(void){return 0;}", &["gnu89"], Silent, Warns),
+            ("// c\nint x;", &["gnu89"], Warns, Silent),
+            (
+                "#define M(a,...) a,##__VA_ARGS__\nint M(x);",
+                &["gnu17"],
+                Silent,
+                Warns,
+            ),
+            ("#define M(a,...) a\nint M(x);", &["gnu17"], Silent, Warns),
+            ("#define M(a,...) a\nint M(x);", &["c23"], Silent, Silent),
+            (
+                "#define M(a,...) a __VA_OPT__(,) __VA_ARGS__\nint M(x);",
+                &["gnu17"],
+                Silent,
+                Warns,
+            ),
+            // What bcc itself says nothing of.
+            ("struct {int x;};", ALL, Warns, Warns),
+            ("int;", ALL, Warns, Warns),
+            ("struct S{int x;};", ALL, Silent, Silent),
+            ("enum{E};", ALL, Silent, Silent),
+            (
+                "void f(void){const char*s=__FUNCTION__;(void)s;}",
+                ALL,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__PRETTY_FUNCTION__;(void)s;}",
+                ALL,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__func__;(void)s;}",
+                C89,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__func__;(void)s;}",
+                &["gnu17"],
+                Silent,
+                Silent,
+            ),
+            ("# 5 \"f.c\"\nint x;", ALL, Warns, Warns),
+            ("int x='ab';", ALL, Warns, Warns),
+            ("void f(int n){int a[n];(void)a;}", C89, Warns, Warns),
+            (
+                "void f(int n){int a[n];(void)a;}",
+                &["gnu17"],
+                Silent,
+                Silent,
+            ),
+            ("int f(void){return sizeof(void);}", ALL, Warns, Warns),
+            ("int g(void);int h=sizeof(g);", ALL, Warns, Warns),
+        ];
+        let directory = Directory::new();
+        for (source, standards, gcc, clang) in table.iter().copied() {
+            directory.write("c.c", &format!("{source}\n"));
+            for standard in standards {
+                let option = format!("-std={standard}");
+                for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                    let output =
+                        directory.bcc(mode, &[&option, "-pedantic", "-fsyntax-only", "c.c"]);
+                    let text = stderr(&output);
+                    let answer = if !output.status.success() {
+                        Refuses
+                    } else if text.contains(": warning: ") {
+                        Warns
+                    } else {
+                        Silent
+                    };
+                    assert_eq!(answer, expected, "{mode} {option} {source}: {text}");
+                }
+            }
+        }
+        // A comma expression as a static initializer, whose other half under
+        // Clang is `-Wunused-value`.
+        for (source, standard, accepted) in [
+            ("int x=(1,2);", "gnu17", true),
+            ("int x=(1,2)+1;", "gnu17", false),
+            ("int x=(1,2)+1;", "c89", true),
+        ] {
+            directory.write("c.c", &format!("{source}\n"));
+            let option = format!("-std={standard}");
+            let output = directory.bcc(
+                "--gcc-mode",
+                &[&option, "-pedantic", "-fsyntax-only", "c.c"],
+            );
+            let text = stderr(&output);
+            assert_eq!(output.status.success(), accepted, "{source}: {text}");
+            assert_eq!(
+                text.contains("initializer element is not constant"),
+                accepted,
+                "{source}: {text}"
+            );
+        }
+        // Plain bcc keeps its own policy, which reports every extension.
+        directory.write("c.c", "#foo\n__float128 q;\nint main(void) { return 0; }\n");
+        let output = directory.bcc("", &["-pedantic", "c.c"]);
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(text.contains("unknown preprocessing directive"), "{text}");
+        assert!(text.contains("__float128"), "{text}");
+    }
+
     /// `-ffunction-sections` and `-fdata-sections` give each definition a
     /// section of its own, so that `--gc-sections` removes the unused ones.
     #[cfg(target_os = "linux")]
@@ -4030,6 +4721,665 @@ mod tests {
                 .status
                 .success()
         );
+    }
+
+    /// `-m` options and `-march=` define each compiler's macros and let LLVM
+    /// use the instructions, with what a feature needs turned on and what needs
+    /// it turned off.
+    #[test]
+    fn gnu_target_features_define_macros_and_generate_code() {
+        let directory = Directory::new();
+        directory.write("m.c", "");
+        directory.write(
+            "p.c",
+            "int f(unsigned x) { return __builtin_popcount(x); }\nvoid g(int *restrict a, int \
+             *restrict b) { for (int i = 0; i < 64; i++) a[i] += b[i]; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let has = |options: &[&str], name: &str| {
+                let args = [options, &["-E", "-dM", "m.c"]].concat();
+                stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
+            };
+            for name in [
+                "__AVX2__",
+                "__AVX__",
+                "__SSE4_2__",
+                "__SSE3__",
+                "__POPCNT__",
+                "__XSAVE__",
+            ] {
+                assert!(has(&["-mavx2"], name), "{mode} {name}");
+            }
+            assert!(!has(&[], "__AVX2__"), "{mode}");
+            assert!(!has(&["-mavx2"], "__BMI__"), "{mode}");
+            // Turning a feature off takes what needs it along.
+            assert!(!has(&["-mavx2", "-mno-avx"], "__AVX2__"), "{mode}");
+            assert!(has(&["-mavx2", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-mavx2", "-mno-avx2"], "__AVX2__"), "{mode}");
+            assert!(has(&["-msse4"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-msse4", "-mno-sse4"], "__SSE4_1__"), "{mode}");
+            assert!(has(&["-msse4", "-mno-sse4"], "__SSSE3__"), "{mode}");
+            assert!(has(&["-march=x86-64-v2"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-march=x86-64-v2"], "__AVX__"), "{mode}");
+            for name in [
+                "__AVX2__",
+                "__FMA__",
+                "__BMI2__",
+                "__MOVBE__",
+                "__LAHF_SAHF__",
+            ] {
+                assert!(has(&["-march=x86-64-v3"], name), "{mode} {name}");
+            }
+            assert_eq!(
+                has(&["-mfma"], "__FP_FAST_FMA"),
+                mode == "--gcc-mode",
+                "{mode}"
+            );
+            assert!(
+                has(&["-march=x86-64-v2"], "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16"),
+                "{mode}"
+            );
+            assert!(
+                !has(
+                    &["-march=x86-64-v2", "-march=x86-64"],
+                    "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16"
+                ),
+                "{mode}"
+            );
+            // The last `-march=` names defaults; explicit options outrank them.
+            assert!(
+                !has(&["-march=x86-64-v3", "-march=x86-64"], "__AVX2__"),
+                "{mode}"
+            );
+            assert!(
+                has(&["-mavx2", "-march=x86-64-v3", "-march=x86-64"], "__AVX2__"),
+                "{mode}"
+            );
+            assert!(
+                has(&["-march=x86-64-v3", "-march=x86-64", "-mavx2"], "__AVX2__"),
+                "{mode}"
+            );
+            assert!(
+                !has(&["-mno-avx", "-march=x86-64-v3"], "__AVX2__"),
+                "{mode}"
+            );
+            assert!(has(&["-mno-avx", "-march=x86-64-v3"], "__BMI2__"), "{mode}");
+            // POPCNT and CRC32 come with SSE4.2, which doesn't need them.
+            for options in [&["-mavx2", "-mno-popcnt"], &["-mno-popcnt", "-mavx2"]] {
+                assert!(has(options, "__AVX2__"), "{mode} {options:?}");
+                assert!(!has(options, "__POPCNT__"), "{mode} {options:?}");
+                assert!(has(options, "__CRC32__"), "{mode} {options:?}");
+            }
+            assert!(has(&["-mavx", "-mno-crc32"], "__AVX__"), "{mode}");
+            assert!(!has(&["-mavx", "-mno-crc32"], "__CRC32__"), "{mode}");
+            // AVX needs XSAVE in GCC; in Clang it comes along unless refused.
+            assert_eq!(
+                has(&["-mavx", "-mno-xsave"], "__AVX__"),
+                mode == "--clang-mode"
+            );
+            assert_eq!(
+                has(&["-mavx2", "-mno-avx"], "__XSAVE__"),
+                mode == "--gcc-mode"
+            );
+            let assembly = |options: &[&str]| {
+                let args = [options, &["-O2", "-S", "p.c", "-o", "-"]].concat();
+                let output = directory.bcc(mode, &args);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {options:?}");
+                stdout(&output)
+            };
+            assert!(!assembly(&[]).contains("popcnt"), "{mode}");
+            assert!(assembly(&["-mpopcnt"]).contains("popcnt"), "{mode}");
+            assert!(assembly(&["-mavx2"]).contains("vpaddd"), "{mode}");
+            assert!(assembly(&["-march=x86-64-v3"]).contains("vpaddd"), "{mode}");
+            assert!(
+                !assembly(&["-mavx2", "-mno-avx2", "-mno-avx"]).contains("vpaddd"),
+                "{mode}"
+            );
+            // The processor would have them; `-mno-avx` has to tell LLVM.
+            assert!(
+                !assembly(&["-march=x86-64-v3", "-mno-avx"]).contains("vpaddd"),
+                "{mode}"
+            );
+            assert!(assembly(&["-march=x86-64-v3", "-mno-avx"]).contains("paddd"));
+            assert!(
+                !assembly(&["-march=x86-64-v3", "-mno-popcnt"]).contains("popcnt"),
+                "{mode}"
+            );
+            assert!(
+                !assembly(&["-march=x86-64-v3", "-march=x86-64"]).contains("popcnt"),
+                "{mode}"
+            );
+            // `native` is the running processor, whatever that has.
+            succeeds(&directory.bcc(mode, &["-march=native", "-O2", "-c", "p.c", "-o", "p.o"]));
+        }
+    }
+
+    /// x86 feature options on a WebAssembly target are refused in each
+    /// compiler's words and leave no macros behind. Clang leaves `-msse4.2` and
+    /// `-msse4` unused; GCC has no such target, and says what a GCC for another
+    /// processor says of options it doesn't know.
+    #[test]
+    fn x86_feature_options_are_refused_on_webassembly() {
+        let directory = Directory::new();
+        directory.write("m.c", "");
+        let run = |mode: &str, option: &str| {
+            directory.bcc(
+                mode,
+                &[
+                    "--target=wasm32-unknown-unknown",
+                    option,
+                    "-E",
+                    "-dM",
+                    "m.c",
+                ],
+            )
+        };
+        let triple = "wasm32-unknown-unknown";
+        for (option, words) in [
+            ("-mavx2", "-mavx2".to_owned()),
+            ("-mno-avx2", "-mno-avx2".to_owned()),
+            ("-mno-sse4", "-mno-sse4.1".to_owned()),
+            ("-mavx512f", "-mavx512f".to_owned()),
+            ("-mmmx", "-mmmx".to_owned()),
+            ("-march=x86-64-v3", "-march=".to_owned()),
+            ("-march=haswell", "-march=".to_owned()),
+        ] {
+            let output = run("--clang-mode", option);
+            assert_eq!(output.status.code(), Some(1), "{option}");
+            assert!(
+                stderr(&output).contains(&format!(
+                    "unsupported option '{words}' for target '{triple}'"
+                )),
+                "{}",
+                stderr(&output)
+            );
+            assert!(!stdout(&output).contains("__AVX"), "{option}");
+            let output = run("--gcc-mode", option);
+            assert_eq!(output.status.code(), Some(1), "{option}");
+            let wanted = option.strip_prefix("-march=").map_or_else(
+                || format!("unrecognized command-line option '{option}'"),
+                |name| format!("bad value '{name}' for '-march=' switch"),
+            );
+            assert!(stderr(&output).contains(&wanted), "{}", stderr(&output));
+        }
+        for option in ["-msse4.2", "-msse4"] {
+            let output = run("--clang-mode", option);
+            succeeds(&output);
+            assert!(
+                stderr(&output)
+                    .contains(&format!("argument unused during compilation: '{option}'")),
+                "{}",
+                stderr(&output)
+            );
+            assert!(!stdout(&output).contains("__SSE4"), "{option}");
+        }
+    }
+
+    /// An option with a later opposite doesn't count at all in either compiler:
+    /// `-mavx -mno-avx` leaves no SSE4.2, while `-mavx2 -mno-avx` does, and an
+    /// earlier `-mno-avx` turned around by `-mavx` doesn't stop `-march=` from
+    /// turning on what needs AVX.
+    #[test]
+    fn a_later_opposite_option_cancels_the_earlier() {
+        let directory = Directory::new();
+        directory.write("m.c", "");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let has = |options: &[&str], name: &str| {
+                let args = [options, &["-E", "-dM", "m.c"]].concat();
+                stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
+            };
+            assert!(!has(&["-mavx", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(has(&["-mavx2", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-mssse3", "-mno-ssse3"], "__SSE3__"), "{mode}");
+            assert!(
+                has(&["-mno-avx", "-mavx", "-march=x86-64-v3"], "__FMA__"),
+                "{mode}"
+            );
+            assert!(!has(&["-msse4.2", "-mno-sse4.2"], "__SSE4_1__"), "{mode}");
+            assert!(has(&["-mno-sse4.1", "-msse4.2"], "__SSE4_1__"), "{mode}");
+            assert!(!has(&["-msse4.2", "-mno-sse4.1"], "__SSE4_1__"), "{mode}");
+        }
+        // Clang reads `-msse4` as `-msse4.2`, GCC as an option of its own.
+        let has = |mode: &str, options: &[&str], name: &str| {
+            let args = [options, &["-E", "-dM", "m.c"]].concat();
+            stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
+        };
+        assert!(!has(
+            "--clang-mode",
+            &["-msse4", "-mno-sse4.2"],
+            "__SSE4_1__"
+        ));
+        assert!(has("--gcc-mode", &["-msse4", "-mno-sse4.2"], "__SSE4_1__"));
+    }
+
+    /// With AVX, 32-byte vectors and their wrappers travel in YMM registers, so
+    /// bcc's objects link with GCC's and Clang's both ways, at `-O0` and `-O2`.
+    /// Skipped without AVX on the machine or a reference compiler.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn avx_vectors_cross_objects_of_each_compiler() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let directory = Directory::new();
+        let types = "typedef int V __attribute__((vector_size(32)));\ntypedef int W \
+                     __attribute__((vector_size(16)));\ntypedef struct { V v; } S;\ntypedef union \
+                     { V v; float f; } U;\ntypedef struct { double d[4]; } M;\n";
+        directory.write(
+            "lib.c",
+            &format!(
+                "#include <stdarg.h>\n{types}\nV add(V a, V b) {{ return a + b; }}\nW small(W a, \
+                 double d) {{ return a + (int)d; }}\nS wrap(int i, S s, V v) {{ s.v += v + i; \
+                 return s; }}\nU un(U u) {{ u.v += u.v; return u; }}\nM mem(M m) {{ m.d[3] += 1; \
+                 return m; }}\nint last(V a, V b, V c, V d, V e, V f, V g, V h, V i, int k) {{ \
+                 return a[0] + h[7] + i[1] + k; }}\nint var(int n, ...) {{ va_list ap; \
+                 va_start(ap, n); V v = va_arg(ap, V); int i = va_arg(ap, int); S s = va_arg(ap, \
+                 S); va_end(ap); return v[7] + i + s.v[1]; }}\n"
+            ),
+        );
+        directory.write(
+            "client.c",
+            &format!(
+                "#include <stdio.h>\n{types}V add(V, V); W small(W, double); S wrap(int, S, V); U \
+                 un(U); M mem(M); int last(V, V, V, V, V, V, V, V, V, int); int var(int,                  ...);\nint main(void) {{ V a = {{1, 2, 3, 4, 5, 6, 7, 8}}, b = {{10, 20, 30, 40,                  50, 60, 70, 80}}; V r = add(a, b); W w = small((W){{1, 2, 3, 4}}, 5.0); S s =                  wrap(1, (S){{a}}, b); U u = un((U){{.v = a}}); M m = mem((M){{{{1, 2, 3, 4}}}});                  printf(\"%d %d %d %d %g %d %d\\n\", r[7], w[3], s.v[7], u.v[3], m.d[3], last(a,                  a, a, a, a, a, a, a, a, 100), var(1, a, 9, (S){{b}})); return 0; }}\n"
+            ),
+        );
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        let references = [("--gcc-mode", "gcc"), ("--clang-mode", clang)];
+        for (mode, compiler) in references {
+            let available = Command::new(compiler).arg("--version").output();
+            if !available.is_ok_and(|output| output.status.success()) {
+                continue;
+            }
+            for flags in [["-O0", "-mavx2"], ["-O2", "-march=x86-64-v3"]] {
+                let reference = |source: &str, object: &str| {
+                    let output = Command::new(compiler)
+                        .current_dir(directory.path("."))
+                        .args(flags)
+                        .args(["-w", "-c", source, "-o", object])
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{}", stderr(&output));
+                };
+                let bcc = |source: &str, object: &str| {
+                    let args = [&flags[..], &["-w", "-c", source, "-o", object]].concat();
+                    succeeds(&directory.bcc(mode, &args));
+                };
+                reference("lib.c", "r-lib.o");
+                reference("client.c", "r-client.o");
+                bcc("lib.c", "b-lib.o");
+                bcc("client.c", "b-client.o");
+                for (library, client) in [
+                    ("b-lib.o", "r-client.o"),
+                    ("r-lib.o", "b-client.o"),
+                    ("b-lib.o", "b-client.o"),
+                ] {
+                    succeeds(&directory.bcc(mode, &[library, client, "-o", "mixed"]));
+                    let run = Command::new(directory.path("mixed")).output().unwrap();
+                    assert_eq!(
+                        String::from_utf8_lossy(&run.stdout),
+                        "88 9 89 8 5 111 37\n",
+                        "{mode} {flags:?} {library} {client}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Both compilers place a vector on the stack by its size, whatever
+    /// `aligned` its typedef says, in every direction across objects, named or
+    /// not. Skipped without AVX on the machine or a reference compiler.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn aligned_vector_typedefs_keep_their_stack_slots() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let directory = Directory::new();
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        for attributes in [
+            "vector_size(32), aligned(1)",
+            "vector_size(32), aligned(64)",
+            "vector_size(16), aligned(1)",
+            "vector_size(8), aligned(32)",
+            "vector_size(64), aligned(8)",
+            "vector_size(128), aligned(1)",
+        ] {
+            let types = format!(
+                "typedef int T __attribute__(({attributes}));\n#define N (int)(sizeof(T) / \
+                 sizeof(int))\n"
+            );
+            directory.write(
+                "lib.c",
+                &format!(
+                    "#include <stdarg.h>\n{types}int low(long a, long b, long c, long d, long e, \
+                     long f, long g, T v0, T v1, T v2, T v3, T v4, T v5, T v6, T v7, T v8, long \
+                     z) {{ return g != 7 || z != 99 || v0[0] != 1 || v8[N - 1] != N || (unsigned \
+                     long)&v8 % _Alignof(T) != 0; }}\nint var(long g, ...) {{ va_list ap; \
+                     va_start(ap, g); int bad = g != 1; for (int i = 2; i <= 7; i++) bad |= \
+                     va_arg(ap, long) != i; for (int i = 0; i < 9; i++) {{ T v = va_arg(ap, T); \
+                     bad |= v[N - 1] != N; }} bad |= va_arg(ap, long) != 99; va_end(ap); return \
+                     bad; }}\n"
+                ),
+            );
+            directory.write(
+                "client.c",
+                &format!(
+                    "{types}int low(long, long, long, long, long, long, long, T, T, T, T, T, T, \
+                     T, T, T, long); int var(long, ...);\nint main(void) {{ T v; for (int i = 0; \
+                     i < N; i++) v[i] = i + 1; return low(1, 2, 3, 4, 5, 6, 7, v, v, v, v, v, v, \
+                     v, v, v, 99) || var(1L, 2L, 3L, 4L, 5L, 6L, 7L, v, v, v, v, v, v, v, v, v, \
+                     99L); }}\n"
+                ),
+            );
+            for (mode, compiler) in [("--gcc-mode", "gcc"), ("--clang-mode", clang)] {
+                let available = Command::new(compiler).arg("--version").output();
+                if !available.is_ok_and(|output| output.status.success()) {
+                    continue;
+                }
+                for flags in [&["-O0", "-mavx2"][..], &["-O2"]] {
+                    let reference = |source: &str, object: &str| {
+                        let output = Command::new(compiler)
+                            .current_dir(directory.path("."))
+                            .args(flags)
+                            .args(["-w", "-c", source, "-o", object])
+                            .output()
+                            .unwrap();
+                        assert!(output.status.success(), "{}", stderr(&output));
+                    };
+                    let bcc = |source: &str, object: &str| {
+                        let args = [flags, &["-w", "-c", source, "-o", object]].concat();
+                        succeeds(&directory.bcc(mode, &args));
+                    };
+                    reference("lib.c", "r-lib.o");
+                    reference("client.c", "r-client.o");
+                    bcc("lib.c", "b-lib.o");
+                    bcc("client.c", "b-client.o");
+                    for (library, client) in [
+                        ("b-lib.o", "r-client.o"),
+                        ("r-lib.o", "b-client.o"),
+                        ("b-lib.o", "b-client.o"),
+                    ] {
+                        succeeds(&directory.bcc(mode, &[library, client, "-o", "mixed"]));
+                        let run = Command::new(directory.path("mixed")).output().unwrap();
+                        assert_eq!(
+                            run.status.code(),
+                            Some(0),
+                            "{attributes} {mode} {flags:?} {library} {client}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// What the driver leaves out is still read in order: an option outside the
+    /// table refuses a vector its convention changes until AVX is off in that
+    /// compiler or the option's own opposite follows, wherever the options
+    /// stand. Each row was measured with `-dM -E` on GCC 14.2 and Clang 23.1.1.
+    #[test]
+    fn unknown_vector_options_refuse_as_each_compiler_reads_them() {
+        let directory = Directory::new();
+        directory.write(
+            "v.c",
+            "typedef int V __attribute__((vector_size(32)));\nV add(V a, V b) { return a + b; }\n",
+        );
+        let reads = |mode: &str, options: &[&str]| {
+            let args = [options, &["-w", "-c", "v.c", "-o", "v.o"]].concat();
+            let output = directory.bcc(mode, &args);
+            let refused = stderr(&output).contains("ignores changes how it travels");
+            assert_eq!(output.status.success(), !refused, "{}", stderr(&output));
+            refused
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for options in [
+                &["-mavx512f", "-mno-avx512bw"][..],
+                &["-mavx512bw", "-mno-avx512f"],
+                &["-mavx512f", "-mavx512bw", "-mno-avx512f"],
+                &["-mxop", "-mno-fma4"],
+                &["-mavx512f", "-mno-avx2"],
+                &["-mavx512f", "-mno-avx", "-mavx"],
+                &["-mno-avx", "-mavx512f"],
+                &["-march=haswell"],
+                &["-march=haswell", "-mno-bmi"],
+            ] {
+                assert!(reads(mode, options), "{mode} {options:?}");
+            }
+            for options in [
+                &["-mavx512f", "-mno-avx512f"][..],
+                &["-mavx512f", "-mno-avx"],
+                &["-mavx512f", "-mno-sse4.2"],
+                &["-mavx", "-mavx512f", "-mno-avx"],
+                &["-march=haswell", "-mno-avx"],
+                &["-mno-avx", "-march=haswell"],
+                &["-march=haswell", "-march=x86-64"],
+            ] {
+                assert!(!reads(mode, options), "{mode} {options:?}");
+            }
+            for options in [
+                &["-mavx512f", "-mno-xsave"][..],
+                &["-march=haswell", "-mno-xsave"],
+            ] {
+                assert_eq!(
+                    reads(mode, options),
+                    mode == "--clang-mode",
+                    "{mode} {options:?}"
+                );
+            }
+        }
+        assert!(!reads("--gcc-mode", &["-mavx256-split-unaligned-load"]));
+        assert!(reads("--gcc-mode", &["-msse5"]));
+        // clang-cl returns the vector in YMM0 under these, as `clang
+        // --driver-mode=cl` was measured to, and takes the same options.
+        for (options, refused) in [
+            (&["-mavx512f"][..], true),
+            (&["-mavx512f", "-mno-avx512bw"], true),
+            (&["-march=haswell"], true),
+            (&["-mavx512f", "-mno-avx512f"], false),
+            (&["-mavx512f", "-mno-avx"], false),
+            (&["-mavx2"], false),
+        ] {
+            let args = [options, &["/c", "v.c"]].concat();
+            let output = directory.bcc("--clang-cl-mode", &args);
+            assert_eq!(
+                stderr(&output).contains("ignores changes how it travels"),
+                refused,
+                "{options:?}: {}",
+                stderr(&output)
+            );
+            assert_eq!(output.status.success(), !refused, "{options:?}");
+        }
+    }
+
+    /// `__builtin_cpu_supports` and `__builtin_cpu_is` read libgcc's data as
+    /// each compiler does: GCC gives the bit where it stands and Clang 1, and
+    /// each words a bad name its own way. A function with a `target` attribute
+    /// that the query guards runs, computed in software.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn cpu_builtins_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "dispatch.c",
+            "#include <immintrin.h>\n#include <stdio.h>\n__attribute__((target(\"avx2\"))) static \
+             int sum(const int *p) {\n__m256i v = _mm256_loadu_si256((const __m256i \
+             *)p);\n__m256i w = _mm256_add_epi32(v, v);\nint o[8]; _mm256_storeu_si256((__m256i \
+             *)o, w);\nreturn o[0] + o[7];\n}\nint main(void) { int d[8] = {1,2,3,4,5,6,7,8};\nif \
+             (__builtin_cpu_supports(\"avx2\")) printf(\"%d\\n\", sum(d)); else puts(\"none\"); \
+             return 0; }\n",
+        );
+        directory.write(
+            "compare.c",
+            "#include <stdio.h>\n#define S(n) printf(n \" %d\\n\", \
+             __builtin_cpu_supports(n))\n#define I(n) printf(n \" %d\\n\", \
+             __builtin_cpu_is(n))\nint main(void) { S(\"cmov\"); S(\"mmx\"); S(\"popcnt\"); \
+             S(\"sse4.2\"); S(\"avx\"); S(\"avx2\"); S(\"fma\"); S(\"bmi2\"); S(\"avx512f\"); \
+             S(\"avx512vl\"); S(\"avx512vbmi2\"); S(\"gfni\"); S(\"aes\"); S(\"f16c\"); \
+             S(\"lzcnt\"); S(\"movbe\"); S(\"rdrnd\"); S(\"sha\"); S(\"xsave\"); S(\"x86-64\"); \
+             S(\"x86-64-v2\"); S(\"x86-64-v3\"); S(\"x86-64-v4\"); I(\"intel\"); I(\"amd\"); \
+             I(\"corei7\"); I(\"amdfam19h\"); I(\"znver4\"); I(\"haswell\"); return 0; }\n",
+        );
+        directory.write(
+            "bad.c",
+            "int f(const char *s) {\nint a = __builtin_cpu_supports(\"bogus\");\nint b = \
+             __builtin_cpu_supports(s);\nint c = __builtin_cpu_is(s);\nreturn a + b + c + \
+             __builtin_cpu_is(\"bogus\");\n}\n",
+        );
+        directory.write(
+            "unknown.c",
+            "int main(void) { return __builtin_cpu_supports(\"bogus\"); }\n",
+        );
+        directory.write(
+            "has.c",
+            "#if __has_builtin(__builtin_cpu_supports) && __has_builtin(__builtin_cpu_is) && \
+             __has_builtin(__builtin_cpu_init)\nyes\n#else\nno\n#endif\n",
+        );
+        let sum = if std::is_x86_feature_detected!("avx2") {
+            "18\n"
+        } else {
+            "none\n"
+        };
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        for (mode, compiler) in [("--gcc-mode", "gcc"), ("--clang-mode", clang)] {
+            for flags in [
+                &["-O0"][..],
+                &["-O2"],
+                &["-O2", "-static"],
+                &["-O0", "-fPIE", "-pie"],
+            ] {
+                let mut args = flags.to_vec();
+                args.extend(["-w", "dispatch.c", "-o", "dispatch"]);
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("dispatch")).output().unwrap();
+                assert_eq!(
+                    String::from_utf8_lossy(&run.stdout),
+                    sum,
+                    "{mode} {flags:?}"
+                );
+            }
+            // The feature bits of the table, against the compiler's own code.
+            succeeds(&directory.bcc(mode, &["-w", "compare.c", "-o", "ours"]));
+            let reference = Command::new(compiler)
+                .current_dir(directory.path("."))
+                .args(["-w", "compare.c", "-o", "theirs"])
+                .output();
+            if reference.is_ok_and(|output| output.status.success()) {
+                let ours = Command::new(directory.path("ours")).output().unwrap();
+                let theirs = Command::new(directory.path("theirs")).output().unwrap();
+                assert_eq!(
+                    String::from_utf8_lossy(&ours.stdout),
+                    String::from_utf8_lossy(&theirs.stdout),
+                    "{mode}"
+                );
+            }
+            let output = directory.bcc(mode, &["-E", "has.c"]);
+            assert!(stdout(&output).contains("yes"), "{mode}");
+            let output = directory.bcc(mode, &["--target=wasm32-unknown-unknown", "-E", "has.c"]);
+            assert!(stdout(&output).contains("no"), "{mode}");
+            let output = directory.bcc(
+                mode,
+                &[
+                    "--target=wasm32-unknown-unknown",
+                    "-S",
+                    "unknown.c",
+                    "-o",
+                    "unknown.s",
+                ],
+            );
+            assert_eq!(output.status.code(), Some(1), "{mode}");
+            assert!(
+                stderr(&output).contains("error: builtin is not supported on this target"),
+                "{}",
+                stderr(&output)
+            );
+        }
+        let value = |mode: &str, name: &str, expected: &str| {
+            directory.write(
+                "value.c",
+                &format!(
+                    "#include <stdio.h>\nint main(void) {{ printf(\"%d\\n\",                      \
+                     __builtin_cpu_supports(\"{name}\")); return 0; }}\n"
+                ),
+            );
+            succeeds(&directory.bcc(mode, &["-w", "value.c", "-o", "value"]));
+            let run = Command::new(directory.path("value")).output().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout),
+                expected,
+                "{mode} {name}"
+            );
+        };
+        value("--gcc-mode", "sse2", "16\n");
+        value("--clang-mode", "sse2", "1\n");
+        // GCC reads a C string; Clang all of it, which names no feature.
+        value("--gcc-mode", "sse2\\0junk", "16\n");
+        value("--gcc-mode", "sse2\\0\\377", "16\n");
+        value("--clang-mode", "sse2\\0junk", "0\n");
+        directory.write(
+            "utf8.c",
+            "#include <stdio.h>\nint main(void) { printf(\"%d\\n\", \
+             __builtin_cpu_supports(u8\"sse2\")); return 0; }\n",
+        );
+        for (mode, expected) in [("--gcc-mode", "16\n"), ("--clang-mode", "1\n")] {
+            succeeds(&directory.bcc(mode, &["-w", "utf8.c", "-o", "utf8"]));
+            let run = Command::new(directory.path("utf8")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{mode}");
+        }
+        directory.write(
+            "empty.c",
+            "int main(void) { return __builtin_cpu_supports(\"\\0sse2\"); }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-c", "empty.c", "-o", "empty.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("error: parameter to builtin not valid: \n"),
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--gcc-mode", &["-c", "bad.c", "-o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        let words = stderr(&output);
+        assert!(
+            words.contains("error: parameter to builtin not valid: bogus"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: parameter to builtin must be a string constant or literal"),
+            "{words}"
+        );
+        let output = directory.bcc("--clang-mode", &["-c", "bad.c", "-o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        let words = stderr(&output);
+        assert!(
+            words.contains("warning: invalid cpu feature string for builtin"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: invalid cpu name for builtin"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: expression is not a string literal"),
+            "{words}"
+        );
+        // Clang's unknown feature warns and answers 0.
+        let output = directory.bcc("--clang-mode", &["unknown.c", "-o", "unknown"]);
+        succeeds(&output);
+        assert!(stderr(&output).contains("invalid cpu feature string"));
+        let run = Command::new(directory.path("unknown")).status().unwrap();
+        assert_eq!(run.code(), Some(0));
+        // `__builtin_cpu_init` is `int` in GCC and `void` in Clang.
+        directory.write(
+            "init.c",
+            "#include <stdio.h>\nint main(void) { printf(\"%zu\\n\", \
+             sizeof(__builtin_cpu_init()));              return 0; }\n",
+        );
+        for (mode, expected) in [("--gcc-mode", "4\n"), ("--clang-mode", "1\n")] {
+            succeeds(&directory.bcc(mode, &["-w", "init.c", "-o", "init"]));
+            let run = Command::new(directory.path("init")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{mode}");
+        }
     }
 
     /// `-masm=intel` writes Intel syntax and reads `asm` statements in it. The
@@ -7880,8 +9230,9 @@ mod tests {
             "-o",
             "x.o",
         ]));
-        // A newer processor warns: baseline code runs on it.
-        for option in ["-march=native", "-march=x86-64-v3", "-mavx2"] {
+        // A processor or feature bcc doesn't model warns: baseline code runs on
+        // it.
+        for option in ["-march=haswell", "-march=x86-64-v4", "-mavx512f"] {
             let output = linux(&["-c", option, "x.c", "-o", "x.o"]);
             succeeds(&output);
             assert!(

@@ -246,6 +246,24 @@ impl Expander<'_, '_, '_, '_> {
                         name.source_vectors,
                     );
                     let taken = self.eval_macro_test(directive);
+                    // GCC's `gnu` modes report it only where taking the group
+                    // tells it from an older compiler's skipping it.
+                    if taken
+                        && self
+                            .context
+                            .configuration
+                            .silent_extension(Feature::Elifdef)
+                    {
+                        self.context.report_extension_since(
+                            if directive == "elifdef" {
+                                "#elifdef"
+                            } else {
+                                "#elifndef"
+                            },
+                            Feature::Elifdef.origin(),
+                            name.source_vectors,
+                        );
+                    }
                     if self.tracing() {
                         self.trace_condition(name.source_vectors, taken, true);
                     }

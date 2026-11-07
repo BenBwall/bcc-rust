@@ -253,10 +253,12 @@ signed `<<` wraps in every mode: GCC documents that it does not treat its
 overflow as undefined, and Clang emits a plain shift. Constant expressions
 fold it to the same two's-complement value (`static int s = -1 << 4;` is
 -16, `3 << 31` is `INT_MIN`), reported as a GNU extension only under the
-pedantic policy, as GCC accepts them; Clang's default `-Wshift-negative-value`
-and `-Wshift-overflow` warnings are not reproduced, and such a shift stays an
-integer constant expression, where GCC treats an array bound of it as
-variable. `-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect
+pedantic policy, as GCC accepts them; plain bcc reproduces neither of Clang's
+default `-Wshift-negative-value` and `-Wshift-overflow` warnings, and such a
+shift stays an integer constant expression there. Under `--gcc-mode` and
+`--clang-mode` the shift follows its compiler instead
+([exceptional constants](#exceptional-integer-constants-2026-11-07)).
+`-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect
 before any `#pragma pack`, which `#pragma pack()` restores, as GCC documents
 and `cl /ZpN` does. `-fpack-struct` without a value instead packs every
 structure and union as the `packed` attribute does (an `aligned` member keeps
@@ -2397,7 +2399,7 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `no_callee_saved_registers` and the other non-x86 conventions are refused |
 | Machine entries (Linux targets; refused by lowering on the others) | `interrupt` (handlers, below), `no_caller_saved_registers`, and under GCC's identity `naked` |
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked` under Clang's identity, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage` |
-| Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
+| Dropped with a warning | `common` (bcc emits ordinary definitions), `target` (refused where it would change how a vector of 32 bytes or more crosses objects; `docs/design/driver-modes.md`), `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
 | Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
 | Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls (`no_sanitize` and its spellings keep a function out of the sanitizers bcc has), `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull` (which `-fsanitize=returns-nonnull-attribute` checks), `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
 | GCC identity only | `scalar_storage_order`: little-endian accepted, big-endian refused on records, ignored with a warning elsewhere (see above); unknown under the other identities |
@@ -2494,6 +2496,10 @@ was run):
   that supplied its name, that replacement's macro may expand again inside
   the call's replacement, as GCC and Clang choose (C11 §6.10.3.4p4 allows
   either); `TraceLoggingProvider.h` counts arguments that way.
+- `__builtin_cpu_supports`, `__builtin_cpu_is` and `__builtin_cpu_init` read
+  libgcc's or compiler-rt's `__cpu_model` and `__cpu_features2` on x86-64, with
+  each compiler's names, bits and words for an unknown name
+  (`target/cpu_model.rs`; `docs/design/driver-modes.md`). WebAssembly refuses them.
 - `__rdtsc` is Clang's x86 builtin in every x86 target and mode
   (`unsigned long long __rdtsc(void)`, `llvm.x86.rdtsc`); the interpreter
   gives an increasing counter and the native back end refuses it.
@@ -3229,8 +3235,9 @@ or `_Static_assert` rejects it, as GCC does, where Clang folds the
 saturated value. A conversion in function code keeps its run-time
 evaluation. GCC's pedantic warning for signed integer overflow in a static
 initializer (`(int)1e10 + 1`) and Clang's `-Winteger-overflow` and
-`-Wbitfield-constant-conversion` are not reproduced; bcc still rejects the
-first, and its `__builtin_constant_p((int)1e10 + 1)` is 0 where Clang's is 1.
+`-Wbitfield-constant-conversion` on such a converted value are not reproduced;
+bcc still rejects the first, and its `__builtin_constant_p((int)1e10 + 1)` is 0
+where Clang's is 1.
 
 GCC's pedantic report is a pedantic child of `-Woverflow` (as GCC's
 `pedwarn` with `OPT_Woverflow` is): only `-pedantic` reports it, and
@@ -3757,3 +3764,141 @@ Deviations:
   Clang does for a declaration.
 - GCC reports a `register` array's conversion at the start of the
   function that contains it; bcc reports it at the operand.
+
+## Exceptional integer constants (2026-11-07)
+
+C99 §6.6p4 makes a constant expression that overflows or divides by zero a
+constraint violation, and plain bcc refuses one with `ConstantOverflow`. Both
+compilers fold most of them with a warning, so `--compiler-extensions`, which
+only the GNU personalities pass, turns on `exceptional_constants.rs`; the
+identity could not tell, since plain bcc has Clang's. Values were measured with
+GCC 13.3 (running programs) and GCC 14.2's `cc1` and Clang 23.1:
+
+| `int x = E;` | GCC | Clang |
+| --- | --- | --- |
+| `2147483647+1` | -2147483648, `-Woverflow` | -2147483648, `-Winteger-overflow` |
+| `(-2147483647-1)/-1`, `%-1` | -2147483648, 0, `-Woverflow` | -2147483648, 0, silently |
+| `1<<40`, `1u<<32`, `(char)1<<40` | 0 | -2147483648 (count clamped to width - 1) |
+| `1>>40`, `-1>>40` | 0, -1 | 0, -1 |
+| `1LL<<64` | 0 | -9223372036854775808 |
+| `1<<-1`, `1>>-1` | not constant | 0, 2 (shifts the other way) |
+| `-1>>-1`, `0<<-1` | -1, 0 (the operand decides) | -2, 0 |
+| `1<<(1LL<<33)` | 1 (the count converts to `int`) | -2147483648 |
+| `1/0`, `1%0` | not constant | not constant |
+
+What each context makes of a value:
+
+| Context | GCC | Clang |
+| --- | --- | --- |
+| Static initializer | any value; under `-pedantic` "overflow in constant expression" or "initializer element is not a constant expression" | any value |
+| Enumerator, `case`, `_Static_assert`, bit-field width | any value; under `-pedantic` the overflow report, or "... is not an integer constant expression" in the context's words | any value; under `-pedantic` `-Wgnu-folding-constant`, but not for a `case` |
+| Array bound | only a wrapped value that is negative stays a constant, and is refused; anything else is variable length, so an error at file scope | folds with `-Wgnu-folding-constant` in every scope, except a minimum over -1, which is variable length |
+| `_Alignas`, `_BitInt` width | only arithmetic that wrapped; a shift or comparison is no constant | any value, except `_Alignas` of a minimum over -1 |
+| Code | the folded value | a wrapped value; poison from an undefined shift or minimum over -1, which reads as any value there, and bcc reads 0 |
+
+GCC's result stays a constant through arithmetic and conversions, but a
+comparison, `!`, `&&`, `||` or `?:` makes it what its parser no longer reads as
+one (`ConstantFolding::Wrapped` against `Undefined`). A shift into or past the
+sign bit (`1<<31`, `-1<<1`) is such a value too from C99 on, and a plain
+integer constant expression before it; Clang keeps `1<<31` as one, and its
+`-1<<1` wraps.
+
+Warnings follow the same split as the compilers' own code paths. GCC warns as it
+parses an operator, unless the operand is under `sizeof`, `_Alignof`, `typeof`,
+a `_Generic` controlling expression or an association of another type, or is
+what a constant `&&`, `||` or `?:` skips; unreachable code still warns. Clang
+reports shift counts and zero divisors with `DiagRuntimeBehavior`, so not in a
+constant context or in code it can tell is unreachable, and overflow from a
+single evaluation of each full expression (`Sema::CheckForIntOverflow`), so
+that `y ? 2147483647+1 : 0` says nothing and `y + (2147483647+1)` does. The
+groups are `-Woverflow` (GCC), `-Winteger-overflow` (Clang),
+`-Wshift-count-overflow`, `-Wshift-count-negative`, `-Wshift-overflow` (GCC
+prints `-Wshift-overflow=`), Clang's `-Wshift-negative-value`, GCC's
+`-Wdiv-by-zero` and Clang's `-Wdivision-by-zero`, which also answers to
+`-Wno-div-by-zero`. `-Wno-overflow` does not reach Clang's warning.
+
+Known differences that remain: `1LL<<(1ULL<<63)`, a 64-bit left operand with
+that count, is no constant under GCC and 1 here; Clang's code shifts
+`1<<(1LL<<33)` by the low bits of the count, where bcc reads 0; GCC's second
+"overflow in constant expression" on `1?(2147483647+1):2` under `-pedantic`,
+Clang's `-Wgnu-folding-constant` on `_Alignas` under `-pedantic` and on a
+`__builtin_choose_expr` operand it does not select are not reproduced; Clang's
+silence in the body of `while (0)` is not, since bcc's unreachable-code model
+does not cover it; a `case` label's `?:` warns under Clang's overflow check here
+but not there; Clang's refusal of `struct { int b : 4; } t = { 1 << 40 };` and
+GCC's `-Wextra` `-Wshift-negative-value` are not modeled; and
+`int *p = (int *)(2147483647 + 1);` keeps a false `-Wint-to-pointer-cast`.
+
+## An address's truth in a constant (2026-11-07)
+
+An object or function has a non-null address (C99 §6.3.2.3p3), so what its truth
+decides is known without a link. `_Bool b = &g;` is an address constant
+converted by §6.3.1.2p1, and every mode stores it, without a relocation. The
+other forms are §6.6p10's latitude, so `--compiler-extensions` turns them on
+(`semantic_analysis/address_truth.rs`), as it does exceptional constants: `!&g`,
+`&g ? 1 : 2`, `&g == 0`, `&g && 1`, `!f`, `(a + 1) != 0`, `"x" == 0` and
+`(void *)0 ? 1 : 2`, in a static initializer and in an enumerator, `case`,
+`_Static_assert` or bit-field width, with `-pedantic`'s report of a value that is
+no integer constant expression. Measured against GCC 14.2 (13.3 for values)
+and Clang 23.1:
+
+| | GCC | Clang |
+| --- | --- | --- |
+| `_Bool b = E;` | `&g`, an array or function, `a + 0`, through pointer casts | any address, `&a[1]`, `a + 1`, `"x"`, `(long)&g` |
+| A weak entity | known if this unit defines it (`_Bool b = &g;`, `!&g`), but not to `==`; refused if only declared | refused |
+| `(long)&g != 0`, `&g > 0` | folds | refused |
+| Array bound | variable length | folds with `-Wgnu-folding-constant` |
+| `_Static_assert(&g, "x")` | refused | accepted |
+| An automatic or thread-local object | known, since only its truth is read | same |
+
+Known differences that remain: GCC refuses a second conversion of the same
+symbol to `_Bool` in one unit (`_Bool a = &g; _Bool b = &g;`, "not computable at
+load time"), which looks like an accident of when it creates the symbol, and bcc
+accepts it; GCC's `int a[!&g + 1];` at file scope is a warning, where bcc reports
+its usual variably modified error; Clang's `-Wtautological-pointer-compare` is
+not reproduced; and in function code bcc still references the symbol, so that
+`if (&g)` or `_Bool n = &g;` needs `g` defined where both compilers fold it away.
+
+## `-pedantic` under a personality (2026-11-07)
+
+bcc's own `-pedantic` reports every extension. GCC and Clang do not, and each
+refuses some of what bcc takes, so `--compiler-extensions` follows them.
+`CompilerConfiguration::silent_extension` lists what goes unreported and
+`semantic_analysis/compiler_parity.rs` holds what only the compiler a personality
+stands in for says. Measured on GCC 14.2 and Clang 23.1 at `-std=c89`, `c99`,
+`c11`, `gnu89`, `gnu17` and `c23`:
+
+| Program | GCC | Clang |
+| --- | --- | --- |
+| `#foo` in an active group | refused | refused |
+| `#assert`, `#unassert` | reported, then ignored | refused |
+| `#elifdef` before C23 | ISO modes: an invalid directive. `gnu` modes: reported only if the group is taken | accepted, reported |
+| `#embed` | refused, until GCC 15 | accepted |
+| `for (int i...)` before C99 | refused | reported |
+| `int a[] = {};` | refused | reported |
+| `_Decimal64` and its kin | reported before C23 | refused |
+| A comma in an enumerator, `case`, `_Static_assert`, bit-field or file-scope bound | refused | folds, reported |
+| `int x = (1,2);`, `(1,2)+1` | reported; from C99 refuses the second | accepted |
+| `__float128` | silent | silent |
+| `__COUNTER__`, an empty macro argument, `, ## __VA_ARGS__` | silent | reported |
+| `$` in an identifier | reported only before C99 | reported |
+| `typeof`, `__VA_OPT__`, hex floats, `inline`, an omitted `...` argument | silent in a `gnu` mode | reported |
+| `//` in `gnu89` | reported | silent |
+| `struct { int x; };`, `int;` | warns by default, with no option | warns by default, `-Wmissing-declarations` |
+| `__FUNCTION__`, `__PRETTY_FUNCTION__`; `__func__` before C99 | reported | silent |
+| `# 5 "f.c"` outside preprocessed input | reported | reported |
+| `'ab'` | `-Wmultichar` | `-Wmultichar`; not `'abcd'` |
+| A variable length array before C99 | reported | reported |
+| `sizeof(void)`, `sizeof(f)` | reported | reported |
+
+A reported extension keeps bcc's words (`'inline' is a C99 extension
+[-Wpedantic]`) unless this document or `exceptional_constants.rs` quotes the
+compiler's. `void f(void) { int a = {}; }` already compiled under both before
+this work, so the entry for it in the original probe no longer applied.
+
+Known differences that remain: `-Woverflow` and `-Wconstant-conversion` on an
+implicit conversion such as `int x = 2147483648;`; `-Wmultichar` in a `#if`, and
+GCC's and Clang's other words for a constant of more than four characters; GCC's
+`int x = L'ab';`, which bcc refuses as Clang does; `_Decimal64 d = 1.0dd;`, whose
+constant bcc has no type for; Clang's `-Wunused-value` on a comma, which #284
+adds; and its `-Wdeprecated-non-prototype`.

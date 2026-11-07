@@ -97,6 +97,7 @@ mod statements;
 mod vectors;
 mod vla;
 mod wide_bit_int;
+mod wide_vectors;
 mod work;
 
 // Construction

@@ -113,6 +113,12 @@ pub(crate) struct EntityAttributes<'tu> {
     /// GNU `no_sanitize` naming `UndefinedBehaviorSanitizer`'s checks, or
     /// `no_sanitize_undefined`, on a function: the checks it leaves out.
     pub(crate) no_sanitize_undefined: crate::target::sanitizers::UbChecks,
+    /// GNU `target` on a function, with text that makes GCC or Clang pass
+    /// vectors of 32 bytes or more otherwise than the command line does. bcc
+    /// ignores the attribute (`lowering/wide_vectors.rs` refuses what that
+    /// would miscompile).
+    /// GNU extension: GCC manual, "x86 Function Attributes".
+    pub(crate) target_vector_abi:     bool,
     /// x86 `interrupt`: an interrupt or exception handler.
     /// GNU extension: GCC manual, "x86 Function Attributes".
     pub(crate) interrupt:             bool,

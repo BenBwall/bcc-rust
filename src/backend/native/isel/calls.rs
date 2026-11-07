@@ -575,8 +575,7 @@ impl Selector<'_, '_, '_> {
                     mem,
                 });
                 if matches!(registers.second, Some(Type::I128 | Type::F128)) {
-                    let offset =
-                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    let offset = i32::from(registers.second_offset);
                     self.emit(MInst::Move128 {
                         load: false,
                         reg:  Reg::Phys(PReg::Xmm1),
@@ -592,8 +591,7 @@ impl Selector<'_, '_, '_> {
                     mem,
                 });
                 if registers.second == Some(Type::F80) {
-                    let offset =
-                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    let offset = i32::from(registers.second_offset);
                     self.emit(MInst::X87Store {
                         format: X87Format::F80,
                         mem:    mem.offset(offset),
@@ -838,8 +836,7 @@ impl Selector<'_, '_, '_> {
                 });
                 uses = uses.with(PReg::Xmm0);
                 if matches!(registers.second, Some(Type::I128 | Type::F128)) {
-                    let offset =
-                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    let offset = i32::from(registers.second_offset);
                     self.emit(MInst::Move128 {
                         load: true,
                         reg:  Reg::Phys(PReg::Xmm1),
@@ -852,8 +849,7 @@ impl Selector<'_, '_, '_> {
                 // A complex `long double` returns its imaginary part in
                 // `%st(1)`, so that part is pushed first.
                 if registers.second == Some(Type::F80) {
-                    let offset =
-                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    let offset = i32::from(registers.second_offset);
                     self.emit(MInst::X87Load {
                         format: X87Format::F80,
                         mem:    area.offset(offset),

@@ -416,23 +416,33 @@ impl Cli {
     /// and the last of `-f[no-]strict-volatile-bitfields`,
     /// `-f[no-]function-sections` and `-f[no-]data-sections`.
     fn code_options(&self) -> CodeOptions {
+        // WebAssembly has no such features: `report_x86_options_on_wasm`
+        // refuses them.
+        let x86_features = if self.target.is_wasm() {
+            crate::target::X86Features::NONE
+        } else {
+            crate::target::X86Features::from_options(
+                &self.language_option.iter().map(std::ops::Deref::deref),
+                CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
+            )
+        };
         CodeOptions {
-            hardening:                  self.hardening(),
-            relocation:                 self
+            x86_features,
+            hardening: self.hardening(),
+            relocation: self
                 .language_option
                 .iter()
                 .filter_map(|option| Relocation::parse(option))
                 .next_back(),
-            tls_model:                  self.tls_model.unwrap_or_default(),
-            debug_info:                 self.code_generation.debug_options(self.target).is_some(),
+            tls_model: self.tls_model.unwrap_or_default(),
+            debug_info: self.code_generation.debug_options(self.target).is_some(),
             strict_volatile_bit_fields: self.last_of(
                 "-fstrict-volatile-bitfields",
                 "-fno-strict-volatile-bitfields",
             ),
-            intel_syntax:               self.last_of("-masm=intel", "-masm=att"),
-            function_sections:          self
-                .last_of("-ffunction-sections", "-fno-function-sections"),
-            data_sections:              self.last_of("-fdata-sections", "-fno-data-sections"),
+            intel_syntax: self.last_of("-masm=intel", "-masm=att"),
+            function_sections: self.last_of("-ffunction-sections", "-fno-function-sections"),
+            data_sections: self.last_of("-fdata-sections", "-fno-data-sections"),
         }
     }
 
@@ -565,6 +575,69 @@ impl Cli {
             .rfind(|option| Relocation::parse(option).is_some())
             .filter(|option| Relocation::parse(option) != Some(Relocation::Static))
             .map(String::as_str)
+    }
+
+    /// Reports the x86 feature options a WebAssembly target has no use for,
+    /// which leave no macros behind ([`Self::code_options`]). Clang refuses
+    /// each in its own words, but for `-msse4.2` and `-msse4`, which it leaves
+    /// unused, and reads `-mno-sse4` as `-mno-sse4.1`. GCC has no WebAssembly
+    /// target; a GCC for a processor without these options says what it says of
+    /// any option it doesn't know, and of a processor it doesn't know.
+    /// Returns whether any was an error.
+    pub(super) fn report_x86_options_on_wasm(&self) -> bool {
+        use super::driver::{
+            Severity,
+            report,
+        };
+        if !self.target.is_wasm() {
+            return false;
+        }
+        let gcc = CompilerIdentity::from(self.compiler_identity) == CompilerIdentity::Gcc;
+        let triple = self.target.triple();
+        let mut failed = false;
+        for option in &self.language_option {
+            let option = option.as_str();
+            if !crate::target::is_feature_option(option) {
+                continue;
+            }
+            if !gcc && matches!(option, "-msse4.2" | "-msse4") {
+                report(
+                    self,
+                    Severity::Warning,
+                    format_args!(
+                        "argument unused during compilation: '{option}' \
+                         [-Wunused-command-line-argument]"
+                    ),
+                );
+                continue;
+            }
+            failed = true;
+            match (gcc, option.strip_prefix("-march=")) {
+                | (true, Some(architecture)) => report(
+                    self,
+                    Severity::Error,
+                    format_args!("bad value '{architecture}' for '-march=' switch"),
+                ),
+                | (true, None) => report(
+                    self,
+                    Severity::Error,
+                    format_args!("unrecognized command-line option '{option}'"),
+                ),
+                | (false, architecture) => {
+                    let option = match option {
+                        | _ if architecture.is_some() => "-march=",
+                        | "-mno-sse4" => "-mno-sse4.1",
+                        | other => other,
+                    };
+                    report(
+                        self,
+                        Severity::Error,
+                        format_args!("unsupported option '{option}' for target '{triple}'"),
+                    );
+                },
+            }
+        }
+        failed
     }
 
     /// The library functions code generation may treat as builtins, from
@@ -1036,6 +1109,9 @@ impl LanguageFlag {
             | "-fomit-frame-pointer" => return Some(Self::Code),
             | _ if is_hardening_option(text) => return Some(Self::Code),
             | _ if is_diagnostic_presentation(text) => return Some(Self::Presentation),
+            | _ if crate::target::is_feature_option(text)
+                || text == crate::target::UNKNOWN_VECTOR_ABI =>
+                return Some(Self::Code),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpermissive" => return Some(Self::Permissive(true)),
             | "-fno-permissive" => return Some(Self::Permissive(false)),

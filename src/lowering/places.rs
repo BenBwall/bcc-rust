@@ -80,7 +80,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let place = match data.kind {
             | BindingKind::Function => Place::Function(
                 self.unit
-                    .function(binding)
+                    .addressed_function(binding)
                     .map_err(|kind| at(kind, source))?,
             ),
             | BindingKind::Object | BindingKind::Parameter => match data.duration {

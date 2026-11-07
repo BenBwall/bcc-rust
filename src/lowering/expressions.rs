@@ -137,7 +137,28 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             info.category,
             ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
         );
-        if (info.ice || saturated)
+        // An exceptional constant's value reaches code as it does a static
+        // object (C99 §6.6p4), but Clang's code computes poison from an
+        // undefined shift or division where its evaluator has a value. A
+        // program can read anything then; bcc reads zero.
+        let exceptional = info.folding.exceptional();
+        let poison = exceptional
+            && info.folding
+                != crate::translation_phases::semantic_analysis::ConstantFolding::Wrapped
+            && self.unit.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang;
+        if poison
+            && !info.runtime_query
+            && !lvalue
+            && let Ok(representation @ (Repr::Int { .. } | Repr::Bool)) =
+                repr(&self.unit.sema.types, info.ty)
+        {
+            let ty = representation.value_type().expect("integers have values");
+            let value = self.iconst(ty, 0);
+            self.push_item(Operand::Value(value), info.ty);
+            return Ok(());
+        }
+        if (info.ice || saturated || exceptional)
             && !info.runtime_query
             && !lvalue
             && let Some(value) = info.integer
@@ -155,7 +176,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         // A wide one is a constant object of its limbs.
-        if info.ice
+        if (info.ice || exceptional)
             && !info.runtime_query
             && !lvalue
             && let Some(value) = info.integer
@@ -2543,12 +2564,38 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ty:      items[0].ty,
             });
         }
-        let fixed = if open_external {
+        // A vector AVX passes whole travels as a named one, since the callee
+        // has no `...` to read it from; Clang's `isNoProtoCallVariadic` makes
+        // such a call an ordinary one as well.
+        let open_variadic = open_external
+            && !items
+                .iter()
+                .any(|item| self.unit.travels_whole(item.ty).unwrap_or(false));
+        let fixed = if open_variadic {
             0
+        } else if open_external {
+            items.len()
         } else {
             call.fixed + hidden_count + usize::from(frame_argument)
         };
-        let variadic = open_external || (call.prototype && call.variadic);
+        let variadic = open_variadic || (call.prototype && call.variadic);
+        let target_attribute = self
+            .record
+            .binding
+            .is_some_and(|binding| self.unit.target_vector_abi(binding));
+        if direct.is_none_or(|binding| {
+            self.unit.sema.bindings[binding].linkage
+                != crate::translation_phases::semantic_analysis::Linkage::Internal
+        }) {
+            self.unit
+                .check_foreign_vectors(
+                    items[..fixed].iter().map(|item| item.ty),
+                    result,
+                    variadic,
+                    target_attribute,
+                )
+                .map_err(|kind| at(kind, source))?;
+        }
         let described = items[fixed..].iter().any(|item| {
             matches!(
                 repr(&self.unit.sema.types, item.ty),
