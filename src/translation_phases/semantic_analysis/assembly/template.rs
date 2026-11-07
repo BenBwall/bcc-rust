@@ -40,14 +40,15 @@ pub(super) struct Names<'n> {
 }
 
 /// Splits an extended template into pieces in `arena`. Of each `{att|intel}`
-/// group only the first, AT&T alternative is kept and checked, as GCC
-/// writes it in AT&T syntax: the others are skipped up to their `|` or `}`
-/// (a `%` escape there skips its next character), never interpreted, so a
-/// `%z` that only Intel syntax gives meaning is no error. Outside a group,
-/// `|` and `}` are literal text.
+/// group only the alternative of the syntax in use is kept and checked, as
+/// GCC writes it: the first, or the second with `intel`. The others are
+/// skipped up to their `|` or `}` (a `%` escape there skips its next
+/// character), never interpreted, so a `%z` that only Intel syntax gives
+/// meaning is no error. Outside a group, `|` and `}` are literal text.
 pub(super) fn parse<'a, 't: 'a>(
     text: &'t str,
     names: &Names<'_>,
+    intel: bool,
     arena: &'a Bump,
 ) -> Result<&'a [AsmPiece<'a>], TemplateFault> {
     let mut pieces = ArenaVec::new_in(arena);
@@ -67,6 +68,9 @@ pub(super) fn parse<'a, 't: 'a>(
                 flush(&mut pieces, start, index);
                 group = true;
                 index += 1;
+                if intel {
+                    (index, group) = skip_first_alternative(bytes, index)?;
+                }
                 start = index;
             },
             | b'}' if group => {
@@ -96,6 +100,21 @@ pub(super) fn parse<'a, 't: 'a>(
     }
     flush(&mut pieces, start, index);
     Ok(pieces.leak())
+}
+
+/// Where a group's second alternative starts, and whether there is one: past
+/// a `}` first, the group is over and writes nothing.
+fn skip_first_alternative(bytes: &[u8], mut index: usize) -> Result<(usize, bool), TemplateFault> {
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
+            | b'%' => index += 2,
+            | b'|' => return Ok((index + 1, true)),
+            | b'}' => return Ok((index + 1, false)),
+            | b'{' => return Err(TemplateFault::Dialect),
+            | _ => index += 1,
+        }
+    }
+    Err(TemplateFault::Dialect)
 }
 
 /// Where the text continues after the alternatives that follow a group's
