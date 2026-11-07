@@ -1372,6 +1372,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             .filter(|&alignment| alignment > 0)
     }
 
+    /// Whether a declaration of function `binding` says `naked`.
+    pub(in crate::translation_phases::semantic_analysis) fn declared_naked(
+        &mut self,
+        binding: usize,
+    ) -> bool {
+        let entity = self.entity_of(binding);
+        self.attributes
+            .entities
+            .get(&entity)
+            .is_some_and(|attributes| attributes.naked)
+    }
+
     /// A declaration of object `binding` specifies its alignment.
     pub(super) fn declares_alignment(&mut self, binding: usize) {
         let entity = self.entity_of(binding);
