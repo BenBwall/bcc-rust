@@ -9706,16 +9706,23 @@ mod tests {
 
     /// TCC's binary floating constants, from its own
     /// `70_floating_point_literals` test, are the hexadecimal ones with the
-    /// same bits. GCC and Clang refuse them.
+    /// same bits. As in TCC, a mantissa without digits is zero, and leading
+    /// or trailing zeroes may run far longer than the value they spell. GCC
+    /// and Clang refuse them.
     #[cfg(target_os = "linux")]
     #[test]
     fn tcc_reads_binary_floating_constants() {
         let directory = Directory::new();
+        let zeroes = "0".repeat(1000);
         directory.write(
             "a.c",
-            "int main(void) {\n    long double a = 0B.110101100P12L;\n    double b = \
-             0b110101100.10111101p-12;\n    double c = 0b1p3;\n    return a == 3424.0L && b == \
-             0x1ac.bdp-12 && c == 8.0 ? 0 : 1;\n}\n",
+            &format!(
+                "int main(void) {{\n    long double a = 0B.110101100P12L;\n    double b = \
+                 0b110101100.10111101p-12;\n    double c = 0b1p3;\n    double d = 0b.p0, e = \
+                 0bp0;\n    long double f = 0b{zeroes}1p0L, g = 0b0.{zeroes}{zeroes}1p2001;\n    \
+                 return a == 3424.0L && b == 0x1ac.bdp-12 && c == 8.0 && d == 0.0 && e == 0.0 && \
+                 f == 1.0L && g == 1.0L ? 0 : 1;\n}}\n"
+            ),
         );
         succeeds(&directory.bcc("--tcc-mode", &["a.c", "-o", "a"]));
         let run = Command::new(directory.path("a")).status().unwrap();
