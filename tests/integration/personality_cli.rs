@@ -3688,6 +3688,91 @@ mod tests {
         );
     }
 
+    /// `-masm=intel` writes Intel syntax and reads `asm` statements in it. The
+    /// checks name no register, since the argument's differs on Windows.
+    #[test]
+    fn gnu_intel_syntax_reads_and_writes_assembly() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int add(int a, int b) {\n    int r;\n    __asm__(\"mov %0, %1\\n\\tadd %0, %2\" : \
+             \"=&r\"(r) : \"r\"(a), \"r\"(b));\n    return r;\n}\nint load(int *p) {\n    int \
+             v;\n    __asm__(\"mov %0, DWORD PTR [%1]\" : \"=r\"(v) : \"r\"(p));\n    return \
+             v;\n}\nint main(void) {\n    int g = 5;\n    return add(2, 3) == 5 && load(&g) == 5 \
+             ? 0 : 1;\n}\n",
+        );
+        directory.write("p.c", "int f(int *p) { return *p; }\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let intel =
+                stdout(&directory.bcc(mode, &["-masm=intel", "-O1", "-S", "p.c", "-o", "-"]));
+            assert!(intel.contains(".intel_syntax noprefix"), "{mode}: {intel}");
+            assert!(intel.contains("dword ptr [r"), "{mode}: {intel}");
+            let plain = stdout(&directory.bcc(
+                mode,
+                &["-masm=intel", "-masm=att", "-O1", "-S", "p.c", "-o", "-"],
+            ));
+            assert!(plain.contains("(%r"), "{mode}: {plain}");
+            // Under GCC, `%z` names no size in Intel syntax.
+            directory.write(
+                "z.c",
+                "int f(short v) {\n    short r;\n    __asm__(\"mov%z0 %0, %1\" : \"=r\"(r) : \
+                 \"r\"(v));\n    return r;\n}\n",
+            );
+            if mode == "--gcc-mode" {
+                let args = ["-masm=intel", "-O1", "-S", "z.c", "-o", "-"];
+                assert!(stdout(&directory.bcc(mode, &args)).contains("mov\tax, "));
+                // Of any operand, which AT&T's `%z` would refuse.
+                directory.write(
+                    "i.c",
+                    "int main(void) {\n    __asm__ volatile(\"nop%z0\" : : \"i\"(3));\n    return \
+                     0;\n}\n",
+                );
+                succeeds(&directory.bcc(mode, &["-masm=intel", "-c", "i.c", "-o", "i.o"]));
+                // A naked function's frame, as GCC builds it.
+                directory.write(
+                    "n.c",
+                    "extern int sink(int *);\n__attribute__((naked)) void f(void) {\n    int x = \
+                     3;\n    sink(&x);\n    __asm__(\"ret\");\n}\n",
+                );
+                #[cfg(target_os = "linux")]
+                succeeds(&directory.bcc(mode, &["-masm=intel", "-c", "n.c", "-o", "n.o"]));
+            }
+            // What bcc writes around an `asm` follows too, and so does
+            // file-scope `asm`.
+            directory.write(
+                "g.c",
+                "__asm__(\".globl seven\\nseven:\\nmov eax, 7\\nret\");\nextern int \
+                 seven(void);\nint main(void) {\n    __asm__ goto(\"jmp %l0\" : : : : hit);\n    \
+                 return 1;\nhit:\n    return seven() != 7;\n}\n",
+            );
+            for optimization in ["-O0", "-O2"] {
+                let args = ["-masm=intel", optimization, "g.c", "-o", "g"];
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("g")).status().unwrap();
+                assert_eq!(run.code(), Some(0), "{mode} {optimization}");
+            }
+            // A group's alternative follows the syntax in use.
+            directory.write(
+                "d.c",
+                "int main(void) {\n    int a = 3, b, c = 0;\n    __asm__(\"{movl %1, %0|mov %0, \
+                 %1}\" : \"=r\"(b) : \"r\"(a));\n    __asm__(\"{addl $2, %0|add %0, 2}\" : \
+                 \"+r\"(c));\n    return b + c == 5 ? 0 : 1;\n}\n",
+            );
+            for options in [&["-masm=intel"][..], &[]] {
+                let args = [options, &["-O1", "d.c", "-o", "d"]].concat();
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("d")).status().unwrap();
+                assert_eq!(run.code(), Some(0), "{mode} {options:?}");
+            }
+            for optimization in ["-O0", "-O2"] {
+                let args = ["-masm=intel", optimization, "a.c", "-o", "a"];
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("a")).status().unwrap();
+                assert_eq!(run.code(), Some(0), "{mode} {optimization}");
+            }
+        }
+    }
+
     /// The options around GCC 14's permerrors and Clang's default errors,
     /// as each compiler orders them: `-Werror` does not reach into a system
     /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`

@@ -929,7 +929,6 @@ const MACHINE_IGNORED: &[&str] = &[
     "-m[no-]noreturn-no-callee-saved-registers",
     "-m[no-]force-indirect-call",
     "-m[no-]direct-extern-access",
-    "-masm=att",
     "-mincoming-stack-boundary=4",
     "-mpreferred-stack-boundary=4",
     "-mno-daz-ftz",
