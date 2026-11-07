@@ -69,6 +69,7 @@ pub use model::{
     ExplorerInclude,
     ExplorerInstruction,
     ExplorerLineMapping,
+    ExplorerLineOrigin,
     ExplorerLineRange,
     ExplorerLogicalLine,
     ExplorerOptions,
