@@ -373,8 +373,10 @@ fn describe(side: Side, line: usize, linked: &[usize], view: View, origins: Orig
             | None => format!("{this} has no source line."),
         },
         | (Side::Output, false, true) => match origins.call {
+            // The callee's own line can equal the call's (a header's function,
+            // or a callee written on the caller's line), so no file is named.
             | Some(call) if linked == [call] => format!(
-                "{this} came from a header's function, inlined for the call on source line {call}."
+                "{this} came from a function inlined for the call on source line {call}."
             ),
             | Some(call) =>
                 format!("{this} came from source {lines}, inlined for the call on line {call}."),
@@ -539,8 +541,8 @@ mod tests {
         );
         assert_eq!(
             said(Side::Output, 14, &[8], Origins { call, ..none }),
-            "Line 14 of the x86-64 assembly came from a header's function, inlined for the call on \
-             source line 8."
+            "Line 14 of the x86-64 assembly came from a function inlined for the call on source \
+             line 8."
         );
         assert_eq!(
             said(Side::Source, 3, &[4, 5, 14, 15], Origins {
