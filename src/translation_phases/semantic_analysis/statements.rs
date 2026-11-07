@@ -6,6 +6,8 @@
 
 use rustc_hash::FxBuildHasher;
 
+mod switch_warnings;
+
 use super::{
     super::parsing::syntax::ConstantExpressionSlot,
     Analyzer,
@@ -1130,7 +1132,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             });
             self.control.statements[statement.0].switch = Some(id);
         }
-        for case in cases {
+        for &case in &cases {
             if let Some(prior) = previous
                 && self.wide.compare(case.lower, prior.upper).is_le()
             {
@@ -1150,6 +1152,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 previous = Some(case);
             }
         }
+        self.check_switch_warnings(index, &cases);
     }
 }
 

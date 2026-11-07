@@ -276,7 +276,7 @@ impl<'tu> Context<'tu> {
         if everything {
             state.everything = Some(class);
         }
-        self.record_pragma_state(state);
+        self.record_pragma_state(&state);
     }
 
     /// One number of `#pragma warning(<specifier>: <number>)` under the `cl`
@@ -307,7 +307,7 @@ impl<'tu> Context<'tu> {
         };
         let mut state = self.current_pragma_state();
         state.configuration = state.configuration.with_pragma_group(group, class);
-        self.record_pragma_state(state);
+        self.record_pragma_state(&state);
     }
 
     /// `#pragma ... diagnostic push`.
@@ -332,7 +332,7 @@ impl<'tu> Context<'tu> {
                 return false,
             | None => Self::initial_pragma_state(self.configuration),
         };
-        self.record_pragma_state(state);
+        self.record_pragma_state(&state);
         true
     }
 
@@ -380,10 +380,10 @@ impl<'tu> Context<'tu> {
         !self.diagnostic_pragmas.changes.is_empty()
     }
 
-    fn record_pragma_state(&mut self, state: PragmaState) {
+    fn record_pragma_state(&mut self, state: &PragmaState) {
         let token = u32::try_from(self.parser_token_vectors.len())
             .expect("parser provenance fits its 32-bit source ranges");
-        let state = &*self.tu.alloc(state);
+        let state = &*self.tu.alloc(*state);
         self.diagnostic_pragmas
             .changes
             .push(Change { token, state });

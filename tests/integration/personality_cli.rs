@@ -6919,6 +6919,72 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// What a `switch` handles, under the options each compiler has for it.
+    /// Each row was measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_switch_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "enum e { A, B, C };\nint f(enum e x) { switch (x) { case A: return 1; } return 0; \
+             }\nint g(enum e x) { switch (x) { case A: return 1; default: return 0; } }\nint \
+             h(unsigned char x) { switch (x) { case 300: return 1; } return 0; }\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            let mut flags: Vec<String> = stderr(&output)
+                .lines()
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.dedup();
+            flags.join(" ")
+        };
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], "switch-outside-range"),
+            ("--gcc-mode", &["-Wall"][..], "switch switch-outside-range"),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Wno-switch"][..],
+                "switch-outside-range",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Wswitch-enum", "-Wswitch-default"][..],
+                "switch switch-default switch-enum switch-outside-range",
+            ),
+            ("--clang-mode", &[][..], "switch"),
+            ("--clang-mode", &["-Wno-switch"][..], ""),
+            (
+                "--clang-mode",
+                &["-Wswitch-enum", "-Wswitch-default"][..],
+                "switch switch-default switch-enum",
+            ),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
+        // Clang names the enumerators together, GCC one at a time.
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "a.c"]);
+        assert!(
+            stderr(&output).contains("enumeration values 'B' and 'C' not handled in switch"),
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "a.c"]);
+        assert!(
+            stderr(&output).contains("enumeration value 'C' not handled in switch"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();
