@@ -76,6 +76,14 @@ impl Expander<'_, '_, '_, '_> {
     /// <https://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html>, over
     /// the non-directive of C99 §6.10 paragraph 1, p. 145; PDF p. 157.
     pub(super) fn parse_line_marker(&mut self, number: PreprocessorToken) {
+        // What the preprocessor wrote is no extension of the user's.
+        if self.context.configuration.compiler_extensions() && !self.context.preprocessed_input {
+            self.context.report_extension(
+                crate::configuration::Feature::IdentDirective,
+                "line marker",
+                number.source_vectors,
+            );
+        }
         self.apply_line_directive(number, true);
     }
 

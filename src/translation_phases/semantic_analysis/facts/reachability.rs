@@ -196,6 +196,12 @@ impl SemanticTranslationUnit<'_> {
                 (canonical[alias.target], true),
             ]);
         }
+        // A weak reference's target in this unit is what its uses reach.
+        for weakref in self.symbols.weakrefs {
+            if let Some(target) = weakref.target {
+                work.push((canonical[target], true));
+            }
+        }
         for binding in 0..canonical.len() {
             if used(binding) && local_owner(binding).is_none() {
                 work.push((canonical[binding], true));

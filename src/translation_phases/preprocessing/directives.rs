@@ -183,8 +183,33 @@ impl Expander<'_, '_, '_, '_> {
                 );
                 self.parse_include_directive(directive);
             },
-            | "embed" if self.context.configuration.accepts(Feature::Embed) =>
+            // GCC has no `#embed` until its version 15.
+            | "embed"
+                if self.context.configuration.accepts(Feature::Embed)
+                    && !(self.context.configuration.compiler_extensions()
+                        && self.context.configuration.compiler_identity().rules()
+                            == crate::configuration::RuleSet::Gcc) =>
                 self.parse_embed_directive(directive),
+            // GCC's deprecated assertions, which bcc reads no further; they
+            // have no meaning without its `#if #predicate`.
+            // GNU extension: GCC manual, "Obsolete Features".
+            | "assert" | "unassert"
+                if self.context.configuration.compiler_extensions()
+                    && self.context.configuration.compiler_identity().rules()
+                        == crate::configuration::RuleSet::Gcc =>
+            {
+                self.context.report_extension(
+                    Feature::IdentDirective,
+                    if name == "assert" {
+                        "#assert"
+                    } else {
+                        "#unassert"
+                    },
+                    directive.source_vectors,
+                );
+                self.skip_until_newline();
+                self.resume_at_line_start();
+            },
             | "ident" | "sccs" => {
                 self.context.report_extension(
                     Feature::IdentDirective,
@@ -231,6 +256,12 @@ impl Expander<'_, '_, '_, '_> {
                     self.skip_until_newline();
                 }
                 self.resume_at_line_start();
+            },
+            // GCC and Clang refuse what bcc itself only warns of.
+            // C99: §6.10 paragraph 2, p. 145; PDF p. 157 (a non-directive).
+            | _ if self.context.configuration.compiler_extensions() => {
+                self.language_error("invalid preprocessing directive", directive.source_vectors);
+                self.skip_until_newline();
             },
             | _ => {
                 self.context.preprocessor_error(PreprocessorError {

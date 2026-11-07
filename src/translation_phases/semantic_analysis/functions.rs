@@ -1054,10 +1054,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 self.report_unused_function(b.name, definition);
             }
+            // An alias's or an `ifunc`'s definition is its target's.
             if !clang_after_error
                 && b.linkage == Linkage::Internal
                 && entity.definition.is_none()
                 && !self.types.unanalyzed(b.ty)
+                && !self.declares_alias(self.function_identity(entity.latest))
             {
                 if let Some(&usage) = used.get(&self.function_identity(entity.latest)) {
                     // A constraint, which GCC and Clang diagnose with a
@@ -1181,6 +1183,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .entities
             .get(&name)
             .map(|entity| (entity.latest, entity.definition.is_some()))
+    }
+
+    /// Whether the unit so far defines the linked entity `name`, a tentative
+    /// definition included.
+    /// C99: §6.9p5, p. 140; PDF p. 152; §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn defined_in_unit(&self, name: StringCacheId) -> bool {
+        self.functions
+            .entities
+            .get(&name)
+            .is_some_and(|entity| entity.definition.is_some() || entity.tentative.is_some())
     }
 
     /// Whether a declaration of `binding`'s function, up to this one, says

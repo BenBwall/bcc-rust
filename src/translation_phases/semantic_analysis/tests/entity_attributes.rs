@@ -821,11 +821,6 @@ void prefixed(void) __attribute__((section(L"wide")));
 fn unimplementable_attributes_and_conventions_are_retained_refusals() {
     let cases: &[(&str, Target, Option<UnsupportedAttribute>)] = &[
         (
-            "int r(void); int f(void) __attribute__((ifunc(\"r\")));",
-            Target::LinuxGnu,
-            Some(UnsupportedAttribute::Ifunc),
-        ),
-        (
             "__attribute__((naked)) void f(void) {}",
             Target::LinuxGnu,
             Some(UnsupportedAttribute::Naked),

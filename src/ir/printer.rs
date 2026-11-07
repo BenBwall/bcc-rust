@@ -602,6 +602,9 @@ impl<'ir> Module<'ir> {
             if let Some(target) = attributes.alias {
                 write!(f, " alias {}", self.display_symbol(target))?;
             }
+            if let Some(target) = attributes.ifunc {
+                write!(f, " ifunc {}", self.display_symbol(target))?;
+            }
             Ok(())
         })
     }
@@ -788,6 +791,9 @@ fn display_param_abi(abi: ParamAbi<'_>) -> impl fmt::Display + '_ {
                 }
                 if registers.complex {
                     f.write_str("complex, ")?;
+                }
+                if registers.whole != 0 {
+                    write!(f, "whole {}, ", registers.whole)?;
                 }
                 write!(f, "align {}", registers.align.bytes())?;
             }

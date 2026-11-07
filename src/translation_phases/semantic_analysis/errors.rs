@@ -293,6 +293,15 @@ pub(crate) enum SemanticErrorKind {
     /// value; the payload is the interned message.
     /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
     FloatOverflow(StringCacheId),
+    /// What GCC or Clang warns of an exceptional operation on integer
+    /// constants, in its words, with the group that controls it.
+    ExceptionalConstant(crate::configuration::DiagnosticGroup, StringCacheId),
+    /// What only the compiler a personality stands in for refuses, in its
+    /// words.
+    CompilerRefusal(StringCacheId),
+    /// GCC's `-pedantic` report of a folded value where a constant
+    /// expression is required, in its words.
+    PedanticConstant(StringCacheId),
     /// GCC's pedantic "overflow in constant expression": a static
     /// initializer's floating value converted out of an integer type's
     /// range, by a cast too, or arithmetic on one.
@@ -368,6 +377,18 @@ pub(crate) enum SemanticErrorKind {
     /// Clang: Microsoft's `__annotation` takes wide string literals only.
     /// MSVC extension: Microsoft Learn, "__annotation".
     AnnotationArgument,
+    /// `__builtin_cpu_supports` or `__builtin_cpu_is` of anything but a string
+    /// literal. GCC manual, "x86 Built-in Functions".
+    CpuBuiltinNotLiteral,
+    /// GCC: a name `__builtin_cpu_supports` or `__builtin_cpu_is` doesn't know.
+    CpuBuiltinParameter,
+    /// Clang: a name `__builtin_cpu_is` doesn't know.
+    CpuNameUnknown,
+    /// Clang: a name `__builtin_cpu_supports` doesn't know, which it warns
+    /// about and answers 0.
+    CpuFeatureUnknown,
+    /// Clang: a runtime processor query on a target without such processors.
+    CpuBuiltinTarget,
     /// C99: §6.5.2.5p1, p. 75; PDF p. 87.
     InvalidCompoundLiteral,
     /// An array of register storage converted to a pointer, which GCC and
@@ -773,6 +794,12 @@ pub(crate) enum SemanticErrorKind {
     AliasTarget,
     /// Clang: a function aliases a function and a variable a variable.
     AliasKind,
+    /// An `ifunc` resolver that returns no pointer.
+    IfuncResolver,
+    /// A `weakref` on a declaration with external linkage.
+    WeakrefLinkage,
+    /// A bare `weakref` with no `alias` to name its target, under Clang.
+    WeakrefAlias,
     /// Clang: aliases that name each other in a cycle.
     AliasCycle,
     /// Clang `-Wattribute-alias`: alias and target have different types.
@@ -874,6 +901,7 @@ impl SemanticErrorKind {
             | Self::ImmediateOutOfRange { .. } => Some(DiagnosticGroup::ArgumentOutsideRange),
             | Self::ConstantConversion(_) => Some(DiagnosticGroup::ConstantConversion),
             | Self::FloatOverflow(_) => Some(DiagnosticGroup::Overflow),
+            | Self::ExceptionalConstant(group, _) => Some(group),
             | Self::PedanticOverflow => Some(DiagnosticGroup::PedanticOverflow),
             | Self::LiteralConversion(_) => Some(DiagnosticGroup::LiteralConversion),
             | Self::ExcessString | Self::ExcessElements(_) =>
@@ -946,6 +974,9 @@ impl SemanticErrorKind {
             | Self::AliasDefinition => "definition with an alias attribute",
             | Self::AliasTarget => "alias target is not defined here",
             | Self::AliasKind => "alias and target differ in kind",
+            | Self::IfuncResolver => "this resolver returns no pointer",
+            | Self::WeakrefLinkage => "this has external linkage",
+            | Self::WeakrefAlias => "no target named",
             | Self::AliasCycle => "alias is part of a cycle",
             | Self::AliasTypeMismatch => "alias type differs from its target's",
             | Self::SectionMismatch => "different section",
@@ -991,6 +1022,9 @@ impl SemanticErrorKind {
             | Self::ConstantConversion(_) => "the converted value differs",
             | Self::FloatOverflow(_) | Self::LiteralConversion(_) | Self::PedanticOverflow =>
                 "the value is not the integer's",
+            | Self::ExceptionalConstant(..) => "this operation has no defined value",
+            | Self::PedanticConstant(_) => "folded, but not a constant expression",
+            | Self::CompilerRefusal(_) => "the selected compiler refuses this",
             | Self::ExcessString => "characters past the array's end are dropped",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
             | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
@@ -1012,6 +1046,10 @@ impl SemanticErrorKind {
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
             | Self::AnnotationArgument => "not a wide string literal",
+            | Self::CpuBuiltinNotLiteral => "not a string literal",
+            | Self::CpuBuiltinParameter | Self::CpuNameUnknown | Self::CpuFeatureUnknown =>
+                "not a name this builtin knows",
+            | Self::CpuBuiltinTarget => "not on this target",
             | Self::SelectAnySubject => "not a data item with external linkage",
             | Self::InvalidArgumentType => "argument does not convert to the parameter type",
             | Self::InvalidCompoundLiteral => "invalid compound literal type",
@@ -1168,6 +1206,9 @@ impl SemanticErrorKind {
             | Self::AliasDefinition
             | Self::AliasTarget
             | Self::AliasKind
+            | Self::IfuncResolver
+            | Self::WeakrefLinkage
+            | Self::WeakrefAlias
             | Self::AliasCycle
             | Self::AliasTypeMismatch
             | Self::SectionMismatch
@@ -1274,6 +1315,17 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ConstantPromotion
                     | crate::configuration::DiagnosticGroup::ConstantConversion
                     | crate::configuration::DiagnosticGroup::Overflow
+                    | crate::configuration::DiagnosticGroup::IntegerOverflow
+                    | crate::configuration::DiagnosticGroup::ShiftCountOverflow
+                    | crate::configuration::DiagnosticGroup::ShiftCountNegative
+                    | crate::configuration::DiagnosticGroup::DivByZero
+                    | crate::configuration::DiagnosticGroup::DivisionByZero
+                    | crate::configuration::DiagnosticGroup::ShiftOverflow
+                    | crate::configuration::DiagnosticGroup::GccShiftOverflow
+                    | crate::configuration::DiagnosticGroup::ShiftNegativeValue
+                    | crate::configuration::DiagnosticGroup::Multichar
+                    | crate::configuration::DiagnosticGroup::MissingDeclarations
+                    | crate::configuration::DiagnosticGroup::GccEmptyDeclaration
                     | crate::configuration::DiagnosticGroup::PedanticOverflow
                     | crate::configuration::DiagnosticGroup::Normalized
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
@@ -1344,6 +1396,21 @@ impl SemanticErrorKind {
                 "overflow in constant expression",
                 "C99 §6.6p4: a constant expression evaluates to a value its type represents; GCC \
                  folds an out-of-range conversion to the nearest bound",
+            ),
+            | Self::CompilerRefusal(_) => (
+                "the selected compiler refuses this",
+                "C99 §4p6: an implementation may accept extensions; this compiler does not",
+            ),
+            | Self::PedanticConstant(_) => (
+                "a value folded where a constant expression is required",
+                "C99 §6.6p6: an integer constant expression restricts its operands; GCC folds \
+                 this one as an extension",
+            ),
+            | Self::ExceptionalConstant(..) => (
+                "an operation on constants has no defined value",
+                "C99 §6.6p4: a constant expression is representable in its type; §6.5p5 and \
+                 §6.5.7p3 leave this operation undefined, and the selected compiler folds it \
+                 with a warning",
             ),
             | Self::FloatOverflow(_) | Self::LiteralConversion(_) => (
                 "floating value converted to an integer type changes",
@@ -1973,6 +2040,27 @@ impl SemanticErrorKind {
                 "Clang: Microsoft's `selectany` lets several translation units define one \
                  external object",
             ),
+            | Self::CpuBuiltinNotLiteral => (
+                "expression is not a string literal",
+                "GCC \"x86 Built-in Functions\": the feature or processor is named by a string \
+                 literal",
+            ),
+            | Self::CpuBuiltinParameter => (
+                "parameter to builtin not valid",
+                "GCC \"x86 Built-in Functions\" lists the names",
+            ),
+            | Self::CpuNameUnknown => (
+                "invalid cpu name for builtin",
+                "Clang: `__builtin_cpu_is` takes the names in LLVM's `X86TargetParser.def`",
+            ),
+            | Self::CpuFeatureUnknown => (
+                "invalid cpu feature string for builtin",
+                "Clang: `__builtin_cpu_supports` of an unknown feature answers 0",
+            ),
+            | Self::CpuBuiltinTarget => (
+                "builtin is not supported on this target",
+                "Clang: runtime processor detection reads x86's `__cpu_model`",
+            ),
             | Self::AnnotationArgument => (
                 "argument to `__annotation` must be a wide string literal",
                 "Clang: Microsoft's `__annotation` records wide strings in the debug \
@@ -2351,6 +2439,18 @@ impl SemanticErrorKind {
                 "GCC Common Function Attributes: the target names a definition in the same \
                  translation unit, by its emitted symbol name",
             ),
+            | Self::WeakrefLinkage => (
+                "weakref declaration must have internal linkage",
+                "GCC Common Function Attributes: weakref requires static",
+            ),
+            | Self::WeakrefAlias => (
+                "weakref declaration must also have an alias attribute",
+                "Clang: a weakref with no target needs an alias to name one",
+            ),
+            | Self::IfuncResolver => (
+                "ifunc resolver function must return a pointer",
+                "GCC Common Function Attributes: the resolver returns the function a call reaches",
+            ),
             | Self::AliasKind => (
                 "alias and target must both be functions or both be variables",
                 "Clang: a function cannot alias a variable, nor a variable a function",
@@ -2711,8 +2811,18 @@ impl SemanticError {
     /// diagnostic formats.
     fn gnu_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
         use crate::configuration::DiagnosticFormat as Format;
+        if context.configuration.diagnostic_format() == Format::Gcc
+            && self.kind == SemanticErrorKind::CpuBuiltinNotLiteral
+        {
+            return Some("parameter to builtin must be a string constant or literal");
+        }
         let name = context.string_cache.at(self.name?);
         match (context.configuration.diagnostic_format(), self.kind) {
+            | (_, SemanticErrorKind::CpuBuiltinParameter) =>
+                Some(format_in!(arena, "parameter to builtin not valid: {name}")),
+            | (_, SemanticErrorKind::CpuNameUnknown) => Some("invalid cpu name for builtin"),
+            | (_, SemanticErrorKind::CpuFeatureUnknown) =>
+                Some("invalid cpu feature string for builtin"),
             | (Format::Gcc, SemanticErrorKind::UndeclaredIdentifier) => Some(format_in!(
                 arena,
                 "'{name}' undeclared (first use in this function)"
@@ -2815,7 +2925,11 @@ impl ToDiagnostic for SemanticError {
                     "non-zero bytes"
                 }
             )
+        } else if let SemanticErrorKind::PedanticConstant(text) = self.kind {
+            format_in!(arena, "{} [-Wpedantic]", context.string_cache.at(text))
         } else if let SemanticErrorKind::ConstantConversion(text)
+        | SemanticErrorKind::CompilerRefusal(text)
+        | SemanticErrorKind::ExceptionalConstant(_, text)
         | SemanticErrorKind::FloatOverflow(text)
         | SemanticErrorKind::LiteralConversion(text) = self.kind
         {
@@ -2999,6 +3113,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::AtomicBufferQualifiers
                 | SemanticErrorKind::UnknownAttribute
                 | SemanticErrorKind::IgnoredAttribute
+                | SemanticErrorKind::CpuFeatureUnknown
                 | SemanticErrorKind::IgnoredConvention
                 | SemanticErrorKind::ExcessiveRegsave(_)
                 | SemanticErrorKind::ReservedPriority
@@ -3013,6 +3128,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PartialInitializerOverride
                 | SemanticErrorKind::ConstantConversion(_)
                 | SemanticErrorKind::FloatOverflow(_)
+                | SemanticErrorKind::ExceptionalConstant(..)
                 | SemanticErrorKind::PedanticOverflow
                 | SemanticErrorKind::LiteralConversion(_)
                 | SemanticErrorKind::ExcessString
