@@ -285,7 +285,14 @@ fn switch_promotion_conversion_and_ranges() {
         kinds("void f(unsigned x) { switch(x) {case -1:; case 4294967295U:;} }"),
         [SemanticErrorKind::DuplicateCase]
     );
-    clean("void f(unsigned char x) {switch(x) {case -1:; case 255:;}} ");
+    // Clang's `-Wswitch` says the conversion changes `-1`, which promotion
+    // leaves an `int` that `unsigned char` cannot hold.
+    assert_eq!(
+        kinds("void f(unsigned char x) {switch(x) {case -1:; case 255:;}} "),
+        [SemanticErrorKind::SwitchCases(
+            crate::configuration::DiagnosticGroup::Switch
+        )]
+    );
     assert_eq!(
         kinds("void f(void) {case 1:; default:;}"),
         [

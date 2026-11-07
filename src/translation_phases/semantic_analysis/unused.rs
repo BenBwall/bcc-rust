@@ -138,6 +138,8 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about what a `switch` handles may be on.
+    pub(super) switches: bool,
     /// Whether `-Wsign-compare` is on.
     pub(super) sign_compare: bool,
     /// Whether `-Wmissing-field-initializers` is on.
@@ -193,6 +195,12 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            switches: on(&[
+                G::Switch,
+                G::SwitchEnum,
+                G::SwitchDefault,
+                G::SwitchOutsideRange,
+            ]),
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,

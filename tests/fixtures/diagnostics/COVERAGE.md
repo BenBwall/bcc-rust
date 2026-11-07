@@ -729,6 +729,7 @@ pinned by the `.args` sidecars.
 | `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c), [cleanup use](sema3-internal-cleanup.c) |
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
+| `SwitchCases` | [GCC](sema-switch-gcc.c), [Clang](sema-switch-clang.c) |
 | `MissingFieldInitializer` | [GCC](sema-missing-fields-gcc.c), [Clang](sema-missing-fields-clang.c), [GCC with a system macro](sema-missing-fields-system-gcc.c) |
 | `Unused` | GCC's words: [variables and parameters](sema-unused-variables-gcc.c), [file scope](sema-unused-file-scope-gcc.c), [labels](sema-unused-label-gcc.c), [values](sema-unused-value-gcc.c); Clang's: [variables and parameters](sema-unused-variables-clang.c), [file scope](sema-unused-file-scope-clang.c), [labels](sema-unused-label-clang.c), [values](sema-unused-value-clang.c); [`-Werror`](sema-unused-werror-clang.c) |
 | `InlineInternalReference` | [inline-reference](sema3-inline-reference.c) |
