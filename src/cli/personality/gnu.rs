@@ -1677,6 +1677,8 @@ impl State<'_> {
                     | "-fno-approx-func"
                     | "-Wmain-return-type"
                     | "-Wno-main-return-type"
+                    | "-Wunused-local-typedef"
+                    | "-Wno-unused-local-typedef"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an

@@ -196,6 +196,8 @@ impl CompilerConfiguration {
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
             | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
             | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
+            | DiagnosticGroup::UnusedLocalTypedefs if clang =>
+                &[DiagnosticGroup::UnusedLocalTypedef],
             | _ => &[],
         };
         for &child in children {
@@ -911,6 +913,11 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// A typedef a block declares and never uses, in GCC's spelling, which
+    /// Clang accepts too.
+    UnusedLocalTypedefs => Some("unused-local-typedefs"), Ignored, false;
+    /// Clang's own spelling, which its warning names.
+    UnusedLocalTypedef => Some("unused-local-typedef"), Ignored, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds
@@ -999,6 +1006,8 @@ impl DiagnosticGroup {
         Self::UnusedLabel,
         Self::UnusedValue,
         Self::UnusedComparison,
+        Self::UnusedLocalTypedefs,
+        Self::UnusedLocalTypedef,
     ];
 
     /// Whether Clang's `-Wconversion` holds this group.
@@ -1147,6 +1156,8 @@ impl WarningSettings {
                 | DiagnosticGroup::UnusedLabel
                 | DiagnosticGroup::UnusedValue
                 | DiagnosticGroup::UnusedComparison
+                | DiagnosticGroup::UnusedLocalTypedefs
+                | DiagnosticGroup::UnusedLocalTypedef
                 | DiagnosticGroup::Main
                 | DiagnosticGroup::PointerBoolConversion => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
