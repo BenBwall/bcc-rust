@@ -62,6 +62,8 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     DllExport,
     /// GNU `noinline` and `noipa`: the inliner never expands the function.
     NoInline,
+    /// GNU `no_stack_protector`: no stack protector, whatever the options ask.
+    NoStackProtector,
     /// GNU `always_inline`: the inliner expands every direct call it can,
     /// and a GNU inline body is kept as a private definition.
     AlwaysInline,
@@ -265,6 +267,7 @@ fn gnu(name: &str) -> Option<Rule> {
             Rule::Unsupported(U::Multiversioning),
         | "address_space" => Rule::Unsupported(U::AddressSpace),
         | "noinline" | "noipa" => Rule::NoInline,
+        | "no_stack_protector" => Rule::NoStackProtector,
         | "selectany" => Rule::SelectAny,
         | "common" => Rule::Common(true),
         | "nocommon" => Rule::Common(false),
@@ -376,7 +379,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_sanitize_coverage"
         | "no_split_stack"
         | "no_stack_limit"
-        | "no_stack_protector"
         | "no_speculative_load_hardening"
         | "noclone"
         | "nocf_check"

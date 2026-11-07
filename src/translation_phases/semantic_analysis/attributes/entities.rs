@@ -168,6 +168,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::DllExport => self.dll_attribute(subject, attribute, DllStorage::Export),
                 | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
+                | Rule::NoStackProtector => self.no_stack_protector(subject, attribute),
                 | _ => {},
             }
         }
@@ -424,6 +425,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if attributes.inlining != Inlining::Never {
             attributes.inlining = inlining;
         }
+    }
+
+    /// GCC's and Clang's `no_stack_protector` on a function, which it keeps
+    /// out of `-fstack-protector`; elsewhere it is ignored with a warning.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    fn no_stack_protector(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        let Subject::Function { binding, .. } = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        let entity = self.entity_of(binding);
+        self.attributes.entity(entity).no_stack_protector = true;
     }
 
     /// Retains GNU `nonnull` parameter indices after checking each integer

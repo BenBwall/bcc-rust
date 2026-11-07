@@ -45,6 +45,7 @@ use crate::{
         arguments::{
             implements_language_option,
             is_diagnostic_presentation,
+            is_hardening_option,
         },
         driver::{
             InputKind,
@@ -1692,6 +1693,13 @@ impl State<'_> {
                 return;
             }
         }
+        // `Plan::machine_options` warns about these off Linux, once it knows
+        // the target.
+        if is_hardening_option(text) && knows(self.compiler, text) {
+            self.machine.push(text.into());
+            self.out.push(text.into());
+            return;
+        }
         if !clang_only
             && (PLAIN_OPTIONS.contains(&text)
                 || text.starts_with("-std=")
@@ -1824,6 +1832,8 @@ impl State<'_> {
                 self.out.push("-Wl,--subsystem,windows".into());
             } else if option == "-mgeneral-regs-only" && linux && personality == Personality::Gcc {
                 machine.general_regs_only = true;
+            } else if linux && is_hardening_option(&option) {
+                // `Cli::code_options` gives Linux these.
             } else if linux && let "-muintr" | "-mno-uintr" = option.as_str() {
                 machine.user_interrupts = option == "-muintr";
             } else {

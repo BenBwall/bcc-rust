@@ -210,7 +210,7 @@ to the options TCC itself implements; see [TCC](#tcc).
   languages (C++'s `-fno-rtti`).
 - **Warned and ignored**, for hardening and instrumentation that a correct
   program does not depend on: `-fstack-protector*`,
-  `-fstack-clash-protection`, `-fcf-protection`, `-ftrivial-auto-var-init=`,
+  `-ftrivial-auto-var-init=`,
   `-fexceptions` (bcc emits no landing pads, so cleanups do not run while an
   exception unwinds), Spectre mitigations, `-mfentry`, `-specs=`, `-B`, and
   `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`; and requests

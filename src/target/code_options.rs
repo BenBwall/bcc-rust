@@ -35,6 +35,8 @@ use super::Target;
     reason = "Each flag is an independent command-line option."
 )]
 pub(crate) struct CodeOptions {
+    /// `-fstack-protector`, `-fcf-protection` and their kin.
+    pub(crate) hardening:                  Hardening,
     /// The relocation model the last `-fpic`-family flag selected, or
     /// `None` for the target's default.
     pub(crate) relocation:                 Option<Relocation>,
@@ -56,6 +58,47 @@ pub(crate) struct CodeOptions {
     /// this, because its linker drops the information unless asked to keep
     /// it; no code generation does.
     pub(crate) debug_info:                 bool,
+}
+
+/// Which functions check a canary before they return: `-fstack-protector`
+/// and its `-strong` and `-all` forms. GCC manual, "Instrumentation Options".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum StackProtector {
+    #[default]
+    Off,
+    Basic,
+    Strong,
+    All,
+}
+
+/// Run-time checks and frame shapes a build asks for, on Linux. None changes
+/// what a program means. GCC manual, "Instrumentation Options" and "Code Gen
+/// Options".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each is a separate option's on or off, in any combination."
+)]
+pub(crate) struct Hardening {
+    pub(crate) stack_protector:    StackProtector,
+    /// `-fcf-protection=branch`: indirect branches land on `endbr64`.
+    pub(crate) branch_protection:  bool,
+    /// `-fcf-protection=return`: the object says it works with a shadow stack.
+    pub(crate) return_protection:  bool,
+    /// `-fstack-clash-protection`: a large frame probes each page.
+    pub(crate) stack_clash:        bool,
+    /// `-fno-omit-frame-pointer`: every function keeps a frame pointer.
+    pub(crate) keep_frame_pointer: bool,
+}
+
+impl Hardening {
+    pub(crate) const NONE: Self = Self {
+        stack_protector:    StackProtector::Off,
+        branch_protection:  false,
+        return_protection:  false,
+        stack_clash:        false,
+        keep_frame_pointer: false,
+    };
 }
 
 /// What code generation may assume where C leaves the behaviour
