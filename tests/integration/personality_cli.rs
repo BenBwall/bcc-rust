@@ -1784,6 +1784,38 @@ mod tests {
         }
     }
 
+    /// A call to a static function defined nowhere is a warning in GCC and
+    /// Clang, and the link is what fails.
+    #[test]
+    fn gnu_undefined_static_functions_warn() {
+        let directory = Directory::new();
+        directory.write("u.c", "static void f(void);\nvoid g(void) { f(); }\n");
+        directory.write(
+            "l.c",
+            "static void f(void);\nvoid g(void) { f(); }\nint main(void) { g(); return 0; }\n",
+        );
+        for (mode, message) in [
+            ("--gcc-mode", "warning: 'f' used but never defined"),
+            (
+                "--clang-mode",
+                "warning: function 'f' has internal linkage but is not defined",
+            ),
+        ] {
+            let output = directory.bcc(mode, &["-c", "u.c", "-o", "u.o"]);
+            succeeds(&output);
+            assert!(stderr(&output).contains(message), "{}", stderr(&output));
+            let args = ["-Werror", "-c", "u.c", "-o", "u.o"];
+            assert!(!directory.bcc(mode, &args).status.success(), "{mode}");
+            let output = directory.bcc(mode, &["l.c", "-o", "l"]);
+            assert!(!output.status.success(), "{mode}");
+            assert!(stderr(&output).contains("undefined"), "{}", stderr(&output));
+        }
+        let args = ["-Wno-undefined-internal", "-c", "u.c", "-o", "u.o"];
+        let output = directory.bcc("--clang-mode", &args);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+    }
+
     /// A distribution's hardening options do what they say on Linux, with the
     /// macros each compiler numbers its own way.
     #[cfg(target_os = "linux")]
