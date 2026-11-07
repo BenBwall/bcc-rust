@@ -214,6 +214,72 @@ also stay in every `-std=` under both, and `//` comments in C89 and `#embed` und
 Clang: `-std=c99` selects a language, and each is still an extension under
 `-pedantic`. Plain bcc keeps all of these behind the language mode.
 
+`-msse3`, `-mssse3`, `-msse4.1`, `-msse4.2`, `-msse4`, `-mpopcnt`, `-mcrc32`,
+`-mavx`, `-mavx2`, `-mfma`, `-mf16c`, `-mbmi`, `-mbmi2`, `-mlzcnt`, `-mmovbe`,
+`-maes`, `-mpclmul`, `-mxsave`, `-msahf`, their `-mno-` forms, and `-march=x86-64`,
+`x86-64-v2`, `x86-64-v3` and `native` define each compiler's macros and let LLVM use
+the instructions. Each turns on what it needs and `-mno-` turns off what needs it,
+and LLVM hears `-avx` as well as `+avx2`, since the processor `-march=` names may have
+what the command line took away. POPCNT and CRC32 come with SSE4.2 by default and
+aren't needed by it, so `-mavx -mno-popcnt` keeps AVX. AVX needs XSAVE in GCC, while
+Clang's `-mno-xsave` leaves AVX on. An option with a later opposite doesn't count at all
+in either compiler, so `-mavx -mno-avx` turns nothing on while `-mavx2 -mno-avx` leaves
+SSE4.2. The last `-march=` names defaults, which replace the
+previous `-march=`'s, and an explicit option outranks them wherever it stands:
+`-mno-avx -march=x86-64-v3` has no AVX, and `-mavx2 -march=x86-64` keeps AVX2.
+Random combinations of these options defined the same feature macros as GCC 13, GCC
+14's cc1 and Clang 23.
+
+Intrinsics compile without them, because bcc's headers compute on any x86-64, and a
+`target` attribute changes nothing about a function's code.
+
+These options apply only to x86-64. On a WebAssembly target `--clang-mode` refuses
+them as Clang does, with `unsupported option '-mavx2' for target
+'wasm32-unknown-unknown'`, and leaves `-msse4.2` and `-msse4` unused as it does.
+`--gcc-mode` says `unrecognized command-line option '-mavx2'` and `bad value
+'x86-64-v3' for '-march=' switch`, since GCC has no such target and that is what a GCC
+for another processor says. They define no macros there.
+
+With AVX on, vectors of 32 bytes, and the records each compiler lets wrap one, travel
+in YMM registers as GCC and Clang pass them, so bcc's objects link with theirs both
+ways; a 64-byte result comes back in YMM0 and YMM1 under `--clang-mode` and through
+memory under `--gcc-mode`. What bcc can't follow is refused, in functions other objects
+can reach and calls of them:
+
+- A vector of 32 bytes or more by value when an option bcc only warns about would
+  change how it travels (`-mavx512f`, `-march=haswell`, `-march=x86-64-v4`), or, for
+  64 bytes, under `-march=native` on an AVX-512 processor.
+- The same in a function with a `target` attribute that changes AVX, or a call from
+  one: GCC passes YMM there, Clang refuses mismatched calls, and bcc ignores the
+  attribute.
+- Under `--gcc-mode`, a variadic function's named 32-byte vector, which GCC passes in
+  YMM0 and LLVM only on the stack. `--clang-mode` keeps Clang's stack.
+- `--backend=native` refuses any YMM signature, since it writes no AVX instructions.
+
+A `static` function whose address nothing takes has only bcc's callers, so it keeps
+bcc's convention under each of these. An address taken reaches other objects, so the
+function is refused like an external one.
+
+An option bcc only warns about counts until AVX goes in that compiler or its own opposite
+follows: `-mavx512bw -mno-avx512f` keeps AVX in both, and `-mavx512f -mno-xsave` keeps it in
+Clang alone. clang-cl's options count the same way. On the stack, a vector is aligned to
+its size, as both compilers place it, whatever `aligned` its typedef says.
+
+`__builtin_cpu_supports`, `__builtin_cpu_is` and `__builtin_cpu_init` read `__cpu_model`
+and `__cpu_features2`, as GCC's and Clang's code does (`target/cpu_model.rs`). libgcc
+defines them, and the bundled clang links `-lgcc` with or without compiler-rt's
+builtins, so a program links wherever any program links; `-nostdlib` leaves them
+undefined, as in GCC. Each mode accepts the names its compiler accepts and reads the
+bits it reads. `__builtin_cpu_supports("avx2")` gives the bit where it stands in GCC
+(`1024`), and 1 in Clang. An unknown name is an error in GCC, `parameter to builtin not
+valid: bogus`, and in Clang's `__builtin_cpu_is`, `invalid cpu name for builtin`, while
+Clang's `__builtin_cpu_supports` warns, `invalid cpu feature string for builtin`, and
+answers 0. GCC reads the name as far as a NUL, so `"avx\0junk"` is `avx` there, and Clang
+reads all of it. Both accept `u8""`. WebAssembly refuses all three, `builtin is not
+supported on this target`, and `__has_builtin` says it has none there. The Microsoft target needs
+`clang_rt.builtins` on the link line, as Clang does; `--interpret` stops at the unresolved
+`__cpu_model`.
+
 `-masm=intel` writes assembly in Intel syntax and reads `asm` statements in it,
 taking the second alternative of a `{att|intel}` group, on the LLVM back end. The
 native back end writes AT&T syntax whatever it is given.
@@ -261,10 +327,11 @@ to the options TCC itself implements; see [TCC](#tcc).
   `-fexceptions` (bcc emits no landing pads, so cleanups do not run while an
   exception unwinds), Spectre mitigations, `-mfentry`, `-specs=`, `-B`, and
   `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`; and requests
-  bcc's output satisfies less fully but correctly: a newer processor
-  (`-march=native`, `-march=x86-64-v3`, `-mavx2`; baseline x86-64 code runs
-  on it, but its macros such as `__AVX2__` stay undefined). The build goes
-  on and says what it lacks.
+  bcc's output satisfies less fully but correctly: a processor bcc doesn't name
+  (`-march=haswell`, `-march=x86-64-v4`) or a feature outside the list below
+  (`-mavx512f`); baseline x86-64 code runs on it, but its macros stay undefined.
+  The build goes on and says what it lacks, unless a vector by value would travel
+  differently from how those options pass it (see above).
 - **Refused**, with the compiler's kind of error, for everything else:
   options that change layout or the ABI away from the target's
   (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on
