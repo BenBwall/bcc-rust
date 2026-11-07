@@ -911,6 +911,9 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// Clang's K&R parameter whose promoted type a preceding prototype does
+    /// not give it.
+    KnrPromotedParameter => Some("knr-promoted-parameter"), ClangWarning, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds

@@ -119,6 +119,9 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
     /// The words are the diagnostic's name.
+    /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
+    KnrPromotedParameter,
+    /// The words are the diagnostic's name.
     /// C99: §6.7.8p21, p. 127; PDF p. 139.
     MissingFieldInitializer,
     /// C99: §6.9.2p3, p. 143; PDF p. 155.
@@ -1121,6 +1124,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::KnrPromotedParameter => "the prototype gives it another type",
             | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
@@ -1330,6 +1334,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::KnrPromotedParameter
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
@@ -1741,6 +1746,11 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::KnrPromotedParameter => (
+                "K&R parameter type",
+                "C99 §6.7.5.3p15: a parameter an identifier list declares is compatible with a \
+                 prototype's only after the default argument promotions",
             ),
             | Self::SignCompare => (
                 "comparison of integers of different signs",
@@ -2610,6 +2620,7 @@ impl SemanticErrorKind {
             | Self::PointerConstraint(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
+            | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),
             | Self::Main(rule) => rule.group(),
@@ -2934,7 +2945,9 @@ impl ToDiagnostic for SemanticError {
             )
         } else if matches!(
             self.kind,
-            SemanticErrorKind::SignCompare | SemanticErrorKind::MissingFieldInitializer
+            SemanticErrorKind::SignCompare
+                | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::KnrPromotedParameter
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
