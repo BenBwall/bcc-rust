@@ -144,7 +144,7 @@ impl X86Features {
     /// -mno-avx` turns nothing on while `-mavx2 -mno-avx` leaves SSE4.2.
     /// GCC's `prune_options` and Clang's driver.
     pub(crate) fn from_options<'o>(
-        options: impl Iterator<Item = &'o str> + Clone,
+        options: &(impl Iterator<Item = &'o str> + Clone),
         clang: bool,
     ) -> Self {
         let mut features = Self::for_compiler(clang);

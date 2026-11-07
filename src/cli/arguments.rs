@@ -417,7 +417,7 @@ impl Cli {
             crate::target::X86Features::NONE
         } else {
             crate::target::X86Features::from_options(
-                self.language_option.iter().map(std::ops::Deref::deref),
+                &self.language_option.iter().map(std::ops::Deref::deref),
                 CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
             )
         };

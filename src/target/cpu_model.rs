@@ -145,7 +145,7 @@ const FEATURES: &[(&str, Option<u8>, Option<u8>)] = &[
 
 /// A processor `__builtin_cpu_is` knows: the field it compares and the value it
 /// compares with, if GCC and if Clang knows it.
-const PROCESSORS: &[(&str, Option<(CpuField, u8)>, Option<(CpuField, u8)>)] = &[
+const PROCESSORS: &[(&str, Comparison, Comparison)] = &[
     (
         "alderlake",
         Some((CpuField::Subtype, 25)),
@@ -461,6 +461,10 @@ const PROCESSORS: &[(&str, Option<(CpuField, u8)>, Option<(CpuField, u8)>)] = &[
     ("znver6", None, Some((CpuField::Subtype, 40))),
 ];
 
+/// The field `__builtin_cpu_is` compares and its value, if the compiler knows
+/// the name.
+type Comparison = Option<(CpuField, u8)>;
+
 /// A field of `__cpu_model`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CpuField {
@@ -489,7 +493,7 @@ pub(crate) fn cpu_feature_bit(name: &str, clang: bool) -> Option<u8> {
 
 /// What `__builtin_cpu_is` compares for `name`, in Clang's table or GCC's, if
 /// the compiler knows it.
-pub(crate) fn cpu_processor(name: &str, clang: bool) -> Option<(CpuField, u8)> {
+pub(crate) fn cpu_processor(name: &str, clang: bool) -> Comparison {
     let &(_, gcc_value, clang_value) = find(PROCESSORS, name)?;
     if clang { clang_value } else { gcc_value }
 }
