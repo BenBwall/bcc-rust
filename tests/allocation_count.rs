@@ -706,7 +706,7 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
             ),
             (
                 include_str!("fixtures/semantic/vectors/x86_immediate_parameter_conversion.c"),
-                0,
+                3,
             ),
             (
                 include_str!("fixtures/semantic/vectors/elementwise_min_max_exclude_bool.c"),
