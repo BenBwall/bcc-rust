@@ -174,6 +174,15 @@ A computed `goto` in a function that takes no label's address is GCC's to
 accept and Clang's to refuse; bcc follows the compiler it answers as. The jump
 has nowhere defined to go, so `-O2` treats it as unreachable.
 
+The feature-test operators (`__has_include`, `__has_c_attribute`,
+`__has_attribute`, `__has_builtin`, `__has_feature`, `__has_extension`, and
+Clang's `__has_embed`) exist in every `-std=` under `--gcc-mode` and
+`--clang-mode`, and neither compiler calls them extensions under `-pedantic`.
+A `void` expression in a `return`, binary constants, case ranges and `__VA_OPT__`
+also stay in every `-std=` under both, and `//` comments in C89 and `#embed` under
+Clang: `-std=c99` selects a language, and each is still an extension under
+`-pedantic`. Plain bcc keeps all of these behind the language mode.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
@@ -182,8 +191,9 @@ every option it does not know, so its personality applies the kinds only
 to the options TCC itself implements; see [TCC](#tcc).
 
 - **Ignored**, when bcc's output already means what the option asks for:
-  warnings and diagnostics formatting, debug information (`-g*`,
-  `-fdebug-prefix-map=`), reports and dumps, build mechanics (`-pipe`,
+  warnings and diagnostics formatting, the shape of debug information
+  (`-gsplit-dwarf`, `-gz`, `-gstrict-dwarf`, `-fdebug-prefix-map=`; `-g`
+  itself is [implemented](#debug-information)), reports and dumps, build mechanics (`-pipe`,
   `-save-temps`, `-flto`, `-fuse-ld=`), optimizations
   the compiler is permitted but not required to make (`-funroll-loops`,
   `-fomit-frame-pointer`, `-fstrict-aliasing`), code generation tuning (`-mtune=`, `-falign-*`,
@@ -372,7 +382,7 @@ compiles, from separate runs that read the saved `.i`, and never over the
 command's own output. So a failed compile leaves none, where GCC keeps the
 `.i`; a source read from standard input saves nothing; and `-fsyntax-only`
 writes nothing, where GCC and Clang write the `.i`.
-`-g*`, `-pipe` and `--param` have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
+`-pipe` and `--param` have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
 refused: it implies `-ffast-math`, which defines `__FAST_MATH__` and links
 `crtfastmath`, which bcc does not do.
 
@@ -578,7 +588,8 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/external:I DIR`, `/external:env:VAR` | `-isystem` |
 | `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stderr |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
-| `/nologo`, `/Zi`, `/Z7`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
+| `/Zi`, `/Z7`, `/ZI` | CodeView in the object, as clang-cl treats all three; a link keeps it through `lld-link -debug` |
+| `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
 | `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/d1*`, `/d2*` | accepted with a warning |
 | `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
 
@@ -885,7 +896,8 @@ reject.
 | `-f[no-]ms-extensions` | `-f[no-]ms-anonymous-structs`: TCC's flag allows only anonymous `struct` and `union` members, and is on by default |
 | `-fleading-underscore`, `-ftest-coverage`, `-mno-sse`, `-mms-bitfields` on Linux, `-m32` | refused, as the GCC personality refuses them |
 | `-freverse-funcargs` | ignored with a warning: C leaves the order unspecified |
-| `-fasynchronous-unwind-tables`, `-msse`, `-m64`, `-g*`, `-B` | ignored |
+| `-g`, `-gN`, `-gdwarf[-N]` | [debug information](#debug-information), as for GCC |
+| `-fasynchronous-unwind-tables`, `-msse`, `-m64`, `-gstabs` and other `-g*`, `-B` | ignored |
 | `-b`, `-bt[N]`, `-bench` | ignored with a warning: bcc has no bounds checker, no backtraces and no statistics |
 | `-Werror`, `-Wdiscarded-qualifiers`, `-Wunsupported` | `-Werror`, `-Wincompatible-pointer-types-discards-qualifiers`; `-Wunsupported` makes the personality warn about ignored options |
 | `-Wimplicit-function-declaration` (and `no-`, `error=`) | passed on |
@@ -994,6 +1006,31 @@ classifies such a structure as a whole (`classify_x86_64_inner` in
 the x86-64 psABI requires, so `{double, long}` travels in two integer
 registers. bcc follows the psABI and agrees with GCC there, as both TCCs
 disagree with GCC; it does not copy TCC's classification.
+
+## Debug information
+
+`-g` writes debug information through the LLVM back end; `middle-end.md` has the
+design. Every personality reads the options in order, as measured against GCC
+14.2 and Clang 23:
+
+| Option | GCC personality | Clang personality |
+| --- | --- | --- |
+| `-g`, `-ggdb`, `-gdwarf` | level 2, or the level already asked for | the same |
+| `-g0` | off, whatever came before | the same |
+| `-g1`, `-g2`, `-g3`, `-ggdb1`-`-ggdb3` | that level | the same |
+| `-g4` and above | `debug output level '4' is too high` | `unknown argument: '-g4'` |
+| `-gdwarf-N` | DWARF N, 2 through 5, and on as `-g` is; others `dwarf version N is not supported` | the same with 2 through 6; others `unknown argument` |
+| `-gline-tables-only`, `-gmlt` | ignored; GCC refuses them, and bcc keeps ignoring an unknown `-g` option | level 1 |
+| `-gtoggle` | flips the result, last | ignored; Clang refuses it |
+| `-gcolumn-info`, `-gno-column-info` | columns on or off | the same |
+| `-gsplit-dwarf`, `-gz`, `-gstrict-dwarf`, `-gdwarf32`, `-gcodeview` and others | ignored: alone they do not ask for debug information, in either compiler | the same; `-gdwarf32` and `-gdwarf64` turn Clang's on, and bcc does not |
+
+`cl` and clang-cl's `/Zi`, `/Z7` and `/ZI` mean `-g` with CodeView in the object.
+`tcc -g` means `-g`; its `-gstabs` is ignored. The native and WebAssembly back
+ends warn that they write nothing, and `--interpret` says nothing.
+
+Levels 2 and 3 write the same, without macros. The tables' other differences
+from GCC and Clang are in `middle-end.md`, "Debug information".
 
 ## Diagnostic pragmas
 
@@ -1156,8 +1193,8 @@ Besides those above:
   `/P` and `/Fa` work. LLD writes an import library for every DLL, where
   `link.exe` writes one (and an `.exp` file) only for a DLL that exports
   something, so `cl /LD b.c` of a DLL without exports leaves `b.dll` and
-  `b.obj` and bcc also `b.lib`. `/Zi` writes no `vc140.pdb`: bcc ignores
-  it.
+  `b.obj` and bcc also `b.lib`. `/Zi` writes no `vc140.pdb`: the CodeView
+  stays in the object, as with `/Z7`, as clang-cl does.
 - Against `cl` 19.44 the predefined macros differ in these, as the MSVC
   identity decides above: `_MSC_VER` and `_MSC_FULL_VER` (1944 and
   194435228; bcc claims 19.33); `_MSVC_TRADITIONAL`, which `cl` defines as
