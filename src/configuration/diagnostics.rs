@@ -229,6 +229,8 @@ impl CompilerConfiguration {
         ] {
             self.warning_options[group as usize].apply_all(enabled);
         }
+        self.warning_options[DiagnosticGroup::Switch as usize].apply_all(enabled);
+        self.warning_options[DiagnosticGroup::ReturnType as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
         // GCC's `-Wunused`, given or refused in either order, outranks
         // `-Wall`, as the groups' own options outrank it.
@@ -911,6 +913,29 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// Clang's K&R parameter whose promoted type a preceding prototype does
+    /// not give it.
+    KnrPromotedParameter => Some("knr-promoted-parameter"), ClangWarning, false;
+    /// A `switch` over an enumeration that leaves an enumerator out with no
+    /// `default`, or names a value outside it. `-Wall` holds it in GCC, and
+    /// Clang reports it by default.
+    Switch => Some("switch"), ClangWarning, false;
+    /// An enumerator a `switch` leaves to its `default`.
+    SwitchEnum => Some("switch-enum"), Ignored, false;
+    /// A `switch` with no `default`.
+    SwitchDefault => Some("switch-default"), Ignored, false;
+    /// GCC's `case` its controlling type cannot hold; Clang's is `-Wswitch`.
+    SwitchOutsideRange => Some("switch-outside-range"), Warning, false;
+    /// Clang's constant `switch` condition that no `case` matches, which no
+    /// option controls.
+    ConstantSwitchCondition => None, Warning, false;
+    /// Control can reach the end of a non-void function. `-Wall` holds it in
+    /// GCC, and Clang reports it by default.
+    ReturnType => Some("return-type"), ClangWarning, false;
+    /// Clang's words for a `noreturn` function that returns.
+    InvalidNoreturn => Some("invalid-noreturn"), Warning, false;
+    /// GCC's, which no option controls.
+    GccNoreturn => None, Warning, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds
@@ -974,6 +999,8 @@ impl DiagnosticGroup {
     /// them.
     const UNDER_ALL: &[Self] = &[
         Self::Unused,
+        Self::Switch,
+        Self::ReturnType,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
         Self::ImplicitInt,
@@ -1016,7 +1043,10 @@ impl DiagnosticGroup {
     /// Whether only GCC has the group, so that Clang reports its option as
     /// unknown.
     pub(crate) const fn gcc_only(self) -> bool {
-        matches!(self, Self::Normalized | Self::PedanticNormalized)
+        matches!(
+            self,
+            Self::Normalized | Self::PedanticNormalized | Self::SwitchOutsideRange
+        )
     }
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
@@ -1138,6 +1168,8 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::Switch
+                | DiagnosticGroup::ReturnType
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
                 | DiagnosticGroup::UnusedVariable
