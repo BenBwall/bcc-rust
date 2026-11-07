@@ -764,6 +764,42 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let bit_width = bits.map(|bits| bits.width);
         let bit_field = bits.is_some();
         self.report_exceptional_initializer(e, info);
+        let folds = self.context.configuration.folds_exceptional_constants();
+        let boolean = matches!(
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Scalar(Scalar::Bool)
+        );
+        // An address's truth converts without a relocation (C99 §6.3.1.2p1).
+        if folds
+            && boolean
+            && info.integer.is_none()
+            && (self.pointer_like(info) || info.constant == ConstantClass::Address)
+        {
+            if !self.boolean_address_initializer(e) {
+                self.error(
+                    SemanticErrorKind::NonConstantInitializer,
+                    e.source_vectors,
+                    None,
+                    None,
+                );
+            }
+            return;
+        }
+        // C99 §6.6p10: what an address's truth decides is a constant here.
+        let mut info = info;
+        if folds
+            && info.constant != ConstantClass::Arithmetic
+            && info.constant != ConstantClass::Address
+            && self.integer_type(info.ty).is_some()
+            && let Some(value) = self.folded_address_value(e, 0)
+            && let Some(&index) = self.expression_indices.get(&std::ptr::from_ref(e).addr())
+        {
+            let record = &mut self.expressions[index];
+            record.integer = Some(value);
+            record.constant = ConstantClass::Arithmetic;
+            record.folding = ConstantFolding::Address;
+            info = *record;
+        }
         let overflow = self.static_float_conversion(target, info, e, bit_width)
             || info.folding == ConstantFolding::Overflow;
         if overflow

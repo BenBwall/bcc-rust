@@ -1869,12 +1869,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             return self.static_bit_field_literal(bytes, start, field, literal, literal_ty);
         }
         let integer = info.integer.filter(|_| {
-            representation == Repr::Pointer
+            matches!(representation, Repr::Pointer | Repr::Bool)
                 || !matches!(
                     self.sema.types.kind(info.ty),
                     TypeKind::Pointer(_) | TypeKind::Array(..)
                 )
         });
+
         // A wide bit-precise object stores its limbs, its padding bits
         // extended from its width.
         if let Some((width, signed)) = super::wide_bit_int::wide_bit_int(&self.sema.types, ty) {
@@ -2021,6 +2022,16 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 let bits = floats::to_integer(&folded.real, width, signed);
                 Some(bits.ok_or_else(unsupported)?.cast_signed())
             }
+        } else if representation == Repr::Bool
+            && (info.constant == ConstantClass::Address
+                || matches!(
+                    self.sema.types.kind(info.ty),
+                    TypeKind::Pointer(_) | TypeKind::Array(..) | TypeKind::Function { .. }
+                ))
+        {
+            // An address semantic analysis found known not to be null
+            // converts to true, with no relocation (C99 §6.3.1.2p1).
+            Some(1)
         } else {
             None
         };

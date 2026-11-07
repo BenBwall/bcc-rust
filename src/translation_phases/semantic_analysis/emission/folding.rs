@@ -1214,7 +1214,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// body, such as a static or inline function's, after the whole unit.
     /// GNU extension: GCC manual, "Common Function Attributes", `weak`, and
     /// "Weak Pragmas".
-    fn may_be_weak(&mut self, binding: usize) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn may_be_weak(
+        &mut self,
+        binding: usize,
+    ) -> bool {
         self.weak_at_horizon(binding, false)
     }
 

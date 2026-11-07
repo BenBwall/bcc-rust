@@ -36,7 +36,8 @@
 //! - Types and values: `types.rs` interns and compares types and computes
 //!   layouts; `integer.rs` evaluates integer constants, and
 //!   `exceptional_constants.rs` folds what GCC and Clang fold of those §6.6p4
-//!   leaves without a value; `constants.rs` folds floating values.
+//!   leaves without a value; `address_truth.rs` folds what an address's truth
+//!   decides; `constants.rs` folds floating values.
 //! - Language extensions: `assembly.rs` and `assembly/` check GNU `asm`
 //!   statements' constraints, operands, clobbers and templates; `generic.rs`
 //!   selects C11 generic associations; `type_generic.rs` checks GNU type
@@ -81,6 +82,7 @@ mod statements;
 mod traversal;
 
 // Types and constant values
+mod address_truth;
 mod constants;
 mod exceptional_constants;
 mod excess;
@@ -1054,7 +1056,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     value = None;
                 }
                 if value.is_some()
-                    && info.folding.exceptional()
+                    && (info.folding.exceptional()
+                        || (info.integer.is_none()
+                            && self.context.configuration.folds_exceptional_constants()))
                     && self.context.configuration.compiler_identity().rules()
                         == crate::configuration::RuleSet::Clang
                 {
