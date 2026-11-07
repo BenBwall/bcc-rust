@@ -922,6 +922,9 @@ diagnostic_groups! {
     SwitchDefault => Some("switch-default"), Ignored, false;
     /// GCC's `case` its controlling type cannot hold; Clang's is `-Wswitch`.
     SwitchOutsideRange => Some("switch-outside-range"), Warning, false;
+    /// Clang's constant `switch` condition that no `case` matches, which no
+    /// option controls.
+    ConstantSwitchCondition => None, Warning, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds

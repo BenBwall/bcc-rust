@@ -684,7 +684,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some_and(|entry| self.unused.unused_tags.get(&entry.binding) == Some(&true))
     }
 
-    fn attribute_chain_exempts(&self, mut chain: Option<&SpecifierExtension<'tu>>) -> bool {
+    pub(super) fn attribute_chain_exempts(
+        &self,
+        mut chain: Option<&SpecifierExtension<'tu>>,
+    ) -> bool {
         while let Some(item) = chain {
             if let SpecifierExtensionKind::Attributes(attribute) = item.kind
                 && super::attributes::known_names(attribute, self.context)

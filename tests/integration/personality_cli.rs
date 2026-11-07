@@ -6985,6 +6985,76 @@ mod tests {
         );
     }
 
+    /// Valid switches both compilers accept under `-Werror` (PR #322's
+    /// review): a constant condition its case matches, a `case` that
+    /// matches an enumerator once converted, and an enumerator marked
+    /// unused. GCC names `-Wswitch-enum` for a `case` outside the
+    /// enumeration when `-Wswitch` is off, and Clang's constant condition no
+    /// `case` matches has no option. Each row was measured against GCC 14.2
+    /// and Clang 23.1.
+    #[test]
+    fn gnu_switch_warnings_spare_constant_and_converted_cases() {
+        let directory = Directory::new();
+        directory.write(
+            "valid.c",
+            "enum e { A, B, C __attribute__((unused)) };
+enum u { U = 0xffffffffU, V = 0 };
+int f(void) { switch ((enum e)A) { case A: return 1; } return 0; }
+int g(enum u x) { switch (x) { case -1: case 0: return 1; } return 0; }
+int h(enum e x) { switch (x) { case A: case B: return 1; } return 0; }
+",
+        );
+        for (mode, args) in [
+            ("", &["-Werror"][..]),
+            ("--clang-mode", &["-Werror"][..]),
+            ("--gcc-mode", &["-Wall", "-Werror"][..]),
+        ] {
+            let mut args = args.to_vec();
+            args.extend(["-fsyntax-only", "valid.c"]);
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} {args:?}");
+        }
+        directory.write(
+            "outside.c",
+            "enum e { A, B };
+int f(enum e x) { switch (x) { case A: case B: case 5: return 1; } return 0; }
+int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
+",
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wswitch-enum", "-fsyntax-only", "outside.c"],
+        );
+        succeeds(&output);
+        assert!(
+            stderr(&output).contains(
+                "outside.c:2:48: warning: case value '5' not in enumerated type 'enum e' \
+                 [-Wswitch-enum]"
+            ),
+            "{}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("enumeration value 'B' not handled in switch [-Wswitch-enum]"),
+            "{}",
+            stderr(&output)
+        );
+        for args in [&[][..], &["-Wno-switch"][..]] {
+            let mut args = args.to_vec();
+            args.extend(["-fsyntax-only", "outside.c"]);
+            let output = directory.bcc("--clang-mode", &args);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains(
+                    "outside.c:3:23: warning: no case matching constant switch condition '1'\n"
+                ),
+                "{args:?}: {}",
+                stderr(&output)
+            );
+        }
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();

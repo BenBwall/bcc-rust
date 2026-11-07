@@ -268,8 +268,9 @@ fn folded_switch_case_labels_keep_source_order_and_scope() {
         )
         .contains(&SemanticErrorKind::UndeclaredIdentifier)
     );
+    // The condition matches a case, which Clang asks of a constant one.
     clean(
-        "int main(void) { switch (1) { { case sizeof(enum { K = 1 }): break; } { case sizeof(enum \
+        "int main(void) { switch (4) { { case sizeof(enum { K = 1 }): break; } { case sizeof(enum \
          { K = 2 }) + 1: break; } } return 0; }",
     );
     clean(

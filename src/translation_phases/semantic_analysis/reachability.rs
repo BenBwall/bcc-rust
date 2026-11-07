@@ -38,10 +38,7 @@ use super::{
     },
 };
 use crate::{
-    configuration::{
-        DiagnosticGroup,
-        RuleSet,
-    },
+    configuration::DiagnosticGroup,
     translation_phases::{
         SourceVectors,
         parsing::{
@@ -95,14 +92,14 @@ struct DeferredWarning {
 
 /// What the walk needs that analysis alone knows.
 pub(super) struct ReachabilityState<'s> {
-    deferred:               ArenaVec<'s, DeferredWarning>,
+    deferred:                   ArenaVec<'s, DeferredWarning>,
     /// Each enumeration's values, by tag, which tell whether a switch covers
-    /// them.
-    pub(super) enumerators: ArenaMap<'s, usize, ArenaVec<'s, (i128, StringCacheId)>>,
+    /// them, with each name and whether an attribute marks it unused.
+    pub(super) enumerators:     ArenaMap<'s, usize, ArenaVec<'s, (i128, StringCacheId, bool)>>,
     /// The enumeration each enumerator belongs to, by binding.
-    enumerator_tags:        ArenaMap<'s, usize, usize>,
+    pub(super) enumerator_tags: ArenaMap<'s, usize, usize>,
     /// The association each generic selection selects, by identity.
-    selected_generic:       ArenaMap<'s, usize, usize>,
+    selected_generic:           ArenaMap<'s, usize, usize>,
 }
 
 impl<'s> ReachabilityState<'s> {
@@ -252,6 +249,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         tag: usize,
         name: Identifier,
         value: Option<super::Integer>,
+        unused: bool,
     ) {
         let Some(value) = value.and_then(super::Integer::to_i128) else {
             return;
@@ -261,10 +259,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             .enumerators
             .entry(tag)
             .or_insert_with(|| ArenaVec::new_in(scratch))
-            .push((value, name.name));
-        if self.context.configuration.compiler_identity().rules() != RuleSet::Clang {
-            return;
-        }
+            .push((value, name.name, unused));
         if let Some(entry) = self.lookup(super::scopes::Namespace::Ordinary, name.name) {
             _ = self.reachability.enumerator_tags.insert(entry.binding, tag);
         }
@@ -623,7 +618,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             .enumerators
             .get(&tag)
             .is_some_and(|values| {
-                values.iter().all(|&(value, _)| {
+                values.iter().all(|&(value, ..)| {
                     ranges.iter().any(|&(low, high)| {
                         low.to_i128()
                             .zip(high.to_i128())

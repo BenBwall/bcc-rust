@@ -172,6 +172,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     point: self.control.point(),
                     ty,
                     default: None,
+                    labels: 0,
                     cases: self.scratch.alloc(Collection::new()),
                 });
                 self.work
@@ -913,6 +914,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.4.2 paragraph 2, p. 134; PDF p. 146.
     pub(super) fn switch_label(&mut self, statement: &'tu Statement<'tu>, source: SourceVectors) {
         if let Some(index) = self.statements.switch {
+            if !matches!(
+                statement.kind,
+                crate::translation_phases::parsing::syntax::StatementType::Default(_)
+            ) {
+                self.statements.switches[index].labels += 1;
+            }
             let points = self.statements.switches[index]
                 .point
                 .zip(self.control.point());
@@ -1068,6 +1075,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .then(a.ordinal.cmp(&b.ordinal))
         });
         let mut previous: Option<Case<'tu>> = None;
+        // Clang checks no condition against a list a `case` is in error in
+        // (`CaseListIsErroneous`).
+        let mut erroneous = list.len() != self.statements.switches[index].labels;
         if let Some(statement) = self
             .control
             .statement_id(self.statements.switches[index].statement)
@@ -1141,6 +1151,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     (prior, case)
                 };
+                erroneous = true;
                 self.error(
                     SemanticErrorKind::DuplicateCase,
                     later.source,
@@ -1152,7 +1163,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 previous = Some(case);
             }
         }
-        self.check_switch_warnings(index, &cases);
+        self.check_switch_warnings(index, &cases, erroneous);
     }
 }
 
@@ -1265,6 +1276,8 @@ struct Switch<'tu, 's> {
     point:     Option<ControlPoint>,
     default:   Option<LabelId>,
     ty:        TypeId,
+    /// The `case` labels it holds, each value valid or not.
+    labels:    usize,
     cases:     &'s Collection<'s, Case<'tu>>,
 }
 

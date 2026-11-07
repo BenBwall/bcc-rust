@@ -1322,6 +1322,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::SwitchEnum
                     | crate::configuration::DiagnosticGroup::SwitchDefault
                     | crate::configuration::DiagnosticGroup::SwitchOutsideRange
+                    | crate::configuration::DiagnosticGroup::ConstantSwitchCondition
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
