@@ -1057,6 +1057,59 @@ fn emission_model_queries_stay_linear() {
     });
 }
 
+/// A chain of jumps, each backward of the last, reaches one more label each
+/// time the reachability walk repeats, so each repetition reads only what the
+/// new label reaches: both the walk for a function's end and the one for
+/// Clang's warnings that wait to be reached. PR #321's review measured
+/// 16,000 labels at 33 s when each repetition read the whole function; this
+/// row costs well under a second when it reads only what changed.
+#[test]
+fn reachability_walk_stays_linear_through_backward_jumps() {
+    let chain = |end: &str| {
+        let count = 20_000;
+        let mut source = String::from("int f(int x) { goto l0; ");
+        for index in (0..count).rev() {
+            write!(source, "l{index}: goto l{}; ", index + 1).unwrap();
+        }
+        write!(source, "l{count}: {end} }}").unwrap();
+        source
+    };
+    let clang = crate::configuration::CompilerConfiguration::default()
+        .with_compiler_identity(crate::configuration::CompilerIdentity::Clang);
+    for (end, reaches_end) in [("return 0;", false), ("x + 1;", true)] {
+        let source = chain(end);
+        let start = std::time::Instant::now();
+        let mut kinds = Vec::new();
+        with_exact_configuration(&source, clang, |context, _| {
+            kinds.extend(
+                context
+                    .take_pending_errors()
+                    .iter()
+                    .filter_map(|e| match e {
+                        | TranslationError::Semantic(e) => Some(e.kind),
+                        | _ => None,
+                    }),
+            );
+        });
+        assert!(
+            start.elapsed().as_secs() < 15,
+            "{end}: {:?} (limit 15s)",
+            start.elapsed()
+        );
+        let returns = kinds
+            .iter()
+            .any(|kind| matches!(kind, SemanticErrorKind::ReturnFlow(_)));
+        let unused = kinds
+            .iter()
+            .any(|kind| matches!(kind, SemanticErrorKind::Unused(_)));
+        assert_eq!(
+            (returns, unused),
+            (reaches_end, reaches_end),
+            "{end}: {kinds:?}"
+        );
+    }
+}
+
 /// The fold evaluator recurses only as deep as keeps it within a 1 MiB
 /// stack, the default reserve of a Windows program's main thread, even
 /// unoptimized: through operands, `const` arrays read element by element

@@ -121,6 +121,8 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
     ShadowOrBody(crate::configuration::DiagnosticGroup),
+    /// C99: §6.9.1p12, p. 142; PDF p. 154.
+    ReturnFlow(crate::configuration::DiagnosticGroup),
     /// The words are the diagnostic's name.
     /// C99: §6.7.8p21, p. 127; PDF p. 139.
     MissingFieldInitializer,
@@ -1125,6 +1127,7 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::ShadowOrBody(_) => "this may not be what it looks like",
+            | Self::ReturnFlow(_) => "control can reach this point",
             | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
@@ -1339,6 +1342,9 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ShadowCompatibleLocal
                     | crate::configuration::DiagnosticGroup::ShadowAll
                     | crate::configuration::DiagnosticGroup::EmptyBody
+                    | crate::configuration::DiagnosticGroup::ReturnType
+                    | crate::configuration::DiagnosticGroup::InvalidNoreturn
+                    | crate::configuration::DiagnosticGroup::GccNoreturn
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
@@ -1755,6 +1761,11 @@ impl SemanticErrorKind {
                 "hidden declaration or empty body",
                 "C99 §6.2.1p4 hides an outer declaration in an inner scope, and §6.8.3p3 makes \
                  a lone semicolon a statement",
+            ),
+            | Self::ReturnFlow(_) => (
+                "control reaches the end of the function",
+                "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
+                 reaches the closing brace",
             ),
             | Self::SignCompare => (
                 "comparison of integers of different signs",
@@ -2621,7 +2632,9 @@ impl SemanticErrorKind {
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
         match self {
-            | Self::PointerConstraint(group) | Self::ShadowOrBody(group) => Some(group),
+            | Self::PointerConstraint(group)
+            | Self::ShadowOrBody(group)
+            | Self::ReturnFlow(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
@@ -2951,6 +2964,7 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ShadowOrBody(_)
+                | SemanticErrorKind::ReturnFlow(_)
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))

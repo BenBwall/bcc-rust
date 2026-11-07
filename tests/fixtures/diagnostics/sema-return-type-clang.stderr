@@ -1,0 +1,16 @@
+sema-return-type-clang.c:6:1: warning: non-void function does not return a value in all control paths [-Wreturn-type]
+    6 | }
+      | ^
+sema-return-type-clang.c:8:1: warning: non-void function does not return a value [-Wreturn-type]
+    8 | }
+      | ^
+sema-return-type-clang.c:23:1: warning: non-void function does not return a value in all control paths [-Wreturn-type]
+   23 | }
+      | ^
+sema-return-type-clang.c:27:1: warning: function declared 'noreturn' should not return [-Winvalid-noreturn]
+   27 | }
+      | ^
+sema-return-type-clang.c:29:5: warning: function 'says' declared 'noreturn' should not return [-Winvalid-noreturn]
+   29 |     return;
+      |     ^~~~~~~
+5 warnings generated.
