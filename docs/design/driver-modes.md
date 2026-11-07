@@ -250,8 +250,9 @@ bits it reads. `__builtin_cpu_supports("avx2")` gives the bit where it stands in
 (`1024`), and 1 in Clang. An unknown name is an error in GCC, `parameter to builtin not
 valid: bogus`, and in Clang's `__builtin_cpu_is`, `invalid cpu name for builtin`, while
 Clang's `__builtin_cpu_supports` warns, `invalid cpu feature string for builtin`, and
-answers 0. WebAssembly refuses all three, `builtin is not supported on this target`, and
-`__has_builtin` says it has none there. The Microsoft target needs
+answers 0. GCC reads the name as far as a NUL, so `"avx\0junk"` is `avx` there, and Clang
+reads all of it. Both accept `u8""`. WebAssembly refuses all three, `builtin is not
+supported on this target`, and `__has_builtin` says it has none there. The Microsoft target needs
 `clang_rt.builtins` on the link line, as Clang does; `--interpret` stops at the unresolved
 `__cpu_model`.
 

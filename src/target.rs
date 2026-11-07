@@ -56,6 +56,7 @@ pub(crate) use code_options::{
 pub(crate) use cpu_model::{
     cpu_feature_bit,
     cpu_processor,
+    cpu_query_name,
 };
 pub(crate) use model::{
     Layout,

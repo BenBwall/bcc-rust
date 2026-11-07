@@ -534,10 +534,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let ExpressionType::Parenthesized { expression } = literal.kind {
             literal = expression;
         }
-        let ExpressionType::StringLiteral(
-            crate::translation_phases::preprocessing::StringTokenType::String(text),
-        ) = literal.kind
-        else {
+        let ExpressionType::StringLiteral(kind) = literal.kind else {
             self.error(
                 SemanticErrorKind::CpuBuiltinNotLiteral,
                 info.expression.source_vectors,
@@ -546,10 +543,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             return;
         };
-        let name = self
-            .context
-            .literal_text_in(self.scratch, text, false)
-            .unwrap_or("");
+        let Some(text) = kind.narrow() else {
+            self.error(
+                SemanticErrorKind::CpuBuiltinNotLiteral,
+                info.expression.source_vectors,
+                None,
+                None,
+            );
+            return;
+        };
+        let (name, _) = self.context.literal_text_lossy_in(self.scratch, text);
+        let name = crate::target::cpu_query_name(name, clang);
         let known = if processor {
             crate::target::cpu_processor(name, clang).is_some()
         } else {

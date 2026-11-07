@@ -1194,20 +1194,18 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         while let ExpressionType::Parenthesized { expression } = literal.kind {
             literal = expression;
         }
-        let ExpressionType::StringLiteral(
-            crate::translation_phases::preprocessing::StringTokenType::String(text),
-        ) = literal.kind
-        else {
+        let text = match literal.kind {
+            | ExpressionType::StringLiteral(kind) => kind.narrow(),
+            | _ => None,
+        };
+        let Some(text) = text else {
             return Err(LoweringError::missing(
                 "a processor query's name is not a string literal",
                 source,
             ));
         };
-        let name = self
-            .unit
-            .context
-            .literal_text_in(self.scratch, text, false)
-            .unwrap_or("");
+        let (name, _) = self.unit.context.literal_text_lossy_in(self.scratch, text);
+        let name = crate::target::cpu_query_name(name, clang);
         if processor {
             let (field, value) = crate::target::cpu_processor(name, clang).ok_or_else(|| {
                 LoweringError::missing("an unknown processor name was not refused", source)

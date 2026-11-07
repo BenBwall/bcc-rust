@@ -4457,6 +4457,31 @@ mod tests {
         };
         value("--gcc-mode", "sse2", "16\n");
         value("--clang-mode", "sse2", "1\n");
+        // GCC reads a C string; Clang all of it, which names no feature.
+        value("--gcc-mode", "sse2\\0junk", "16\n");
+        value("--gcc-mode", "sse2\\0\\377", "16\n");
+        value("--clang-mode", "sse2\\0junk", "0\n");
+        directory.write(
+            "utf8.c",
+            "#include <stdio.h>\nint main(void) { printf(\"%d\\n\", \
+             __builtin_cpu_supports(u8\"sse2\")); return 0; }\n",
+        );
+        for (mode, expected) in [("--gcc-mode", "16\n"), ("--clang-mode", "1\n")] {
+            succeeds(&directory.bcc(mode, &["-w", "utf8.c", "-o", "utf8"]));
+            let run = Command::new(directory.path("utf8")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{mode}");
+        }
+        directory.write(
+            "empty.c",
+            "int main(void) { return __builtin_cpu_supports(\"\\0sse2\"); }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-c", "empty.c", "-o", "empty.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("error: parameter to builtin not valid: \n"),
+            "{}",
+            stderr(&output)
+        );
         let output = directory.bcc("--gcc-mode", &["-c", "bad.c", "-o", "bad.o"]);
         assert_eq!(output.status.code(), Some(1));
         let words = stderr(&output);

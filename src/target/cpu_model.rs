@@ -484,6 +484,17 @@ impl CpuField {
     }
 }
 
+/// The name a processor query's string gives: as far as the first NUL in GCC,
+/// which reads it as a C string, and all of it in Clang.
+/// GCC `fold_builtin_cpu`; Clang's `checkBuiltinCpu`.
+pub(crate) fn cpu_query_name(text: &str, clang: bool) -> &str {
+    if clang {
+        text
+    } else {
+        text.split('\0').next().unwrap_or(text)
+    }
+}
+
 /// The bit of the feature `name` for `__builtin_cpu_supports`, in Clang's table
 /// or GCC's, if the compiler knows it.
 pub(crate) fn cpu_feature_bit(name: &str, clang: bool) -> Option<u8> {
