@@ -1811,7 +1811,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     Duration::None,
                     retained,
                 );
-                self.note_enumerator(tag, item.name, retained);
+                let unused = self.attribute_chain_exempts(item.attributes);
+                self.note_enumerator(tag, item.name, retained, unused);
                 self.work.push(Work::EnumMembers(
                     tag,
                     list,
