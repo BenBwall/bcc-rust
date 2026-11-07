@@ -113,7 +113,7 @@ impl X86Features {
             | _ =>
                 if let Some((bit, feature)) = find(option.strip_prefix("-m")) {
                     self.enabled |= bit | feature.implies;
-                } else if let Some((bit, _)) = find(option.strip_prefix("-mno-")) {
+                } else if let Some((bit, _)) = find(no_option(option)) {
                     self.enabled &= !bit;
                     for (index, feature) in FEATURES.iter().enumerate() {
                         if feature.implies & bit != 0 {
@@ -187,12 +187,24 @@ impl<const N: usize> ConcatBytes for [&[u8]; N] {
 }
 
 fn find(name: Option<&str>) -> Option<(u32, &'static Feature)> {
-    let name = name?;
+    // `-msse4` is the newer of the two.
+    let name = match name? {
+        | "sse4" => "sse4.2",
+        | other => other,
+    };
     FEATURES
         .iter()
         .enumerate()
         .find(|(_, feature)| feature.option == name)
         .map(|(index, feature)| (1 << index, feature))
+}
+
+/// The feature a `-mno-` option turns off. `-mno-sse4` is the older of the two.
+fn no_option(option: &str) -> Option<&str> {
+    match option.strip_prefix("-mno-")? {
+        | "sse4" => Some("sse4.1"),
+        | other => Some(other),
+    }
 }
 
 /// Whether `text` is an option [`X86Features::apply`] reads.

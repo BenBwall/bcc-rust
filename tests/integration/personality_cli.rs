@@ -3187,6 +3187,9 @@ mod tests {
             assert!(!has(&["-mavx2", "-mno-avx"], "__AVX2__"), "{mode}");
             assert!(has(&["-mavx2", "-mno-avx"], "__SSE4_2__"), "{mode}");
             assert!(!has(&["-mavx2", "-mno-avx2"], "__AVX2__"), "{mode}");
+            assert!(has(&["-msse4"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-msse4", "-mno-sse4"], "__SSE4_1__"), "{mode}");
+            assert!(has(&["-msse4", "-mno-sse4"], "__SSSE3__"), "{mode}");
             assert!(has(&["-march=x86-64-v2"], "__SSE4_2__"), "{mode}");
             assert!(!has(&["-march=x86-64-v2"], "__AVX__"), "{mode}");
             for name in [
@@ -6959,7 +6962,8 @@ mod tests {
             "-o",
             "x.o",
         ]));
-        // A processor or feature bcc doesn't model warns: baseline code runs on it.
+        // A processor or feature bcc doesn't model warns: baseline code runs on
+        // it.
         for option in ["-march=haswell", "-march=x86-64-v4", "-mavx512f"] {
             let output = linux(&["-c", option, "x.c", "-o", "x.o"]);
             succeeds(&output);

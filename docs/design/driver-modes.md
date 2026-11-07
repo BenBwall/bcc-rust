@@ -183,6 +183,14 @@ also stay in every `-std=` under both, and `//` comments in C89 and `#embed` und
 Clang: `-std=c99` selects a language, and each is still an extension under
 `-pedantic`. Plain bcc keeps all of these behind the language mode.
 
+`-msse3`, `-mssse3`, `-msse4.1`, `-msse4.2`, `-msse4`, `-mpopcnt`, `-mcrc32`,
+`-mavx`, `-mavx2`, `-mfma`, `-mf16c`, `-mbmi`, `-mbmi2`, `-mlzcnt`, `-mmovbe`,
+`-maes`, `-mpclmul`, `-mxsave`, `-msahf`, their `-mno-` forms, and `-march=x86-64`,
+`x86-64-v2`, `x86-64-v3` and `native` define each compiler's macros and let LLVM use
+the instructions. Each turns on what it needs and `-mno-` turns off what needs it.
+Intrinsics compile without them, because bcc's headers compute on any x86-64, and a
+`target` attribute changes nothing about a function's code.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
@@ -213,10 +221,10 @@ to the options TCC itself implements; see [TCC](#tcc).
   `-fexceptions` (bcc emits no landing pads, so cleanups do not run while an
   exception unwinds), Spectre mitigations, `-mfentry`, `-specs=`, `-B`, and
   `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`; and requests
-  bcc's output satisfies less fully but correctly: a newer processor
-  (`-march=native`, `-march=x86-64-v3`, `-mavx2`; baseline x86-64 code runs
-  on it, but its macros such as `__AVX2__` stay undefined). The build goes
-  on and says what it lacks.
+  bcc's output satisfies less fully but correctly: a processor bcc doesn't name
+  (`-march=haswell`, `-march=x86-64-v4`) or a feature outside the list below
+  (`-mavx512f`); baseline x86-64 code runs on it, but its macros stay undefined.
+  The build goes on and says what it lacks.
 - **Refused**, with the compiler's kind of error, for everything else:
   options that change layout or the ABI away from the target's
   (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on
