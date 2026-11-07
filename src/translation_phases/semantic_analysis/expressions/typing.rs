@@ -1645,11 +1645,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let ty = self.types.recovery_type(&[ty]);
             return Self::expression_result(e, ty);
         }
-        let gnu = self.context.configuration.gnu_extensions()
+        let gnu = (self.context.configuration.gnu_extensions()
+            || self.context.configuration.compiler_extensions())
             && matches!(
                 self.types.nodes[ty.index],
                 TypeKind::Scalar(Scalar::Void) | TypeKind::Function { .. }
             );
+        if gnu && !align && bit_field.is_none() && self.context.configuration.compiler_extensions()
+        {
+            self.context.report_extension(
+                crate::configuration::Feature::VoidPointerArithmetic,
+                "sizeof of void or a function",
+                e.source_vectors,
+            );
+        }
         // `void` has size 1 for GNU pointer arithmetic, also in ISO modes,
         // as Clang accepts it with `-Wpointer-arith` off. GNU extension: GCC
         // "Pointer Arith".

@@ -597,6 +597,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(initializer) = f.initializer {
                     match initializer {
                         | ForInitializer::Declaration(d) => {
+                            self.report_for_declaration(d.source_vectors);
                             self.for_declaration(d);
                             self.work.push(Work::Declaration(d));
                         },

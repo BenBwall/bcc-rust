@@ -881,6 +881,12 @@ diagnostic_groups! {
     /// Clang: a negative constant shifted left. GCC reports it only under
     /// `-Wextra`, which is not modeled.
     ShiftNegativeValue => Some("shift-negative-value"), Warning, false;
+    /// An ordinary multi-character constant.
+    Multichar => Some("multichar"), Warning, false;
+    /// Clang: a declaration that declares nothing.
+    MissingDeclarations => Some("missing-declarations"), Warning, false;
+    /// GCC's report of the same, which no option controls but `-w`.
+    GccEmptyDeclaration => None, Warning, false;
     /// GCC's word for a zero divisor, which also sets Clang's
     /// [`Self::DivisionByZero`], as Clang takes it as an alias.
     DivByZero => Some("div-by-zero"), Warning, false;

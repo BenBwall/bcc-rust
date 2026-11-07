@@ -39,6 +39,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.evaluate_exceptional(expression, info);
             return;
         }
+        if self.evaluate_comma(expression, info) {
+            return;
+        }
         if info.constant != super::ConstantClass::Arithmetic
             && self.context.configuration.folds_exceptional_constants()
             && let Some(value) = self.address_truth_constant(expression, info)

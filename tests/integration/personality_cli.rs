@@ -2694,6 +2694,181 @@ mod tests {
         assert!(!directory.bcc("", &["-w", "c.c"]).status.success());
     }
 
+    /// `-pedantic` at each standard, as GCC 14.2 and Clang 23.1 answer: whether
+    /// the program is accepted, and whether it says anything then.
+    #[test]
+    fn pedantic_reports_follow_each_compiler() {
+        const ALL: &[&str] = &["c89", "c99", "c11", "gnu89", "gnu17", "c23"];
+        const GNU: &[&str] = &["gnu89", "gnu17"];
+        const C89: &[&str] = &["c89", "gnu89"];
+        const ISO_BEFORE_C23: &[&str] = &["c89", "c99", "c11"];
+        const BEFORE_C23: &[&str] = &["c89", "c99", "c11", "gnu89", "gnu17"];
+        /// What a compiler does with a program.
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum Answer {
+            Silent,
+            Warns,
+            Refuses,
+        }
+        use Answer::{
+            Refuses,
+            Silent,
+            Warns,
+        };
+        type Row = (&'static str, &'static [&'static str], Answer, Answer);
+        let table: &[Row] = &[
+            // Refusals of what bcc takes.
+            ("void f(void){for(int i=0;i<1;i++);}", C89, Refuses, Warns),
+            ("int a[]={};", ALL, Refuses, Warns),
+            ("void f(void){int a[]={};(void)a;}", ALL, Refuses, Warns),
+            ("void f(void){int a={};(void)a;}", &["gnu17"], Warns, Warns),
+            ("#foo\nint x;", ALL, Refuses, Refuses),
+            ("#if 0\n#foo\n#endif\nint x;", ALL, Silent, Silent),
+            ("#elifdef A\nint x;", ISO_BEFORE_C23, Refuses, Refuses),
+            ("#assert a(b)\nint x;", ALL, Warns, Refuses),
+            ("#unassert a\nint x;", ALL, Warns, Refuses),
+            ("_Decimal64 d;", BEFORE_C23, Warns, Refuses),
+            ("_Decimal64 d;", &["c23"], Silent, Refuses),
+            ("_Decimal32 d;", BEFORE_C23, Warns, Refuses),
+            ("int a[(1,2)];", GNU, Refuses, Warns),
+            ("enum{A=(1,2)};", GNU, Refuses, Warns),
+            ("enum{A=(1,2)};", &["c99"], Refuses, Warns),
+            (
+                "void f(int x){switch(x){case (1,2):;}}",
+                &["gnu17"],
+                Refuses,
+                Warns,
+            ),
+            ("_Static_assert((1,2),\"x\");", &["gnu17"], Refuses, Warns),
+            // What neither, or only one, reports.
+            ("__float128 q;", ALL, Silent, Silent),
+            ("int c=__COUNTER__;", ALL, Silent, Warns),
+            ("#define M(a,b) a\nint M(x,);", C89, Silent, Warns),
+            (
+                "int x=1<<31;",
+                &["c99", "c11", "gnu17", "c23"],
+                Warns,
+                Silent,
+            ),
+            ("int x=1<<31;", C89, Silent, Silent),
+            ("int $x;", &["c99", "c11", "gnu17", "c23"], Silent, Warns),
+            ("typeof(1) x;", GNU, Silent, Warns),
+            ("#if 0\n#elifdef A\n#endif\nint x;", GNU, Silent, Warns),
+            (
+                "#define A\n#if 0\n#elifdef A\n#endif\nint x;",
+                GNU,
+                Warns,
+                Warns,
+            ),
+            ("#if 0\n#elifndef A\n#endif\nint x;", GNU, Warns, Warns),
+            ("int x=0x1p3;", &["gnu89"], Silent, Warns),
+            ("inline int f(void){return 0;}", &["gnu89"], Silent, Warns),
+            ("// c\nint x;", &["gnu89"], Warns, Silent),
+            (
+                "#define M(a,...) a,##__VA_ARGS__\nint M(x);",
+                &["gnu17"],
+                Silent,
+                Warns,
+            ),
+            ("#define M(a,...) a\nint M(x);", &["gnu17"], Silent, Warns),
+            ("#define M(a,...) a\nint M(x);", &["c23"], Silent, Silent),
+            (
+                "#define M(a,...) a __VA_OPT__(,) __VA_ARGS__\nint M(x);",
+                &["gnu17"],
+                Silent,
+                Warns,
+            ),
+            // What bcc itself says nothing of.
+            ("struct {int x;};", ALL, Warns, Warns),
+            ("int;", ALL, Warns, Warns),
+            ("struct S{int x;};", ALL, Silent, Silent),
+            ("enum{E};", ALL, Silent, Silent),
+            (
+                "void f(void){const char*s=__FUNCTION__;(void)s;}",
+                ALL,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__PRETTY_FUNCTION__;(void)s;}",
+                ALL,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__func__;(void)s;}",
+                C89,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__func__;(void)s;}",
+                &["gnu17"],
+                Silent,
+                Silent,
+            ),
+            ("# 5 \"f.c\"\nint x;", ALL, Warns, Warns),
+            ("int x='ab';", ALL, Warns, Warns),
+            ("void f(int n){int a[n];(void)a;}", C89, Warns, Warns),
+            (
+                "void f(int n){int a[n];(void)a;}",
+                &["gnu17"],
+                Silent,
+                Silent,
+            ),
+            ("int f(void){return sizeof(void);}", ALL, Warns, Warns),
+            ("int g(void);int h=sizeof(g);", ALL, Warns, Warns),
+        ];
+        let directory = Directory::new();
+        for (source, standards, gcc, clang) in table.iter().copied() {
+            directory.write("c.c", &format!("{source}\n"));
+            for standard in standards {
+                let option = format!("-std={standard}");
+                for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                    let output =
+                        directory.bcc(mode, &[&option, "-pedantic", "-fsyntax-only", "c.c"]);
+                    let text = stderr(&output);
+                    let answer = if !output.status.success() {
+                        Refuses
+                    } else if text.contains(": warning: ") {
+                        Warns
+                    } else {
+                        Silent
+                    };
+                    assert_eq!(answer, expected, "{mode} {option} {source}: {text}");
+                }
+            }
+        }
+        // A comma expression as a static initializer, whose other half under
+        // Clang is `-Wunused-value`.
+        for (source, standard, accepted) in [
+            ("int x=(1,2);", "gnu17", true),
+            ("int x=(1,2)+1;", "gnu17", false),
+            ("int x=(1,2)+1;", "c89", true),
+        ] {
+            directory.write("c.c", &format!("{source}\n"));
+            let option = format!("-std={standard}");
+            let output = directory.bcc(
+                "--gcc-mode",
+                &[&option, "-pedantic", "-fsyntax-only", "c.c"],
+            );
+            let text = stderr(&output);
+            assert_eq!(output.status.success(), accepted, "{source}: {text}");
+            assert_eq!(
+                text.contains("initializer element is not constant"),
+                accepted,
+                "{source}: {text}"
+            );
+        }
+        // Plain bcc keeps its own policy, which reports every extension.
+        directory.write("c.c", "#foo\n__float128 q;\nint main(void) { return 0; }\n");
+        let output = directory.bcc("", &["-pedantic", "c.c"]);
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(text.contains("unknown preprocessing directive"), "{text}");
+        assert!(text.contains("__float128"), "{text}");
+    }
+
     /// `-ffunction-sections` and `-fdata-sections` give each definition a
     /// section of its own, so that `--gc-sections` removes the unused ones.
     #[cfg(target_os = "linux")]
