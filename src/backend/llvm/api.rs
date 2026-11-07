@@ -2187,7 +2187,25 @@ impl Session<'_> {
     /// as Clang does for each top-level `asm`; LLVM ends each block with a
     /// newline and assembles them, in order, before the functions.
     /// GNU extension: GCC manual, "Basic Asm", outside functions.
+    /// Whether `asm` text and what LLVM writes are in Intel syntax.
+    pub(super) const fn intel_syntax(&self) -> bool {
+        self.code.intel_syntax
+    }
+
     pub(super) fn append_module_asm(&self, text: &str) {
+        // LLVM reads module assembly as AT&T unless told otherwise, whatever
+        // syntax it writes, as `-masm=intel` promises for all of `asm`.
+        if self.code.intel_syntax {
+            let directive = ".intel_syntax noprefix";
+            // SAFETY: As below.
+            unsafe {
+                llvm_sys::core::LLVMAppendModuleInlineAsm(
+                    self.module,
+                    directive.as_ptr().cast(),
+                    directive.len(),
+                );
+            }
+        }
         // SAFETY: The module is live; LLVM copies `text.len()` bytes, which
         // need no terminator.
         unsafe {

@@ -276,6 +276,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 resolved.push(piece);
                 continue;
             };
+            // Intel syntax names no size in the mnemonic, of any operand.
+            if self.context.configuration.code_options().intel_syntax {
+                continue;
+            }
             let Some(suffix) = self.size_suffix(&operands[operand as usize]) else {
                 let source = asm
                     .template
@@ -283,10 +287,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.assembly_error(AsmFault::SizeModifier, source, None);
                 return None;
             };
-            // Intel syntax names no size in the mnemonic.
-            if !self.context.configuration.code_options().intel_syntax {
-                resolved.push(AsmPiece::Text(suffix));
-            }
+            resolved.push(AsmPiece::Text(suffix));
         }
         Some(resolved.leak())
     }

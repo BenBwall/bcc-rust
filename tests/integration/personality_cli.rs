@@ -3187,6 +3187,35 @@ mod tests {
             if mode == "--gcc-mode" {
                 let args = ["-masm=intel", "-O1", "-S", "z.c", "-o", "-"];
                 assert!(stdout(&directory.bcc(mode, &args)).contains("mov\tax, "));
+                // Of any operand, which AT&T's `%z` would refuse.
+                directory.write(
+                    "i.c",
+                    "int main(void) {\n    __asm__ volatile(\"nop%z0\" : : \"i\"(3));\n    return \
+                     0;\n}\n",
+                );
+                succeeds(&directory.bcc(mode, &["-masm=intel", "-c", "i.c", "-o", "i.o"]));
+                // A naked function's frame, as GCC builds it.
+                directory.write(
+                    "n.c",
+                    "extern int sink(int *);\n__attribute__((naked)) void f(void) {\n    int x = \
+                     3;\n    sink(&x);\n    __asm__(\"ret\");\n}\n",
+                );
+                #[cfg(target_os = "linux")]
+                succeeds(&directory.bcc(mode, &["-masm=intel", "-c", "n.c", "-o", "n.o"]));
+            }
+            // What bcc writes around an `asm` follows too, and so does
+            // file-scope `asm`.
+            directory.write(
+                "g.c",
+                "__asm__(\".globl seven\\nseven:\\nmov eax, 7\\nret\");\nextern int \
+                 seven(void);\nint main(void) {\n    __asm__ goto(\"jmp %l0\" : : : : hit);\n    \
+                 return 1;\nhit:\n    return seven() != 7;\n}\n",
+            );
+            for optimization in ["-O0", "-O2"] {
+                let args = ["-masm=intel", optimization, "g.c", "-o", "g"];
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("g")).status().unwrap();
+                assert_eq!(run.code(), Some(0), "{mode} {optimization}");
             }
             // A group's alternative follows the syntax in use.
             directory.write(
