@@ -7578,6 +7578,26 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// `#pragma once` marks a file, not a spelling of its path: GCC, Clang and
+    /// TCC (its own `18_include` test) read the header once however it is
+    /// reached.
+    #[test]
+    fn pragma_once_marks_the_file_whatever_path_reaches_it() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write("sub/h.h", "#pragma once\nint counter_seen;\n");
+        directory.write(
+            "sub/a.c",
+            "#include \"h.h\"\n#include \"./h.h\"\n#include \"../sub/h.h\"\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "sub/a.c"]);
+            succeeds(&output);
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(text.matches("counter_seen").count(), 1, "{mode}: {text}");
+        }
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();
