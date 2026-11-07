@@ -49,12 +49,14 @@ use crate::{
         },
         native,
     },
+    configuration::DebugOptions,
     diagnostics::{
         ColorChoice as RenderColor,
         DiagnosticReporter,
     },
     headers::HeaderSearch,
     ir::{
+        DebugLevel,
         Module,
         Profile,
     },
@@ -105,6 +107,11 @@ pub(super) fn generate_code<'tu>(
     search: HeaderSearch<'_>,
     options: &CodeGeneration,
 ) -> Generated {
+    if let Some(warning) = options.ignored_debug_info(context.configuration.target())
+        && !context.configuration.suppress_warnings()
+    {
+        report_stderr(format_args!("{warning}"));
+    }
     let unit = parse_translation_unit(context, source_filename, input_string, search);
     let sema = analyze_translation_unit(context, &unit);
     let reporter_arena = Bump::new();
@@ -346,6 +353,33 @@ pub(super) struct CodeGeneration {
     /// stderr when it finishes (implies --opt=bcc).
     #[arg(long, requires = "generation")]
     pub(super) time_passes: bool,
+    /// Debug information to write: 0 for none, 1 for line tables and
+    /// functions, 2 or 3 for everything bcc describes (also accepts GCC's
+    /// -g, -g0 through -g3 and -gdwarf-N, read in order).
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u8).range(0..=3),
+        overrides_with = "debug_level")]
+    pub(super) debug_level: Option<u8>,
+    /// Flip whether debug information is written, after everything else
+    /// (also accepts GCC's -gtoggle). Given twice, it does nothing.
+    #[arg(long, action = clap::ArgAction::Count, hide = true)]
+    pub(super) debug_toggle: u8,
+    /// The DWARF version of the debug information, 2 through 6; the default
+    /// is 5, or `CodeView` for an MSVC target.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u8).range(2..=6),
+        overrides_with = "dwarf_version")]
+    pub(super) dwarf_version: Option<u8>,
+    /// Keep columns in debug locations, the default (also accepts GCC's
+    /// -gcolumn-info).
+    #[arg(long, overrides_with = "no_debug_columns")]
+    pub(super) debug_columns: bool,
+    /// Leave columns out of debug locations (also accepts GCC's
+    /// -gno-column-info).
+    #[arg(long, overrides_with = "debug_columns")]
+    pub(super) no_debug_columns: bool,
+    /// With --emit=ir or --emit=ir-abi, print the debug tables and each
+    /// instruction's location.
+    #[arg(long, requires = "emit")]
+    pub(super) ir_debug_locations: bool,
     /// Select the LLVM IR pipeline and code generation level; none means O0.
     #[arg(long, value_enum, overrides_with = "llvm_opt")]
     pub(super) llvm_opt: Option<LlvmOpt>,
@@ -449,6 +483,53 @@ impl CodeGeneration {
             self.bcc_enabled() || llvm.enabled(),
             matches!(llvm, LlvmOpt::Os | LlvmOpt::Oz),
         )
+    }
+
+    /// The debug level the options ask for, 0 for none.
+    pub(super) fn debug_level(&self) -> u8 {
+        let level = self.debug_level.unwrap_or(0);
+        if self.debug_toggle.is_multiple_of(2) {
+            level
+        } else if level == 0 {
+            2
+        } else {
+            0
+        }
+    }
+
+    /// Whether the selected back end writes no debug information. The
+    /// interpreter has no output to put it in.
+    fn writes_no_debug_info(&self, target: Target) -> bool {
+        self.interpret
+            || target.is_wasm()
+            || self.backend != BackEnd::Llvm
+            || matches!(self.emit, Some(Emit::Wasm | Emit::Wat))
+    }
+
+    /// What `-g` asks of the compilation. `None` without it, and where the
+    /// back end would not use it, so that no phase pays for recording it.
+    pub(super) fn debug_options(&self, target: Target) -> Option<DebugOptions> {
+        if self.writes_no_debug_info(target) {
+            return None;
+        }
+        Some(DebugOptions {
+            level:         DebugLevel::from_number(self.debug_level())?,
+            dwarf_version: self.dwarf_version,
+            columns:       !self.no_debug_columns,
+        })
+    }
+
+    /// The warning for `-g` with a back end that writes no debug information;
+    /// the interpreter's output has nothing to put it in, so it stays quiet.
+    fn ignored_debug_info(&self, target: Target) -> Option<&'static str> {
+        if self.debug_level() == 0 || self.interpret || !self.writes_no_debug_info(target) {
+            return None;
+        }
+        Some(if self.backend == BackEnd::Native {
+            "warning: --backend=native writes no debug information; ignoring -g"
+        } else {
+            "warning: the WebAssembly back end writes no debug information; ignoring -g"
+        })
     }
 
     /// Why the selected options do not fit the selected back end, if they

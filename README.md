@@ -199,7 +199,7 @@ or running bcc under the name `gcc`, `cc`, `clang`, `cl`, `clang-cl` or `tcc`
 `x86_64-w64-mingw32-gcc`), select a personality. It reads that compiler's
 options, including `cl`'s `/c /Fo /Fe /link` and `tcc -run`. Of the options
 the compiler knows and bcc does not implement, it ignores those that cannot
-change the program (warnings, diagnostics, debug information, tuning), warns
+change the program (warnings, diagnostics, tuning), warns
 about hardening it does not apply (`-fstack-protector`, `/GS`), and refuses
 the rest (`-fshort-enums`, `-mno-sse`, `/Gv`) with the compiler's kind of
 error. It diagnoses unknown options as the compiler does, and claims the

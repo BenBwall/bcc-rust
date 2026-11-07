@@ -1765,6 +1765,129 @@ mod tests {
         }
     }
 
+    /// The `-g` options, read in order as GCC 14.2 and Clang 23 read them:
+    /// whether each command line writes debug information.
+    #[test]
+    fn debug_options_are_read_in_order() {
+        let directory = Directory::new();
+        directory.write("t.c", "int t(int a) { return a + 1; }\n");
+        let writes = |mode: &str, flags: &[&str]| {
+            let mut args = vec![
+                "--target=x86_64-unknown-linux-gnu",
+                "-c",
+                "t.c",
+                "-o",
+                "t.o",
+            ];
+            args.extend_from_slice(flags);
+            let output = directory.bcc(mode, &args);
+            assert!(
+                output.status.success(),
+                "{mode} {flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::fs::read(directory.path("t.o"))
+                .unwrap()
+                .windows(b".debug_info".len())
+                .any(|window| window == b".debug_info")
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for (flags, expected) in [
+                (&[][..], false),
+                (&["-g"], true),
+                (&["-g0"], false),
+                (&["-g1"], true),
+                (&["-g2"], true),
+                (&["-g3"], true),
+                (&["-ggdb"], true),
+                (&["-ggdb3"], true),
+                (&["-gdwarf"], true),
+                (&["-gdwarf-4"], true),
+                (&["-g", "-g0"], false),
+                (&["-g0", "-g"], true),
+                (&["-gdwarf-4", "-g0"], false),
+                (&["-g0", "-gdwarf-4"], true),
+                // These shape debug information; alone they do not ask for it.
+                (&["-gsplit-dwarf"], false),
+                (&["-gcolumn-info"], false),
+                (&["-gno-column-info"], false),
+                (&["-gstrict-dwarf"], false),
+                (&["-gz"], false),
+                (&["-grecord-gcc-switches"], false),
+            ] {
+                assert_eq!(writes(mode, flags), expected, "{mode} {flags:?}");
+            }
+        }
+        assert!(writes("--gcc-mode", &["-gtoggle"]));
+        assert!(!writes("--gcc-mode", &["-g", "-gtoggle"]));
+        assert!(!writes("--gcc-mode", &["-gtoggle", "-g"]));
+        assert!(writes("--clang-mode", &["-gline-tables-only"]));
+        assert!(writes("--clang-mode", &["-gmlt"]));
+        assert!(writes("--clang-mode", &["-gdwarf-6"]));
+    }
+
+    /// TCC takes `-g` as GCC does.
+    #[test]
+    fn tcc_debug_option_writes_debug_information() {
+        let directory = Directory::new();
+        directory.write("t.c", "int t(int a) { return a + 1; }\n");
+        let output = directory.bcc("--tcc-mode", &["-g", "-c", "t.c", "-o", "t.o"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let object = std::fs::read(directory.path("t.o")).unwrap();
+        assert!(object.windows(7).any(|window| window == b".debug_"));
+    }
+
+    /// A level or DWARF version the compiler refuses, in its words.
+    #[test]
+    fn debug_levels_and_versions_out_of_range_are_errors() {
+        let directory = Directory::new();
+        directory.write("t.c", "int t(void) { return 0; }\n");
+        for (mode, flag, message) in [
+            ("--gcc-mode", "-g4", "debug output level '4' is too high"),
+            (
+                "--gcc-mode",
+                "-gdwarf-1",
+                "dwarf version 1 is not supported",
+            ),
+            (
+                "--gcc-mode",
+                "-gdwarf-6",
+                "dwarf version 6 is not supported",
+            ),
+            ("--clang-mode", "-g4", "unknown argument: '-g4'"),
+            ("--clang-mode", "-gdwarf-1", "unknown argument: '-gdwarf-1'"),
+        ] {
+            let output = directory.bcc(mode, &[flag, "-c", "t.c", "-o", "t.o"]);
+            assert!(!output.status.success(), "{mode} {flag}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(message), "{mode} {flag}: {stderr}");
+        }
+    }
+
+    /// `/Zi`, `/Z7` and `/ZI` put `CodeView` in the object, as with clang-cl.
+    #[test]
+    fn msvc_debug_options_write_codeview() {
+        let directory = Directory::new();
+        directory.write("t.c", "int t(int a) { return a + 1; }\n");
+        for flag in ["/Zi", "/Z7", "/ZI"] {
+            let output = directory.bcc("--msvc-mode", &[flag, "/c", "t.c", "/Fot.obj"]);
+            assert!(
+                output.status.success(),
+                "{flag}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let object = std::fs::read(directory.path("t.obj")).unwrap();
+            assert!(
+                object.windows(8).any(|window| window == b".debug$S"),
+                "{flag}"
+            );
+        }
+    }
+
     /// What follows a string in its array's braces is excess: a warning from
     /// Clang, which drops it, and an error from GCC and TCC.
     #[test]
@@ -2019,6 +2142,30 @@ mod tests {
             "{}",
             stderr(&output)
         );
+    }
+
+    /// With a type present, a typedef name before an attribute or `asm` label
+    /// is the declarator, and without one it stays the type.
+    #[test]
+    fn typedef_names_before_attributes_follow_the_declaration() {
+        let directory = Directory::new();
+        directory.write(
+            "t.c",
+            "typedef int U;\ntypedef int U __attribute__((unused));\ntypedef int V;\nconst V \
+             __attribute__((unused)) c = 1;\nV __attribute__((unused)) d = 2;\nint main(void) \
+             {\n    int U __attribute__((unused)) = 3;\n    long V __asm__(\"inner\");\n    \
+             (void)V;\n    return U - c - d;\n}\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-O1", "-c", "t.c", "-o", "t.o"]);
+            succeeds(&output);
+        }
+        // The type stays one when another declarator follows the attribute.
+        directory.write("e.c", "typedef int T;\nint T __attribute__((unused)) x;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-c", "e.c", "-o", "e.o"]);
+            assert!(!output.status.success(), "{mode}");
+        }
     }
 
     /// `-save-temps` keeps the intermediate files, named as each compiler
