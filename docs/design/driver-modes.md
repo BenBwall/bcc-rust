@@ -50,6 +50,15 @@ An address's truth folds the same way (`int i = !&g;`, `&g ? 1 : 2`), with each
 compiler's rules for weak symbols and for what a static `_Bool` takes
 ([language-standards.md](../../language-standards.md#an-addresss-truth-in-a-constant-2026-11-07)).
 
+## `-pedantic` and what each compiler refuses
+
+bcc's own `-pedantic` reports every extension. Under `--gcc-mode` and
+`--clang-mode` it says what the compiler says instead: `typeof` is silent in GCC's
+`gnu` modes, `__float128` in both, and an active `#foo` is an error in both, where
+plain bcc warns. GCC refuses `for (int i...)` before C99 and `int a[] = {};`;
+Clang refuses `_Decimal64` and `#assert`. The table is in
+[language-standards.md](../../language-standards.md#-pedantic-under-a-personality-2026-11-07).
+
 ## How a personality runs
 
 A personality is a translator, not a second driver. It reads its compiler's

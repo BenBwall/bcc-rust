@@ -47,10 +47,11 @@
 //!   retain packing, alignment and scalar machine modes; `bound_sites.rs`
 //!   retains typeof operand execution at written type sites; `builtins.rs` and
 //!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
-//! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
-//!   extensions; `errors.rs` defines diagnostic kinds and renders them;
-//!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
-//!   these paths.
+//! - Diagnostics and inspection: `compiler_parity.rs` reports and refuses what
+//!   only GCC or Clang does under a personality; `diagnostics.rs` reports
+//!   constraints and extensions; `errors.rs` defines diagnostic kinds and
+//!   renders them; `inspection.rs` formats retained results. `tests.rs` and
+//!   `tests/` exercise these paths.
 //!
 //! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22 (translation phase 7).
 //! C99: §6.2.1-§6.2.4, pp. 29-32; PDF pp. 41-44 (scopes, linkage and duration).
@@ -83,6 +84,7 @@ mod traversal;
 
 // Types and constant values
 mod address_truth;
+mod compiler_parity;
 mod constants;
 mod exceptional_constants;
 mod excess;
@@ -414,6 +416,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.taint(d.recovered);
                 self.validate_declaration_list_item(d);
+                self.report_empty_declaration(d);
                 self.constexpr_declaration(d);
                 self.implicit_declaration_defaults(d);
                 self.work
@@ -1064,7 +1067,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 {
                     // Clang folds these in every scope, as a warning says.
                     self.error(SemanticErrorKind::FoldedArrayBound, source, None, None);
-                } else if value.is_some() && !info.ice && info.folded_address() {
+                } else if value.is_some()
+                    && !info.ice
+                    && (info.folded_address() || self.clang_folds_comma(expression))
+                {
                     if fold_bounds {
                         self.error(SemanticErrorKind::FoldedArrayBound, source, None, None);
                     } else {
@@ -1117,6 +1123,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         .to_u64()
                         .map_or_else(|| self.variable_bound(expression), ArrayBound::Constant)
                 } else {
+                    self.report_variable_length_array(expression);
                     self.variable_bound(expression)
                 };
                 let ty = self

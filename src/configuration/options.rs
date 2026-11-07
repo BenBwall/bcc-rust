@@ -59,8 +59,15 @@ impl CompilerConfiguration {
                 | Feature::MsPragma
                 | Feature::MsAnonymousStructs
                 | Feature::MsVaArgs => native,
-                | Feature::Elifdef | Feature::WarningDirective | Feature::Inline =>
-                    native || self.gnu,
+                | Feature::Elifdef =>
+                    native
+                        || self.gnu
+                        || (self.compiler_extensions
+                            && matches!(
+                                self.identity,
+                                super::CompilerIdentity::Clang | super::CompilerIdentity::ClangCl
+                            )),
+                | Feature::WarningDirective | Feature::Inline => native || self.gnu,
                 | Feature::Trigraphs => match self.trigraphs {
                     | Some(enabled) => enabled,
                     | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
@@ -883,12 +890,55 @@ impl CompilerConfiguration {
         self.derive_features()
     }
 
+    /// Whether a compiler's own language rules are asked for, as the GNU
+    /// personalities do; see [`Self::with_compiler_extensions`].
+    pub(crate) const fn compiler_extensions(self) -> bool {
+        self.compiler_extensions
+    }
+
     /// Whether integer constant arithmetic C99 §6.6p4 gives no value folds
     /// as GCC or Clang folds it, with a warning, rather than being refused.
     /// Plain bcc has Clang's identity, so the identity cannot tell.
     /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
     pub(crate) const fn folds_exceptional_constants(self) -> bool {
         self.compiler_extensions
+    }
+
+    /// Whether the compiler being stood in for says nothing of `feature`
+    /// under `-pedantic`, where bcc's own policy reports every extension.
+    /// GCC treats what a `gnu` mode enables as native to it, and has never
+    /// reported some spellings; each entry was measured on GCC 14.2 and Clang
+    /// 23.1 at `-std=c89` through `c23`.
+    pub(crate) const fn silent_extension(self, feature: Feature) -> bool {
+        if !self.compiler_extensions {
+            return false;
+        }
+        let gcc = matches!(self.identity.rules(), super::RuleSet::Gcc);
+        let c99 = (self.standard as u8) >= CStandard::C99 as u8;
+        match feature {
+            | Feature::Float128 => true,
+            | Feature::Counter | Feature::EmptyMacroArguments | Feature::GnuVaArgs => gcc,
+            | Feature::DollarIdentifiers => gcc && c99,
+            | Feature::ForDeclarations => gcc && !c99,
+            | Feature::GnuTypeof
+            | Feature::VaOpt
+            | Feature::Elifdef
+            | Feature::OmittedVariadicArguments
+            | Feature::HexFloats
+            | Feature::Inline => gcc && self.gnu,
+            | Feature::LineComments => !gcc && self.gnu,
+            | _ => false,
+        }
+    }
+
+    /// The origin to report a keyword's `feature` under, unless the compiler
+    /// being stood in for says nothing of it ([`Self::silent_extension`]).
+    pub(crate) const fn reported_origin(self, feature: Feature) -> Option<FeatureOrigin> {
+        if self.silent_extension(feature) {
+            None
+        } else {
+            Some(feature.origin())
+        }
     }
 
     /// Whether `feature` is an operator that tests for features, which GCC

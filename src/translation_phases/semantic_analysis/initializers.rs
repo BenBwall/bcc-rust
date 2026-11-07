@@ -764,6 +764,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let bit_width = bits.map(|bits| bits.width);
         let bit_field = bits.is_some();
         self.report_exceptional_initializer(e, info);
+        if self.gcc_refuses_comma_initializer(e) {
+            self.error(
+                SemanticErrorKind::NonConstantInitializer,
+                e.source_vectors,
+                None,
+                None,
+            );
+            return;
+        }
         let folds = self.context.configuration.folds_exceptional_constants();
         let boolean = matches!(
             self.types.nodes[self.types.non_atomic(target).index],
@@ -1569,6 +1578,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     // array, which C forbids (C99 §6.7.5.2p1, p. 116; PDF
                     // p. 128; N3220 §6.7.11p4).
                     // GNU extension: GCC manual, "Arrays of Length Zero".
+                    if self.context.configuration.compiler_extensions()
+                        && self.context.configuration.compiler_identity().rules()
+                            == crate::configuration::RuleSet::Gcc
+                    {
+                        // Though GCC 14's words here are its own.
+                        self.compiler_refusal(
+                            "zero or negative size array",
+                            initializer.source_vectors,
+                        );
+                        return Err((self.types.unknown(), None));
+                    }
                     self.context.report_extension(
                         crate::configuration::Feature::ZeroLengthArrays,
                         "zero-length array",

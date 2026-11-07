@@ -313,6 +313,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::TypeName(name, false));
                     return;
                 }
+                // Clang parses the decimal types only to refuse them.
+                if matches!(
+                    extended,
+                    super::ExtendedType::Decimal32
+                        | super::ExtendedType::Decimal64
+                        | super::ExtendedType::Decimal128
+                ) && self.context.configuration.compiler_extensions()
+                    && self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+                {
+                    self.compiler_refusal("GNU decimal type extension not supported", source);
+                }
                 let reason = match *extended {
                     | super::ExtendedType::BitInt { .. } => Some(UnmodeledType::BitInt),
                     | super::ExtendedType::Decimal32 => Some(UnmodeledType::Decimal32),

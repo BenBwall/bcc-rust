@@ -285,6 +285,9 @@ pub(crate) enum SemanticErrorKind {
     /// What GCC or Clang warns of an exceptional operation on integer
     /// constants, in its words, with the group that controls it.
     ExceptionalConstant(crate::configuration::DiagnosticGroup, StringCacheId),
+    /// What only the compiler a personality stands in for refuses, in its
+    /// words.
+    CompilerRefusal(StringCacheId),
     /// GCC's `-pedantic` report of a folded value where a constant
     /// expression is required, in its words.
     PedanticConstant(StringCacheId),
@@ -989,6 +992,7 @@ impl SemanticErrorKind {
                 "the value is not the integer's",
             | Self::ExceptionalConstant(..) => "this operation has no defined value",
             | Self::PedanticConstant(_) => "folded, but not a constant expression",
+            | Self::CompilerRefusal(_) => "the selected compiler refuses this",
             | Self::ExcessString => "characters past the array's end are dropped",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
             | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
@@ -1276,6 +1280,9 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ShiftOverflow
                     | crate::configuration::DiagnosticGroup::GccShiftOverflow
                     | crate::configuration::DiagnosticGroup::ShiftNegativeValue
+                    | crate::configuration::DiagnosticGroup::Multichar
+                    | crate::configuration::DiagnosticGroup::MissingDeclarations
+                    | crate::configuration::DiagnosticGroup::GccEmptyDeclaration
                     | crate::configuration::DiagnosticGroup::PedanticOverflow
                     | crate::configuration::DiagnosticGroup::Normalized
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
@@ -1333,6 +1340,10 @@ impl SemanticErrorKind {
                 "overflow in constant expression",
                 "C99 §6.6p4: a constant expression evaluates to a value its type represents; GCC \
                  folds an out-of-range conversion to the nearest bound",
+            ),
+            | Self::CompilerRefusal(_) => (
+                "the selected compiler refuses this",
+                "C99 §4p6: an implementation may accept extensions; this compiler does not",
             ),
             | Self::PedanticConstant(_) => (
                 "a value folded where a constant expression is required",
@@ -2789,6 +2800,7 @@ impl ToDiagnostic for SemanticError {
         } else if let SemanticErrorKind::PedanticConstant(text) = self.kind {
             format_in!(arena, "{} [-Wpedantic]", context.string_cache.at(text))
         } else if let SemanticErrorKind::ConstantConversion(text)
+        | SemanticErrorKind::CompilerRefusal(text)
         | SemanticErrorKind::ExceptionalConstant(_, text)
         | SemanticErrorKind::FloatOverflow(text)
         | SemanticErrorKind::LiteralConversion(text) = self.kind

@@ -94,6 +94,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
+                self.report_c90_func(name);
                 let (found, self_reference) = self.identifier_lookup(name);
                 if let Some(index) = found {
                     let binding = self.bindings[index];
@@ -225,6 +226,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.constant = ConstantClass::Arithmetic;
             },
             | E::Constant(Constant::Char(value)) => {
+                if let CharacterTokenType::MultiChar(packed) = value {
+                    self.report_multicharacter_constant(e, packed);
+                }
                 // C11 §6.4.4.4p11: `u` and `U` constants have `char16_t` and
                 // `char32_t` type; C23 §6.4.4.5p12: `u8` (a C23 construct in
                 // every mode) has `char8_t`.

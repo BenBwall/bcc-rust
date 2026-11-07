@@ -858,7 +858,7 @@ impl KeywordTokenType {
             let (enabled, origin) = match kind {
                 | Self::Inline => (
                     configuration.accepts(Feature::Inline),
-                    Some(Feature::Inline.origin()),
+                    configuration.reported_origin(Feature::Inline),
                 ),
                 | Self::Restrict => (
                     configuration.accepts(Feature::Restrict),
@@ -921,7 +921,7 @@ impl KeywordTokenType {
                     (true, Some(Feature::C23Keywords.origin())),
                 | Self::Typeof => (
                     configuration.gnu_extensions(),
-                    Some(Feature::GnuTypeof.origin()),
+                    configuration.reported_origin(Feature::GnuTypeof),
                 ),
 
                 | Self::Countof => (
@@ -952,7 +952,7 @@ impl KeywordTokenType {
                 ),
                 | Self::Float128 => (
                     configuration.accepts(Feature::Float128),
-                    Some(Feature::Float128.origin()),
+                    configuration.reported_origin(Feature::Float128),
                 ),
                 // Reserved identifiers that glibc declares as typedefs for
                 // compilers it does not know to provide them, as for the

@@ -737,7 +737,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         // Clang checks a case label's overflow, but not its form.
-        if self.constant_site == ConstantSite::CaseLabel {
+        if self.constant_site == ConstantSite::CaseLabel
+            && self.expression_info(e).folding.exceptional()
+        {
             return;
         }
         let configuration = self.context.configuration_at(e.source_vectors);
@@ -782,7 +784,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Reports `text` as `-pedantic` reports an extension.
-    fn report_pedantic_constant(&mut self, text: &str, source: SourceVectors) {
+    pub(super) fn report_pedantic_constant(&mut self, text: &str, source: SourceVectors) {
         let text = self.context.string_cache.intern(text);
         self.extension_error(
             crate::configuration::Feature::ConstantFolding,

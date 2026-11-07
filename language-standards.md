@@ -3831,3 +3831,47 @@ accepts it; GCC's `int a[!&g + 1];` at file scope is a warning, where bcc report
 its usual variably modified error; Clang's `-Wtautological-pointer-compare` is
 not reproduced; and in function code bcc still references the symbol, so that
 `if (&g)` or `_Bool n = &g;` needs `g` defined where both compilers fold it away.
+
+## `-pedantic` under a personality (2026-11-07)
+
+bcc's own `-pedantic` reports every extension. GCC and Clang do not, and each
+refuses some of what bcc takes, so `--compiler-extensions` follows them.
+`CompilerConfiguration::silent_extension` lists what goes unreported and
+`semantic_analysis/compiler_parity.rs` holds what only the compiler a personality
+stands in for says. Measured on GCC 14.2 and Clang 23.1 at `-std=c89`, `c99`,
+`c11`, `gnu89`, `gnu17` and `c23`:
+
+| Program | GCC | Clang |
+| --- | --- | --- |
+| `#foo` in an active group | refused | refused |
+| `#assert`, `#unassert` | reported, then ignored | refused |
+| `#elifdef` before C23 | ISO modes: an invalid directive. `gnu` modes: reported only if the group is taken | accepted, reported |
+| `#embed` | refused, until GCC 15 | accepted |
+| `for (int i...)` before C99 | refused | reported |
+| `int a[] = {};` | refused | reported |
+| `_Decimal64` and its kin | reported before C23 | refused |
+| A comma in an enumerator, `case`, `_Static_assert`, bit-field or file-scope bound | refused | folds, reported |
+| `int x = (1,2);`, `(1,2)+1` | reported; from C99 refuses the second | accepted |
+| `__float128` | silent | silent |
+| `__COUNTER__`, an empty macro argument, `, ## __VA_ARGS__` | silent | reported |
+| `$` in an identifier | reported only before C99 | reported |
+| `typeof`, `__VA_OPT__`, hex floats, `inline`, an omitted `...` argument | silent in a `gnu` mode | reported |
+| `//` in `gnu89` | reported | silent |
+| `struct { int x; };`, `int;` | warns by default, with no option | warns by default, `-Wmissing-declarations` |
+| `__FUNCTION__`, `__PRETTY_FUNCTION__`; `__func__` before C99 | reported | silent |
+| `# 5 "f.c"` outside preprocessed input | reported | reported |
+| `'ab'` | `-Wmultichar` | `-Wmultichar`; not `'abcd'` |
+| A variable length array before C99 | reported | reported |
+| `sizeof(void)`, `sizeof(f)` | reported | reported |
+
+A reported extension keeps bcc's words (`'inline' is a C99 extension
+[-Wpedantic]`) unless this document or `exceptional_constants.rs` quotes the
+compiler's. `void f(void) { int a = {}; }` already compiled under both before
+this work, so the entry for it in the original probe no longer applied.
+
+Known differences that remain: `-Woverflow` and `-Wconstant-conversion` on an
+implicit conversion such as `int x = 2147483648;`; `-Wmultichar` in a `#if`, and
+GCC's and Clang's other words for a constant of more than four characters; GCC's
+`int x = L'ab';`, which bcc refuses as Clang does; `_Decimal64 d = 1.0dd;`, whose
+constant bcc has no type for; Clang's `-Wunused-value` on a comma, which #284
+adds; and its `-Wdeprecated-non-prototype`.
