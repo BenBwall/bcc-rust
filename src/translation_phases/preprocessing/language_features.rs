@@ -1162,6 +1162,27 @@ pub(super) fn with_identity_macros<'a>(
     if x86.has_compare_and_swap_16() {
         out.push_str("#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 1\n");
     }
+    // The compilers number their protector macros differently.
+    let hardening = configuration.code_options().hardening;
+    let gcc = identity == CompilerIdentity::Gcc;
+    match hardening.stack_protector {
+        | crate::target::StackProtector::Off => {},
+        | crate::target::StackProtector::Basic => out.push_str("#define __SSP__ 1\n"),
+        | crate::target::StackProtector::Strong =>
+            _ = writeln!(out, "#define __SSP_STRONG__ {}", if gcc { 3 } else { 2 }),
+        | crate::target::StackProtector::All =>
+            _ = writeln!(out, "#define __SSP_ALL__ {}", if gcc { 2 } else { 3 }),
+    }
+    if hardening.sanitize_address {
+        out.push_str("#define __SANITIZE_ADDRESS__ 1\n");
+    }
+    if hardening.sanitize_thread {
+        out.push_str("#define __SANITIZE_THREAD__ 1\n");
+    }
+    let cet = u8::from(hardening.branch_protection) + 2 * u8::from(hardening.return_protection);
+    if cet != 0 {
+        _ = writeln!(out, "#define __CET__ {cet}");
+    }
     // The widest `_BitInt` the identity's compiler accepts, which
     // semantic analysis enforces (C23 §5.2.5.3.2p1, pp. 22-23; PDF pp. 35-36).
     _ = writeln!(
@@ -1438,7 +1459,7 @@ fn identity_claim(identity: CompilerIdentity) -> &'static str {
 /// for the features bcc implements, after `__name__` normalization. A C11
 /// language feature is a feature where it is native and an extension wherever
 /// bcc accepts it, as in Clang. Every other name answers 0, including Clang
-/// features bcc lacks (sanitizers, blocks, nullability), so
+/// features bcc lacks (other sanitizers, blocks, nullability), so
 /// headers take their portable paths.
 /// Clang extension: Clang Language Extensions, "`__has_feature` and
 /// `__has_extension`".
@@ -1455,6 +1476,8 @@ fn clang_feature(configuration: CompilerConfiguration, name: &str, extension: bo
         // GNU `deprecated` takes an optional message in every mode.
         | "attribute_deprecated_with_message" | "attribute_overloadable" => return true,
         | "overloadable_unmarked" => return extension,
+        | "address_sanitizer" => return configuration.code_options().hardening.sanitize_address,
+        | "thread_sanitizer" => return configuration.code_options().hardening.sanitize_thread,
         | _ => return false,
     };
     if extension {

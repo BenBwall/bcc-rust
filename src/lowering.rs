@@ -54,10 +54,10 @@
 //!   regions an exit leaves: dynamic stack restores, and GNU cleanup calls from
 //!   `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
-//!   `debug_locations.rs` what `-g` records beside it; `emit.rs` copies a
-//!   finished draft into the module; `types.rs` maps C types to IR types;
-//!   shared `crate::float_parsing::bits` turns folded floating constants into
-//!   IR bits.
+//!   `debug_locations.rs` and `debug_types.rs` what `-g` records beside it;
+//!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
+//!   to IR types; shared `crate::float_parsing::bits` turns folded floating
+//!   constants into IR bits.
 //! - Errors: `errors.rs`. Tests: `tests.rs` and `tests/`.
 //!
 //! C99: §5.1.2.3, pp. 13-15; PDF pp. 25-27 (program execution: lowering
@@ -101,6 +101,7 @@ mod work;
 
 // Construction
 mod debug_locations;
+mod debug_types;
 mod emit;
 mod ssa;
 mod types;
@@ -255,7 +256,8 @@ fn lower_unit<'tu, 'ir>(
     };
     unit.retain_local_statics = options.retain_locals;
     unit.source_lines |= options.source_lines;
-    unit.begin_debug_info();
+    unit.stack_locals = context.configuration.stack_locals();
+    unit.begin_debug_info(syntax);
     // A freestanding program supplies its own library, so no library
     // function is a builtin there, as Clang's -ffreestanding implies
     // -fno-builtin. C99: §5.1.2.1, p. 11; PDF p. 23.
@@ -437,6 +439,10 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             },
             | Task::CleanupNormal(statement) => self.cleanup_normal(statement, false),
             | Task::CleanupKeepStack(statement) => self.cleanup_normal(statement, true),
+            | Task::RestoreDebugScope(scope) => {
+                self.debug_scope = Some(scope);
+                Ok(())
+            },
             | Task::Enter { block, seal } => {
                 if seal {
                     self.draft.seal(block);

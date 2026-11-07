@@ -26,7 +26,9 @@ pub(super) use debug_info::{
     CompileUnit,
     DebugBuilder,
     FunctionDescription,
+    MemberDescription,
     Meta,
+    VariableDescription,
 };
 use llvm_sys::{
     LLVMDLLStorageClass,
@@ -222,6 +224,7 @@ use crate::{
         CodeOptions,
         Cpu,
         Relocation,
+        StackProtector,
         Target,
         TlsModel,
     },
@@ -367,6 +370,15 @@ impl Session<'_> {
             if pie {
                 session.module_flag(MODULE_FLAG_MAX, "PIE Level", level);
             }
+        }
+        // As Clang marks them, so that linking keeps a property only where
+        // every object has it.
+        let hardening = session.code.hardening;
+        if hardening.return_protection {
+            session.module_flag(MODULE_FLAG_MIN, "cf-protection-return", 1);
+        }
+        if hardening.branch_protection {
+            session.module_flag(MODULE_FLAG_MIN, "cf-protection-branch", 1);
         }
         body(&session)
     }
@@ -1671,6 +1683,39 @@ impl<'id> Session<'id> {
     }
 
     /// Adds the string attribute `key`=`value` to the function `function`.
+    /// The run-time checks the options ask of a defined function, in Clang's
+    /// attributes.
+    pub(super) fn hardening(
+        &self,
+        function: Val<'id>,
+        no_stack_protector: bool,
+        no_sanitize: crate::ir::NoSanitize,
+    ) {
+        let hardening = self.code.hardening;
+        let protector = match hardening.stack_protector {
+            | StackProtector::Off => None,
+            | _ if no_stack_protector => None,
+            | StackProtector::Basic => Some("ssp"),
+            | StackProtector::Strong => Some("sspstrong"),
+            | StackProtector::All => Some("sspreq"),
+        };
+        if let Some(protector) = protector {
+            self.attribute(function, u32::MAX, protector, 0, None, false);
+        }
+        if hardening.sanitize_address && !no_sanitize.address {
+            self.attribute(function, u32::MAX, "sanitize_address", 0, None, false);
+        }
+        if hardening.sanitize_thread && !no_sanitize.thread {
+            self.attribute(function, u32::MAX, "sanitize_thread", 0, None, false);
+        }
+        if hardening.stack_clash {
+            self.string_attribute(function, "probe-stack", "inline-asm");
+        }
+        if hardening.keep_frame_pointer {
+            self.string_attribute(function, "frame-pointer", "all");
+        }
+    }
+
     pub(super) fn string_attribute(&self, function: Val<'id>, key: &str, value: &str) {
         let key_length = u32::try_from(key.len()).expect("attribute key fits in u32");
         let value_length = u32::try_from(value.len()).expect("attribute value fits in u32");
@@ -1863,6 +1908,27 @@ impl<'id> Session<'id> {
                 let error = unsafe { LLVMGetErrorMessage(result) };
                 let message = Message::copy_error(error);
                 return Err(message);
+            }
+        }
+        // Sanitizers instrument the optimized code, as Clang runs them last.
+        let sanitize = self.code.hardening;
+        for (requested, pipeline) in [
+            (sanitize.sanitize_address, c"asan"),
+            (sanitize.sanitize_thread, c"tsan-module,function(tsan)"),
+        ] {
+            if requested {
+                // SAFETY: Creates independently owned pass-builder options.
+                let options = PassOptions(unsafe { LLVMCreatePassBuilderOptions() });
+                // SAFETY: Live module, target machine and pass options, with a
+                // known pipeline.
+                let result =
+                    unsafe { LLVMRunPasses(self.module, pipeline.as_ptr(), machine.0, options.0) };
+                if !result.is_null() {
+                    // SAFETY: Consumes the LLVMErrorRef and returns a message
+                    // with error-specific disposal.
+                    let error = unsafe { LLVMGetErrorMessage(result) };
+                    return Err(Message::copy_error(error));
+                }
             }
         }
         self.verify()?;

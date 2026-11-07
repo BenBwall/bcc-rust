@@ -23,6 +23,7 @@ use super::{
 use crate::{
     ir::{
         Block,
+        DeclaredVariable,
         Entity,
         FuncId,
         FunctionBuilder,
@@ -31,6 +32,7 @@ use crate::{
         Opcode,
         Type,
         Value,
+        VariablePlace,
     },
     util::bump::ArenaVec,
 };
@@ -295,6 +297,17 @@ pub(super) fn emit<'s>(
                 builder.ret(value);
             },
             | Some(Terminator::Unreachable) | None => builder.unreachable(),
+        }
+    }
+    for declared in &draft.declared {
+        let place = match declared.place {
+            | VariablePlace::Slot(slot) => Some(VariablePlace::Slot(slot)),
+            | VariablePlace::Address(value) =>
+                values[draft.resolve(value).index()].map(VariablePlace::Address),
+        };
+        // A place in code that was unreachable has no value.
+        if let Some(place) = place {
+            builder.declare_variable(DeclaredVariable { place, ..*declared });
         }
     }
     builder.finish();

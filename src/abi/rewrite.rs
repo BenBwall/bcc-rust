@@ -157,6 +157,11 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         for &data in slots {
             _ = self.builder.create_stack_slot(data.size, data.align);
         }
+        // Values and slots keep their numbers, so what a variable's place
+        // names stays right.
+        for &declared in old.declared_variables() {
+            self.builder.declare_variable(declared);
+        }
         for _ in old.blocks() {
             _ = self.builder.create_block();
         }

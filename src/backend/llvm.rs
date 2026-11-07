@@ -212,6 +212,7 @@ fn build_module<'m>(
         emitter.global(id)?;
     }
     if let Some(debug) = &debug {
+        debug.describe_globals(&globals);
         debug.finalize();
     }
     api.verify()?;

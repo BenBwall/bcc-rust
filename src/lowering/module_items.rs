@@ -104,6 +104,10 @@ use crate::{
 };
 
 /// Translation-unit state shared by every function's lowering.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent option of the unit, read on its own."
+)]
 pub(super) struct Unit<'a, 'tu, 'ir> {
     /// The module planner's emission closure, including static local objects.
     pub(super) reachable: ArenaSet<'a, usize>,
@@ -116,6 +120,22 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) debug_files: ArenaMap<'a, u32, crate::ir::DebugFile>,
     /// Whether debug locations hold columns (`-gno-column-info` clears it).
     pub(super) debug_columns: bool,
+    /// Whether the unit describes variables and types: `-g` and above.
+    pub(super) debug_variables: bool,
+    /// Each object's description once made, keyed for shared types.
+    pub(super) debug_types: ArenaMap<'a, TypeId, crate::ir::DebugType>,
+    /// The typedef each binding's declaration names (`debug_types.rs`).
+    pub(super) debug_typedefs: ArenaMap<'a, usize, usize>,
+    /// The bindings of each typedef name, innermost last.
+    pub(super) debug_typedef_names: ArenaMap<'a, StringCacheId, ArenaVec<'a, usize>>,
+    /// The description of each typedef binding.
+    pub(super) debug_typedef_nodes: ArenaMap<'a, usize, crate::ir::DebugType>,
+    /// The global objects already described.
+    pub(super) debug_described_globals: ArenaSet<'a, usize>,
+    /// Every named local object lives in memory, for the debugger to read
+    /// and set, as at GCC's and Clang's `-O0`. The optimizing levels do not
+    /// set it, and neither does `-g`: it must not change the code.
+    pub(super) stack_locals: bool,
     /// Work spent associating retained parameter bindings (scaling regression).
     #[cfg(test)]
     pub(super) parameter_alias_visits: usize,
@@ -308,8 +328,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 ));
                 continue;
             }
-            if let Err(error) = self.define_object(definition.binding, None, initializer) {
-                errors.push(error);
+            match self.define_object(definition.binding, None, initializer) {
+                | Ok(global) => self.describe_global(definition.binding, global, None),
+                | Err(error) => errors.push(error),
             }
         }
         // A retained local can be inside an unevaluated operand. Define its
@@ -2641,6 +2662,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             source_lines: target.is_wasm(),
             debug_files: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             debug_columns: true,
+            debug_variables: false,
+            debug_types: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            debug_typedefs: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            debug_typedef_names: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            debug_typedef_nodes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            debug_described_globals: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            stack_locals: false,
             reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             #[cfg(test)]
             parameter_alias_visits: 0,

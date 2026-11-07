@@ -665,18 +665,28 @@ locations that name them, and a location names only earlier locations:
 debug file file0 @a.c
 debug file file1 @"dir/in c.h"
 debug unit file0 language c11 level 2 dwarf 4 optimized
-debug scope scope0 @add name @add file file0 line 7 scope_line 8
+debug type type0 base @int size 32 encoding signed
+debug type type1 function type0 (type0, type0) prototyped
+debug scope scope0 @add name @add file file0 line 7 scope_line 8 type type1
+debug scope scope1 block scope0 @add file file0 line 9 column 3
+debug variable var0 @a scope scope0 file file0 line 7 type type0 argument 1
+debug global @g name @g file file0 line 2 type type0
 debug loc loc0 file0 line 9 column 11 scope scope0
 debug loc loc1 file1 line 3 column 3 scope scope1 at loc0
 
 function @add(i32, i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
+    debug declare var0 slot0 loc0
 block0(v0: i32, v1: i32):
     v2 = iadd.i32 nsw v0, v1 dbg loc0
     return v2 dbg loc0
 }
 ```
 
-`at` names the call an inlined location's instruction was copied for. The
+A `debug declare` line in a function says where it keeps a variable: a stack
+slot or a value holding its address. A type may name a later type, as a
+structure's member points back at the structure; the verifier checks that it
+exists. `at` names the call an inlined location's instruction was copied for. The
 verifier checks that a location exists and that its chain of calls ends in the
 function holding the instruction.
 
@@ -3069,10 +3079,12 @@ exist on wasm32.
 
 ## Debug information (2026-11-06)
 
-`-g` writes DWARF through the LLVM back end. This records line tables and
-functions: each defined function has a `DISubprogram` and each instruction with
-a source position a `DILocation`, so `addr2line` and a debugger's `bt` and
-`break file:line` work at every optimization level.
+`-g` writes DWARF through the LLVM back end. Each defined function has a
+`DISubprogram` and each instruction with a source position a `DILocation`, so
+`addr2line` and a debugger's `bt` and `break file:line` work at every
+optimization level. At `-g` and above the variables, types and block scopes are
+described too, so at `-O0` a debugger reads `info locals`, `print s.member` and
+`ptype` as with GCC and Clang.
 
 **Options.** `src/cli/arguments.rs` reads the options in order, as measured
 against GCC 14.2 and Clang 23: `-g0` turns debug information off; `-gN` sets the
@@ -3091,6 +3103,44 @@ instruction record does not grow and a compilation without it pays nothing but
 a few empty tables. The configuration leaves `debug_info` unset when the back
 end would not use it, so lowering records nothing for the native back end, the
 WebAssembly back end or the interpreter.
+
+**Locals in memory.** GCC and Clang keep every named local in memory at `-O0`,
+which is what lets a debugger read and set one at any line. bcc keeps a scalar
+local whose address is not taken in SSA values, whose location changes from one
+instruction to the next and ends at its last use. `-g` must not change the
+code, so moving the locals only under `-g` is no answer. The hidden option
+`--stack-locals` therefore moves them whether or not `-g` is given, when no
+optimizer runs (`CodeGeneration::stack_locals_apply`), and running under the GCC,
+Clang, `cl` or TCC personality implies it, so their `-O0` code has the same shape
+as those compilers', a little slower than before, and `-O1` and above are
+unchanged. A
+register variable (`register int r asm("r12")`) stays out of memory. bcc's own
+command line does not set it, so its goldens and `--emit=ir` keep their SSA form,
+and there a local without its address taken is described without a place.
+
+**Variables and types.** `Unit::debug_type` reduces semantic analysis's types to
+the IR's own table (`DebugTypeData`), so the IR does not depend on semantic
+analysis: base types, pointers, qualifiers including `_Atomic`, arrays, GNU
+vectors, structures and unions with member offsets and bit-fields, enumerations,
+function types and typedefs. A type enters the table when something names it, so
+an unused one takes no space, as with GCC's and Clang's defaults. A retained type
+has seen through its typedefs, so `Unit::note_typedef_use` reads which typedef a
+declaration's specifiers name and describes the binding's type with that typedef
+in place, under the declarator's pointers and arrays. The parser is unchanged.
+Enumerators are the one thing semantic analysis keeps only for this
+(`SemanticTranslationUnit::enumerators`), and only with `-g`, since their bindings
+do not name their tag.
+
+`describe_local` makes a `Variable` for each automatic object and parameter, and
+`describe_global` a `GlobalVariable` for each global and static local. A body
+records where it keeps a variable in a side table (`DeclaredVariable`), not an
+instruction, which would count against the inliner's budget and so change the
+code. Passes keep the table: a slot or value that does not survive drops the
+place and the description stays, so a debugger says `<optimized out>`, and an
+inlined copy gets its callee's variable with the call as `at`. A compound
+statement that declares names has a `DILexicalBlock`, and so does a `for` with a
+declaration; a function's outermost block shares its scope with the parameters,
+as C99 §6.2.1p4 says.
 
 **Locations in lowering.** `FunctionLowerer::track_line` already kept the
 current statement's physical line for the WebAssembly source map; it also keeps
@@ -3125,7 +3175,9 @@ is not its scope's file goes through a `DILexicalBlockFile`, since a
 `DILocation` has no file of its own. A phi takes its block's first location, so
 its copies are not line 0 between statements. LLVM requires a location on a
 call between two functions with subprograms, so a call without one gets line 0.
-`-g1` uses LLVM's line-tables-only emission kind.
+`-g1` uses LLVM's line-tables-only emission kind, as Clang's does, so a function
+without inlined calls has no `DW_TAG_subprogram` of its own, where GCC's `-g1`
+keeps one; `addr2line -f` then reads its name from the symbol table.
 
 `-g` does not change the machine code: only the back end reads locations, and
 LLVM's passes and code generator ignore debug metadata. A test compares
@@ -3150,17 +3202,28 @@ assembles them, as GCC and Clang pass it on.
 `tests/integration/debug_info.rs` the file and line of each row at `-O2` match
 Clang's, the inlined subroutines too. What differs:
 
-- At `-O0` bcc keeps scalar locals in SSA values, so a line that only
-  initializes one (`int s = 0;`) has no row, and the code generator's reloads
-  between statements appear as line 0 rows. GCC and Clang keep every local in
-  memory at `-O0`.
+- At `-O1` and above bcc's own passes promote locals to SSA values and do not
+  say where they went, so `info locals` shows most as `<optimized out>`, where
+  GCC and Clang track them through the optimizer. A local that stays in a slot
+  through bcc's passes is followed through LLVM's.
+- bcc's own command line (no personality) keeps scalar locals in SSA values at
+  `-O0` too, unless `--stack-locals` is given, so its lines that only initialize
+  a local have no row and its reloads appear as line 0.
+- A variable-length array's bound is not described: `print vla` shows its address
+  and `sizeof vla` is unavailable. Clang and GCC describe the bound.
+- A typedef of a typedef names its final type, and so does a member of a record:
+  `whatis` shows `int` for a `my_t` member. Both compilers keep the typedef.
+- A tag's line is its first member's, since nothing retains the tag's own.
+- A base type uses bcc's spelling (`unsigned long`, Clang's), where GCC writes
+  `long unsigned int`.
+- GCC and Clang give `}` a row where several returns share one, so `next` stops
+  there in a recursive `return n * f(n - 1);`; bcc returns from the statement.
 - A location is the position of the first token of its expression, where GCC and
   Clang use the operator of a binary expression. This changes columns, and the
   line of a binary expression written over several lines. As in
   `Context::file_vector`, a macro invoked within another macro's argument
   reports the outermost invocation.
 - GCC gives a closing brace a row after a `return`; bcc and Clang do not.
-- Without variables or types, `ptype` and `info locals` have nothing to show.
 - `-g3` writes no macros, `-gsplit-dwarf` writes no `.dwo`, `-gz` compresses
   nothing and `-fdebug-prefix-map=` maps nothing.
 - A compiled `.i` names the `.i` in `DW_AT_name`, where GCC names the file of

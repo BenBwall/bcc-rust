@@ -15,6 +15,7 @@ use crate::{
     ir::{
         Block,
         Body,
+        DeclaredVariable,
         Entity,
         FuncId,
         InlineControl,
@@ -24,6 +25,7 @@ use crate::{
         Opcode,
         StackSlot,
         Value,
+        VariablePlace,
     },
     util::bump::{
         ArenaVec,
@@ -211,6 +213,21 @@ pub(super) fn expand(
             if let Some(value) = body.inst_result(old) {
                 values[value.index()] = result;
             }
+        }
+    }
+    for declared in body.declared_variables() {
+        let place = match declared.place {
+            | VariablePlace::Slot(slot) => Some(VariablePlace::Slot(slots[slot.index()])),
+            | VariablePlace::Address(value) => values[value.index()].map(VariablePlace::Address),
+        };
+        if let Some(place) = place
+            && let Some(location) = draft.inlined_location(Some(declared.location), call_location)
+        {
+            draft.add_variable(DeclaredVariable {
+                variable: declared.variable,
+                place,
+                location,
+            });
         }
     }
     let map = |value: Value| values[value.index()].expect("every callee definition was reserved");

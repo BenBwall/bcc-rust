@@ -136,7 +136,10 @@ const REFUSED: &[(&str, &str)] = &[
         "-fno-unit-at-a-time",
         "bcc may reorder top-level definitions",
     ),
-    ("-fsanitize=", "bcc has no sanitizers"),
+    (
+        "-fsanitize=",
+        "bcc has only AddressSanitizer and ThreadSanitizer, on Linux, one at a time",
+    ),
     (
         "-fsanitize-coverage=",
         "bcc has no coverage instrumentation",

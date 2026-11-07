@@ -48,7 +48,9 @@ pub(crate) mod sections;
 pub(crate) use code_options::{
     CodeAssumptions,
     CodeOptions,
+    Hardening,
     Relocation,
+    StackProtector,
     TlsModel,
 };
 pub(crate) use cpu_model::{
