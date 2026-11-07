@@ -1149,6 +1149,18 @@ pub(super) fn with_identity_macros<'a>(
             _ = write!(out, "#define __PIE__ {level}\n#define __pie__ {level}\n");
         }
     }
+    // What `-mavx2` and `-march=` ask for.
+    let x86 = configuration.code_options().x86_features;
+    for feature in x86.macros() {
+        _ = writeln!(out, "#define {feature} 1");
+    }
+    if identity == CompilerIdentity::Gcc && x86.fast_fma() {
+        for name in ["", "F", "F32", "F32x", "F64"] {
+            _ = writeln!(out, "#define __FP_FAST_FMA{name} 1");
+        }
+    } else if identity != CompilerIdentity::Gcc && x86.has_compare_and_swap_16() {
+        out.push_str("#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 1\n");
+    }
     // The widest `_BitInt` the identity's compiler accepts, which
     // semantic analysis enforces (C23 §5.2.5.3.2p1, pp. 22-23; PDF pp. 35-36).
     _ = writeln!(

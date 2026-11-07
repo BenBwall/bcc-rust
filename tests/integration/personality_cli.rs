@@ -3154,6 +3154,80 @@ mod tests {
         );
     }
 
+    /// `-m` options and `-march=` define each compiler's macros and let LLVM
+    /// use the instructions, with what a feature needs turned on and what needs
+    /// it turned off.
+    #[test]
+    fn gnu_target_features_define_macros_and_generate_code() {
+        let directory = Directory::new();
+        directory.write("m.c", "");
+        directory.write(
+            "p.c",
+            "int f(unsigned x) { return __builtin_popcount(x); }\nvoid g(int *restrict a, int \
+             *restrict b) { for (int i = 0; i < 64; i++) a[i] += b[i]; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let has = |options: &[&str], name: &str| {
+                let args = [options, &["-E", "-dM", "m.c"]].concat();
+                stdout(&directory.bcc(mode, &args)).contains(&format!("#define {name} 1\n"))
+            };
+            for name in [
+                "__AVX2__",
+                "__AVX__",
+                "__SSE4_2__",
+                "__SSE3__",
+                "__POPCNT__",
+                "__XSAVE__",
+            ] {
+                assert!(has(&["-mavx2"], name), "{mode} {name}");
+            }
+            assert!(!has(&[], "__AVX2__"), "{mode}");
+            assert!(!has(&["-mavx2"], "__BMI__"), "{mode}");
+            // Turning a feature off takes what needs it along.
+            assert!(!has(&["-mavx2", "-mno-avx"], "__AVX2__"), "{mode}");
+            assert!(has(&["-mavx2", "-mno-avx"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-mavx2", "-mno-avx2"], "__AVX2__"), "{mode}");
+            assert!(has(&["-march=x86-64-v2"], "__SSE4_2__"), "{mode}");
+            assert!(!has(&["-march=x86-64-v2"], "__AVX__"), "{mode}");
+            for name in [
+                "__AVX2__",
+                "__FMA__",
+                "__BMI2__",
+                "__MOVBE__",
+                "__LAHF_SAHF__",
+            ] {
+                assert!(has(&["-march=x86-64-v3"], name), "{mode} {name}");
+            }
+            assert_eq!(
+                has(&["-mfma"], "__FP_FAST_FMA"),
+                mode == "--gcc-mode",
+                "{mode}"
+            );
+            assert_eq!(
+                has(&["-march=x86-64-v2"], "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16"),
+                mode == "--clang-mode",
+                "{mode}"
+            );
+            let assembly = |options: &[&str]| {
+                let args = [options, &["-O2", "-S", "p.c", "-o", "-"]].concat();
+                let output = directory.bcc(mode, &args);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{mode} {options:?}");
+                stdout(&output)
+            };
+            assert!(!assembly(&[]).contains("popcnt"), "{mode}");
+            assert!(assembly(&["-mpopcnt"]).contains("popcnt"), "{mode}");
+            assert!(assembly(&["-mavx2"]).contains("vpaddd"), "{mode}");
+            assert!(assembly(&["-march=x86-64-v3"]).contains("vpaddd"), "{mode}");
+            assert!(
+                !assembly(&["-mavx2", "-mno-avx2", "-mno-avx"]).contains("vpaddd"),
+                "{mode}"
+            );
+            // `native` is the running processor, whatever that has.
+            succeeds(&directory.bcc(mode, &["-march=native", "-O2", "-c", "p.c", "-o", "p.o"]));
+        }
+    }
+
     /// The options around GCC 14's permerrors and Clang's default errors,
     /// as each compiler orders them: `-Werror` does not reach into a system
     /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`
@@ -6885,8 +6959,8 @@ mod tests {
             "-o",
             "x.o",
         ]));
-        // A newer processor warns: baseline code runs on it.
-        for option in ["-march=native", "-march=x86-64-v3", "-mavx2"] {
+        // A processor or feature bcc doesn't model warns: baseline code runs on it.
+        for option in ["-march=haswell", "-march=x86-64-v4", "-mavx512f"] {
             let output = linux(&["-c", option, "x.c", "-o", "x.o"]);
             succeeds(&output);
             assert!(

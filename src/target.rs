@@ -37,6 +37,7 @@ mod predefined;
 
 // Code generation options
 mod code_options;
+mod x86_features;
 
 // ELF named-section policy shared by semantics and code generation
 pub(crate) mod sections;
@@ -52,6 +53,11 @@ pub(crate) use model::{
     RecordPassing,
     Scalar,
     TargetLayout,
+};
+pub(crate) use x86_features::{
+    Cpu,
+    X86Features,
+    is_feature_option,
 };
 
 impl Target {

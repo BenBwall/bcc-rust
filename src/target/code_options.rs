@@ -31,6 +31,8 @@ use super::Target;
 /// on the machine it runs on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct CodeOptions {
+    /// `-mavx2`, `-march=x86-64-v3` and the like.
+    pub(crate) x86_features:               super::X86Features,
     /// The relocation model the last `-fpic`-family flag selected, or
     /// `None` for the target's default.
     pub(crate) relocation:                 Option<Relocation>,
