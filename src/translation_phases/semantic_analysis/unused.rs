@@ -138,6 +138,8 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about operators' grouping may be on.
+    pub(super) parentheses: bool,
     /// Whether `-Wsign-compare` is on.
     pub(super) sign_compare: bool,
     /// Whether `-Wmissing-field-initializers` is on.
@@ -193,6 +195,18 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            parentheses: on(&[
+                G::Parentheses,
+                G::ChainedComparison,
+                G::LogicalOpParentheses,
+                G::BitwiseOpParentheses,
+                G::ShiftOpParentheses,
+                G::ParenthesesEquality,
+                G::BitwiseConditionalParentheses,
+                G::LogicalNotParentheses,
+                G::DanglingElse,
+                G::SwitchBool,
+            ]),
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,

@@ -194,6 +194,8 @@ impl CompilerConfiguration {
                 &[DiagnosticGroup::UnusedButSetGlobal],
             | DiagnosticGroup::UnusedValue if clang => &[DiagnosticGroup::UnusedComparison],
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
+            | DiagnosticGroup::Parentheses if clang => DiagnosticGroup::CLANG_PARENTHESES,
+            | DiagnosticGroup::Parentheses => &[DiagnosticGroup::DanglingElse],
             | _ => &[],
         };
         for &child in children {
@@ -226,6 +228,19 @@ impl CompilerConfiguration {
             DiagnosticGroup::VoidReturnMismatch,
         ] {
             self.warning_options[group as usize].apply_all(enabled);
+        }
+        self.warning_options[DiagnosticGroup::Parentheses as usize].apply_all(enabled);
+        if self.identity.rules() == super::RuleSet::Clang {
+            for &group in DiagnosticGroup::CLANG_PARENTHESES {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
+        } else {
+            for group in [
+                DiagnosticGroup::DanglingElse,
+                DiagnosticGroup::LogicalNotParentheses,
+            ] {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
         }
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
         // GCC's `-Wunused`, given or refused in either order, outranks
@@ -885,6 +900,27 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// `-Wparentheses`, which reports the rest of its family itself. `-Wall`
+    /// holds it in GCC, and Clang reports most of it by default.
+    Parentheses => Some("parentheses"), ClangWarning, false;
+    /// Clang's error for `a < b < c`, which `-Wparentheses` controls.
+    ChainedComparison => None, Error, false;
+    /// `a && b || c`.
+    LogicalOpParentheses => Some("logical-op-parentheses"), Ignored, false;
+    /// `a & b | c`.
+    BitwiseOpParentheses => Some("bitwise-op-parentheses"), Ignored, false;
+    /// `a + b << c`.
+    ShiftOpParentheses => Some("shift-op-parentheses"), ClangWarning, false;
+    /// `if ((a == b))`.
+    ParenthesesEquality => Some("parentheses-equality"), ClangWarning, false;
+    /// `a & (b < c) ? d : e`.
+    BitwiseConditionalParentheses => Some("bitwise-conditional-parentheses"), ClangWarning, false;
+    /// `!a == b`.
+    LogicalNotParentheses => Some("logical-not-parentheses"), ClangWarning, false;
+    /// `if (a) if (b) c; else d;`.
+    DanglingElse => Some("dangling-else"), ClangWarning, false;
+    /// `switch (a == b)`.
+    SwitchBool => Some("switch-bool"), ClangWarning, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds
@@ -942,12 +978,25 @@ enum GroupDefault {
 }
 
 impl DiagnosticGroup {
+    /// What Clang's `-Wparentheses` holds.
+    const CLANG_PARENTHESES: &[Self] = &[
+        Self::ChainedComparison,
+        Self::LogicalOpParentheses,
+        Self::BitwiseOpParentheses,
+        Self::ShiftOpParentheses,
+        Self::ParenthesesEquality,
+        Self::BitwiseConditionalParentheses,
+        Self::LogicalNotParentheses,
+        Self::DanglingElse,
+    ];
     /// The groups GCC's `-Wunused` holds only with `-Wextra` too.
     const PARAMETERS: &[Self] = &[Self::UnusedParameter, Self::UnusedButSetParameter];
     /// The groups bcc models under `-Wall`, as a pragma naming it reaches
     /// them.
     const UNDER_ALL: &[Self] = &[
         Self::Unused,
+        Self::Parentheses,
+        Self::LogicalNotParentheses,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
         Self::ImplicitInt,
@@ -1112,6 +1161,9 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::Parentheses
+                | DiagnosticGroup::DanglingElse
+                | DiagnosticGroup::LogicalNotParentheses
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
                 | DiagnosticGroup::UnusedVariable

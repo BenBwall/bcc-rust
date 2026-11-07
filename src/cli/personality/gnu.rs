@@ -1677,6 +1677,16 @@ impl State<'_> {
                     | "-fno-approx-func"
                     | "-Wmain-return-type"
                     | "-Wno-main-return-type"
+                    | "-Wlogical-op-parentheses"
+                    | "-Wno-logical-op-parentheses"
+                    | "-Wbitwise-op-parentheses"
+                    | "-Wno-bitwise-op-parentheses"
+                    | "-Wshift-op-parentheses"
+                    | "-Wno-shift-op-parentheses"
+                    | "-Wparentheses-equality"
+                    | "-Wno-parentheses-equality"
+                    | "-Wbitwise-conditional-parentheses"
+                    | "-Wno-bitwise-conditional-parentheses"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an

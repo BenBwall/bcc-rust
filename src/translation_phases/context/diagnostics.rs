@@ -290,3 +290,28 @@ impl<'tu> Context<'tu> {
         self.pending_errors.extend(errors);
     }
 }
+
+impl<'tu> Context<'tu> {
+    /// Records where `-Wdangling-else` reports about `statement`: the `else`
+    /// that introduces it, for Clang, and the `(` of the `if` it is the body
+    /// of, for GCC.
+    pub(crate) fn note_dangling_else_site(
+        &mut self,
+        statement: &'tu crate::translation_phases::parsing::syntax::Statement<'tu>,
+        site: SourceVectors,
+    ) {
+        _ = self
+            .dangling_else_sites
+            .insert(core::ptr::from_ref(statement) as usize, site);
+    }
+
+    /// The site [`Self::note_dangling_else_site`] recorded for `statement`.
+    pub(crate) fn dangling_else_site(
+        &self,
+        statement: &'tu crate::translation_phases::parsing::syntax::Statement<'tu>,
+    ) -> Option<SourceVectors> {
+        self.dangling_else_sites
+            .get(&(core::ptr::from_ref(statement) as usize))
+            .copied()
+    }
+}
