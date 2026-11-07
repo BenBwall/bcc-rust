@@ -24,6 +24,7 @@ use crate::{
     ir::{
         Entity,
         EntryConvention,
+        Inst,
         Symbol,
     },
     util::bump::{
@@ -89,6 +90,8 @@ pub(crate) struct MFunction<'a> {
     /// Each [`MInst::InlineAsm`]'s template and operand locations, by its
     /// `index`.
     pub(crate) asm:              ArenaVec<'a, AsmMachine<'a>>,
+    /// Whether each block keeps its [`MBlockData::sources`].
+    pub(crate) tracks_sources:   bool,
 }
 
 impl<'a> MFunction<'a> {
@@ -113,6 +116,7 @@ impl<'a> MFunction<'a> {
             labels:           ArenaVec::new_in(arena),
             indirect_symbols: ArenaVec::new_in(arena),
             asm:              ArenaVec::new_in(arena),
+            tracks_sources:   false,
         }
     }
 
@@ -201,7 +205,8 @@ impl<'a> MFunction<'a> {
     pub(crate) fn block(&mut self, arena: &'a Bump) -> MBlock {
         let block = MBlock::new(self.blocks.len());
         self.blocks.push(MBlockData {
-            insts: ArenaVec::new_in(arena),
+            insts:   ArenaVec::new_in(arena),
+            sources: ArenaVec::new_in(arena),
         });
         block
     }
@@ -219,7 +224,8 @@ impl<'a> MFunction<'a> {
         let mut blocks = ArenaVec::with_capacity_in(order.len(), arena);
         for &old in order {
             let insts = std::mem::replace(&mut self.blocks[old].insts, ArenaVec::new_in(arena));
-            blocks.push(MBlockData { insts });
+            let sources = std::mem::replace(&mut self.blocks[old].sources, ArenaVec::new_in(arena));
+            blocks.push(MBlockData { insts, sources });
         }
         for data in &mut blocks {
             if let Some(last) = data.insts.last_mut() {
@@ -257,7 +263,54 @@ impl<'a> MFunction<'a> {
 
 /// A block's instructions; the last is a terminator.
 pub(crate) struct MBlockData<'a> {
-    pub(crate) insts: ArenaVec<'a, MInst>,
+    pub(crate) insts:   ArenaVec<'a, MInst>,
+    /// Beside `insts`, one for one, when the function tracks them
+    /// ([`MFunction::tracks_sources`]); otherwise empty. Nothing that decides
+    /// what code to generate reads them.
+    pub(crate) sources: ArenaVec<'a, InstSource>,
+}
+
+impl MBlockData<'_> {
+    /// Keeps the instructions `keep` accepts, with their sources. `keep` sees
+    /// each instruction's index before this call.
+    pub(crate) fn retain_insts(&mut self, mut keep: impl FnMut(usize, &MInst) -> bool) {
+        let tracked = !self.sources.is_empty();
+        let mut kept = 0;
+        for index in 0..self.insts.len() {
+            if keep(index, &self.insts[index]) {
+                self.insts[kept] = self.insts[index];
+                if tracked {
+                    self.sources[kept] = self.sources[index];
+                }
+                kept += 1;
+            }
+        }
+        self.insts.truncate(kept);
+        if tracked {
+            self.sources.truncate(kept);
+        }
+    }
+
+    /// Removes the instruction at `index`.
+    pub(crate) fn remove_inst(&mut self, index: usize) {
+        _ = self.insts.remove(index);
+        if !self.sources.is_empty() {
+            _ = self.sources.remove(index);
+        }
+    }
+}
+
+/// What a machine instruction was made for, for a reader of the listing such
+/// as the explorer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum InstSource {
+    /// Nothing in the program asked for it: register allocation's moves
+    /// between a value's locations, and a jump on an edge it split.
+    Allocator,
+    /// The function's entry: its prologue and its parameters' first copies.
+    Entry,
+    /// This IR instruction.
+    Ir(Inst),
 }
 
 /// A frame object's size and alignment in bytes.

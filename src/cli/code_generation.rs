@@ -528,6 +528,7 @@ impl CodeGeneration {
             level:         DebugLevel::from_number(self.debug_level())?,
             dwarf_version: self.dwarf_version,
             columns:       !self.no_debug_columns,
+            physical:      false,
         })
     }
 
