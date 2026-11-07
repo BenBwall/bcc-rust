@@ -638,7 +638,8 @@ fn mixed_floating_operands_round_before_arithmetic() {
     with_source(
         "int comparison=16777217==16777216.0f; float addition=16777217+1.0f;",
         |context, unit| {
-            assert_eq!(context.pending_error_count(), 0);
+            // Clang warns that each `16777217` becomes 16777216.
+            assert_eq!(int_float_warnings(context), 2);
             let comparison = unit
                 .expressions
                 .iter()

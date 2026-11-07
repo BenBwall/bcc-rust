@@ -486,6 +486,11 @@ impl CompilerConfiguration {
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 permits warning diagnostics.
     pub(crate) fn diagnostic_severity(self, group: DiagnosticGroup) -> Option<ErrorSeverity> {
         let mut option = self.warning_options[group as usize];
+        if option == WarningSettings::DEFAULT
+            && group == DiagnosticGroup::ImplicitConstIntFloatConversion
+        {
+            option = self.warning_options[DiagnosticGroup::ImplicitIntFloatConversion as usize];
+        }
         // Clang's `-Wconversion` holds these groups; a child without an
         // option of its own takes the parent's. GCC's `-Wconversion` holds
         // none of Clang's groups, so its options leave them alone.
@@ -853,6 +858,13 @@ diagnostic_groups! {
     ConstantPromotion => Some("constant-promotion"), Ignored, false;
     /// An integer constant whose implicit conversion changes its value.
     ConstantConversion => Some("constant-conversion"), Warning, false;
+    /// Clang: an integer constant whose implicit conversion to a floating
+    /// type changes its value.
+    ImplicitConstIntFloatConversion => Some("implicit-const-int-float-conversion"), ClangWarning, false;
+    /// Clang's parent of [`Self::ImplicitConstIntFloatConversion`], under
+    /// `-Wconversion`. Its own warning about converting a variable is not
+    /// implemented.
+    ImplicitIntFloatConversion => Some("implicit-int-float-conversion"), Ignored, false;
     /// An element beyond the object it initializes, or a string literal
     /// longer than its array, null character aside: a warning by default that `-pedantic-errors` makes
     /// an error, as in GCC (a pedantic warning without an option) and Clang.
@@ -1015,6 +1027,8 @@ impl DiagnosticGroup {
                 | Self::PointerBoolConversion
                 | Self::ConstantConversion
                 | Self::LiteralConversion
+                | Self::ImplicitConstIntFloatConversion
+                | Self::ImplicitIntFloatConversion
         )
     }
 

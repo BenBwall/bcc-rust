@@ -1679,6 +1679,10 @@ impl State<'_> {
                     | "-Wno-main-return-type"
                     | "-Wreturn-stack-address"
                     | "-Wno-return-stack-address"
+                    | "-Wimplicit-const-int-float-conversion"
+                    | "-Wno-implicit-const-int-float-conversion"
+                    | "-Wimplicit-int-float-conversion"
+                    | "-Wno-implicit-int-float-conversion"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an

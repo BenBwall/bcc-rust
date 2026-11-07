@@ -1301,6 +1301,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
                     | crate::configuration::DiagnosticGroup::ConstantPromotion
                     | crate::configuration::DiagnosticGroup::ConstantConversion
+                    | crate::configuration::DiagnosticGroup::ImplicitConstIntFloatConversion
+                    | crate::configuration::DiagnosticGroup::ImplicitIntFloatConversion
                     | crate::configuration::DiagnosticGroup::Overflow
                     | crate::configuration::DiagnosticGroup::IntegerOverflow
                     | crate::configuration::DiagnosticGroup::ShiftCountOverflow
@@ -1739,6 +1741,13 @@ impl SemanticErrorKind {
                 "returned address of a local",
                 "C99 §6.2.4p2: an automatic object's lifetime ends with its block, so the \
                  returned pointer is indeterminate",
+            ),
+            | Self::ValueWarning(
+                crate::configuration::DiagnosticGroup::ImplicitConstIntFloatConversion,
+            ) => (
+                "constant rounded by conversion to a floating type",
+                "C99 §6.3.1.4p2: an integer the floating type cannot represent exactly becomes \
+                 a nearby value it can",
             ),
             | Self::ValueWarning(_) => (
                 "constant changed by conversion",

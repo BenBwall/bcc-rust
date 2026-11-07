@@ -39,6 +39,8 @@ use crate::{
     },
 };
 
+pub(super) mod int_float;
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Checks the value `e` a function returns as a pointer.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.8.6.4p3, p. 139; PDF p. 151.
@@ -235,6 +237,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) {
         if self.tainted {
             return;
+        }
+        // Clang's `constexpr` refusal stands alone here too.
+        if self.underspecified == 0 {
+            self.check_int_float_source(target, source);
         }
         let Some(value) = source.integer.and_then(super::Integer::to_i128) else {
             return;
