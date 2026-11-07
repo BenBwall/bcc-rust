@@ -45,6 +45,8 @@ use crate::{
         arguments::{
             implements_language_option,
             is_diagnostic_presentation,
+            is_hardening_option,
+            is_sanitizer_option,
         },
         driver::{
             InputKind,
@@ -1692,6 +1694,13 @@ impl State<'_> {
                 return;
             }
         }
+        // `Plan::machine_options` warns about these off Linux, once it knows
+        // the target.
+        if is_hardening_option(text) && knows(self.compiler, text) {
+            self.machine.push(text.into());
+            self.out.push(text.into());
+            return;
+        }
         if !clang_only
             && (PLAIN_OPTIONS.contains(&text)
                 || text.starts_with("-std=")
@@ -1819,11 +1828,17 @@ impl State<'_> {
             general_regs_only: false,
             user_interrupts:   false,
         };
+        self.incompatible_sanitizers();
         for option in std::mem::take(&mut self.machine) {
             if option == "-mwindows" && target == Target::WindowsGnu {
                 self.out.push("-Wl,--subsystem,windows".into());
             } else if option == "-mgeneral-regs-only" && linux && personality == Personality::Gcc {
                 machine.general_regs_only = true;
+            } else if target == Target::LinuxMusl && is_sanitizer_option(&option) {
+                // The bundled run-time libraries are glibc's.
+                self.treat(&option, target);
+            } else if linux && is_hardening_option(&option) {
+                // `Cli::code_options` gives Linux these.
             } else if linux && let "-muintr" | "-mno-uintr" = option.as_str() {
                 machine.user_interrupts = option == "-muintr";
             } else {
@@ -1834,6 +1849,32 @@ impl State<'_> {
             }
         }
         machine
+    }
+
+    /// `AddressSanitizer` and `ThreadSanitizer` lay out memory differently, so
+    /// each compiler refuses the two together, in its own words.
+    fn incompatible_sanitizers(&mut self) {
+        let (mut address, mut thread) = (false, false);
+        for option in &self.machine {
+            match option.as_str() {
+                | "-fsanitize=address" => address = true,
+                | "-fsanitize=thread" => thread = true,
+                | "-fno-sanitize=address" => address = false,
+                | "-fno-sanitize=thread" => thread = false,
+                | "-fno-sanitize=all" => (address, thread) = (false, false),
+                | _ => {},
+            }
+        }
+        if address && thread {
+            match self.compiler {
+                | Compiler::Gcc => self.error(format_args!(
+                    "'-fsanitize=thread' is incompatible with '-fsanitize=address'"
+                )),
+                | Compiler::Clang => self.error(format_args!(
+                    "invalid argument '-fsanitize=address' not allowed with '-fsanitize=thread'"
+                )),
+            }
+        }
     }
 
     /// Ignores, warns about or refuses a known option bcc does not

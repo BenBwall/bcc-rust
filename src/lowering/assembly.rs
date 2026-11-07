@@ -223,6 +223,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             &prints,
             gcc_outputs,
             selector.map(|_| gcc_outputs),
+            self.unit.context.configuration.code_options().intel_syntax,
             self.scratch,
         );
         let asm = self.scratch.alloc(InlineAsm {
@@ -767,6 +768,7 @@ fn llvm_template<'s>(
     prints: &[Option<Type>],
     outputs: usize,
     selector: Option<usize>,
+    intel: bool,
     scratch: &'s crate::util::bump::Bump,
 ) -> &'s str {
     let mut text = ArenaString::new_in(scratch);
@@ -813,17 +815,20 @@ fn llvm_template<'s>(
     }
     if let Some(selector) = selector {
         let end = "_end";
-        _ = write!(
-            text,
-            "\n\tmovl $$0, ${selector}\n\tjmp {GOTO_PREFIX}${{:uid}}{end}"
-        );
+        // The stubs are in the statement's own syntax.
+        let set_selector = |text: &mut ArenaString<'_>, value: usize| {
+            _ = if intel {
+                write!(text, "\n\tmov dword ptr ${selector}, {value}")
+            } else {
+                write!(text, "\n\tmovl $${value}, ${selector}")
+            };
+        };
+        set_selector(&mut text, 0);
+        _ = write!(text, "\n\tjmp {GOTO_PREFIX}${{:uid}}{end}");
         for label in 0..facts.jumps.len() {
-            _ = write!(
-                text,
-                "\n{GOTO_PREFIX}${{:uid}}_{label}:\n\tmovl $${}, ${selector}\n\tjmp \
-                 {GOTO_PREFIX}${{:uid}}{end}",
-                label + 1
-            );
+            _ = write!(text, "\n{GOTO_PREFIX}${{:uid}}_{label}:");
+            set_selector(&mut text, label + 1);
+            _ = write!(text, "\n\tjmp {GOTO_PREFIX}${{:uid}}{end}");
         }
         _ = write!(text, "\n{GOTO_PREFIX}${{:uid}}{end}:");
     }

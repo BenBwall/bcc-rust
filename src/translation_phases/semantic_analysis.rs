@@ -144,6 +144,7 @@ pub(crate) use results::{
     FlexibleArray,
     FunctionRecord,
     Linkage,
+    RetainedEnumerator,
     Scope,
     ScopeKind,
     SemanticTranslationUnit,
@@ -331,6 +332,7 @@ pub(crate) fn analyze<'tu>(
         external_redeclarations: unit_arena
             .alloc_slice_copy(&analyzer.functions.external_redeclarations),
         functions: analyzer.function_records.leak(),
+        enumerators: analyzer.enumerators.leak(),
         scopes: analyzer.scopes.leak(),
         type_names,
         type_name_indices: analyzer.retained_type_names,
@@ -1709,6 +1711,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         value.map(|v| Integer::int(v.value)),
                     ),
                 };
+                if self.context.configuration.debug_info().is_some()
+                    && let Some(value) = retained.and_then(Integer::to_i128)
+                {
+                    self.enumerators.push(RetainedEnumerator {
+                        tag,
+                        name: item.name.name,
+                        value,
+                    });
+                }
                 self.bind(
                     item.name,
                     ty,
@@ -2089,6 +2100,9 @@ struct Analyzer<'a, 'tu, 's> {
     definitions:             ArenaVec<'tu, Definition>,
     /// Indexed by the function definition's traversal id.
     function_records:        ArenaVec<'tu, FunctionRecord<'tu>>,
+    /// Each enumerator with its tag and value, kept only for debug
+    /// information; other phases read an enumerator through its binding.
+    enumerators:             ArenaVec<'tu, RetainedEnumerator>,
     scopes:                  ArenaVec<'tu, Scope>,
     type_names:              ArenaVec<'s, (&'tu TypeName<'tu>, TypeId)>,
     retained_type_names:     ArenaMap<'tu, usize, TypeNameId>,

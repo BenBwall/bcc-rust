@@ -145,7 +145,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 if !types::is_volatile(ty)
                     && !matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_))
                     && !self.unit.address_taken.contains(&binding)
-                    && !self.locals_survive_setjmp() =>
+                    && !self.locals_survive_setjmp()
+                    && (!self.unit.stack_locals
+                        || self.unit.sema.entities.register_variable(binding).is_some()) =>
                 Local::Variable(self.draft.declare_var(value_type)),
             | _ if types::variable_size(&self.unit.sema.types, ty) => {
                 let size = self.runtime_size(ty, source)?;
@@ -192,6 +194,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
         }
         _ = self.locals.insert(binding, local);
+        self.describe_local(binding, local);
         Ok(local)
     }
 

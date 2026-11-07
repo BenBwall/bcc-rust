@@ -133,7 +133,10 @@ const REFUSED: &[(&str, &str)] = &[
         "-fno-unit-at-a-time",
         "bcc may reorder top-level definitions",
     ),
-    ("-fsanitize=", "bcc has no sanitizers"),
+    (
+        "-fsanitize=",
+        "bcc has only AddressSanitizer and ThreadSanitizer, on Linux, one at a time",
+    ),
     (
         "-fsanitize-coverage=",
         "bcc has no coverage instrumentation",
@@ -922,7 +925,6 @@ const MACHINE_IGNORED: &[&str] = &[
     "-m[no-]noreturn-no-callee-saved-registers",
     "-m[no-]force-indirect-call",
     "-m[no-]direct-extern-access",
-    "-masm=att",
     "-mincoming-stack-boundary=4",
     "-mpreferred-stack-boundary=4",
     "-mno-daz-ftz",

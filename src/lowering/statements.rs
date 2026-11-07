@@ -129,7 +129,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
         };
         match statement.kind {
-            | S::Compound { items } =>
+            | S::Compound { items } => {
+                if items
+                    .iter()
+                    .any(|item| matches!(item, BlockItem::Declaration(_)))
+                {
+                    self.enter_debug_block(statement);
+                }
                 for item in items.iter().rev() {
                     self.tasks.push(match *item {
                         | BlockItem::Statement(statement) => child(statement),
@@ -144,7 +150,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             continue;
                         },
                     });
-                },
+                }
+            },
             | S::Expression(slot) => {
                 let expression = expression(slot, source)?;
                 if mode == StatementMode::Effects {
@@ -323,6 +330,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ]);
             },
             | S::For(clauses) => {
+                if matches!(clauses.initializer, Some(ForInitializer::Declaration(_))) {
+                    self.enter_debug_block(statement);
+                }
                 let header = self.draft.create_block(&[]);
                 let body = self.draft.create_block(&[]);
                 let step = self.draft.create_block(&[]);
@@ -934,6 +944,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         declaration: &'tu Declaration<'tu>,
     ) -> Result<(), LoweringError> {
         self.free_wide_temporaries();
+        if self.unit.debug_variables {
+            self.unit.note_declaration_typedefs(declaration);
+        }
         let mut tasks = ArenaVec::new_in(self.scratch);
         let site = self
             .unit
@@ -1002,9 +1015,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             // retained locals also keep their initializer's referents alive.
             // C99 §6.2.4p3, p. 32; PDF p. 44; §6.9p3-5, p. 140; PDF p. 152.
             if data.linkage == Linkage::None && self.unit.reachable.contains(&binding) {
-                _ = self
+                let global = self
                     .unit
                     .define_object(binding, Some(self.name), initializer)?;
+                self.unit.describe_global(binding, global, self.debug_scope);
             }
             return Ok(());
         }
@@ -1180,6 +1194,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             // caller's copy, which is the parameter object.
             if types::variable_size(&lowerer.unit.sema.types, declared) {
                 _ = lowerer.locals.insert(parameter, Local::Address(value));
+                lowerer.describe_local(parameter, Local::Address(value));
                 continue;
             }
             if matches!(
@@ -1214,6 +1229,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                     lowerer.escape_for_setjmp(home, declared);
                 }
                 _ = lowerer.locals.insert(parameter, Local::Address(home));
+                lowerer.describe_local(parameter, Local::Address(home));
                 continue;
             }
             // GNU: a definition written with a member's type after a

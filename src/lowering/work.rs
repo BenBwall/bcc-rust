@@ -59,6 +59,8 @@ pub(super) enum Task<'tu> {
     /// Emit a GNU `asm` statement whose operands are on the stack.
     Assembly(&'tu Statement<'tu>),
 
+    /// Leave a block's debug scope for the one around it.
+    RestoreDebugScope(crate::ir::DebugScope),
     /// Enter `block`: it is sealed if all its predecessors are known.
     Enter {
         block: Block,

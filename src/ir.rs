@@ -80,12 +80,24 @@ pub(crate) use bits::{
 pub(crate) use builder::FunctionBuilder;
 pub(crate) use cfg::ControlFlowGraph;
 pub(crate) use debug_info::{
+    DebugEncoding,
+    DebugEnumerator,
     DebugInfo,
     DebugLanguage,
     DebugLevel,
+    DebugMember,
+    DebugQualifier,
+    DebugRecord,
+    DebugTypeData,
     DebugUnit,
+    DeclaredVariable,
+    GlobalVariable,
+    LexicalBlock,
+    Scope,
     SourceLocation,
     Subprogram,
+    Variable,
+    VariablePlace,
 };
 pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
@@ -97,6 +109,8 @@ pub(crate) use entities::{
     DebugFile,
     DebugLoc,
     DebugScope,
+    DebugType,
+    DebugVariable,
     Entity,
     FuncId,
     GlobalId,
@@ -241,14 +255,14 @@ pub(crate) struct Module<'ir> {
 /// A function of a module. It is defined if it has a body.
 #[derive(Debug)]
 pub(crate) struct Function<'ir> {
-    pub(crate) name:           &'ir str,
-    pub(crate) signature:      SigId,
-    pub(crate) linkage:        Linkage,
-    pub(crate) body:           Option<Body<'ir>>,
+    pub(crate) name:               &'ir str,
+    pub(crate) signature:          SigId,
+    pub(crate) linkage:            Linkage,
+    pub(crate) body:               Option<Body<'ir>>,
     /// Alias target, section and retention requests.
-    pub(crate) attributes:     SymbolAttributes<'ir>,
+    pub(crate) attributes:         SymbolAttributes<'ir>,
     /// A requested minimum alignment of the function's code.
-    pub(crate) align:          Option<Align>,
+    pub(crate) align:              Option<Align>,
     /// A call may return a second time, after a `longjmp` restores the
     /// environment it saved (`setjmp`, `vfork`, GNU `returns_twice`). The
     /// optimizer does not inline across such frames, the LLVM back end
@@ -256,9 +270,13 @@ pub(crate) struct Function<'ir> {
     /// back end marks its calls and gives every value live across one a
     /// spill slot of its own. C99: §7.13.2.1 paragraph 4, p. 244; PDF p.
     /// 256.
-    pub(crate) returns_twice:  bool,
+    pub(crate) returns_twice:      bool,
     /// Whether calls may, must or must not be expanded inline.
-    pub(crate) inlining:       InlineControl,
+    pub(crate) inlining:           InlineControl,
+    /// GNU `no_stack_protector`: no stack protector, whatever the options ask.
+    pub(crate) no_stack_protector: bool,
+    /// GNU `no_sanitize`: the sanitizers that leave this function alone.
+    pub(crate) no_sanitize:        NoSanitize,
     /// For the private copy of an `always_inline` inline-only definition,
     /// the external function it copies. Direct calls name the copy so that
     /// bcc's optimizer, interpreter and native back end expand or run it;
@@ -267,9 +285,9 @@ pub(crate) struct Function<'ir> {
     /// it, as Clang does, so LLVM's inliner decides as for Clang (a
     /// recursive body is not inline viable and calls the external
     /// definition). C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
-    pub(crate) inline_copy_of: Option<&'ir str>,
+    pub(crate) inline_copy_of:     Option<&'ir str>,
     /// How the machine enters and leaves the function.
-    pub(crate) entry:          EntryConvention,
+    pub(crate) entry:              EntryConvention,
 }
 
 /// How the machine enters and leaves a function, beyond the signature the
@@ -316,3 +334,11 @@ impl EntryConvention {
               compiler, not its tests."
 )]
 mod tests;
+
+/// The sanitizers a function's `no_sanitize` attribute turns off.
+/// GNU extension: GCC manual, "Common Function Attributes".
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct NoSanitize {
+    pub(crate) address: bool,
+    pub(crate) thread:  bool,
+}

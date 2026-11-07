@@ -45,6 +45,7 @@ use crate::{
         Signature,
         Type,
         Value,
+        VariablePlace,
     },
     target::Target,
     util::bump::{
@@ -181,8 +182,22 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 values[param.index()] = Some(value);
             }
         }
-        if self.debug.is_some() {
+        // A variable's record names its storage, which exists by now unless
+        // an instruction computes it: a `dyn_alloca`.
+        let mut later_variables = ArenaVec::new_in(self.arena);
+        if let Some(debug) = self.debug {
             api.set_debug_location(None);
+            let entry_block = blocks[entry.index()].ok_or(std::fmt::Error)?;
+            for &declared in body.declared_variables() {
+                match declared.place {
+                    | VariablePlace::Slot(slot) =>
+                        debug.declare(declared, slots[slot.index()], entry_block),
+                    | VariablePlace::Address(value) => match values[value.index()] {
+                        | Some(storage) => debug.declare(declared, storage, entry_block),
+                        | None => later_variables.push((value, declared)),
+                    },
+                }
+            }
         }
         let cfg = ControlFlowGraph::compute(body, self.arena);
         let dom = DominatorTree::compute(body, &cfg, self.arena);
@@ -209,7 +224,11 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 // over what the caller left there. Make room for the frame, as
                 // that prologue would have.
                 let ty = api.signature(api.void(), &[], false);
-                let template = format_in!(self.arena, "leaq -{naked_frame}(%rsp), %rsp");
+                let template = if api.intel_syntax() {
+                    format_in!(self.arena, "lea rsp, [rsp - {naked_frame}]")
+                } else {
+                    format_in!(self.arena, "leaq -{naked_frame}(%rsp), %rsp")
+                };
                 let asm = api.inline_asm(ty, template, "", true);
                 _ = api.call(ty, asm, &[]);
             }
@@ -235,6 +254,17 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                         api.set_name(value, &named(result, self.arena));
                     }
                     builder.values[result.index()] = Some(value);
+                    if let Some(debug) = self.debug {
+                        for &(storage, declared) in &later_variables {
+                            if storage == result {
+                                debug.declare(
+                                    declared,
+                                    value,
+                                    blocks[block.index()].ok_or(std::fmt::Error)?,
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }

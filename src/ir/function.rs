@@ -9,6 +9,7 @@
 //! indices in the pool's `Value` slots.
 
 use super::{
+    debug_info::DeclaredVariable,
     entities::{
         Block,
         BlockLabel,
@@ -65,6 +66,9 @@ pub(crate) struct Body<'ir> {
     /// Empty unless the module records them (`debug_info.rs`), and kept by
     /// the passes that rebuild a body.
     pub(super) locations:        ArenaVec<'ir, Option<DebugLoc>>,
+    /// Where the function keeps its described variables. Empty unless the
+    /// module describes them.
+    pub(super) variables:        ArenaVec<'ir, DeclaredVariable>,
 }
 
 impl<'ir> Body<'ir> {
@@ -126,6 +130,11 @@ impl<'ir> Body<'ir> {
     /// The debug location of `inst`, if it has one.
     pub(crate) fn inst_location(&self, inst: Inst) -> Option<DebugLoc> {
         self.locations.get(inst.index()).copied().flatten()
+    }
+
+    /// Where the function keeps its described variables.
+    pub(crate) fn declared_variables(&self) -> &[DeclaredVariable] {
+        &self.variables
     }
 
     /// Whether any instruction has a debug location.
@@ -400,6 +409,7 @@ impl<'ir> Body<'ir> {
             call_diagnostics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             lines:            Table::new_in(arena),
             locations:        ArenaVec::new_in(arena),
+            variables:        ArenaVec::new_in(arena),
         }
     }
 }

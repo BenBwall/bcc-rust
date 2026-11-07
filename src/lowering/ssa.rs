@@ -27,6 +27,7 @@ use crate::{
     ir::{
         Block,
         DebugLoc,
+        DeclaredVariable,
         Entity,
         FuncId,
         InstData,
@@ -73,6 +74,8 @@ pub(super) struct Draft<'s> {
     pub(super) location: Option<DebugLoc>,
     /// Whether instructions record [`Self::location`].
     pub(super) locating: bool,
+    /// Where the function keeps its described variables, in draft values.
+    pub(super) declared: ArenaVec<'s, DeclaredVariable>,
 }
 
 /// A scalar local whose value lives in SSA values rather than memory.
@@ -634,6 +637,7 @@ impl<'s> Draft<'s> {
             line: 0,
             location: None,
             locating: false,
+            declared: ArenaVec::new_in(scratch),
         };
         let entry = draft.create_block(params);
         draft.blocks[entry.index()].sealed = true;

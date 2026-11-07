@@ -41,6 +41,9 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
+    /// The enumerators of each enumeration when the unit asks for debug
+    /// information, which alone needs them by tag; empty otherwise.
+    pub(crate) enumerators:             &'tu [RetainedEnumerator],
     pub(crate) entities:                super::EntityFacts<'tu>,
     /// Evaluated entity references, owned by a function or object initializer.
     pub(crate) references:              &'tu [EntityReference],
@@ -178,6 +181,15 @@ pub(crate) struct Binding {
     pub(crate) linkage:  Linkage,
     pub(crate) duration: Duration,
     pub(crate) value:    Option<Integer>,
+}
+
+/// An enumeration constant as debug information describes it.
+/// C99: §6.7.2.2, pp. 104-105; PDF pp. 116-117.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RetainedEnumerator {
+    pub(crate) tag:   usize,
+    pub(crate) name:  StringCacheId,
+    pub(crate) value: i128,
 }
 
 /// Semantic ordinary binding category.

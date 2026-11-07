@@ -18,11 +18,15 @@ use std::fmt::{
 
 use super::{
     Body,
+    DebugTypeData,
     FuncId,
     GlobalId,
     Module,
+    Scope,
+    VariablePlace,
     entities::{
         DebugLoc,
+        DebugType,
         Entity,
         Inst,
     },
@@ -123,16 +127,68 @@ impl<'ir> Module<'ir> {
             }
             f.write_char('\n')?;
         }
+        for (ty, data) in debug.types() {
+            write!(f, "debug type {ty} ")?;
+            write_debug_type(f, data)?;
+            f.write_char('\n')?;
+        }
         for (scope, data) in debug.scopes() {
-            writeln!(
+            match data {
+                | Scope::Subprogram(data) => {
+                    write!(
+                        f,
+                        "debug scope {scope} {} name {} file {} line {} scope_line {}",
+                        self.display_func_name(data.function),
+                        display_name(data.name),
+                        data.file,
+                        data.line,
+                        data.scope_line
+                    )?;
+                    if let Some(ty) = data.ty {
+                        write!(f, " type {ty}")?;
+                    }
+                    f.write_char('\n')?;
+                },
+                | Scope::Block(data) => writeln!(
+                    f,
+                    "debug scope {scope} block {} {} file {} line {} column {}",
+                    data.parent,
+                    self.display_func_name(data.function),
+                    data.file,
+                    data.line,
+                    data.column
+                )?,
+            }
+        }
+        for (variable, data) in debug.variables() {
+            write!(
                 f,
-                "debug scope {scope} {} name {} file {} line {} scope_line {}",
-                self.display_func_name(data.function),
+                "debug variable {variable} {} scope {} file {} line {} type {}",
+                display_name(data.name),
+                data.scope,
+                data.file,
+                data.line,
+                display_debug_type(data.ty)
+            )?;
+            if let Some(argument) = data.argument {
+                write!(f, " argument {argument}")?;
+            }
+            f.write_char('\n')?;
+        }
+        for data in debug.globals() {
+            write!(
+                f,
+                "debug global {} name {} file {} line {} type {}",
+                self.display_global_name(data.global),
                 display_name(data.name),
                 data.file,
                 data.line,
-                data.scope_line
+                display_debug_type(data.ty)
             )?;
+            if let Some(scope) = data.scope {
+                write!(f, " scope {scope}")?;
+            }
+            f.write_char('\n')?;
         }
         for index in 0..debug.location_count() {
             let id = DebugLoc::new(index);
@@ -177,6 +233,15 @@ impl<'ir> Module<'ir> {
             if let Some(keyword) = function.inlining.keyword() {
                 write!(f, " {keyword}")?;
             }
+            if function.no_stack_protector {
+                f.write_str(" no_stack_protector")?;
+            }
+            if function.no_sanitize.address {
+                f.write_str(" no_sanitize_address")?;
+            }
+            if function.no_sanitize.thread {
+                f.write_str(" no_sanitize_thread")?;
+            }
             if let Some(external) = function.inline_copy_of {
                 write!(f, " inline_copy_of {}", display_name(external))?;
             }
@@ -198,6 +263,16 @@ impl<'ir> Module<'ir> {
             }
             for (label, block) in body.labels() {
                 writeln!(f, "    {label} = block_label {block}")?;
+            }
+            if located {
+                for declared in body.declared_variables() {
+                    write!(f, "    debug declare {} ", declared.variable)?;
+                    match declared.place {
+                        | VariablePlace::Slot(slot) => write!(f, "{slot}")?,
+                        | VariablePlace::Address(value) => write!(f, "{value}")?,
+                    }
+                    writeln!(f, " {}", declared.location)?;
+                }
             }
             for block in body.blocks() {
                 write!(f, "{block}")?;
@@ -774,4 +849,152 @@ fn display_int(bits: u128, ty: Type) -> impl fmt::Display {
             write!(f, "{}", ((bits << shift) as i128) >> shift)
         }
     })
+}
+
+/// A type a debug table names: `void` for none.
+fn display_debug_type(ty: Option<DebugType>) -> impl fmt::Display {
+    fmt::from_fn(move |f| match ty {
+        | Some(ty) => write!(f, "{ty}"),
+        | None => f.write_str("void"),
+    })
+}
+
+/// A name a debug table may leave out: the word `anonymous` for none, which a
+/// name's `@` keeps apart from a C identifier of that spelling.
+fn display_optional_name(name: Option<&str>) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| match name {
+        | Some(name) => write!(f, "{}", display_name(name)),
+        | None => f.write_str("anonymous"),
+    })
+}
+
+/// The text of a debug type, after its number.
+fn write_debug_type(f: &mut fmt::Formatter<'_>, data: &DebugTypeData<'_>) -> fmt::Result {
+    match *data {
+        | DebugTypeData::Base {
+            name,
+            size_bits,
+            encoding,
+        } => write!(
+            f,
+            "base {} size {size_bits} encoding {}",
+            display_name(name),
+            encoding.keyword()
+        ),
+        | DebugTypeData::Pointer { pointee } =>
+            write!(f, "pointer {}", display_debug_type(pointee)),
+        | DebugTypeData::Qualified { qualifier, ty } =>
+            write!(f, "{} {}", qualifier.keyword(), display_debug_type(ty)),
+        | DebugTypeData::Array {
+            element,
+            count,
+            size_bits,
+            align_bits,
+        } => {
+            write!(f, "array {}", display_debug_type(element))?;
+            if let Some(count) = count {
+                write!(f, " count {count}")?;
+            }
+            write!(f, " size {size_bits} align {align_bits}")
+        },
+        | DebugTypeData::Vector {
+            element,
+            count,
+            size_bits,
+            align_bits,
+        } => write!(
+            f,
+            "vector {} count {count} size {size_bits} align {align_bits}",
+            display_debug_type(element)
+        ),
+        | DebugTypeData::Record(record) => {
+            write!(
+                f,
+                "{} {} file {} line {} size {} align {}",
+                if record.union { "union" } else { "struct" },
+                display_optional_name(record.name),
+                record.file,
+                record.line,
+                record.size_bits,
+                record.align_bits
+            )?;
+            if !record.complete {
+                return f.write_str(" incomplete");
+            }
+            f.write_str(" members (")?;
+            for (index, member) in record.members.iter().enumerate() {
+                let separator = if index == 0 { "" } else { ", " };
+                write!(
+                    f,
+                    "{separator}{} {} line {} offset {}",
+                    display_optional_name(member.name),
+                    display_debug_type(member.ty),
+                    member.line,
+                    member.offset_bits
+                )?;
+                if let Some(width) = member.bit_field {
+                    write!(f, " bits {width}")?;
+                }
+            }
+            f.write_char(')')
+        },
+        | DebugTypeData::Enumeration {
+            name,
+            file,
+            line,
+            size_bits,
+            align_bits,
+            base,
+            enumerators,
+        } => {
+            write!(
+                f,
+                "enum {} file {file} line {line} size {size_bits} align {align_bits} base {} \
+                 values (",
+                display_optional_name(name),
+                display_debug_type(base)
+            )?;
+            for (index, enumerator) in enumerators.iter().enumerate() {
+                let separator = if index == 0 { "" } else { ", " };
+                write!(
+                    f,
+                    "{separator}{} {}",
+                    display_name(enumerator.name),
+                    enumerator.value
+                )?;
+            }
+            f.write_char(')')
+        },
+        | DebugTypeData::Typedef {
+            name,
+            ty,
+            file,
+            line,
+        } => write!(
+            f,
+            "typedef {} type {} file {file} line {line}",
+            display_name(name),
+            display_debug_type(ty)
+        ),
+        | DebugTypeData::Function {
+            result,
+            parameters,
+            variadic,
+            prototyped,
+        } => {
+            write!(f, "function {} (", display_debug_type(result))?;
+            for (index, &parameter) in parameters.iter().enumerate() {
+                let separator = if index == 0 { "" } else { ", " };
+                write!(f, "{separator}{}", display_debug_type(parameter))?;
+            }
+            f.write_char(')')?;
+            if variadic {
+                f.write_str(" variadic")?;
+            }
+            if prototyped {
+                f.write_str(" prototyped")?;
+            }
+            Ok(())
+        },
+    }
 }
