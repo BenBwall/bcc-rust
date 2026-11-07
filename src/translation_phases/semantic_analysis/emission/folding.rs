@@ -2116,10 +2116,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if data.kind != BindingKind::Object {
             return;
         }
-        if matches!(
-            self.types.nodes[data.ty.index],
-            TypeKind::Array(..) | TypeKind::Tag(_)
-        ) {
+        // An enumeration is a scalar, whose value Clang's evaluator reads as
+        // an integer's.
+        if match self.types.nodes[data.ty.index] {
+            | TypeKind::Array(..) => true,
+            | TypeKind::Tag(tag) => self.types.tags[tag].kind != TagKind::Enum,
+            | _ => false,
+        } {
             if self.constant_object(data.ty) {
                 _ = self
                     .functions
