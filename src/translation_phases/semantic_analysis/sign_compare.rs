@@ -605,6 +605,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return FoldedSign::constant(value);
         }
+        // `_Generic` and `__builtin_choose_expr` are the operand they select.
+        // C11: §6.5.1.1p4, p. 79; PDF p. 97.
+        if let Some(selected) = info.selected_expression {
+            return self.folded_sign(selected);
+        }
         let folded = match e.kind {
             | E::Unary {
                 operator,

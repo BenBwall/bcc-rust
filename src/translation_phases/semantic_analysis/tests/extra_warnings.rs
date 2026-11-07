@@ -931,6 +931,11 @@ fn gcc_folds_a_constant_condition_first() {
             "(a & 1) ?: 2",
             "1 ?: a",
             "0 ?: 1",
+            // What selects an operand is that operand.
+            "_Generic(a, int: a & 1)",
+            "_Generic(a, long: a, default: a & 1)",
+            "__builtin_choose_expr(1, a & 1, a)",
+            "__builtin_choose_expr(0, a, a & 1)",
         ],
         false,
     );
@@ -945,6 +950,8 @@ fn gcc_folds_a_constant_condition_first() {
             "g() ? (a & 1) : a",
             "a ?: 1",
             "0 ?: a",
+            "_Generic(a, int: a, default: a & 1)",
+            "__builtin_choose_expr(1, a, a & 1)",
         ],
         true,
     );
