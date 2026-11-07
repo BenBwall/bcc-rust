@@ -199,6 +199,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | Rule::NoStackProtector => self.no_stack_protector(subject, attribute),
+                | Rule::NoInstrument => self.no_instrument(subject, attribute),
                 | Rule::NoSanitize => self.no_sanitize(subject, attribute),
                 | _ => {},
             }
@@ -507,6 +508,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if attributes.inlining != Inlining::Never {
             attributes.inlining = inlining;
         }
+    }
+
+    /// GCC's and Clang's `no_instrument_function` on a function, which it
+    /// keeps out of `-pg`; elsewhere it is ignored with a warning.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    fn no_instrument(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        let Subject::Function { binding, .. } = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        let entity = self.entity_of(binding);
+        self.attributes.entity(entity).no_instrument = true;
     }
 
     /// GCC's and Clang's `no_stack_protector` on a function, which it keeps

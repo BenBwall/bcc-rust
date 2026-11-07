@@ -1784,36 +1784,61 @@ mod tests {
         }
     }
 
-    /// A call to a static function defined nowhere is a warning in GCC and
-    /// Clang, and the link is what fails.
+    /// `-pg` builds a program `gprof` can read: each function calls `mcount`
+    /// unless it says otherwise, and a run writes `gmon.out`.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn gnu_undefined_static_functions_warn() {
+    fn gnu_profiling_instruments_and_links() {
         let directory = Directory::new();
-        directory.write("u.c", "static void f(void);\nvoid g(void) { f(); }\n");
         directory.write(
-            "l.c",
-            "static void f(void);\nvoid g(void) { f(); }\nint main(void) { g(); return 0; }\n",
+            "a.c",
+            "__attribute__((noinline)) int f(int x) { return x + 1; \
+             }\n__attribute__((no_instrument_function)) int g(int x) { return x + 2; }\nint \
+             main(void) { return f(1) + g(1) == 5 ? 0 : 1; }\n",
         );
-        for (mode, message) in [
-            ("--gcc-mode", "warning: 'f' used but never defined"),
-            (
-                "--clang-mode",
-                "warning: function 'f' has internal linkage but is not defined",
-            ),
-        ] {
-            let output = directory.bcc(mode, &["-c", "u.c", "-o", "u.o"]);
-            succeeds(&output);
-            assert!(stderr(&output).contains(message), "{}", stderr(&output));
-            let args = ["-Werror", "-c", "u.c", "-o", "u.o"];
-            assert!(!directory.bcc(mode, &args).status.success(), "{mode}");
-            let output = directory.bcc(mode, &["l.c", "-o", "l"]);
-            assert!(!output.status.success(), "{mode}");
-            assert!(stderr(&output).contains("undefined"), "{}", stderr(&output));
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let text = stdout(&directory.bcc(mode, &["-pg", "-O1", "-S", "a.c", "-o", "-"]));
+            let calls = text.matches("mcount").count();
+            assert!(calls >= 2, "{mode}: {text}");
+            let g = text
+                .split("\ng:")
+                .nth(1)
+                .and_then(|rest| rest.split(".size").next());
+            assert!(
+                g.is_some_and(|body| !body.contains("mcount")),
+                "{mode}: {text}"
+            );
+            let plain = stdout(&directory.bcc(mode, &["-O1", "-S", "a.c", "-o", "-"]));
+            assert!(!plain.contains("mcount"), "{mode}");
+            // A run writes the profile, where the toolchain has `gcrt1.o`.
+            let build = directory.bcc(mode, &["-pg", "-O1", "a.c", "-o", "a"]);
+            if build.status.success() {
+                assert_eq!(stderr(&build), "", "{mode}");
+                drop(std::fs::remove_file(directory.path("gmon.out")));
+                let run = Command::new(directory.path("a"))
+                    .current_dir(directory.path("."))
+                    .status()
+                    .unwrap();
+                assert_eq!(run.code(), Some(0), "{mode}");
+                assert!(directory.path("gmon.out").exists(), "{mode}");
+            } else {
+                assert!(stderr(&build).contains("gcrt1"), "{}", stderr(&build));
+            }
+            // Each compiler refuses it with no frame pointer, unless taken
+            // back.
+            let both = ["-pg", "-fomit-frame-pointer", "-c", "a.c", "-o", "a.o"];
+            assert!(!directory.bcc(mode, &both).status.success(), "{mode}");
+            let back = [
+                "-pg",
+                "-fomit-frame-pointer",
+                "-fno-omit-frame-pointer",
+                "-c",
+                "a.c",
+                "-o",
+                "a.o",
+            ];
+            succeeds(&directory.bcc(mode, &back));
         }
-        let args = ["-Wno-undefined-internal", "-c", "u.c", "-o", "u.o"];
-        let output = directory.bcc("--clang-mode", &args);
-        succeeds(&output);
-        assert_eq!(stderr(&output), "");
     }
 
     /// A distribution's hardening options do what they say on Linux, with the
@@ -3928,6 +3953,33 @@ mod tests {
         }
     }
 
+    /// clang-cl takes Clang's options, which bcc reads or treats as its Clang
+    /// personality does, without its own argument parser showing through.
+    #[test]
+    fn clang_cl_treats_clang_options_as_clang_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int add(int a, int b) { return a + b; }\n");
+        let run =
+            |args: &[&str]| directory.bcc("--clang-cl-mode", &[args, &["/c", "a.c"]].concat());
+        for option in ["/GR", "/GR-", "/Zl", "/Y-"] {
+            let output = run(&[option]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{option}");
+        }
+        let output = run(&["-fms-compatibility"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = run(&["-fsyntax-only"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        assert!(run(&["-march=native"]).status.success());
+        for option in ["-m32", "-fbogus-option"] {
+            let text = stderr(&run(&[option]));
+            assert!(!text.contains("unexpected argument"), "{option}: {text}");
+            assert!(!text.contains("Usage:"), "{option}: {text}");
+        }
+    }
+
     /// The options around GCC 14's permerrors and Clang's default errors,
     /// as each compiler orders them: `-Werror` does not reach into a system
     /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`
@@ -6010,6 +6062,38 @@ mod tests {
         );
         succeeds(&tcc);
         assert_eq!(stderr(&tcc), "");
+    }
+
+    /// A call to a static function defined nowhere is a warning in GCC and
+    /// Clang, and the link is what fails.
+    #[test]
+    fn gnu_undefined_static_functions_warn() {
+        let directory = Directory::new();
+        directory.write("u.c", "static void f(void);\nvoid g(void) { f(); }\n");
+        directory.write(
+            "l.c",
+            "static void f(void);\nvoid g(void) { f(); }\nint main(void) { g(); return 0; }\n",
+        );
+        for (mode, message) in [
+            ("--gcc-mode", "warning: 'f' used but never defined"),
+            (
+                "--clang-mode",
+                "warning: function 'f' has internal linkage but is not defined",
+            ),
+        ] {
+            let output = directory.bcc(mode, &["-c", "u.c", "-o", "u.o"]);
+            succeeds(&output);
+            assert!(stderr(&output).contains(message), "{}", stderr(&output));
+            let args = ["-Werror", "-c", "u.c", "-o", "u.o"];
+            assert!(!directory.bcc(mode, &args).status.success(), "{mode}");
+            let output = directory.bcc(mode, &["l.c", "-o", "l"]);
+            assert!(!output.status.success(), "{mode}");
+            assert!(stderr(&output).contains("undefined"), "{}", stderr(&output));
+        }
+        let args = ["-Wno-undefined-internal", "-c", "u.c", "-o", "u.o"];
+        let output = directory.bcc("--clang-mode", &args);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
     }
 
     #[test]
