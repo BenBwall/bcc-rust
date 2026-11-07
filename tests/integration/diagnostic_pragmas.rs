@@ -337,6 +337,34 @@ int x;
 
     /// GCC's `-Wall` holds `-Wmain`, which `error` and `warning` reach, while
     /// its `ignored "-Wall"` changes nothing; Clang's does not hold it.
+    /// `-Waddress` names what bcc files as `-Wpointer-bool-conversion`, in a
+    /// pragma as on the command line. Both references were asked.
+    #[test]
+    fn a_pragma_naming_address_reaches_the_truth_warning() {
+        const USE: &str = "int g;\nint f(void) { return !!&g; }\n";
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for (class, flags, expected) in [
+                ("ignored", &["-Wall"][..], &[][..]),
+                ("ignored", &["-Wall", "-Werror"][..], &[][..]),
+                ("warning", &["-Wall", "-Werror"][..], &["3 warning"][..]),
+                ("error", &["-Wall"][..], &["3 error"][..]),
+            ] {
+                let source = format!("#pragma GCC diagnostic {class} \"-Waddress\"\n{USE}");
+                assert_eq!(
+                    compile("address_pragma", mode, flags, &source),
+                    expected,
+                    "{mode} {class}"
+                );
+            }
+        }
+        // With no option, the pragma alone turns GCC's on.
+        let source = format!("#pragma GCC diagnostic warning \"-Waddress\"\n{USE}");
+        assert_eq!(
+            compile("address_pragma_alone", "--gcc-mode", &[], &source),
+            ["3 warning"]
+        );
+    }
+
     #[test]
     fn a_pragma_naming_wall_reaches_main_under_gcc() {
         let source = |kind: &str| {
@@ -736,4 +764,814 @@ int still(void) { return promoted_still(); }
         assert!(reported[1].contains("(8)"), "{reported:?}");
         assert!(reported[2].contains("(10)"), "{reported:?}");
     }
+
+    /// One program under diagnostic pragmas, with what each compiler reports:
+    /// each `line severity` read from GCC 14.2 and Clang 23.1.
+    struct Reading {
+        source: &'static str,
+        flags:  &'static [&'static str],
+        gcc:    &'static [&'static str],
+        clang:  &'static [&'static str],
+    }
+
+    fn assert_readings(name: &str, readings: &[Reading]) {
+        for reading in readings {
+            for (mode, expected) in [("--gcc-mode", reading.gcc), ("--clang-mode", reading.clang)] {
+                // The reference compilers report these in another order.
+                let mut reported = compile(name, mode, reading.flags, reading.source);
+                reported.sort_unstable();
+                let mut expected = expected.to_vec();
+                expected.sort_unstable();
+                assert_eq!(
+                    reported, expected,
+                    "{mode} {:?}\n{}",
+                    reading.flags, reading.source
+                );
+            }
+        }
+    }
+
+    /// The unused warnings wait for the end of a scope or of the unit, and each
+    /// compiler asks the settings at its own place: Clang at the entity, and
+    /// GCC there too except for an unused variable and a label, whose settings
+    /// it reads at the end of their scope. Pragmas also turn these warnings on
+    /// when the command line leaves them off.
+    #[test]
+    fn unused_warnings_read_the_settings_each_compiler_reads() {
+        assert_readings("unused-readings", UNUSED_READINGS);
+    }
+
+    const UNUSED_READINGS: &[Reading] = &[
+        // A pragma after the declaration, before the brace: GCC only.
+        Reading {
+            source: "\
+void f(void) {
+  int x;
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["2 warning"],
+        },
+        // The same in the other direction.
+        Reading {
+            source: "\
+void f(void) {
+  int x;
+#pragma GCC diagnostic error \"-Wunused-variable\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 error"],
+            clang:  &["2 warning"],
+        },
+        // Around the declaration, popped before the brace: Clang only.
+        Reading {
+            source: "\
+void f(void) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+  int x;
+#pragma GCC diagnostic pop
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["4 warning"],
+            clang:  &[],
+        },
+        // After the brace, neither.
+        Reading {
+            source: "\
+void f(void) {
+  int x;
+}
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+int z;
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        // Turned on only for the rest of the function, then off.
+        Reading {
+            source: "\
+void f(void) {
+  int x;
+#pragma GCC diagnostic warning \"-Wunused-variable\"
+}
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+
+",
+            flags:  &[],
+            gcc:    &["2 warning"],
+            clang:  &[],
+        },
+        // `warning` keeps it from -Werror where each compiler reads.
+        Reading {
+            source: "\
+void f(void) {
+#pragma GCC diagnostic warning \"-Wunused-variable\"
+  int x;
+}
+",
+            flags:  &["-Wall", "-Wextra", "-Werror"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // Each block has its own brace.
+        Reading {
+            source: "\
+void f(void) {
+  int a;
+  {
+    int b;
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+  }
+#pragma GCC diagnostic warning \"-Wunused-variable\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning", "4 warning"],
+        },
+        // A `for` declaration ends with the body.
+        Reading {
+            source: "\
+void f(void) {
+  for (int i;;)
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+    ;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["2 warning"],
+        },
+        // After the `for` body, too late.
+        Reading {
+            source: "\
+void f(void) {
+  for (int i;;)
+    ;
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+  ;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        // A statement expression has its own brace.
+        Reading {
+            source: "\
+void f(void) {
+  (void)({
+    int x;
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+    0;
+  });
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["3 warning"],
+        },
+        // A static local is read as any other.
+        Reading {
+            source: "\
+void f(void) {
+  static int s;
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["2 warning"],
+        },
+        // A macro that wraps the declaration restores before the brace.
+        Reading {
+            source: "\
+#define QUIET(...) _Pragma(\"GCC diagnostic push\") _Pragma(\"GCC diagnostic ignored \
+                     \\\"-Wunused-variable\\\"\") __VA_ARGS__ _Pragma(\"GCC diagnostic pop\")
+void f(void) {
+  QUIET(int x;)
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &[],
+        },
+        // `_Pragma` on the brace's line, before it.
+        Reading {
+            source: "\
+void f(void) { int x; _Pragma(\"GCC diagnostic ignored \\\"-Wunused-variable\\\"\") }
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["1 warning"],
+        },
+        // A macro that spells the brace.
+        Reading {
+            source: "\
+#define END _Pragma(\"GCC diagnostic ignored \\\"-Wunused-variable\\\"\") }
+void f(void) {
+  int x;
+END
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["3 warning"],
+        },
+        // A macro that restores right after the brace.
+        Reading {
+            source: "\
+#define END _Pragma(\"GCC diagnostic push\") _Pragma(\"GCC diagnostic ignored \
+                     \\\"-Wunused-variable\\\"\") } _Pragma(\"GCC diagnostic pop\")
+void f(void) {
+  int x;
+END
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["3 warning"],
+        },
+        // An unused set variable reads at its name in both.
+        Reading {
+            source: "\
+void f(void) {
+  int x;
+  x = 1;
+#pragma GCC diagnostic ignored \"-Wunused-but-set-variable\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        // Around the name only.
+        Reading {
+            source: "\
+void f(void) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-but-set-variable\"
+  int x;
+#pragma GCC diagnostic pop
+  x = 1;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // A label reads at the end of the function in GCC.
+        Reading {
+            source: "\
+void f(void) {
+  l: ;
+#pragma GCC diagnostic ignored \"-Wunused-label\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["2 warning"],
+        },
+        // Around the label only.
+        Reading {
+            source: "\
+void f(void) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-label\"
+  l: ;
+#pragma GCC diagnostic pop
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["4 warning"],
+            clang:  &[],
+        },
+        // An inner brace is not its end.
+        Reading {
+            source: "\
+void f(void) {
+  {
+    l: ;
+#pragma GCC diagnostic ignored \"-Wunused-label\"
+  }
+#pragma GCC diagnostic warning \"-Wunused-label\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // Nor is the last pragma in an inner block.
+        Reading {
+            source: "\
+void f(void) {
+  {
+    l: ;
+  }
+#pragma GCC diagnostic ignored \"-Wunused-label\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["3 warning"],
+        },
+        // A local label ends with its block, and Clang reports its
+        // declaration.
+        Reading {
+            source: "\
+void f(void) {
+  {
+    __label__ l;
+    l: ;
+#pragma GCC diagnostic ignored \"-Wunused-label\"
+  }
+  ;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["3 warning"],
+        },
+        // After a local label's block, too late.
+        Reading {
+            source: "\
+void f(void) {
+  {
+    __label__ l;
+    l: ;
+  }
+#pragma GCC diagnostic ignored \"-Wunused-label\"
+  ;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["4 warning"],
+            clang:  &["3 warning"],
+        },
+        // Clang asks at the local label's declaration, not at the
+        // definition.
+        Reading {
+            source: "\
+void f(void) {
+  __label__ l;
+#pragma GCC diagnostic ignored \"-Wunused-label\"
+  l: ;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &["2 warning"],
+        },
+        // A parameter reads at its name in both.
+        Reading {
+            source: "\
+void f(int x) {
+#pragma GCC diagnostic ignored \"-Wunused-parameter\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["1 warning"],
+            clang:  &["1 warning"],
+        },
+        // Around the header only.
+        Reading {
+            source: "\
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-parameter\"
+void f(int x) {
+#pragma GCC diagnostic pop
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // An error by pragma before the header.
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wunused-parameter\"
+void f(int x) {
+}
+",
+            flags:  &[],
+            gcc:    &["2 error"],
+            clang:  &["2 error"],
+        },
+        // A set parameter reads at its name too.
+        Reading {
+            source: "\
+void f(int x) {
+#pragma GCC diagnostic ignored \"-Wunused-but-set-parameter\"
+  x = 1;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["1 warning"],
+            clang:  &["1 warning"],
+        },
+        // Around the header only.
+        Reading {
+            source: "\
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-but-set-parameter\"
+void f(int x) {
+#pragma GCC diagnostic pop
+  x = 1;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // A function reads at its name, not at the end of the unit.
+        Reading {
+            source: "\
+static void g(void) {
+}
+#pragma GCC diagnostic ignored \"-Wunused-function\"
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["1 warning"],
+            clang:  &["1 warning"],
+        },
+        // On at its name, off by the end.
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wunused-function\"
+static void g(void) {
+}
+#pragma GCC diagnostic ignored \"-Wunused-function\"
+",
+            flags:  &[],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        // Around the definition only.
+        Reading {
+            source: "\
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-function\"
+static void g(void) {
+}
+#pragma GCC diagnostic pop
+int z;
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // The declaration's settings do not matter.
+        Reading {
+            source: "\
+#pragma GCC diagnostic ignored \"-Wunused-function\"
+static void g(void);
+#pragma GCC diagnostic warning \"-Wunused-function\"
+static void g(void) {
+}
+",
+            flags:  &[],
+            gcc:    &["4 warning"],
+            clang:  &["4 warning"],
+        },
+        // A file-scope object reads at its name.
+        Reading {
+            source: "\
+static int o;
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["1 warning"],
+            clang:  &["1 warning"],
+        },
+        // An error at its name, off by the end.
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wunused-variable\"
+static int o;
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+",
+            flags:  &[],
+            gcc:    &["2 error"],
+            clang:  &["2 error"],
+        },
+        // GCC the last declaration, Clang the first.
+        Reading {
+            source: "\
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+static int o;
+#pragma GCC diagnostic pop
+static int o;
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["5 warning"],
+            clang:  &[],
+        },
+        // The const group reads at its name.
+        Reading {
+            source: "\
+static const int o = 1;
+#pragma GCC diagnostic ignored \"-Wunused-const-variable\"
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["1 warning"],
+            clang:  &["1 warning"],
+        },
+        // `-Wunused-variable` holds the const group, though GCC's
+        // `ignored` stops there.
+        Reading {
+            source: "\
+#pragma GCC diagnostic ignored \"-Wunused-variable\"
+static const int o = 1;
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &[],
+        },
+        // `warning` and `error` reach it in both.
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wunused-variable\"
+static const int o = 1;
+",
+            flags:  &["-Wall", "-Wextra", "-Werror"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wunused-variable\"
+static const int o = 1;
+",
+            flags:  &[],
+            gcc:    &["2 error"],
+            clang:  &["2 error"],
+        },
+        // Clang asks about a global only written if the group is on at
+        // the end of the unit.
+        Reading {
+            source: "\
+static int o;
+void f(void) { o = 1; }
+#pragma GCC diagnostic ignored \"-Wunused-but-set-global\"
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &[],
+        },
+        // Then it classifies at the declaration.
+        Reading {
+            source: "\
+static int o;
+void f(void) { o = 1; }
+#pragma GCC diagnostic error \"-Wunused-but-set-global\"
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["3 warning"],
+            clang:  &["1 warning"],
+        },
+        // Off at the declaration is off.
+        Reading {
+            source: "\
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-but-set-global\"
+static int o;
+#pragma GCC diagnostic pop
+void f(void) { o = 1; }
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &[],
+        },
+        // A value reads at the statement.
+        Reading {
+            source: "\
+void f(void) {
+  42;
+#pragma GCC diagnostic ignored \"-Wunused-value\"
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        Reading {
+            source: "\
+void f(void) {
+#pragma GCC diagnostic ignored \"-Wunused-value\"
+  42;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // Around the statement only.
+        Reading {
+            source: "\
+void f(void) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored \"-Wunused-value\"
+  42;
+#pragma GCC diagnostic pop
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // Past the end of the function does not matter, though Clang
+        // waits for it.
+        Reading {
+            source: "\
+void f(void) {
+  42;
+}
+#pragma GCC diagnostic ignored \"-Wunused-value\"
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+        // On at the statement, command line off.
+        Reading {
+            source: "\
+void f(void) {
+#pragma GCC diagnostic error \"-Wunused-value\"
+  42;
+}
+",
+            flags:  &["-Wall", "-Wextra", "-Wno-unused-value"],
+            gcc:    &["3 error"],
+            clang:  &["3 error"],
+        },
+        Reading {
+            source: "\
+void f(void) {
+#pragma GCC diagnostic warning \"-Wunused-value\"
+  42;
+#pragma GCC diagnostic ignored \"-Wunused-value\"
+}
+",
+            flags:  &[],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // Unreachable: Clang never reports it.
+        Reading {
+            source: "\
+int f(void) {
+  return 0;
+#pragma GCC diagnostic error \"-Wunused-value\"
+  42;
+}
+",
+            flags:  &[],
+            gcc:    &["4 error"],
+            clang:  &[],
+        },
+        // `-Wno-X` before the pragma that turns it on.
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wunused-label\"
+void f(void) {
+  l: ;
+}
+",
+            flags:  &["-Wall", "-Wextra", "-Wno-unused-label"],
+            gcc:    &["3 warning"],
+            clang:  &["3 warning"],
+        },
+        // `-w` silences what a pragma turned on.
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wunused-variable\"
+void f(void) {
+  int x;
+}
+",
+            flags:  &["-w"],
+            gcc:    &[],
+            clang:  &[],
+        },
+        // `-Wall` in a pragma reaches every unused group.
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wall\"
+void f(int p) {
+  int x;
+  l: 42;
+}
+static void g(void) {
+}
+",
+            flags:  &[],
+            gcc:    &["3 warning", "4 warning", "4 warning", "6 warning"],
+            clang:  &["3 warning", "4 warning", "4 warning", "6 warning"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wall\"
+void f(int p) {
+  int x;
+  l: 42;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 error", "3 error", "4 error", "4 error"],
+            clang:  &["2 warning", "3 error", "4 error", "4 error"],
+        },
+        // GCC's `ignored` of a parent says nothing about what it holds.
+        Reading {
+            source: "\
+#pragma GCC diagnostic ignored \"-Wall\"
+void f(int p) {
+  int x;
+  l: 42;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning", "3 warning", "4 warning", "4 warning"],
+            clang:  &["2 warning"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic ignored \"-Wunused\"
+void f(int p) {
+  int x;
+  l: 42;
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning", "3 warning", "4 warning", "4 warning"],
+            clang:  &["2 warning"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic ignored \"-Wextra\"
+void f(int p) {
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 warning"],
+            clang:  &[],
+        },
+        // `-Wunused` holds a parameter only in GCC, and only with
+        // `-Wextra`.
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wunused\"
+void f(int p) {
+}
+",
+            flags:  &[],
+            gcc:    &[],
+            clang:  &[],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wunused\"
+void f(int p) {
+}
+",
+            flags:  &["-Wall", "-Wextra"],
+            gcc:    &["2 error"],
+            clang:  &["2 warning"],
+        },
+        // `-Wextra` holds it in Clang, and in GCC with `-Wunused`.
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wextra\"
+void f(int p) {
+}
+",
+            flags:  &[],
+            gcc:    &[],
+            clang:  &["2 warning"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic error \"-Wextra\"
+void f(int p) {
+}
+",
+            flags:  &[],
+            gcc:    &[],
+            clang:  &["2 error"],
+        },
+        Reading {
+            source: "\
+#pragma GCC diagnostic warning \"-Wextra\"
+void f(int p) {
+}
+",
+            flags:  &["-Wall", "-Wextra", "-Werror"],
+            gcc:    &["2 warning"],
+            clang:  &["2 warning"],
+        },
+    ];
 }

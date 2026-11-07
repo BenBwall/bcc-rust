@@ -308,6 +308,7 @@ fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
         attributes,
         EntityAttributes {
             weak:                false,
+            weak_reference:      false,
             section:             None,
             used:                false,
             code_alignment:      0,

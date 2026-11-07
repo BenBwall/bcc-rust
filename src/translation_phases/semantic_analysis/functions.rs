@@ -395,6 +395,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         None,
                     );
                     if let Some(prototype) = parameter.binding {
+                        if self.unused.tracking {
+                            self.inherit_unused_exemption(prototype, self.bindings.len() - 1);
+                        }
                         if let Some(&alignment) = self.binding_alignments.get(&prototype) {
                             _ = self
                                 .binding_alignments
@@ -477,6 +480,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.define_func_name(name);
         self.check_main_definition(f, ty);
+        self.note_scope_end(f.body.source_vectors);
         self.work.push(Work::PopScope);
         self.work.push(Work::Statement(f.body, false));
         self.work
@@ -493,6 +497,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn function_work(&mut self, work: FunctionWork<'tu>) {
         match work {
             | FunctionWork::Finish(previous, loops, switch, sizeof, targets) => {
+                self.report_reachable_warnings();
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());
@@ -584,6 +589,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreUnvisited(unvisited) => self.functions.unvisited = unvisited,
             | FunctionWork::RestoreOrphan(orphan) => self.functions.emission.orphan = orphan,
             | FunctionWork::RestoreElided(elided) => self.functions.elided = elided,
+            | FunctionWork::RestoreSkippedOperand(skipped) =>
+                self.functions.skipped_operand = skipped,
+            // GCC takes only a constant expression for decided.
+            | FunctionWork::DecidedOperand(left, live) => {
+                let constant = self.context.configuration.compiler_identity()
+                    != crate::configuration::CompilerIdentity::Gcc
+                    || self.expression_info(left).ice;
+                if constant && self.folded_condition(left) == Some(!live) {
+                    self.functions.skipped_operand = true;
+                }
+            },
             | FunctionWork::RestoreWeakHorizon(horizon) =>
                 self.functions.emission.weak_horizon = horizon,
             | FunctionWork::RestoreUnjoinedOrphan(orphan) =>
@@ -1024,9 +1040,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut entities = ArenaVec::new_in(self.scratch);
         entities.extend(self.functions.entities.values().copied());
         entities.sort_unstable_by_key(|entity| entity.latest);
+        // These read the errors so far, not those this loop adds.
+        let unit_end_reports = self.reports_unused_at_unit_end();
+        let clang_after_error = self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang
+            && self.context.error_count() != 0;
         for entity in entities {
             let b = self.bindings[entity.latest];
-            if b.linkage == Linkage::Internal
+            if unit_end_reports
+                && let Some(definition) = entity.definition
+                && b.linkage == Linkage::Internal
+                && b.kind == BindingKind::Function
+            {
+                self.report_unused_function(b.name, definition);
+            }
+            if !clang_after_error
+                && b.linkage == Linkage::Internal
                 && entity.definition.is_none()
                 && !self.types.unanalyzed(b.ty)
             {
@@ -1037,7 +1066,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Some(b.name.name),
                         Some(b.name.source_vectors),
                     );
-                } else if b.kind == BindingKind::Function {
+                } else if b.kind == BindingKind::Function && !self.is_weak_reference(b.name.name) {
                     self.group_diagnostic(
                         crate::configuration::DiagnosticGroup::UnusedFunction,
                         SemanticErrorKind::UnusedStaticFunction,
@@ -1047,6 +1076,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
             }
+        }
+        if unit_end_reports {
+            self.report_unused_file_scope();
         }
         for i in 0..self.definitions.len() {
             let definition = self.definitions[i];
@@ -2162,6 +2194,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }));
     }
 
+    /// Whether the expression being analyzed is an operand the program does
+    /// not evaluate: of `sizeof`, `typeof` or `_Alignof`, of a `_Generic`, or
+    /// of a `&&`, `||` or `?:` that a constant decides. GCC calls this
+    /// `c_inhibit_evaluation_warnings`, and Clang's warnings about what runs
+    /// stay out of it too.
+    /// C99: §6.5.3.4p2, p. 80; PDF p. 92; §6.5.13p4, p. 89; PDF p. 101;
+    /// §6.5.14p4, p. 89; PDF p. 101; §6.5.15p4, p. 90; PDF p. 102.
+    pub(super) fn evaluation_inhibited(&self) -> bool {
+        if self.functions.sizeof.is_some() || self.functions.skipped_operand {
+            return true;
+        }
+        let mut next = self.functions.reference_context;
+        while let Some(index) = next {
+            let context = self.functions.reference_contexts[index];
+            if matches!(
+                context.kind,
+                ReferenceContextKind::Typeof(_)
+                    | ReferenceContextKind::Unevaluated
+                    | ReferenceContextKind::ConstantQuery { .. }
+                    | ReferenceContextKind::ConditionalArm { .. }
+            ) {
+                return true;
+            }
+            next = context.parent;
+        }
+        false
+    }
+
     /// The skipped state of the code being analyzed, which an operand or
     /// arm starts from.
     pub(super) fn skipped_state(&self) -> Skipped {
@@ -2623,6 +2683,9 @@ pub(super) enum FunctionWork<'tu> {
     RestoreOrphan(Option<usize>),
     /// Restores whole-statement/operand omission, including declarations.
     RestoreElided(bool),
+    RestoreSkippedOperand(bool),
+    /// The left operand of a `&&` (`true`) or `||` (`false`) is analyzed.
+    DecidedOperand(&'tu Expression<'tu>, bool),
     /// Restores which weak names apply to the code being analyzed
     /// ([`super::emission::State::weak_horizon`]).
     RestoreWeakHorizon(usize),
@@ -2927,6 +2990,10 @@ pub(super) struct State<'tu, 's> {
     /// does not return, until a label (`CodeGenFunction::EmitStmt`;
     /// [`super::emission`]).
     pub(super) dead: bool,
+    /// The operand being analyzed is not evaluated, though its enclosing code
+    /// may be: the right operand of a `&&` or `||` that its left operand
+    /// decides, or part of a `_Generic`.
+    pub(super) skipped_operand: bool,
     /// A whole statement or operand is omitted, including its declarations:
     /// an untaken arm, an unselected switch region, or a non-simple statement
     /// without labels while `dead`. Simple declarations and compounds still
@@ -2988,6 +3055,7 @@ impl<'s> State<'_, 's> {
             evaluated_imports: &[],
             sizeof_contexts: ArenaVec::new_in(scratch),
             sizeof: None,
+            skipped_operand: false,
             dead: false,
             elided: false,
             unvisited: false,

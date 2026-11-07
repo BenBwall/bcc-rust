@@ -1,7 +1,9 @@
 //! The table of `#pragma GCC diagnostic` and `#pragma clang diagnostic`
 //! changes. Preprocessing finishes before parsing starts, so no mutable state
 //! can serve later phases: each change records where it falls in the output
-//! tokens, and a diagnostic looks up the settings at its first token.
+//! tokens, and a diagnostic looks up the settings at its first token, or at
+//! the place the compiler it follows asks them for a warning it reports late
+//! (`semantic_analysis/unused.rs`).
 //!
 //! Output-token order is the order GCC's and Clang's own lookups give for
 //! everything but a directive inside macro arguments. It covers each inclusion
@@ -102,6 +104,19 @@ impl<'tu> Context<'tu> {
             | Some(state) => state.configuration,
             | None => self.configuration,
         }
+    }
+
+    /// Whether any diagnostic pragma has changed the settings, so that a
+    /// warning the command line leaves off may still be on somewhere.
+    #[inline]
+    pub(crate) fn has_diagnostic_pragmas(&self) -> bool {
+        !self.diagnostic_pragmas.changes.is_empty()
+    }
+
+    /// The warning settings in force at the end of the unit, as far as the
+    /// output tokens go: once analysis runs, the latest change's.
+    pub(crate) fn final_configuration(&self) -> CompilerConfiguration {
+        self.current_pragma_state().configuration
     }
 
     /// Queues a diagnostic of a warning group as the settings at `source`
