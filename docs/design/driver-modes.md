@@ -35,6 +35,30 @@ musl. `c89` and `c99` select `-std=c89` and `-std=c99`, as the POSIX
 utilities do. Any other name, including `bcc-rust`, runs bcc's own command
 line.
 
+## Constants that overflow
+
+Under `--gcc-mode` and `--clang-mode`, the `--compiler-extensions` they pass
+makes signed overflow, a bad shift count and the like in a constant expression
+fold to each compiler's value with its warning, where plain bcc keeps refusing
+them as C99 §6.6p4 lets it. `2147483647+1` wraps in both, `1<<40` is 0 for GCC
+and -2147483648 for Clang, `1<<-1` is no constant for GCC and 0 for Clang,
+and `1/0` is no constant for either. A negative or too large shift count and a
+zero divisor also warn in code whose left operand is not constant. The tables
+of values, contexts and warning options are in
+[language-standards.md](../../language-standards.md#exceptional-integer-constants-2026-11-07).
+An address's truth folds the same way (`int i = !&g;`, `&g ? 1 : 2`), with each
+compiler's rules for weak symbols and for what a static `_Bool` takes
+([language-standards.md](../../language-standards.md#an-addresss-truth-in-a-constant-2026-11-07)).
+
+## `-pedantic` and what each compiler refuses
+
+bcc's own `-pedantic` reports every extension. Under `--gcc-mode` and
+`--clang-mode` it says what the compiler says instead: `typeof` is silent in GCC's
+`gnu` modes, `__float128` in both, and an active `#foo` is an error in both, where
+plain bcc warns. GCC refuses `for (int i...)` before C99 and `int a[] = {};`;
+Clang refuses `_Decimal64` and `#assert`. The table is in
+[language-standards.md](../../language-standards.md#-pedantic-under-a-personality-2026-11-07).
+
 ## How a personality runs
 
 A personality is a translator, not a second driver. It reads its compiler's
@@ -193,6 +217,14 @@ Clang: `-std=c99` selects a language, and each is still an extension under
 `-masm=intel` writes assembly in Intel syntax and reads `asm` statements in it,
 taking the second alternative of a `{att|intel}` group, on the LLVM back end. The
 native back end writes AT&T syntax whatever it is given.
+
+`weakref` works on the LLVM back end: a use is weak unless this unit declares the
+target, as in both compilers.
+
+`ifunc` works on glibc's targets with the LLVM back end: the resolver runs when
+the program loads and chooses the function. Elsewhere it is an unknown attribute,
+as in Clang. The native back end and the interpreter have no such thing, so a call
+there is an undefined symbol.
 
 `-pg` on Linux makes each function call `mcount` and links the profiling startup
 file, so a run writes `gmon.out` for `gprof`, and `no_instrument_function` keeps a

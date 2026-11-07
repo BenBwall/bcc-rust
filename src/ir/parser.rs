@@ -327,6 +327,7 @@ struct WrittenAttributes<'t> {
     section:    Option<&'t str>,
     used:       bool,
     alias:      Option<Token<'t>>,
+    ifunc:      Option<Token<'t>>,
 }
 
 impl<'t> WrittenAttributes<'t> {
@@ -356,12 +357,18 @@ impl<'t> WrittenAttributes<'t> {
         } else {
             None
         };
+        let ifunc = if cursor.eat(TokenKind::Ident("ifunc")) {
+            Some(cursor.symbol()?)
+        } else {
+            None
+        };
         Ok(Self {
             visibility,
             dll,
             section,
             used,
             alias,
+            ifunc,
         })
     }
 
@@ -378,8 +385,17 @@ impl<'t> WrittenAttributes<'t> {
                     .ok_or_else(|| token.error(ParseErrorKind::UnknownSymbol(token.text)))
             })
             .transpose()?;
+        let ifunc = self
+            .ifunc
+            .map(|token| {
+                module
+                    .symbol(token.text_name(scratch)?)
+                    .ok_or_else(|| token.error(ParseErrorKind::UnknownSymbol(token.text)))
+            })
+            .transpose()?;
         Ok(SymbolAttributes {
             alias,
+            ifunc,
             section: self.section,
             used: self.used,
             visibility: self.visibility,

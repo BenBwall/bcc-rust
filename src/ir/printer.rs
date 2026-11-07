@@ -602,6 +602,9 @@ impl<'ir> Module<'ir> {
             if let Some(target) = attributes.alias {
                 write!(f, " alias {}", self.display_symbol(target))?;
             }
+            if let Some(target) = attributes.ifunc {
+                write!(f, " ifunc {}", self.display_symbol(target))?;
+            }
             Ok(())
         })
     }
