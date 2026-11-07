@@ -23,6 +23,7 @@ mod tests {
     use bcc_rust::explorer::{
         ExplorerFile,
         ExplorerLineMapping,
+        ExplorerLineOrigin,
         ExplorerLineRange,
         ExplorerOptions,
         ExplorerOutput,
@@ -266,21 +267,28 @@ mod tests {
             );
             assert!(mapping.source.start <= mapping.source.end);
         }
-        // Each IR line that names a source line lies in a function of the
-        // input and names a line of that function.
+        // Each output line that names a source line lies in a function of the
+        // input and names a line of that function, or of one inlined into it
+        // for a call in that function.
         let ir: fn(&ExplorerLineMapping) -> Option<ExplorerLineRange> = |mapping| mapping.ir;
         let ir_abi: fn(&ExplorerLineMapping) -> Option<ExplorerLineRange> =
             |mapping| mapping.ir_abi;
+        let asm: fn(&ExplorerLineMapping) -> Option<ExplorerLineRange> = |mapping| mapping.asm;
         for (text, lines, range) in [
             (&output.ir, &output.ir_lines, ir),
             (&output.ir_abi, &output.ir_abi_lines, ir_abi),
+            (&output.asm, &output.asm_lines, asm),
         ] {
             assert_eq!(
                 lines.len(),
                 text.as_ref().unwrap().lines().count(),
                 "{name}"
             );
-            for (index, &line) in lines.iter().enumerate().filter(|&(_, &line)| line != 0) {
+            for (index, origin) in lines
+                .iter()
+                .enumerate()
+                .filter(|(_, origin)| origin.line != 0)
+            {
                 let output_line = u32::try_from(index + 1).unwrap();
                 let mapping = output
                     .line_map
@@ -289,9 +297,14 @@ mod tests {
                         range(mapping).is_some_and(|ir| (ir.start..=ir.end).contains(&output_line))
                     })
                     .unwrap_or_else(|| panic!("{name}: IR line {output_line} is in no function"));
+                let within = if origin.call == 0 {
+                    origin.line
+                } else {
+                    origin.call
+                };
                 assert!(
-                    (mapping.source.start..=mapping.source.end).contains(&line),
-                    "{name}: IR line {output_line} names line {line}, outside {mapping:?}"
+                    (mapping.source.start..=mapping.source.end).contains(&within),
+                    "{name}: output line {output_line} names {origin:?}, outside {mapping:?}"
                 );
             }
         }
@@ -816,12 +829,123 @@ mod tests {
                 .lines()
                 .position(|line| line.contains(needle))
                 .unwrap_or_else(|| panic!("{needle} in\n{ir}"));
-            output.ir_lines[index]
+            output.ir_lines[index].line
         };
         assert_eq!(line_of("imul"), 2, "{ir}\n{:?}", output.ir_lines);
         assert_eq!(line_of("return"), 3, "{ir}\n{:?}", output.ir_lines);
         assert_eq!(line_of("function @square"), 0);
-        assert!(output.ir_abi_lines.contains(&2));
+        assert!(output.ir_abi_lines.iter().any(|origin| origin.line == 2));
+    }
+
+    /// The origin in `lines` of the last line of `text` that holds `needle`:
+    /// a program's last function, where one is inlined into another.
+    fn origin_of(text: &str, lines: &[ExplorerLineOrigin], needle: &str) -> ExplorerLineOrigin {
+        let index = text
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains(needle))
+            .last()
+            .unwrap_or_else(|| panic!("{needle} in\n{text}"))
+            .0;
+        lines[index]
+    }
+
+    /// The assembly links line by line: an instruction to its statement, the
+    /// prologue to where the body opens, and a label or directive to nothing.
+    #[test]
+    fn assembly_lines_name_the_source_line_of_each_instruction() {
+        let source = "int square(int x)\n{\n    int y = x * x;\n    return y;\n}\n";
+        let output = compile(source, &options(false));
+        let asm = output.asm.as_deref().expect("assembly");
+        assert_eq!(output.asm_lines.len(), asm.lines().count());
+        let imul = origin_of(asm, &output.asm_lines, "imull");
+        assert_eq!((imul.line, imul.call, imul.code), (3, 0, true), "{asm}");
+        assert_eq!(origin_of(asm, &output.asm_lines, "retq").line, 4, "{asm}");
+        let label = origin_of(asm, &output.asm_lines, "square:");
+        assert_eq!((label.line, label.code), (0, false), "{asm}");
+        let directive = origin_of(asm, &output.asm_lines, ".cfi_startproc");
+        assert_eq!((directive.line, directive.code), (0, false), "{asm}");
+        // With a frame to set up, the entry code is where the body opens.
+        let source = "int leaf(int *p);\nint framed(int x)\n{\n    int a[2] = {x, x};\n                          return leaf(a);\n}\n";
+        let output = compile(source, &options(false));
+        let asm = output.asm.as_deref().expect("assembly");
+        let entry = origin_of(asm, &output.asm_lines, "subq");
+        assert_eq!((entry.line, entry.code), (3, true), "{asm}");
+    }
+
+    /// Each machine instruction encodes one line of the assembly.
+    #[test]
+    fn machine_code_names_its_line_of_the_assembly() {
+        let source = "int square(int x) {\n    return x * x;\n}\n";
+        let output = compile(source, &options(false));
+        let asm: Vec<&str> = output.asm.as_deref().expect("assembly").lines().collect();
+        let code = output.machine_code.as_deref().expect("machine code");
+        for instruction in code.iter().flat_map(|function| &function.instructions) {
+            assert_eq!(asm[instruction.line as usize - 1].trim(), instruction.asm);
+        }
+    }
+
+    /// At -O2 an instruction keeps its line through inlining, naming the call
+    /// it was copied for, in the IR and in the assembly.
+    #[test]
+    fn inlined_code_names_its_line_and_the_call() {
+        let source = "static int scale(int n) {\n    return n * 7;\n}\nint f(int x) {\n    int y \
+                      = scale(x);\n    return y + 1;\n}\n";
+        let output = compile(source, &options(true));
+        let ir = output.ir.as_deref().expect("IR");
+        let multiply = origin_of(ir, &output.ir_lines, "imul");
+        assert_eq!((multiply.line, multiply.call), (2, 5), "{ir}");
+        assert_eq!(origin_of(ir, &output.ir_lines, "iadd").line, 6, "{ir}");
+        let abi = output.ir_abi.as_deref().expect("IR after ABI lowering");
+        let multiply = origin_of(abi, &output.ir_abi_lines, "imul");
+        assert_eq!((multiply.line, multiply.call), (2, 5), "{abi}");
+        let asm = output.asm.as_deref().expect("assembly");
+        assert!(
+            output
+                .asm_lines
+                .iter()
+                .any(|origin| (origin.line, origin.call, origin.code) == (2, 5, true)),
+            "{asm}\n{:?}",
+            output.asm_lines
+        );
+    }
+
+    /// An instruction the optimizer moved to another block has no line left,
+    /// and says it is code, so a reader can tell it from a label.
+    #[test]
+    fn moved_code_has_no_line() {
+        let source = "int f(int n, int a, int b) {\n    int total = 0;\n    for (int i = 0; i < \
+                      n; i++) {\n        total += a * b;\n    }\n    return total;\n}\n";
+        let output = compile(source, &options(true));
+        let ir = output.ir.as_deref().expect("IR");
+        let multiply = origin_of(ir, &output.ir_lines, "imul");
+        assert_eq!((multiply.line, multiply.code), (0, true), "{ir}");
+    }
+
+    /// `#line` moves neither what `__LINE__` says nor the editor's lines: every
+    /// output links to the file as written.
+    #[test]
+    fn output_lines_are_physical_despite_line_directives() {
+        for source in [
+            "#line 100\nint f(int x) {\n    return x * x;\n}\n",
+            "#line 100 \"generated.c\"\nint f(int x) {\n    return x * x;\n}\n",
+        ] {
+            for optimize in [false, true] {
+                let output = compile(source, &options(optimize));
+                let ir = output.ir.as_deref().expect("IR");
+                assert_eq!(
+                    origin_of(ir, &output.ir_lines, "imul").line,
+                    3,
+                    "{source:?}"
+                );
+                let asm = output.asm.as_deref().expect("assembly");
+                assert_eq!(
+                    origin_of(asm, &output.asm_lines, "imull").line,
+                    3,
+                    "{source:?}"
+                );
+            }
+        }
     }
 
     /// Each terminator is on its statement's line, the implicit return on
@@ -834,7 +958,7 @@ mod tests {
                 .lines()
                 .position(|line| line.trim_start().starts_with(needle))
                 .unwrap_or_else(|| panic!("{needle} in\n{ir}"));
-            output.ir_lines[index]
+            output.ir_lines[index].line
         };
         let source = "int sw(int x) {\n    x = x + 1;\n    switch (x) {\n    case 1: return 10;\n    \
                       }\n    return x;\n}\nvoid side(int *p) {\n    *p = 2;\n}\n";
@@ -846,7 +970,7 @@ mod tests {
             .position(|line| line.trim() == "return")
             .expect("side returns");
         assert_eq!(
-            output.ir_lines[bare], 10,
+            output.ir_lines[bare].line, 10,
             "the implicit return is the closing brace's"
         );
         let options = ExplorerOptions {
