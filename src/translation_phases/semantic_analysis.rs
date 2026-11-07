@@ -1498,8 +1498,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                     self.record_field_noreturn(tag, name.name, d, member, ty);
                 }
+                let named = d
+                    .declarator
+                    .and_then(Declarator::identifier)
+                    .map(|name| (tag, name, ty));
                 self.declaration_attributes(
-                    attributes::Subject::Member,
+                    attributes::Subject::Member(named),
                     d.attributes,
                     d.declarator,
                 );

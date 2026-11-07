@@ -26,6 +26,7 @@ use super::{
         PredicateKind,
         ScopeKind,
         SemanticErrorKind,
+        TypeId,
         facts::{
             AliasFacts,
             AttributeRefusal,
@@ -34,6 +35,7 @@ use super::{
             DllStorage,
             EntityAttributes,
             EntityId,
+            FormatAttribute,
             InitFunctionFacts,
             InitFunctionKind,
             Inlining,
@@ -92,7 +94,15 @@ pub(in crate::translation_phases::semantic_analysis) enum Subject {
     Typedef(Option<usize>),
     /// The binding of a declared parameter, for the same.
     Parameter(Option<usize>),
-    Member,
+    /// A structure or union member: its tag, its name and its type, when
+    /// it has a name.
+    Member(
+        Option<(
+            usize,
+            crate::translation_phases::parsing::syntax::Identifier,
+            TypeId,
+        )>,
+    ),
 }
 
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
@@ -410,7 +420,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             },
             | Subject::Parameter(_) => {},
-            | Subject::Typedef(_) | Subject::Member => self.ignored(attribute),
+            | Subject::Typedef(_) | Subject::Member(_) => self.ignored(attribute),
         }
     }
 
@@ -1801,6 +1811,18 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Where the declaration whose attributes apply begins, which GCC
     /// reports a `format` attribute's faults at.
     pub(in crate::translation_phases::semantic_analysis) declaration_start: Option<SourceVectors>,
+    /// The `format` attributes of function pointers and members that
+    /// point to functions (`formats.rs`).
+    pub(super) pointer_formats: ArenaMap<'s, FormatHolder, FormatAttribute>,
+}
+
+/// What holds a function pointer's `format` attribute: a linked object's
+/// entity, an unlinked object or parameter, or a member of a tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(in crate::translation_phases::semantic_analysis) enum FormatHolder {
+    Entity(EntityId),
+    Binding(usize),
+    Member(usize, StringCacheId),
 }
 
 impl<'tu, 's> AttributeState<'tu, 's> {
@@ -1832,6 +1854,7 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             pending_dll:        ArenaVec::new_in(scratch),
             dll:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             declaration_start:  None,
+            pointer_formats:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 

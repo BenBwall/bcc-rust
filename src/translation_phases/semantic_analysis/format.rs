@@ -66,7 +66,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !(gcc || configuration.compiler_identity().rules() == RuleSet::Clang)
             || !matches!(
                 configuration.target(),
-                crate::target::Target::LinuxGnu | crate::target::Target::LinuxMusl
+                crate::target::Target::LinuxGnu
+                    | crate::target::Target::LinuxMusl
+                    | crate::target::Target::WindowsGnu
+                    | crate::target::Target::WindowsMsvc
             )
             || self.tainted
         {
@@ -101,7 +104,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(&format) = arguments.get(contract.format) else {
             return;
         };
+        // The prototype's parameters, which a data argument of a function
+        // without `...` converts to. C99: §6.5.2.2p7, p. 72; PDF p. 84.
+        let callee = self.types.non_atomic(function.ty);
+        let callee = self.pointer_target(callee).unwrap_or(callee);
+        let parameters = match self.types.nodes[callee.index] {
+            | super::TypeKind::Function {
+                parameters,
+                prototype: true,
+                ..
+            } => parameters,
+            | _ => &[],
+        };
         let call = FormatCall {
+            parameters,
             input_location: if gcc {
                 self.gcc_input_location(e)
             } else {
@@ -112,6 +128,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             format,
             format_index: contract.format,
             first: contract.first,
+            ms: contract.ms,
             arguments,
         };
         if gcc {
@@ -208,9 +225,20 @@ struct FormatCall<'a, 'tu> {
     /// only the format string is checked.
     first:          Option<usize>,
     arguments:      &'a [&'tu Expression<'tu>],
+    /// The callee's parameter types, when it has a prototype.
+    parameters:     &'tu [super::TypeId],
+    /// Whether GCC reads the format by the Microsoft C runtime's rules.
+    ms:             bool,
 }
 
 impl<'tu> FormatCall<'_, 'tu> {
+    /// The type of the parameter data argument `index` (from 0) converts
+    /// to, when a prototype names one rather than `...`.
+    fn fixed_parameter(&self, index: usize) -> Option<super::TypeId> {
+        let position = self.first?.checked_add(index)?;
+        self.parameters.get(position).map(|ty| ty.unqualified())
+    }
+
     /// The data arguments the format converts.
     fn data(&self) -> &[&'tu Expression<'tu>] {
         self.first
@@ -228,6 +256,8 @@ pub(crate) enum FormatNote {
     /// Clang: where the function it suggests an attribute for, by name, is
     /// declared.
     DeclaredHere(crate::util::string_cache::StringCacheId),
+    /// Clang's correction of `L` or `q` on an integer conversion.
+    UseLongLong,
 }
 
 impl FormatNote {
@@ -244,6 +274,7 @@ impl FormatNote {
                 "'{}' declared here",
                 context.string_cache.at(name)
             ),
+            | Self::UseLongLong => "did you mean to use 'll'?",
         }
     }
 }

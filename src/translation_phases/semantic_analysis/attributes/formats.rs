@@ -10,6 +10,9 @@
 use super::{
     super::{
         Analyzer,
+        BindingKind,
+        Linkage,
+        Namespace,
         SemanticErrorKind,
         TypeKind,
         facts::{
@@ -17,7 +20,10 @@ use super::{
             FormatKind,
         },
     },
-    entities::Subject,
+    entities::{
+        FormatHolder,
+        Subject,
+    },
     written::WrittenAttribute,
 };
 use crate::{
@@ -26,6 +32,7 @@ use crate::{
     translation_phases::{
         SourceVectors,
         preprocessing::{
+            OperatorTokenType,
             Token,
             TokenType,
         },
@@ -47,7 +54,7 @@ impl Analyzer<'_, '_, '_> {
     /// on a function, as each compiler checks it: GCC reports at the
     /// declaration, Clang at the attribute.
     pub(super) fn format_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
-        let Subject::Function { binding, .. } = subject else {
+        let Some((holder, function, declared)) = self.format_holder(subject) else {
             return;
         };
         let gcc = self.context.configuration.compiler_identity()
@@ -110,7 +117,8 @@ impl Analyzer<'_, '_, '_> {
             .at(archetype.contents)
             .trim_end_matches('\0')
             .trim_matches('_');
-        let Some(kind) = archetype_kind(name, gcc) else {
+        let microsoft = self.gcc_microsoft_formats();
+        let Some((kind, ms)) = archetype_kind(name, gcc, microsoft) else {
             let words = if gcc {
                 format_in!(
                     self.scratch,
@@ -126,12 +134,9 @@ impl Analyzer<'_, '_, '_> {
             self.format_attribute_warning(group, words, site);
             return;
         };
-        let ([format_token], [first_token]) = (operands[1], operands[2]) else {
-            return;
-        };
         let (Some(format), Some(first)) = (
-            self.token_number(*format_token),
-            self.token_number(*first_token),
+            self.attribute_index(operands[1]),
+            self.attribute_index(operands[2]),
         ) else {
             return;
         };
@@ -141,7 +146,7 @@ impl Analyzer<'_, '_, '_> {
             variadic,
             prototype: true,
             ..
-        } = self.types.nodes[self.bindings[binding].ty.index]
+        } = self.types.nodes[function.index]
         else {
             return;
         };
@@ -218,11 +223,10 @@ impl Analyzer<'_, '_, '_> {
                         return;
                     }
                 } else {
-                    let name = self.bindings[binding].name.source_vectors;
                     self.format_attribute_warning(
                         G::GccCompat,
                         "GCC requires a function with the 'format' attribute to be variadic",
-                        name,
+                        declared,
                     );
                     if first <= format || first > count {
                         self.format_attribute_error(
@@ -234,12 +238,79 @@ impl Analyzer<'_, '_, '_> {
                 }
             }
         }
-        let entity = self.entity_of(binding);
-        self.attributes.entity(entity).format = Some(FormatAttribute {
+        let attribute = FormatAttribute {
             kind,
             format,
             first,
-        });
+            ms,
+        };
+        match (subject, holder) {
+            | (Subject::Function { .. }, FormatHolder::Entity(entity)) =>
+                self.attributes.entity(entity).format = Some(attribute),
+            | (_, holder) => _ = self.attributes.pointer_formats.insert(holder, attribute),
+        }
+    }
+
+    /// What holds a `format` attribute on `subject`, the function type it
+    /// describes and where the declared name is: a function, or an object,
+    /// parameter or member that points to a function. GCC takes the
+    /// attribute for the function type's; Clang for the declaration's.
+    fn format_holder(
+        &mut self,
+        subject: Subject,
+    ) -> Option<(FormatHolder, super::super::TypeId, SourceVectors)> {
+        let (holder, ty, name) = match subject {
+            | Subject::Function { binding, .. } => {
+                let data = self.bindings[binding];
+                return Some((
+                    FormatHolder::Entity(self.entity_of(binding)),
+                    data.ty,
+                    data.name.source_vectors,
+                ));
+            },
+            | Subject::Object { binding, .. } | Subject::Parameter(Some(binding)) => {
+                let data = self.bindings[binding];
+                let holder = if data.linkage == Linkage::None {
+                    FormatHolder::Binding(binding)
+                } else {
+                    FormatHolder::Entity(self.entity_of(binding))
+                };
+                (holder, data.ty, data.name.source_vectors)
+            },
+            | Subject::Member(Some((tag, name, ty))) => (
+                FormatHolder::Member(tag, name.name),
+                ty,
+                name.source_vectors,
+            ),
+            | _ => return None,
+        };
+        let pointer = self.types.non_atomic(ty);
+        let function = self.pointer_target(pointer)?;
+        matches!(self.types.nodes[function.index], TypeKind::Function { .. })
+            .then_some((holder, function, name))
+    }
+
+    /// Gives the body's binding of a parameter its prototype binding's
+    /// `format`.
+    pub(in crate::translation_phases::semantic_analysis) fn inherit_pointer_format(
+        &mut self,
+        prototype: usize,
+        body: usize,
+    ) {
+        if let Some(attribute) = self.pointer_format(FormatHolder::Binding(prototype)) {
+            _ = self
+                .attributes
+                .pointer_formats
+                .insert(FormatHolder::Binding(body), attribute);
+        }
+    }
+
+    /// The `format` attribute of the function pointer or member `holder`.
+    pub(in crate::translation_phases::semantic_analysis) fn pointer_format(
+        &self,
+        holder: FormatHolder,
+    ) -> Option<FormatAttribute> {
+        self.attributes.pointer_formats.get(&holder).copied()
     }
 
     /// How many comma-separated operands an attribute has, and the tokens
@@ -305,6 +376,7 @@ impl Analyzer<'_, '_, '_> {
             kind,
             format,
             first,
+            ms: false,
         });
     }
 
@@ -321,10 +393,7 @@ impl Analyzer<'_, '_, '_> {
         let Some(tokens) = attribute.arguments else {
             return;
         };
-        let [token] = tokens else {
-            return;
-        };
-        let Some(index) = self.token_number(*token) else {
+        let Some(index) = self.attribute_index(tokens) else {
             return;
         };
         let TypeKind::Function {
@@ -363,6 +432,121 @@ impl Analyzer<'_, '_, '_> {
         }
     }
 
+    /// The value of an attribute's index operand, an integer constant
+    /// expression both compilers evaluate (C99 §6.6p6): integer constants,
+    /// enumeration constants, parentheses and the unary, binary and
+    /// conditional operators. `None` for anything else, or a value no
+    /// parameter could have.
+    fn attribute_index(&self, tokens: &[Token]) -> Option<u32> {
+        let mut at = 0;
+        let value = self.index_expression(tokens, &mut at, 0)?;
+        (at == tokens.len())
+            .then_some(value)
+            .and_then(|value| u32::try_from(value).ok())
+    }
+
+    /// One operand of [`Self::attribute_index`] with its binary operators
+    /// that bind at least as tightly as `precedence`, from `*at`.
+    fn index_expression(&self, tokens: &[Token], at: &mut usize, precedence: u8) -> Option<i128> {
+        use OperatorTokenType as O;
+        let mut left = self.index_operand(tokens, at)?;
+        loop {
+            let Some(TokenType::Operator(operator)) = tokens.get(*at).map(|token| token.kind)
+            else {
+                return Some(left);
+            };
+            if operator == O::QuestionMark {
+                if precedence > 1 {
+                    return Some(left);
+                }
+                *at += 1;
+                let then = self.index_expression(tokens, at, 0)?;
+                if !tokens
+                    .get(*at)
+                    .is_some_and(|token| matches!(token.kind, TokenType::Operator(O::Colon)))
+                {
+                    return None;
+                }
+                *at += 1;
+                let otherwise = self.index_expression(tokens, at, 1)?;
+                left = if left != 0 { then } else { otherwise };
+                continue;
+            }
+            let binding = match operator {
+                | O::PipePipe => 2,
+                | O::AmpersandAmpersand => 3,
+                | O::Pipe => 4,
+                | O::Caret => 5,
+                | O::Ampersand => 6,
+                | O::EqualsEquals | O::ExclamationMarkEquals => 7,
+                | O::LessThan | O::GreaterThan | O::LessThanEquals | O::GreaterThanEquals => 8,
+                | O::LessThanLessThan | O::GreaterThanGreaterThan => 9,
+                | O::Plus | O::Minus => 10,
+                | O::Asterisk | O::ForwardSlash | O::Percent => 11,
+                | _ => return Some(left),
+            };
+            if binding < precedence {
+                return Some(left);
+            }
+            *at += 1;
+            let right = self.index_expression(tokens, at, binding + 1)?;
+            left = match operator {
+                | O::PipePipe => i128::from(left != 0 || right != 0),
+                | O::AmpersandAmpersand => i128::from(left != 0 && right != 0),
+                | O::Pipe => left | right,
+                | O::Caret => left ^ right,
+                | O::Ampersand => left & right,
+                | O::EqualsEquals => i128::from(left == right),
+                | O::ExclamationMarkEquals => i128::from(left != right),
+                | O::LessThan => i128::from(left < right),
+                | O::GreaterThan => i128::from(left > right),
+                | O::LessThanEquals => i128::from(left <= right),
+                | O::GreaterThanEquals => i128::from(left >= right),
+                | O::LessThanLessThan => left.checked_shl(u32::try_from(right).ok()?)?,
+                | O::GreaterThanGreaterThan => left.checked_shr(u32::try_from(right).ok()?)?,
+                | O::Plus => left.checked_add(right)?,
+                | O::Minus => left.checked_sub(right)?,
+                | O::Asterisk => left.checked_mul(right)?,
+                | O::ForwardSlash => left.checked_div(right)?,
+                | _ => left.checked_rem(right)?,
+            };
+        }
+    }
+
+    /// A primary or unary operand of [`Self::attribute_index`].
+    fn index_operand(&self, tokens: &[Token], at: &mut usize) -> Option<i128> {
+        use OperatorTokenType as O;
+        let token = *tokens.get(*at)?;
+        *at += 1;
+        match token.kind {
+            | TokenType::Integer(_) => self.token_number(token).map(i128::from),
+            | TokenType::Identifier => {
+                let entry = self.lookup(Namespace::Ordinary, token.contents)?;
+                let binding = self.bindings[entry.binding];
+                if binding.kind != BindingKind::Enumerator {
+                    return None;
+                }
+                binding.value?.to_i128()
+            },
+            | TokenType::Operator(O::OpeningParenthesis) => {
+                let value = self.index_expression(tokens, at, 0)?;
+                if !tokens.get(*at).is_some_and(|token| {
+                    matches!(token.kind, TokenType::Operator(O::ClosingParenthesis))
+                }) {
+                    return None;
+                }
+                *at += 1;
+                Some(value)
+            },
+            | TokenType::Operator(O::Plus) => self.index_operand(tokens, at),
+            | TokenType::Operator(O::Minus) => self.index_operand(tokens, at)?.checked_neg(),
+            | TokenType::Operator(O::Tilde) => Some(!self.index_operand(tokens, at)?),
+            | TokenType::Operator(O::ExclamationMark) =>
+                Some(i128::from(self.index_operand(tokens, at)? == 0)),
+            | _ => None,
+        }
+    }
+
     /// An integer constant token's value, without a suffix.
     fn token_number(&self, token: Token) -> Option<u32> {
         if !matches!(token.kind, TokenType::Integer(_)) {
@@ -384,13 +568,21 @@ impl Analyzer<'_, '_, '_> {
 }
 
 /// The archetype a `format` attribute names, without its underscores, as
-/// both compilers know it: GCC's on a GNU target and Clang's.
-fn archetype_kind(name: &str, gcc: bool) -> Option<FormatKind> {
+/// both compilers know it, and whether GCC reads it by the Microsoft C
+/// runtime's rules. On Windows (`microsoft`) GCC takes `printf`, `scanf`
+/// and `strftime` for the `ms_` archetypes it also knows by name
+/// (MinGW's `msformat-c.cc`); elsewhere it knows those by no name.
+fn archetype_kind(name: &str, gcc: bool, microsoft: bool) -> Option<(FormatKind, bool)> {
     Some(match name {
-        | "printf" | "gnu_printf" => FormatKind::Printf,
-        | "printf0" | "syslog" if !gcc => FormatKind::Printf,
-        | "scanf" | "gnu_scanf" => FormatKind::Scanf,
-        | "strftime" | "gnu_strftime" | "strfmon" | "gnu_strfmon" => FormatKind::Unchecked,
+        | "printf" => (FormatKind::Printf, microsoft),
+        | "gnu_printf" => (FormatKind::Printf, false),
+        | "printf0" | "syslog" if !gcc => (FormatKind::Printf, false),
+        | "scanf" => (FormatKind::Scanf, microsoft),
+        | "gnu_scanf" => (FormatKind::Scanf, false),
+        | "ms_printf" if microsoft => (FormatKind::Printf, true),
+        | "ms_scanf" if microsoft => (FormatKind::Scanf, true),
+        | "strftime" | "gnu_strftime" | "strfmon" | "gnu_strfmon" => (FormatKind::Unchecked, false),
+        | "ms_strftime" if microsoft => (FormatKind::Unchecked, true),
         | _ => return None,
     })
 }

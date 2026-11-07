@@ -4246,10 +4246,10 @@ mod tests {
              printf(s);\n    printf(\"%d %d\\n\", i);\n    printf(\"%y\\n\");\n    \
              printf(\"a\\0b\");\n}\n",
         );
-        let flags = |mode: &str, args: &[&str]| {
-            let args: Vec<&str> = args
-                .iter()
-                .copied()
+        let flags = |mode: &str, target: Option<&str>, args: &[&str]| {
+            let args: Vec<&str> = target
+                .into_iter()
+                .chain(args.iter().copied())
                 .chain(["-fsyntax-only", "a.c"])
                 .collect();
             let output = directory.bcc(mode, &args);
@@ -4267,8 +4267,12 @@ mod tests {
         let gcc = "format-contains-nul format-extra-args format-zero-length format=";
         let clang = "format format-extra-args format-insufficient-args format-invalid-specifier \
                      format-security format-zero-length";
-        // Each row was measured against GCC 14.2 and Clang 23.1.
-        for (mode, args, expected) in [
+        // Each row was measured against GCC 14.2 and Clang 23.1, and for the
+        // Windows targets, where GCC checks `ms_printf` and Clang the
+        // Microsoft C runtime's formats, against MinGW's GCC 13.3 and Clang
+        // 23.1 for `x86_64-pc-windows-msvc`. The host's own target is a
+        // Windows one on a Windows host.
+        let rows = [
             ("--gcc-mode", &[][..], ""),
             ("--gcc-mode", &["-Wall"][..], gcc),
             ("--gcc-mode", &["-Wformat"][..], gcc),
@@ -4328,8 +4332,19 @@ mod tests {
                  error,-Wformat-zero-length",
             ),
             ("--clang-mode", &["-Werror", "-Wno-error=format"][..], clang),
+        ];
+        for target in [
+            None,
+            Some("--target=x86_64-w64-mingw32"),
+            Some("--target=x86_64-pc-windows-msvc"),
         ] {
-            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+            for (mode, args, expected) in rows {
+                assert_eq!(
+                    flags(mode, target, args),
+                    expected,
+                    "{mode} {target:?} {args:?}"
+                );
+            }
         }
         // Each compiler's own groups are unknown to the other.
         let output = directory.bcc(

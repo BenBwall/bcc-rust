@@ -63,6 +63,7 @@ mod written_types;
 pub(crate) use catalog::clang_attribute_version;
 pub(super) use entities::{
     AttributeState,
+    FormatHolder,
     Subject,
 };
 pub(super) use written::known_names;

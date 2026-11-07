@@ -15,6 +15,7 @@ use Scalar as S;
 use super::{
     super::{
         Analyzer,
+        ArrayBound,
         BindingKind,
         Scalar,
         TagKind,
@@ -42,6 +43,7 @@ use crate::{
             ExpressionType as E,
             UnaryOperator,
         },
+        preprocessing::KeywordTokenType,
     },
     util::bump::{
         ArenaString,
@@ -108,6 +110,8 @@ enum Conversion {
     Os,
     /// `%@`, which only Objective-C takes.
     Object,
+    /// `%Z`, the Microsoft C runtime's counted string.
+    Counted,
 }
 
 impl Conversion {
@@ -122,7 +126,7 @@ enum Amount {
     NotSpecified,
     /// A number, its first byte and its length.
     Constant {
-        value:  u64,
+        value:  u32,
         start:  usize,
         length: usize,
     },
@@ -226,6 +230,8 @@ enum Fit {
 /// The state of one string's reading (`CheckFormatHandler`).
 struct Reading<'a, 'tu> {
     call:       &'a FormatCall<'a, 'tu>,
+    /// Whether the target's C library is the Microsoft C runtime.
+    msvcrt:     bool,
     leaf:       Leaf<'tu>,
     bytes:      &'tu [u8],
     covered:    ArenaVec<'a, bool>,
@@ -432,7 +438,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         call: &FormatCall<'_, 'tu>,
         e: &'tu Expression<'tu>,
         in_call: bool,
-        offset: usize,
+        offset: i128,
         uncovered: &mut Uncovered,
         depth: u32,
     ) -> Found {
@@ -446,6 +452,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | E::Cast {
                     operand_expression, ..
                 } => e = operand_expression,
+                // `IgnoreParenCasts` looks through the operand a selection
+                // chooses.
+                | E::Generic(_) => match self.expression_info(e).selected_expression {
+                    | Some(selected) => e = selected,
+                    | None => break,
+                },
+                | E::Builtin(builtin) if builtin.keyword == KeywordTokenType::BuiltinChooseExpr =>
+                    match self.expression_info(e).selected_expression {
+                        | Some(selected) => e = selected,
+                        | None => break,
+                    },
                 | _ => break,
             }
         }
@@ -506,6 +523,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.constant_scalar(binding),
                     | _ => None,
                 };
+                // An array's string keeps the array's extent, which may
+                // leave out its null character.
+                let extent = match self.types.nodes[ty.index] {
+                    | TypeKind::Array(_, ArrayBound::Constant(count)) =>
+                        usize::try_from(count).ok(),
+                    | _ => None,
+                };
+                if let Some((literal, _)) = initializer.and_then(Self::string_literal)
+                    && extent.is_some()
+                {
+                    let Some(mut leaf) = usize::try_from(offset)
+                        .ok()
+                        .and_then(|offset| self.leaf(literal, literal, offset, false, false))
+                    else {
+                        return Found::NotALiteral;
+                    };
+                    leaf.extent = extent;
+                    self.clang_check_string(call, leaf, uncovered);
+                    return Found::Checked;
+                }
                 match initializer {
                     | Some(initializer) => self.clang_format_expression(
                         call,
@@ -538,18 +575,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 found.unwrap_or(Found::NotALiteral)
             },
             | E::StringLiteral(_) => {
-                let Some(leaf) = self.leaf(e, e, offset, in_call, in_call) else {
+                // A negative offset, or one past the string, is no string.
+                let Some(leaf) = usize::try_from(offset)
+                    .ok()
+                    .and_then(|offset| self.leaf(e, e, offset, in_call, in_call))
+                else {
                     return Found::NotALiteral;
                 };
                 let length = self.format_bytes(&Leaf { offset: 0, ..leaf }).len();
-                if offset > length {
+                if leaf.offset > length {
                     return Found::NotALiteral;
                 }
                 self.clang_check_string(call, leaf, uncovered);
                 Found::Checked
             },
+            // A constant offset from a literal is still the literal
+            // (`sumOffsets`): `"..." + N`, `N + "..."` and `"..." - N`.
             | E::Binary {
-                operator: BinaryOperator::Addition,
+                operator: operator @ (BinaryOperator::Addition | BinaryOperator::Subtraction),
                 left_expression,
                 right_expression,
             } => {
@@ -559,33 +602,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .filter(|_| info.ice)
                         .and_then(super::super::Integer::to_i128)
                 };
-                match (
+                let (pointer, number) = match (
                     constant(self, left_expression),
                     constant(self, right_expression),
                 ) {
-                    | (Some(value), None) => match usize::try_from(value) {
-                        | Ok(value) => self.clang_format_expression(
-                            call,
-                            right_expression,
-                            in_call,
-                            offset + value,
-                            uncovered,
-                            depth + 1,
-                        ),
-                        | Err(_) => Found::NotALiteral,
-                    },
-                    | (None, Some(value)) => match usize::try_from(value) {
-                        | Ok(value) => self.clang_format_expression(
-                            call,
-                            left_expression,
-                            in_call,
-                            offset + value,
-                            uncovered,
-                            depth + 1,
-                        ),
-                        | Err(_) => Found::NotALiteral,
-                    },
-                    | _ => Found::NotALiteral,
+                    | (Some(value), None) if operator == BinaryOperator::Addition =>
+                        (right_expression, value),
+                    | (None, Some(value)) if operator == BinaryOperator::Addition =>
+                        (left_expression, value),
+                    | (None, Some(value)) => (left_expression, -value),
+                    | _ => return Found::NotALiteral,
+                };
+                match offset.checked_add(number) {
+                    | Some(offset) => self.clang_format_expression(
+                        call,
+                        pointer,
+                        in_call,
+                        offset,
+                        uncovered,
+                        depth + 1,
+                    ),
+                    | None => Found::NotALiteral,
                 }
             },
             | E::Unary {
@@ -602,13 +639,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .integer
                         .filter(|_| info.ice)
                         .and_then(super::super::Integer::to_i128)
-                        .and_then(|value| usize::try_from(value).ok())
+                        .and_then(|value| offset.checked_add(value))
                     {
-                        | Some(value) => self.clang_format_expression(
+                        | Some(offset) => self.clang_format_expression(
                             call,
                             left_expression,
                             in_call,
-                            offset + value,
+                            offset,
                             uncovered,
                             depth + 1,
                         ),
@@ -628,8 +665,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         leaf: Leaf<'tu>,
         uncovered: &mut Uncovered,
     ) {
-        let bytes = self.format_bytes(&leaf);
+        let mut bytes = self.format_bytes(&leaf);
         let data = call.data().len();
+        // An array too short for the null character, with none of its own
+        // within it, holds no string; a longer one ends where it does.
+        if let Some(extent) = leaf.extent {
+            if extent <= bytes.len() && !bytes[..extent].contains(&0) {
+                self.clang_string_warning_at(
+                    call,
+                    &leaf,
+                    G::Format,
+                    "format string is not null-terminated",
+                    leaf.literal.source_vectors,
+                );
+                return;
+            }
+            bytes = &bytes[..bytes.len().min(extent.max(1) - 1)];
+        }
         if bytes.is_empty() && data > 0 {
             self.clang_string_warning_at(
                 call,
@@ -643,6 +695,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let scratch = self.scratch;
         let mut reading = Reading {
             call,
+            msvcrt: matches!(
+                self.context.configuration.target(),
+                crate::target::Target::WindowsGnu | crate::target::Target::WindowsMsvc
+            ),
             leaf,
             bytes,
             covered: ArenaVec::new_in(scratch),
@@ -864,6 +920,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | b'@' => Conversion::Object,
             | b'n' => Conversion::Written,
             | b'm' => Conversion::Errno,
+            | b'Z' if r.msvcrt => Conversion::Counted,
             | _ => Conversion::Invalid,
         };
         if spec.conversion.consumes() && !spec.positional {
@@ -893,14 +950,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         i: &mut usize,
     ) -> Option<bool> {
         let bytes = r.bytes;
-        let mut j = *i;
-        let mut value: u64 = 0;
-        while j < bytes.len() && bytes[j].is_ascii_digit() {
-            value = value
-                .saturating_mul(10)
-                .saturating_add(u64::from(bytes[j] - b'0'));
-            j += 1;
-        }
+        let (value, j, _) = amount_digits(bytes, *i);
         if j == bytes.len() {
             return None;
         }
@@ -914,7 +964,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 return Some(true);
             }
-            spec.index = usize::try_from(value - 1).unwrap_or(usize::MAX);
+            spec.index = (value - 1) as usize;
             spec.positional = true;
             *i = j + 1;
         }
@@ -933,17 +983,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         precision: bool,
     ) -> Option<Amount> {
         let bytes = r.bytes;
-        let digits = |mut j: usize| {
-            let first = j;
-            let mut value: u64 = 0;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                value = value
-                    .saturating_mul(10)
-                    .saturating_add(u64::from(bytes[j] - b'0'));
-                j += 1;
-            }
-            (value, j, j - first)
-        };
+        let digits = |j: usize| amount_digits(bytes, j);
         if bytes[*i] != b'*' {
             let (value, j, length) = digits(*i);
             if length == 0 {
@@ -998,8 +1038,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         *i = j + 1;
         Some(Amount::Argument {
-            index: usize::try_from(value - 1).unwrap_or(usize::MAX),
-            start: star + 1,
+            index: (value - 1) as usize,
+            // Clang points at the `*` of `*n$`, and past a plain `*`.
+            start: star,
         })
     }
 
@@ -1203,7 +1244,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 zeros,
             );
         }
-        if !valid_length(spec.length, spec.conversion, false) {
+        if !valid_length(spec.length, spec.conversion, false, r.msvcrt) {
             self.clang_length_warning(r, &spec);
         }
         if r.call.takes_va_list() {
@@ -1215,7 +1256,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(&argument) = r.call.data().get(spec.index) else {
             return true;
         };
-        let want = printf_type(&spec);
+        let want = printf_type(&spec, r.msvcrt);
         if want.want == Want::Invalid || want.want == Want::Unknown {
             return true;
         }
@@ -1243,7 +1284,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return false;
         };
         r.covered[index] = true;
-        let ty = self.clang_value_type(argument);
+        let ty = match r.call.fixed_parameter(index) {
+            | Some(ty) => ty,
+            | None => self.clang_value_type(argument),
+        };
         if self.clang_matches(arg(specific(S::Int)), ty) == Fit::Mismatch {
             let Some(spelling) = self.clang_type_name(argument, ty) else {
                 return false;
@@ -1307,8 +1351,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.format_warning(r.call.call.source_vectors, G::Format, words, site, note);
             return;
         }
-        let value_type = self.decayed_type(argument);
-        let promoted = self.clang_promoted(argument, value_type);
+        // A parameter's argument has the parameter's type, not promoted.
+        let fixed = r.call.fixed_parameter(spec.index);
+        let value_type = fixed.unwrap_or_else(|| self.decayed_type(argument));
+        let promoted = match fixed {
+            | Some(ty) => ty,
+            | None => self.clang_promoted(argument, value_type),
+        };
         let mut matched = self.clang_matches(want, promoted);
         let original = matched;
         if matched == Fit::Signedness {
@@ -1319,7 +1368,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut shown = promoted;
         let mut implicit = Fit::Mismatch;
-        let promotion = promoted != value_type.unqualified() && self.arithmetic(value_type);
+        let promotion =
+            fixed.is_none() && promoted != value_type.unqualified() && self.arithmetic(value_type);
         if promotion {
             shown = value_type;
             let int = self.types.scalar(S::Int);
@@ -1336,7 +1386,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return;
                 }
             }
-        } else if let E::Constant(Constant::Char(_)) = Self::without_parentheses(argument).kind
+        } else if fixed.is_none()
+            && let E::Constant(Constant::Char(_)) = Self::without_parentheses(argument).kind
             && info.ty == self.types.scalar(S::Int)
             && spec.length != Length::Char
             && info
@@ -1493,13 +1544,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         let first = *i;
-        let mut value: u64 = 0;
-        while *i < end && bytes[*i].is_ascii_digit() {
-            value = value
-                .saturating_mul(10)
-                .saturating_add(u64::from(bytes[*i] - b'0'));
-            *i += 1;
-        }
+        let (value, after, _) = amount_digits(bytes, first);
+        *i = after;
         if *i > first {
             spec.width = Amount::Constant {
                 value,
@@ -1630,7 +1676,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if spec.index < r.covered.len() {
             r.covered[spec.index] = true;
         }
-        if !valid_length(spec.length, spec.conversion, true) {
+        if !valid_length(spec.length, spec.conversion, true, r.msvcrt) {
             self.clang_length_warning(r, &spec);
         }
         if r.call.takes_va_list() {
@@ -1642,19 +1688,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(&argument) = r.call.data().get(spec.index) else {
             return true;
         };
-        let want = scanf_type(&spec);
+        let want = scanf_type(&spec, r.msvcrt);
         if matches!(want.want, Want::Invalid | Want::Unknown) {
             return true;
         }
-        let ty = self.decayed_type(argument);
+        let ty = r
+            .call
+            .fixed_parameter(spec.index)
+            .unwrap_or_else(|| self.decayed_type(argument));
         let mut matched = self.clang_matches(want, ty);
         if matched == Fit::Signedness {
             matched = Fit::Exact;
         }
+        // Clang's scanf check has no words for type confusion: it is a
+        // mismatch like any other.
         let group = match matched {
-            | Fit::Mismatch => G::Format,
+            | Fit::Exact => return true,
             | Fit::Pedantic => G::FormatPedantic,
-            | _ => return true,
+            | _ => G::Format,
         };
         let (Some(wanted), Some(spelling)) = (
             self.clang_want_name(want),
@@ -1682,6 +1733,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
              conversion specifier",
             spec.letter as char
         );
+        // Clang corrects `L` and `q` on an integer conversion to `ll`.
+        let corrects = matches!(spec.length, Length::LongDouble | Length::Quad)
+            && matches!(
+                spec.conversion,
+                Conversion::Signed
+                    | Conversion::Unsigned
+                    | Conversion::Binary
+                    | Conversion::Octal
+                    | Conversion::Hex
+                    | Conversion::Written
+            );
+        if corrects && r.leaf.in_call {
+            let place = self.clang_byte(&r.leaf, spec.length_at);
+            self.format_warning(
+                r.call.call.source_vectors,
+                G::Format,
+                words,
+                place,
+                Some((FormatNote::UseLongLong, place)),
+            );
+            return;
+        }
         self.clang_string_warning(r, G::Format, words, spec.length_at);
     }
 
@@ -2108,19 +2181,25 @@ enum Caller {
 /// conversions it means something with.
 type Flag = (Option<usize>, char, fn(Conversion) -> bool);
 
-/// What reading one specification gave. A specification's offsets make it
-/// large only where `usize` is 64 bits wide.
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::large_enum_variant,
-        reason = "A specification is read and checked at once, never stored."
-    )
-)]
+/// What reading one specification gave.
 enum Parsed {
     Nothing,
     Spec(Spec),
     Stop,
+}
+
+/// The number written at `at`, its end and its length, accumulated as
+/// Clang's `ParseAmount` does in an `unsigned`, which wraps.
+fn amount_digits(bytes: &[u8], at: usize) -> (u32, usize, usize) {
+    let mut value: u32 = 0;
+    let mut end = at;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        value = value
+            .wrapping_mul(10)
+            .wrapping_add(u32::from(bytes[end] - b'0'));
+        end += 1;
+    }
+    (value, end, end - at)
 }
 
 /// The end of the UTF-8 sequence beginning at `at`, as
@@ -2177,39 +2256,51 @@ const fn valid_alternative(conversion: Conversion) -> bool {
     )
 }
 
-/// `hasValidLengthModifier` on a Linux target.
-const fn valid_length(length: Length, conversion: Conversion, scanf: bool) -> bool {
+/// `hasValidLengthModifier` on a Linux target, or with `msvcrt` on a
+/// Windows one, whose C runtime has Microsoft's modifiers (`isOSMSVCRT`,
+/// which MinGW is too) and no `L` on an integer (`isOSWindows`).
+const fn valid_length(length: Length, conversion: Conversion, scanf: bool, msvcrt: bool) -> bool {
     use Conversion as C;
     let integer = matches!(
         conversion,
         C::Signed | C::Unsigned | C::Binary | C::Octal | C::Hex | C::Written
     );
+    let wide = matches!(
+        conversion,
+        C::Char | C::WideChar | C::String | C::WideString | C::Counted
+    );
     match length {
         | Length::None => true,
+        | Length::Short => integer || (msvcrt && wide),
         | Length::Char
-        | Length::Short
         | Length::LongLong
         | Length::Quad
         | Length::IntMax
         | Length::SizeT
         | Length::PtrDiff => integer,
         | Length::Long =>
-            integer || matches!(conversion, C::Double | C::Char | C::String | C::ScanList),
+            integer
+                || matches!(
+                    conversion,
+                    C::Double | C::Char | C::String | C::ScanList | C::Counted
+                ),
         | Length::LongDouble =>
             matches!(conversion, C::Double)
-                || matches!(conversion, C::Signed | C::Unsigned | C::Octal | C::Hex),
+                || (!msvcrt && matches!(conversion, C::Signed | C::Unsigned | C::Octal | C::Hex)),
         | Length::MAllocate =>
             scanf
                 && matches!(
                     conversion,
                     C::Char | C::WideChar | C::String | C::WideString | C::ScanList
                 ),
-        | Length::Int64 | Length::Int32 | Length::Int3264 | Length::Wide => false,
+        | Length::Int64 | Length::Int32 | Length::Int3264 =>
+            msvcrt && matches!(conversion, C::Signed | C::Unsigned | C::Octal | C::Hex),
+        | Length::Wide => msvcrt && wide,
     }
 }
 
 /// The type a printf specification wants (`PrintfSpecifier::getArgType`).
-fn printf_type(spec: &Spec) -> ArgType {
+fn printf_type(spec: &Spec, msvcrt: bool) -> ArgType {
     use Conversion as C;
     use Length as L;
     let length = spec.length;
@@ -2217,6 +2308,7 @@ fn printf_type(spec: &Spec) -> ArgType {
         | C::Char => match length {
             | L::None => arg(specific(S::Int)),
             | L::Long | L::Wide => arg(Want::WideInt),
+            | L::Short if msvcrt => arg(specific(S::Int)),
             | _ => arg(Want::Invalid),
         },
         | C::Signed => arg(match length {
@@ -2266,7 +2358,9 @@ fn printf_type(spec: &Spec) -> ArgType {
             | L::Long | L::Wide => arg(Want::WideString),
             | _ => arg(Want::CString),
         },
+        | C::WideString if msvcrt && length == L::Short => arg(Want::CString),
         | C::WideString => arg(Want::WideString),
+        | C::WideChar if msvcrt && length == L::Short => arg(specific(S::Int)),
         | C::WideChar => arg(Want::Specific(Ty::WideChar)),
         | C::Pointer | C::Os => arg(Want::CPointer),
         | _ => arg(Want::Unknown),
@@ -2274,7 +2368,7 @@ fn printf_type(spec: &Spec) -> ArgType {
 }
 
 /// The type a scanf specification wants (`ScanfSpecifier::getArgType`).
-fn scanf_type(spec: &Spec) -> ArgType {
+fn scanf_type(spec: &Spec, msvcrt: bool) -> ArgType {
     use Conversion as C;
     use Length as L;
     let length = spec.length;
@@ -2313,11 +2407,13 @@ fn scanf_type(spec: &Spec) -> ArgType {
             | L::None => pointer_to(Want::AnyChar),
             | L::Long | L::Wide => pointer_to(Want::Specific(Ty::WideChar)),
             | L::MAllocate => pointer_to(Want::CString),
+            | L::Short if msvcrt => pointer_to(Want::AnyChar),
             | _ => arg(Want::Invalid),
         },
         | C::WideChar | C::WideString => match length {
             | L::None | L::Wide => pointer_to(Want::Specific(Ty::WideChar)),
             | L::MAllocate => pointer_to(Want::WideString),
+            | L::Short if msvcrt => pointer_to(Want::AnyChar),
             | _ => arg(Want::Invalid),
         },
         | C::Pointer => pointer_to(Want::CPointer),

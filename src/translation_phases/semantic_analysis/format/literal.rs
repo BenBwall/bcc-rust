@@ -18,6 +18,7 @@ use crate::{
             ExpressionType,
         },
         preprocessing::{
+            LiteralEncoding,
             LiteralId,
             LiteralUnit,
             StringTokenType,
@@ -30,21 +31,27 @@ use crate::{
 #[derive(Clone, Copy)]
 pub(super) struct Leaf<'tu> {
     /// The string literal.
-    pub(super) literal: &'tu Expression<'tu>,
-    pub(super) id:      LiteralId,
+    pub(super) literal:   &'tu Expression<'tu>,
+    pub(super) id:        LiteralId,
     /// The byte the format starts at: `"..." + N` starts later.
-    pub(super) offset:  usize,
+    pub(super) offset:    usize,
     /// The expression the compiler read the string from, where it reports
     /// what it says of the whole string.
-    pub(super) site:    SourceVectors,
+    pub(super) site:      SourceVectors,
+    /// Where GCC reports a conversion it cannot place in the string: the
+    /// site, or the outermost operator of an offset into the string.
+    pub(super) char_site: SourceVectors,
     /// Whether the string is the call's argument, rather than a constant
     /// object's initializer: Clang's `InFunctionCall`.
-    pub(super) in_call: bool,
+    pub(super) in_call:   bool,
     /// Whether GCC reads the string where it is written: the expression
     /// itself, neither parenthesized nor a constant object's initializer.
-    pub(super) bare:    bool,
+    pub(super) bare:      bool,
     /// Who wrote the string's first token.
-    pub(super) spelled: Spelled,
+    pub(super) spelled:   Spelled,
+    /// The elements of the constant array the string initializes, which
+    /// may leave out its null character.
+    pub(super) extent:    Option<usize>,
 }
 
 /// Who wrote a string literal's first token.
@@ -81,11 +88,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             inner = expression;
             parenthesized = true;
         }
-        matches!(
-            inner.kind,
-            ExpressionType::StringLiteral(StringTokenType::String(_))
-        )
-        .then_some((inner, parenthesized))
+        narrow_literal(inner).map(|_| (inner, parenthesized))
     }
 
     /// A leaf for the narrow string literal `literal`, read from `site`.
@@ -97,9 +100,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         in_call: bool,
         bare: bool,
     ) -> Option<Leaf<'tu>> {
-        let ExpressionType::StringLiteral(StringTokenType::String(id)) = literal.kind else {
-            return None;
-        };
+        let id = narrow_literal(literal)?;
         let source = literal.source_vectors;
         let spelled = if source.length() == 0 || !self.context.produced_by_macro_expansion(source) {
             Spelled::File
@@ -113,9 +114,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             id,
             offset,
             site: site.source_vectors,
+            char_site: site.source_vectors,
             in_call,
             bare,
             spelled,
+            extent: None,
         })
     }
 
@@ -140,9 +143,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &self,
         literal: &'tu Expression<'tu>,
     ) -> Option<&'tu [BytePosition]> {
-        let ExpressionType::StringLiteral(StringTokenType::String(id)) = literal.kind else {
-            return None;
-        };
+        let id = narrow_literal(literal)?;
         // The spelling's bytes, each with its place.
         let mut spelled = ArenaVec::new_in(self.scratch);
         for vector in self.context.get_source_vectors(literal.source_vectors) {
@@ -229,6 +230,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             position.file,
             usize::from(position.width),
         )
+    }
+}
+
+/// The value of a narrow string literal, plain or UTF-8, which both
+/// compilers read as a format; a wide one is none.
+/// C11: §6.4.5p3, p. 70; PDF p. 88.
+fn narrow_literal(literal: &Expression<'_>) -> Option<LiteralId> {
+    match literal.kind {
+        | ExpressionType::StringLiteral(
+            StringTokenType::String(id) | StringTokenType::EncodedString(id, LiteralEncoding::Utf8),
+        ) => Some(id),
+        | _ => None,
     }
 }
 

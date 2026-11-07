@@ -12,6 +12,7 @@
 use super::{
     super::{
         Analyzer,
+        ArrayBound,
         BindingKind,
         Scalar,
         TypeId,
@@ -37,6 +38,7 @@ use crate::{
             ExpressionType as E,
             UnaryOperator,
         },
+        preprocessing::KeywordTokenType,
     },
     util::bump::{
         ArenaString,
@@ -55,6 +57,8 @@ struct Results {
     extra_args:        usize,
     dollar_extra_args: usize,
     empty:             usize,
+    /// Strings a constant array cuts off before their null character.
+    unterminated:      usize,
     /// Where the first string with too many arguments is.
     extra_site:        Option<SourceVectors>,
 }
@@ -342,6 +346,9 @@ struct Length {
     chars:    &'static str,
     index:    usize,
     standard: Standard,
+    /// Whether an argument of the wanted type's kind and width will do
+    /// (`scalar_identity_flag`), as for Microsoft's `I64`.
+    identity: bool,
 }
 
 /// `printf_length_specs` and `scanf_length_specs`: a spelling, its
@@ -353,31 +360,227 @@ type LengthSpec = (
     usize,
     Standard,
     Option<(&'static str, usize, Standard)>,
+    bool,
 );
 
 const PRINTF_LENGTHS: &[LengthSpec] = &[
-    ("h", 2, C89, Some(("hh", 1, C99))),
-    ("l", 3, C89, Some(("ll", 4, C99))),
-    ("q", 4, EXT, None),
-    ("L", 5, C89, None),
-    ("z", 6, C99, None),
-    ("Z", 6, EXT, None),
-    ("t", 7, C99, None),
-    ("j", 8, C99, None),
-    ("H", 9, EXT, None),
-    ("D", 10, EXT, Some(("DD", 11, EXT))),
+    ("h", 2, C89, Some(("hh", 1, C99)), false),
+    ("l", 3, C89, Some(("ll", 4, C99)), false),
+    ("q", 4, EXT, None, false),
+    ("L", 5, C89, None, false),
+    ("z", 6, C99, None, false),
+    ("Z", 6, EXT, None, false),
+    ("t", 7, C99, None, false),
+    ("j", 8, C99, None, false),
+    ("H", 9, EXT, None, false),
+    ("D", 10, EXT, Some(("DD", 11, EXT)), false),
 ];
 
 const SCANF_LENGTHS: &[LengthSpec] = &[
-    ("h", 2, C89, Some(("hh", 1, C99))),
-    ("l", 3, C89, Some(("ll", 4, C99))),
-    ("q", 4, EXT, None),
-    ("L", 5, C89, None),
-    ("z", 6, C99, None),
-    ("t", 7, C99, None),
-    ("j", 8, C99, None),
-    ("H", 9, EXT, None),
-    ("D", 10, EXT, Some(("DD", 11, EXT))),
+    ("h", 2, C89, Some(("hh", 1, C99)), false),
+    ("l", 3, C89, Some(("ll", 4, C99)), false),
+    ("q", 4, EXT, None, false),
+    ("L", 5, C89, None, false),
+    ("z", 6, C99, None, false),
+    ("t", 7, C99, None, false),
+    ("j", 8, C99, None, false),
+    ("H", 9, EXT, None, false),
+    ("D", 10, EXT, Some(("DD", 11, EXT)), false),
+];
+
+/// `ms_printf_length_specs`, which `ms_scanf` shares: `I32`, `I64` and
+/// `I` are `l`, `ll` and `z` for any argument of their width, and `L`
+/// is `double`'s width on a `long double` it does not have.
+const MS_LENGTHS: &[LengthSpec] = &[
+    ("h", 2, C89, None, false),
+    ("l", 3, C89, Some(("ll", 4, C89)), false),
+    ("L", 5, C89, None, true),
+    ("I32", 3, EXT, None, true),
+    ("I64", 4, EXT, None, true),
+    ("I", 6, EXT, None, true),
+];
+
+/// A Microsoft table row: its first seven columns, to `z`.
+const fn ms(columns: [Wanted; 7]) -> [Wanted; LENGTHS] {
+    let mut row = [BAD; LENGTHS];
+    let mut index = 0;
+    while index < 7 {
+        row[index] = columns[index];
+        index += 1;
+    }
+    row
+}
+
+const MS_SIGNED: [Wanted; LENGTHS] = ms([
+    s(S::Int, C89),
+    BAD,
+    s(S::Short, C89),
+    s(S::Long, C89),
+    s(S::LongLong, C99),
+    BAD,
+    t(Want::SignedSize, Some("signed size_t"), C99),
+]);
+
+const MS_UNSIGNED: [Wanted; LENGTHS] = ms([
+    s(S::UnsignedInt, C89),
+    BAD,
+    s(S::UnsignedShort, C89),
+    s(S::UnsignedLong, C89),
+    s(S::UnsignedLongLong, C99),
+    BAD,
+    t(Want::Size, Some("size_t"), C99),
+]);
+
+const MS_WRITTEN: [Wanted; LENGTHS] = {
+    let mut row = ms([
+        s(S::Int, C89),
+        BAD,
+        s(S::Short, C89),
+        s(S::Long, C89),
+        s(S::LongLong, C99),
+        BAD,
+        BAD,
+    ]);
+    row[8] = t(Want::Intmax, Some("intmax_t"), C99);
+    row
+};
+
+const fn ms_floating(standard: Standard) -> [Wanted; LENGTHS] {
+    ms([
+        s(S::Double, standard),
+        BAD,
+        BAD,
+        s(S::Double, C99),
+        BAD,
+        s(S::Double, standard),
+        BAD,
+    ])
+}
+
+const fn ms_wide(wide: Wanted, standard: Standard) -> [Wanted; LENGTHS] {
+    ms([wide, BAD, s(S::Short, standard), BAD, BAD, BAD, BAD])
+}
+
+const fn ms_characters(h: Wanted) -> [Wanted; LENGTHS] {
+    ms([
+        s(S::Char, C89),
+        BAD,
+        h,
+        t(Want::WideChar, Some("wchar_t"), C99),
+        BAD,
+        BAD,
+        BAD,
+    ])
+}
+
+/// `ms_print_char_table` (MinGW's `msformat-c.cc`).
+const MS_PRINTF: &[Conversion] = &[
+    conversion(b"di", 0, C89, &MS_SIGNED, b"-wp0 +'", b"i"),
+    conversion(b"oxX", 0, C89, &MS_UNSIGNED, b"-wp0#", b"i"),
+    conversion(b"u", 0, C89, &MS_UNSIGNED, b"-wp0'", b"i"),
+    conversion(b"fgG", 0, C89, &ms_floating(C89), b"-wp0 +#'", b""),
+    conversion(b"eE", 0, C89, &ms_floating(C89), b"-wp0 +#", b""),
+    conversion(
+        b"c",
+        0,
+        C89,
+        &ms([
+            s(S::Int, C89),
+            BAD,
+            s(S::Short, C89),
+            t(Want::WideInt, Some("wint_t"), C99),
+            BAD,
+            BAD,
+            BAD,
+        ]),
+        b"-w",
+        b"",
+    ),
+    conversion(
+        b"s",
+        1,
+        C89,
+        &ms_characters(s(S::Short, C89)),
+        b"-wp",
+        b"cR",
+    ),
+    conversion(b"p", 1, C89, &only(s(S::Void, C89), BAD), b"-w", b"c"),
+    conversion(b"n", 1, C89, &MS_WRITTEN, b"", b"W"),
+    conversion(b"aA", 0, C99, &ms_floating(C99), b"-wp0 +#", b""),
+    conversion(
+        b"C",
+        0,
+        EXT,
+        &ms_wide(t(Want::WideInt, Some("wint_t"), EXT), C89),
+        b"-w",
+        b"",
+    ),
+    conversion(
+        b"S",
+        1,
+        EXT,
+        &ms_wide(t(Want::WideChar, Some("wchar_t"), EXT), C89),
+        b"-wp",
+        b"R",
+    ),
+];
+
+/// `ms_scan_char_table`.
+const MS_SCANF: &[Conversion] = &[
+    conversion(b"di", 1, C89, &MS_SIGNED, b"*w'", b"W"),
+    conversion(b"u", 1, C89, &MS_UNSIGNED, b"*w'", b"W"),
+    conversion(b"oxX", 1, C89, &MS_UNSIGNED, b"*w", b"W"),
+    conversion(
+        b"efgEG",
+        1,
+        C89,
+        &only(s(S::Float, C89), s(S::Double, C89)),
+        b"*w'",
+        b"W",
+    ),
+    conversion(b"c", 1, C89, &ms_characters(s(S::Short, C89)), b"*w", b"cW"),
+    conversion(
+        b"s",
+        1,
+        C89,
+        &ms_characters(s(S::Short, C89)),
+        b"*aw",
+        b"cW",
+    ),
+    conversion(b"[", 1, C89, &ms_characters(BAD), b"*aw", b"cW["),
+    conversion(b"p", 2, C89, &only(s(S::Void, C89), BAD), b"*w", b"W"),
+    conversion(
+        b"n",
+        1,
+        C89,
+        &ms([
+            s(S::Int, C89),
+            BAD,
+            s(S::Short, C89),
+            s(S::Long, C89),
+            s(S::LongLong, C99),
+            BAD,
+            BAD,
+        ]),
+        b"",
+        b"W",
+    ),
+    conversion(
+        b"C",
+        1,
+        EXT,
+        &ms_wide(t(Want::WideChar, Some("wchar_t"), EXT), C89),
+        b"*w",
+        b"W",
+    ),
+    conversion(
+        b"S",
+        1,
+        EXT,
+        &ms_wide(t(Want::WideChar, Some("wchar_t"), EXT), C89),
+        b"*aw",
+        b"W",
+    ),
 ];
 
 /// A flag's name in GCC's words (`printf_flag_specs`, `scanf_flag_specs`).
@@ -408,7 +611,9 @@ struct WantedArgument<'tu> {
     kind:          Kind,
     wanted:        Wanted,
     pointer_count: u8,
-    char_lenient:  bool,
+    /// The conversion's `flags2`: `c` for lenient character types, `R`
+    /// when it reads through its pointer; none for a width or precision.
+    flags2:        &'static [u8],
     writing:       bool,
     /// The argument, if there is one.
     argument:      Option<&'tu Expression<'tu>>,
@@ -419,6 +624,8 @@ struct WantedArgument<'tu> {
     quoted:        (usize, usize),
     /// The byte the caret is at.
     caret:         usize,
+    /// Whether any argument of the wanted type's kind and width will do.
+    identity:      bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -541,12 +748,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         }
         if results.empty > 0 && !silent {
-            let name = archetype(call.kind);
+            let name = archetype(call.kind, call.ms);
             let words = format_in!(self.scratch, "zero-length {name} format string");
             self.format_warning(
                 call.call.source_vectors,
                 G::FormatZeroLength,
                 words,
+                location,
+                None,
+            );
+        }
+        if results.unterminated > 0 {
+            self.format_warning(
+                call.call.source_vectors,
+                G::Format,
+                "unterminated format string",
                 location,
                 None,
             );
@@ -585,6 +801,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.pointer_target(operand).is_some()
                 } =>
                     e = operand_expression,
+                // GCC reads the operand a selection chooses, which keeps its
+                // place for `_Generic` and takes the builtin's for
+                // `__builtin_choose_expr`.
+                | E::Generic(_) => match self.expression_info(e).selected_expression {
+                    | Some(selected) => e = selected,
+                    | None => break,
+                },
+                | E::Builtin(builtin) if builtin.keyword == KeywordTokenType::BuiltinChooseExpr =>
+                    match self.expression_info(e).selected_expression {
+                        | Some(selected) => {
+                            e = selected;
+                            bare = false;
+                        },
+                        | None => break,
+                    },
                 | _ => break,
             }
         }
@@ -645,18 +876,45 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .constant_array_string(e)
                 .and_then(|literal| self.leaf(literal, site, 0, false, false))
             {
+                | Some(mut leaf) => {
+                    let ty = self.expression_info(e).ty;
+                    if let TypeKind::Array(_, ArrayBound::Constant(count)) =
+                        self.types.nodes[ty.index]
+                    {
+                        leaf.extent = usize::try_from(count).ok();
+                    }
+                    leaves.push(GccLeaf::Literal(leaf));
+                },
+                | None => leaves.push(non_literal(self, e)),
+            },
+            // GCC places a conversion of `"..." + N` within the string, and
+            // of anything else at the outermost operator; what concerns the
+            // whole string at the expression's first operand.
+            | _ => match self
+                .literal_offset(e)
+                .and_then(|(literal, offset, direct)| {
+                    let mut leaf =
+                        self.leaf(literal, Self::gcc_leftmost(e), offset, true, bare && direct)?;
+                    leaf.char_site = e.operator_source_vectors.unwrap_or(e.source_vectors);
+                    Some(leaf)
+                }) {
                 | Some(leaf) => leaves.push(GccLeaf::Literal(leaf)),
                 | None => leaves.push(non_literal(self, e)),
             },
-            // GCC places `"..." + N` within the string and `&"..."[N]` at
-            // the expression.
-            | _ => match self.literal_offset(e).and_then(|(literal, offset)| {
-                let sum = matches!(Self::without_parentheses(e).kind, E::Binary { .. });
-                self.leaf(literal, site, offset, true, bare && sum)
-            }) {
-                | Some(leaf) => leaves.push(GccLeaf::Literal(leaf)),
-                | None => leaves.push(non_literal(self, e)),
-            },
+        }
+    }
+
+    /// The first operand of `e`, through parentheses and the left operands
+    /// of binary operators: where GCC's location of `e` begins.
+    fn gcc_leftmost(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+        loop {
+            match e.kind {
+                | E::Parenthesized { expression } => e = expression,
+                | E::Binary {
+                    left_expression, ..
+                } => e = left_expression,
+                | _ => return e,
+            }
         }
     }
 
@@ -668,7 +926,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         leaf: Leaf<'tu>,
         results: &mut Results,
     ) {
-        let bytes = self.format_bytes(&leaf);
+        let mut bytes = self.format_bytes(&leaf);
+        // An array shorter than its string keeps only its extent, which must
+        // end in a null character.
+        if let Some(extent) = leaf.extent
+            && extent <= bytes.len()
+        {
+            if extent == 0 || bytes[extent - 1] != 0 {
+                results.unterminated += 1;
+                return;
+            }
+            bytes = &bytes[..extent - 1];
+        }
         if bytes.is_empty() {
             results.empty += 1;
             return;
@@ -761,7 +1030,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         // Flags.
         let mut flags = ArenaVec::new_in(self.scratch);
-        let flag_chars: &[u8] = if scanf { b"*'I" } else { b" +#0-'I" };
+        let flag_chars: &[u8] = match (scanf, r.call.ms) {
+            | (true, false) => b"*'I",
+            | (false, false) => b" +#0-'I",
+            | (true, true) => b"*'",
+            | (false, true) => b" +#0-'",
+        };
         while at(*i) != 0 && flag_chars.contains(&at(*i)) {
             let flag = at(*i);
             if flags.contains(&flag) {
@@ -802,12 +1076,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     kind: Kind::Width,
                     wanted: s(S::Int, C89),
                     pointer_count: 0,
-                    char_lenient: false,
+                    flags2: b"",
                     writing: false,
                     argument: r.call.arguments.get(number - 1).copied(),
                     number,
                     quoted: (*i - 1, 1),
                     caret: *i - 1,
+                    identity: false,
                 });
             }
             flags.push(b'w');
@@ -820,10 +1095,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 *i += 1;
             }
             if found && !non_zero && scanf {
+                let words = format_in!(
+                    self.scratch,
+                    "zero width in {} format",
+                    archetype(r.call.kind, r.call.ms)
+                );
                 self.format_warning(
                     r.call.call.source_vectors,
                     G::Format,
-                    "zero width in gnu_scanf format",
+                    words,
                     r.leaf.site,
                     None,
                 );
@@ -859,12 +1139,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         kind: Kind::Precision,
                         wanted: s(S::Int, C89),
                         pointer_count: 0,
-                        char_lenient: false,
+                        flags2: b"",
                         writing: false,
                         argument: r.call.arguments.get(number - 1).copied(),
                         number,
                         quoted: (*i - 2, 2),
                         caret: *i - 1,
+                        identity: false,
                     });
                 }
             } else {
@@ -877,7 +1158,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let format_start = *i;
         // The scanf allocation flag, `m`.
         let mut alloc = false;
-        if scanf && at(*i) == b'm' {
+        if scanf && !r.call.ms && at(*i) == b'm' {
             flags.push(b'm');
             alloc = true;
             *i += 1;
@@ -892,7 +1173,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.scratch,
                 "ISO C does not support the '{}' {} length modifier",
                 length.chars,
-                archetype(r.call.kind)
+                archetype(r.call.kind, r.call.ms)
             );
             self.format_warning(
                 r.call.call.source_vectors,
@@ -916,7 +1197,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Step::Next;
         }
         *i += 1;
-        let table = if scanf { SCANF } else { PRINTF };
+        let table = match (scanf, r.call.ms) {
+            | (true, false) => SCANF,
+            | (false, false) => PRINTF,
+            | (true, true) => MS_SCANF,
+            | (false, true) => MS_PRINTF,
+        };
         let Some(conversion) = table
             .iter()
             .find(|conversion| conversion.chars.contains(&conversion_char))
@@ -929,7 +1215,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.gcc_char_warning(r, G::Format, words, *i - 1);
             return Step::Next;
         };
-        let name = archetype(r.call.kind);
+        let name = archetype(r.call.kind, r.call.ms);
         if pedantic && conversion.standard == EXT {
             let words = format_in!(
                 self.scratch,
@@ -977,7 +1263,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let alloc = alloc && flags.contains(&b'm');
         let suppressed = scanf && flags.contains(&b'*');
         // Pairs of flags.
-        let pairs: &[(u8, u8, bool, u8)] = if scanf {
+        let pairs: &[(u8, u8, bool, u8)] = if scanf && r.call.ms {
+            &[(b'*', b'L', false, 0)]
+        } else if scanf {
             &[(b'*', b'L', false, 0), (b'a', b'm', false, 0)]
         } else {
             &[
@@ -1110,12 +1398,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 kind: Kind::Format,
                 wanted: main,
                 pointer_count: conversion.pointer_count + u8::from(alloc),
-                char_lenient: conversion.flags2.contains(&b'c'),
+                flags2: conversion.flags2,
                 writing: alloc || conversion.flags2.contains(&b'W'),
                 argument: r.call.arguments.get(number - 1).copied(),
                 number,
                 quoted: (format_start, *i - format_start),
                 caret: *i - 1,
+                identity: length.is_some_and(|length| length.identity),
             });
         }
         for &wanted in &wanted {
@@ -1127,12 +1416,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Reads a length modifier at `i`.
     fn gcc_length(r: &Reading<'_, 'tu>, i: &mut usize) -> Option<Length> {
         let rest = r.bytes.get(*i..).unwrap_or_default();
-        let specs = if r.scanf {
+        let specs = if r.call.ms {
+            MS_LENGTHS
+        } else if r.scanf {
             SCANF_LENGTHS
         } else {
             PRINTF_LENGTHS
         };
-        let &(name, index, standard, double) = specs
+        let &(name, index, standard, double, identity) = specs
             .iter()
             .find(|spec| rest.starts_with(spec.0.as_bytes()))?;
         *i += name.len();
@@ -1144,12 +1435,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 chars:    double,
                 index:    double_index,
                 standard: double_standard,
+                identity: false,
             });
         }
         Some(Length {
             chars: name,
             index,
             standard,
+            identity,
         })
     }
 
@@ -1162,9 +1455,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !at(j).is_ascii_digit() {
             return self.gcc_missing_dollar(r, needed);
         }
+        // GCC flags a number past `INT_MAX` and reads all its digits.
         while at(j).is_ascii_digit() {
             number = number * 10 + u64::from(at(j) - b'0');
-            overflow |= number > i32::MAX as u64;
+            if number > i32::MAX as u64 {
+                overflow = true;
+                number = i32::MAX as u64;
+            }
             j += 1;
         }
         if at(j) != b'$' {
@@ -1338,6 +1635,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
             }
+            // GCC leaves a null `%s` of its own `printf` to the middle end,
+            // but not one of another table's, such as `ms_printf`'s.
+            if wanted.flags2.contains(&b'R')
+                && r.call.ms
+                && level == 0
+                && parameter.is_some_and(|parameter| self.gcc_null(parameter))
+            {
+                let words = format_in!(
+                    self.scratch,
+                    "reading through null pointer (argument {})",
+                    wanted.number
+                );
+                self.format_warning(
+                    r.call.call.source_vectors,
+                    G::Format,
+                    words,
+                    r.call.input_location,
+                    None,
+                );
+            }
             if level > 0
                 && self.gcc_pedantic()
                 && target.qualifiers.intersects(
@@ -1366,7 +1683,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let current = self.types.non_atomic(current).unqualified();
         let pedantic = self.gcc_pedantic();
-        let char_flag = wanted.char_lenient && self.gcc_character(current);
+        let char_flag = wanted.flags2.contains(&b'c') && self.gcc_character(current);
         let wanted_main = wanted_type.map(|(ty, _)| ty);
         if let Some(wanted_main) = wanted_main {
             if self.gcc_compatible(wanted_main, current) {
@@ -1384,6 +1701,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return;
             }
             if wanted_scalar == Some(S::Char) && (!pedantic || level < 2) && char_flag {
+                return;
+            }
+            if wanted.identity && self.gcc_same_width(wanted_main, current) {
                 return;
             }
         }
@@ -1499,7 +1819,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             positions.and_then(|positions| positions.get(start)),
             positions.and_then(|positions| positions.get(caret)),
         ) else {
-            self.format_warning(r.call.call.source_vectors, group, words, leaf.site, None);
+            self.format_warning(
+                r.call.call.source_vectors,
+                group,
+                words,
+                leaf.char_site,
+                None,
+            );
             return;
         };
         let place = self.byte_location(last);
@@ -1645,6 +1971,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether `a` and `b` are both integer or both floating types of one
+    /// width, which a Microsoft length modifier asks no more of.
+    fn gcc_same_width(&self, a: TypeId, b: TypeId) -> bool {
+        let floating = |ty| {
+            matches!(
+                self.scalar_of(ty),
+                Some(S::Float | S::Double | S::LongDouble)
+            )
+        };
+        let kinds = match (self.integer_type(a), self.integer_type(b)) {
+            | (Some((a, _)), Some((b, _))) => return a == b,
+            | (None, None) => floating(a) && floating(b),
+            | _ => false,
+        };
+        kinds
+            && self
+                .types
+                .layout(a)
+                .zip(self.types.layout(b))
+                .is_some_and(|(a, b)| a.size == b.size)
+    }
+
     /// Whether `ty` is a character type.
     fn gcc_character(&self, ty: TypeId) -> bool {
         matches!(
@@ -1701,30 +2049,64 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Self::string_literal(expression).map(|(literal, _)| literal)
     }
 
-    /// The literal and offset of `"..." + N`, `N + "..."` and `&"..."[N]`.
+    /// The literal and offset of `"..." + N`, `N + "..."`, `"..." - N` and
+    /// `&"..."[N]`, nested as `fold` combines them into one offset, and
+    /// whether the literal is the outermost sum's own operand. A negative
+    /// offset is no string.
     pub(super) fn literal_offset(
         &self,
         e: &'tu Expression<'tu>,
-    ) -> Option<(&'tu Expression<'tu>, usize)> {
+    ) -> Option<(&'tu Expression<'tu>, usize, bool)> {
+        let (literal, offset, direct) = self.gcc_folded_offset(e, 0)?;
+        Some((literal, usize::try_from(offset).ok()?, direct))
+    }
+
+    fn gcc_folded_offset(
+        &self,
+        e: &'tu Expression<'tu>,
+        depth: u32,
+    ) -> Option<(&'tu Expression<'tu>, i128, bool)> {
         let constant = |analyzer: &Self, e: &'tu Expression<'tu>| {
             let info = analyzer.expression_info(e);
             info.integer
                 .filter(|_| info.ice)
                 .and_then(super::super::Integer::to_i128)
-                .and_then(|value| usize::try_from(value).ok())
         };
+        if depth > 64 {
+            return None;
+        }
+        let direct = |e: &'tu Expression<'tu>| matches!(e.kind, E::StringLiteral(_)).then_some(e);
         match Self::without_parentheses(e).kind {
+            | E::StringLiteral(_) => Some((Self::without_parentheses(e), 0, false)),
             | E::Binary {
                 operator: BinaryOperator::Addition,
                 left_expression,
                 right_expression,
-            } =>
-                if let Some((literal, _)) = Self::string_literal(left_expression) {
-                    Some((literal, constant(self, right_expression)?))
-                } else {
-                    let (literal, _) = Self::string_literal(right_expression)?;
-                    Some((literal, constant(self, left_expression)?))
-                },
+            } => {
+                let (pointer, number) = match constant(self, right_expression) {
+                    | Some(number) => (left_expression, number),
+                    | None => (right_expression, constant(self, left_expression)?),
+                };
+                let (literal, offset, _) = self.gcc_folded_offset(pointer, depth + 1)?;
+                Some((
+                    literal,
+                    offset.checked_add(number)?,
+                    direct(pointer).is_some(),
+                ))
+            },
+            | E::Binary {
+                operator: BinaryOperator::Subtraction,
+                left_expression,
+                right_expression,
+            } => {
+                let number = constant(self, right_expression)?;
+                let (literal, offset, _) = self.gcc_folded_offset(left_expression, depth + 1)?;
+                Some((
+                    literal,
+                    offset.checked_sub(number)?,
+                    direct(left_expression).is_some(),
+                ))
+            },
             | E::Unary {
                 operator: UnaryOperator::AddressOf,
                 operand_expression,
@@ -1734,8 +2116,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     left_expression,
                     right_expression,
                 } => {
-                    let (literal, _) = Self::string_literal(left_expression)?;
-                    Some((literal, constant(self, right_expression)?))
+                    let (base, index) = match constant(self, right_expression) {
+                        | Some(index) => (left_expression, index),
+                        | None => (right_expression, constant(self, left_expression)?),
+                    };
+                    let (literal, offset, _) = self.gcc_folded_offset(base, depth + 1)?;
+                    Some((literal, offset.checked_add(index)?, false))
                 },
                 | _ => None,
             },
@@ -1766,12 +2152,14 @@ enum Dollar {
     Error,
 }
 
-/// GCC's name for the archetype it checks a builtin or `format(printf)`
-/// function with on a GNU target.
-const fn archetype(kind: FormatKind) -> &'static str {
-    match kind {
-        | FormatKind::Scanf => "gnu_scanf",
-        | _ => "gnu_printf",
+/// GCC's name for the archetype it checks with: the GNU C library's, or
+/// on Windows the Microsoft C runtime's for a builtin or `format(printf)`.
+const fn archetype(kind: FormatKind, ms: bool) -> &'static str {
+    match (kind, ms) {
+        | (FormatKind::Scanf, false) => "gnu_scanf",
+        | (FormatKind::Scanf, true) => "ms_scanf",
+        | (_, false) => "gnu_printf",
+        | (_, true) => "ms_printf",
     }
 }
 

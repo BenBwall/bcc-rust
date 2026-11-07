@@ -76,6 +76,9 @@ pub(crate) struct FormatAttribute {
     pub(crate) kind:   FormatKind,
     pub(crate) format: u32,
     pub(crate) first:  u32,
+    /// Whether GCC reads the format by the Microsoft C runtime's rules
+    /// (`ms_printf`, `ms_scanf`), as MinGW does `format(printf)`.
+    pub(crate) ms:     bool,
 }
 
 /// Attributes merged over every declaration of one entity.
