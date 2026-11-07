@@ -46,10 +46,9 @@ pub(super) fn argument<'s>(
     registers: &mut ArgumentRegisters,
     named: bool,
 ) -> Result<ArgPlan<'s>, AbiErrorKind> {
-    // Clang gives the stack slot at least eight bytes' alignment.
     let stack = ArgPlan::Stack {
         layout,
-        align: raised(layout, Align::from_bytes(8).expect("8 is a power of two")).align,
+        align: stack_align(layout),
     };
     // One YMM register, which the XMM registers count, if named and free.
     // psABI §3.2.3, "Passing", and §3.5.7 (the register save area has no room
@@ -87,6 +86,21 @@ pub(super) fn argument<'s>(
         Ok(ArgPlan::Registers { layout, parts })
     } else {
         Ok(stack)
+    }
+}
+
+/// The alignment of an aggregate's stack slot, at least eight bytes as Clang
+/// gives it. A vector's is its size, whatever `aligned` its typedef says, since
+/// both compilers read the type without it: GCC's `ix86_function_arg_boundary`
+/// takes the `TYPE_MAIN_VARIANT`, and Clang's `byval` keeps the natural
+/// `align`. Measured with `gcc -S` and `clang -S` for sizes 8 to 256, with and
+/// without AVX. psABI §3.2.3, "Passing".
+pub(super) fn stack_align(layout: AggregateLayout<'_>) -> Align {
+    let eight = Align::from_bytes(8).expect("8 is a power of two");
+    if layout.flags.contains(AggregateFlags::VECTOR) {
+        Align::from_bytes(layout.size.max(8)).unwrap_or(eight)
+    } else {
+        raised(layout, eight).align
     }
 }
 

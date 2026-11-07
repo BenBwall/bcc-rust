@@ -4172,6 +4172,93 @@ mod tests {
         }
     }
 
+    /// Both compilers place a vector on the stack by its size, whatever
+    /// `aligned` its typedef says, in every direction across objects, named or
+    /// not. Skipped without AVX on the machine or a reference compiler.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn aligned_vector_typedefs_keep_their_stack_slots() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let directory = Directory::new();
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        for attributes in [
+            "vector_size(32), aligned(1)",
+            "vector_size(32), aligned(64)",
+            "vector_size(16), aligned(1)",
+            "vector_size(8), aligned(32)",
+            "vector_size(64), aligned(8)",
+            "vector_size(128), aligned(1)",
+        ] {
+            let types = format!(
+                "typedef int T __attribute__(({attributes}));\n#define N (int)(sizeof(T) / \
+                 sizeof(int))\n"
+            );
+            directory.write(
+                "lib.c",
+                &format!(
+                    "#include <stdarg.h>\n{types}int low(long a, long b, long c, long d, long e, \
+                     long f, long g, T v0, T v1, T v2, T v3, T v4, T v5, T v6, T v7, T v8, long \
+                     z) {{ return g != 7 || z != 99 || v0[0] != 1 || v8[N - 1] != N || (unsigned \
+                     long)&v8 % _Alignof(T) != 0; }}\nint var(long g, ...) {{ va_list ap; \
+                     va_start(ap, g); int bad = g != 1; for (int i = 2; i <= 7; i++) bad |= \
+                     va_arg(ap, long) != i; for (int i = 0; i < 9; i++) {{ T v = va_arg(ap, T); \
+                     bad |= v[N - 1] != N; }} bad |= va_arg(ap, long) != 99; va_end(ap); return \
+                     bad; }}\n"
+                ),
+            );
+            directory.write(
+                "client.c",
+                &format!(
+                    "{types}int low(long, long, long, long, long, long, long, T, T, T, T, T, T, \
+                     T, T, T, long); int var(long, ...);\nint main(void) {{ T v; for (int i = 0; \
+                     i < N; i++) v[i] = i + 1; return low(1, 2, 3, 4, 5, 6, 7, v, v, v, v, v, v, \
+                     v, v, v, 99) || var(1L, 2L, 3L, 4L, 5L, 6L, 7L, v, v, v, v, v, v, v, v, v, \
+                     99L); }}\n"
+                ),
+            );
+            for (mode, compiler) in [("--gcc-mode", "gcc"), ("--clang-mode", clang)] {
+                let available = Command::new(compiler).arg("--version").output();
+                if !available.is_ok_and(|output| output.status.success()) {
+                    continue;
+                }
+                for flags in [&["-O0", "-mavx2"][..], &["-O2"]] {
+                    let reference = |source: &str, object: &str| {
+                        let output = Command::new(compiler)
+                            .current_dir(directory.path("."))
+                            .args(flags)
+                            .args(["-w", "-c", source, "-o", object])
+                            .output()
+                            .unwrap();
+                        assert!(output.status.success(), "{}", stderr(&output));
+                    };
+                    let bcc = |source: &str, object: &str| {
+                        let args = [flags, &["-w", "-c", source, "-o", object]].concat();
+                        succeeds(&directory.bcc(mode, &args));
+                    };
+                    reference("lib.c", "r-lib.o");
+                    reference("client.c", "r-client.o");
+                    bcc("lib.c", "b-lib.o");
+                    bcc("client.c", "b-client.o");
+                    for (library, client) in [
+                        ("b-lib.o", "r-client.o"),
+                        ("r-lib.o", "b-client.o"),
+                        ("b-lib.o", "b-client.o"),
+                    ] {
+                        succeeds(&directory.bcc(mode, &[library, client, "-o", "mixed"]));
+                        let run = Command::new(directory.path("mixed")).output().unwrap();
+                        assert_eq!(
+                            run.status.code(),
+                            Some(0),
+                            "{attributes} {mode} {flags:?} {library} {client}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// `__builtin_cpu_supports` and `__builtin_cpu_is` read libgcc's data as
     /// each compiler does: GCC gives the bit where it stands and Clang 1, and
     /// each words a bad name its own way. A function with a `target` attribute

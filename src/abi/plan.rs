@@ -148,7 +148,8 @@ pub(crate) enum ArgPlan<'s> {
         parts:  Parts,
     },
     /// In the stack's argument area, a copy of the aggregate (`byval`) in a
-    /// stack slot aligned to `align`, which may exceed the aggregate's.
+    /// stack slot aligned to `align`, which may differ from the aggregate's
+    /// ([`sysv::stack_align`](super::sysv::stack_align)).
     Stack {
         layout: AggregateLayout<'s>,
         align:  Align,
@@ -392,7 +393,10 @@ pub(super) fn lowered_signature<'s>(
                 }
                 describe(
                     &params,
-                    ParamAbi::ByVal(raised(without_scalars(layout), align)),
+                    ParamAbi::ByVal(AggregateLayout {
+                        align,
+                        ..without_scalars(layout)
+                    }),
                 );
                 params.push(Type::Ptr);
             },
