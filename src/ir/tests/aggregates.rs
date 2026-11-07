@@ -35,6 +35,9 @@ function @memory(ptr sret(size 24, align 8), ptr byval(size 24, align 8)) extern
 function @registers(ptr registers(i64, f64, align 8), i64, f64) external
 
 function @one(ptr registers(i32, align 4)) external
+
+function @whole(ptr registers(f128, f128, offset 16, whole 32, align 32), ptr vector_register(size \
+                        32, align 32, vector, wide)) external
 ";
 
 #[test]
@@ -100,7 +103,7 @@ fn each_profile_accepts_only_its_own_kinds() {
     );
     let post = parse(&arena, POST_ABI);
     assert_eq!(verify(&post, Profile::PostAbi), Vec::<String>::new());
-    assert_eq!(verify(&post, Profile::PreAbi).len(), 4);
+    assert_eq!(verify(&post, Profile::PreAbi).len(), 6);
 }
 
 #[test]

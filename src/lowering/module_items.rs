@@ -33,6 +33,7 @@ use super::{
 use crate::{
     diagnostics::format_in,
     ir::{
+        AggregateFlags,
         AggregateLayout,
         AggregateParam,
         Align,
@@ -716,6 +717,22 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 "lowering referenced an omitted internal function",
             ));
         }
+        if data.linkage != Linkage::Internal
+            && let TypeKind::Function {
+                result,
+                parameters,
+                variadic,
+                prototype,
+                ..
+            } = self.sema.types.kind(data.ty)
+        {
+            self.check_foreign_vectors(
+                parameters.iter().copied(),
+                result,
+                variadic && prototype,
+                self.target_vector_abi(binding),
+            )?;
+        }
         let name = self.symbol_name(binding);
         // Builtin aliases describe the C binding, never the exact assembler
         // label chosen by the user (GNU extension to C99 §6.2.2p2).
@@ -873,8 +890,102 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             crate::abi::Convention::of(self.target),
             self.rules(),
             result,
+            self.avx(),
             scratch,
         )
+    }
+
+    /// Whether AVX changes how vectors of 32 bytes and more travel.
+    fn avx(&self) -> bool {
+        self.context.configuration.code_options().x86_features.avx()
+    }
+
+    /// Whether `binding` has a `target` attribute that changes how vectors of
+    /// 32 bytes and more travel.
+    pub(super) fn target_vector_abi(&self, binding: usize) -> bool {
+        self.sema
+            .entity_attributes(binding)
+            .is_some_and(|attributes| attributes.target_vector_abi)
+    }
+
+    /// Refuses what GCC or Clang would pass or return otherwise than bcc, for a
+    /// function another object can reach, or a call of one: a vector of 32
+    /// bytes or more where a `target` attribute (`target_attribute`) or an
+    /// option bcc only warns about gives it YMM or ZMM registers bcc doesn't
+    /// use, and under GCC's convention a variadic function's named one in YMM,
+    /// since LLVM keeps such a function's named vectors on the stack, as
+    /// Clang's convention says (`CC_X86_64_C` has `CCIfNotVarArg`). An internal
+    /// function's callers are all bcc's and keep bcc's convention.
+    /// GCC `classify_argument` and `function_arg_64`; System V AMD64 psABI
+    /// §3.2.3.
+    pub(super) fn check_foreign_vectors(
+        &self,
+        named: impl Iterator<Item = TypeId> + Clone,
+        result: TypeId,
+        variadic: bool,
+        target_attribute: bool,
+    ) -> Result<(), LoweringErrorKind> {
+        let types = &self.sema.types;
+        let unknown = self
+            .context
+            .configuration
+            .code_options()
+            .x86_features
+            .unknown_vector_abi();
+        let smallest = if target_attribute { Some(32) } else { unknown };
+        if let Some(smallest) = smallest {
+            for ty in named.clone().chain([result]) {
+                let bytes = super::wide_vectors::widest_vector(types, ty)?;
+                if bytes >= smallest {
+                    return Err(LoweringErrorKind::Unsupported(Construct::ForeignVectorAbi));
+                }
+            }
+        }
+        if variadic && self.rules() == crate::configuration::RuleSet::Gcc {
+            for ty in named {
+                if self.travels_whole(ty)? {
+                    return Err(LoweringErrorKind::Unsupported(
+                        Construct::VariadicNamedVector,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether an argument of type `ty` travels whole in a YMM register when it
+    /// is named and one is free.
+    pub(super) fn travels_whole(&self, ty: TypeId) -> Result<bool, LoweringErrorKind> {
+        let types = &self.sema.types;
+        if !self.avx() || crate::abi::Convention::of(self.target) != crate::abi::Convention::SystemV
+        {
+            return Ok(false);
+        }
+        if super::vectors::shape(types, ty).is_some() {
+            return Ok(self
+                .vector_abi_layout(ty, false, self.tables)?
+                .flags
+                .contains(AggregateFlags::WIDE));
+        }
+        super::wide_vectors::record_travels_whole(types, ty, self.rules())
+    }
+
+    /// `layout`, for a record value of type `ty`, marked if AVX lets the record
+    /// travel whole in a YMM register. A transparent union's first member
+    /// decides for an argument, which `first` names.
+    fn with_wide_record<'s>(
+        &self,
+        ty: TypeId,
+        mut layout: AggregateLayout<'s>,
+    ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
+        if self.avx()
+            && crate::abi::Convention::of(self.target) == crate::abi::Convention::SystemV
+            && super::wide_vectors::record_travels_whole(&self.sema.types, ty, self.rules())?
+        {
+            layout.flags |= AggregateFlags::WIDE;
+            layout.scalars = &[];
+        }
+        Ok(layout)
     }
 
     /// Whose rules the claimed compiler identity follows where GCC's and
@@ -930,7 +1041,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 let layout = if super::vectors::shape(types, result).is_some() {
                     self.vector_abi_layout(result, true, scratch)?
                 } else {
-                    types::object_layout(types, result, self.rules(), scratch)?
+                    self.with_wide_record(
+                        result,
+                        types::object_layout(types, result, self.rules(), scratch)?,
+                    )?
                 };
                 aggregates.push(AggregateParam {
                     index: 0,
@@ -967,12 +1081,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     let layout = if super::vectors::shape(types, parameter).is_some() {
                         self.vector_abi_layout(parameter, false, scratch)?
                     } else {
-                        types::argument_layout(
-                            types,
-                            self.target,
+                        self.with_wide_record(
                             parameter,
-                            self.rules(),
-                            scratch,
+                            types::argument_layout(
+                                types,
+                                self.target,
+                                parameter,
+                                self.rules(),
+                                scratch,
+                            )?,
                         )?
                     };
                     aggregates.push(AggregateParam {

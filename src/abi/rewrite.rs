@@ -211,9 +211,9 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         }
         for (&param, &arg) in params[first..].iter().zip(plan.args) {
             match arg {
-                | ArgPlan::Keep | ArgPlan::Stack { .. } =>
-                    self.builder
-                        .define_block_param(entry, param, self.old.value_type(param)),
+                | ArgPlan::Keep | ArgPlan::Stack { .. } | ArgPlan::Vector(_) => self
+                    .builder
+                    .define_block_param(entry, param, self.old.value_type(param)),
                 | ArgPlan::IndirectI128 => {
                     let pointer = self.builder.append_block_param(entry, Type::Ptr);
                     prologue.push(Prologue::LoadI128 { param, pointer });
@@ -485,7 +485,8 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                     lowered.push(args[0]);
                 } else {
                     let size = layout.size.max(registers.bytes());
-                    let area = self.temporary(size, max_align(layout.align, 8));
+                    let align = max_align(registers.align, layout.align.bytes().max(8));
+                    let area = self.temporary(size, align);
                     lowered.push(area);
                     copy_back = Some((area, args[0], layout));
                 },
@@ -505,6 +506,15 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                         lowered.push(value);
                     } else {
                         let copy = self.temporary(layout.size, align);
+                        self.copy(copy, value, layout.size, layout.align);
+                        lowered.push(copy);
+                    },
+                // The load in the back end needs the copy's alignment.
+                | ArgPlan::Vector(layout) =>
+                    if self.is_slot_address(value) {
+                        lowered.push(value);
+                    } else {
+                        let copy = self.temporary(layout.size, layout.align);
                         self.copy(copy, value, layout.size, layout.align);
                         lowered.push(copy);
                     },
@@ -896,7 +906,7 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
             overflow_size:  layout.size.next_multiple_of(8),
             overflow_align: layout.align.bytes().max(8),
         };
-        let arg = sysv::argument(layout, &mut sysv::ArgumentRegisters::default())
+        let arg = sysv::argument(layout, &mut sysv::ArgumentRegisters::default(), false)
             .expect("aggregate descriptor preflight");
         let ArgPlan::Registers { parts, .. } = arg else {
             if !matches!(arg, ArgPlan::Ignore(_)) {
@@ -1023,8 +1033,10 @@ fn slot_needs<'s>(
                 need(args[0], registers.bytes(), registers.align);
             }
             for (&value, &arg) in args[plan.first_arg()..].iter().zip(plan.args) {
-                if let ArgPlan::Stack { layout, align } = arg {
-                    need(value, layout.size, align);
+                match arg {
+                    | ArgPlan::Stack { layout, align } => need(value, layout.size, align),
+                    | ArgPlan::Vector(layout) => need(value, layout.size, layout.align),
+                    | _ => {},
                 }
             }
         }

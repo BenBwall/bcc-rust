@@ -285,19 +285,20 @@ fn split_binary128_unions_follow_the_psabi() {
         &[(0, F128), (0, F64), (8, F64)],
     );
     let whole = layout(16, 16, AggregateFlags::empty(), &[(0, F128), (0, F64)]);
-    let parts = |layout, registers: &mut ArgumentRegisters| match sysv::argument(layout, registers)
-        .unwrap()
-    {
-        | ArgPlan::Registers { parts, .. } => parts.types().to_vec(),
-        | other => panic!("{other:?}"),
-    };
+    let parts =
+        |layout, registers: &mut ArgumentRegisters| match sysv::argument(layout, registers, true)
+            .unwrap()
+        {
+            | ArgPlan::Registers { parts, .. } => parts.types().to_vec(),
+            | other => panic!("{other:?}"),
+        };
     let mut registers = ArgumentRegisters { gp: 6, sse: 0 };
     assert_eq!(parts(split, &mut registers), [F64, F64]);
     assert_eq!(registers, ArgumentRegisters { gp: 6, sse: 2 });
     assert_eq!(parts(whole, &mut ArgumentRegisters::default()), [F128]);
     let mut full = ArgumentRegisters { gp: 0, sse: 7 };
     assert!(matches!(
-        sysv::argument(split, &mut full).unwrap(),
+        sysv::argument(split, &mut full, true).unwrap(),
         ArgPlan::Stack { .. }
     ));
 }

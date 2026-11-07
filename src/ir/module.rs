@@ -816,6 +816,14 @@ pub(crate) enum ParamAbi<'ir> {
     /// layout's alignment is the stack slot's, which ABI lowering may raise
     /// above the aggregate's; the caller's pointer must have it too.
     ByVal(AggregateLayout<'ir>),
+    /// Post-ABI: a vector, or a record wrapping one, passed whole in one YMM
+    /// register, which only exists with AVX. The parameter addresses a copy
+    /// that nothing else addresses, as for [`ParamAbi::Aggregate`]: a back end
+    /// loads the register from the address at a call and stores it into a
+    /// fresh slot in the callee. The caller's pointer has the layout's
+    /// alignment.
+    /// System V AMD64 psABI §3.2.3, "Classification", rule 1, `__m256`.
+    VectorRegister(AggregateLayout<'ir>),
     /// Post-ABI: the address of a caller-owned complex scalar copy, passed
     /// as an ordinary pointer (Win64). Its leaves retain the scalar's value
     /// contract; it has no LLVM byval attribute.
@@ -851,6 +859,7 @@ impl<'ir> ParamAbi<'ir> {
             | Self::Aggregate(layout)
             | Self::Result(layout)
             | Self::ByVal(layout)
+            | Self::VectorRegister(layout)
             | Self::Indirect(layout)
             | Self::Sret(layout) => Some(layout),
             | Self::Registers(_) => None,
@@ -863,6 +872,7 @@ impl<'ir> ParamAbi<'ir> {
             | Self::Aggregate(_) => "aggregate",
             | Self::Result(_) => "result",
             | Self::ByVal(_) => "byval",
+            | Self::VectorRegister(_) => "vector_register",
             | Self::Indirect(_) => "indirect",
             | Self::Sret(_) => "sret",
             | Self::Registers(_) => "registers",
@@ -882,6 +892,7 @@ impl<'ir> ParamAbi<'ir> {
             | Self::Aggregate(layout) => ParamAbi::Aggregate(copy(layout)),
             | Self::Result(layout) => ParamAbi::Result(copy(layout)),
             | Self::ByVal(layout) => ParamAbi::ByVal(copy(layout)),
+            | Self::VectorRegister(layout) => ParamAbi::VectorRegister(copy(layout)),
             | Self::Indirect(layout) => ParamAbi::Indirect(copy(layout)),
             | Self::Sret(layout) => ParamAbi::Sret(copy(layout)),
             | Self::Registers(registers) => ParamAbi::Registers(registers),
@@ -958,18 +969,24 @@ bitflags! {
         /// A member, a one-lane GNU vector, puts the aggregate in memory
         /// under the claimed compiler's System V classification.
         const MEMORY = 1 << 5;
+        /// A vector or a record wrapping one that travels whole in registers
+        /// wider than XMM, as AVX lets it under the claimed compiler's
+        /// classification (`lowering/wide_vectors.rs`). As an argument it is
+        /// one YMM register if named and free; as a result, its bytes.
+        const WIDE = 1 << 6;
     }
 }
 
 impl AggregateFlags {
     /// Each flag with its textual name, in printing order.
-    pub(crate) const NAMES: [(Self, &'static str); 6] = [
+    pub(crate) const NAMES: [(Self, &'static str); 7] = [
         (Self::UNALIGNED, "unaligned"),
         (Self::FLEXIBLE, "flexible"),
         (Self::COMPLEX, "complex"),
         (Self::SINGLE_ELEMENT, "single_element"),
         (Self::VECTOR, "vector"),
         (Self::MEMORY, "memory"),
+        (Self::WIDE, "wide"),
     ];
 }
 
@@ -990,19 +1007,24 @@ pub(crate) struct ResultRegisters {
     pub(crate) first:         Type,
     pub(crate) second:        Option<Type>,
     /// Explicit return-area byte offset of the second register.
-    pub(crate) second_offset: u32,
+    pub(crate) second_offset: u16,
     /// The returned value is a complex scalar; meaningful bytes retain
     /// poison rather than aggregate register-packing freeze refinement.
     pub(crate) complex:       bool,
     /// The aggregate's alignment, which its return area has.
     pub(crate) align:         Align,
+    /// Not zero when the result is one vector of this many bytes, which the
+    /// target's registers hold as they can: with AVX, 32 bytes are YMM0 and 64
+    /// bytes YMM0 and YMM1. `first` and `second` are then the `f128` pieces at
+    /// offsets 0 and 16, as [`Self::parts`] goes on over the rest.
+    pub(crate) whole:         u8,
 }
 
 impl ResultRegisters {
     /// Ordinary paired results occupy two ABI eightbytes. Complex x87 uses
     /// offset 16 instead. Natural LLVM structure layout must agree.
     /// C99: §6.8.6.4p3, p. 139; PDF p. 151; the layout is an IR/ABI contract.
-    pub(crate) const SECOND_OFFSET: u32 = 8;
+    pub(crate) const SECOND_OFFSET: u16 = 8;
 
     /// Whether the parts' natural layout agrees with the return area produced
     /// by ABI lowering, including the special complex x87 pair.
@@ -1023,16 +1045,20 @@ impl ResultRegisters {
         self.second.is_none_or(|second| {
             let first_size = self.first.bytes();
             let second_size = second.bytes();
-            first_size <= Self::SECOND_OFFSET
-                && second_size <= Self::SECOND_OFFSET
-                && first_size.div_ceil(second_size) * second_size == Self::SECOND_OFFSET
+            first_size <= u32::from(Self::SECOND_OFFSET)
+                && second_size <= u32::from(Self::SECOND_OFFSET)
+                && first_size.div_ceil(second_size) * second_size == u32::from(Self::SECOND_OFFSET)
         })
     }
 
     /// Each register's byte offset and type in the return area.
     pub(crate) fn parts(self) -> impl Iterator<Item = (u64, Type)> {
+        let beyond = (32..u64::from(self.whole))
+            .step_by(16)
+            .map(|offset| (offset, Type::F128));
         std::iter::once((0, self.first))
             .chain(self.second.map(|ty| (u64::from(self.second_offset), ty)))
+            .chain(beyond)
     }
 
     /// The registers' types in order.

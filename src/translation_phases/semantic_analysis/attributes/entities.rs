@@ -166,6 +166,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::Common(common) => self.common_attribute(subject, attribute, common),
                 | Rule::DllImport => self.dll_attribute(subject, attribute, DllStorage::Import),
                 | Rule::DllExport => self.dll_attribute(subject, attribute, DllStorage::Export),
+                | Rule::Ignored if attribute.name == "target" =>
+                    self.target_attribute(subject, attribute),
                 | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
                 | Rule::AlwaysInline => self.inline_attribute(subject, attribute, Inlining::Always),
                 | _ => {},
@@ -399,6 +401,28 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 attributes.common = Some(common || attributes.common == Some(true));
             },
             | _ => self.ignored(attribute),
+        }
+    }
+
+    /// GCC and Clang `target` on a function, which is otherwise ignored:
+    /// retains whether its text changes how vectors of 32 bytes and more
+    /// travel. GNU extension: GCC manual, "x86 Function Attributes", `target`.
+    fn target_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        let Subject::Function { binding, .. } = subject else {
+            return;
+        };
+        let options = self.context.configuration.code_options().x86_features;
+        let mut changes = false;
+        for token in attribute.arguments.unwrap_or_default() {
+            if let TokenType::String(StringTokenType::String(id)) = token.kind
+                && let Some(text) = self.context.literal_text_in(self.scratch, id, false)
+            {
+                changes |= options.target_changes_vector_abi(text);
+            }
+        }
+        if changes {
+            let entity = self.entity_of(binding);
+            self.attributes.entity(entity).target_vector_abi = true;
         }
     }
 

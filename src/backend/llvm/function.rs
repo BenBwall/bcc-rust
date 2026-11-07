@@ -24,6 +24,7 @@ use super::{
 use crate::{
     diagnostics::format_in,
     ir::{
+        AggregateLayout,
         Block,
         BlockCall,
         Body,
@@ -145,6 +146,15 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 let area = api.alloca(api.array(api.ty(Type::I8), registers.area_bytes()));
                 api.alignment(area, registers.align.bytes().max(8));
                 area
+            } else if let Some(ParamAbi::VectorRegister(layout)) = signature.param_abi(ir_index) {
+                // The parameter object is the slot the register lands in.
+                let register = api.param(self.functions[id.index()], index);
+                index += 1;
+                let slot = api.alloca(api.array(api.ty(Type::I8), layout.size));
+                api.alignment(slot, layout.align.bytes());
+                let store = api.store(register, slot);
+                api.alignment(store, layout.align.bytes());
+                slot
             } else {
                 let param = api.param(self.functions[id.index()], index);
                 index += 1;
@@ -334,7 +344,10 @@ pub(super) fn signature_type<'id>(
         .enumerate()
     {
         if passed(signature, index) {
-            types.push(api.ty(ty));
+            types.push(match signature.param_abi(index) {
+                | Some(ParamAbi::VectorRegister(layout)) => vector_register_type(api, layout),
+                | _ => api.ty(ty),
+            });
         }
     }
     api.signature(result_type(api, signature), &types, signature.variadic)
@@ -347,10 +360,28 @@ fn result_type<'id>(api: &Session<'id>, signature: Signature<'_>) -> Ty<'id> {
     }
 }
 
+/// The LLVM type of a vector that travels whole, as Clang's
+/// `X86_64ABIInfo::GetByteVectorType` gives one. LLVM's X86 calling convention
+/// puts the 256 bits in a YMM register or, when none is free, on the stack at
+/// 32 bytes' alignment (`X86CallingConv.td`).
+fn vector_register_type<'id>(api: &Session<'id>, layout: AggregateLayout<'_>) -> Ty<'id> {
+    whole_vector_type(api, layout.size)
+}
+
+fn whole_vector_type<'id>(api: &Session<'id>, bytes: u64) -> Ty<'id> {
+    api.vector(
+        api.ty(Type::I64),
+        u32::try_from(bytes / 8).unwrap_or(u32::MAX),
+    )
+}
+
 fn registers_type<'id>(api: &Session<'id>, registers: ResultRegisters) -> Ty<'id> {
     // The verifier enforces the shared return-area layout, so an unpacked
     // LLVM structure places the second part at its explicit register offset.
     debug_assert!(registers.valid_layout(), "verified register return layout");
+    if registers.whole != 0 {
+        return whole_vector_type(api, u64::from(registers.whole));
+    }
     match registers.second {
         | Some(second) => api.structure(
             &[
@@ -954,6 +985,19 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
     fn register_return(&self, registers: ResultRegisters, area: Val<'id>) -> Val<'id> {
         let api = self.emitter.api;
         let result_ty = registers_type(api, registers);
+        if registers.whole != 0 {
+            let bytes = self.whole_vector_bytes(
+                area,
+                u64::from(registers.whole),
+                registers.align.bytes().max(8),
+            );
+            let frozen = if self.signature.result_noundef {
+                bytes
+            } else {
+                api.freeze(bytes)
+            };
+            return api.cast(LLVMOpcode::LLVMBitCast, frozen, result_ty);
+        }
         let mut result = api.poison(result_ty);
         for ((offset, ty), index) in registers.parts().zip(0_u32..) {
             let addr = if offset == 0 {
@@ -991,6 +1035,18 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             };
         }
         result
+    }
+
+    /// The bytes of a vector that travels whole, as a byte vector, which keeps
+    /// each byte's poison as [`Self::register_return`] does.
+    fn whole_vector_bytes(&self, address: Val<'id>, size: u64, align: u64) -> Val<'id> {
+        let api = self.emitter.api;
+        let bytes = api.load(
+            api.vector(api.ty(Type::I8), u32::try_from(size).unwrap_or(u32::MAX)),
+            address,
+        );
+        api.alignment(bytes, align);
+        bytes
     }
 
     /// `llvm.eh.sjlj.setjmp` on the `buffer` lowering filled as Clang
@@ -1069,7 +1125,21 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
         let mut arguments = ArenaVec::with_capacity_in(args.len(), self.emitter.arena);
         for (index, &arg) in args.iter().enumerate() {
             if passed(signature, index) {
-                arguments.push(self.value(arg)?);
+                arguments.push(match signature.param_abi(index) {
+                    | Some(ParamAbi::VectorRegister(layout)) => {
+                        let bytes = self.whole_vector_bytes(
+                            self.value(arg)?,
+                            layout.size,
+                            layout.align.bytes(),
+                        );
+                        api.cast(
+                            LLVMOpcode::LLVMBitCast,
+                            api.freeze(bytes),
+                            vector_register_type(api, layout),
+                        )
+                    },
+                    | _ => self.value(arg)?,
+                });
             }
         }
         let call = api.call(

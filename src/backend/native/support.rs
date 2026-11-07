@@ -262,6 +262,11 @@ impl Checker<'_, '_> {
                 | ParamAbi::ByVal(layout) if layout.align.bytes() > 4096 =>
                     return Err(Construct::SlotAlignment(layout.align.bytes())),
                 | ParamAbi::Sret(_) | ParamAbi::ByVal(_) | ParamAbi::Indirect(_) => {},
+                // This back end writes no AVX instructions.
+                | ParamAbi::VectorRegister(layout) =>
+                    return Err(Construct::VectorRegister(layout.size)),
+                | ParamAbi::Registers(registers) if registers.whole != 0 =>
+                    return Err(Construct::VectorRegister(u64::from(registers.whole))),
                 // Win64's `__int128` result and System V's `__float128` one
                 // in `%xmm0`, and System V's `long double` in `%st0`, or a
                 // complex one in `%st0` and `%st1`.
@@ -373,6 +378,8 @@ pub(crate) enum Construct {
     Opcode(Opcode),
     /// A Win64 `i128` passed by value.
     WideByValue,
+    /// A vector that AVX passes whole in YMM registers.
+    VectorRegister(u64),
     /// `__builtin_return_address` or `__builtin_frame_address` in a handler
     /// or a naked function, neither of which has a return address and frame
     /// at a fixed place.
@@ -423,6 +430,10 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::Opcode(opcode) => write!(f, "the `{opcode}` instruction")?,
             | Construct::InlineAsm(reason) => write!(f, "inline assembly with {reason}")?,
             | Construct::WideByValue => write!(f, "an i128 passed by value on Win64")?,
+            | Construct::VectorRegister(bytes) => write!(
+                f,
+                "a {bytes}-byte vector in YMM registers, as AVX passes it"
+            )?,
             | Construct::MachineEntryFrameQuery => write!(
                 f,
                 "a return or frame address in an interrupt handler or naked function"

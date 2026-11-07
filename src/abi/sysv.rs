@@ -44,12 +44,23 @@ use crate::ir::{
 pub(super) fn argument<'s>(
     layout: AggregateLayout<'s>,
     registers: &mut ArgumentRegisters,
+    named: bool,
 ) -> Result<ArgPlan<'s>, AbiErrorKind> {
     // Clang gives the stack slot at least eight bytes' alignment.
     let stack = ArgPlan::Stack {
         layout,
         align: raised(layout, Align::from_bytes(8).expect("8 is a power of two")).align,
     };
+    // One YMM register, which the XMM registers count, if named and free.
+    // psABI §3.2.3, "Passing", and §3.5.7 (the register save area has no room
+    // for the upper halves).
+    if layout.flags.contains(AggregateFlags::WIDE) {
+        return Ok(if named && registers.take(0, 1) {
+            ArgPlan::Vector(layout)
+        } else {
+            stack
+        });
+    }
     // A vector's registers were chosen by lowering; none means memory.
     if layout.flags.contains(AggregateFlags::VECTOR) && layout.scalars.is_empty() {
         return Ok(stack);
@@ -91,6 +102,9 @@ pub(super) fn result<'s>(
         _ = registers.take(1, 0);
         ResultPlan::Memory(layout)
     };
+    if layout.flags.contains(AggregateFlags::WIDE) {
+        return Ok(ResultPlan::wide(layout));
+    }
     if layout.flags.contains(AggregateFlags::COMPLEX)
         && layout
             .scalars
@@ -105,6 +119,7 @@ pub(super) fn result<'s>(
                 second:        Some(Type::F80),
                 second_offset: 16,
                 align:         layout.align,
+                whole:         0,
             },
         });
     }
@@ -119,8 +134,9 @@ pub(super) fn result<'s>(
                         complex:       false,
                         first:         low.ty,
                         second:        Some(high.ty),
-                        second_offset: high.offset,
+                        second_offset: u16::try_from(high.offset).unwrap_or(u16::MAX),
                         align:         layout.align,
+                        whole:         0,
                     },
                 });
             },
@@ -142,6 +158,7 @@ pub(super) fn result<'s>(
             first:         integer(first),
             second:        second.map(integer),
             align:         layout.align,
+            whole:         0,
         },
     };
     if classes == [Class::X87, Class::X87Up] {
@@ -198,6 +215,7 @@ fn parts(layout: AggregateLayout<'_>, classes: [Class; 2]) -> Result<Option<Part
                 first:         low,
                 second:        Some(high),
                 align:         layout.align,
+                whole:         0,
             };
             let low = if registers.valid_layout() {
                 low
@@ -401,6 +419,7 @@ impl ArgumentRegisters {
         for (index, &ty) in signature.params.iter().enumerate() {
             match signature.param_abi(index) {
                 | Some(ParamAbi::Registers(_) | ParamAbi::ByVal(_)) => {},
+                | Some(ParamAbi::VectorRegister(_)) => _ = registers.take(0, 1),
                 | _ => _ = registers.take_scalar(ty),
             }
         }

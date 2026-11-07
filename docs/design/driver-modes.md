@@ -187,9 +187,45 @@ Clang: `-std=c99` selects a language, and each is still an extension under
 `-mavx`, `-mavx2`, `-mfma`, `-mf16c`, `-mbmi`, `-mbmi2`, `-mlzcnt`, `-mmovbe`,
 `-maes`, `-mpclmul`, `-mxsave`, `-msahf`, their `-mno-` forms, and `-march=x86-64`,
 `x86-64-v2`, `x86-64-v3` and `native` define each compiler's macros and let LLVM use
-the instructions. Each turns on what it needs and `-mno-` turns off what needs it.
+the instructions. Each turns on what it needs and `-mno-` turns off what needs it,
+and LLVM hears `-avx` as well as `+avx2`, since the processor `-march=` names may have
+what the command line took away. POPCNT and CRC32 come with SSE4.2 by default and
+aren't needed by it, so `-mavx -mno-popcnt` keeps AVX. AVX needs XSAVE in GCC, while
+Clang's `-mno-xsave` leaves AVX on; Clang also reads only the last of `-msse4.2`,
+`-msse4` and `-mno-sse4.2`. The last `-march=` names defaults, which replace the
+previous `-march=`'s, and an explicit option outranks them wherever it stands:
+`-mno-avx -march=x86-64-v3` has no AVX, and `-mavx2 -march=x86-64` keeps AVX2.
+Random combinations of these options defined the same feature macros as GCC 13, GCC
+14's cc1 and Clang 23.
+
 Intrinsics compile without them, because bcc's headers compute on any x86-64, and a
 `target` attribute changes nothing about a function's code.
+
+These options apply only to x86-64. On a WebAssembly target `--clang-mode` refuses
+them as Clang does, with `unsupported option '-mavx2' for target
+'wasm32-unknown-unknown'`, and leaves `-msse4.2` and `-msse4` unused as it does.
+`--gcc-mode` says `unrecognized command-line option '-mavx2'` and `bad value
+'x86-64-v3' for '-march=' switch`, since GCC has no such target and that is what a GCC
+for another processor says. They define no macros there.
+
+With AVX on, vectors of 32 bytes, and the records each compiler lets wrap one, travel
+in YMM registers as GCC and Clang pass them, so bcc's objects link with theirs both
+ways; a 64-byte result comes back in YMM0 and YMM1 under `--clang-mode` and through
+memory under `--gcc-mode`. What bcc can't follow is refused, in functions other objects
+can reach and calls of them:
+
+- A vector of 32 bytes or more by value when an option bcc only warns about would
+  change how it travels (`-mavx512f`, `-march=haswell`, `-march=x86-64-v4`), or, for
+  64 bytes, under `-march=native` on an AVX-512 processor.
+- The same in a function with a `target` attribute that changes AVX, or a call from
+  one: GCC passes YMM there, Clang refuses mismatched calls, and bcc ignores the
+  attribute.
+- Under `--gcc-mode`, a variadic function's named 32-byte vector, which GCC passes in
+  YMM0 and LLVM only on the stack. `--clang-mode` keeps Clang's stack.
+- `--backend=native` refuses any YMM signature, since it writes no AVX instructions.
+
+A `static` function's callers are all bcc's, so it keeps bcc's convention under each of
+these.
 
 ## Options a compiler knows and bcc does not implement
 
@@ -225,7 +261,8 @@ to the options TCC itself implements; see [TCC](#tcc).
   bcc's output satisfies less fully but correctly: a processor bcc doesn't name
   (`-march=haswell`, `-march=x86-64-v4`) or a feature outside the list below
   (`-mavx512f`); baseline x86-64 code runs on it, but its macros stay undefined.
-  The build goes on and says what it lacks.
+  The build goes on and says what it lacks, unless a vector by value would travel
+  differently from how those options pass it (see above).
 - **Refused**, with the compiler's kind of error, for everything else:
   options that change layout or the ABI away from the target's
   (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on

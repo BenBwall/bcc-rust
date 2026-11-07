@@ -408,14 +408,16 @@ impl Cli {
         let mut x86_features = crate::target::X86Features::for_compiler(
             CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
         );
-        // WebAssembly has no such features: `x86_options_for_wasm` refuses
-        // them.
+        // WebAssembly has no such features: `report_x86_options_on_wasm`
+        // refuses them.
         if !self.target.is_wasm() {
             // Clang's driver reads only the last of `-msse4.2`, `-msse4` and
             // `-mno-sse4.2`, where it stands.
-            let sse4_2 =
-                |option: &String| matches!(option.as_str(), "-msse4.2" | "-msse4" | "-mno-sse4.2");
-            let last = self.language_option.iter().rposition(sse4_2);
+            let sse4_2 = |option: &str| matches!(option, "-msse4.2" | "-msse4" | "-mno-sse4.2");
+            let last = self
+                .language_option
+                .iter()
+                .rposition(|option| sse4_2(option));
             let gcc = CompilerIdentity::from(self.compiler_identity) == CompilerIdentity::Gcc;
             for (index, option) in self.language_option.iter().enumerate() {
                 if gcc || !sse4_2(option) || Some(index) == last {
@@ -554,21 +556,30 @@ impl Cli {
                 continue;
             }
             failed = true;
-            let message = match (gcc, option.strip_prefix("-march=")) {
-                | (true, Some(architecture)) =>
-                    format!("bad value '{architecture}' for '-march=' switch"),
-                | (true, None) => format!("unrecognized command-line option '{option}'"),
-                | (false, Some(_)) => format!("unsupported option '-march=' for target '{triple}'"),
-                | (false, None) => {
-                    let option = if option == "-mno-sse4" {
-                        "-mno-sse4.1"
-                    } else {
-                        option
+            match (gcc, option.strip_prefix("-march=")) {
+                | (true, Some(architecture)) => report(
+                    self,
+                    Severity::Error,
+                    format_args!("bad value '{architecture}' for '-march=' switch"),
+                ),
+                | (true, None) => report(
+                    self,
+                    Severity::Error,
+                    format_args!("unrecognized command-line option '{option}'"),
+                ),
+                | (false, architecture) => {
+                    let option = match option {
+                        | _ if architecture.is_some() => "-march=",
+                        | "-mno-sse4" => "-mno-sse4.1",
+                        | other => other,
                     };
-                    format!("unsupported option '{option}' for target '{triple}'")
+                    report(
+                        self,
+                        Severity::Error,
+                        format_args!("unsupported option '{option}' for target '{triple}'"),
+                    );
                 },
-            };
-            report(self, Severity::Error, format_args!("{message}"));
+            }
         }
         failed
     }
@@ -950,7 +961,6 @@ impl LanguageFlag {
             | "-fsignaling-nans" => return Some(Self::SignalingNans(true)),
             | "-fno-signaling-nans" => return Some(Self::SignalingNans(false)),
             | "--general-regs-only" => return Some(Self::GeneralRegsOnly),
-            | crate::target::UNKNOWN_VECTOR_ABI => return Some(Self::Code),
             | "--user-interrupts" => return Some(Self::UserInterrupts),
             | "-fno-honor-nans" | "-fhonor-nans" =>
                 return Some(Self::RelaxedFloatingPoint(
@@ -1010,7 +1020,9 @@ impl LanguageFlag {
             | "-fdata-sections"
             | "-fno-data-sections" => return Some(Self::Code),
             | _ if is_diagnostic_presentation(text) => return Some(Self::Presentation),
-            | _ if crate::target::is_feature_option(text) => return Some(Self::Code),
+            | _ if crate::target::is_feature_option(text)
+                || text == crate::target::UNKNOWN_VECTOR_ABI =>
+                return Some(Self::Code),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpermissive" => return Some(Self::Permissive(true)),
             | "-fno-permissive" => return Some(Self::Permissive(false)),

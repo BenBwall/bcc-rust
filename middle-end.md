@@ -2721,7 +2721,22 @@ and 16) and through memory for GCC; larger ones and every larger argument
 go to memory (`byval`, aligned as the vector). GCC passes one-lane `float`,
 `double` and `long double` vectors in memory; Clang passes the `float` as
 an integer, the `double` argument in memory with its result in XMM0, and
-the `long double` as x87 data. A vector member of a structure classifies
+the `long double` as x87 data. With AVX (`-mavx`, `-march=x86-64-v3`), a
+32-byte vector carries the layout flag `wide`, and so does a record of 32
+bytes that `lowering/wide_vectors.rs` finds travels whole under the claimed
+compiler's rules: `abi/sysv.rs` gives a named argument one vector register
+(`ParamAbi::VectorRegister`, a pointer to the copy in the IR, which the LLVM
+back end loads into a `<4 x i64>`) and a result `registers(f128, f128, offset
+16, whole 32, ...)`, one `<4 x i64>` for the LLVM back end. An unnamed one goes
+on the stack, as psABI §3.5.7 says, and when the eight vector registers are
+used so does a named one. A call of a function without a prototype passes it
+in YMM as well, as an ordinary call, as Clang's `isNoProtoCallVariadic` does.
+A 64-byte result is `whole 64` for Clang, which LLVM splits over YMM0 and YMM1,
+and memory for GCC. `__int128` lanes stay in memory for both. A named
+vector in a variadic function is on the stack for Clang, since LLVM's
+`CC_X86_64_C` says `CCIfNotVarArg`, and in YMM for GCC, which bcc can't write,
+so GCC's identity refuses it where another object could reach the function. A
+vector member of a structure classifies
 as one unit (`f128` for 16 bytes, `f64` for 8, an integer for 1 to 4), as
 Clang's `classify` treats a vector field; a one-lane `double` member puts
 its record in memory for both compilers, and a one-lane `float` or `long
@@ -2729,11 +2744,14 @@ double` member for GCC (the layout flag `memory`). Microsoft x64 (`abi/win64.rs`
 as Clang passes GNU vectors: arguments by reference except a lone `float`
 or `double` lane in its XMM register; results of up to 16 bytes in XMM0
 (`i128`, which the LLVM back end types `<2 x i64>`) and of 32 bytes in XMM0
-and XMM1. WebAssembly passes one-lane `float` and `double` vectors as
+and XMM1; with AVX, of 32 bytes in YMM0 and of 64 in YMM0 and YMM1. WebAssembly
+passes one-lane `float` and `double` vectors as
 values and others by reference and `sret`, where wasi-sdk's Clang splits
 them into lanes.
 
-The native back end returns the `f128`/`i128` pair in XMM0 and XMM1, and
+The native back end writes no AVX instructions, so it refuses a signature
+with a YMM register (`Construct::VectorRegister`). It returns the `f128`/`i128`
+pair in XMM0 and XMM1, and
 passes a `byval` copy aligned above 16 bytes by realigning `%rsp` in the
 prologue (`andq $-align, %rsp`) with a frame pointer, as a moving stack
 does (`MFunction::outgoing_align`, `Frame::realign`), and again at each
