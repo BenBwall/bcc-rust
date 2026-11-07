@@ -53,15 +53,13 @@ pub(crate) use source_files::{
 use source_text::SourceText;
 
 #[cfg(test)]
-use super::provenance::{
-    SourcePosition,
-    SourceVectors,
-};
+use super::provenance::SourcePosition;
 use super::{
     TranslationError,
     provenance::{
         SourceVector,
         SourceVectorStack,
+        SourceVectors,
     },
 };
 use crate::{
@@ -189,6 +187,9 @@ pub(crate) struct Context<'tu> {
     retained_vectors: RegionVec<SourceVector>,
     pub(crate) string_cache: StringCache<'tu>,
     pub(crate) canonical_identifiers: ArenaMap<'tu, StringCacheId, StringCacheId>,
+    /// Where `-Wdangling-else` reports about each statement that can hold a
+    /// nested `if`, by the statement's address.
+    dangling_else_sites: ArenaMap<'tu, usize, SourceVectors>,
     literal_values: DedupArena<'tu, &'tu [LiteralUnit], FxBuildHasher>,
     /// Sparse endpoints follow their source arena's lifetime.
     expansion_sites: [ExpansionSites<'tu>; 3],

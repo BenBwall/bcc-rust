@@ -76,6 +76,7 @@ mod inference;
 mod initializers;
 mod main_function;
 mod missing_fields;
+mod parentheses;
 mod predefined;
 mod reachability;
 mod sign_compare;
@@ -700,8 +701,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
             | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
             | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
-            | Work::Condition(slot, integer, statement) =>
-                self.check_condition(slot, integer, statement),
+            | Work::Condition(slot, integer, statement) => {
+                self.check_condition(slot, integer, statement);
+                if integer {
+                    self.check_switch_condition(statement, slot);
+                } else {
+                    self.check_condition_parentheses(slot);
+                }
+            },
             | Work::RequireConstant(e, assertion, before) => {
                 let value = self.integers.pop().flatten();
                 if self.semantic_errors == before && !self.unanalyzed_constant(e) {
