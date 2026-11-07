@@ -84,6 +84,7 @@ pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
                 first:         layout.scalars[0].ty,
                 second:        None,
                 align:         layout.align,
+                whole:         0,
             },
         };
     }
@@ -99,6 +100,7 @@ pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
                 first,
                 second: None,
                 align: layout.align,
+                whole: 0,
             },
         },
         | None => ResultPlan::Memory(layout),
