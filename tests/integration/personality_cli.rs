@@ -7578,6 +7578,47 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// GCC's `-Wunknown-pragmas`, which `-Wall` holds: each pragma GCC does not
+    /// know, named by its first one or two names. Measured against GCC 14.2.
+    #[test]
+    fn gcc_ignores_unknown_pragmas_with_a_warning() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "#pragma foo bar baz\n#pragma omp parallel\n#pragma GCC foo\n#pragma clang \
+             fp\n#pragma STDC FP_CONTRACT ON\n#pragma comment(lib, \"x\")\n#pragma once\n#pragma \
+             GCC diagnostic push\n#pragma GCC diagnostic pop\n#pragma pack(1)\nint x;\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "a.c"]);
+        succeeds(&output);
+        let text = stderr(&output);
+        let ignored: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once("ignoring '").map(|(_, rest)| rest))
+            .filter_map(|rest| rest.split_once('\'').map(|(name, _)| name))
+            .collect();
+        assert_eq!(
+            ignored,
+            [
+                "#pragma foo bar",
+                "#pragma omp parallel",
+                "#pragma GCC foo",
+                "#pragma clang fp",
+                "#pragma STDC FP_CONTRACT",
+                "#pragma comment ",
+            ],
+            "{text}"
+        );
+        assert!(text.contains("[-Wunknown-pragmas]"), "{text}");
+        let quiet = directory.bcc("--gcc-mode", &["-fsyntax-only", "a.c"]);
+        assert!(!stderr(&quiet).contains("ignoring"), "{}", stderr(&quiet));
+        let quiet = directory.bcc(
+            "--gcc-mode",
+            &["-Wall", "-Wno-unknown-pragmas", "-fsyntax-only", "a.c"],
+        );
+        assert!(!stderr(&quiet).contains("ignoring"), "{}", stderr(&quiet));
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();

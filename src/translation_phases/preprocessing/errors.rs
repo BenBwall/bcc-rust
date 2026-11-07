@@ -499,6 +499,10 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
     UnknownPragmaDirective,
+    /// GCC's words for a pragma it does not know: the pragma's first one or
+    /// two names, as `ignoring '#pragma omp parallel'`.
+    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+    IgnoredPragma(&'tu str),
     /// C99: §6.10.6 paragraph 2, p. 159; PDF p. 171.
     UnknownPragmaSTDCArgument(&'tu str),
     // C99: `#pragma once` is an implementation-defined pragma, §6.10.6
@@ -1321,6 +1325,13 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("expected a string literal")
             .note("C99 §6.10.9: write `_Pragma(\"...\")`"),
+            | Self::IgnoredPragma(text) => new(format_in!(
+                arena,
+                "ignoring '#pragma {text}' [-Wunknown-pragmas]"
+            ))
+            .option_suffix()
+            .label("GCC knows no such pragma")
+            .note("C99 §6.10.6p1: a pragma the implementation does not recognize is ignored"),
             | Self::UnknownPragmaDirective => new("unknown pragma ignored")
                 .label("not recognized")
                 .note("bcc recognizes `#pragma once` and the `#pragma STDC` pragmas"),
@@ -1751,6 +1762,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
             | PreprocessorErrorType::PragmaDiagnostic(_)
             | PreprocessorErrorType::UnknownPragmaDirective
+            | PreprocessorErrorType::IgnoredPragma(_)
             | PreprocessorErrorType::UnknownEscapeSequence(_)
             | PreprocessorErrorType::IllegalCharacterEncoding { prefixed: false, .. }
             | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
