@@ -1007,16 +1007,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .push(Work::FunctionWork(FunctionWork::StatementExpressionEnd(
                 self.functions.dead,
             )));
-        if self.functions.dead {
-            return;
-        }
-        let StatementType::Compound { items } = block.kind else {
+        let Some(last) = self.value_statement_of(block) else {
             return;
         };
-        let Some((&BlockItem::Statement(mut last), _)) =
-            self.statement_expression_value_item(items.as_slice())
+        self.note_statement_expression_value(last);
+        if !self.functions.dead {
+            _ = self
+                .functions
+                .emission
+                .value_statements
+                .insert(std::ptr::from_ref(last).addr(), ());
+        }
+    }
+}
+
+impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// The expression statement that gives statement expression `block` its
+    /// value: the item that holds it, after its labels.
+    /// GNU extension: GCC manual, "Statement Exprs".
+    fn value_statement_of(&self, block: &'tu Statement<'tu>) -> Option<&'tu Statement<'tu>> {
+        let StatementType::Compound { items } = block.kind else {
+            return None;
+        };
+        let (&BlockItem::Statement(mut last), _) =
+            self.statement_expression_value_item(items.as_slice())?
         else {
-            return;
+            return None;
         };
         loop {
             match last.kind {
@@ -1025,16 +1041,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | _ => break,
             }
         }
-        if matches!(
+        matches!(
             last.kind,
             StatementType::Expression(ExpressionSlot::Parsed(_))
-        ) {
-            _ = self
-                .functions
-                .emission
-                .value_statements
-                .insert(std::ptr::from_ref(last).addr(), ());
-        }
+        )
+        .then_some(last)
     }
 }
 

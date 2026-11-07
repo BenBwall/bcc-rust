@@ -10,6 +10,7 @@ use super::{
         compiler_wording::ConversionSite,
     },
     ConversionKind,
+    Expression,
     ExpressionInfo,
 };
 use crate::{
@@ -94,7 +95,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.types.nodes[target.index],
                 TypeKind::Scalar(Scalar::Bool)
             ) {
-                self.boolean_conversion_warning(source);
+                self.conversion_to_bool_warning(source);
             }
             return true;
         }
@@ -248,7 +249,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether `expression` is an address constant, possibly inside casts,
     /// as GCC's `TREE_CONSTANT` finds `(int)(long)&x`.
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
-    fn casts_address_constant(&self, mut expression: &'tu super::Expression<'tu>) -> bool {
+    fn casts_address_constant(&self, mut expression: &'tu Expression<'tu>) -> bool {
         use crate::translation_phases::parsing::syntax::ExpressionType as E;
         loop {
             let info = self.expression_info(expression);
@@ -418,59 +419,404 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Diagnoses implicit Boolean conversion while retaining the operand's
-    /// type; truth contexts need no synthetic cast.
+    /// type; truth contexts need no synthetic cast. `site` is the token each
+    /// compiler takes the conversion's location from: `!`, `&&`, `?` or the
+    /// condition's first token.
     /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
-    pub(super) fn boolean_conversion_warning(&mut self, info: ExpressionInfo<'tu>) {
+    pub(super) fn boolean_conversion_warning(
+        &mut self,
+        info: ExpressionInfo<'tu>,
+        site: SourceVectors,
+    ) {
         if self.nullptr_type(info.ty) {
             self.pointer_diagnostic(
                 DiagnosticGroup::NullConversion,
                 info.expression.source_vectors,
             );
+        } else if self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang
+        {
+            self.clang_pointer_bool_warning(info, site);
         } else {
-            self.pointer_bool_warning(info);
+            self.gcc_address_warning(info.expression, Some(site));
         }
     }
 
-    /// Clang's pointer-to-bool warning concerns a known address, not the
-    /// unknown value read from a pointer variable.
+    /// [`Self::boolean_conversion_warning`] for a conversion to `_Bool`, whose
+    /// location GCC does not take from the expression, so a macro around it
+    /// changes nothing.
     /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
-    pub(super) fn pointer_bool_warning(&mut self, info: ExpressionInfo<'tu>) {
+    fn conversion_to_bool_warning(&mut self, info: ExpressionInfo<'tu>) {
+        if self.nullptr_type(info.ty)
+            || self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang
+        {
+            self.boolean_conversion_warning(info, info.expression.source_vectors);
+        } else {
+            self.gcc_address_warning(info.expression, None);
+        }
+    }
+
+    /// Clang's `DiagnoseAlwaysNonNullPointer`, about one name or member: it
+    /// wants the operand of `&` as written, so `&(g)` is silent, leaves the
+    /// address of a function alone as the way to silence it, and says nothing
+    /// about a string literal, a compound literal or a weak entity. It stays
+    /// out of a macro's body, and away from an argument the macro's body
+    /// converts.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.5.3.2p3, pp. 78-79; PDF pp. 90-91.
+    fn clang_pointer_bool_warning(&mut self, info: ExpressionInfo<'tu>, site: SourceVectors) {
         use crate::translation_phases::parsing::syntax::{
             ExpressionType as E,
             UnaryOperator as U,
         };
-        let mut expression = info.expression;
-        while let E::Parenthesized { expression: inner } = expression.kind {
-            expression = inner;
-        }
-        let address = if let E::Unary {
+        let expression = Self::without_parentheses(info.expression);
+        let (address, named) = if let E::Unary {
             operator: U::AddressOf,
             operand_expression,
         } = expression.kind
         {
-            let mut operand = operand_expression;
-            loop {
-                match operand.kind {
-                    | E::Identifier(_) | E::CompoundLiteral { .. } => break true,
-                    | E::Parenthesized { expression } => operand = expression,
-                    | E::DirectMember {
-                        base_expression, ..
-                    } => operand = base_expression,
-                    | _ => break false,
-                }
-            }
+            (true, operand_expression)
         } else {
-            false
+            (false, expression)
         };
-        if info.category == super::ValueCategory::FunctionDesignator
-            || matches!(self.types.nodes[info.ty.index], TypeKind::Array(..))
-            || address
+        let located_at = match named.kind {
+            | E::Identifier(name) => {
+                if let Some(binding) = self.expression_info(named).binding
+                    && self.declared_weak(binding)
+                {
+                    return;
+                }
+                if matches!(
+                    self.context.string_cache.at(name.name),
+                    "__func__" | "__FUNCTION__" | "__PRETTY_FUNCTION__"
+                ) {
+                    return;
+                }
+                name.source_vectors
+            },
+            | E::DirectMember { member, .. } | E::IndirectMember { member, .. } =>
+                member.source_vectors,
+            | _ => return,
+        };
+        let located_at = if address {
+            expression.source_vectors
+        } else {
+            located_at
+        };
+        if self.context.produced_by_macro_expansion(located_at)
+            && (self.context.written_by_macro_body(located_at)
+                || self.context.written_by_macro_body(site))
         {
+            return;
+        }
+        let function =
+            self.expression_info(named).category == super::ValueCategory::FunctionDesignator;
+        let array = matches!(
+            self.types.nodes[self.expression_info(named).ty.index],
+            TypeKind::Array(..)
+        );
+        let known = if address {
+            !function
+        } else {
+            function || array
+        };
+        if known {
             self.pointer_diagnostic(
                 DiagnosticGroup::PointerBoolConversion,
                 expression.source_vectors,
             );
         }
+    }
+
+    /// GCC's `-Waddress` on a truth value, which walks a conditional's arms:
+    /// `c_common_truthvalue_conversion` reports the address of a declaration
+    /// wherever it is written, and `maybe_warn_for_null_address` the rest of
+    /// what [`Self::gcc_known_address`] finds, unless `site`, the conversion's
+    /// location where it has one of its own, comes from a macro.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.5.3.2p3, pp. 78-79; PDF pp. 90-91.
+    pub(super) fn gcc_address_warning(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        site: Option<SourceVectors>,
+    ) {
+        use crate::translation_phases::parsing::syntax::ExpressionType as E;
+        let e = Self::without_parentheses(e);
+        if let E::Conditional(c) = e.kind {
+            self.gcc_address_warning(c.then_expression, site);
+            self.gcc_address_warning(c.else_expression, site);
+            return;
+        }
+        let known = match self.gcc_known_address(e) {
+            | GccAddress::Declaration => true,
+            | GccAddress::Folded =>
+                !site.is_some_and(|site| self.context.produced_by_macro_expansion(site)),
+            | GccAddress::Unknown => false,
+        };
+        if known {
+            self.pointer_diagnostic(DiagnosticGroup::PointerBoolConversion, e.source_vectors);
+        }
+    }
+
+    /// What GCC's tree for the pointer value `e` shows about its address. A
+    /// pointer's own value says nothing, nor does a string or a compound
+    /// literal, which are no declarations; a weak entity's address can be null.
+    /// C99: §6.3.2.1p3-p4, p. 46; PDF p. 58.
+    fn gcc_known_address(&mut self, e: &'tu Expression<'tu>) -> GccAddress {
+        use crate::translation_phases::parsing::syntax::{
+            BinaryOperator as B,
+            ExpressionType as E,
+            UnaryOperator as U,
+        };
+        let e = Self::without_parentheses(e);
+        let decays = {
+            let info = self.expression_info(e);
+            info.category == super::ValueCategory::FunctionDesignator
+                || matches!(self.types.nodes[info.ty.index], TypeKind::Array(..))
+        };
+        match e.kind {
+            | E::Identifier(_) if decays => self.gcc_declaration_address(e),
+            | E::LabelAddress(_) => GccAddress::Declaration,
+            | E::Unary {
+                operator: U::AddressOf,
+                operand_expression,
+            } => self.gcc_address_of(operand_expression),
+            // `*x` as a pointer is `x`, as `&*x` is.
+            | E::Unary {
+                operator: U::Indirection,
+                operand_expression,
+            } if decays => self.gcc_known_address(operand_expression),
+            | E::DirectMember { .. }
+            | E::IndirectMember { .. }
+            | E::Binary {
+                operator: B::Subscript,
+                ..
+            } if decays => self.gcc_address_of(e),
+            | E::Binary {
+                operator: B::Addition | B::Subtraction,
+                left_expression,
+                right_expression,
+            } => self.gcc_pointer_sum(e, left_expression, right_expression),
+            | E::Cast {
+                operand_expression, ..
+            } => self.gcc_cast_address(e, operand_expression),
+            | _ => GccAddress::Unknown,
+        }
+    }
+
+    /// GCC's `&x`.
+    fn gcc_address_of(&mut self, x: &'tu Expression<'tu>) -> GccAddress {
+        use crate::translation_phases::parsing::syntax::{
+            BinaryOperator as B,
+            ExpressionType as E,
+            UnaryOperator as U,
+        };
+        let x = Self::without_parentheses(x);
+        match x.kind {
+            | E::Identifier(_) => self.gcc_declaration_address(x),
+            | E::Unary {
+                operator: U::Indirection,
+                operand_expression,
+            } => self.gcc_known_address(operand_expression),
+            | E::Unary {
+                operator: U::Real | U::Imag,
+                ..
+            } => GccAddress::Folded,
+            | E::DirectMember { .. } | E::IndirectMember { .. } =>
+                if self.gcc_constant_base(x) {
+                    GccAddress::Unknown
+                } else {
+                    GccAddress::Folded
+                },
+            | E::Binary {
+                operator: B::Subscript,
+                left_expression,
+                right_expression,
+            } => {
+                let (base, index) = if self.pointer_or_array(left_expression) {
+                    (left_expression, right_expression)
+                } else {
+                    (right_expression, left_expression)
+                };
+                let array = matches!(
+                    self.types.nodes[self.expression_info(base).ty.index],
+                    TypeKind::Array(..)
+                );
+                if self.gcc_constant_base(x) {
+                    GccAddress::Unknown
+                } else if !array && self.constant_zero(index) {
+                    // GCC folds `&p[0]` to `p`.
+                    self.gcc_known_address(base)
+                } else {
+                    GccAddress::Folded
+                }
+            },
+            | _ => GccAddress::Unknown,
+        }
+    }
+
+    /// `p + i`, `i + p` or `p - i`, which GCC keeps as a `POINTER_PLUS_EXPR`
+    /// unless `i` is zero or `p` a constant, and which it lets a `void *` take
+    /// out of the warning.
+    fn gcc_pointer_sum(
+        &mut self,
+        sum: &'tu Expression<'tu>,
+        left: &'tu Expression<'tu>,
+        right: &'tu Expression<'tu>,
+    ) -> GccAddress {
+        let ty = self.expression_info(sum).ty;
+        let Some(target) = self.pointer_target(ty) else {
+            return GccAddress::Unknown;
+        };
+        if self.void_target(target) {
+            return GccAddress::Unknown;
+        }
+        let (base, offset) = if self.pointer_or_array(left) {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        if self.gcc_constant_pointer(base) {
+            GccAddress::Unknown
+        } else if self.constant_zero(offset) {
+            self.gcc_known_address(base)
+        } else {
+            GccAddress::Folded
+        }
+    }
+
+    /// A cast, which GCC strips unless it is to an integer. A sum with a known
+    /// address folds into the cast's type, so `(void *)(a + 1)` is a `void *`
+    /// sum and `(void *)(p + 1)` is not.
+    fn gcc_cast_address(
+        &mut self,
+        cast: &'tu Expression<'tu>,
+        operand: &'tu Expression<'tu>,
+    ) -> GccAddress {
+        use crate::translation_phases::parsing::syntax::{
+            BinaryOperator as B,
+            ExpressionType as E,
+        };
+        let ty = self.expression_info(cast).ty;
+        let Some(target) = self.pointer_target(ty) else {
+            return GccAddress::Unknown;
+        };
+        let inner = Self::without_parentheses(operand);
+        if self.void_target(target)
+            && let E::Binary {
+                operator: B::Addition | B::Subtraction,
+                left_expression,
+                right_expression,
+            } = inner.kind
+        {
+            let base = if self.pointer_or_array(left_expression) {
+                left_expression
+            } else {
+                right_expression
+            };
+            if matches!(
+                self.gcc_known_address(base),
+                GccAddress::Declaration | GccAddress::Folded
+            ) {
+                return GccAddress::Unknown;
+            }
+        }
+        match self.gcc_known_address(operand) {
+            | GccAddress::Declaration | GccAddress::Folded => GccAddress::Folded,
+            | GccAddress::Unknown => GccAddress::Unknown,
+        }
+    }
+
+    fn gcc_declaration_address(&mut self, name: &'tu Expression<'tu>) -> GccAddress {
+        match self.expression_info(name).binding {
+            | Some(binding) if self.declared_weak(binding) => GccAddress::Unknown,
+            | Some(_) => GccAddress::Declaration,
+            | None => GccAddress::Unknown,
+        }
+    }
+
+    /// Whether the object a member or element chain ends in is `*p` with `p`
+    /// constant, as in `offsetof`'s `&((struct S *)0)->x`: GCC's
+    /// `build_unary_op` folds that address to a constant (`fold_offsetof`), so
+    /// nothing is left to warn about.
+    /// C99: §7.17p3, p. 254; PDF p. 266.
+    fn gcc_constant_base(&self, mut x: &'tu Expression<'tu>) -> bool {
+        use crate::translation_phases::parsing::syntax::{
+            BinaryOperator as B,
+            ExpressionType as E,
+            UnaryOperator as U,
+        };
+        loop {
+            x = Self::without_parentheses(x);
+            match x.kind {
+                | E::DirectMember {
+                    base_expression, ..
+                } => x = base_expression,
+                | E::IndirectMember {
+                    base_expression, ..
+                } => return self.gcc_constant_pointer(base_expression),
+                | E::Unary {
+                    operator: U::Indirection,
+                    operand_expression,
+                } => return self.gcc_constant_pointer(operand_expression),
+                | E::Binary {
+                    operator: B::Subscript,
+                    left_expression,
+                    right_expression,
+                } => {
+                    let (base, index) = if self.pointer_or_array(left_expression) {
+                        (left_expression, right_expression)
+                    } else {
+                        (right_expression, left_expression)
+                    };
+                    if matches!(
+                        self.types.nodes[self.expression_info(base).ty.index],
+                        TypeKind::Array(..)
+                    ) {
+                        x = base;
+                    } else {
+                        return self.gcc_constant_pointer(base)
+                            && self.expression_info(index).integer.is_some();
+                    }
+                },
+                | _ => return false,
+            }
+        }
+    }
+
+    /// A pointer whose value is an integer constant, through casts and sums.
+    fn gcc_constant_pointer(&self, e: &'tu Expression<'tu>) -> bool {
+        use crate::translation_phases::parsing::syntax::{
+            BinaryOperator as B,
+            ExpressionType as E,
+        };
+        let e = Self::without_parentheses(e);
+        match e.kind {
+            | E::Cast {
+                operand_expression, ..
+            } => self.gcc_constant_pointer(operand_expression),
+            | E::Binary {
+                operator: B::Addition | B::Subtraction,
+                left_expression,
+                right_expression,
+            } if self.pointer_or_array(left_expression)
+                || self.pointer_or_array(right_expression) =>
+                self.gcc_constant_pointer(left_expression)
+                    && self.gcc_constant_pointer(right_expression),
+            | _ => self.expression_info(e).integer.is_some(),
+        }
+    }
+
+    fn pointer_or_array(&self, e: &'tu Expression<'tu>) -> bool {
+        matches!(
+            self.types.nodes[self.expression_info(e).ty.index],
+            TypeKind::Pointer(_) | TypeKind::Array(..)
+        )
+    }
+
+    fn constant_zero(&self, e: &'tu Expression<'tu>) -> bool {
+        self.expression_info(e)
+            .integer
+            .is_some_and(super::Integer::is_zero)
     }
 
     /// The sole conversion-constraint classifier. Callers first test standard
@@ -727,4 +1073,16 @@ fn integral_x87(value: crate::float_parsing::LongDouble) -> bool {
         return true;
     };
     shift < 64 && significand & ((1_u64 << shift) - 1) == 0
+}
+
+/// What GCC can tell about the address a pointer value holds.
+#[derive(Clone, Copy)]
+enum GccAddress {
+    /// A variable, function or label's own address, without a cast.
+    Declaration,
+    /// Anything else known not to be null: a member, an element, a sum or a
+    /// cast of an address.
+    Folded,
+    /// Nothing, as for a pointer's value.
+    Unknown,
 }
