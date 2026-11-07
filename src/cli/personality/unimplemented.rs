@@ -630,6 +630,10 @@ const IGNORED: &[&str] = &[
 const WARNED: &[(&str, &str)] = &[
     ("-fstack-protector*", "bcc does not emit stack protectors"),
     (
+        "-pg",
+        "bcc instruments programs for profiling only on Linux",
+    ),
+    (
         "-fstack-clash-protection",
         "bcc does not probe large stack allocations",
     ),

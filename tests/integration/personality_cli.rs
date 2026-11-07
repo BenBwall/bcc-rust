@@ -1784,6 +1784,63 @@ mod tests {
         }
     }
 
+    /// `-pg` builds a program `gprof` can read: each function calls `mcount`
+    /// unless it says otherwise, and a run writes `gmon.out`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_profiling_instruments_and_links() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "__attribute__((noinline)) int f(int x) { return x + 1; \
+             }\n__attribute__((no_instrument_function)) int g(int x) { return x + 2; }\nint \
+             main(void) { return f(1) + g(1) == 5 ? 0 : 1; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let text = stdout(&directory.bcc(mode, &["-pg", "-O1", "-S", "a.c", "-o", "-"]));
+            let calls = text.matches("mcount").count();
+            assert!(calls >= 2, "{mode}: {text}");
+            let g = text
+                .split("\ng:")
+                .nth(1)
+                .and_then(|rest| rest.split(".size").next());
+            assert!(
+                g.is_some_and(|body| !body.contains("mcount")),
+                "{mode}: {text}"
+            );
+            let plain = stdout(&directory.bcc(mode, &["-O1", "-S", "a.c", "-o", "-"]));
+            assert!(!plain.contains("mcount"), "{mode}");
+            // A run writes the profile, where the toolchain has `gcrt1.o`.
+            let build = directory.bcc(mode, &["-pg", "-O1", "a.c", "-o", "a"]);
+            if build.status.success() {
+                assert_eq!(stderr(&build), "", "{mode}");
+                drop(std::fs::remove_file(directory.path("gmon.out")));
+                let run = Command::new(directory.path("a"))
+                    .current_dir(directory.path("."))
+                    .status()
+                    .unwrap();
+                assert_eq!(run.code(), Some(0), "{mode}");
+                assert!(directory.path("gmon.out").exists(), "{mode}");
+            } else {
+                assert!(stderr(&build).contains("gcrt1"), "{}", stderr(&build));
+            }
+            // Each compiler refuses it with no frame pointer, unless taken
+            // back.
+            let both = ["-pg", "-fomit-frame-pointer", "-c", "a.c", "-o", "a.o"];
+            assert!(!directory.bcc(mode, &both).status.success(), "{mode}");
+            let back = [
+                "-pg",
+                "-fomit-frame-pointer",
+                "-fno-omit-frame-pointer",
+                "-c",
+                "a.c",
+                "-o",
+                "a.o",
+            ];
+            succeeds(&directory.bcc(mode, &back));
+        }
+    }
+
     /// A distribution's hardening options do what they say on Linux, with the
     /// macros each compiler numbers its own way.
     #[cfg(target_os = "linux")]

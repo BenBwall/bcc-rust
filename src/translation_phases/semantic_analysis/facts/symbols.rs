@@ -91,6 +91,8 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) declared_alignment:  bool,
     /// GNU `noinline`/`noipa` or `always_inline` on a function.
     pub(crate) inlining:            Inlining,
+    /// GNU `no_instrument_function` on a function.
+    pub(crate) no_instrument:       bool,
     /// GNU `no_stack_protector` on a function.
     pub(crate) no_stack_protector:  bool,
     /// GNU `no_sanitize` naming `AddressSanitizer` on a function.

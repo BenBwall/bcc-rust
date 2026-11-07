@@ -190,6 +190,10 @@ also stay in every `-std=` under both, and `//` comments in C89 and `#embed` und
 Clang: `-std=c99` selects a language, and each is still an extension under
 `-pedantic`. Plain bcc keeps all of these behind the language mode.
 
+`-pg` on Linux makes each function call `mcount` and links the profiling startup
+file, so a run writes `gmon.out` for `gprof`, and `no_instrument_function` keeps a
+function out. `-p` still warns.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`

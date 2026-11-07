@@ -472,6 +472,7 @@ impl Cli {
                     hardening.sanitize_address = false;
                     hardening.sanitize_thread = false;
                 },
+                | "-pg" => hardening.profile = true,
                 | "-fno-omit-frame-pointer" => hardening.keep_frame_pointer = true,
                 | "-fomit-frame-pointer" => hardening.keep_frame_pointer = false,
                 | _ => {},
@@ -659,6 +660,7 @@ pub(super) fn is_hardening_option(text: &str) -> bool {
             | "-fcf-protection=none"
             | "-fstack-clash-protection"
             | "-fno-stack-clash-protection"
+            | "-pg"
     ) || is_sanitizer_option(text)
 }
 

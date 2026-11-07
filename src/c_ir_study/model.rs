@@ -317,6 +317,7 @@ fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
             call_diagnostic:     None,
             declared_alignment:  false,
             inlining:            Inlining::Default,
+            no_instrument:       false,
             no_stack_protector:  false,
             no_sanitize_address: false,
             no_sanitize_thread:  false,
