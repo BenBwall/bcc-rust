@@ -7580,7 +7580,8 @@ mod tests {
 
     /// `#pragma once` marks a file, not a spelling of its path: GCC, Clang and
     /// TCC (its own `18_include` test) read the header once however it is
-    /// reached.
+    /// reached. bcc knows a file's identity on Unix hosts only.
+    #[cfg(unix)]
     #[test]
     fn pragma_once_marks_the_file_whatever_path_reaches_it() {
         let directory = Directory::new();
