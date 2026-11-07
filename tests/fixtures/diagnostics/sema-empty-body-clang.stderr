@@ -1,0 +1,13 @@
+sema-empty-body-clang.c:3:9: warning: if statement has empty body [-Wempty-body]
+    3 |   if (x);
+      |         ^
+sema-empty-body-clang.c:4:10: warning: if statement has empty body [-Wempty-body]
+    4 |   if (x) ;
+      |          ^
+sema-empty-body-clang.c:18:13: warning: switch statement has empty body [-Wempty-body]
+   18 |   switch (x);
+      |             ^
+sema-empty-body-clang.c:19:18: warning: if statement has empty body [-Wempty-body]
+   19 |   if (x) /* c */ ;
+      |                  ^
+4 warnings generated.

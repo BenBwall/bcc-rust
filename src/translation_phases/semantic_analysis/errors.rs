@@ -119,6 +119,9 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
     /// The words are the diagnostic's name.
+    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
+    ShadowOrBody(crate::configuration::DiagnosticGroup),
+    /// The words are the diagnostic's name.
     /// C99: §6.7.8p21, p. 127; PDF p. 139.
     MissingFieldInitializer,
     /// C99: §6.9.2p3, p. 143; PDF p. 155.
@@ -1105,6 +1108,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::ShadowOrBody(_) => "this may not be what it looks like",
             | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
@@ -1314,6 +1318,11 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::Shadow
+                    | crate::configuration::DiagnosticGroup::ShadowLocal
+                    | crate::configuration::DiagnosticGroup::ShadowCompatibleLocal
+                    | crate::configuration::DiagnosticGroup::ShadowAll
+                    | crate::configuration::DiagnosticGroup::EmptyBody
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
@@ -1725,6 +1734,11 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::ShadowOrBody(_) => (
+                "hidden declaration or empty body",
+                "C99 §6.2.1p4 hides an outer declaration in an inner scope, and §6.8.3p3 makes \
+                 a lone semicolon a statement",
             ),
             | Self::SignCompare => (
                 "comparison of integers of different signs",
@@ -2570,7 +2584,7 @@ impl SemanticErrorKind {
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
         match self {
-            | Self::PointerConstraint(group) => Some(group),
+            | Self::PointerConstraint(group) | Self::ShadowOrBody(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
@@ -2887,7 +2901,9 @@ impl ToDiagnostic for SemanticError {
             )
         } else if matches!(
             self.kind,
-            SemanticErrorKind::SignCompare | SemanticErrorKind::MissingFieldInitializer
+            SemanticErrorKind::SignCompare
+                | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::ShadowOrBody(_)
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
@@ -3018,6 +3034,10 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FlexibleArrayDesignator =>
                     "initialized flexible array member is here",
                 | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
+                | SemanticErrorKind::ShadowOrBody(_)
+                    if context.configuration.compiler_identity()
+                        == crate::configuration::CompilerIdentity::Gcc =>
+                    "shadowed declaration is here",
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);

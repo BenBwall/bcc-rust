@@ -196,6 +196,12 @@ impl CompilerConfiguration {
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
             | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
             | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
+            | DiagnosticGroup::Shadow => &[
+                DiagnosticGroup::ShadowLocal,
+                DiagnosticGroup::ShadowCompatibleLocal,
+            ],
+            | DiagnosticGroup::ShadowLocal => &[DiagnosticGroup::ShadowCompatibleLocal],
+            | DiagnosticGroup::ShadowAll => &[DiagnosticGroup::Shadow],
             | _ => &[],
         };
         for &child in children {
@@ -268,6 +274,7 @@ impl CompilerConfiguration {
         for group in [
             DiagnosticGroup::SignCompare,
             DiagnosticGroup::MissingFieldInitializers,
+            DiagnosticGroup::EmptyBody,
         ] {
             self.warning_options[group as usize].apply_all(enabled);
         }
@@ -911,6 +918,18 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// A declaration that hides another one in an enclosing scope.
+    Shadow => Some("shadow"), Ignored, false;
+    /// GCC's `-Wshadow=local`: one that hides a local declaration.
+    ShadowLocal => Some("shadow=local"), Ignored, false;
+    /// GCC's `-Wshadow=compatible-local`: one that hides a local of a
+    /// compatible type.
+    ShadowCompatibleLocal => Some("shadow=compatible-local"), Ignored, false;
+    /// Clang's `-Wshadow-all`, which holds `-Wshadow` in C.
+    ShadowAll => Some("shadow-all"), Ignored, false;
+    /// A body that is only `;`. `-Wextra` holds it in GCC, and Clang reports
+    /// it by default.
+    EmptyBody => Some("empty-body"), ClangWarning, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds
@@ -984,6 +1003,7 @@ impl DiagnosticGroup {
     /// them.
     const UNDER_EXTRA: &[Self] = &[
         Self::SignCompare,
+        Self::EmptyBody,
         Self::MissingFieldInitializers,
         Self::UnusedParameter,
         Self::UnusedButSetParameter,
@@ -1016,7 +1036,13 @@ impl DiagnosticGroup {
     /// Whether only GCC has the group, so that Clang reports its option as
     /// unknown.
     pub(crate) const fn gcc_only(self) -> bool {
-        matches!(self, Self::Normalized | Self::PedanticNormalized)
+        matches!(
+            self,
+            Self::Normalized
+                | Self::PedanticNormalized
+                | Self::ShadowLocal
+                | Self::ShadowCompatibleLocal
+        )
     }
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
@@ -1138,6 +1164,7 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::EmptyBody
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
                 | DiagnosticGroup::UnusedVariable
