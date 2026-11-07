@@ -3824,3 +3824,33 @@ does not cover it; a `case` label's `?:` warns under Clang's overflow check here
 but not there; Clang's refusal of `struct { int b : 4; } t = { 1 << 40 };` and
 GCC's `-Wextra` `-Wshift-negative-value` are not modeled; and
 `int *p = (int *)(2147483647 + 1);` keeps a false `-Wint-to-pointer-cast`.
+
+## An address's truth in a constant (2026-11-07)
+
+An object or function has a non-null address (C99 §6.3.2.3p3), so what its truth
+decides is known without a link. `_Bool b = &g;` is an address constant
+converted by §6.3.1.2p1, and every mode stores it, without a relocation. The
+other forms are §6.6p10's latitude, so `--compiler-extensions` turns them on
+(`semantic_analysis/address_truth.rs`), as it does exceptional constants: `!&g`,
+`&g ? 1 : 2`, `&g == 0`, `&g && 1`, `!f`, `(a + 1) != 0`, `"x" == 0` and
+`(void *)0 ? 1 : 2`, in a static initializer and in an enumerator, `case`,
+`_Static_assert` or bit-field width, with `-pedantic`'s report of a value that is
+no integer constant expression. Measured against GCC 14.2 (13.3 for values)
+and Clang 23.1:
+
+| | GCC | Clang |
+| --- | --- | --- |
+| `_Bool b = E;` | `&g`, an array or function, `a + 0`, through pointer casts | any address, `&a[1]`, `a + 1`, `"x"`, `(long)&g` |
+| A weak entity | known if this unit defines it (`_Bool b = &g;`, `!&g`), but not to `==`; refused if only declared | refused |
+| `(long)&g != 0`, `&g > 0` | folds | refused |
+| Array bound | variable length | folds with `-Wgnu-folding-constant` |
+| `_Static_assert(&g, "x")` | refused | accepted |
+| An automatic or thread-local object | known, since only its truth is read | same |
+
+Known differences that remain: GCC refuses a second conversion of the same
+symbol to `_Bool` in one unit (`_Bool a = &g; _Bool b = &g;`, "not computable at
+load time"), which looks like an accident of when it creates the symbol, and bcc
+accepts it; GCC's `int a[!&g + 1];` at file scope is a warning, where bcc reports
+its usual variably modified error; Clang's `-Wtautological-pointer-compare` is
+not reproduced; and in function code bcc still references the symbol, so that
+`if (&g)` or `_Bool n = &g;` needs `g` defined where both compilers fold it away.

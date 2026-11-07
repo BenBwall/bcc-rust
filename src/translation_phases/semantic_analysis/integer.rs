@@ -39,6 +39,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.evaluate_exceptional(expression, info);
             return;
         }
+        if info.constant != super::ConstantClass::Arithmetic
+            && self.context.configuration.folds_exceptional_constants()
+            && let Some(value) = self.address_truth_constant(expression, info)
+        {
+            let gcc = self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc;
+            if self.runtime_bound {
+                // GCC's bound is variable length; `ArrayDone` warns of Clang's.
+                self.integers.push((!gcc).then_some(value));
+            } else {
+                if !self.tainted {
+                    self.report_folded_constant(expression);
+                }
+                self.integers.push(Some(value));
+            }
+            return;
+        }
         if self.type_generic_constant(expression) && !info.folded_address() {
             self.integers
                 .push(if info.ice { info.integer } else { None });

@@ -1172,6 +1172,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .map(|entity| (entity.latest, entity.definition.is_some()))
     }
 
+    /// Whether the unit so far defines the linked entity `name`, a tentative
+    /// definition included.
+    /// C99: §6.9p5, p. 140; PDF p. 152; §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn defined_in_unit(&self, name: StringCacheId) -> bool {
+        self.functions
+            .entities
+            .get(&name)
+            .is_some_and(|entity| entity.definition.is_some() || entity.tentative.is_some())
+    }
+
     /// Whether a declaration of `binding`'s function, up to this one, says
     /// `inline`, as Clang's `FunctionDecl::isInlined` inherits it.
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.

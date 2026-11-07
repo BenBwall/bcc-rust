@@ -2566,6 +2566,134 @@ mod tests {
         }
     }
 
+    /// What an address's truth gives a static object, with the values GCC
+    /// 13.3 and Clang 23.1 store (`None`: refused). No symbol is referenced,
+    /// so `g` and `f` need no definition.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn address_truth_folds_in_static_initializers() {
+        type Row = (
+            &'static str,
+            &'static str,
+            Option<&'static str>,
+            Option<&'static str>,
+        );
+        let table: [Row; 33] = [
+            ("extern int g;", "_Bool x=&g;", Some("1"), Some("1")),
+            (
+                "extern int g;",
+                "struct{_Bool b;}s={&g};_Bool x=1;",
+                Some("1"),
+                Some("1"),
+            ),
+            ("void f(void);", "_Bool x=f;", Some("1"), Some("1")),
+            ("void f(void);", "_Bool x=&f;", Some("1"), Some("1")),
+            ("", "_Bool x=(void*)0;", Some("0"), Some("0")),
+            ("", "_Bool x=(void*)1;", Some("1"), Some("1")),
+            ("int a[3];", "_Bool x=a;", Some("1"), Some("1")),
+            ("int a[3];", "_Bool x=a+1;", None, Some("1")),
+            ("int a[3];", "_Bool x=&a[1];", None, Some("1")),
+            ("int a[3];", "_Bool x=&a[0];", None, Some("1")),
+            ("", "_Bool x=\"x\";", None, Some("1")),
+            ("extern int g;", "_Bool x=(char*)&g;", Some("1"), Some("1")),
+            ("extern int g;", "_Bool x=(long)&g;", None, Some("1")),
+            (
+                "__attribute__((weak)) int g;",
+                "_Bool x=&g;",
+                Some("1"),
+                None,
+            ),
+            (
+                "extern int g __attribute__((weak));",
+                "_Bool x=&g;",
+                None,
+                None,
+            ),
+            (
+                "void f(void) __attribute__((weak));",
+                "_Bool x=f;",
+                None,
+                None,
+            ),
+            ("extern int g;", "int x=!&g;", Some("0"), Some("0")),
+            ("extern int g;", "int x=&g?1:2;", Some("1"), Some("1")),
+            ("extern int g;", "int x=!!&g;", Some("1"), Some("1")),
+            ("extern int g;", "int x=&g==0;", Some("0"), Some("0")),
+            ("extern int g;", "int x=&g!=0;", Some("1"), Some("1")),
+            ("static int g;", "int x=&g&&1;", Some("1"), Some("1")),
+            ("void f(void);", "int x=!f;", Some("0"), Some("0")),
+            ("int a[3];", "int x=(a+1)!=0;", Some("1"), Some("1")),
+            ("", "int x=\"x\"==0;", Some("0"), Some("0")),
+            ("", "int x=(void*)0?1:2;", Some("2"), Some("2")),
+            ("int g,h;", "int x=&g==&h;", Some("0"), Some("0")),
+            ("int g;", "int x=&g<&g;", Some("0"), Some("0")),
+            ("int g;", "int x=&g>0;", Some("1"), None),
+            ("int g;", "int x=(long)&g!=0;", Some("1"), None),
+            ("int g;", "int x=(!&g)+5;", Some("5"), Some("5")),
+            ("int y;int g;", "int x=!&g&&y;", Some("0"), Some("0")),
+            ("int y;int g;", "int x=y&&&g;", None, None),
+        ];
+        let directory = Directory::new();
+        for (declarations, definition, gcc, clang) in table {
+            directory.write(
+                "c.c",
+                &format!(
+                    "int printf(const char *, ...);\n{declarations}\n{definition}\nint main(void) \
+                     {{ printf(\"%d\", (int)x); return 0; }}\n"
+                ),
+            );
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-w", "c.c", "-o", "c"]);
+                assert_eq!(
+                    output.status.success(),
+                    expected.is_some(),
+                    "{mode} {declarations} {definition}: {}",
+                    stderr(&output)
+                );
+                if let Some(expected) = expected {
+                    let run = Command::new(directory.path("c")).output().unwrap();
+                    assert_eq!(stdout(&run), expected, "{mode} {definition}");
+                }
+            }
+        }
+        // A constant context reads it too, where the compiler folds it.
+        for (source, gcc, clang) in [
+            ("int g;enum{A=!&g};", true, true),
+            ("int g;_Static_assert(&g!=0,\"x\");", true, true),
+            ("int g;_Static_assert(!!&g,\"x\");", true, true),
+            ("int g;_Static_assert(&g,\"x\");", false, true),
+            ("int g;void h(int x){switch(x){case !&g:;}}", true, true),
+            ("int g;struct{int b:!&g+1;}s;", true, true),
+            ("void h(void){int g;int a[!&g+1];(void)a;}", true, true),
+        ] {
+            directory.write("c.c", &format!("{source}\n"));
+            for (mode, accepts) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-w", "-fsyntax-only", "c.c"]);
+                assert_eq!(
+                    output.status.success(),
+                    accepts,
+                    "{mode} {source}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+        // Plain bcc stores `_Bool b = &g;` as the constraint allows, and
+        // keeps refusing the other forms, which only §6.6p10 could admit.
+        directory.write(
+            "c.c",
+            "extern int g;\n_Bool b = &g;\nint main(void) { return !b; }\n",
+        );
+        succeeds(&directory.bcc("", &["-w", "c.c", "-o", "c"]));
+        assert!(
+            Command::new(directory.path("c"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        directory.write("c.c", "extern int g;\nint i = !&g;\n");
+        assert!(!directory.bcc("", &["-w", "c.c"]).status.success());
+    }
+
     /// `-ffunction-sections` and `-fdata-sections` give each definition a
     /// section of its own, so that `--gc-sections` removes the unused ones.
     #[cfg(target_os = "linux")]

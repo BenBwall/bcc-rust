@@ -46,6 +46,9 @@ and `1/0` is no constant for either. A negative or too large shift count and a
 zero divisor also warn in code whose left operand is not constant. The tables
 of values, contexts and warning options are in
 [language-standards.md](../../language-standards.md#exceptional-integer-constants-2026-11-07).
+An address's truth folds the same way (`int i = !&g;`, `&g ? 1 : 2`), with each
+compiler's rules for weak symbols and for what a static `_Bool` takes
+([language-standards.md](../../language-standards.md#an-addresss-truth-in-a-constant-2026-11-07)).
 
 ## How a personality runs
 
