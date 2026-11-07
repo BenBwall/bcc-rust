@@ -39,6 +39,7 @@ use super::{
 use crate::{
     configuration::{
         CStandard,
+        CompilerIdentity,
         RuleSet,
     },
     translation_phases::{
@@ -643,6 +644,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if self.storage_half(base) {
                     self.error(SemanticErrorKind::Fp16Return, source, None, None);
                 }
+                let base = self.function_result(base);
                 self.enter(ScopeKind::Prototype);
                 let parameters = self.scratch.alloc(Collection::new());
                 self.work.push(Work::FunctionParameters(
@@ -660,7 +662,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.error(SemanticErrorKind::Fp16Return, source, None, None);
                 }
                 let ty = self.types.intern(TypeKind::Function {
-                    result:     base,
+                    result:     self.function_result(base),
                     parameters: &[],
                     prototype:  false,
                     variadic:   false,
@@ -700,6 +702,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }),
             | _ => self.values.push(base),
         }
+    }
+
+    /// The result type of a function declared to return `base`. C99 keeps
+    /// the qualifiers, as Clang does in every revision; C17 (DR 423) drops
+    /// them, which GCC applies from C11 on and TCC always, so `const int
+    /// f(void);` and `int f(void) {}` declare one type there.
+    /// C99: §6.7.5.3 paragraph 5, pp. 118-119; PDF pp. 130-131.
+    /// C17: §6.7.6.3 paragraph 5, pp. 96-97; PDF pp. 109-110.
+    fn function_result(&self, base: TypeId) -> TypeId {
+        let configuration = &self.context.configuration;
+        let drops = match configuration.compiler_identity() {
+            | CompilerIdentity::Tcc => true,
+            | CompilerIdentity::Gcc => configuration.standard() >= CStandard::C11,
+            | _ => false,
+        };
+        if drops { base.unqualified() } else { base }
     }
 
     /// Resolves storage class, linkage inheritance and duration independently.
@@ -850,8 +868,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && ((!function && !self.types.unanalyzed(ty))
                 || typedef
                 || (self.context.configuration.hosted()
-                    && self.context.configuration.compiler_identity()
-                        == crate::configuration::CompilerIdentity::Msvc
+                    && self.context.configuration.compiler_identity() == CompilerIdentity::Msvc
                     && self.context.string_cache.at(name.name) == "main"))
         {
             self.error(
