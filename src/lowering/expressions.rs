@@ -20,6 +20,7 @@ use super::{
     LoweringError,
     floats,
     module_items::at,
+    sanitizer::Parent,
     ssa::{
         Op,
         Terminator,
@@ -324,6 +325,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         let signed = self.repr(left.ty, source)?.signed();
                         _ = self.distribute(right_expression, &[], Some((width, signed)))?;
                     }
+                    if self.gcc_reports() {
+                        let root = if self.assigns_register(left_expression) {
+                            super::sanitizer::Root::Register
+                        } else {
+                            super::sanitizer::Root::Memory
+                        };
+                        self.note_statement_site(
+                            right_expression,
+                            super::sanitizer::operator_site(expression),
+                            root,
+                        );
+                    }
+                    self.note_parent(left_expression, Parent::Assigned);
                     self.tasks.push(Task::Finish(expression));
                     self.tasks.push(Task::Evaluate(right_expression));
                     self.tasks.push(Task::EvaluateRaw(left_expression));
@@ -335,12 +349,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     // C99 §6.5.16.2p3 (p. 93; PDF p. 105) permits this order;
                     // C11 §6.5.16.2p3 (pp. 103-104; PDF pp. 121-122) requires
                     // the update to be one evaluation relative to such a call.
+                    self.note_parent(left_expression, Parent::Assigned);
                     self.tasks.push(Task::Finish(expression));
                     self.tasks.push(Task::ReadForUpdate(left_expression));
                     self.tasks.push(Task::EvaluateRaw(left_expression));
                     self.tasks.push(Task::Evaluate(right_expression));
                 },
                 | _ => {
+                    if operator == BinaryOperator::Subscript {
+                        self.note_parent(left_expression, Parent::Subscripted);
+                        self.note_parent(right_expression, Parent::Subscripted);
+                    }
                     self.tasks.push(Task::Finish(expression));
                     self.tasks.push(Task::Evaluate(right_expression));
                     self.tasks.push(Task::Evaluate(left_expression));
@@ -352,12 +371,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => {
                 self.tasks.push(Task::Finish(expression));
                 match operator {
-                    | UnaryOperator::AddressOf | UnaryOperator::Real | UnaryOperator::Imag =>
+                    | UnaryOperator::AddressOf => {
+                        self.note_parent(operand_expression, Parent::AddressOf);
+                        self.tasks.push(Task::EvaluateRaw(operand_expression));
+                    },
+                    | UnaryOperator::Real | UnaryOperator::Imag =>
                         self.tasks.push(Task::EvaluateRaw(operand_expression)),
                     | UnaryOperator::PreIncrement
                     | UnaryOperator::PreDecrement
                     | UnaryOperator::PostIncrement
                     | UnaryOperator::PostDecrement => {
+                        self.note_parent(operand_expression, Parent::Stepped);
                         self.tasks.push(Task::ReadForUpdate(operand_expression));
                         self.tasks.push(Task::EvaluateRaw(operand_expression));
                     },
@@ -379,6 +403,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     return Ok(());
                 }
                 self.tasks.push(Task::Finish(expression));
+                let call_site = expression.source_vectors;
                 let mut arguments = call.arguments;
                 if let Some(pack) = self.forwarded_pack(call)? {
                     self.tasks.push(Task::ForwardPack(pack));
@@ -394,6 +419,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             LoweringError::missing("a call argument is not retained", source)
                         })?
                         .expression;
+                    self.note_statement_site(
+                        expression,
+                        call_site,
+                        super::sanitizer::Root::Argument,
+                    );
                     self.tasks.push(Task::SnapshotArgument(expression));
                     self.tasks.push(Task::Evaluate(expression));
                 }
@@ -435,6 +465,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ..
             } => {
                 _ = self.distribute(expression, &[], None)?;
+                self.note_parent(base_expression, Parent::Cast(expression));
                 self.tasks.push(Task::Finish(expression));
                 self.tasks.push(Task::Evaluate(base_expression));
             },
@@ -600,10 +631,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         match expression.kind {
             | E::Binary {
                 operator: BinaryOperator::Assignment,
+                left_expression,
                 ..
             } => {
                 let value = self.pop();
                 let place = self.pop();
+                self.check_write(expression, Some(left_expression), place);
                 let result = self.write(place, value, source)?;
                 self.push_item(result.operand, info.ty);
             },
@@ -641,6 +674,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
                 let result = self.binary(operation, left, right, operation_type, source)?;
                 let converted = self.convert_back(result, back, source)?;
+                self.check_write(expression, None, place);
                 let stored = self.write(place, converted, source)?;
                 self.push_item(stored.operand, info.ty);
             },
@@ -655,13 +689,35 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.operands.push(lane);
                     return Ok(());
                 }
-                let (pointer, index) = if self.is_pointer(left.ty) {
+                let pointer_left = self.is_pointer(left.ty);
+                let (pointer, index) = if pointer_left {
                     (left, right)
                 } else {
                     (right, left)
                 };
                 let index = self.wide_index(index, source)?;
+                let mut bounded = false;
+                if let E::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } = expression.kind
+                    && let Operand::Value(value) = index.operand
+                {
+                    let array = if pointer_left {
+                        left_expression
+                    } else {
+                        right_expression
+                    };
+                    bounded = self.check_bounds(expression, array, value, index.ty, source);
+                }
                 let address = self.offset_pointer(pointer, index, false, source)?;
+                if bounded {
+                    self.note_bounded(address);
+                }
+                if let Operand::Value(base) = pointer.operand {
+                    self.inherit_member(base, address);
+                }
                 self.push_item(Operand::Place(Place::Memory(address)), info.ty);
             },
             | E::Binary { operator, .. } => {
@@ -697,8 +753,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     "member access retains its field width"
                 );
                 self.member_base(base, base_ty, source)?;
+                let record_base = base;
                 let base = self.segment_address(base, member.tag, field.path.index, source)?;
                 let address = self.offset_address(base, field.offset);
+                let record = match self.unit.sema.types.kind(base_ty) {
+                    | TypeKind::Pointer(pointee) => pointee,
+                    | _ => base_ty,
+                };
+                self.check_member(
+                    expression,
+                    record_base,
+                    address,
+                    record,
+                    Align::from_bytes(u64::from(guaranteed)).unwrap_or(Align::BYTE),
+                );
                 let align = self.place_alignment(
                     address,
                     Align::from_bytes(u64::from(guaranteed)).unwrap_or(Align::BYTE),
@@ -924,7 +992,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
             item = match conversion.kind {
                 | ConversionKind::Lvalue => match item.operand {
-                    | Operand::Place(place) => self.read(place, item.ty, conversion.ty, source)?,
+                    | Operand::Place(place) => {
+                        if !self.discarded(expression) {
+                            self.check_read(expression, place, item.ty, update);
+                        }
+                        let read = self.read(place, item.ty, conversion.ty, source)?;
+                        if !update
+                            && let Place::Memory(_) = place
+                            && let Operand::Value(value) = read.operand
+                            && matches!(self.repr(item.ty, source)?, Repr::Bool)
+                        {
+                            self.check_bool(expression, value, item.ty);
+                        }
+                        read
+                    },
                     | operand => Item {
                         operand,
                         ty: conversion.ty,
@@ -1135,6 +1216,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     },
                     // A floating value truncates toward zero (§6.3.1.4p1).
                     | Repr::Float { .. } => {
+                        self.check_float_cast(value, item.ty, to, (ty.bits(), signed), source);
                         let opcode = if signed {
                             Opcode::Fptosi
                         } else {
@@ -1923,9 +2005,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     source,
                 )),
         };
+        match operator {
+            | B::Division | B::Modulo => self.check_division([a, b], ty, signed, source),
+            | B::LeftShift | B::RightShift =>
+                self.check_shift(operator == B::LeftShift, a, b, ty, right.ty, signed, source),
+            | _ => {},
+        }
         let value = self.binary_inst(opcode, flags, a, b);
         if signed {
             self.trap_on_overflow(opcode, representation, [a, b], value);
+            self.check_signed_overflow(opcode, representation, [a, b], value, ty, false, source);
         }
         // A narrow bit-precise result is extended again where the operation
         // can reach the bits above its width; the others keep extended
@@ -2075,6 +2164,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let negated = self.binary_inst(Opcode::Isub, flags, zero, value);
                 if representation.signed() {
                     self.trap_on_overflow(Opcode::Isub, representation, [zero, value], negated);
+                    self.check_signed_overflow(
+                        Opcode::Isub,
+                        representation,
+                        [zero, value],
+                        negated,
+                        info.ty,
+                        true,
+                        source,
+                    );
                 }
                 Operand::Value(self.normalize(negated, representation))
             },
@@ -2142,6 +2240,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     operand
                 };
                 let updated = self.step_value(operand, increment, false, source)?;
+                if let Some(expression) = self.ub.site {
+                    self.check_write(expression, None, place);
+                }
                 let stored = self.write(place, updated, source)?;
                 if matches!(operator, U::PreIncrement | U::PreDecrement) {
                     stored.operand
@@ -2200,6 +2301,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         self.binary_inst(Opcode::Isub, InstFlags::empty(), zero, size)
                     }
                 };
+                self.check_pointer_overflow(value, offset, None, source);
                 Operand::Value(self.ptr_add(value, offset))
             },
             // A 16-bit floating type steps in `float` and rounds once.
@@ -2247,6 +2349,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let stepped = self.binary_inst(opcode, flags, value, one);
                 if overflows {
                     self.trap_on_overflow(opcode, representation, [value, one], stepped);
+                    self.check_signed_overflow(
+                        opcode,
+                        representation,
+                        [value, one],
+                        stepped,
+                        item.ty,
+                        false,
+                        source,
+                    );
                 }
                 Operand::Value(self.normalize(stepped, representation))
             },
@@ -2328,6 +2439,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             && let [argument] = items[..]
         {
             self.trap_on_absolute_minimum(binding, argument, source)?;
+        }
+        if let Some(binding) = direct
+            && self.checks(crate::target::sanitizers::UbChecks::NONNULL_ATTRIBUTE)
+        {
+            let mut expressions = ArenaVec::new_in(self.scratch);
+            expressions.extend(arguments.iter().filter_map(|argument| {
+                Some(
+                    self.unit
+                        .sema
+                        .expressions
+                        .get(argument.expression.0)?
+                        .expression,
+                )
+            }));
+            self.check_nonnull_arguments(info.expression, binding, &items, &expressions);
         }
         // `(*f)(...)` of a function using the pack calls its copy too.
         let packed_callee = direct
@@ -2780,6 +2906,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let base = self.value(pointer, source)?;
         let signed = self.repr(index.ty, source)?.signed();
         let index = self.value(index, source)?;
+        // A checked offset may wrap, for the check to see it.
+        let wrap = if self.checks(crate::target::sanitizers::UbChecks::POINTER_OVERFLOW) {
+            InstFlags::empty()
+        } else {
+            InstFlags::NSW
+        };
+        let mut product = None;
         if let Some(size) = self.static_element_size(pointer.ty) {
             let stride = size;
             let size = i128::from(size);
@@ -2801,27 +2934,33 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     wide
                 } else {
                     let size = self.iconst(Type::I64, size);
-                    self.binary_inst(Opcode::Imul, InstFlags::NSW, wide, size)
+                    let scaled = self.binary_inst(Opcode::Imul, wrap, wide, size);
+                    product = Some([wide, size, scaled]);
+                    scaled
                 };
                 if subtract {
                     let zero = self.iconst(Type::I64, 0);
-                    self.binary_inst(Opcode::Isub, InstFlags::NSW, zero, scaled)
+                    self.binary_inst(Opcode::Isub, wrap, zero, scaled)
                 } else {
                     scaled
                 }
             };
-            return self.indexed_address(base, offset, pointer.ty, Some(stride), source);
+            let address = self.indexed_address(base, offset, pointer.ty, Some(stride), source)?;
+            self.check_pointer_overflow(base, offset, product, source);
+            return Ok(address);
         }
         let size = self.element_size(pointer.ty, source)?;
         let wide = self.extend(index, signed, Type::I64);
-        let scaled = self.binary_inst(Opcode::Imul, InstFlags::NSW, wide, size);
+        let scaled = self.binary_inst(Opcode::Imul, wrap, wide, size);
         let offset = if subtract {
             let zero = self.iconst(Type::I64, 0);
-            self.binary_inst(Opcode::Isub, InstFlags::NSW, zero, scaled)
+            self.binary_inst(Opcode::Isub, wrap, zero, scaled)
         } else {
             scaled
         };
-        self.indexed_address(base, offset, pointer.ty, None, source)
+        let address = self.indexed_address(base, offset, pointer.ty, None, source)?;
+        self.check_pointer_overflow(base, offset, Some([wide, size, scaled]), source);
+        Ok(address)
     }
 
     /// A pointer comparison operand: a pointer, or an integer (in practice

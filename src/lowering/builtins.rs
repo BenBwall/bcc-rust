@@ -592,6 +592,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Void
             },
             | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {
+                if builtin == CommonBuiltin::Unreachable {
+                    self.check_unreachable(e);
+                }
                 if builtin == CommonBuiltin::Trap {
                     _ = self.draft.push(
                         Op::Inst(InstData::Nullary {
@@ -776,6 +779,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::Bit(op, _) => {
                 let arg = self.value(items[0], source)?;
                 let ty = self.draft.value_type(arg);
+                if matches!(op, BitOperation::Clz | BitOperation::Ctz) {
+                    self.check_bit_count(e, arg, op == BitOperation::Clz);
+                }
                 let count = match op {
                     | BitOperation::Clz => self.convert(Opcode::Clz, ty, arg),
                     | BitOperation::Ctz => self.convert(Opcode::Ctz, ty, arg),

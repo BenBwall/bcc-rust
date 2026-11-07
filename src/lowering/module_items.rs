@@ -204,6 +204,8 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) pack_addresses: ArenaMap<'a, FuncId, &'tu FunctionRecord<'tu>>,
     /// The unit's GNU nested functions (`nested.rs`).
     pub(super) nested: super::nested::NestedFunctions<'a>,
+    /// `UndefinedBehaviorSanitizer`'s options and static data (`sanitizer.rs`).
+    pub(super) sanitizer: super::sanitizer::UnitSanitizer<'a>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -1552,6 +1554,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
     }
 
+    /// Records that the unit made `global` for itself, so that no linked
+    /// declaration reuses it.
+    pub(super) fn note_generated_global(&mut self, global: GlobalId) {
+        _ = self.generated_globals.insert(global);
+    }
+
     pub(super) fn into_module(mut self) -> Module<'ir> {
         self.settle_dll_storage();
         self.module
@@ -2665,6 +2673,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             pack_copy_index: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             pack_addresses: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             nested: super::nested::NestedFunctions::new(tables, sema),
+            sanitizer: super::sanitizer::UnitSanitizer::new(
+                context.configuration.code_options().hardening.undefined,
+                tables,
+            ),
         })
     }
 }

@@ -578,6 +578,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         if let Some(align) = alignment {
             self.retain_alignment(value, align);
         }
+        if !self.unit.sanitizer.options.checks.is_empty() {
+            self.note_storage(inst, value);
+        }
         value
     }
 
@@ -590,11 +593,15 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
 
     /// The flags of signed integer `+`, `-`, `*` and `<<`: `nsw`, because
     /// signed overflow is undefined (C99 §6.5p5, p. 67; PDF p. 79), unless
-    /// `-fwrapv` makes it wrap or `-ftrapv` checks it
-    /// ([`Self::trap_on_overflow`]), extensions.
+    /// `-fwrapv` makes it wrap, or `-ftrapv` or `-fsanitize` checks it
+    /// ([`Self::trap_on_overflow`], [`Self::check_signed_overflow`]),
+    /// extensions.
     pub(super) fn signed_wrap(&self) -> InstFlags {
         let configuration = self.unit.context.configuration;
-        if configuration.wrapv() || configuration.trapv() {
+        if configuration.wrapv()
+            || configuration.trapv()
+            || self.checks(crate::target::sanitizers::UbChecks::SIGNED_INTEGER_OVERFLOW)
+        {
             InstFlags::empty()
         } else {
             InstFlags::NSW
@@ -618,6 +625,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         if !self.unit.context.configuration.trapv() || representation.narrow().is_some() {
             return;
         }
+        if let Some(overflow) = self.overflow_condition(opcode, [a, b], result) {
+            self.trap_if(overflow);
+        }
+    }
+
+    /// Whether the signed `iadd`, `isub` or `imul` of `a` and `b`, whose
+    /// wrapped result is `result`, overflowed; `None` for another opcode.
+    pub(super) fn overflow_condition(
+        &mut self,
+        opcode: Opcode,
+        [a, b]: [Value; 2],
+        result: Value,
+    ) -> Option<Value> {
         let ty = self.draft.value_type(result);
         let plain = InstFlags::empty();
         let zero = self.iconst(ty, 0);
@@ -670,9 +690,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let negated = self.binary_inst(Opcode::And, plain, a_minus_one, b_minimum);
                 self.binary_inst(Opcode::Or, plain, wrapped, negated)
             },
-            | _ => return,
+            | _ => return None,
         };
-        self.trap_if(overflow);
+        Some(overflow)
     }
 
     /// Under `-ftrapv`, traps before a call of the library's `abs`, `labs`
