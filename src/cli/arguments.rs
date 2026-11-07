@@ -424,6 +424,7 @@ impl Cli {
                 "-fstrict-volatile-bitfields",
                 "-fno-strict-volatile-bitfields",
             ),
+            intel_syntax:               self.last_of("-masm=intel", "-masm=att"),
             function_sections:          self
                 .last_of("-ffunction-sections", "-fno-function-sections"),
             data_sections:              self.last_of("-fdata-sections", "-fno-data-sections"),
@@ -1025,6 +1026,8 @@ impl LanguageFlag {
             | "-fno-function-sections"
             | "-fdata-sections"
             | "-fno-data-sections"
+            | "-masm=intel"
+            | "-masm=att"
             | "-fno-omit-frame-pointer"
             | "-fomit-frame-pointer" => return Some(Self::Code),
             | _ if is_hardening_option(text) => return Some(Self::Code),

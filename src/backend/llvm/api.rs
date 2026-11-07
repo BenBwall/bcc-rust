@@ -1482,7 +1482,11 @@ impl<'id> Session<'id> {
                 constraints.len(),
                 i32::from(side_effects),
                 0,
-                LLVMInlineAsmDialect::LLVMInlineAsmDialectATT,
+                if self.code.intel_syntax {
+                    LLVMInlineAsmDialect::LLVMInlineAsmDialectIntel
+                } else {
+                    LLVMInlineAsmDialect::LLVMInlineAsmDialectATT
+                },
                 0,
             )
         };
@@ -1862,6 +1866,12 @@ impl<'id> Session<'id> {
                 bcc_llvm_use_init_array(machine.0);
             }
         }
+        if self.code.intel_syntax {
+            // SAFETY: As above; this option is also missing from LLVM-C.
+            unsafe {
+                bcc_llvm_use_intel_syntax(machine.0);
+            }
+        }
         // SAFETY: As above; this option is also missing from LLVM-C.
         unsafe {
             bcc_llvm_use_sections(
@@ -2175,6 +2185,8 @@ unsafe extern "C" {
     /// Gives each function, and each data object, a section of its own on a
     /// live, unused target machine.
     fn bcc_llvm_use_sections(machine: LLVMTargetMachineRef, functions: bool, data: bool);
+    /// Writes assembly in Intel syntax on a live, unused target machine.
+    fn bcc_llvm_use_intel_syntax(machine: LLVMTargetMachineRef);
     /// Merges the counted `attributes` into the attribute list of a live
     /// function (`call` 0) or call instruction (`call` 1) in one step.
     fn bcc_llvm_add_attributes(
@@ -2248,7 +2260,25 @@ impl Session<'_> {
     /// as Clang does for each top-level `asm`; LLVM ends each block with a
     /// newline and assembles them, in order, before the functions.
     /// GNU extension: GCC manual, "Basic Asm", outside functions.
+    /// Whether `asm` text and what LLVM writes are in Intel syntax.
+    pub(super) const fn intel_syntax(&self) -> bool {
+        self.code.intel_syntax
+    }
+
     pub(super) fn append_module_asm(&self, text: &str) {
+        // LLVM reads module assembly as AT&T unless told otherwise, whatever
+        // syntax it writes, as `-masm=intel` promises for all of `asm`.
+        if self.code.intel_syntax {
+            let directive = ".intel_syntax noprefix";
+            // SAFETY: As below.
+            unsafe {
+                llvm_sys::core::LLVMAppendModuleInlineAsm(
+                    self.module,
+                    directive.as_ptr().cast(),
+                    directive.len(),
+                );
+            }
+        }
         // SAFETY: The module is live; LLVM copies `text.len()` bytes, which
         // need no terminator.
         unsafe {

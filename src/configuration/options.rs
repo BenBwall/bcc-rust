@@ -1011,6 +1011,7 @@ impl CompilerConfiguration {
                 tls_model:                  crate::target::TlsModel::GlobalDynamic,
                 debug_info:                 false,
                 strict_volatile_bit_fields: false,
+                intel_syntax:               false,
                 function_sections:          false,
                 data_sections:              false,
             },
