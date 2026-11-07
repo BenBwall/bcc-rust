@@ -92,14 +92,15 @@ pub struct ExplorerOutput {
     /// The bcc IR after ABI lowering, as `--emit=ir-abi --backend=native`
     /// prints it.
     pub ir_abi:             Option<String>,
-    /// For each line of `ir`, the source line its instruction came from, or
-    /// 0 (a label, a declaration, or a line the optimizer dropped).
-    pub ir_lines:           Vec<u32>,
+    /// Where each line of `ir` came from.
+    pub ir_lines:           Vec<ExplorerLineOrigin>,
     /// The same for `ir_abi`.
-    pub ir_abi_lines:       Vec<u32>,
+    pub ir_abi_lines:       Vec<ExplorerLineOrigin>,
     /// The native back end's assembly, as `--emit=asm --backend=native`
     /// prints it.
     pub asm:                Option<String>,
+    /// The same for `asm`.
+    pub asm_lines:          Vec<ExplorerLineOrigin>,
     /// Each function's machine code, encoded from `asm` as
     /// `--native-object` would encode it. ELF targets only.
     pub machine_code:       Option<Vec<ExplorerFunctionBytes>>,
@@ -239,10 +240,33 @@ pub struct ExplorerInstruction {
     pub bytes:  Vec<u8>,
     /// The assembly line it encodes, as `asm` spells it.
     pub asm:    String,
+    /// That line's 1-based number in `asm`.
+    pub line:   u32,
 }
 
-/// The lines of each output that one function definition produced. The IR
-/// keeps no source locations, so the mapping is per function: a function's
+/// Where one line of an output came from, read from the debug locations the
+/// explorer's compilation records. Lines are the editor's: physical lines of
+/// the input, which `#line` does not change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExplorerLineOrigin {
+    /// The line its instruction came from, or 0. The optimizer takes the line
+    /// from an instruction it moves to another block, or merges, and register
+    /// allocation's moves never had one.
+    pub line: u32,
+    /// For an instruction the optimizer copied in from a function it inlined,
+    /// the line of the call it was copied for, in the function the instruction
+    /// now runs in; otherwise 0. With a call in the input and a callee in a
+    /// header, `line` is this line too.
+    pub call: u32,
+    /// Whether the line is an instruction, rather than a label, a directive
+    /// or a declaration. An instruction with no `line` is code that no one
+    /// source line can claim; anything else has no line to claim.
+    pub code: bool,
+}
+
+/// The lines of each output that one function definition produced: a
+/// function's
 /// source lines map to its whole body in each output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

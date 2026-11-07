@@ -146,6 +146,126 @@ fn links_the_other_stages_per_function() {
     assert!(links(Stage::Asm, &compilation, source, false).is_empty());
 }
 
+/// Where each line came from, given its source line: 0 for a line that is not
+/// code.
+fn origins(lines: &[usize]) -> Vec<LineOrigin> {
+    lines
+        .iter()
+        .map(|&line| LineOrigin {
+            line,
+            call: 0,
+            code: line != 0,
+        })
+        .collect()
+}
+
+/// Every back-end stage reads the same table the same way, whatever its
+/// function's last line is: a closing brace or directive stands for the
+/// function, and the machine code's last line is an instruction.
+#[test]
+fn back_end_stages_link_line_by_line() {
+    let source = "int f(int x) {\n    return x * x;\n}\n";
+    let asm = "\t.text\nf:\n\t.cfi_startproc\n\timull\t%edi, %edi\n\tmovl\t%edi, %eax\n\tretq\n\t.\
+               size\tf, .-f\n";
+    let code = |line, call| LineOrigin {
+        line,
+        call,
+        code: true,
+    };
+    let none = LineOrigin::default();
+    let compilation = Compilation {
+        asm: Some(asm.to_owned()),
+        asm_lines: vec![none, none, none, code(2, 0), code(0, 0), code(2, 0), none],
+        machine_code: Some("<f>:\n  0  0f af ff\n  3  89 f8\n  5  c3\n".to_owned()),
+        machine_code_lines: vec![none, code(2, 0), code(0, 0), code(2, 0)],
+        functions: vec![FunctionLines {
+            name: "f".into(),
+            source: (1, 3),
+            asm: Some((2, 7)),
+            machine_code: Some((1, 4)),
+            ..FunctionLines::default()
+        }],
+        ..Compilation::default()
+    };
+    let asm = links(Stage::Asm, &compilation, source, false);
+    assert!(asm.is_exact() && asm.has_origins());
+    assert_eq!(asm.outputs_for(2), [4, 6]);
+    assert_eq!(asm.sources_for(2), [1, 2, 3], "the label stands for the function");
+    assert_eq!(asm.sources_for(7), [1, 2, 3], "and so does the end directive");
+    assert_eq!(asm.sources_for(4), [2]);
+    assert_eq!(asm.sources_for(5), Vec::<usize>::new());
+    assert_eq!(asm.unclaimed().collect::<Vec<_>>(), [5]);
+    let machine = links(Stage::MachineCode, &compilation, source, false);
+    assert_eq!(machine.sources_for(4), [2], "the last instruction keeps its line");
+    assert_eq!(machine.sources_for(1), [1, 2, 3]);
+    assert_eq!(machine.outputs_for(2), [2, 4]);
+}
+
+/// An inlined copy links to its own line and to the call it was made for.
+#[test]
+fn inlined_copies_link_to_their_line_and_their_call() {
+    let source = "int s(int n) {\n    return n * n;\n}\nint f(int x) {\n    return s(x);\n}\n";
+    let code = |line, call| LineOrigin {
+        line,
+        call,
+        code: true,
+    };
+    let none = LineOrigin::default();
+    let compilation = Compilation {
+        ir: Some(
+            "function @s(i32) -> i32 {\nblock0(v0: i32):\n    v1 = imul v0, v0\n    return \
+             v1\n}\nfunction @f(i32) -> i32 {\nblock0(v0: i32):\n    v1 = imul v0, v0\n    return \
+             v1\n}\n"
+                .to_owned(),
+        ),
+        ir_lines: vec![none, none, code(2, 0), code(2, 0), none, none, none, code(2, 5), code(5, 0), none],
+        functions: vec![
+            FunctionLines {
+                name: "s".into(),
+                source: (1, 3),
+                ir: Some((1, 5)),
+                ..FunctionLines::default()
+            },
+            FunctionLines {
+                name: "f".into(),
+                source: (4, 6),
+                ir: Some((6, 10)),
+                ..FunctionLines::default()
+            },
+        ],
+        ..Compilation::default()
+    };
+    let ir = links(Stage::Ir, &compilation, source, false);
+    assert_eq!(ir.outputs_for(2), [3, 4, 8], "the line, in place and inlined");
+    assert_eq!(ir.outputs_for(5), [8, 9], "the call, with the copy made for it");
+    assert_eq!(ir.sources_for(8), [2], "the copy's own line");
+    assert_eq!(ir.origin(8).call, 5);
+    assert_eq!(ir.first_output_for(5), Some(9), "scroll to the call's own code");
+}
+
+/// Each lesson's recorded lines match its LLVM IR, name lines of its source,
+/// and mark exactly the instructions as code.
+#[test]
+fn precomputed_llvm_lines_match_their_ir() {
+    for lesson in &DEMOS {
+        let stem = lesson.name.trim_end_matches(".c");
+        let lines = lesson.source.lines().count();
+        for optimize in [false, true] {
+            let Some(llvm) = precomputed_llvm(stem, optimize) else {
+                continue;
+            };
+            let origins = precomputed_llvm_lines(stem, optimize);
+            assert_eq!(origins.len(), llvm.lines().count(), "{stem}");
+            for (text, origin) in llvm.lines().zip(&origins) {
+                let instruction = text.starts_with("  ") && !text.trim_start().starts_with(';');
+                assert_eq!(origin.code, instruction, "{stem}: {text}");
+                assert!(origin.line <= lines && origin.call <= lines, "{stem}: {text}");
+            }
+            assert!(origins.iter().any(|origin| origin.line != 0), "{stem}");
+        }
+    }
+}
+
 #[test]
 fn links_ir_instructions_to_their_lines() {
     let source = "int square(int x) {\n    int y = x * x;\n    return y;\n}\n";
@@ -162,7 +282,7 @@ fn links_ir_instructions_to_their_lines() {
                  v0\n    return v1\n}\n"
                     .into(),
             ),
-        ir_lines: vec![0, 0, 0, 0, 2, 3, 0],
+        ir_lines: origins(&[0, 0, 0, 0, 2, 3, 0]),
         functions: vec![function((3, 7))],
         ..Compilation::default()
     };
@@ -198,7 +318,7 @@ fn links_ir_instructions_to_their_lines() {
     );
     // A body the optimizer rebuilt has no lines left: it links per function.
     let rebuilt = Compilation {
-        ir_lines: vec![0; 7],
+        ir_lines: origins(&[0; 7]),
         ..compilation
     };
     let rebuilt = links(Stage::Ir, &rebuilt, source, false);
@@ -307,8 +427,8 @@ fn a_trap_is_reported_by_its_cause() {
 fn a_functions_ends_stand_for_its_lines_only_without_lines_of_their_own() {
     // `square` (source 1-4) keeps an instruction for line 2; `rebuilt`
     // (source 6-9) has only its header, a body without lines, and its brace.
-    let links = Links {
-        exact: Some(vec![
+    let links = Links::exact(
+        vec![
             None,
             Some((1, 4)),
             Some((2, 2)),
@@ -316,9 +436,10 @@ fn a_functions_ends_stand_for_its_lines_only_without_lines_of_their_own() {
             Some((6, 9)),
             Some((6, 9)),
             Some((6, 9)),
-        ]),
-        ..Links::default()
-    };
+        ],
+        Vec::new(),
+        Vec::new(),
+    );
     assert_eq!(links.outputs_for(2), [2]);
     assert_eq!(
         links.outputs_for(3),

@@ -20,6 +20,7 @@
 
 use crate::{
     backend::native::mir::{
+        InstSource,
         MBlock,
         MFunction,
         MInst,
@@ -59,6 +60,11 @@ pub(super) fn split_critical_edges<'a>(func: &mut MFunction<'a>, arena: &'a Bump
             }
             let edge = func.block(arena);
             func.blocks[edge.index()].insts.push(MInst::Jmp { target });
+            if func.tracks_sources {
+                func.blocks[edge.index()]
+                    .sources
+                    .push(InstSource::Allocator);
+            }
             inserted.push((block, edge));
             edge
         };
@@ -190,6 +196,7 @@ const DUPLICATED: usize = 8;
 /// `jmp`, as many jumps as it replaced.
 pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
     let mut copy = ArenaVec::new_in(arena);
+    let mut sources = ArenaVec::new_in(arena);
     for block in 0..func.blocks.len() {
         let Some(&MInst::Jmp { target }) = func.blocks[block].insts.last() else {
             continue;
@@ -231,6 +238,8 @@ pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
         }
         copy.clear();
         copy.extend_from_slice(insts);
+        sources.clear();
+        sources.extend_from_slice(&func.blocks[target.index()].sources);
         if !falls && body == Some(not_taken) {
             *copy.last_mut().expect("the copy ends in the branch") = MInst::Jcc {
                 cond:      cond.negated(),
@@ -238,8 +247,11 @@ pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
                 not_taken: taken,
             };
         }
-        let data = &mut func.blocks[block].insts;
-        _ = data.pop();
-        data.extend_from_slice(&copy);
+        let data = &mut func.blocks[block];
+        _ = data.insts.pop();
+        data.insts.extend_from_slice(&copy);
+        // The copied test keeps the line of the loop's condition.
+        _ = data.sources.pop();
+        data.sources.extend_from_slice(&sources);
     }
 }
