@@ -33,7 +33,6 @@ use crate::{
         displayed,
         gutter,
         is_folded,
-        links,
         optimizer_changes,
     },
 };
@@ -54,6 +53,10 @@ pub fn PipelineView(
     /// The output on screen: `compilation`, or the last output while the
     /// next one compiles. The stage strip and stop box describe it.
     shown: Memo<Option<Compilation>>,
+    /// The links between the source and `compilation`'s output.
+    links: Memo<Links>,
+    /// What the line the reader points at links to, in a sentence.
+    reading: Signal<Option<String>>,
     /// Its compilation at the other level, for the optimizer comparison.
     other: Memo<Option<Compilation>>,
     /// The in-browser compiler's progress on `source` at the selected level.
@@ -99,32 +102,56 @@ pub fn PipelineView(
                 compilation
                     .as_ref()
                     .map(|compilation| {
-                        source.with(|source| links(stage.get(), compilation, source, headers.get()))
+                        source.with(|source| {
+                            crate::pipeline::links(stage.get(), compilation, source, headers.get())
+                        })
                     })
                     .unwrap_or_default()
             })
         })
     };
-    let links = links_of(compilation);
     // The note on linking describes the output on screen, so it stays while
     // the next output compiles.
     let shown_links = links_of(shown);
     let layers = Signal::derive(move || -> Vec<Layer> {
         let hovered = pointing.line(Side::Source);
         let linked = if hovered > 0 {
-            links.with(|links| links.outputs_for(hovered))
+            links.with(|links| {
+                links
+                    .outputs_for(hovered)
+                    .into_iter()
+                    .map(|line| {
+                        // A copy inlined from elsewhere reads differently from
+                        // what this line became in place.
+                        let class = if links.origin(line).call == 0 {
+                            "link-line"
+                        } else {
+                            "link-inlined"
+                        };
+                        Decoration::line(line, class)
+                    })
+                    .collect()
+            })
         } else {
             Vec::new()
         };
         vec![
-            (
-                "links",
-                linked
-                    .into_iter()
-                    .map(|line| Decoration::line(line, "link-line"))
-                    .collect(),
-            ),
+            ("links", linked),
             ("stage", output_marks(stage.get(), shown, text)),
+            (
+                "unclaimed",
+                shown_links.with(|links| {
+                    links
+                        .unclaimed()
+                        .map(|line| Decoration {
+                            start_line: line,
+                            end_line: line,
+                            margin_class: Some("link-unclaimed".to_owned()),
+                            ..Decoration::default()
+                        })
+                        .collect()
+                }),
+            ),
         ]
     });
     let reveal = Signal::derive(move || {
@@ -217,13 +244,15 @@ pub fn PipelineView(
                 <OptimizerNote stage optimize compilation other shown=Signal::derive(move || output.with(Option::is_some)) />
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
-                        {move || if shown_links.with(Links::is_exact) {
+                        {move || if !shown_links.with(Links::is_exact) {
+                            "Hover a source line, or move the cursor to it, to find its function here; do the same \
+                             here to find the source. No line of this program has a source location, so it links \
+                             per function."
+                        } else if shown_links.with(Links::has_origins) {
+                            stage.get().link_note()
+                        } else {
                             "Hover a source line, or move the cursor to it, to find what it became here; do the \
                              same here to find its source."
-                        } else {
-                            "Hover a source line, or move the cursor to it, to find its function here; do the same \
-                             here to find the source. These lines keep no source locations, so they link per \
-                             function, not per line."
                         }}
                     </p>
                     <button
@@ -238,6 +267,13 @@ pub fn PipelineView(
                         "Show headers"
                     </button>
                 </div>
+                <p
+                    class="link-reading"
+                    aria-hidden="true"
+                    hidden=move || shown_links.with(Links::is_empty) || output.with(Option::is_none)
+                >
+                    {move || reading.get()}
+                </p>
                 <div class="stage-output" hidden=move || output.with(Option::is_none)>
                     <CodeEditor
                         text
@@ -251,6 +287,11 @@ pub fn PipelineView(
                         reveal
                         line_numbers
                     />
+                    <footer class="link-legend" hidden=move || !shown_links.with(Links::has_origins)>
+                        <span><i class="swatch swatch-link"></i>"came from the line you point at"</span>
+                        <span><i class="swatch swatch-inlined"></i>"inlined from another function"</span>
+                        <span><i class="swatch swatch-unclaimed"></i>"no single source line"</span>
+                    </footer>
                 </div>
                 <div class="stage-missing" hidden=move || output.with(Option::is_some)>
                     <p>
@@ -780,6 +821,8 @@ mod tests {
                     optimize=RwSignal::new(optimize)
                     compilation
                     shown
+                    links=Memo::new(|_| crate::pipeline::Links::default())
+                    reading=Signal::stored(None)
                     other
                     live=Signal::stored(LiveCompile::Compiling)
                     theme=Signal::stored("dark")
