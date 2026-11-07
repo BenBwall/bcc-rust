@@ -232,8 +232,9 @@ can reach and calls of them:
   YMM0 and LLVM only on the stack. `--clang-mode` keeps Clang's stack.
 - `--backend=native` refuses any YMM signature, since it writes no AVX instructions.
 
-A `static` function's callers are all bcc's, so it keeps bcc's convention under each of
-these.
+A `static` function whose address nothing takes has only bcc's callers, so it keeps
+bcc's convention under each of these. An address taken reaches other objects, so the
+function is refused like an external one.
 
 An option bcc only warns about counts until AVX goes in that compiler or its own opposite
 follows: `-mavx512bw -mno-avx512f` keeps AVX in both, and `-mavx512f -mno-xsave` keeps it in

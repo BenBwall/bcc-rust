@@ -233,6 +233,15 @@ fn foreign_vector_conventions_are_refused() {
         accepted(definition, compiler, &["-march=haswell", "-march=x86-64"]);
         let local = "static V f(V a) { return a; } V *g(V *p) { *p = f(*p); return p; }";
         accepted(local, compiler, &["-mavx512f"]);
+        // An address taken reaches other objects, whatever the linkage.
+        for escaping in [
+            "static V f(V a) { return a; } V (*p)(V) = f;",
+            "static V f(V a) { return a; } V (*g(void))(V) { return f; }",
+            "void e(V (*)(V)); static V f(V a) { return a; } void g(void) { e(&f); }",
+        ] {
+            refused(escaping, compiler, &["-mavx512f"], foreign);
+            accepted(escaping, compiler, &["-mavx2"]);
+        }
         // An option outside the table leaves AVX on until AVX goes, or until
         // its own later opposite.
         for options in [
@@ -262,6 +271,9 @@ fn foreign_vector_conventions_are_refused() {
         let local = "__attribute__((target(\"avx2\"))) static V f(V a) { return a; } V *g(V *p) { \
                      *p = f(*p); return p; }";
         accepted(local, compiler, &[]);
+        let escaping =
+            "__attribute__((target(\"avx2\"))) static V f(V a) { return a; } V (*p)(V) = f;";
+        refused(escaping, compiler, &[], foreign);
         let call = "V e(V); __attribute__((target(\"avx2\"))) void g(V *p) { *p = e(*p); }";
         refused(call, compiler, &[], foreign);
         accepted(
@@ -280,6 +292,14 @@ fn foreign_vector_conventions_are_refused() {
         CompilerIdentity::Gcc,
         &["-mavx2"],
     );
+    for escaping in [
+        "static int f(V a, ...) { return a[7]; } int (*p)(V, ...) = f;",
+        "int e(int (*)(V, ...)); static int f(V a, ...) { return a[7]; } int g(void) { return \
+         e(f); }",
+    ] {
+        refused(escaping, CompilerIdentity::Gcc, &["-mavx2"], named);
+        accepted(escaping, CompilerIdentity::Clang, &["-mavx2"]);
+    }
     // XSAVE: AVX needs it in GCC only.
     let definition = "V f(V a) { return a; }";
     let foreign = "ignores changes how it travels";

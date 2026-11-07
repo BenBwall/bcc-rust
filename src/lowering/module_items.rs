@@ -726,6 +726,38 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 .is_some_and(|attributes| attributes.inlining == Inlining::Always)
     }
 
+    /// The function whose address a C expression or static initializer takes.
+    /// That address can reach another object, which calls it as its own
+    /// compiler would, whatever the function's linkage.
+    pub(super) fn addressed_function(
+        &mut self,
+        binding: usize,
+    ) -> Result<FuncId, LoweringErrorKind> {
+        self.check_reachable_function(binding)?;
+        self.function(binding)
+    }
+
+    /// Refuses a function that another object can call when bcc would pass or
+    /// return its arguments otherwise ([`Self::check_foreign_vectors`]).
+    fn check_reachable_function(&self, binding: usize) -> Result<(), LoweringErrorKind> {
+        let TypeKind::Function {
+            result,
+            parameters,
+            variadic,
+            prototype,
+            ..
+        } = self.sema.types.kind(self.sema.bindings[binding].ty)
+        else {
+            return Ok(());
+        };
+        self.check_foreign_vectors(
+            parameters.iter().copied(),
+            result,
+            variadic && prototype,
+            self.target_vector_abi(binding),
+        )
+    }
+
     /// The function a function binding names, declaring it on first use
     /// with the signature of the binding's type.
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
@@ -738,21 +770,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 "lowering referenced an omitted internal function",
             ));
         }
-        if data.linkage != Linkage::Internal
-            && let TypeKind::Function {
-                result,
-                parameters,
-                variadic,
-                prototype,
-                ..
-            } = self.sema.types.kind(data.ty)
-        {
-            self.check_foreign_vectors(
-                parameters.iter().copied(),
-                result,
-                variadic && prototype,
-                self.target_vector_abi(binding),
-            )?;
+        if data.linkage != Linkage::Internal {
+            self.check_reachable_function(binding)?;
         }
         let name = self.symbol_name(binding);
         // Builtin aliases describe the C binding, never the exact assembler
@@ -936,7 +955,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// use, and under GCC's convention a variadic function's named one in YMM,
     /// since LLVM keeps such a function's named vectors on the stack, as
     /// Clang's convention says (`CC_X86_64_C` has `CCIfNotVarArg`). An internal
-    /// function's callers are all bcc's and keep bcc's convention.
+    /// function whose address nothing takes has only bcc's callers and keeps
+    /// bcc's convention.
     /// GCC `classify_argument` and `function_arg_64`; System V AMD64 psABI
     /// §3.2.3.
     pub(super) fn check_foreign_vectors(
@@ -2348,7 +2368,10 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let source = expression.source_vectors;
                     let kind = self.sema.types.kind(data.ty);
                     let symbol = if matches!(kind, TypeKind::Function { .. }) {
-                        Symbol::Function(self.function(binding).map_err(|kind| at(kind, source))?)
+                        Symbol::Function(
+                            self.addressed_function(binding)
+                                .map_err(|kind| at(kind, source))?,
+                        )
                     } else if data.duration
                         == crate::translation_phases::semantic_analysis::Duration::Static
                         && (place || matches!(kind, TypeKind::Array(..)))
