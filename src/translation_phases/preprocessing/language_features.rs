@@ -1465,6 +1465,13 @@ fn clang_feature(configuration: CompilerConfiguration, name: &str, extension: bo
         | "overloadable_unmarked" => return extension,
         | "address_sanitizer" => return configuration.code_options().hardening.sanitize_address,
         | "thread_sanitizer" => return configuration.code_options().hardening.sanitize_thread,
+        | "undefined_behavior_sanitizer" =>
+            return !configuration
+                .code_options()
+                .hardening
+                .undefined
+                .checks
+                .is_empty(),
         | _ => return false,
     };
     if extension {

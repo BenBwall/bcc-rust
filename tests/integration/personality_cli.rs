@@ -1776,7 +1776,7 @@ mod tests {
                     .status
                     .success()
             };
-            assert!(refused(&["-fsanitize=undefined"]), "{mode}");
+            assert!(refused(&["-fsanitize=leak"]), "{mode}");
             assert!(
                 refused(&["--target=x86_64-w64-mingw32", "-fsanitize=address"]),
                 "{mode}"
