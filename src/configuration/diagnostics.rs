@@ -196,6 +196,12 @@ impl CompilerConfiguration {
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
             | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
             | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
+            | DiagnosticGroup::TypeLimits if clang => &[
+                DiagnosticGroup::TautologicalUnsignedZeroCompare,
+                DiagnosticGroup::TautologicalTypeLimitCompare,
+            ],
+            | DiagnosticGroup::TautologicalConstantCompare =>
+                &[DiagnosticGroup::TautologicalConstantOutOfRangeCompare],
             | _ => &[],
         };
         for &child in children {
@@ -270,6 +276,9 @@ impl CompilerConfiguration {
             DiagnosticGroup::MissingFieldInitializers,
         ] {
             self.warning_options[group as usize].apply_all(enabled);
+        }
+        if self.identity.rules() != super::RuleSet::Clang {
+            self.warning_options[DiagnosticGroup::TypeLimits as usize].apply_all(enabled);
         }
         if self.identity.rules() == super::RuleSet::Clang {
             for group in [
@@ -911,6 +920,18 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// A comparison the operands' types decide. `-Wextra` holds it in GCC;
+    /// in Clang it holds the unsigned-zero and type-limit groups.
+    TypeLimits => Some("type-limits"), Ignored, false;
+    /// Clang's, on by default: holds the out-of-range group.
+    TautologicalConstantCompare => Some("tautological-constant-compare"), ClangWarning, false;
+    /// Clang's constant outside the operand type's range, on by default.
+    TautologicalConstantOutOfRangeCompare =>
+        Some("tautological-constant-out-of-range-compare"), ClangWarning, false;
+    /// Clang's unsigned operand compared with zero.
+    TautologicalUnsignedZeroCompare => Some("tautological-unsigned-zero-compare"), Ignored, false;
+    /// Clang's constant at the limit of the operand type's range.
+    TautologicalTypeLimitCompare => Some("tautological-type-limit-compare"), Ignored, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds
@@ -984,6 +1005,7 @@ impl DiagnosticGroup {
     /// them.
     const UNDER_EXTRA: &[Self] = &[
         Self::SignCompare,
+        Self::TypeLimits,
         Self::MissingFieldInitializers,
         Self::UnusedParameter,
         Self::UnusedButSetParameter,
@@ -1138,6 +1160,7 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::TypeLimits
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
                 | DiagnosticGroup::UnusedVariable

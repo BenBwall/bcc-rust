@@ -138,6 +138,8 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about a comparison the types decide may be on.
+    pub(super) type_limits: bool,
     /// Whether `-Wsign-compare` is on.
     pub(super) sign_compare: bool,
     /// Whether `-Wmissing-field-initializers` is on.
@@ -193,6 +195,13 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            type_limits: on(&[
+                G::TypeLimits,
+                G::TautologicalConstantCompare,
+                G::TautologicalConstantOutOfRangeCompare,
+                G::TautologicalUnsignedZeroCompare,
+                G::TautologicalTypeLimitCompare,
+            ]),
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,

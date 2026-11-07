@@ -1,0 +1,31 @@
+int f(unsigned u, unsigned char c, signed char s, int i, unsigned long ul, _Bool b, unsigned short us) {
+  int r = 0;
+  r += u < 0;
+  r += u >= 0;
+  r += 0 > u;
+  r += 0 <= u;
+  r += u <= 0;
+  r += u > 0;
+  r += u == 0;
+  r += c > 300;
+  r += c < 300;
+  r += c == 300;
+  r += c != 300;
+  r += 300 > c;
+  r += c >= 0;
+  r += c < 0;
+  r += s > 200;
+  r += s < -200;
+  r += s == 128;
+  r += c > 255;
+  r += c >= 255;
+  r += i < 0;
+  r += ul < 0;
+  r += c < -1;
+  r += b > 1;
+  r += b == 2;
+  r += us > 70000;
+  r += (c + 1) > 300;
+  r += c > 300u;
+  return r;
+}

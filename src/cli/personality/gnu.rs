@@ -1677,6 +1677,14 @@ impl State<'_> {
                     | "-fno-approx-func"
                     | "-Wmain-return-type"
                     | "-Wno-main-return-type"
+                    | "-Wtautological-constant-compare"
+                    | "-Wno-tautological-constant-compare"
+                    | "-Wtautological-constant-out-of-range-compare"
+                    | "-Wno-tautological-constant-out-of-range-compare"
+                    | "-Wtautological-unsigned-zero-compare"
+                    | "-Wno-tautological-unsigned-zero-compare"
+                    | "-Wtautological-type-limit-compare"
+                    | "-Wno-tautological-type-limit-compare"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an

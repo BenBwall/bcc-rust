@@ -1,0 +1,64 @@
+sema-type-limits-clang.c:3:10: warning: result of comparison of unsigned expression < 0 is always false [-Wtautological-unsigned-zero-compare]
+    3 |   r += u < 0;
+      |          ^
+sema-type-limits-clang.c:4:10: warning: result of comparison of unsigned expression >= 0 is always true [-Wtautological-unsigned-zero-compare]
+    4 |   r += u >= 0;
+      |          ^~
+sema-type-limits-clang.c:5:10: warning: result of comparison of 0 > unsigned expression is always false [-Wtautological-unsigned-zero-compare]
+    5 |   r += 0 > u;
+      |          ^
+sema-type-limits-clang.c:6:10: warning: result of comparison of 0 <= unsigned expression is always true [-Wtautological-unsigned-zero-compare]
+    6 |   r += 0 <= u;
+      |          ^~
+sema-type-limits-clang.c:10:10: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always false [-Wtautological-constant-out-of-range-compare]
+   10 |   r += c > 300;
+      |          ^
+sema-type-limits-clang.c:11:10: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always true [-Wtautological-constant-out-of-range-compare]
+   11 |   r += c < 300;
+      |          ^
+sema-type-limits-clang.c:12:10: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always false [-Wtautological-constant-out-of-range-compare]
+   12 |   r += c == 300;
+      |          ^~
+sema-type-limits-clang.c:13:10: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always true [-Wtautological-constant-out-of-range-compare]
+   13 |   r += c != 300;
+      |          ^~
+sema-type-limits-clang.c:14:12: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always true [-Wtautological-constant-out-of-range-compare]
+   14 |   r += 300 > c;
+      |            ^
+sema-type-limits-clang.c:15:10: warning: result of comparison of unsigned expression >= 0 is always true [-Wtautological-unsigned-zero-compare]
+   15 |   r += c >= 0;
+      |          ^~
+sema-type-limits-clang.c:16:10: warning: result of comparison of unsigned expression < 0 is always false [-Wtautological-unsigned-zero-compare]
+   16 |   r += c < 0;
+      |          ^
+sema-type-limits-clang.c:17:10: warning: result of comparison of constant 200 with expression of type 'signed char' is always false [-Wtautological-constant-out-of-range-compare]
+   17 |   r += s > 200;
+      |          ^
+sema-type-limits-clang.c:18:10: warning: result of comparison of constant -200 with expression of type 'signed char' is always false [-Wtautological-constant-out-of-range-compare]
+   18 |   r += s < -200;
+      |          ^
+sema-type-limits-clang.c:19:10: warning: result of comparison of constant 128 with expression of type 'signed char' is always false [-Wtautological-constant-out-of-range-compare]
+   19 |   r += s == 128;
+      |          ^~
+sema-type-limits-clang.c:20:10: warning: result of comparison 'unsigned char' > 255 is always false [-Wtautological-type-limit-compare]
+   20 |   r += c > 255;
+      |          ^
+sema-type-limits-clang.c:23:11: warning: result of comparison of unsigned expression < 0 is always false [-Wtautological-unsigned-zero-compare]
+   23 |   r += ul < 0;
+      |           ^
+sema-type-limits-clang.c:24:10: warning: result of comparison of constant -1 with expression of type 'unsigned char' is always false [-Wtautological-constant-out-of-range-compare]
+   24 |   r += c < -1;
+      |          ^
+sema-type-limits-clang.c:25:10: warning: result of comparison of constant 1 with expression of type '_Bool' is always false [-Wtautological-constant-compare]
+   25 |   r += b > 1;
+      |          ^
+sema-type-limits-clang.c:26:10: warning: result of comparison of constant 2 with expression of type '_Bool' is always false [-Wtautological-constant-out-of-range-compare]
+   26 |   r += b == 2;
+      |          ^~
+sema-type-limits-clang.c:27:11: warning: result of comparison of constant 70000 with expression of type 'unsigned short' is always false [-Wtautological-constant-out-of-range-compare]
+   27 |   r += us > 70000;
+      |           ^
+sema-type-limits-clang.c:29:10: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always false [-Wtautological-constant-out-of-range-compare]
+   29 |   r += c > 300u;
+      |          ^
+21 warnings generated.

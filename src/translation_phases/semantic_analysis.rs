@@ -84,6 +84,7 @@ mod reachability;
 mod sign_compare;
 mod statements;
 mod traversal;
+mod type_limits;
 mod unused;
 
 // Types and constant values

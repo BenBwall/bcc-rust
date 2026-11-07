@@ -6919,6 +6919,60 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// Comparisons the operand's type decides, under each compiler's options.
+    /// Each row was measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_type_limit_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int f(unsigned u, unsigned char c) { return (u < 0) + (c > 300) + (c > 255); }\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            let mut flags: Vec<String> = stderr(&output)
+                .lines()
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.join(" ")
+        };
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], ""),
+            ("--gcc-mode", &["-Wall"][..], ""),
+            (
+                "--gcc-mode",
+                &["-Wextra"][..],
+                "type-limits type-limits type-limits",
+            ),
+            (
+                "--clang-mode",
+                &[][..],
+                "tautological-constant-out-of-range-compare",
+            ),
+            (
+                "--clang-mode",
+                &["-Wno-tautological-constant-compare"][..],
+                "",
+            ),
+            (
+                "--clang-mode",
+                &["-Wtype-limits"][..],
+                "tautological-constant-out-of-range-compare tautological-type-limit-compare \
+                 tautological-unsigned-zero-compare",
+            ),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();

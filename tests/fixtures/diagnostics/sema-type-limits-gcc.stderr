@@ -1,0 +1,57 @@
+sema-type-limits-gcc.c:3:10: warning: comparison of unsigned expression in '< 0' is always false [-Wtype-limits]
+    3 |   r += u < 0;
+      |          ^
+sema-type-limits-gcc.c:4:10: warning: comparison of unsigned expression in '>= 0' is always true [-Wtype-limits]
+    4 |   r += u >= 0;
+      |          ^~
+sema-type-limits-gcc.c:5:10: warning: comparison of unsigned expression in '< 0' is always false [-Wtype-limits]
+    5 |   r += 0 > u;
+      |          ^
+sema-type-limits-gcc.c:6:10: warning: comparison of unsigned expression in '>= 0' is always true [-Wtype-limits]
+    6 |   r += 0 <= u;
+      |          ^~
+sema-type-limits-gcc.c:10:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   10 |   r += c > 300;
+      |          ^
+sema-type-limits-gcc.c:11:10: warning: comparison is always true due to limited range of data type [-Wtype-limits]
+   11 |   r += c < 300;
+      |          ^
+sema-type-limits-gcc.c:12:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   12 |   r += c == 300;
+      |          ^~
+sema-type-limits-gcc.c:13:10: warning: comparison is always true due to limited range of data type [-Wtype-limits]
+   13 |   r += c != 300;
+      |          ^~
+sema-type-limits-gcc.c:14:12: warning: comparison is always true due to limited range of data type [-Wtype-limits]
+   14 |   r += 300 > c;
+      |            ^
+sema-type-limits-gcc.c:15:10: warning: comparison is always true due to limited range of data type [-Wtype-limits]
+   15 |   r += c >= 0;
+      |          ^~
+sema-type-limits-gcc.c:16:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   16 |   r += c < 0;
+      |          ^
+sema-type-limits-gcc.c:17:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   17 |   r += s > 200;
+      |          ^
+sema-type-limits-gcc.c:18:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   18 |   r += s < -200;
+      |          ^
+sema-type-limits-gcc.c:19:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   19 |   r += s == 128;
+      |          ^~
+sema-type-limits-gcc.c:20:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   20 |   r += c > 255;
+      |          ^
+sema-type-limits-gcc.c:23:11: warning: comparison of unsigned expression in '< 0' is always false [-Wtype-limits]
+   23 |   r += ul < 0;
+      |           ^
+sema-type-limits-gcc.c:24:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   24 |   r += c < -1;
+      |          ^
+sema-type-limits-gcc.c:27:11: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   27 |   r += us > 70000;
+      |           ^
+sema-type-limits-gcc.c:29:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   29 |   r += c > 300u;
+      |          ^

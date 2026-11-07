@@ -119,6 +119,9 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
     /// The words are the diagnostic's name.
+    /// C99: §6.5.8p6, p. 86; PDF p. 98.
+    TypeLimits(crate::configuration::DiagnosticGroup),
+    /// The words are the diagnostic's name.
     /// C99: §6.7.8p21, p. 127; PDF p. 139.
     MissingFieldInitializer,
     /// C99: §6.9.2p3, p. 143; PDF p. 155.
@@ -1105,6 +1108,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::TypeLimits(_) => "the types decide this comparison",
             | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
@@ -1314,6 +1318,11 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::TypeLimits
+                    | crate::configuration::DiagnosticGroup::TautologicalConstantCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalConstantOutOfRangeCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalUnsignedZeroCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalTypeLimitCompare
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
@@ -1725,6 +1734,10 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::TypeLimits(_) => (
+                "comparison decided by type",
+                "C99 §6.5.8p6: the result is the same for every value the operand's type can hold",
             ),
             | Self::SignCompare => (
                 "comparison of integers of different signs",
@@ -2570,7 +2583,7 @@ impl SemanticErrorKind {
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
         match self {
-            | Self::PointerConstraint(group) => Some(group),
+            | Self::PointerConstraint(group) | Self::TypeLimits(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
@@ -2887,7 +2900,9 @@ impl ToDiagnostic for SemanticError {
             )
         } else if matches!(
             self.kind,
-            SemanticErrorKind::SignCompare | SemanticErrorKind::MissingFieldInitializer
+            SemanticErrorKind::SignCompare
+                | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::TypeLimits(_)
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
