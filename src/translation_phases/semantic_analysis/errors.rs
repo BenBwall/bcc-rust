@@ -119,6 +119,8 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
     /// The words are the diagnostic's name.
+    /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
+    KnrPromotedParameter,
     /// C99: §6.8.4.2p5, p. 134; PDF p. 146.
     SwitchCases(crate::configuration::DiagnosticGroup),
     /// C99: §6.9.1p12, p. 142; PDF p. 154.
@@ -1126,6 +1128,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::KnrPromotedParameter => "the prototype gives it another type",
             | Self::SwitchCases(_) => "this switch may not handle every value",
             | Self::ReturnFlow(_) => "control can reach this point",
             | Self::MissingFieldInitializer => "later members are left zero",
@@ -1337,6 +1340,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::KnrPromotedParameter
                     | crate::configuration::DiagnosticGroup::Switch
                     | crate::configuration::DiagnosticGroup::SwitchEnum
                     | crate::configuration::DiagnosticGroup::SwitchDefault
@@ -1756,6 +1760,11 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::KnrPromotedParameter => (
+                "K&R parameter type",
+                "C99 §6.7.5.3p15: a parameter an identifier list declares is compatible with a \
+                 prototype's only after the default argument promotions",
             ),
             | Self::SwitchCases(_) => (
                 "switch cases",
@@ -2636,6 +2645,7 @@ impl SemanticErrorKind {
             | Self::ReturnFlow(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
+            | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),
             | Self::Main(rule) => rule.group(),
@@ -2962,6 +2972,7 @@ impl ToDiagnostic for SemanticError {
             self.kind,
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::KnrPromotedParameter
                 | SemanticErrorKind::SwitchCases(_)
                 | SemanticErrorKind::ReturnFlow(_)
         ) {

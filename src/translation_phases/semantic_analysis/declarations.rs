@@ -1068,6 +1068,69 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether an identifier-list definition of type `defined` matches the
+    /// prototype `prior` once each parameter whose promoted type is the
+    /// prototype's promoted type is taken at the prototype's type, as GCC,
+    /// Clang and TCC take `void f(float); void f(a) float a;`.
+    /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
+    fn knr_keeps_prototype(&mut self, prior: TypeId, defined: TypeId) -> bool {
+        let (
+            TypeKind::Function {
+                result: prior_result,
+                parameters: prior_parameters,
+                prototype: true,
+                variadic: false,
+            },
+            TypeKind::Function {
+                result,
+                parameters,
+                prototype: false,
+                ..
+            },
+        ) = (
+            self.types.nodes[prior.index],
+            self.types.nodes[defined.index],
+        )
+        else {
+            return false;
+        };
+        if self.types.composite(prior_result, result).is_none() {
+            return false;
+        }
+        // An identifier-list definition is declared before its parameters'
+        // types are known; `old_signature` compares them once they are.
+        if parameters.is_empty() {
+            return self.functions.old_style_definition && !prior_parameters.is_empty();
+        }
+        if prior_parameters.len() != parameters.len() {
+            return false;
+        }
+        prior_parameters
+            .iter()
+            .zip(parameters.iter())
+            .all(|(&expected, &given)| {
+                self.types.composite(expected, given).is_some()
+                    || self.default_promoted(expected) == self.default_promoted(given)
+            })
+    }
+
+    /// `ty` after the default argument promotions.
+    /// C99: §6.5.2.2p6, p. 71; PDF p. 83.
+    fn default_promoted(&mut self, ty: TypeId) -> TypeId {
+        match self.types.nodes[self.types.non_atomic(ty).index] {
+            | TypeKind::Scalar(
+                Scalar::Bool
+                | Scalar::Char
+                | Scalar::SignedChar
+                | Scalar::UnsignedChar
+                | Scalar::Short
+                | Scalar::UnsignedShort,
+            ) => self.types.scalar(Scalar::Int),
+            | TypeKind::Scalar(Scalar::Float) => self.types.scalar(Scalar::Double),
+            | _ => ty.unqualified(),
+        }
+    }
+
     pub(super) fn bind(
         &mut self,
         name: Identifier,
@@ -1238,6 +1301,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } {
                 if Some(index) == composite_prior {
                     ty = composite;
+                }
+            } else if kind == BindingKind::Function && self.knr_keeps_prototype(old.ty, ty) {
+                // The definition takes the prototype's types; see
+                // `keep_prototype_parameters`.
+                if Some(index) == composite_prior {
+                    ty = old.ty;
                 }
             } else {
                 self.error(

@@ -913,6 +913,9 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// Clang's K&R parameter whose promoted type a preceding prototype does
+    /// not give it.
+    KnrPromotedParameter => Some("knr-promoted-parameter"), ClangWarning, false;
     /// A `switch` over an enumeration that leaves an enumerator out with no
     /// `default`, or names a value outside it. `-Wall` holds it in GCC, and
     /// Clang reports it by default.
