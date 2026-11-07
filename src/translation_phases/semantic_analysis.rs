@@ -34,8 +34,10 @@
 //!   declaration/parameter correspondence, typed bound sites, size DAGs,
 //!   expression effect summaries and effects-only evaluation recipes.
 //! - Types and values: `types.rs` interns and compares types and computes
-//!   layouts; `integer.rs` evaluates integer constants; `constants.rs` folds
-//!   floating values.
+//!   layouts; `integer.rs` evaluates integer constants, and
+//!   `exceptional_constants.rs` folds what GCC and Clang fold of those §6.6p4
+//!   leaves without a value; `address_truth.rs` folds what an address's truth
+//!   decides; `constants.rs` folds floating values.
 //! - Language extensions: `assembly.rs` and `assembly/` check GNU `asm`
 //!   statements' constraints, operands, clobbers and templates; `generic.rs`
 //!   selects C11 generic associations; `type_generic.rs` checks GNU type
@@ -45,10 +47,11 @@
 //!   retain packing, alignment and scalar machine modes; `bound_sites.rs`
 //!   retains typeof operand execution at written type sites; `builtins.rs` and
 //!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
-//! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
-//!   extensions; `errors.rs` defines diagnostic kinds and renders them;
-//!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
-//!   these paths.
+//! - Diagnostics and inspection: `compiler_parity.rs` reports and refuses what
+//!   only GCC or Clang does under a personality; `diagnostics.rs` reports
+//!   constraints and extensions; `errors.rs` defines diagnostic kinds and
+//!   renders them; `inspection.rs` formats retained results. `tests.rs` and
+//!   `tests/` exercise these paths.
 //!
 //! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22 (translation phase 7).
 //! C99: §6.2.1-§6.2.4, pp. 29-32; PDF pp. 41-44 (scopes, linkage and duration).
@@ -85,7 +88,10 @@ mod traversal;
 mod unused;
 
 // Types and constant values
+mod address_truth;
+mod compiler_parity;
 mod constants;
+mod exceptional_constants;
 mod excess;
 mod integer;
 mod named_constants;
@@ -127,6 +133,7 @@ pub(crate) use excess::{
 };
 pub(crate) use expressions::{
     ConstantClass,
+    ConstantFolding,
     Conversion,
     ConversionKind,
     ExpressionInfo,
@@ -406,11 +413,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         self.semantic_errors,
                     ));
                     self.work.push(Work::Eval(assertion.expression));
-                    self.work.push(Work::Expression(assertion.expression));
+                    self.constant_expression(
+                        assertion.expression,
+                        exceptional_constants::ConstantSite::StaticAssertion,
+                    );
                     return;
                 }
                 self.taint(d.recovered);
                 self.validate_declaration_list_item(d);
+                self.report_empty_declaration(d);
                 self.constexpr_declaration(d);
                 self.implicit_declaration_defaults(d);
                 self.work
@@ -633,6 +644,40 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.complete_conditional_elision(e);
                 // The blocks `e` creates depend on its type.
                 self.expression_emitted(e);
+                self.leave_expression(e);
+            },
+            | Work::SkippedOperand(condition, live, begin) => {
+                let info = self.expression_info(condition);
+                if Self::constant_truth(info) == Some(!live) {
+                    if begin {
+                        self.inhibited_evaluations += 1;
+                    } else {
+                        self.inhibited_evaluations -= 1;
+                    }
+                }
+            },
+            | Work::Unevaluated(enter) =>
+                if enter {
+                    self.inhibited_evaluations += 1;
+                } else {
+                    self.inhibited_evaluations -= 1;
+                },
+            | Work::ConstantContext => self.constant_contexts += 1,
+            | Work::ConstantContextEnd(site) => {
+                self.constant_contexts -= 1;
+                self.constant_site = site;
+            },
+            | Work::GenericAssociation(generic, name, enter) =>
+                if self.unmatched_association(generic, name) {
+                    if enter {
+                        self.inhibited_evaluations += 1;
+                    } else {
+                        self.inhibited_evaluations -= 1;
+                    }
+                },
+            | Work::RestoreFullExpression(depth, start) => {
+                self.expression_depth = depth;
+                self.full_expression_start = start;
             },
             | Work::ValueExpression(e) => {
                 let info = self.expression_info(e);
@@ -640,6 +685,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::CompoundInitializer(e, initializer) => {
                 self.work.push(Work::ExpressionDone(e));
+                self.begin_nested_full_expressions();
                 self.work.push(Work::Initializer(initializer));
             },
             | Work::InitializeDeclaration(declarator, initializer) => {
@@ -1022,7 +1068,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if !info.ice && info.assoc_barrier {
                     value = None;
                 }
-                if value.is_some() && !info.ice && info.folded_address() {
+                if value.is_some()
+                    && (info.folding.exceptional()
+                        || (info.integer.is_none()
+                            && self.context.configuration.folds_exceptional_constants()))
+                    && self.context.configuration.compiler_identity().rules()
+                        == crate::configuration::RuleSet::Clang
+                {
+                    // Clang folds these in every scope, as a warning says.
+                    self.error(SemanticErrorKind::FoldedArrayBound, source, None, None);
+                } else if value.is_some()
+                    && !info.ice
+                    && (info.folded_address() || self.clang_folds_comma(expression))
+                {
                     if fold_bounds {
                         self.error(SemanticErrorKind::FoldedArrayBound, source, None, None);
                     } else {
@@ -1075,6 +1133,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         .to_u64()
                         .map_or_else(|| self.variable_bound(expression), ArrayBound::Constant)
                 } else {
+                    self.report_variable_length_array(expression);
                     self.variable_bound(expression)
                 };
                 let ty = self
@@ -1306,7 +1365,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             self.semantic_errors,
                         ));
                         self.work.push(Work::Eval(assertion.expression));
-                        self.work.push(Work::Expression(assertion.expression));
+                        self.constant_expression(
+                            assertion.expression,
+                            exceptional_constants::ConstantSite::StaticAssertion,
+                        );
                         return;
                     }
                     self.check_extension_chain(member.extensions);
@@ -1457,7 +1519,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 ));
                 if let Some(width) = d.bitfield_width {
                     self.work.push(Work::Eval(width.expression()));
-                    self.work.push(Work::Expression(width.expression()));
+                    self.constant_expression(
+                        width.expression(),
+                        exceptional_constants::ConstantSite::BitFieldWidth(
+                            d.declarator
+                                .and_then(Declarator::identifier)
+                                .map(|name| name.name),
+                        ),
+                    );
                 } else {
                     self.integers.push(None);
                 }
@@ -1584,7 +1653,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     ));
                     if let Some(expression) = item.expression {
                         self.work.push(Work::Eval(expression.expression()));
-                        self.work.push(Work::Expression(expression.expression()));
+                        self.constant_expression(
+                            expression.expression(),
+                            exceptional_constants::ConstantSite::Enumerator(item.name.name),
+                        );
                     } else {
                         self.integers.push(
                             previous
@@ -1949,6 +2021,26 @@ enum Work<'tu, 's> {
     ExpressionDone(&'tu Expression<'tu>),
     ValueExpression(&'tu Expression<'tu>),
     CompoundInitializer(&'tu Expression<'tu>, &'tu Initializer<'tu>),
+    /// Starts (`true`) or ends the operand of `?:`, `&&` or `||` taken when
+    /// the condition has the truth value given, which silences evaluation
+    /// warnings if it does not.
+    SkippedOperand(&'tu Expression<'tu>, bool, bool),
+    /// Enters (`true`) or leaves an unevaluated operand.
+    Unevaluated(bool),
+    /// Enters a context requiring a constant.
+    ConstantContext,
+    /// Leaves it, for the evaluation of the constant at this site.
+    ConstantContextEnd(exceptional_constants::ConstantSite),
+    /// Starts (`true`) or ends an association of a generic selection whose
+    /// type name is given, which GCC does not warn in unless it matches.
+    GenericAssociation(
+        &'tu super::parsing::GenericSelection<'tu>,
+        &'tu TypeName<'tu>,
+        bool,
+    ),
+    /// Restores the full expression around a statement expression or a
+    /// compound literal, whose parts are full expressions of their own.
+    RestoreFullExpression(u32, usize),
     InitializeDeclaration(Declarator<'tu>, &'tu Initializer<'tu>),
     /// One init-declarator of a C23 `auto` or GNU `__auto_type`
     /// declaration, by index: its form is checked and its initializer
@@ -2137,6 +2229,21 @@ struct Analyzer<'a, 'tu, 's> {
     old_parameter_mode:      bool,
     /// Exceptional evaluation yields a variable array bound, not an error.
     runtime_bound:           bool,
+    /// How many enclosing unevaluated or skipped operands silence warnings
+    /// about evaluation, as GCC's `c_inhibit_evaluation_warnings` does.
+    /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92; §6.5.13-§6.5.15,
+    /// pp. 89-91; PDF pp. 101-103.
+    inhibited_evaluations:   u32,
+    /// How many enclosing contexts require a constant expression: Clang's
+    /// `ConstantEvaluated`, which silences its warnings about code.
+    constant_contexts:       u32,
+    /// What requires the constant the next `Work::Eval` evaluates.
+    constant_site:           exceptional_constants::ConstantSite,
+    /// Expressions being typed around the current one, up to its full
+    /// expression, and where that full expression's overflows start.
+    expression_depth:        u32,
+    full_expression_start:   usize,
+    pending_overflows:       ArenaVec<'s, exceptional_constants::PendingOverflow<'tu>>,
     /// Counts the initializers checked, and the count when one last
     /// reported an out-of-range value for a static bit-field under Clang's
     /// rules: Clang's evaluator stops at the first, so one initializer

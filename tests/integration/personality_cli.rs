@@ -2178,6 +2178,697 @@ mod tests {
         );
     }
 
+    /// Constant arithmetic C99 §6.6p4 gives no value, in a static object and
+    /// in code, with the values GCC 13.3 and Clang 23.1 give it (`None`: no
+    /// constant). A static `int` or `long long` prints each.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exceptional_constants_fold_to_each_compilers_value() {
+        use std::fmt::Write as _;
+        const MIN: &str = "-2147483648";
+        const MIN64: &str = "-9223372036854775808";
+        type Row = (&'static str, Option<&'static str>, Option<&'static str>);
+        let ints: [Row; 37] = [
+            ("2147483647+1", Some(MIN), Some(MIN)),
+            ("-2147483647-2", Some("2147483647"), Some("2147483647")),
+            ("-(-2147483647-1)", Some(MIN), Some(MIN)),
+            ("2147483647*2", Some("-2"), Some("-2")),
+            ("(-2147483647-1)/-1", Some(MIN), Some(MIN)),
+            ("(-2147483647-1)%-1", Some("0"), Some("0")),
+            ("1<<40", Some("0"), Some(MIN)),
+            ("1<<32", Some("0"), Some(MIN)),
+            ("1u<<32", Some("0"), Some(MIN)),
+            ("(1<<40)+0", Some("0"), Some(MIN)),
+            ("~0<<40", Some("0"), Some(MIN)),
+            ("1>>40", Some("0"), Some("0")),
+            ("-1>>40", Some("-1"), Some("-1")),
+            ("-5>>33", Some("-1"), Some("-1")),
+            ("1<<-1", None, Some("0")),
+            ("1>>-1", None, Some("2")),
+            ("4<<-1", None, Some("2")),
+            ("4>>-1", None, Some("8")),
+            ("1<<-40", None, Some("0")),
+            ("-1<<-1", None, Some("-1")),
+            ("-1>>-1", Some("-1"), Some("-2")),
+            ("0<<-1", Some("0"), Some("0")),
+            ("1<<(1LL<<33)", Some("1"), Some(MIN)),
+            ("1<<(unsigned)4294967295u", None, Some(MIN)),
+            ("1?(2147483647+1):2", Some(MIN), Some(MIN)),
+            ("0?2:(1<<40)", Some("0"), Some(MIN)),
+            ("(2147483647+1)/2", Some("-1073741824"), Some("-1073741824")),
+            ("(1<<40)==0", Some("1"), Some("0")),
+            ("(1<<40)!=0", Some("0"), Some("1")),
+            ("0||(1<<40)", Some("0"), Some("1")),
+            ("!(1<<40)", Some("1"), Some("0")),
+            ("~(1<<40)", Some("-1"), Some("2147483647")),
+            ("(1<<40)|1", Some("1"), Some("-2147483647")),
+            ("(char)1<<40", Some("0"), Some(MIN)),
+            ("1<<31", Some(MIN), Some(MIN)),
+            ("3<<31", Some(MIN), Some(MIN)),
+            ("-1<<1", Some("-2"), Some("-2")),
+        ];
+        let longs: [Row; 6] = [
+            ("1LL<<64", Some("0"), Some(MIN64)),
+            ("1ULL>>64", Some("0"), Some("0")),
+            ("-1LL>>64", Some("-1"), Some("-1")),
+            ("9223372036854775807LL*2", Some("-2"), Some("-2")),
+            ("-(-9223372036854775807LL-1)", Some(MIN64), Some(MIN64)),
+            ("1LL>>-1", None, Some("2")),
+        ];
+        let directory = Directory::new();
+        for (mode, gcc) in [("--gcc-mode", true), ("--clang-mode", false)] {
+            let select = |row: &Row| if gcc { row.1 } else { row.2 };
+            let mut source = String::from("int printf(const char *, ...);\n");
+            let mut body = String::new();
+            let mut expected = String::new();
+            let tables = [("int", "%d", &ints[..]), ("long long", "%lld", &longs[..])];
+            for (table, (ty, format, rows)) in tables.into_iter().enumerate() {
+                for (index, row) in rows.iter().enumerate() {
+                    let probe = format!("{ty} x = {};\n", row.0);
+                    directory.write("probe.c", &probe);
+                    let output = directory.bcc(mode, &["-w", "-fsyntax-only", "probe.c"]);
+                    assert_eq!(
+                        output.status.success(),
+                        select(row).is_some(),
+                        "{mode} {}: {}",
+                        row.0,
+                        stderr(&output)
+                    );
+                    if let Some(value) = select(row) {
+                        writeln!(source, "{ty} v{table}_{index} = {};", row.0).unwrap();
+                        writeln!(body, "printf(\"{format}\\n\", v{table}_{index});").unwrap();
+                        expected.push_str(value);
+                        expected.push('\n');
+                    }
+                }
+            }
+            writeln!(source, "int main(void) {{\n{body}return 0;\n}}").unwrap();
+            directory.write("statics.c", &source);
+            succeeds(&directory.bcc(mode, &["-w", "statics.c", "-o", "statics"]));
+            let run = Command::new(directory.path("statics")).output().unwrap();
+            assert_eq!(stdout(&run), expected, "{mode}");
+
+            // Code reads what GCC folds. Clang's code computes poison from
+            // an undefined shift or division, which reads as whatever a
+            // register held (551572928 in one run of its build), so that
+            // column is `None`; bcc reads 0.
+            let code: [(&str, &str, Option<&str>); 9] = [
+                ("2147483647+1", MIN, Some(MIN)),
+                ("-(-2147483647-1)", MIN, Some(MIN)),
+                ("1<<40", "0", None),
+                ("-1>>40", "-1", None),
+                ("(1<<40)+1", "1", None),
+                ("(-2147483647-1)/-1", MIN, None),
+                ("(-2147483647-1)%-1", "0", None),
+                ("(2147483647+1)>>1", "-1073741824", Some("-1073741824")),
+                ("1?(2147483647+1):2", MIN, Some(MIN)),
+            ];
+            let mut source = String::from("int printf(const char *, ...);\nint main(void) {\n");
+            for (expression, ..) in code {
+                writeln!(source, "printf(\"%d\\n\", {expression});").unwrap();
+            }
+            source.push_str("return 0;\n}\n");
+            directory.write("code.c", &source);
+            succeeds(&directory.bcc(mode, &["-w", "code.c", "-o", "code"]));
+            let run = Command::new(directory.path("code")).output().unwrap();
+            let run = stdout(&run);
+            let lines: Vec<&str> = run.lines().collect();
+            assert_eq!(lines.len(), code.len(), "{mode}: {run}");
+            for (line, (expression, gcc_value, clang_value)) in lines.iter().zip(code) {
+                let expected = if gcc {
+                    gcc_value
+                } else {
+                    clang_value.unwrap_or("0")
+                };
+                assert_eq!(*line, expected, "{mode} {expression}");
+            }
+        }
+    }
+
+    /// What GCC 14.2 and Clang 23.1 say of exceptional constants in each
+    /// context (`W`: warns, `E`: refuses), by the first words of the reports.
+    #[test]
+    fn exceptional_constants_warn_in_each_compilers_words() {
+        const GCC_ADD: &str =
+            "integer overflow in expression of type 'int' results in '-2147483648' [-Woverflow]";
+        const CLANG_ADD: &str =
+            "overflow in expression; result is -2'147'483'648 with type 'int' [-Winteger-overflow]";
+        const GCC_SHL: &str = "left shift count >= width of type [-Wshift-count-overflow]";
+        const GCC_SHR: &str = "right shift count >= width of type [-Wshift-count-overflow]";
+        const CLANG_COUNT: &str = "shift count >= width of type [-Wshift-count-overflow]";
+        const GCC_NEGATIVE: &str = "left shift count is negative [-Wshift-count-negative]";
+        const CLANG_NEGATIVE: &str = "shift count is negative [-Wshift-count-negative]";
+        const GCC_ZERO: &str = "division by zero [-Wdiv-by-zero]";
+        const CLANG_ZERO: &str = "division by zero is undefined [-Wdivision-by-zero]";
+        const FOLDED: &str = "variable length array folded to constant array as an extension \
+                              [-Wgnu-folding-constant]";
+        type Row = (
+            &'static str,
+            bool,
+            &'static [&'static str],
+            bool,
+            &'static [&'static str],
+        );
+        let table: [Row; 27] = [
+            ("int x=2147483647+1;", true, &[GCC_ADD], true, &[CLANG_ADD]),
+            (
+                "int x=-(-2147483647-1);",
+                true,
+                &[
+                    "integer overflow in expression '-2147483648' of type 'int' results in \
+                     '-2147483648' [-Woverflow]",
+                ],
+                true,
+                &[CLANG_ADD],
+            ),
+            (
+                "long long x=9223372036854775807LL*2;",
+                true,
+                &[
+                    "integer overflow in expression of type 'long long int' results in '-2' \
+                     [-Woverflow]",
+                ],
+                true,
+                &[
+                    "overflow in expression; result is -2 with type 'long long' \
+                     [-Winteger-overflow]",
+                ],
+            ),
+            ("int x=(-2147483647-1)/-1;", true, &[GCC_ADD], true, &[]),
+            ("int x=1<<40;", true, &[GCC_SHL], true, &[CLANG_COUNT]),
+            ("int x=1>>40;", true, &[GCC_SHR], true, &[CLANG_COUNT]),
+            (
+                "int x=1<<-1;",
+                false,
+                &[GCC_NEGATIVE],
+                true,
+                &[CLANG_NEGATIVE],
+            ),
+            ("int x=1/0;", false, &[GCC_ZERO], false, &[CLANG_ZERO]),
+            (
+                "enum{A=2147483647+1};",
+                true,
+                &[GCC_ADD],
+                true,
+                &[CLANG_ADD],
+            ),
+            ("enum{A=1<<40};", true, &[GCC_SHL], true, &[]),
+            ("enum{A=1<<-1};", false, &[GCC_NEGATIVE], true, &[]),
+            ("enum{A=1/0};", false, &[GCC_ZERO], false, &[]),
+            (
+                "_Static_assert(2147483647+1<0,\"x\");",
+                true,
+                &[GCC_ADD],
+                true,
+                &[CLANG_ADD],
+            ),
+            ("int a[(1<<40)+1];", false, &[GCC_SHL], false, &[FOLDED]),
+            (
+                "int a[2147483647+1>0?1:2];",
+                false,
+                &[GCC_ADD],
+                true,
+                &[CLANG_ADD, FOLDED],
+            ),
+            (
+                "void f(void){int a[(1>>40)+1];(void)a;}",
+                true,
+                &[GCC_SHR],
+                true,
+                &[FOLDED],
+            ),
+            ("int x=sizeof(2147483647+1);", true, &[], true, &[]),
+            ("int x=sizeof(1/0);", true, &[], true, &[]),
+            ("int x=0&&(2147483647+1);", true, &[], true, &[]),
+            ("int x=0&&(1/0);", true, &[], true, &[]),
+            ("int x=1?2:(1<<-1);", true, &[], true, &[]),
+            ("int x=1?(2147483647+1):2;", true, &[GCC_ADD], true, &[]),
+            (
+                "int f(int y){return y<<40;}",
+                true,
+                &[GCC_SHL],
+                true,
+                &[CLANG_COUNT],
+            ),
+            (
+                "int f(int y){return y/0;}",
+                true,
+                &[GCC_ZERO],
+                true,
+                &[CLANG_ZERO],
+            ),
+            (
+                "int f(int y){return y?2147483647+1:0;}",
+                true,
+                &[GCC_ADD],
+                true,
+                &[],
+            ),
+            (
+                "int f(int y){return y+(2147483647+1);}",
+                true,
+                &[GCC_ADD],
+                true,
+                &[CLANG_ADD],
+            ),
+            (
+                "int f(int y){if(0)y=1<<40;return y;}",
+                true,
+                &[GCC_SHL],
+                true,
+                &[],
+            ),
+        ];
+        let directory = Directory::new();
+        for (source, gcc_accepts, gcc_words, clang_accepts, clang_words) in table {
+            directory.write("c.c", &format!("{source}\n"));
+            for (mode, accepts, words) in [
+                ("--gcc-mode", gcc_accepts, gcc_words),
+                ("--clang-mode", clang_accepts, clang_words),
+            ] {
+                let output = directory.bcc(mode, &["-fsyntax-only", "c.c"]);
+                let text = stderr(&output);
+                assert_eq!(output.status.success(), accepts, "{mode} {source}: {text}");
+                let warnings = text
+                    .lines()
+                    .filter(|line| line.contains(": warning: "))
+                    .count();
+                assert_eq!(warnings, words.len(), "{mode} {source}: {text}");
+                for word in words {
+                    assert!(text.contains(word), "{mode} {source}: {text}");
+                }
+            }
+        }
+    }
+
+    /// Wider types and bit-precise ones of any width fold the same way, as
+    /// assertions accepted by GCC 14.2 and by Clang 23.1 show.
+    #[test]
+    fn exceptional_constants_fold_at_every_width() {
+        let table = [
+            ("((_BitInt(200))1<<200)==0", true, false),
+            ("((_BitInt(200))1<<200)<0", false, true),
+            ("((_BitInt(200))-1>>200)==-1", true, true),
+            ("(((_BitInt(200))1<<198)*4)==0", true, true),
+            ("(-(-((_BitInt(200))1<<198)*2))<0", true, true),
+            ("((_BitInt(200))1<<-1)==0", false, true),
+            ("((_BitInt(200))1>>-1)==2", false, true),
+            ("(1>>-((_BitInt(256))1<<200))==(-2147483647-1)", false, true),
+            ("(1<<-((_BitInt(256))1<<200))==0", false, true),
+            ("((unsigned _BitInt(200))1<<200)==0", true, false),
+            ("((_BitInt(8))127+(_BitInt(8))1)==-128", true, true),
+            ("((_BitInt(8))1<<8)==0", true, false),
+            ("((_BitInt(8))1<<8)==-128", false, true),
+            ("((_BitInt(8))-128/(_BitInt(8))-1)==-128", true, true),
+            ("((__int128)1<<130)==0", true, false),
+            ("((__int128)1<<130)<0", false, true),
+            ("(((__int128)1<<126)*4)==0", true, true),
+        ];
+        let directory = Directory::new();
+        for (condition, gcc, clang) in table {
+            directory.write("c.c", &format!("_Static_assert({condition},\"x\");\n"));
+            for (mode, accepts) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-w", "-fsyntax-only", "c.c"]);
+                assert_eq!(
+                    output.status.success(),
+                    accepts,
+                    "{mode} {condition}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
+    /// The options and pragmas that silence or promote each warning, and
+    /// that plain bcc keeps refusing these constants.
+    #[test]
+    fn exceptional_constant_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "c.c",
+            "int a=2147483647+1;\nint b=1<<40;\nint c=-1>>-1;\nint f(int y){return y/0+(y<<-1);}\n",
+        );
+        let warnings = |mode: &str, flags: &[&str]| {
+            let mut arguments = flags.to_vec();
+            arguments.extend(["-fsyntax-only", "c.c"]);
+            let output = directory.bcc(mode, &arguments);
+            (output.status.success(), stderr(&output))
+        };
+        for (mode, overflow, division) in [
+            ("--gcc-mode", "overflow", "div-by-zero"),
+            ("--clang-mode", "integer-overflow", "division-by-zero"),
+        ] {
+            let (ok, text) = warnings(mode, &[]);
+            assert!(ok, "{text}");
+            assert!(text.contains(&format!("[-W{overflow}]")), "{text}");
+            assert!(text.contains(&format!("[-W{division}]")), "{text}");
+            let silence = format!("-Wno-{overflow}");
+            let (ok, text) = warnings(mode, &[&silence]);
+            assert!(ok && !text.contains(&format!("[-W{overflow}]")), "{text}");
+            let (ok, text) = warnings(mode, &["-Wno-shift-count-overflow"]);
+            assert!(ok && !text.contains("[-Wshift-count-overflow]"), "{text}");
+            let (ok, text) = warnings(mode, &["-Wno-shift-count-negative"]);
+            assert!(ok && !text.contains("[-Wshift-count-negative]"), "{text}");
+            let (ok, text) = warnings(mode, &["-Wno-div-by-zero"]);
+            assert!(ok && !text.contains(&format!("[-W{division}]")), "{text}");
+            let (ok, text) = warnings(mode, &["-w"]);
+            assert!(ok && text.is_empty(), "{text}");
+            let (ok, text) = warnings(mode, &["-Werror"]);
+            assert!(!ok && text.contains("error: "), "{text}");
+            assert!(text.contains(overflow), "{text}");
+            directory.write(
+                "p.c",
+                &format!(
+                    "#pragma GCC diagnostic ignored \"-W{overflow}\"\nint a=2147483647+1;\n                     #pragma GCC diagnostic error \"-Wshift-count-overflow\"\nint b=1<<40;\n"
+                ),
+            );
+            let output = directory.bcc(mode, &["-fsyntax-only", "p.c"]);
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{text}");
+            assert!(!text.contains(&format!("[-W{overflow}]")), "{text}");
+            assert!(text.contains("shift count"), "{text}");
+        }
+        // GCC's option does not reach Clang's warning, or Clang's GCC's.
+        let (_, text) = warnings("--clang-mode", &["-Wno-overflow"]);
+        assert!(text.contains("[-Winteger-overflow]"), "{text}");
+        let (_, text) = warnings("--gcc-mode", &["-Wno-integer-overflow"]);
+        assert!(text.contains("[-Woverflow]"), "{text}");
+        // Plain bcc keeps the constraint of C99 §6.6p4.
+        for source in ["int x=2147483647+1;", "int x=1<<40;", "int x=1/0;"] {
+            directory.write("plain.c", &format!("{source}\n"));
+            let output = directory.bcc("", &["plain.c"]);
+            assert!(!output.status.success(), "{source}");
+            assert!(
+                stderr(&output).contains("constant expression overflows"),
+                "{source}: {}",
+                stderr(&output)
+            );
+        }
+    }
+
+    /// What an address's truth gives a static object, with the values GCC
+    /// 13.3 and Clang 23.1 store (`None`: refused). No symbol is referenced,
+    /// so `g` and `f` need no definition.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn address_truth_folds_in_static_initializers() {
+        type Row = (
+            &'static str,
+            &'static str,
+            Option<&'static str>,
+            Option<&'static str>,
+        );
+        let table: [Row; 33] = [
+            ("extern int g;", "_Bool x=&g;", Some("1"), Some("1")),
+            (
+                "extern int g;",
+                "struct{_Bool b;}s={&g};_Bool x=1;",
+                Some("1"),
+                Some("1"),
+            ),
+            ("void f(void);", "_Bool x=f;", Some("1"), Some("1")),
+            ("void f(void);", "_Bool x=&f;", Some("1"), Some("1")),
+            ("", "_Bool x=(void*)0;", Some("0"), Some("0")),
+            ("", "_Bool x=(void*)1;", Some("1"), Some("1")),
+            ("int a[3];", "_Bool x=a;", Some("1"), Some("1")),
+            ("int a[3];", "_Bool x=a+1;", None, Some("1")),
+            ("int a[3];", "_Bool x=&a[1];", None, Some("1")),
+            ("int a[3];", "_Bool x=&a[0];", None, Some("1")),
+            ("", "_Bool x=\"x\";", None, Some("1")),
+            ("extern int g;", "_Bool x=(char*)&g;", Some("1"), Some("1")),
+            ("extern int g;", "_Bool x=(long)&g;", None, Some("1")),
+            (
+                "__attribute__((weak)) int g;",
+                "_Bool x=&g;",
+                Some("1"),
+                None,
+            ),
+            (
+                "extern int g __attribute__((weak));",
+                "_Bool x=&g;",
+                None,
+                None,
+            ),
+            (
+                "void f(void) __attribute__((weak));",
+                "_Bool x=f;",
+                None,
+                None,
+            ),
+            ("extern int g;", "int x=!&g;", Some("0"), Some("0")),
+            ("extern int g;", "int x=&g?1:2;", Some("1"), Some("1")),
+            ("extern int g;", "int x=!!&g;", Some("1"), Some("1")),
+            ("extern int g;", "int x=&g==0;", Some("0"), Some("0")),
+            ("extern int g;", "int x=&g!=0;", Some("1"), Some("1")),
+            ("static int g;", "int x=&g&&1;", Some("1"), Some("1")),
+            ("void f(void);", "int x=!f;", Some("0"), Some("0")),
+            ("int a[3];", "int x=(a+1)!=0;", Some("1"), Some("1")),
+            ("", "int x=\"x\"==0;", Some("0"), Some("0")),
+            ("", "int x=(void*)0?1:2;", Some("2"), Some("2")),
+            ("int g,h;", "int x=&g==&h;", Some("0"), Some("0")),
+            ("int g;", "int x=&g<&g;", Some("0"), Some("0")),
+            ("int g;", "int x=&g>0;", Some("1"), None),
+            ("int g;", "int x=(long)&g!=0;", Some("1"), None),
+            ("int g;", "int x=(!&g)+5;", Some("5"), Some("5")),
+            ("int y;int g;", "int x=!&g&&y;", Some("0"), Some("0")),
+            ("int y;int g;", "int x=y&&&g;", None, None),
+        ];
+        let directory = Directory::new();
+        for (declarations, definition, gcc, clang) in table {
+            directory.write(
+                "c.c",
+                &format!(
+                    "int printf(const char *, ...);\n{declarations}\n{definition}\nint main(void) \
+                     {{ printf(\"%d\", (int)x); return 0; }}\n"
+                ),
+            );
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-w", "c.c", "-o", "c"]);
+                assert_eq!(
+                    output.status.success(),
+                    expected.is_some(),
+                    "{mode} {declarations} {definition}: {}",
+                    stderr(&output)
+                );
+                if let Some(expected) = expected {
+                    let run = Command::new(directory.path("c")).output().unwrap();
+                    assert_eq!(stdout(&run), expected, "{mode} {definition}");
+                }
+            }
+        }
+        // A constant context reads it too, where the compiler folds it.
+        for (source, gcc, clang) in [
+            ("int g;enum{A=!&g};", true, true),
+            ("int g;_Static_assert(&g!=0,\"x\");", true, true),
+            ("int g;_Static_assert(!!&g,\"x\");", true, true),
+            ("int g;_Static_assert(&g,\"x\");", false, true),
+            ("int g;void h(int x){switch(x){case !&g:;}}", true, true),
+            ("int g;struct{int b:!&g+1;}s;", true, true),
+            ("void h(void){int g;int a[!&g+1];(void)a;}", true, true),
+        ] {
+            directory.write("c.c", &format!("{source}\n"));
+            for (mode, accepts) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-w", "-fsyntax-only", "c.c"]);
+                assert_eq!(
+                    output.status.success(),
+                    accepts,
+                    "{mode} {source}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+        // Plain bcc stores `_Bool b = &g;` as the constraint allows, and
+        // keeps refusing the other forms, which only §6.6p10 could admit.
+        directory.write(
+            "c.c",
+            "extern int g;\n_Bool b = &g;\nint main(void) { return !b; }\n",
+        );
+        succeeds(&directory.bcc("", &["-w", "c.c", "-o", "c"]));
+        assert!(
+            Command::new(directory.path("c"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        directory.write("c.c", "extern int g;\nint i = !&g;\n");
+        assert!(!directory.bcc("", &["-w", "c.c"]).status.success());
+    }
+
+    /// `-pedantic` at each standard, as GCC 14.2 and Clang 23.1 answer: whether
+    /// the program is accepted, and whether it says anything then.
+    #[test]
+    fn pedantic_reports_follow_each_compiler() {
+        const ALL: &[&str] = &["c89", "c99", "c11", "gnu89", "gnu17", "c23"];
+        const GNU: &[&str] = &["gnu89", "gnu17"];
+        const C89: &[&str] = &["c89", "gnu89"];
+        const ISO_BEFORE_C23: &[&str] = &["c89", "c99", "c11"];
+        const BEFORE_C23: &[&str] = &["c89", "c99", "c11", "gnu89", "gnu17"];
+        /// What a compiler does with a program.
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum Answer {
+            Silent,
+            Warns,
+            Refuses,
+        }
+        use Answer::{
+            Refuses,
+            Silent,
+            Warns,
+        };
+        type Row = (&'static str, &'static [&'static str], Answer, Answer);
+        let table: &[Row] = &[
+            // Refusals of what bcc takes.
+            ("void f(void){for(int i=0;i<1;i++);}", C89, Refuses, Warns),
+            ("int a[]={};", ALL, Refuses, Warns),
+            ("void f(void){int a[]={};(void)a;}", ALL, Refuses, Warns),
+            ("void f(void){int a={};(void)a;}", &["gnu17"], Warns, Warns),
+            ("#foo\nint x;", ALL, Refuses, Refuses),
+            ("#if 0\n#foo\n#endif\nint x;", ALL, Silent, Silent),
+            ("#elifdef A\nint x;", ISO_BEFORE_C23, Refuses, Refuses),
+            ("#assert a(b)\nint x;", ALL, Warns, Refuses),
+            ("#unassert a\nint x;", ALL, Warns, Refuses),
+            ("_Decimal64 d;", BEFORE_C23, Warns, Refuses),
+            ("_Decimal64 d;", &["c23"], Silent, Refuses),
+            ("_Decimal32 d;", BEFORE_C23, Warns, Refuses),
+            ("int a[(1,2)];", GNU, Refuses, Warns),
+            ("enum{A=(1,2)};", GNU, Refuses, Warns),
+            ("enum{A=(1,2)};", &["c99"], Refuses, Warns),
+            (
+                "void f(int x){switch(x){case (1,2):;}}",
+                &["gnu17"],
+                Refuses,
+                Warns,
+            ),
+            ("_Static_assert((1,2),\"x\");", &["gnu17"], Refuses, Warns),
+            // What neither, or only one, reports.
+            ("__float128 q;", ALL, Silent, Silent),
+            ("int c=__COUNTER__;", ALL, Silent, Warns),
+            ("#define M(a,b) a\nint M(x,);", C89, Silent, Warns),
+            (
+                "int x=1<<31;",
+                &["c99", "c11", "gnu17", "c23"],
+                Warns,
+                Silent,
+            ),
+            ("int x=1<<31;", C89, Silent, Silent),
+            ("int $x;", &["c99", "c11", "gnu17", "c23"], Silent, Warns),
+            ("typeof(1) x;", GNU, Silent, Warns),
+            ("#if 0\n#elifdef A\n#endif\nint x;", GNU, Silent, Warns),
+            (
+                "#define A\n#if 0\n#elifdef A\n#endif\nint x;",
+                GNU,
+                Warns,
+                Warns,
+            ),
+            ("#if 0\n#elifndef A\n#endif\nint x;", GNU, Warns, Warns),
+            ("int x=0x1p3;", &["gnu89"], Silent, Warns),
+            ("inline int f(void){return 0;}", &["gnu89"], Silent, Warns),
+            ("// c\nint x;", &["gnu89"], Warns, Silent),
+            (
+                "#define M(a,...) a,##__VA_ARGS__\nint M(x);",
+                &["gnu17"],
+                Silent,
+                Warns,
+            ),
+            ("#define M(a,...) a\nint M(x);", &["gnu17"], Silent, Warns),
+            ("#define M(a,...) a\nint M(x);", &["c23"], Silent, Silent),
+            (
+                "#define M(a,...) a __VA_OPT__(,) __VA_ARGS__\nint M(x);",
+                &["gnu17"],
+                Silent,
+                Warns,
+            ),
+            // What bcc itself says nothing of.
+            ("struct {int x;};", ALL, Warns, Warns),
+            ("int;", ALL, Warns, Warns),
+            ("struct S{int x;};", ALL, Silent, Silent),
+            ("enum{E};", ALL, Silent, Silent),
+            (
+                "void f(void){const char*s=__FUNCTION__;(void)s;}",
+                ALL,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__PRETTY_FUNCTION__;(void)s;}",
+                ALL,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__func__;(void)s;}",
+                C89,
+                Warns,
+                Silent,
+            ),
+            (
+                "void f(void){const char*s=__func__;(void)s;}",
+                &["gnu17"],
+                Silent,
+                Silent,
+            ),
+            ("# 5 \"f.c\"\nint x;", ALL, Warns, Warns),
+            ("int x='ab';", ALL, Warns, Warns),
+            ("void f(int n){int a[n];(void)a;}", C89, Warns, Warns),
+            (
+                "void f(int n){int a[n];(void)a;}",
+                &["gnu17"],
+                Silent,
+                Silent,
+            ),
+            ("int f(void){return sizeof(void);}", ALL, Warns, Warns),
+            ("int g(void);int h=sizeof(g);", ALL, Warns, Warns),
+        ];
+        let directory = Directory::new();
+        for (source, standards, gcc, clang) in table.iter().copied() {
+            directory.write("c.c", &format!("{source}\n"));
+            for standard in standards {
+                let option = format!("-std={standard}");
+                for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                    let output =
+                        directory.bcc(mode, &[&option, "-pedantic", "-fsyntax-only", "c.c"]);
+                    let text = stderr(&output);
+                    let answer = if !output.status.success() {
+                        Refuses
+                    } else if text.contains(": warning: ") {
+                        Warns
+                    } else {
+                        Silent
+                    };
+                    assert_eq!(answer, expected, "{mode} {option} {source}: {text}");
+                }
+            }
+        }
+        // A comma expression as a static initializer, whose other half under
+        // Clang is `-Wunused-value`.
+        for (source, standard, accepted) in [
+            ("int x=(1,2);", "gnu17", true),
+            ("int x=(1,2)+1;", "gnu17", false),
+            ("int x=(1,2)+1;", "c89", true),
+        ] {
+            directory.write("c.c", &format!("{source}\n"));
+            let option = format!("-std={standard}");
+            let output = directory.bcc(
+                "--gcc-mode",
+                &[&option, "-pedantic", "-fsyntax-only", "c.c"],
+            );
+            let text = stderr(&output);
+            assert_eq!(output.status.success(), accepted, "{source}: {text}");
+            assert_eq!(
+                text.contains("initializer element is not constant"),
+                accepted,
+                "{source}: {text}"
+            );
+        }
+        // Plain bcc keeps its own policy, which reports every extension.
+        directory.write("c.c", "#foo\n__float128 q;\nint main(void) { return 0; }\n");
+        let output = directory.bcc("", &["-pedantic", "c.c"]);
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(text.contains("unknown preprocessing directive"), "{text}");
+        assert!(text.contains("__float128"), "{text}");
+    }
+
     /// `-ffunction-sections` and `-fdata-sections` give each definition a
     /// section of its own, so that `--gc-sections` removes the unused ones.
     #[cfg(target_os = "linux")]

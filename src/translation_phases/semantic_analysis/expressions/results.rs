@@ -95,9 +95,33 @@ pub(crate) enum ConstantFolding {
     /// operator): still no integer constant expression, but no pedantic
     /// report either.
     OverflowOperand,
+    /// The wrapped result of integer arithmetic C99 §6.6p4 gives no value:
+    /// for GCC a constant still, flagged as overflowed, through arithmetic
+    /// and conversions; for Clang a value its code keeps too. See
+    /// `exceptional_constants.rs`.
+    Wrapped,
+    /// A value of an undefined operation that is no integer constant
+    /// expression, or none at all when `integer` is empty: for GCC what its
+    /// parser no longer reads as a constant, for Clang what its code
+    /// computes as poison.
+    Undefined,
+    /// Clang's evaluator's quotient or remainder of a type's minimum over
+    /// -1, which a bound or an alignment refuses and code computes as
+    /// poison.
+    UndefinedQuotient,
 }
 
 impl ConstantFolding {
+    /// Whether an exceptional operation on integer constants gave this
+    /// value.
+    /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
+    pub(crate) const fn exceptional(self) -> bool {
+        matches!(
+            self,
+            Self::Wrapped | Self::Undefined | Self::UndefinedQuotient
+        )
+    }
+
     /// Whether the value derives from an out-of-range floating conversion,
     /// so that it is no integer constant expression.
     pub(crate) fn overflowed(self) -> bool {

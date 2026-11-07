@@ -768,6 +768,52 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
         let bit_width = bits.map(|bits| bits.width);
         let bit_field = bits.is_some();
+        self.report_exceptional_initializer(e, info);
+        if self.gcc_refuses_comma_initializer(e) {
+            self.error(
+                SemanticErrorKind::NonConstantInitializer,
+                e.source_vectors,
+                None,
+                None,
+            );
+            return;
+        }
+        let folds = self.context.configuration.folds_exceptional_constants();
+        let boolean = matches!(
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Scalar(Scalar::Bool)
+        );
+        // An address's truth converts without a relocation (C99 §6.3.1.2p1).
+        if folds
+            && boolean
+            && info.integer.is_none()
+            && (self.pointer_like(info) || info.constant == ConstantClass::Address)
+        {
+            if !self.boolean_address_initializer(e) {
+                self.error(
+                    SemanticErrorKind::NonConstantInitializer,
+                    e.source_vectors,
+                    None,
+                    None,
+                );
+            }
+            return;
+        }
+        // C99 §6.6p10: what an address's truth decides is a constant here.
+        let mut info = info;
+        if folds
+            && info.constant != ConstantClass::Arithmetic
+            && info.constant != ConstantClass::Address
+            && self.integer_type(info.ty).is_some()
+            && let Some(value) = self.folded_address_value(e, 0)
+            && let Some(&index) = self.expression_indices.get(&std::ptr::from_ref(e).addr())
+        {
+            let record = &mut self.expressions[index];
+            record.integer = Some(value);
+            record.constant = ConstantClass::Arithmetic;
+            record.folding = ConstantFolding::Address;
+            info = *record;
+        }
         let overflow = self.static_float_conversion(target, info, e, bit_width)
             || info.folding == ConstantFolding::Overflow;
         if overflow
@@ -830,12 +876,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 || (matches!(
                     self.types.nodes[self.types.non_atomic(target).index],
                     TypeKind::Pointer(_)
-                ) && info.ice
+                ) && (info.ice || info.folding.exceptional())
                     && info.integer.is_some())
         };
         if !valid {
             self.error(
-                if info.constant == ConstantClass::Arithmetic {
+                if info.constant == ConstantClass::Arithmetic
+                    && !self.context.configuration.folds_exceptional_constants()
+                {
                     SemanticErrorKind::ConstantOverflow
                 } else {
                     SemanticErrorKind::NonConstantInitializer
@@ -1535,6 +1583,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     // array, which C forbids (C99 §6.7.5.2p1, p. 116; PDF
                     // p. 128; N3220 §6.7.11p4).
                     // GNU extension: GCC manual, "Arrays of Length Zero".
+                    if self.context.configuration.compiler_extensions()
+                        && self.context.configuration.compiler_identity().rules()
+                            == crate::configuration::RuleSet::Gcc
+                    {
+                        // Though GCC 14's words here are its own.
+                        self.compiler_refusal(
+                            "zero or negative size array",
+                            initializer.source_vectors,
+                        );
+                        return Err((self.types.unknown(), None));
+                    }
                     self.context.report_extension(
                         crate::configuration::Feature::ZeroLengthArrays,
                         "zero-length array",

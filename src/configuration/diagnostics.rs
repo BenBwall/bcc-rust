@@ -203,6 +203,8 @@ impl CompilerConfiguration {
             ],
             | DiagnosticGroup::FormatNonliteral if clang =>
                 &[DiagnosticGroup::MissingFormatAttribute],
+            | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
+            | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
             | _ => &[],
         };
         for &child in children {
@@ -945,6 +947,33 @@ diagnostic_groups! {
     /// `-pedantic-errors`, and controlled by `-Woverflow`'s options, which
     /// disable it or set its severity but never enable it alone.
     PedanticOverflow => Some("overflow"), Extension, true;
+    /// Clang: a signed constant operation out of its type's range. GCC's is
+    /// [`Self::Overflow`].
+    IntegerOverflow => Some("integer-overflow"), Warning, false;
+    /// A shift count not below the width of the shifted type.
+    ShiftCountOverflow => Some("shift-count-overflow"), Warning, false;
+    /// A negative shift count.
+    ShiftCountNegative => Some("shift-count-negative"), Warning, false;
+    /// A nonnegative constant shifted left past the sign bit: Clang's option,
+    /// and the parent of GCC's spelling.
+    ShiftOverflow => Some("shift-overflow"), Warning, false;
+    /// GCC's report of [`Self::ShiftOverflow`], which names the option with
+    /// the level it takes.
+    GccShiftOverflow => Some("shift-overflow="), Warning, false;
+    /// Clang: a negative constant shifted left. GCC reports it only under
+    /// `-Wextra`, which is not modeled.
+    ShiftNegativeValue => Some("shift-negative-value"), Warning, false;
+    /// An ordinary multi-character constant.
+    Multichar => Some("multichar"), Warning, false;
+    /// Clang: a declaration that declares nothing.
+    MissingDeclarations => Some("missing-declarations"), Warning, false;
+    /// GCC's report of the same, which no option controls but `-w`.
+    GccEmptyDeclaration => None, Warning, false;
+    /// GCC's word for a zero divisor, which also sets Clang's
+    /// [`Self::DivisionByZero`], as Clang takes it as an alias.
+    DivByZero => Some("div-by-zero"), Warning, false;
+    /// Clang: an integer divided by a constant zero.
+    DivisionByZero => Some("division-by-zero"), Warning, false;
     /// GCC: an identifier not in Normalization Form C, before C23, which
     /// does not require the form: a warning no pedantic option changes.
     Normalized => Some("normalized"), Warning, false;
