@@ -140,6 +140,27 @@ impl CompilerConfiguration {
     ) -> Self {
         let clang = self.identity.rules() == super::RuleSet::Clang;
         self.warning_options[group as usize].apply(option, clang);
+        let implies: &[DiagnosticGroup] = match group {
+            | DiagnosticGroup::Unused => DiagnosticGroup::UNUSED,
+            | DiagnosticGroup::UnusedVariable if !clang => &[DiagnosticGroup::UnusedConstVariable],
+            | _ => &[],
+        };
+        // `-Wunused` holds its groups as `-Wall` does, and GCC's
+        // `-Wunused-variable` its `-Wunused-const-variable=1`: their own
+        // options outrank it. An option that only sets their severity is an
+        // ordinary parent's.
+        for &child in implies {
+            match option {
+                | WarningOption::Enable(enabled) =>
+                    self.warning_options[child as usize].apply_all(enabled),
+                | WarningOption::Error(error) if error || group == DiagnosticGroup::Unused =>
+                    self.warning_options[child as usize].apply(option, clang),
+                | WarningOption::Error(_) => {},
+            }
+        }
+        if group == DiagnosticGroup::Unused {
+            return self;
+        }
         if group == DiagnosticGroup::UnknownPragmas || (group == DiagnosticGroup::Pragmas && clang)
         {
             self.warning_options[DiagnosticGroup::UnknownStdcPragma as usize].apply(option, clang);
@@ -168,6 +189,10 @@ impl CompilerConfiguration {
             | DiagnosticGroup::IncompatiblePointerTypes =>
                 &[DiagnosticGroup::GccConditionalPointerMismatch],
             | DiagnosticGroup::Normalized => &[DiagnosticGroup::PedanticNormalized],
+            | DiagnosticGroup::UnusedVariable if clang => &[DiagnosticGroup::UnusedConstVariable],
+            | DiagnosticGroup::UnusedButSetVariable if clang =>
+                &[DiagnosticGroup::UnusedButSetGlobal],
+            | DiagnosticGroup::UnusedValue if clang => &[DiagnosticGroup::UnusedComparison],
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
             | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
             | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
@@ -204,9 +229,55 @@ impl CompilerConfiguration {
         ] {
             self.warning_options[group as usize].apply_all(enabled);
         }
-        // Clang's `-Wmain` is on already, and its `-Wall` does not hold it.
+        self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
+        // GCC's `-Wunused`, given or refused in either order, outranks
+        // `-Wall`, as the groups' own options outrank it.
+        if self.identity.rules() == super::RuleSet::Clang
+            || self.warning_options[DiagnosticGroup::Unused as usize]
+                .enabled()
+                .is_none()
+        {
+            for &group in DiagnosticGroup::UNUSED {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
+        }
+        // GCC's `-Wunused-variable`, given or refused in either order, outranks
+        // it for `-Wunused-const-variable=` as well.
+        if self.identity.rules() != super::RuleSet::Clang
+            && let Some(variable) =
+                self.warning_options[DiagnosticGroup::UnusedVariable as usize].enabled()
+        {
+            self.warning_options[DiagnosticGroup::UnusedConstVariable as usize].apply_all(variable);
+        }
+        // Clang's `-Wmain` and `-Wpointer-bool-conversion` are on already, and
+        // its `-Wall` does not hold them.
         if self.identity.rules() != super::RuleSet::Clang {
             self.warning_options[DiagnosticGroup::Main as usize].apply_all(enabled);
+            self.warning_options[DiagnosticGroup::PointerBoolConversion as usize]
+                .apply_all(enabled);
+        }
+        self
+    }
+
+    /// `-Wextra` (true) or `-Wno-extra` at its argv position, for the groups
+    /// bcc models under it. Clang's holds the parameter groups directly;
+    /// GCC's holds them only with `-Wunused`, which
+    /// [`Self::diagnostic_severity`] asks when it reads them.
+    pub(crate) fn with_extra_warnings(mut self, enabled: bool) -> Self {
+        self.warning_options[DiagnosticGroup::Extra as usize].apply_all(enabled);
+        for group in [
+            DiagnosticGroup::SignCompare,
+            DiagnosticGroup::MissingFieldInitializers,
+        ] {
+            self.warning_options[group as usize].apply_all(enabled);
+        }
+        if self.identity.rules() == super::RuleSet::Clang {
+            for group in [
+                DiagnosticGroup::UnusedParameter,
+                DiagnosticGroup::UnusedButSetParameter,
+            ] {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
         }
         self
     }
@@ -225,9 +296,18 @@ impl CompilerConfiguration {
         let clang = self.identity.rules() == super::RuleSet::Clang;
         match name {
             | "pedantic" => self.with_pragma_pedantic(class),
-            // GCC's `ignored "-Wall"` silences nothing it holds, as it says
-            // nothing about the options `-Wall` enabled.
-            | "all" if class == PragmaClass::Ignored && !clang => self,
+            // GCC's `ignored` of a parent option silences nothing it holds,
+            // as it says nothing about the options the parent enabled.
+            | "all" | "unused" | "extra" if class == PragmaClass::Ignored && !clang => self,
+            | "extra" => self.with_pragma_extra(class),
+            // Nor does GCC's `ignored "-Wunused-variable"` reach the
+            // `-Wunused-const-variable=` it enables.
+            | "unused-variable" if class == PragmaClass::Ignored && !clang => {
+                let mut configuration = self;
+                configuration.warning_options[DiagnosticGroup::UnusedVariable as usize]
+                    .apply(WarningOption::Enable(false), clang);
+                configuration
+            },
             // GCC's `-Wall` holds `-Wmain`; Clang's does not.
             | "all" => DiagnosticGroup::UNDER_ALL
                 .iter()
@@ -240,6 +320,9 @@ impl CompilerConfiguration {
                 .fold(self.with_pragma_pedantic(class), |configuration, &group| {
                     configuration.with_pragma_group(group, class)
                 }),
+            // GCC's `-Waddress` and Clang's group around
+            // `-Wpointer-bool-conversion`, the part of them bcc reports.
+            | "address" => self.with_pragma_group(DiagnosticGroup::PointerBoolConversion, class),
             | _ => DiagnosticGroup::parse(name)
                 .map_or(self, |group| self.with_pragma_group(group, class)),
         }
@@ -249,6 +332,28 @@ impl CompilerConfiguration {
     /// disabled keeps its default when `error` turns it back on, so that `-w`
     /// leaves a default error in Clang.
     pub(crate) fn with_pragma_group(self, group: DiagnosticGroup, class: PragmaClass) -> Self {
+        let mut configuration = self;
+        if self.identity.rules() != super::RuleSet::Clang {
+            match group {
+                // GCC enables the parameter groups only with `-Wextra` too,
+                // which a pragma naming `-Wunused` does not say, but it sets
+                // their class.
+                | DiagnosticGroup::Unused =>
+                    configuration =
+                        configuration.with_pragma_class_of(DiagnosticGroup::PARAMETERS, class),
+                // `warning` also takes back an error, as `-Wno-error=` does
+                // not for this child.
+                | DiagnosticGroup::UnusedVariable if class == PragmaClass::Warning => {
+                    configuration.warning_options[DiagnosticGroup::UnusedConstVariable as usize]
+                        .set(WarningSettings::ERROR, Some(false));
+                },
+                | _ => {},
+            }
+        }
+        configuration.with_pragma_own_group(group, class)
+    }
+
+    fn with_pragma_own_group(self, group: DiagnosticGroup, class: PragmaClass) -> Self {
         match class {
             | PragmaClass::Ignored => self.with_warning_option(group, WarningOption::Enable(false)),
             | PragmaClass::Warning => self
@@ -260,6 +365,27 @@ impl CompilerConfiguration {
                 configuration
             },
         }
+    }
+
+    /// `-Wextra` named by a pragma, which holds what `-Wextra` on the command
+    /// line does ([`Self::with_extra_warnings`]).
+    fn with_pragma_extra(self, class: PragmaClass) -> Self {
+        self.with_extra_warnings(class != PragmaClass::Ignored)
+            .with_pragma_class_of(DiagnosticGroup::UNDER_EXTRA, class)
+    }
+
+    /// Sets whether `groups` are errors, without enabling them: what enables
+    /// them is the option's own business.
+    fn with_pragma_class_of(mut self, groups: &[DiagnosticGroup], class: PragmaClass) -> Self {
+        let error = match class {
+            | PragmaClass::Ignored => return self,
+            | PragmaClass::Warning => false,
+            | PragmaClass::Error => true,
+        };
+        for &group in groups {
+            self.warning_options[group as usize].set(WarningSettings::ERROR, Some(error));
+        }
+        self
     }
 
     /// `-Wpedantic` named by a pragma: an `error` is `-Werror=pedantic`
@@ -373,6 +499,16 @@ impl CompilerConfiguration {
             (group.default() == GroupDefault::Permerror).then(|| self.permerror_default(group));
         let enabled = match permerror {
             | Some(default) => default.is_some(),
+            | None if group.default() == GroupDefault::ClangWarning =>
+                self.identity.rules() == super::RuleSet::Clang,
+            | None if matches!(
+                group,
+                DiagnosticGroup::UnusedParameter | DiagnosticGroup::UnusedButSetParameter
+            ) && self.identity.rules() != super::RuleSet::Clang =>
+                self.warning_options[DiagnosticGroup::Extra as usize].all() == Some(true)
+                    && self.warning_options[DiagnosticGroup::Unused as usize]
+                        .enabled_with_all(DiagnosticGroup::Unused, false)
+                        == Some(true),
             | None if group.default() == GroupDefault::OnInClang =>
                 self.identity != super::CompilerIdentity::Gcc
                     || self.extension_policy != ExtensionPolicy::Allow,
@@ -590,7 +726,8 @@ diagnostic_groups! {
     NonLiteralNullConversion => Some("non-literal-null-conversion"), Warning, false;
     PointerCompare => Some("pointer-compare"), Warning, false;
     NullConversion => Some("null-conversion"), Warning, false;
-    PointerBoolConversion => Some("pointer-bool-conversion"), Warning, false;
+    /// GCC's `-Waddress`, which only its `-Wall` holds.
+    PointerBoolConversion => Some("pointer-bool-conversion"), ClangWarning, false;
     /// A cast from a pointer to a narrower integer (GCC: an integer of any
     /// other width); the parent of Clang's enumeration and `void *` groups.
     PointerToIntCast => Some("pointer-to-int-cast"), Warning, false;
@@ -763,6 +900,36 @@ diagnostic_groups! {
     /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and
     /// `-Werror=` options unless they have their own.
     Conversion => Some("conversion"), Ignored, false;
+    /// A signed operand the usual arithmetic conversions make unsigned, under
+    /// `-Wextra`.
+    SignCompare => Some("sign-compare"), Ignored, false;
+    /// A braced list that leaves later members zero, under `-Wextra`.
+    MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// `-Wextra`, which reports nothing itself.
+    Extra => Some("extra"), Ignored, false;
+    /// `-Wunused`, which reports nothing itself and holds
+    /// [`DiagnosticGroup::UNUSED`]. `-Wall` holds it.
+    Unused => Some("unused"), Ignored, false;
+    /// A local variable, or a file-scope object in Clang's words, that
+    /// nothing refers to. It holds the const group.
+    UnusedVariable => Some("unused-variable"), Ignored, false;
+    /// An internal `const` object in the main file that nothing refers to.
+    UnusedConstVariable => Some("unused-const-variable"), Ignored, false;
+    /// A parameter of a definition that nothing refers to, under `-Wextra`.
+    UnusedParameter => Some("unused-parameter"), Ignored, false;
+    /// A variable only ever assigned to.
+    UnusedButSetVariable => Some("unused-but-set-variable"), Ignored, false;
+    /// Clang: an internal object only ever assigned to.
+    UnusedButSetGlobal => Some("unused-but-set-global"), Ignored, false;
+    /// A parameter only ever assigned to, under `-Wextra`.
+    UnusedButSetParameter => Some("unused-but-set-parameter"), Ignored, false;
+    /// A label nothing jumps to.
+    UnusedLabel => Some("unused-label"), Ignored, false;
+    /// A statement's discarded value that computed nothing it needed: a
+    /// warning by default in Clang, and under `-Wall` in GCC.
+    UnusedValue => Some("unused-value"), ClangWarning, false;
+    /// Clang: a discarded comparison, also a warning by default.
+    UnusedComparison => Some("unused-comparison"), ClangWarning, false;
     /// The forms of `main` that Clang warns about and GCC's `-Wmain`, which
     /// is off until `-Wall` or `-Wpedantic` enables it and which every form
     /// `-pedantic-errors` makes an error of.
@@ -788,20 +955,44 @@ enum GroupDefault {
     Warning,
     Ignored,
     Extension,
+    /// A warning by default under Clang's rules, and otherwise off.
+    ClangWarning,
     /// Clang's warning by default; GCC's only under `-Wpedantic`.
     OnInClang,
 }
 
 impl DiagnosticGroup {
+    /// The groups GCC's `-Wunused` holds only with `-Wextra` too.
+    const PARAMETERS: &[Self] = &[Self::UnusedParameter, Self::UnusedButSetParameter];
     /// The groups bcc models under `-Wall`, as a pragma naming it reaches
     /// them.
     const UNDER_ALL: &[Self] = &[
-        Self::UnusedFunction,
+        Self::Unused,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
         Self::ImplicitInt,
         Self::ReturnMismatch,
         Self::VoidReturnMismatch,
+    ];
+    /// The groups bcc models under `-Wextra`, as a pragma naming it reaches
+    /// them.
+    const UNDER_EXTRA: &[Self] = &[
+        Self::SignCompare,
+        Self::MissingFieldInitializers,
+        Self::UnusedParameter,
+        Self::UnusedButSetParameter,
+    ];
+    /// The groups `-Wunused` and so `-Wall` hold. `-Wunused-parameter` and
+    /// `-Wunused-but-set-parameter` are `-Wextra`'s.
+    pub(crate) const UNUSED: &[Self] = &[
+        Self::UnusedFunction,
+        Self::UnusedVariable,
+        Self::UnusedConstVariable,
+        Self::UnusedButSetVariable,
+        Self::UnusedButSetGlobal,
+        Self::UnusedLabel,
+        Self::UnusedValue,
+        Self::UnusedComparison,
     ];
 
     /// Whether Clang's `-Wconversion` holds this group.
@@ -838,6 +1029,7 @@ impl DiagnosticGroup {
             | GroupDefault::Warning
             | GroupDefault::Ignored
             | GroupDefault::Extension
+            | GroupDefault::ClangWarning
             | GroupDefault::OnInClang => ErrorSeverity::Warning,
         }
     }
@@ -899,6 +1091,11 @@ impl WarningSettings {
         self.get(Self::ENABLED)
     }
 
+    /// What the last `-Wall`, or the option standing for it here, said.
+    const fn all(self) -> Option<bool> {
+        self.get(Self::ALL)
+    }
+
     const fn error(self) -> Option<bool> {
         self.get(Self::ERROR)
     }
@@ -933,7 +1130,19 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitFunctionDeclaration
                 | DiagnosticGroup::ImplicitLibraryFunction
                 | DiagnosticGroup::ImplicitInt
-                | DiagnosticGroup::Main => all,
+                | DiagnosticGroup::SignCompare
+                | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::Unused
+                | DiagnosticGroup::UnusedFunction
+                | DiagnosticGroup::UnusedVariable
+                | DiagnosticGroup::UnusedConstVariable
+                | DiagnosticGroup::UnusedButSetVariable
+                | DiagnosticGroup::UnusedButSetGlobal
+                | DiagnosticGroup::UnusedLabel
+                | DiagnosticGroup::UnusedValue
+                | DiagnosticGroup::UnusedComparison
+                | DiagnosticGroup::Main
+                | DiagnosticGroup::PointerBoolConversion => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
                 | _ => None,
             }

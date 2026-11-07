@@ -197,6 +197,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }) {
                 continue;
             }
+            self.note_attribute_argument(argument.expression);
             self.constant_expression(
                 argument.expression,
                 super::super::exceptional_constants::ConstantSite::Other,

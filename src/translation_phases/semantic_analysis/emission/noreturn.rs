@@ -85,7 +85,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// function); or a call whose callee's function type is `noreturn`. A
     /// cast to an integer may lose the address, and `*` of a pointer to a
     /// pointer loads one, so the call through them names no function.
-    pub(super) fn call_does_not_return(&mut self, callee: &'tu Expression<'tu>) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn call_does_not_return(
+        &mut self,
+        callee: &'tu Expression<'tu>,
+    ) -> bool {
         let mut designator = callee;
         loop {
             designator = match designator.kind {

@@ -1,0 +1,1288 @@
+//! `-Wsign-compare` and `-Wmissing-field-initializers`, pinned against
+//! GCC 14.2 and Clang 23.1.1.
+
+use super::*;
+use crate::configuration::{
+    CompilerConfiguration,
+    CompilerIdentity,
+};
+
+fn reports(source: &str, identity: CompilerIdentity, kind: SemanticErrorKind) -> usize {
+    let mut count = 0;
+    let configuration = CompilerConfiguration::default()
+        .with_compiler_identity(identity)
+        .with_gnu_extensions(true)
+        .with_extra_warnings(true);
+    with_configuration(source, configuration, |context, _| {
+        count = context
+            .take_pending_errors()
+            .iter()
+            .filter(|error| matches!(error, TranslationError::Semantic(e) if e.kind == kind))
+            .count();
+    });
+    count
+}
+
+#[test]
+fn sign_compare_follows_each_compiler() {
+    for (source, gcc, clang) in [
+        ("int f(int a, unsigned b) { return a < b; }", 1, 1),
+        (
+            "int f(unsigned u, int a) { return ((0x3000 & u) >> 12) != a; }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return a == b; }", 1, 1),
+        ("int f(int a, unsigned long b) { return a < b; }", 1, 1),
+        ("int f(short a, unsigned b) { return a < b; }", 1, 1),
+        ("int f(long a, unsigned b) { return a < b; }", 0, 0),
+        ("int f(int a, unsigned short b) { return a < b; }", 0, 0),
+        ("int f(unsigned char a, int b) { return a < b; }", 0, 0),
+        ("int f(unsigned char a, unsigned b) { return a < b; }", 0, 0),
+        ("int f(int a, unsigned b) { return (unsigned)a < b; }", 0, 0),
+        ("int f(int a, unsigned b) { return a < (int)b; }", 0, 0),
+        ("int f(unsigned b) { return 1 < b; }", 0, 0),
+        ("int f(unsigned b) { return b == 0; }", 0, 0),
+        ("int f(unsigned b) { return b > 0; }", 0, 0),
+        ("int f(unsigned b) { return -1 < b; }", 1, 0),
+        ("int f(unsigned b) { return b == -1; }", 1, 1),
+        ("int f(int a, unsigned b) { return (a & 0xff) < b; }", 0, 0),
+        ("int f(int a, unsigned b) { return (a & -1) < b; }", 1, 1),
+        ("int f(int a, unsigned b) { return (a ? 1 : 2) < b; }", 0, 0),
+        (
+            "int f(int a, unsigned b) { return (a ? 1 : -1) < b; }",
+            1,
+            1,
+        ),
+        ("int f(int a, unsigned b) { return (a < 0) < b; }", 0, 0),
+        ("int f(int a, unsigned b) { return a % 2 < b; }", 1, 1),
+        ("int f(int a) { return a < sizeof a; }", 1, 1),
+        ("int f(int a) { return a == sizeof a; }", 0, 0),
+        (
+            "enum E { A, B }; int f(enum E e, unsigned b) { return e < b; }",
+            0,
+            0,
+        ),
+        (
+            "enum E { A, B }; int f(enum E e, int b) { return e < b; }",
+            1,
+            1,
+        ),
+        ("enum E { A, B }; int f(unsigned b) { return A < b; }", 0, 0),
+        (
+            "enum E { A = -1, B }; int f(enum E e, unsigned b) { return e < b; }",
+            1,
+            1,
+        ),
+        (
+            "struct S { unsigned x : 3; }; int f(struct S s, int a) { return s.x < a; }",
+            0,
+            0,
+        ),
+        (
+            "struct S { int y : 3; }; int f(struct S s, unsigned b) { return s.y < b; }",
+            1,
+            1,
+        ),
+        (
+            "struct S { unsigned z : 32; }; int f(struct S s, int a) { return s.z < a; }",
+            1,
+            1,
+        ),
+        ("int f(float a, unsigned b) { return a < b; }", 0, 0),
+        ("int f(_Bool a, unsigned b) { return a < b; }", 0, 0),
+        (
+            "int f(unsigned short a, unsigned short b, unsigned c) { return (a + b) < c; }",
+            0,
+            0,
+        ),
+        ("int f(int *p, int *q) { return p < q; }", 0, 0),
+        (
+            "unsigned f(int a, unsigned b, int c) { return c ? a : b; }",
+            1,
+            0,
+        ),
+        ("unsigned f(unsigned b, int c) { return c ? 1 : b; }", 0, 0),
+        ("unsigned f(unsigned b, int c) { return c ? -1 : b; }", 1, 0),
+        (
+            "int f(int b, unsigned a) { return b == (a ? 1U : 2U); }",
+            1,
+            0,
+        ),
+        (
+            "int f(int b, int c) { return b == (c ? 1U : 0x7FFFFFFFU); }",
+            1,
+            0,
+        ),
+        (
+            "int f(int b, int c) { return b == (c ? 1U : 0x80000000U); }",
+            1,
+            1,
+        ),
+        (
+            "int f(int b, unsigned a, int c) { return b == (c ? a : 2U); }",
+            1,
+            1,
+        ),
+        ("int f(int b, unsigned a) { return b == (a = 1U); }", 1, 0),
+        ("int f(int b, unsigned a) { return b == (a >> 4); }", 1, 0),
+        ("int f(int b, unsigned a) { return b == a / 2U; }", 1, 0),
+        ("int f(int b, unsigned a) { return b == a + 1U; }", 1, 1),
+        (
+            "int f(int b, unsigned char c) { return b == c + 1U; }",
+            1,
+            0,
+        ),
+        (
+            "int f(int b, unsigned char c) { return b == (c ? c : 1U); }",
+            1,
+            0,
+        ),
+        (
+            "int f(long b, unsigned long a) { return b == (a >> 1); }",
+            1,
+            0,
+        ),
+        (
+            "struct S { unsigned long l : 40; }; int f(struct S *p, long b) { return b == p->l; }",
+            0,
+            0,
+        ),
+        ("const int k = 5; int f(unsigned b) { return b < k; }", 1, 0),
+        (
+            "const int k = -5; int f(unsigned b) { return b < k; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { return (a & 1) - (a & 2) < b; }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return (1 << a) < b; }", 1, 0),
+        (
+            "int f(unsigned a, int b) { return (b < 0 ? 0 : b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b <= 0 ? 0 : b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b > 0 ? b : 0) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (0 > b ? 0 : b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b < 5 ? 5 : b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b < 1 ? 0 : b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b >= 1 ? b : 0) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b < 7 ? 5 : b) < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b > 5 ? 5 : b) < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b < -5 ? -5 : b) < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b, int c) { return ((b & 1) < c ? c : (b & 1)) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b, int c) { return (b < (c & 1) ? b : (c & 1)) < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b, int c) { return (c < 0 ? 0 : b) < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b < 0 ? -b : b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (b >= 0 ? b : -b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (0 > b ? -b : b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "unsigned f(int a, unsigned b, int c) { return c ? (a < 0 ? 0 : a) : b; }",
+            0,
+            0,
+        ),
+        ("int f(unsigned a, int b) { return b * b < a; }", 0, 1),
+        (
+            "int f(unsigned a, int b, int c) { return b * c < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return __builtin_abs(b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int abs(int); int f(unsigned a, int b) { return abs(b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return __builtin_popcount(b) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return __builtin_ctz(b) < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return ((b & 7) << 1) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return ((b & 7) << 29) < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return ((b & 7) >> b) < a; }",
+            1,
+            0,
+        ),
+        ("int f(unsigned a, int b) { return (b = 1) < a; }", 0, 0),
+        ("int f(unsigned a, int b) { return (b = -1) < a; }", 1, 1),
+        (
+            "int f(unsigned a, int b) { return (b = (a & 1)) < a; }",
+            0,
+            0,
+        ),
+        (
+            "int f(unsigned a, unsigned char b) { return (int)b < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, unsigned short b) { return (short)b < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned long a, unsigned b) { return (int)b < a; }",
+            1,
+            1,
+        ),
+        (
+            "int f(unsigned long a, unsigned b) { return (long)b < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, int b) { return (short)(b & 1) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, long b) { return (int)(b & 1) < a; }",
+            0,
+            1,
+        ),
+        (
+            "int f(unsigned a, long b) { return (int)(b & 0xffffffff) < a; }",
+            1,
+            1,
+        ),
+        ("int f(int a, unsigned b) { return ({ 1; }) < b; }", 0, 0),
+        (
+            "int f(int a, unsigned b) { return ({ a & 1; }) < b; }",
+            0,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { return ({ int c = 1; c; }) < b; }",
+            1,
+            1,
+        ),
+        ("int f(void) { return -1 < 0U; }", 0, 0),
+        ("int f(void) { return -1 == 0xFFFFFFFFU; }", 1, 0),
+        ("int g = -1 < 0U;", 0, 0),
+        ("int f(unsigned b) { return b < -1; }", 1, 1),
+        ("int f(unsigned b) { return b >= -1; }", 1, 1),
+        ("int f(unsigned b) { return b <= -1; }", 1, 0),
+        ("int f(unsigned b) { return b > -1; }", 1, 0),
+        ("int f(int b) { return b < 0U; }", 0, 0),
+        ("int f(int b) { return b >= 0U; }", 0, 0),
+        ("int f(int b) { return 0U > b; }", 0, 0),
+        ("int f(int b) { return 0U <= b; }", 0, 0),
+        ("int f(int b) { return b > 0U; }", 1, 1),
+        ("#define Z 0U\nint f(int b) { return b < Z; }", 0, 1),
+        (
+            "enum { E = -1 }; int f(unsigned b) { return b <= E; }",
+            1,
+            1,
+        ),
+        ("int f(unsigned char c) { return (unsigned)c < -1; }", 0, 1),
+        ("int f(unsigned char c) { return (unsigned)c == -1; }", 0, 1),
+        ("int f(short c) { return c == 0x80000000U; }", 0, 0),
+        ("int f(short c) { return c == 0xFFFFFFFFU; }", 1, 1),
+        ("int f(short c) { return c < 70000U; }", 1, 1),
+        ("int f(int a, unsigned b) { return sizeof(a < b); }", 0, 0),
+        (
+            "void f(int a, unsigned b) { __typeof__(a < b) c = 0; (void)c; }",
+            0,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return 0 && a < b; }", 0, 0),
+        ("int f(int a, unsigned b) { return 1 || a < b; }", 0, 0),
+        ("int f(int a, unsigned b) { return 1 ? 1 : a < b; }", 0, 0),
+        ("int f(int a, unsigned b) { return 0 ? a < b : 1; }", 0, 0),
+        ("int f(int a, unsigned b) { return 1 && a < b; }", 1, 1),
+        (
+            "int f(int a, unsigned b, int c) { if (0 && a < b) return c; return 1; }",
+            0,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { return _Generic(a < b, int: 1); }",
+            0,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { return __builtin_choose_expr(1, 1, a < b); }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return 1; return a < b; }", 1, 0),
+        (
+            "int f(int a, unsigned b) { if (0) return a < b; return 1; }",
+            1,
+            0,
+        ),
+        (
+            "void g(void) __attribute__((noreturn)); int f(int a, unsigned b) { g(); return a < \
+             b; }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b, int c) { return sizeof(c ? a : b); }",
+            0,
+            0,
+        ),
+        (
+            "int f(__int128 a) { return a == (unsigned __int128)1 << 127; }",
+            1,
+            1,
+        ),
+        (
+            "int f(__int128 a, unsigned __int128 b) { return a < b; }",
+            1,
+            1,
+        ),
+        ("int f(unsigned __int128 a) { return a < -1; }", 1, 1),
+        ("int f(unsigned __int128 a) { return a <= -1; }", 1, 0),
+        ("int f(unsigned _BitInt(200) a) { return a < -1; }", 1, 1),
+        ("int f(_Atomic int a, unsigned b) { return a < b; }", 1, 0),
+        ("int f(int a, _Atomic unsigned b) { return a < b; }", 1, 1),
+    ] {
+        let kind = SemanticErrorKind::SignCompare;
+        assert_eq!(
+            reports(source, CompilerIdentity::Gcc, kind),
+            gcc,
+            "GCC: {source}"
+        );
+        assert_eq!(
+            reports(source, CompilerIdentity::Clang, kind),
+            clang,
+            "Clang: {source}"
+        );
+    }
+}
+
+#[test]
+fn missing_fields_follow_each_compiler() {
+    const S: &str = "struct S { int a, b; }; struct T { struct S s; int c; }; ";
+    for (source, gcc, clang) in [
+        ("struct S s = {1};", 1, 1),
+        ("struct S s = {0};", 0, 0),
+        ("struct S s = {};", 0, 0),
+        ("struct S s = {1, 2};", 0, 0),
+        ("struct S s = {.a = 1};", 0, 0),
+        ("void f(void) { struct S s = {1}; (void)s; }", 1, 1),
+        ("struct T t = {{1}};", 2, 2),
+        ("struct T t = {{1, 2}, 3};", 0, 0),
+        ("struct T t = {.s = {1}, .c = 1};", 0, 1),
+        ("struct T t = {.s.a = 1};", 0, 0),
+        ("struct S t[2] = {{1}, {2, 3}};", 1, 1),
+        ("struct S t[2] = {{1, 2}};", 0, 0),
+        ("int a[3] = {1};", 0, 0),
+        ("struct S *p = &(struct S){1};", 1, 1),
+        ("struct F { int a; int b[]; }; struct F f = {1};", 0, 0),
+        (
+            "struct B { int a; int : 3; int b; }; struct B b = {1};",
+            1,
+            1,
+        ),
+        (
+            "struct B { int a; int b; int : 3; }; struct B b = {1, 2};",
+            0,
+            0,
+        ),
+        ("union U { int a, b; }; union U u = {1};", 0, 0),
+        (
+            "struct C { char a[2]; int b; }; struct C c = {\"x\"};",
+            1,
+            1,
+        ),
+    ] {
+        let source = format!("{S}{source}");
+        let kind = SemanticErrorKind::MissingFieldInitializer;
+        assert_eq!(
+            reports(&source, CompilerIdentity::Gcc, kind),
+            gcc,
+            "GCC: {source}"
+        );
+        assert_eq!(
+            reports(&source, CompilerIdentity::Clang, kind),
+            clang,
+            "Clang: {source}"
+        );
+    }
+}
+
+/// Brace elision is not modeled: such a list stays silent at its level, where
+/// the compilers may warn, rather than guessing.
+#[test]
+fn an_elided_list_stays_silent() {
+    let kind = SemanticErrorKind::MissingFieldInitializer;
+    let source = "struct S { int a, b; }; struct T { struct S s; int c; }; struct T t = {1, 2};";
+    assert_eq!(reports(source, CompilerIdentity::Gcc, kind), 0);
+    assert_eq!(reports(source, CompilerIdentity::Clang, kind), 0);
+}
+
+/// Clang's `DiagRuntimeBehavior` asks its CFG, as `reachability.rs` reads it;
+/// GCC warns wherever the comparison is evaluated.
+#[test]
+fn sign_compare_follows_clang_reachability() {
+    for (source, gcc, clang) in [
+        (
+            "int f(int a, unsigned b) { while (0) { if (a < b) return 1; } return 0; }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { for (; 0;) { if (a < b) return 1; } return 0; }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { __builtin_trap(); return a < b; }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return 0; return a < b; }", 1, 0),
+        (
+            "int f(int a, unsigned b) { if (0) return a < b; return 0; }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return 0 ? a < b : 0; }", 0, 0),
+        (
+            "int f(int a, unsigned b) { return a && 0 ? a < b : 0; }",
+            1,
+            0,
+        ),
+        ("int f(int a, unsigned b) { return 0 && a < b; }", 0, 0),
+        (
+            "int f(int a, unsigned b) { return a < (__builtin_trap(), b); }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { if (a & 0) return a < b; return 0; }",
+            1,
+            0,
+        ),
+        (
+            "enum E { X, Y }; int f(enum E e, int a, unsigned b) { switch (e) { case X: return 1; \
+             case Y: return 2; } return a < b; }",
+            1,
+            0,
+        ),
+        (
+            "int f(int a, unsigned b) { return 0; x: return a < b; }",
+            1,
+            0,
+        ),
+        // What it does reach.
+        (
+            "int f(int a, unsigned b) { while (1) { if (a < b) return 1; } }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { while (a) { if (a < b) return 1; } return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { while (a) {} return a < b; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { while (1) { break; } return a < b; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { if (a) __builtin_trap(); return a < b; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { if (1) return a < b; return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { while (a < b) {} return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { do {} while (a < b); return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { for (; a < b;) {} return 0; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { int c = a < b; return c; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { int c[] = {a < b}; return c[0]; }",
+            1,
+            1,
+        ),
+        (
+            "int f(int a, unsigned b) { goto x; x: return a < b; }",
+            1,
+            1,
+        ),
+        ("int f(int a, unsigned b) { return a ? a < b : 0; }", 1, 1),
+        ("int f(int a, unsigned b) { return 1 ? a < b : 0; }", 1, 1),
+        ("int f(int a, unsigned b) { return ({ a < b; }); }", 1, 1),
+        (
+            "int g(int); int f(int a, unsigned b) { return g(a < b); }",
+            1,
+            1,
+        ),
+    ] {
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::SignCompare
+            ),
+            gcc,
+            "GCC: {source}"
+        );
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Clang,
+                SemanticErrorKind::SignCompare
+            ),
+            clang,
+            "Clang: {source}"
+        );
+    }
+}
+
+/// Neither compiler asks whether an initializer's braces run.
+#[test]
+fn missing_fields_do_not_follow_reachability() {
+    for source in [
+        "struct S { int a, b; }; void f(void) { while (0) { struct S s = {1}; (void)s; } }",
+        "struct S { int a, b; }; void f(void) { __builtin_trap(); struct S s = {1}; (void)s; }",
+        "struct S { int a, b; }; void f(void) { return; struct S s = {1}; (void)s; }",
+    ] {
+        for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+            assert_eq!(
+                reports(source, identity, SemanticErrorKind::MissingFieldInitializer),
+                1,
+                "{source}"
+            );
+        }
+    }
+}
+
+/// Comparisons at the limits of the widest types, which must not overflow the
+/// host's arithmetic: a clamp whose constant is `__int128`'s last value stopped
+/// the compiler. GCC's comparison with its operand type's limit decides itself
+/// or names the one value there is.
+#[test]
+fn sign_compare_survives_the_limits_of_a_type() {
+    for (source, gcc, clang) in [
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a > MAX ? a : 0) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a >= MAX ? a : 0) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a < MAX ? 0 : a) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a <= MAX ? 0 : a) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (a < MIN ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (a <= MIN ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (a > MIN ? a : 0) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (a >= MIN ? a : 0) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (MAX < a ? a : 0) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MIN (-((__int128)1<<126)-((__int128)1<<126))
+int f(__int128 a,unsigned __int128 b){return (MIN > a ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (MAX >= a ? 0 : a) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a > 0 ? a : MAX) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a > MAX-1 ? a : MAX) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return (a >= MAX ? a : MAX) < b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(long long a,unsigned long long b){return (a > 9223372036854775807LL ? a : 0) < \
+             b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(long long a,unsigned long long b){return (a < (-9223372036854775807LL-1) ? 0 : \
+             a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define UMAX (~(unsigned __int128)0)
+int f(unsigned __int128 a,unsigned __int128 b){return (a > UMAX ? a : 0) < b;}",
+            0,
+            0,
+        ),
+        (
+            "int f(int a,unsigned b){return (a > 2147483647 ? a : 2147483647) < b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(int a,unsigned b){return (a < -2147483647-1 ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(int a,unsigned b){return (a >= 2147483647 ? a : 0) < b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(int a,unsigned b){return (a < 2147483647 ? 0 : a) < b;}",
+            0,
+            1,
+        ),
+        (
+            "int f(int a,unsigned b){return (a <= -2147483647-1 ? 0 : a) < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(long long a,unsigned long long b){return (a > 9223372036854775807LL ? a : -1) \
+             < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(long long a,unsigned long long b){return (a >= 9223372036854775807LL ? a : -1) \
+             < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(__int128 a,unsigned __int128 b){return ((a & 1) << 127) < b;}",
+            1,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return ((a & MAX) << 1) < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(__int128 a,unsigned __int128 b){return ((a & 3) << 126) < b;}",
+            1,
+            1,
+        ),
+        (
+            "int f(__int128 a,unsigned __int128 b){return ((a & 3) << 125) < b;}",
+            0,
+            1,
+        ),
+        (
+            "#define MAX ((((__int128)1<<126)-1)*2+1)
+int f(__int128 a,unsigned __int128 b){return ((a & 1) << 126) < b;}",
+            0,
+            1,
+        ),
+        ("int f(int a,unsigned b){return ((a & 1) << 31) < b;}", 1, 1),
+        ("int f(int a,unsigned b){return ((a & 1) << 30) < b;}", 0, 1),
+        ("int f(int a,unsigned b){return ((a & 3) << 30) < b;}", 1, 1),
+        (
+            "int f(_BitInt(200) a,unsigned _BitInt(200) b){return ((a & 1) << 190) < b;}",
+            0,
+            1,
+        ),
+    ] {
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::SignCompare
+            ),
+            gcc,
+            "GCC: {source}"
+        );
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Clang,
+                SemanticErrorKind::SignCompare
+            ),
+            clang,
+            "Clang: {source}"
+        );
+    }
+}
+
+/// One expression compared with an unsigned `b`, in GCC mode: whether it warns.
+fn gcc_warns(operand: &str) -> bool {
+    let source = format!(
+        "int g(void); volatile int v; _Atomic int t; struct S {{ int x, y; unsigned u : 3; }}; \
+         int f(int a, unsigned b, signed char c, unsigned char uc, unsigned char ud, unsigned \
+         short us, long l, double d, int *p, struct S s) {{ return ({operand}) < b; }}"
+    );
+    reports(
+        &source,
+        CompilerIdentity::Gcc,
+        SemanticErrorKind::SignCompare,
+    ) == 1
+}
+
+/// Expectations from GCC 14.2, with `tree_expr_nonnegative_warnv_p` asked of
+/// what `fold` leaves.
+#[track_caller]
+fn assert_gcc_warns(operands: &[&str], warns: bool) {
+    for operand in operands {
+        assert_eq!(gcc_warns(operand), warns, "{operand}");
+    }
+}
+
+#[test]
+fn gcc_keeps_the_proof_through_unary_plus() {
+    assert_gcc_warns(
+        &[
+            "+(a & 1)",
+            "+(a % 1)",
+            "+ +(a & 1)",
+            "+uc",
+            "+s.u",
+            "+!a",
+            "+(a < 1)",
+            "+(a, a & 1)",
+            "+(a = 1)",
+            "+(long)(a & 1)",
+            "+(signed char)(a & 1)",
+            "(signed char)+(a & 1)",
+            "(short)+(a & 1)",
+        ],
+        false,
+    );
+    assert_gcc_warns(&["+a", "+c", "+(a = -1)", "+(signed char)a"], true);
+}
+
+#[test]
+fn gcc_folds_a_constant_condition_first() {
+    assert_gcc_warns(
+        &[
+            "1 ? (a & 1) : a",
+            "0 ? a : (a & 1)",
+            "!0 ? (a & 1) : a",
+            "sizeof(a) ? (a & 1) : a",
+            "1 ? 1 : a",
+            "0 ? -1 : 1",
+            // The condition folds, though it is no constant expression.
+            "a * 0 ? a : (a & 1)",
+            "a - a ? a : (a & 1)",
+            "a ^ a ? a : 1",
+            // Without one both arms count.
+            "a ? (a & 1) : (a & 2)",
+            // `a ? 1 : a` is either that constant or zero.
+            "a ? 1 : a",
+            "a ? 0 : a",
+            // `a ?: b` is `a ? a : b`.
+            "(a & 1) ?: 2",
+            "1 ?: a",
+            "0 ?: 1",
+            // What selects an operand is that operand.
+            "_Generic(a, int: a & 1)",
+            "_Generic(a, long: a, default: a & 1)",
+            "__builtin_choose_expr(1, a & 1, a)",
+            "__builtin_choose_expr(0, a, a & 1)",
+        ],
+        false,
+    );
+    assert_gcc_warns(
+        &[
+            "1 ? a : (a & 1)",
+            "0 ? (a & 1) : a",
+            "1 ? -1 : 1",
+            "a * 0 ? (a & 1) : a",
+            "a ? (a & 1) : a",
+            "a ? -1 : a",
+            "g() ? (a & 1) : a",
+            "a ?: 1",
+            "0 ?: a",
+            "_Generic(a, int: a, default: a & 1)",
+            "__builtin_choose_expr(1, a, a & 1)",
+        ],
+        true,
+    );
+}
+
+#[test]
+fn gcc_folds_a_zero_product_either_way() {
+    assert_gcc_warns(
+        &[
+            "0 * a",
+            "a * 0",
+            "(a & 1) * 0",
+            "0 * (a + 1)",
+            "c * 0",
+            "l * 0",
+            "(int)(l * 0)",
+            "(signed char)(a * 0)",
+            // An operand with side effects stays beside the zero.
+            "g() * 0",
+            "0 * g()",
+            "v * 0",
+            "0 * v",
+            "t * 0",
+            "0 * t",
+            "a++ * 0",
+            "(a * 0) + (a & 1)",
+            "-(0 * a)",
+            "~(a * 0) & 1",
+            "+(0 * a)",
+            // What else one operand decides.
+            "a & 0",
+            "0 / a",
+            "0 % a",
+            "0 << a",
+            "0 >> a",
+        ],
+        false,
+    );
+    assert_gcc_warns(
+        &[
+            "1 * a",
+            "a * 1",
+            "a * 2",
+            "(a * 0) + a",
+            "(a * 0) - 1",
+            "~(a * 0)",
+            // No reduction applies to a floating operand.
+            "(int)(d * 0)",
+            "(int)(0 * d)",
+        ],
+        true,
+    );
+}
+
+#[test]
+fn gcc_cancels_identical_operands() {
+    assert_gcc_warns(
+        &[
+            "a - a",
+            "a ^ a",
+            "a % a",
+            "a / a",
+            "a >> a",
+            "c - c",
+            "l - l",
+            "l ^ l",
+            "(int)(l - l)",
+            "(short)(a - a)",
+            "(long)(a - a)",
+            "*p - *p",
+            "p[1] - p[1]",
+            "s.x - s.x",
+            "s.x ^ s.x",
+            "(a + 1) - (a + 1)",
+            "(a * 2) ^ (a * 2)",
+            "(a + 1) - (1 + a)",
+            "(a + 1) ^ (1 + a)",
+            "a - (int)a",
+            "(long)a - a",
+            "(int)l - (int)l",
+            "-(a - a)",
+            "+(a - a)",
+            "(a - a) + (a & 1)",
+            "(a - a) | (a & 1)",
+            "a & ~a",
+            "~a & a",
+            // What the two leave of each other.
+            "(a & 1) | (a & 1)",
+            "(a & 1) & (a & 1)",
+            "(a & 1) + (a & 1)",
+            "a * a",
+        ],
+        false,
+    );
+    assert_gcc_warns(
+        &[
+            // Reading these again is another value.
+            "g() - g()",
+            "g() ^ g()",
+            "v - v",
+            "v ^ v",
+            "t - t",
+            "t ^ t",
+            "t * t",
+            "a++ - a++",
+            // Other operands.
+            "s.x - s.y",
+            "p[0] - p[1]",
+            "a - 1",
+            "(int)(d - d)",
+            "(a - a) + a",
+            "~(a - a)",
+            "a | a",
+            "a & a",
+            "a + a",
+            "~a ^ a",
+            "a | ~a",
+        ],
+        true,
+    );
+}
+
+/// `PLUS_EXPR` proves zero extensions at least two bits narrower, and what
+/// folds to another form, and not the sum of two nonnegative values.
+#[test]
+fn gcc_proves_a_sum_only_of_zero_extensions() {
+    assert_gcc_warns(
+        &[
+            "uc + ud",
+            "us + uc",
+            "(int)uc + (int)ud",
+            "s.u + s.u",
+            "(a & 1) + (a & 2)",
+            "!a + 1",
+            "(a < 1) + 1",
+            "(a & 1) + 0",
+            "0 + (a & 1)",
+        ],
+        false,
+    );
+    assert_gcc_warns(
+        &[
+            "(a & 1) + 1",
+            "1 + (a & 1)",
+            "uc + 1",
+            "(a & 1) + (a & 3)",
+            "!a + -1",
+        ],
+        true,
+    );
+}
+
+/// What GCC folds to zero whatever the operand: `a % 1`, `a % -1` and `a * 0`.
+#[test]
+fn gcc_folds_an_operation_with_no_sign() {
+    for (source, gcc) in [
+        ("int f(int a, unsigned b) { return a % 1 < b; }", 0),
+        ("int f(int a, unsigned b) { return a % -1 < b; }", 0),
+        ("int f(int a, unsigned b) { return a * 0 < b; }", 0),
+        ("int f(int a, unsigned b) { return a % 2 < b; }", 1),
+        ("int f(int a, unsigned b) { return a / 1 < b; }", 1),
+    ] {
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::SignCompare
+            ),
+            gcc,
+            "{source}"
+        );
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Clang,
+                SemanticErrorKind::SignCompare
+            ),
+            1,
+            "{source}"
+        );
+    }
+}
+
+/// `{ 0 }` against GCC 14.2 and Clang 23.1.1. GCC folds its one element and
+/// wants an integer zero before or after the conversion to the member, so a
+/// cast's converted value counts where the operand does not, and `0.0` counts
+/// for an `int` but not for a `float`. Clang wants an integer literal, as
+/// written.
+#[test]
+fn the_zero_initializer_is_the_folded_value_for_gcc() {
+    const TYPES: &str = "struct S{int a,b;};struct N{struct S s;int c;};struct P{void*p;int \
+                         b;};struct F{float f;int b;};struct E3{int a,b,c;};struct C{char a;int \
+                         b;};struct B{_Bool a;int b;};enum En{Z,O};struct EE{enum En e;int \
+                         b;};struct CX{_Complex int c;int b;};struct D{double d;int b;};int \
+                         g;void fn(void);";
+    for (source, gcc, clang) in [
+        ("struct S x={0};", 0, 0),
+        ("struct S x={(0)};", 0, 1),
+        ("struct S x={0u};", 0, 0),
+        ("struct S x={0LL};", 0, 0),
+        ("struct S x={'\\0'};", 0, 1),
+        ("struct S x={L'\\0'};", 0, 1),
+        ("struct S x={0x0};", 0, 0),
+        ("struct S x={00};", 0, 0),
+        ("struct S x={-0};", 0, 1),
+        ("struct S x={!1};", 0, 1),
+        ("struct S x={1-1};", 0, 1),
+        ("struct S x={Z};", 0, 1),
+        ("struct S x={O};", 1, 1),
+        ("struct S x={sizeof(int)-4};", 0, 1),
+        ("struct S x={(char)0};", 0, 1),
+        ("struct S x={(unsigned char)256};", 0, 1),
+        ("struct S x={(unsigned char)-256};", 0, 1),
+        ("struct S x={(signed char)0x100};", 0, 1),
+        ("struct S x={(int)0.5};", 0, 1),
+        ("struct S x={(int)-0.5};", 0, 1),
+        ("struct S x={(int)0.0};", 0, 1),
+        ("struct S x={(int)1.5};", 1, 1),
+        ("struct S x={(int)(1ULL<<32)};", 0, 1),
+        ("struct S x={(int)((1ULL<<32)+1)};", 1, 1),
+        ("struct S x={(short)65536};", 0, 1),
+        ("struct S x={(_Bool)0};", 0, 1),
+        ("struct S x={(_Bool)0.5};", 1, 1),
+        ("struct S x={(_Bool)2};", 1, 1),
+        ("struct S x={(_Bool)0.0};", 0, 1),
+        ("struct S x={0.0};", 0, 1),
+        ("struct S x={0.0f};", 0, 1),
+        ("struct S x={(float)0};", 0, 1),
+        ("struct S x={(int)0.0f};", 0, 1),
+        ("struct S x={(double)0};", 0, 1),
+        ("struct S x={(int)(char)256};", 0, 1),
+        ("struct S x={((int)0)};", 0, 1),
+        ("struct S x={(int)(0)};", 0, 1),
+        ("struct S x={(long)(void*)0};", 0, 1),
+        ("struct S x={(int)(long)(void*)0};", 0, 1),
+        ("struct S x={(int)1e30};", 1, 1),
+        ("struct S x={(unsigned)1e30};", 1, 1),
+        ("struct S x={1};", 1, 1),
+        ("struct P x={(void*)0};", 0, 1),
+        ("struct P x={0};", 0, 0),
+        ("struct P x={(char*)0};", 0, 1),
+        ("struct P x={(void*)(char*)0};", 0, 1),
+        ("struct P x={(void*)1};", 1, 1),
+        ("struct F x={0.0f};", 1, 1),
+        ("struct F x={0};", 0, 0),
+        ("struct F x={(float)0};", 1, 1),
+        ("struct F x={(int)0.5};", 0, 1),
+        ("struct D x={0.0};", 1, 1),
+        ("struct D x={0};", 0, 0),
+        ("struct C x={'\\0'};", 0, 1),
+        ("struct C x={0};", 0, 0),
+        ("struct B x={0};", 0, 0),
+        ("struct B x={(_Bool)0};", 0, 1),
+        ("struct B x={(_Bool)0.5};", 1, 1),
+        ("struct EE x={Z};", 0, 1),
+        ("struct EE x={0};", 0, 0),
+        ("struct EE x={(enum En)0};", 0, 1),
+        ("struct N x={0};", 0, 0),
+        ("struct N x={{1},0};", 1, 1),
+        ("struct N x={{(char)256,0}};", 1, 1),
+        ("struct N x={{(int)0.5,1}};", 1, 1),
+        ("struct E3 x={0,0};", 1, 1),
+        ("struct E3 x={(int)0.5,0};", 1, 1),
+        ("struct E3 x={0,(int)0.5};", 1, 1),
+        ("struct E3 x={0,1};", 1, 1),
+        ("struct E3 x={1,0};", 1, 1),
+        ("struct E3 x={(char)256,(char)0};", 1, 1),
+        ("struct E3 x={0,0,0};", 0, 0),
+        ("void h(void){struct S x={(int)0.5};(void)x;}", 0, 1),
+        (
+            "void h(struct S);void i(void){h((struct S){(int)0.5});}",
+            0,
+            1,
+        ),
+        ("struct S x[2]={{(int)0.5},{1,2}};", 0, 1),
+        (
+            "void h(void){struct S x={(unsigned char)256};(void)x;}",
+            0,
+            1,
+        ),
+        (
+            "void h(struct S);void i(void){h((struct S){(unsigned char)256});}",
+            0,
+            1,
+        ),
+        ("struct S x[2]={{(unsigned char)256},{1,2}};", 0, 1),
+        ("void h(void){struct S x={0.0};(void)x;}", 0, 1),
+    ] {
+        let source = format!("{TYPES}{source}");
+        assert_eq!(
+            reports(
+                &source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::MissingFieldInitializer
+            ),
+            gcc,
+            "GCC: {source}"
+        );
+        assert_eq!(
+            reports(
+                &source,
+                CompilerIdentity::Clang,
+                SemanticErrorKind::MissingFieldInitializer
+            ),
+            clang,
+            "Clang: {source}"
+        );
+    }
+    // The member through elided braces, past an unnamed one. Clang's elided
+    // lists are not modeled; see the module's documentation.
+    for (source, gcc) in [
+        (
+            "struct S { int a, b; }; struct N { struct S s; int c; }; struct N x = {0.5};",
+            0,
+        ),
+        ("struct A { int a[2]; int b; }; struct A x = {0.5};", 0),
+        (
+            "struct B { int : 3; int a; int b; }; struct B x = {0.5};",
+            0,
+        ),
+        ("struct B { _Bool a; int b; }; struct B x = {0.5};", 1),
+        ("struct B { _Bool a; int b; }; struct B x = {0.0};", 0),
+    ] {
+        assert_eq!(
+            reports(
+                source,
+                CompilerIdentity::Gcc,
+                SemanticErrorKind::MissingFieldInitializer
+            ),
+            gcc,
+            "{source}"
+        );
+    }
+}

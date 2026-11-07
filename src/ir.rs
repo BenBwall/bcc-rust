@@ -275,6 +275,8 @@ pub(crate) struct Function<'ir> {
     pub(crate) inlining:           InlineControl,
     /// GNU `no_stack_protector`: no stack protector, whatever the options ask.
     pub(crate) no_stack_protector: bool,
+    /// GNU `no_instrument_function`: `-pg` leaves this function alone.
+    pub(crate) no_instrument:      bool,
     /// GNU `no_sanitize`: the sanitizers that leave this function alone.
     pub(crate) no_sanitize:        NoSanitize,
     /// For the private copy of an `always_inline` inline-only definition,

@@ -1,4 +1,4 @@
-warning: static function is declared but never defined: `f`
+warning: static function is declared but never defined: `f` [-Wunused-function]
  --> sema3-static-unused.c:1:12
   |
 1 | static int f(void);

@@ -32,6 +32,7 @@ mod correspondence;
 mod diagnostic_parity;
 mod effects;
 mod emission_work;
+mod extra_warnings;
 mod float128;
 mod float_integer_conversions;
 mod fortify;
@@ -60,6 +61,7 @@ mod storage_half;
 mod targets;
 mod transparent_unions;
 mod type_generic;
+mod unused;
 mod vectors;
 
 fn with_source(source: &str, run: impl FnOnce(&mut Context<'_>, &SemanticTranslationUnit<'_>)) {
@@ -120,7 +122,25 @@ fn builtin_va_list_is_complete_and_parameters_decay() {
     );
 }
 
+/// Analyzes `source` under `configuration`, without Clang's by-default
+/// warning about a discarded value, since these tests' statements exist to be
+/// analyzed: `unused.rs` pins that warning.
 fn with_configuration(
+    source: &str,
+    configuration: crate::configuration::CompilerConfiguration,
+    run: impl FnOnce(&mut Context<'_>, &SemanticTranslationUnit<'_>),
+) {
+    with_exact_configuration(
+        source,
+        configuration.with_warning_option(
+            crate::configuration::DiagnosticGroup::UnusedValue,
+            crate::configuration::WarningOption::Enable(false),
+        ),
+        run,
+    );
+}
+
+fn with_exact_configuration(
     source: &str,
     configuration: crate::configuration::CompilerConfiguration,
     run: impl FnOnce(&mut Context<'_>, &SemanticTranslationUnit<'_>),
