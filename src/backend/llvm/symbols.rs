@@ -88,7 +88,12 @@ pub(super) fn declare<'id, 'a, 'm>(
             library_builtins(api, value, module.library_builtins(), arena);
             null_pointer_validity(api, value, module);
             floating_point(api, value, module, strict);
-            api.hardening(value, function.no_stack_protector, function.no_sanitize);
+            api.hardening(
+                value,
+                function.no_stack_protector,
+                function.no_sanitize,
+                function.no_instrument,
+            );
         } else {
             math_without_errno(api, value, module, function.name);
         }

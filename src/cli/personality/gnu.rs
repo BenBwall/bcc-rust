@@ -1042,7 +1042,7 @@ impl State<'_> {
             | "-C" | "-CC" => self.invocation.warning(format_args!(
                 "'{text}' is not supported: bcc does not keep comments in preprocessed output"
             )),
-            | "-pg" | "-p" => self.invocation.warning(format_args!(
+            | "-p" => self.invocation.warning(format_args!(
                 "'{text}' is not supported: bcc does not instrument programs for profiling"
             )),
             | "-m32" | "-mx32" | "-m16" => self.unsupported(text, "bcc compiles for x86-64 only"),
@@ -1706,7 +1706,7 @@ impl State<'_> {
         }
         // `Plan::machine_options` warns about these off Linux, once it knows
         // the target.
-        if is_hardening_option(text) && knows(self.compiler, text) {
+        if is_hardening_option(text) && (text == "-pg" || knows(self.compiler, text)) {
             self.machine.push(text.into());
             self.out.push(text.into());
             return;
@@ -1873,6 +1873,23 @@ impl State<'_> {
                 | "-fno-sanitize=thread" => thread = false,
                 | "-fno-sanitize=all" => (address, thread) = (false, false),
                 | _ => {},
+            }
+        }
+        let frameless = self
+            .out
+            .iter()
+            .rfind(|option| {
+                *option == "-fomit-frame-pointer" || *option == "-fno-omit-frame-pointer"
+            })
+            .is_some_and(|option| option == "-fomit-frame-pointer");
+        if frameless && self.machine.iter().any(|option| option == "-pg") {
+            match self.compiler {
+                | Compiler::Gcc => self.error(format_args!(
+                    "-pg and -fomit-frame-pointer are incompatible"
+                )),
+                | Compiler::Clang => self.error(format_args!(
+                    "invalid argument '-fomit-frame-pointer' not allowed with '-pg'"
+                )),
             }
         }
         if address && thread {
