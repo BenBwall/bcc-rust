@@ -7662,6 +7662,29 @@ mod tests {
             run("--clang-mode", &["-Werror", "-fsyntax-only", "pragma.c"]),
             (true, String::new())
         );
+        // The first declaration's settings decide, whatever a later
+        // redeclaration is under.
+        directory.write(
+            "later.c",
+            "static int f(void);\n#pragma clang diagnostic ignored \
+             \"-Wundefined-internal\"\nstatic int f(void);\nint g(void){return f();}\n",
+        );
+        let (ok, text) = run("--clang-mode", &["-Werror", "-fsyntax-only", "later.c"]);
+        assert!(!ok);
+        assert!(
+            text.starts_with("later.c:1:12: error: function 'f' has internal linkage"),
+            "{text}"
+        );
+        directory.write(
+            "first.c",
+            "#pragma clang diagnostic push\n#pragma clang diagnostic ignored \
+             \"-Wundefined-internal\"\nstatic int f(void);\n#pragma clang diagnostic pop\nstatic \
+             int f(void);\nint g(void){return f();}\n",
+        );
+        assert_eq!(
+            run("--clang-mode", &["-Werror", "-fsyntax-only", "first.c"]),
+            (true, String::new())
+        );
         assert_eq!(
             run("--clang-mode", &["-Werror", "-fsyntax-only", "system.c"]),
             (true, String::new())
