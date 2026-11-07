@@ -10,8 +10,9 @@
 //! becomes one listing in the format `web/pipeline/generate.sh` used to write
 //! from `objdump`. Diagnostics move from the compiler's character columns to
 //! the editor's UTF-16 columns, and the compiler's per-function line map
-//! gains the listing's lines. `llvm` stays `None`: the page adds the
-//! precomputed LLVM IR for the bundled lessons.
+//! gains the listing's lines, each of which takes the source line of the
+//! assembly it encodes. `llvm` stays `None`: the page adds the precomputed
+//! LLVM IR for the bundled lessons.
 
 use std::fmt::Write;
 
@@ -20,6 +21,7 @@ use bcc_rust::explorer::{
     ExplorerDiagnostic,
     ExplorerExpansion,
     ExplorerFunctionBytes,
+    ExplorerLineOrigin,
     ExplorerLineRange,
     ExplorerLogicalLine,
     ExplorerOptions,
@@ -38,6 +40,7 @@ use crate::{
         ExpansionStep,
         FunctionLines,
         Include,
+        LineOrigin,
         LogicalLine,
         OutputLine,
         Preprocessing,
@@ -85,6 +88,7 @@ pub fn compile_wasm(source: &str) -> WasmCompiled {
 /// Compile `source` with bcc, at `-O2` when `optimize`. Malformed source
 /// yields diagnostics; the explorer limits source size and nesting depth
 /// itself.
+#[expect(clippy::too_many_lines, reason = "One field per output of the compiler.")]
 pub fn compile(source: &str, optimize: bool) -> Compilation {
     let output = explorer::compile(
         source,
@@ -97,8 +101,14 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
             ..ExplorerOptions::default()
         },
     );
-    let (machine_code, listed) = output.machine_code.as_deref().map(listing).unzip();
-    let listed = listed.unwrap_or_default();
+    let asm_lines = origins(&output.asm_lines);
+    let (machine_code, listed, machine_code_lines) = output
+        .machine_code
+        .as_deref()
+        .map_or((None, Vec::new(), Vec::new()), |functions| {
+            let (text, listed, lines) = listing(functions, &asm_lines);
+            (Some(text), listed, lines)
+        });
     let lines = |range: Option<ExplorerLineRange>| range.map(span);
     let columns = Columns::new(source);
     let logical = output.logical_lines.as_deref().unwrap_or_default();
@@ -157,15 +167,14 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
         semantic_types: output.semantic_types,
         ir: output.ir,
         ir_abi: output.ir_abi,
-        ir_lines: output.ir_lines.iter().map(|&line| line as usize).collect(),
-        ir_abi_lines: output
-            .ir_abi_lines
-            .iter()
-            .map(|&line| line as usize)
-            .collect(),
+        ir_lines: origins(&output.ir_lines),
+        ir_abi_lines: origins(&output.ir_abi_lines),
         llvm: None,
+        llvm_lines: Vec::new(),
         asm: output.asm,
+        asm_lines,
         machine_code,
+        machine_code_lines,
         diagnostics: output
             .diagnostics
             .iter()
@@ -191,6 +200,17 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
 
 fn span(range: ExplorerLineRange) -> (usize, usize) {
     (range.start as usize, range.end as usize)
+}
+
+fn origins(lines: &[ExplorerLineOrigin]) -> Vec<LineOrigin> {
+    lines
+        .iter()
+        .map(|origin| LineOrigin {
+            line: origin.line as usize,
+            call: origin.call as usize,
+            code: origin.code,
+        })
+        .collect()
 }
 
 /// A logical line's physical lines and changes, in UTF-16 columns.
@@ -461,17 +481,24 @@ type Listed = Vec<(String, (usize, usize))>;
 
 /// The machine-code listing: each function's label, then one line per
 /// instruction with its offset in the function, its bytes and its assembly,
-/// with a blank line between functions. Also each function's lines in it.
-fn listing(functions: &[ExplorerFunctionBytes]) -> (String, Listed) {
+/// with a blank line between functions. Also each function's lines in it, and
+/// where each line came from, which is where its line of the assembly did.
+fn listing(
+    functions: &[ExplorerFunctionBytes],
+    asm_lines: &[LineOrigin],
+) -> (String, Listed, Vec<LineOrigin>) {
     let mut text = String::new();
     let mut lines = Vec::new();
+    let mut origins = Vec::new();
     let mut line = 0;
     for function in functions {
         if line > 0 {
             text.push('\n');
+            origins.push(LineOrigin::default());
             line += 1;
         }
         _ = writeln!(text, "<{}>:", function.name);
+        origins.push(LineOrigin::default());
         line += 1;
         let first = line;
         for instruction in &function.instructions {
@@ -491,11 +518,18 @@ fn listing(functions: &[ExplorerFunctionBytes]) -> (String, Listed) {
                     .collect::<Vec<_>>()
                     .join(" ")
             );
+            origins.push(
+                (instruction.line as usize)
+                    .checked_sub(1)
+                    .and_then(|index| asm_lines.get(index))
+                    .copied()
+                    .unwrap_or_default(),
+            );
             line += 1;
         }
         lines.push((function.name.clone(), (first, line)));
     }
-    (text, lines)
+    (text, lines, origins)
 }
 
 /// `diagnostic` with its range in the editor's coordinates, when it is in

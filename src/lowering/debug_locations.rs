@@ -89,6 +89,7 @@ impl Unit<'_, '_, '_> {
         };
         let file = self.debug_file(MAIN_FILE_INDEX);
         self.debug_columns = options.columns;
+        self.debug_physical = options.physical;
         self.debug_variables = options.level >= DebugLevel::Full;
         if self.debug_variables {
             self.index_typedefs(syntax);
@@ -206,8 +207,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             .map_or(source, |identifier| identifier.source_vectors);
         let name = context.file_vector(name_source);
         let body = context.file_vector(record.syntax.body.source_vectors);
-        let (line, scope_line) = (name.line, body.line);
-        let file = self.unit.debug_file(name.source_file_index);
+        let (line, scope_line) = (self.debug_line(name), self.debug_line(body));
+        let file = self.location_file(name);
         let ty = self.subprogram_type(record);
         let mut text = ArenaString::new_in(self.scratch);
         text.push_str(self.name);
@@ -355,7 +356,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// The debug location of code at `vector`.
     pub(super) fn debug_location(&mut self, vector: &SourceVector) -> Option<DebugLoc> {
         let scope = self.debug_scope?;
-        let file = self.unit.debug_file(vector.source_file_index);
+        let file = self.location_file(vector);
+        let line = self.debug_line(vector);
         let column = if self.unit.debug_columns {
             vector.column
         } else {
@@ -368,12 +370,38 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 .0
                 .location(SourceLocation {
                     file,
-                    line: vector.line,
+                    line,
                     column,
                     scope,
                     inlined_at: None,
                 }),
         )
+    }
+
+    /// The line a location at `vector` holds: `#line`'s unless the unit asks
+    /// for physical lines ([`DebugOptions::physical`]), where 0 stands for a
+    /// line in another file.
+    ///
+    /// [`DebugOptions::physical`]: crate::configuration::DebugOptions::physical
+    fn debug_line(&self, vector: &SourceVector) -> u32 {
+        if self.unit.debug_physical {
+            self.home_line(vector).unwrap_or(0)
+        } else {
+            vector.line
+        }
+    }
+
+    /// The file a location at `vector` holds, chosen as [`Self::debug_line`]
+    /// chooses its line.
+    fn location_file(&mut self, vector: &SourceVector) -> DebugFile {
+        let index = if self.unit.debug_physical {
+            self.unit
+                .context
+                .physical_source_file(vector.source_file_index)
+        } else {
+            vector.source_file_index
+        };
+        self.unit.debug_file(index)
     }
 }
 

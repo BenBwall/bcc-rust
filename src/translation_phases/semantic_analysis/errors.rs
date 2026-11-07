@@ -121,6 +121,10 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
     KnrPromotedParameter,
+    /// C99: §6.8.4.2p5, p. 134; PDF p. 146.
+    SwitchCases(crate::configuration::DiagnosticGroup),
+    /// C99: §6.9.1p12, p. 142; PDF p. 154.
+    ReturnFlow(crate::configuration::DiagnosticGroup),
     /// The words are the diagnostic's name.
     /// C99: §6.7.8p21, p. 127; PDF p. 139.
     MissingFieldInitializer,
@@ -1125,6 +1129,8 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::KnrPromotedParameter => "the prototype gives it another type",
+            | Self::SwitchCases(_) => "this switch may not handle every value",
+            | Self::ReturnFlow(_) => "control can reach this point",
             | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
@@ -1335,6 +1341,14 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
                     | crate::configuration::DiagnosticGroup::KnrPromotedParameter
+                    | crate::configuration::DiagnosticGroup::Switch
+                    | crate::configuration::DiagnosticGroup::SwitchEnum
+                    | crate::configuration::DiagnosticGroup::SwitchDefault
+                    | crate::configuration::DiagnosticGroup::SwitchOutsideRange
+                    | crate::configuration::DiagnosticGroup::ConstantSwitchCondition
+                    | crate::configuration::DiagnosticGroup::ReturnType
+                    | crate::configuration::DiagnosticGroup::InvalidNoreturn
+                    | crate::configuration::DiagnosticGroup::GccNoreturn
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
@@ -1751,6 +1765,15 @@ impl SemanticErrorKind {
                 "K&R parameter type",
                 "C99 §6.7.5.3p15: a parameter an identifier list declares is compatible with a \
                  prototype's only after the default argument promotions",
+            ),
+            | Self::SwitchCases(_) => (
+                "switch cases",
+                "C99 §6.8.4.2p5: a value no case matches goes to default, or past the switch",
+            ),
+            | Self::ReturnFlow(_) => (
+                "control reaches the end of the function",
+                "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
+                 reaches the closing brace",
             ),
             | Self::SignCompare => (
                 "comparison of integers of different signs",
@@ -2617,7 +2640,9 @@ impl SemanticErrorKind {
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
         match self {
-            | Self::PointerConstraint(group) => Some(group),
+            | Self::PointerConstraint(group)
+            | Self::SwitchCases(group)
+            | Self::ReturnFlow(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
@@ -2948,6 +2973,8 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::KnrPromotedParameter
+                | SemanticErrorKind::SwitchCases(_)
+                | SemanticErrorKind::ReturnFlow(_)
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
