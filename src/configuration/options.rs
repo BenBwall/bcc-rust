@@ -878,6 +878,10 @@ impl CompilerConfiguration {
     /// `return`, binary constants, case ranges and `__VA_OPT__`, and under
     /// Clang `//` comments in C89 and `#embed`. Each is still an extension
     /// under `-pedantic`. Set this after the compiler identity, which it reads.
+    pub(crate) const fn compiler_extensions(self) -> bool {
+        self.compiler_extensions
+    }
+
     pub(crate) const fn with_compiler_extensions(mut self, enabled: bool) -> Self {
         self.compiler_extensions = enabled;
         self.derive_features()

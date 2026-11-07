@@ -1267,6 +1267,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::InvalidSourceEncoding
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
+                    | crate::configuration::DiagnosticGroup::UndefinedInternal
                     | crate::configuration::DiagnosticGroup::InitializerOverrides
                     | crate::configuration::DiagnosticGroup::GnuFoldingConstant
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
@@ -2715,6 +2716,12 @@ impl SemanticError {
             | (Format::Gcc, SemanticErrorKind::UndeclaredIdentifier) => Some(format_in!(
                 arena,
                 "'{name}' undeclared (first use in this function)"
+            )),
+            | (Format::Gcc, SemanticErrorKind::UndefinedInternal) =>
+                Some(format_in!(arena, "'{name}' used but never defined")),
+            | (Format::Clang, SemanticErrorKind::UndefinedInternal) => Some(format_in!(
+                arena,
+                "function '{name}' has internal linkage but is not defined"
             )),
             | (Format::Gcc, SemanticErrorKind::UndeclaredOutsideFunction) => Some(format_in!(
                 arena,

@@ -835,6 +835,9 @@ diagnostic_groups! {
     DllAttributeOnRedeclaration => Some("dll-attribute-on-redeclaration"), Warning, false;
     /// A redeclaration of an imported entity without `dllimport`.
     InconsistentDllimport => Some("inconsistent-dllimport"), Warning, false;
+    /// A static function used but defined nowhere in the unit. Clang's name;
+    /// GCC gives the warning no option.
+    UndefinedInternal => Some("undefined-internal"), Warning, false;
     /// A static function declared but neither defined nor used.
     UnusedFunction => Some("unused-function"), Ignored, false;
     /// An initializer that replaces an earlier one for the same subobject

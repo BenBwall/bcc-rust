@@ -1060,12 +1060,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && !self.types.unanalyzed(b.ty)
             {
                 if let Some(&usage) = used.get(&self.function_identity(entity.latest)) {
-                    self.error(
-                        SemanticErrorKind::UndefinedInternal,
-                        usage.source_vectors,
-                        Some(b.name.name),
-                        Some(b.name.source_vectors),
-                    );
+                    // A constraint, which GCC and Clang diagnose with a
+                    // warning: another object can't supply it, so the link
+                    // fails instead.
+                    if self.context.configuration.compiler_extensions() {
+                        self.group_diagnostic(
+                            crate::configuration::DiagnosticGroup::UndefinedInternal,
+                            SemanticErrorKind::UndefinedInternal,
+                            usage.source_vectors,
+                            Some(b.name.name),
+                            Some(b.name.source_vectors),
+                        );
+                    } else {
+                        self.error(
+                            SemanticErrorKind::UndefinedInternal,
+                            usage.source_vectors,
+                            Some(b.name.name),
+                            Some(b.name.source_vectors),
+                        );
+                    }
                 } else if b.kind == BindingKind::Function && !self.is_weak_reference(b.name.name) {
                     self.group_diagnostic(
                         crate::configuration::DiagnosticGroup::UnusedFunction,
