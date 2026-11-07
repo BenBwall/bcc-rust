@@ -233,6 +233,26 @@ fn foreign_vector_conventions_are_refused() {
         accepted(definition, compiler, &["-march=haswell", "-march=x86-64"]);
         let local = "static V f(V a) { return a; } V *g(V *p) { *p = f(*p); return p; }";
         accepted(local, compiler, &["-mavx512f"]);
+        // An option outside the table leaves AVX on until AVX goes, or until
+        // its own later opposite.
+        for options in [
+            &["-mavx512f", "-mno-avx512bw"][..],
+            &["-mavx512bw", "-mno-avx512f"],
+            &["-mavx512f", "-mavx512bw", "-mno-avx512f"],
+            &["-mxop", "-mno-fma4"],
+            &["-mavx512f", "-mno-avx2"],
+            &["-mavx512f", "-mno-avx", "-mavx"],
+            &["-mno-avx", "-mavx512f"],
+        ] {
+            refused(definition, compiler, options, foreign);
+        }
+        for options in [
+            &["-mavx512f", "-mno-avx512f"][..],
+            &["-mavx512f", "-mno-sse4.2"],
+            &["-mavx256-split-unaligned-load"],
+        ] {
+            accepted(definition, compiler, options);
+        }
         let target = "__attribute__((target(\"avx2\"))) V f(V a) { return a; }";
         refused(target, compiler, &[], foreign);
         accepted(target, compiler, &["-mavx2"]);
@@ -259,6 +279,27 @@ fn foreign_vector_conventions_are_refused() {
         "static int f(int n, V a, ...) { return a[n]; } int g(V *p) { return f(0, *p); }",
         CompilerIdentity::Gcc,
         &["-mavx2"],
+    );
+    // XSAVE: AVX needs it in GCC only.
+    let definition = "V f(V a) { return a; }";
+    let foreign = "ignores changes how it travels";
+    refused(
+        definition,
+        CompilerIdentity::Clang,
+        &["-mavx512f", "-mno-xsave"],
+        foreign,
+    );
+    accepted(
+        definition,
+        CompilerIdentity::Gcc,
+        &["-mavx512f", "-mno-xsave"],
+    );
+    // A `target` string ends at a NUL, as GCC reads it.
+    refused(
+        "__attribute__((target(\"no-avx\\0junk\"))) V f(V a) { return a; }",
+        CompilerIdentity::Gcc,
+        &["-mavx2"],
+        foreign,
     );
 }
 

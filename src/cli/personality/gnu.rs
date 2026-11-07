@@ -85,7 +85,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         verbose: false,
         dry_run: false,
         machine: Vec::new(),
-        x86: X86Features::NONE,
+        x86_options: Vec::new(),
         position: 0,
         ofast: Ofast::Absent,
         ofast_at: Vec::new(),
@@ -307,7 +307,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         common.push("-D__UINTR__=1".into());
         common.push("--user-interrupts".into());
     }
-    if state.x86.unknown_vector_abi() == Some(32) {
+    let x86 = X86Features::from_options(
+        &state.x86_options.iter().map(String::as_str),
+        compiler == Compiler::Clang,
+    );
+    if x86.unknown_vector_abi() == Some(32) {
         common.push(UNKNOWN_VECTOR_ABI.into());
     }
     // GCC applies a final `-Ofast`'s `-ffast-math` before every other
@@ -553,7 +557,7 @@ struct State<'a> {
     /// target is known, since `--target` may come after them.
     machine: Vec<String>,
     /// The `-m` and `-march=` options in order, for how vectors travel.
-    x86: X86Features,
+    x86_options: Vec<String>,
     /// The position on the command line of the argument being read.
     position: usize,
     /// Where `-Ofast` stands among the `-O` options.
@@ -1607,7 +1611,9 @@ impl State<'_> {
 
     /// Translates an option without an operand.
     fn flag(&mut self, text: &str) {
-        self.x86.apply(text);
+        if text.starts_with("-m") {
+            self.x86_options.push(text.into());
+        }
         if matches!(text, "-MD" | "-MMD") {
             if self.dependency_mode.as_deref() != Some(OsStr::new("-MMD")) {
                 self.dependency_mode = Some(text.into());

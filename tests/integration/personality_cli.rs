@@ -4259,6 +4259,84 @@ mod tests {
         }
     }
 
+    /// What the driver leaves out is still read in order: an option outside the
+    /// table refuses a vector its convention changes until AVX is off in that
+    /// compiler or the option's own opposite follows, wherever the options
+    /// stand. Each row was measured with `-dM -E` on GCC 14.2 and Clang 23.1.1.
+    #[test]
+    fn unknown_vector_options_refuse_as_each_compiler_reads_them() {
+        let directory = Directory::new();
+        directory.write(
+            "v.c",
+            "typedef int V __attribute__((vector_size(32)));\nV add(V a, V b) { return a + b; }\n",
+        );
+        let reads = |mode: &str, options: &[&str]| {
+            let args = [options, &["-w", "-c", "v.c", "-o", "v.o"]].concat();
+            let output = directory.bcc(mode, &args);
+            let refused = stderr(&output).contains("ignores changes how it travels");
+            assert_eq!(output.status.success(), !refused, "{}", stderr(&output));
+            refused
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for options in [
+                &["-mavx512f", "-mno-avx512bw"][..],
+                &["-mavx512bw", "-mno-avx512f"],
+                &["-mavx512f", "-mavx512bw", "-mno-avx512f"],
+                &["-mxop", "-mno-fma4"],
+                &["-mavx512f", "-mno-avx2"],
+                &["-mavx512f", "-mno-avx", "-mavx"],
+                &["-mno-avx", "-mavx512f"],
+                &["-march=haswell"],
+                &["-march=haswell", "-mno-bmi"],
+            ] {
+                assert!(reads(mode, options), "{mode} {options:?}");
+            }
+            for options in [
+                &["-mavx512f", "-mno-avx512f"][..],
+                &["-mavx512f", "-mno-avx"],
+                &["-mavx512f", "-mno-sse4.2"],
+                &["-mavx", "-mavx512f", "-mno-avx"],
+                &["-march=haswell", "-mno-avx"],
+                &["-mno-avx", "-march=haswell"],
+                &["-march=haswell", "-march=x86-64"],
+            ] {
+                assert!(!reads(mode, options), "{mode} {options:?}");
+            }
+            for options in [
+                &["-mavx512f", "-mno-xsave"][..],
+                &["-march=haswell", "-mno-xsave"],
+            ] {
+                assert_eq!(
+                    reads(mode, options),
+                    mode == "--clang-mode",
+                    "{mode} {options:?}"
+                );
+            }
+        }
+        assert!(!reads("--gcc-mode", &["-mavx256-split-unaligned-load"]));
+        assert!(reads("--gcc-mode", &["-msse5"]));
+        // clang-cl returns the vector in YMM0 under these, as `clang
+        // --driver-mode=cl` was measured to, and takes the same options.
+        for (options, refused) in [
+            (&["-mavx512f"][..], true),
+            (&["-mavx512f", "-mno-avx512bw"], true),
+            (&["-march=haswell"], true),
+            (&["-mavx512f", "-mno-avx512f"], false),
+            (&["-mavx512f", "-mno-avx"], false),
+            (&["-mavx2"], false),
+        ] {
+            let args = [options, &["/c", "v.c"]].concat();
+            let output = directory.bcc("--clang-cl-mode", &args);
+            assert_eq!(
+                stderr(&output).contains("ignores changes how it travels"),
+                refused,
+                "{options:?}: {}",
+                stderr(&output)
+            );
+            assert_eq!(output.status.success(), !refused, "{options:?}");
+        }
+    }
+
     /// `__builtin_cpu_supports` and `__builtin_cpu_is` read libgcc's data as
     /// each compiler does: GCC gives the bit where it stands and Clang 1, and
     /// each words a bad name its own way. A function with a `target` attribute

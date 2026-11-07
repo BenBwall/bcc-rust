@@ -235,6 +235,11 @@ can reach and calls of them:
 A `static` function's callers are all bcc's, so it keeps bcc's convention under each of
 these.
 
+An option bcc only warns about counts until AVX goes in that compiler or its own opposite
+follows: `-mavx512bw -mno-avx512f` keeps AVX in both, and `-mavx512f -mno-xsave` keeps it in
+Clang alone. clang-cl's options count the same way. On the stack, a vector is aligned to
+its size, as both compilers place it, whatever `aligned` its typedef says.
+
 `__builtin_cpu_supports`, `__builtin_cpu_is` and `__builtin_cpu_init` read `__cpu_model`
 and `__cpu_features2`, as GCC's and Clang's code does (`target/cpu_model.rs`). libgcc
 defines them, and the bundled clang links `-lgcc` with or without compiler-rt's

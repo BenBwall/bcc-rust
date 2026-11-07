@@ -67,6 +67,10 @@ use super::{
 use crate::{
     backend::llvm::operand,
     cli::arguments::implements_language_option,
+    target::{
+        UNKNOWN_VECTOR_ABI,
+        X86Features,
+    },
 };
 
 /// Options that clang-cl ignores with a warning when given bare, as for an
@@ -98,6 +102,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // clang-cl reads its `/clang:` options after the others, wherever they
     // stand, so they win over `cl`'s (`/clang:-fsigned-char` over `/J`).
     let mut clang_options: Vec<OsString> = Vec::new();
+    // clang-cl's `-m` and `-march=` options in order, for how vectors travel.
+    let mut x86_options: Vec<&str> = Vec::new();
     // `CL`, the command line with its command files, then `_CL_`.
     let expanded = match command_files::expand(&invocation.arguments, clang_cl) {
         | Ok(arguments) => arguments,
@@ -179,6 +185,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         } else if clang_cl && text.starts_with('-') && !CLANG_ONLY_OPTIONS.contains(&text) {
             // clang-cl also takes Clang's options; bcc reads most of them, and
             // treats the rest as its Clang personality does.
+            if text.starts_with("-m") {
+                x86_options.push(text);
+            }
             if text == "-fsyntax-only" {
                 state.syntax_only = true;
             } else if text == "-fms-compatibility" {
@@ -307,6 +316,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     common.append(&mut state.bcc);
+    if X86Features::from_options(&x86_options.iter().copied(), true).unknown_vector_abi()
+        == Some(32)
+    {
+        common.push(UNKNOWN_VECTOR_ABI.into());
+    }
     if !clang_cl {
         common.extend(state.coded_warning_options());
     }

@@ -101,7 +101,8 @@ pub(crate) struct X86Features {
     cpu:          Option<Cpu>,
     /// The last `-march=` names a processor this table doesn't model.
     unknown_cpu:  bool,
-    /// A feature option outside this table that turns on AVX is in effect.
+    /// A feature option outside this table turned on AVX, which nothing has
+    /// turned off since. Turning off the option's kin leaves AVX on.
     unknown_avx:  bool,
     /// Whether Clang's rules hold where the compilers part, rather than GCC's.
     clang:        bool,
@@ -142,6 +143,9 @@ impl X86Features {
     /// The features of a command line's `options`. An option with a later
     /// opposite doesn't count at all, as both compilers read them, so `-mavx
     /// -mno-avx` turns nothing on while `-mavx2 -mno-avx` leaves SSE4.2.
+    /// [`UNKNOWN_VECTOR_ABI`] is the driver's reading of options it has already
+    /// read this way, so no option beside it takes it back. Explicitly turning
+    /// off AVX decides how vectors travel whatever an unknown `-march=` holds.
     /// GCC's `prune_options` and Clang's driver.
     pub(crate) fn from_options<'o>(
         options: &(impl Iterator<Item = &'o str> + Clone),
@@ -159,16 +163,18 @@ impl X86Features {
                 features.apply(option);
             }
         }
+        if features.decided & AVX != 0 && features.turned_on & AVX == 0 {
+            features.unknown_cpu = false;
+        }
+        features.unknown_avx |= options.clone().any(|option| option == UNKNOWN_VECTOR_ABI);
         features
     }
 
     /// Reads one option, if it is one of these. A later `-march=` replaces an
     /// earlier one's defaults and leaves the explicit `-m` options alone, as in
     /// both compilers.
-    pub(crate) fn apply(&mut self, option: &str) {
-        if option == UNKNOWN_VECTOR_ABI {
-            self.unknown_avx = true;
-        } else if let Some(architecture) = option.strip_prefix("-march=") {
+    fn apply(&mut self, option: &str) {
+        if let Some(architecture) = option.strip_prefix("-march=") {
             self.architecture(architecture);
         } else if let Some(name) = option.strip_prefix("-m") {
             self.machine(name);
@@ -176,9 +182,11 @@ impl X86Features {
     }
 
     /// Reads the text of a `target` attribute, as `"avx2,no-bmi,arch=core2"`,
-    /// which says the same as the command-line options.
+    /// which says the same as the command-line options, read in order with
+    /// nothing cancelled and as far as a NUL, as GCC reads a C string.
     /// GCC manual, "x86 Function Attributes", `target`.
     pub(crate) fn apply_target_attribute(&mut self, text: &str) {
+        let text = text.split('\0').next().unwrap_or(text);
         for part in text.split(',') {
             let part = part.trim();
             if let Some(architecture) = part.strip_prefix("arch=") {
@@ -226,8 +234,6 @@ impl X86Features {
             }
         } else if turns_on_avx(name) {
             self.unknown_avx = true;
-        } else if name.strip_prefix("no-").is_some_and(turns_on_avx) {
-            self.unknown_avx = false;
         }
     }
 
@@ -334,16 +340,18 @@ impl X86Features {
     }
 }
 
-/// What a table option and its opposite have in common, so that the later one
-/// overrides the earlier. `-msse4` and `-mno-sse4` aren't opposites in GCC; in
-/// Clang they are `-msse4.2` and `-mno-sse4.1`.
+/// What an option this file reads and its opposite have in common, so that the
+/// later one overrides the earlier. `-msse4` and `-mno-sse4` aren't opposites
+/// in GCC; in Clang they are `-msse4.2` and `-mno-sse4.1`.
 fn opposite_family(option: &str, clang: bool) -> Option<(&str, bool)> {
     let name = option.strip_prefix("-m")?;
     let (negative, feature) = match name.strip_prefix("no-") {
         | Some(feature) => (true, feature),
         | None => (false, name),
     };
-    _ = find(feature)?;
+    if find(feature).is_none() && !turns_on_avx(feature) {
+        return None;
+    }
     Some(match (feature, clang, negative) {
         | ("sse4", true, true) => ("sse4.1", false),
         | ("sse4", true, false) => ("sse4.2", false),
@@ -366,12 +374,21 @@ fn what_needs(bits: u32) -> u32 {
 const BASELINE_ARCHITECTURES: [&str; 5] = ["x86-64", "x86-64-v1", "k8", "opteron", "athlon64"];
 
 /// Whether the `-m` option `name`, outside the table, turns on AVX in GCC 14 or
-/// Clang: `-dM -E` defines `__AVX__` for these in at least one of them.
+/// Clang: `-dM -E` defines `__AVX__` for these in at least one of them. GCC's
+/// `-mavx256-split-unaligned-*` only tune code, and its `-msse5` is `-mavx`.
 fn turns_on_avx(name: &str) -> bool {
-    name.starts_with("avx")
+    (name.starts_with("avx") && !name.starts_with("avx256-split-unaligned-"))
         || matches!(
             name,
-            "amx-avx512" | "fma4" | "sha512" | "sm3" | "sm4" | "vaes" | "vpclmulqdq" | "xop"
+            "amx-avx512"
+                | "fma4"
+                | "sha512"
+                | "sm3"
+                | "sm4"
+                | "sse5"
+                | "vaes"
+                | "vpclmulqdq"
+                | "xop"
         )
 }
 
