@@ -838,11 +838,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | (B::BitwiseOr | B::BitwiseAnd, ..) if same() => Some(first),
             | (B::BitwiseAnd, ..) if self.complements(left, right) => constant(0),
             // One operand decides the result.
-            | (B::Multiplication | B::BitwiseAnd, Some(0), _)
+            | (B::Multiplication | B::BitwiseAnd | B::LeftShift | B::RightShift, Some(0), _)
             | (B::Multiplication | B::BitwiseAnd, _, Some(0))
             | (B::Division | B::Modulo, Some(0), None)
-            | (B::Modulo, _, Some(1 | -1))
-            | (B::LeftShift | B::RightShift, Some(0), _) => constant(0),
+            | (B::Modulo, _, Some(1 | -1)) => constant(0),
             | (B::BitwiseOr, Some(-1), _) | (B::BitwiseOr, _, Some(-1)) => constant(-1),
             // One operand leaves the other as it was.
             | (B::Multiplication, Some(1), _)
