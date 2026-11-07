@@ -44,7 +44,9 @@ use crate::{
     },
     target::{
         CodeOptions,
+        Hardening,
         Relocation,
+        StackProtector,
         Target,
         TlsModel,
     },
@@ -410,6 +412,7 @@ impl Cli {
     /// `-f[no-]function-sections` and `-f[no-]data-sections`.
     fn code_options(&self) -> CodeOptions {
         CodeOptions {
+            hardening:                  self.hardening(),
             relocation:                 self
                 .language_option
                 .iter()
@@ -426,6 +429,56 @@ impl Cli {
                 .last_of("-ffunction-sections", "-fno-function-sections"),
             data_sections:              self.last_of("-fdata-sections", "-fno-data-sections"),
         }
+    }
+
+    /// The run-time checks the options ask for, each from its last option.
+    /// Only Linux has them: the personalities warn about them on Windows.
+    fn hardening(&self) -> Hardening {
+        let mut hardening = Hardening::default();
+        if !matches!(self.target, Target::LinuxGnu | Target::LinuxMusl) {
+            return hardening;
+        }
+        let gcc = self.compiler_identity == Identity::Gcc;
+        for option in &self.language_option {
+            match option.as_str() {
+                | "-fstack-protector" => hardening.stack_protector = StackProtector::Basic,
+                | "-fstack-protector-strong" => hardening.stack_protector = StackProtector::Strong,
+                | "-fstack-protector-all" => hardening.stack_protector = StackProtector::All,
+                | "-fno-stack-protector" => hardening.stack_protector = StackProtector::Off,
+                | "-fcf-protection" | "-fcf-protection=full" => {
+                    hardening.branch_protection = true;
+                    hardening.return_protection = true;
+                },
+                // GCC adds to what earlier options asked for, and Clang
+                // replaces it.
+                | "-fcf-protection=branch" => {
+                    hardening.branch_protection = true;
+                    hardening.return_protection &= gcc;
+                },
+                | "-fcf-protection=return" => {
+                    hardening.branch_protection &= gcc;
+                    hardening.return_protection = true;
+                },
+                | "-fcf-protection=none" => {
+                    hardening.branch_protection = false;
+                    hardening.return_protection = false;
+                },
+                | "-fstack-clash-protection" => hardening.stack_clash = true,
+                | "-fno-stack-clash-protection" => hardening.stack_clash = false,
+                | "-fsanitize=address" => hardening.sanitize_address = true,
+                | "-fsanitize=thread" => hardening.sanitize_thread = true,
+                | "-fno-sanitize=address" => hardening.sanitize_address = false,
+                | "-fno-sanitize=thread" => hardening.sanitize_thread = false,
+                | "-fno-sanitize=all" => {
+                    hardening.sanitize_address = false;
+                    hardening.sanitize_thread = false;
+                },
+                | "-fno-omit-frame-pointer" => hardening.keep_frame_pointer = true,
+                | "-fomit-frame-pointer" => hardening.keep_frame_pointer = false,
+                | _ => {},
+            }
+        }
+        hardening
     }
 
     /// What GCC's and Clang's diagnostic formats write, from each option in
@@ -589,6 +642,38 @@ pub(super) fn implements_language_option(text: &str) -> bool {
         || text.starts_with("-fdiagnostics-format=")
         || LanguageFlag::parse(text)
             .is_some_and(|flag| !matches!(flag, LanguageFlag::UnknownWarning))
+}
+
+/// Whether `text` asks for a run-time check [`Cli::code_options`] gives Linux
+/// alone, so that a personality warns about it on Windows.
+pub(super) fn is_hardening_option(text: &str) -> bool {
+    matches!(
+        text,
+        "-fstack-protector"
+            | "-fstack-protector-strong"
+            | "-fstack-protector-all"
+            | "-fno-stack-protector"
+            | "-fcf-protection"
+            | "-fcf-protection=full"
+            | "-fcf-protection=branch"
+            | "-fcf-protection=return"
+            | "-fcf-protection=none"
+            | "-fstack-clash-protection"
+            | "-fno-stack-clash-protection"
+    ) || is_sanitizer_option(text)
+}
+
+/// Whether `text` turns a sanitizer bcc can give on or off. GCC's and Clang's
+/// other sanitizers and lists of several stay refused.
+pub(super) fn is_sanitizer_option(text: &str) -> bool {
+    matches!(
+        text,
+        "-fsanitize=address"
+            | "-fsanitize=thread"
+            | "-fno-sanitize=address"
+            | "-fno-sanitize=thread"
+            | "-fno-sanitize=all"
+    )
 }
 
 /// Whether `text` chooses what GCC's or Clang's format writes. Each compiler
@@ -942,7 +1027,10 @@ impl LanguageFlag {
             | "-fdata-sections"
             | "-fno-data-sections"
             | "-masm=intel"
-            | "-masm=att" => return Some(Self::Code),
+            | "-masm=att"
+            | "-fno-omit-frame-pointer"
+            | "-fomit-frame-pointer" => return Some(Self::Code),
+            | _ if is_hardening_option(text) => return Some(Self::Code),
             | _ if is_diagnostic_presentation(text) => return Some(Self::Presentation),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpermissive" => return Some(Self::Permissive(true)),

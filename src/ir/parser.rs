@@ -154,6 +154,8 @@ fn declare_items<'t>(
                     || (header.linkage != Linkage::Internal
                         && crate::builtins::returns_twice(name.text_name(scratch)?));
                 module.function_mut(func).inlining = header.inlining;
+                module.function_mut(func).no_stack_protector = header.no_stack_protector;
+                module.function_mut(func).no_sanitize = header.no_sanitize;
                 module.function_mut(func).entry = header.entry;
                 if let Some(external) = header.inline_copy_of {
                     module.set_inline_copy_of(func, external.text_name(scratch)?);
@@ -548,6 +550,11 @@ fn parse_function_header<'t, 's>(
                 .is_some_and(|keyword| cursor.eat(TokenKind::Ident(keyword)))
         })
         .unwrap_or_default();
+    let no_stack_protector = cursor.eat(TokenKind::Ident("no_stack_protector"));
+    let no_sanitize = super::NoSanitize {
+        address: cursor.eat(TokenKind::Ident("no_sanitize_address")),
+        thread:  cursor.eat(TokenKind::Ident("no_sanitize_thread")),
+    };
     let inline_copy_of = if cursor.eat(TokenKind::Ident("inline_copy_of")) {
         Some(cursor.symbol()?)
     } else {
@@ -573,6 +580,8 @@ fn parse_function_header<'t, 's>(
         align,
         returns_twice,
         inlining,
+        no_stack_protector,
+        no_sanitize,
         inline_copy_of,
         entry,
         attributes,
@@ -580,15 +589,17 @@ fn parse_function_header<'t, 's>(
 }
 
 struct FunctionHeader<'t, 's> {
-    name:           Token<'t>,
-    signature:      Signature<'s>,
-    linkage:        Linkage,
-    align:          Option<Align>,
-    returns_twice:  bool,
-    inlining:       InlineControl,
-    inline_copy_of: Option<Token<'t>>,
-    entry:          EntryConvention,
-    attributes:     WrittenAttributes<'t>,
+    name:               Token<'t>,
+    signature:          Signature<'s>,
+    linkage:            Linkage,
+    align:              Option<Align>,
+    returns_twice:      bool,
+    inlining:           InlineControl,
+    no_stack_protector: bool,
+    no_sanitize:        super::NoSanitize,
+    inline_copy_of:     Option<Token<'t>>,
+    entry:              EntryConvention,
+    attributes:         WrittenAttributes<'t>,
 }
 
 /// Parses a body after its `{`, through its `}`.

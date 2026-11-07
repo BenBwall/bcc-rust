@@ -62,6 +62,11 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     DllExport,
     /// GNU `noinline` and `noipa`: the inliner never expands the function.
     NoInline,
+    /// GNU `no_stack_protector`: no stack protector, whatever the options ask.
+    NoStackProtector,
+    /// GNU `no_sanitize` and its `_address` and `_thread` spellings: a function
+    /// a sanitizer leaves alone.
+    NoSanitize,
     /// GNU `always_inline`: the inliner expands every direct call it can,
     /// and a GNU inline body is kept as a private definition.
     AlwaysInline,
@@ -265,6 +270,8 @@ fn gnu(name: &str) -> Option<Rule> {
             Rule::Unsupported(U::Multiversioning),
         | "address_space" => Rule::Unsupported(U::AddressSpace),
         | "noinline" | "noipa" => Rule::NoInline,
+        | "no_stack_protector" => Rule::NoStackProtector,
+        | "no_sanitize" | "no_sanitize_address" | "no_sanitize_thread" => Rule::NoSanitize,
         | "selectany" => Rule::SelectAny,
         | "common" => Rule::Common(true),
         | "nocommon" => Rule::Common(false),
@@ -367,16 +374,12 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_instrument_function"
         | "no_profile_instrument_function"
         | "no_reorder"
-        | "no_sanitize"
-        | "no_sanitize_address"
         | "no_address_safety_analysis"
-        | "no_sanitize_thread"
         | "no_sanitize_undefined"
         | "no_sanitize_memory"
         | "no_sanitize_coverage"
         | "no_split_stack"
         | "no_stack_limit"
-        | "no_stack_protector"
         | "no_speculative_load_hardening"
         | "noclone"
         | "nocf_check"

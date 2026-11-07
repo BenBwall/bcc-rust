@@ -174,6 +174,13 @@ A computed `goto` in a function that takes no label's address is GCC's to
 accept and Clang's to refuse; bcc follows the compiler it answers as. The jump
 has nowhere defined to go, so `-O2` treats it as unreachable.
 
+On Linux with the LLVM back end, `-fsanitize=address` and `-fsanitize=thread`
+instrument the code and link the bundled clang's run-time library, and
+`no_sanitize`, `no_sanitize_address` and `no_sanitize_thread` keep a function out.
+The two can't be combined, as in both compilers. Other sanitizers, and lists of
+several in one option, are refused. `-fsanitize=undefined` needs checks written
+during lowering, which bcc doesn't have.
+
 The feature-test operators (`__has_include`, `__has_c_attribute`,
 `__has_attribute`, `__has_builtin`, `__has_feature`, `__has_extension`, and
 Clang's `__has_embed`) exist in every `-std=` under `--gcc-mode` and
@@ -214,7 +221,7 @@ to the options TCC itself implements; see [TCC](#tcc).
   languages (C++'s `-fno-rtti`).
 - **Warned and ignored**, for hardening and instrumentation that a correct
   program does not depend on: `-fstack-protector*`,
-  `-fstack-clash-protection`, `-fcf-protection`, `-ftrivial-auto-var-init=`,
+  `-ftrivial-auto-var-init=`,
   `-fexceptions` (bcc emits no landing pads, so cleanups do not run while an
   exception unwinds), Spectre mitigations, `-mfentry`, `-specs=`, `-B`, and
   `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`; and requests
