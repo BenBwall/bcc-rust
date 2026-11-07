@@ -3953,6 +3953,33 @@ mod tests {
         }
     }
 
+    /// clang-cl takes Clang's options, which bcc reads or treats as its Clang
+    /// personality does, without its own argument parser showing through.
+    #[test]
+    fn clang_cl_treats_clang_options_as_clang_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int add(int a, int b) { return a + b; }\n");
+        let run =
+            |args: &[&str]| directory.bcc("--clang-cl-mode", &[args, &["/c", "a.c"]].concat());
+        for option in ["/GR", "/GR-", "/Zl", "/Y-"] {
+            let output = run(&[option]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{option}");
+        }
+        let output = run(&["-fms-compatibility"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = run(&["-fsyntax-only"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        assert!(run(&["-march=native"]).status.success());
+        for option in ["-m32", "-fbogus-option"] {
+            let text = stderr(&run(&[option]));
+            assert!(!text.contains("unexpected argument"), "{option}: {text}");
+            assert!(!text.contains("Usage:"), "{option}: {text}");
+        }
+    }
+
     /// The options around GCC 14's permerrors and Clang's default errors,
     /// as each compiler orders them: `-Werror` does not reach into a system
     /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`
