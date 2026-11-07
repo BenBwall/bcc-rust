@@ -62,6 +62,8 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     DllExport,
     /// GNU `noinline` and `noipa`: the inliner never expands the function.
     NoInline,
+    /// GNU `weakref`: another name, weak unless this unit declares the target.
+    Weakref,
     /// GNU `ifunc`: the function a resolver chooses when the program loads.
     Ifunc,
     /// GNU `no_stack_protector`: no stack protector, whatever the options ask.
@@ -264,7 +266,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_caller_saved_registers" => Rule::NoCallerSaved,
         | "ms_struct" | "gcc_struct" => Rule::RecordLayout,
         | "ifunc" => Rule::Ifunc,
-        | "weakref" => Rule::Unsupported(U::Weakref),
+        | "weakref" => Rule::Weakref,
         | "naked" => Rule::Naked,
         | "returns_twice" => Rule::ReturnsTwice,
         | "nonnull" => Rule::Nonnull,

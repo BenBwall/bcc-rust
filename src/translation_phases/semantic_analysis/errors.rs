@@ -764,6 +764,10 @@ pub(crate) enum SemanticErrorKind {
     AliasKind,
     /// An `ifunc` resolver that returns no pointer.
     IfuncResolver,
+    /// A `weakref` on a declaration with external linkage.
+    WeakrefLinkage,
+    /// A bare `weakref` with no `alias` to name its target, under Clang.
+    WeakrefAlias,
     /// Clang: aliases that name each other in a cycle.
     AliasCycle,
     /// Clang `-Wattribute-alias`: alias and target have different types.
@@ -938,6 +942,8 @@ impl SemanticErrorKind {
             | Self::AliasTarget => "alias target is not defined here",
             | Self::AliasKind => "alias and target differ in kind",
             | Self::IfuncResolver => "this resolver returns no pointer",
+            | Self::WeakrefLinkage => "this has external linkage",
+            | Self::WeakrefAlias => "no target named",
             | Self::AliasCycle => "alias is part of a cycle",
             | Self::AliasTypeMismatch => "alias type differs from its target's",
             | Self::SectionMismatch => "different section",
@@ -1158,6 +1164,8 @@ impl SemanticErrorKind {
             | Self::AliasTarget
             | Self::AliasKind
             | Self::IfuncResolver
+            | Self::WeakrefLinkage
+            | Self::WeakrefAlias
             | Self::AliasCycle
             | Self::AliasTypeMismatch
             | Self::SectionMismatch
@@ -2311,6 +2319,14 @@ impl SemanticErrorKind {
                 "alias must point to a defined variable or function",
                 "GCC Common Function Attributes: the target names a definition in the same \
                  translation unit, by its emitted symbol name",
+            ),
+            | Self::WeakrefLinkage => (
+                "weakref declaration must have internal linkage",
+                "GCC Common Function Attributes: weakref requires static",
+            ),
+            | Self::WeakrefAlias => (
+                "weakref declaration must also have an alias attribute",
+                "Clang: a weakref with no target needs an alias to name one",
             ),
             | Self::IfuncResolver => (
                 "ifunc resolver function must return a pointer",

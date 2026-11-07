@@ -732,6 +732,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         if let Some(func) = self.nested_function(binding) {
             return Ok(func);
         }
+        if let Some(weakref) = self.weakref(binding) {
+            return self.weak_function(binding, weakref);
+        }
         if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {
             return Err(LoweringErrorKind::MissingFact(
                 "lowering referenced an omitted internal function",
@@ -786,6 +789,63 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             _ = self.pack_addresses.insert(func, record);
         }
         Ok(func)
+    }
+
+    /// The `weakref` declared on `binding`, if it has one.
+    /// GNU extension: GCC manual, "Common Function Attributes", weakref.
+    fn weakref(&self, binding: usize) -> Option<(Option<usize>, StringCacheId)> {
+        self.sema
+            .symbols
+            .weakrefs
+            .iter()
+            .find(|weakref| weakref.binding == binding)
+            .map(|weakref| (weakref.target, weakref.name))
+    }
+
+    /// The function a `weakref` names: its target's own symbol if this unit
+    /// declares one, so its uses are ordinary, else a weak undefined symbol.
+    fn weak_function(
+        &mut self,
+        binding: usize,
+        (target, name): (Option<usize>, StringCacheId),
+    ) -> Result<FuncId, LoweringErrorKind> {
+        if let Some(target) = target {
+            return self.function(target);
+        }
+        let name = self.context.string_cache.at(name);
+        match self.module.symbol(name) {
+            | Some(Symbol::Function(func)) => Ok(func),
+            | Some(Symbol::Global(_)) =>
+                Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel)),
+            | None => {
+                let signature = self.signature_for_binding(binding)?;
+                Ok(self
+                    .module
+                    .declare_function(name, signature, IrLinkage::Weak))
+            },
+        }
+    }
+
+    /// The object a `weakref` names, as [`Self::weak_function`] finds a
+    /// function.
+    fn weak_object(
+        &mut self,
+        binding: usize,
+        (target, name): (Option<usize>, StringCacheId),
+    ) -> Result<GlobalId, LoweringErrorKind> {
+        if let Some(target) = target {
+            return self.object(target);
+        }
+        let name = self.context.string_cache.at(name);
+        match self.module.symbol(name) {
+            | Some(Symbol::Global(global)) => Ok(global),
+            | Some(Symbol::Function(_)) =>
+                Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel)),
+            | None => {
+                let declaration = self.global_declaration(binding, IrLinkage::Weak)?;
+                Ok(self.module.declare_global(name, declaration))
+            },
+        }
     }
 
     /// An external declaration without a prototype or a known definition.
@@ -1043,6 +1103,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     pub(super) fn object(&mut self, binding: usize) -> Result<GlobalId, LoweringErrorKind> {
         if let Some(&global) = self.statics.get(&binding) {
             return Ok(global);
+        }
+        if let Some(weakref) = self.weakref(binding) {
+            return self.weak_object(binding, weakref);
         }
         let data = self.sema.bindings[binding];
         if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {

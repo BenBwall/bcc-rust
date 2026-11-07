@@ -1857,6 +1857,49 @@ mod tests {
         }
     }
 
+    /// `weakref`: another name for a symbol, weak unless this unit declares it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_weakref_names_a_symbol_that_may_be_absent() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "static int w(void) __attribute__((weakref(\"absent_function\")));\nstatic int v \
+             __attribute__((weakref(\"absent_object\")));\nstatic int t(void) { return 7; \
+             }\nstatic int same(void) __attribute__((weakref(\"t\")));\nstatic int also(void) \
+             __attribute__((weakref, alias(\"t\")));\nint main(void) {\n    if (w) return 1;\n    \
+             if (&v) return 2;\n    return same() + also() == 14 ? 0 : 3;\n}\n",
+        );
+        directory.write("b.c", "int absent_function(void) { return 1; }\n");
+        directory.write(
+            "c.c",
+            "static int w(void) __attribute__((weakref(\"absent_function\")));\nint main(void) { \
+             return w ? w() - 1 : 9; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for optimization in ["-O0", "-O2"] {
+                let args = [optimization, "a.c", "-o", "a"];
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("a")).status().unwrap();
+                assert_eq!(run.code(), Some(0), "{mode} {optimization}");
+                // When another object defines it, the reference finds it.
+                let args = [optimization, "c.c", "b.c", "-o", "c"];
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("c")).status().unwrap();
+                assert_eq!(run.code(), Some(0), "{mode} {optimization}");
+            }
+            // Only a static declaration can have one, in both compilers.
+            directory.write("e.c", "int w(void) __attribute__((weakref(\"t\")));\n");
+            let args = ["-c", "e.c", "-o", "e.o"];
+            assert!(!directory.bcc(mode, &args).status.success(), "{mode}");
+        }
+        // Clang wants a target; GCC is left with a declaration.
+        directory.write("n.c", "static int w(void) __attribute__((weakref));\n");
+        let args = ["-c", "n.c", "-o", "n.o"];
+        assert!(!directory.bcc("--clang-mode", &args).status.success());
+        succeeds(&directory.bcc("--gcc-mode", &args));
+    }
+
     /// A distribution's hardening options do what they say on Linux, with the
     /// macros each compiler numbers its own way.
     #[cfg(target_os = "linux")]
