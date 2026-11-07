@@ -44,12 +44,22 @@ use crate::ir::{
 pub(super) fn argument<'s>(
     layout: AggregateLayout<'s>,
     registers: &mut ArgumentRegisters,
+    named: bool,
 ) -> Result<ArgPlan<'s>, AbiErrorKind> {
-    // Clang gives the stack slot at least eight bytes' alignment.
     let stack = ArgPlan::Stack {
         layout,
-        align: raised(layout, Align::from_bytes(8).expect("8 is a power of two")).align,
+        align: stack_align(layout),
     };
+    // One YMM register, which the XMM registers count, if named and free.
+    // psABI §3.2.3, "Passing", and §3.5.7 (the register save area has no room
+    // for the upper halves).
+    if layout.flags.contains(AggregateFlags::WIDE) {
+        return Ok(if named && registers.take(0, 1) {
+            ArgPlan::Vector(layout)
+        } else {
+            stack
+        });
+    }
     // A vector's registers were chosen by lowering; none means memory.
     if layout.flags.contains(AggregateFlags::VECTOR) && layout.scalars.is_empty() {
         return Ok(stack);
@@ -79,6 +89,21 @@ pub(super) fn argument<'s>(
     }
 }
 
+/// The alignment of an aggregate's stack slot, at least eight bytes as Clang
+/// gives it. A vector's is its size, whatever `aligned` its typedef says, since
+/// both compilers read the type without it: GCC's `ix86_function_arg_boundary`
+/// takes the `TYPE_MAIN_VARIANT`, and Clang's `byval` keeps the natural
+/// `align`. Measured with `gcc -S` and `clang -S` for sizes 8 to 256, with and
+/// without AVX. psABI §3.2.3, "Passing".
+pub(super) fn stack_align(layout: AggregateLayout<'_>) -> Align {
+    let eight = Align::from_bytes(8).expect("8 is a power of two");
+    if layout.flags.contains(AggregateFlags::VECTOR) {
+        Align::from_bytes(layout.size.max(8)).unwrap_or(eight)
+    } else {
+        raised(layout, eight).align
+    }
+}
+
 /// The plan of an aggregate result: in RAX and RDX, XMM0 and XMM1, or
 /// ST0 by its classes, or in memory through a hidden pointer that takes the
 /// first general register.
@@ -91,6 +116,9 @@ pub(super) fn result<'s>(
         _ = registers.take(1, 0);
         ResultPlan::Memory(layout)
     };
+    if layout.flags.contains(AggregateFlags::WIDE) {
+        return Ok(ResultPlan::wide(layout));
+    }
     if layout.flags.contains(AggregateFlags::COMPLEX)
         && layout
             .scalars
@@ -105,6 +133,7 @@ pub(super) fn result<'s>(
                 second:        Some(Type::F80),
                 second_offset: 16,
                 align:         layout.align,
+                whole:         0,
             },
         });
     }
@@ -119,8 +148,9 @@ pub(super) fn result<'s>(
                         complex:       false,
                         first:         low.ty,
                         second:        Some(high.ty),
-                        second_offset: high.offset,
+                        second_offset: u16::try_from(high.offset).unwrap_or(u16::MAX),
                         align:         layout.align,
+                        whole:         0,
                     },
                 });
             },
@@ -142,6 +172,7 @@ pub(super) fn result<'s>(
             first:         integer(first),
             second:        second.map(integer),
             align:         layout.align,
+            whole:         0,
         },
     };
     if classes == [Class::X87, Class::X87Up] {
@@ -198,6 +229,7 @@ fn parts(layout: AggregateLayout<'_>, classes: [Class; 2]) -> Result<Option<Part
                 first:         low,
                 second:        Some(high),
                 align:         layout.align,
+                whole:         0,
             };
             let low = if registers.valid_layout() {
                 low
@@ -401,6 +433,7 @@ impl ArgumentRegisters {
         for (index, &ty) in signature.params.iter().enumerate() {
             match signature.param_abi(index) {
                 | Some(ParamAbi::Registers(_) | ParamAbi::ByVal(_)) => {},
+                | Some(ParamAbi::VectorRegister(_)) => _ = registers.take(0, 1),
                 | _ => _ = registers.take_scalar(ty),
             }
         }
