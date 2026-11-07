@@ -44,13 +44,6 @@ macro_rules! entities {
             }
         }
 
-        impl $name {
-            /// The raw index, as the textual form spells it.
-            pub(crate) const fn as_u32(self) -> u32 {
-                self.0
-            }
-        }
-
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, concat!($prefix, "{}"), self.0)
@@ -89,6 +82,28 @@ entities! {
     SigId => "sig";
     /// An inline assembly descriptor of a module.
     AsmId => "asm";
+}
+
+macro_rules! raw_indices {
+    ($($name:ident)+) => {$(
+        impl $name {
+            /// The raw index, as the textual form spells it.
+            pub(crate) const fn as_u32(self) -> u32 {
+                self.0
+            }
+        }
+    )+};
+}
+
+raw_indices! { Value Inst Block StackSlot BlockLabel ConstId FuncId GlobalId SigId AsmId }
+
+entities! {
+    /// A source file of a module's debug information.
+    DebugFile => "file";
+    /// A scope of a module's debug information.
+    DebugScope => "scope";
+    /// An interned source location of a module's debug information.
+    DebugLoc => "loc";
 }
 
 /// A strict-aliasing access tag: an index into a per-module table of type

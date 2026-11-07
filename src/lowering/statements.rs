@@ -1078,6 +1078,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             unit,
             record,
             name,
+            debug_scope: None,
             draft,
             scratch,
             #[cfg(feature = "recursive-lowering-study")]
@@ -1112,6 +1113,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             trampolines: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             receiver: None,
         };
+        lowerer.begin_subprogram(record, func);
         if let Some(index) = signature.chain_param() {
             lowerer.chain_in = lowerer
                 .draft
@@ -1343,6 +1345,11 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 .and_then(|brace| self.home_line(&brace))
         {
             self.draft.line = line;
+        }
+        if self.draft.locating
+            && let Some(brace) = self.unit.context.user_source_end(source)
+        {
+            self.draft.location = self.debug_location(&brace);
         }
         self.draft
             .terminate_and_continue_dead(Terminator::Return(value));
