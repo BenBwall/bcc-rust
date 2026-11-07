@@ -10,8 +10,10 @@
 //! the grammar is flat, and lists are read in loops.
 //!
 //! `lexer.rs` splits tokens; `names.rs` decodes quoted symbol names before
-//! declarations and uses resolve them in the module's symbol table.
+//! declarations and uses resolve them in the module's symbol table;
+//! `debug_info.rs` reads the debug tables and instruction locations.
 
+mod debug_info;
 mod lexer;
 mod names;
 
@@ -128,6 +130,7 @@ fn declare_items<'t>(
                 skip_global_init(cursor)?;
             },
             | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
+            | TokenKind::Ident("debug") => debug_info::skip_item(cursor),
             | TokenKind::Ident("constructor" | "destructor") => {
                 _ = cursor.next();
                 _ = cursor.symbol()?;
@@ -168,7 +171,7 @@ fn declare_items<'t>(
 }
 
 const EXPECTED_ITEM: &str =
-    "`target`, `module`, `abi`, `global`, `constructor`, `destructor` or `function`";
+    "`target`, `module`, `abi`, `debug`, `global`, `constructor`, `destructor` or `function`";
 
 /// The second pass: parses initializers and bodies.
 fn define_items<'t>(
@@ -183,6 +186,7 @@ fn define_items<'t>(
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
             | TokenKind::Ident("module") => _ = parse_module_asm(cursor)?,
             | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
+            | TokenKind::Ident("debug") => debug_info::parse_item(cursor, module, scratch)?,
             | TokenKind::Ident("global") => {
                 let (name, _, attributes) = parse_global_header(cursor)?;
                 let Some(Symbol::Global(global)) = module.symbol(name.text_name(scratch)?) else {
@@ -764,6 +768,8 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             Type::Ptr
         };
         let data = self.operands(opcode, ty)?;
+        let location = debug_info::instruction_location(self.cursor, self.builder.module())?;
+        self.builder.set_location(location);
         match (result, self.builder.module().result_type(&data)) {
             | (Some(_), None) => return Err(token.error(ParseErrorKind::UnexpectedResult(opcode))),
             | (None, Some(_)) => return Err(token.error(ParseErrorKind::MissingResult(opcode))),

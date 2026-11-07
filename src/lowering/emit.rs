@@ -169,8 +169,10 @@ pub(super) fn emit<'s>(
             values[draft.resolve(value).index()].ok_or_else(missing)
         };
         let mut call_diagnostic = None;
-        for (&(op, result), &line) in data.insts.iter().zip(&data.lines) {
+        builder.set_location(None);
+        for (index, (&(op, result), &line)) in data.insts.iter().zip(&data.lines).enumerate() {
             builder.set_line(line);
+            builder.set_location(data.locations.get(index).copied().flatten());
             let emitted = match op {
                 | Op::Inst(inst) => {
                     let inst = map_operands(inst, |value| map(value, &values))?;
@@ -240,6 +242,9 @@ pub(super) fn emit<'s>(
             |edge: &Edge<'_>| blocks[edge.target.index()].expect("successors are reachable");
         if data.terminator_line != 0 {
             builder.set_line(data.terminator_line);
+        }
+        if data.terminator_location.is_some() {
+            builder.set_location(data.terminator_location);
         }
         match data.terminator.as_ref() {
             | Some(Terminator::Jump(edge)) => {

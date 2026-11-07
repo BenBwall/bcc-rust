@@ -159,6 +159,8 @@ impl Hoisting<'_> {
                     | None => *preheader.insert(self.preheader(draft, lp)),
                 };
                 draft.block_mut(target).insts.push(inst);
+                // It now runs where its line would not (`draft.rs`).
+                draft.set_location(inst, None);
                 if let Some(result) = draft.inst_result(inst) {
                     self.defined_in[result.index()] = Some(target);
                 }

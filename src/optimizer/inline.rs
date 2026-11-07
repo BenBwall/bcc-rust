@@ -149,6 +149,7 @@ pub(super) fn expand(
     call: Inst,
 ) -> Block {
     let scratch = draft.scratch;
+    let call_location = draft.location(call);
     let InstData::Call { args, .. } = *draft.inst(call) else {
         unreachable!()
     };
@@ -168,6 +169,7 @@ pub(super) fn expand(
     draft.block_mut(continuation).insts = suffix;
     draft.block_mut(continuation).term =
         std::mem::replace(&mut draft.block_mut(block).term, Term::Unreachable);
+    draft.block_mut(continuation).term_location = draft.block(block).term_location;
     draft.block_mut(block).insts.truncate(position);
     draft.remove_inst(call);
 
@@ -203,6 +205,8 @@ pub(super) fn expand(
             let index = draft.block(new_block).insts.len();
             let result = draft.add_inst(new_block, index, *body.inst(old), result_type);
             let new_inst = draft.block(new_block).insts[index];
+            let location = draft.inlined_location(body.inst_location(old), call_location);
+            draft.set_location(new_inst, location);
             instructions[old.index()] = Some(new_inst);
             if let Some(value) = body.inst_result(old) {
                 values[value.index()] = result;
@@ -237,11 +241,14 @@ pub(super) fn expand(
             .expect("verified callee has terminators");
         draft.block_mut(blocks[old_block.index()]).term =
             remap_term(body, old_term, &blocks, &map, continuation, scratch);
+        draft.block_mut(blocks[old_block.index()]).term_location =
+            draft.inlined_location(body.inst_location(old_term), call_location);
     }
     draft.block_mut(block).term = Term::Jump(Edge {
         target: blocks[entry.index()],
         args:   ArenaVec::new_in(scratch),
     });
+    draft.block_mut(block).term_location = call_location;
     continuation
 }
 

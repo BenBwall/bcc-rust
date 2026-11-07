@@ -6,6 +6,10 @@
 //! these sections. Entities print as their raw numbers
 //! (`v3`, `block1`, `slot0`, `label0`), so verifier errors and printed text
 //! name the same things. The parser reads this form back unchanged.
+//!
+//! [`Module::display_located`] adds the debug information: its tables after
+//! the target lines, and ` dbg locN` after each instruction that has a
+//! location. The plain form leaves them out, so `-g` does not change it.
 
 use std::fmt::{
     self,
@@ -18,6 +22,7 @@ use super::{
     GlobalId,
     Module,
     entities::{
+        DebugLoc,
         Entity,
         Inst,
     },
@@ -41,6 +46,17 @@ use super::{
 
 impl fmt::Display for Module<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.write_text(f, false)
+    }
+}
+
+impl<'ir> Module<'ir> {
+    /// The module's text with its debug information.
+    pub(crate) fn display_located(&self) -> impl fmt::Display + '_ {
+        fmt::from_fn(|f| self.write_text(f, true))
+    }
+
+    fn write_text(&self, f: &mut fmt::Formatter<'_>, located: bool) -> fmt::Result {
         let mut separator = "";
         if !self.triple().is_empty() || !self.data_layout().is_empty() {
             writeln!(f, "target triple = \"{}\"", self.triple())?;
@@ -49,6 +65,11 @@ impl fmt::Display for Module<'_> {
         }
         if self.profile() == Profile::PostAbi {
             writeln!(f, "abi lowered")?;
+            separator = "\n";
+        }
+        if located && self.debug_info().unit().is_some() {
+            f.write_str(separator)?;
+            self.write_debug_info(f)?;
             separator = "\n";
         }
         if !self.module_asm().is_empty() {
@@ -74,17 +95,70 @@ impl fmt::Display for Module<'_> {
         }
         for (func, _) in self.functions() {
             f.write_str(separator)?;
-            write!(f, "{}", self.display_function(func))?;
+            write!(f, "{}", self.display_function_text(func, located))?;
             separator = "\n";
         }
         Ok(())
     }
-}
 
-impl<'ir> Module<'ir> {
+    /// The tables of the module's debug information, one item per line.
+    fn write_debug_info(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let debug = self.debug_info();
+        for (file, name) in debug.files() {
+            writeln!(f, "debug file {file} {}", display_name(name))?;
+        }
+        if let Some(unit) = debug.unit() {
+            write!(
+                f,
+                "debug unit {} language {} level {}",
+                unit.file,
+                unit.language.keyword(),
+                unit.level.number()
+            )?;
+            if let Some(version) = unit.dwarf_version {
+                write!(f, " dwarf {version}")?;
+            }
+            if unit.optimized {
+                f.write_str(" optimized")?;
+            }
+            f.write_char('\n')?;
+        }
+        for (scope, data) in debug.scopes() {
+            writeln!(
+                f,
+                "debug scope {scope} {} name {} file {} line {} scope_line {}",
+                self.display_func_name(data.function),
+                display_name(data.name),
+                data.file,
+                data.line,
+                data.scope_line
+            )?;
+        }
+        for index in 0..debug.location_count() {
+            let id = DebugLoc::new(index);
+            let Some(location) = debug.location_data(id) else {
+                continue;
+            };
+            write!(
+                f,
+                "debug loc {id} {} line {} column {} scope {}",
+                location.file, location.line, location.column, location.scope
+            )?;
+            if let Some(call) = location.inlined_at {
+                write!(f, " at {call}")?;
+            }
+            f.write_char('\n')?;
+        }
+        Ok(())
+    }
+
     /// A function's text: its header line, and its body if it has one, each
     /// line ending in a newline.
     pub(crate) fn display_function(&self, func: FuncId) -> impl fmt::Display + '_ {
+        self.display_function_text(func, false)
+    }
+
+    fn display_function_text(&self, func: FuncId, located: bool) -> impl fmt::Display + '_ {
         fmt::from_fn(move |f| {
             let function = self.function(func);
             write!(
@@ -138,7 +212,11 @@ impl<'ir> Module<'ir> {
                 }
                 f.write_str(":\n")?;
                 for &inst in body.block_insts(block) {
-                    writeln!(f, "    {}", self.display_inst(body, inst))?;
+                    write!(f, "    {}", self.display_inst(body, inst))?;
+                    if located && let Some(location) = body.inst_location(inst) {
+                        write!(f, " dbg {location}")?;
+                    }
+                    f.write_char('\n')?;
                 }
             }
             f.write_str("}\n")

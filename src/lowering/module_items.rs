@@ -111,6 +111,10 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// Whether instructions record the source line they came from: for the
     /// WebAssembly back end's source map and for the site's IR views.
     pub(super) source_lines: bool,
+    /// The debug file of each source file index that has one.
+    pub(super) debug_files: ArenaMap<'a, u32, crate::ir::DebugFile>,
+    /// Whether debug locations hold columns (`-gno-column-info` clears it).
+    pub(super) debug_columns: bool,
     /// Work spent associating retained parameter bindings (scaling regression).
     #[cfg(test)]
     pub(super) parameter_alias_visits: usize,
@@ -2518,6 +2522,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         Ok(Self {
             retain_local_statics: true,
             source_lines: target.is_wasm(),
+            debug_files: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            debug_columns: true,
             reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             #[cfg(test)]
             parameter_alias_visits: 0,

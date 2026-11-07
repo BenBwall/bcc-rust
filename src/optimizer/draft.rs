@@ -29,6 +29,15 @@
 //! - **removing a stack slot** drops it from the lowered body, whose remaining
 //!   slots are renumbered.
 //!
+//! Debug locations follow the instructions. An added instruction takes the
+//! location of the code it is placed before, and an instruction moved to
+//! another block loses its own: it now runs where its line would not, which
+//! would make a debugger step to that line on a path that never reaches it.
+//! A copy the inliner makes gets a provisional location
+//! ([`Draft::inlined_location`]), which lowering turns into an interned one,
+//! since the module's tables are out of reach while the passes borrow it.
+//! Nothing in a pass reads a location to decide what to do.
+//!
 //! Labeled blocks, whose address `block_addr` or a global relocation takes,
 //! keep their identity: no pass removes or merges one, and a labeled block
 //! the entry no longer reaches is emptied to an `unreachable` stub by
@@ -54,6 +63,8 @@ use crate::{
     ir::{
         Block,
         Body,
+        DebugInfo,
+        DebugLoc,
         Entity,
         Inst,
         InstData,
@@ -72,6 +83,11 @@ use crate::{
         Bump,
     },
 };
+
+/// Where the ids of provisional locations start, past any interned location:
+/// `2^31` locations would exhaust the `u32` instruction index of a body long
+/// before they reached it.
+pub(super) const PROVISIONAL_LOCATIONS: usize = 1 << 31;
 
 /// A function being optimized; see the module docs.
 pub(super) struct Draft<'b, 's> {
@@ -99,6 +115,12 @@ pub(super) struct Draft<'b, 's> {
     call_args:          ArenaVec<'s, Option<&'s [Value]>>,
     /// Opaque frontend diagnostic IDs, including calls copied by inlining.
     call_diagnostics:   ArenaMap<'s, Inst, u32>,
+    /// The debug location of each instruction, up to the last that has one;
+    /// empty for a body without them.
+    locations:          ArenaVec<'s, Option<DebugLoc>>,
+    /// What each provisional location stands for: a callee's location and
+    /// the location of the call it was copied for, which may be provisional.
+    inlined_locations:  ArenaVec<'s, (DebugLoc, DebugLoc)>,
     /// Whether a stack slot was removed, by slot index.
     removed_slots:      ArenaVec<'s, bool>,
     /// Slots copied from an inlined body, after the original slots.
@@ -117,12 +139,14 @@ pub(super) struct Draft<'b, 's> {
 #[derive(Clone, Debug)]
 pub(super) struct DraftBlock<'s> {
     /// Whether the block is still part of the function.
-    pub(super) alive:  bool,
+    pub(super) alive:         bool,
     /// The block's parameters that remain.
-    pub(super) params: ArenaVec<'s, Value>,
+    pub(super) params:        ArenaVec<'s, Value>,
     /// The instructions before the terminator, in program order.
-    pub(super) insts:  ArenaVec<'s, Inst>,
-    pub(super) term:   Term<'s>,
+    pub(super) insts:         ArenaVec<'s, Inst>,
+    pub(super) term:          Term<'s>,
+    /// The debug location of the terminator, if it has one.
+    pub(super) term_location: Option<DebugLoc>,
 }
 
 /// A terminator with its edges.
@@ -187,6 +211,7 @@ impl<'b, 's> Draft<'b, 's> {
                 params,
                 insts: kept,
                 term: lift_terminator(body, terminator, scratch),
+                term_location: body.inst_location(terminator),
             });
         }
         let mut replacements = ArenaVec::with_capacity_in(body.value_count(), scratch);
@@ -219,6 +244,17 @@ impl<'b, 's> Draft<'b, 's> {
             added_insts: ArenaVec::new_in(scratch),
             removed_slots,
             call_args,
+            locations: {
+                let mut locations = ArenaVec::new_in(scratch);
+                if body.has_locations() {
+                    locations.reserve(body.inst_count());
+                    for index in 0..body.inst_count() {
+                        locations.push(body.inst_location(Inst::new(index)));
+                    }
+                }
+                locations
+            },
+            inlined_locations: ArenaVec::new_in(scratch),
             call_diagnostics: {
                 let mut ids = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch);
                 for block in body.blocks() {
@@ -402,8 +438,62 @@ impl<'b, 's> Draft<'b, 's> {
         result_type: Option<Type>,
     ) -> Option<Value> {
         let (inst, result) = self.new_inst(data, result_type);
+        if !self.locations.is_empty() {
+            let next = self.block(block).insts.get(position).copied();
+            let location = next.map_or(self.block(block).term_location, |next| self.location(next));
+            self.set_location(inst, location);
+        }
         self.block_mut(block).insts.insert(position, inst);
         result
+    }
+
+    /// The location of an instruction copied from a callee, whose location
+    /// there is `callee`, for the call at `call`. An instruction of a call
+    /// without a location, as compiler-generated calls are, has none: its
+    /// scope could not lead back to this function.
+    pub(super) fn inlined_location(
+        &mut self,
+        callee: Option<DebugLoc>,
+        call: Option<DebugLoc>,
+    ) -> Option<DebugLoc> {
+        let index = self.inlined_locations.len();
+        self.inlined_locations.push((callee?, call?));
+        Some(DebugLoc::new(PROVISIONAL_LOCATIONS + index))
+    }
+
+    /// The final ids of the provisional locations, by provisional index.
+    pub(super) fn resolve_inlined_locations(
+        &self,
+        debug: &mut DebugInfo<'_>,
+    ) -> ArenaVec<'s, Option<DebugLoc>> {
+        let mut resolved: ArenaVec<'s, Option<DebugLoc>> =
+            ArenaVec::with_capacity_in(self.inlined_locations.len(), self.scratch);
+        for &(callee, call) in &self.inlined_locations {
+            // A provisional call location comes from an earlier expansion.
+            let call = if call.index() >= PROVISIONAL_LOCATIONS {
+                resolved[call.index() - PROVISIONAL_LOCATIONS]
+            } else {
+                Some(call)
+            };
+            resolved.push(call.and_then(|call| debug.inlined(callee, call)));
+        }
+        resolved
+    }
+
+    /// The debug location of `inst`, if it has one.
+    pub(super) fn location(&self, inst: Inst) -> Option<DebugLoc> {
+        self.locations.get(inst.index()).copied().flatten()
+    }
+
+    /// Gives `inst` the debug location `location`.
+    pub(super) fn set_location(&mut self, inst: Inst, location: Option<DebugLoc>) {
+        if inst.index() >= self.locations.len() {
+            if location.is_none() {
+                return;
+            }
+            self.locations.resize(inst.index() + 1, None);
+        }
+        self.locations[inst.index()] = location;
     }
 
     /// Rewrites a non-terminator while preserving its result and type.
@@ -427,6 +517,9 @@ impl<'b, 's> Draft<'b, 's> {
             .expect("the source block contains the instruction");
         _ = self.block_mut(from).insts.remove(position);
         self.block_mut(to).insts.push(inst);
+        if from != to {
+            self.set_location(inst, None);
+        }
     }
 
     /// Copies call or atomic variable-length operands into the draft's arena.
@@ -644,10 +737,11 @@ impl<'b, 's> Draft<'b, 's> {
         let block = Block::new(self.blocks.len());
         self.labeled.push(false);
         self.blocks.push(DraftBlock {
-            alive:  true,
-            params: ArenaVec::new_in(self.scratch),
-            insts:  ArenaVec::new_in(self.scratch),
-            term:   Term::Unreachable,
+            alive:         true,
+            params:        ArenaVec::new_in(self.scratch),
+            insts:         ArenaVec::new_in(self.scratch),
+            term:          Term::Unreachable,
+            term_location: None,
         });
         block
     }
