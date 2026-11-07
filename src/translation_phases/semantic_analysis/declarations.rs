@@ -1345,8 +1345,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // alignment of its nonzero bit-fields, and packing shrinks one to its
         // bits; Clang's ignores their alignment in a union. MSVC targets
         // follow `cl`, as Clang's Microsoft layout does.
+        let gcc_rules = self.context.configuration.compiler_identity().rules() == RuleSet::Gcc;
         let gcc_ms = ms
-            && self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
+            && gcc_rules
             && self.context.configuration.target() != crate::target::Target::WindowsMsvc;
         let mut ms_unit: Option<(u64, u64, u64)> = None; // size, byte start, used bits
         let mut required = u64::from(tag.alignment.get());
@@ -1621,8 +1622,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         // a field that would straddle a unit of its
                         // alignment starts the next one; otherwise an
                         // `aligned` request the pack does not cap aligns it.
+                        // GCC's, which TCC follows, aligns a larger request
+                        // to the pack instead, so such a field still starts
+                        // a new byte under `pack(1)`.
                         // A packed field's own alignment is one bit.
                         let explicit = u64::from(member.explicit_alignment);
+                        let requested = if pack != 0 && gcc_rules {
+                            explicit.min(u64::from(pack))
+                        } else {
+                            explicit
+                        };
                         let field_align = if packed && pack == 0 {
                             explicit.checked_mul(8)?.max(1)
                         } else {
@@ -1632,8 +1641,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             align_up(bit_end, bits.max(explicit.checked_mul(8)?))?
                         } else if pack == 0 && bit_end.checked_rem(field_align)? + width > bits {
                             align_up(bit_end, field_align)?
-                        } else if explicit != 0 && (pack == 0 || explicit <= u64::from(pack)) {
-                            align_up(bit_end, explicit.checked_mul(8)?)?
+                        } else if requested != 0 && (pack == 0 || requested <= u64::from(pack)) {
+                            align_up(bit_end, requested.checked_mul(8)?)?
                         } else {
                             bit_end
                         };
