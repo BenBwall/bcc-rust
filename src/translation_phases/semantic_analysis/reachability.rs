@@ -17,7 +17,8 @@
 //! execution order, carrying whether the point they are at is reachable, and
 //! `known_conditions` decides which edges Clang prunes
 //! (`PruneTriviallyFalseEdges`). A jump backward can reach what the walk has
-//! already passed, so it repeats until nothing new is reached.
+//! already passed, so it repeats until nothing new is reached, and `revisits`
+//! keeps each repetition to what the new facts can change.
 //!
 //! A warning is reported only if the walk reached its expression, so what the
 //! walk does not read stays silent: named `break` and `continue`, the body of a
@@ -26,6 +27,7 @@
 
 mod known_conditions;
 mod return_flow;
+mod revisits;
 
 use rustc_hash::FxBuildHasher;
 
@@ -60,7 +62,6 @@ use crate::{
             },
             syntax::{
                 BinaryOperator as B,
-                BlockItem,
                 ConstantExpressionSlot,
                 Expression,
                 ExpressionSlot,
@@ -151,6 +152,10 @@ struct Flow<'s> {
     local_labels:  ArenaVec<'s, (StringCacheId, usize)>,
     /// How the function can leave.
     exits:         Exits,
+    /// What each switch's labels decide, by identity.
+    switch_facts:  ArenaMap<'s, usize, SwitchFacts>,
+    /// The last visits, which a repetition reads instead of what they hold.
+    revisits:      revisits::Revisits<'s>,
     /// This pass reached something it may already have passed.
     changed:       bool,
 }
@@ -175,6 +180,14 @@ struct SwitchFlow {
     covered: bool,
 }
 
+/// What a switch's condition and labels decide, which no repetition changes.
+#[derive(Clone, Copy)]
+struct SwitchFacts {
+    value:       Option<super::Integer>,
+    covered:     bool,
+    has_default: bool,
+}
+
 impl<'s> Flow<'s> {
     fn new(scratch: &'s Bump) -> Self {
         Self {
@@ -188,7 +201,17 @@ impl<'s> Flow<'s> {
             switches:      ArenaVec::new_in(scratch),
             local_labels:  ArenaVec::new_in(scratch),
             exits:         Exits::default(),
+            switch_facts:  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            revisits:      revisits::Revisits::new(scratch),
             changed:       false,
+        }
+    }
+
+    /// A reachable jump to `label`.
+    fn jump(&mut self, label: (usize, StringCacheId)) {
+        if self.jumped_to.insert(label, ()).is_none() {
+            self.changed = true;
+            self.revisits.reach_label(label);
         }
     }
 }
@@ -306,29 +329,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// Whether the end of `statement` is reachable, when its start is if
-    /// `live`.
+    /// `live`, reading it again; [`Self::flow_statement`] decides when, and
+    /// reads a compound statement.
     /// C99: §6.8, pp. 131-139; PDF pp. 143-151.
-    fn flow_statement(
+    fn walk_statement(
         &mut self,
         flow: &mut Flow<'s>,
         statement: &'tu Statement<'tu>,
         live: bool,
     ) -> bool {
         match statement.kind {
-            | S::Compound { items } => {
-                let scope = flow.local_labels.len();
-                let mut live = live;
-                for item in items {
-                    live = match *item {
-                        | BlockItem::Statement(child) => self.flow_statement(flow, child, live),
-                        | BlockItem::Declaration(declaration) =>
-                            self.flow_declaration(flow, declaration, live),
-                        | BlockItem::FunctionDefinition(_) => live,
-                    };
-                }
-                flow.local_labels.truncate(scope);
-                live
-            },
             | S::Declaration(declaration) => self.flow_declaration(flow, declaration, live),
             | S::Attributed(attributed) => self.flow_statement(flow, attributed.statement, live),
             | S::LocalLabels(names) => {
@@ -340,6 +350,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | S::Label(name, child) => {
                 let label = Self::label_key(flow, name.name);
+                flow.revisits.note_label(label, statement);
                 let reached = live
                     || flow.jumped_to.contains_key(&label)
                     || (flow.computed_goto && flow.address_taken.contains_key(&label));
@@ -348,14 +359,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | S::Goto(name) => {
                 if live {
                     let label = Self::label_key(flow, name.name);
-                    flow.changed |= flow.jumped_to.insert(label, ()).is_none();
+                    flow.jump(label);
                 }
                 false
             },
             | S::ComputedGoto(slot) => {
-                if self.flow_slot(flow, slot, live) {
-                    flow.changed |= !flow.computed_goto;
+                if self.flow_slot(flow, slot, live) && !flow.computed_goto {
+                    flow.changed = true;
                     flow.computed_goto = true;
+                    for &label in flow.address_taken.keys() {
+                        flow.revisits.reach_label(label);
+                    }
                 }
                 false
             },
@@ -466,7 +480,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if live && asm.qualifiers.goto {
                     for name in asm.labels {
                         let label = Self::label_key(flow, name.name);
-                        flow.changed |= flow.jumped_to.insert(label, ()).is_none();
+                        flow.jump(label);
                     }
                 }
                 live
@@ -499,10 +513,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     fn repeat(flow: &mut Flow<'s>, statement: &'tu Statement<'tu>) {
-        flow.changed |= flow
-            .repeating
-            .insert(std::ptr::from_ref(statement).addr(), ())
-            .is_none();
+        let id = std::ptr::from_ref(statement).addr();
+        if flow.repeating.insert(id, ()).is_none() {
+            flow.changed = true;
+            flow.revisits.touch(id);
+        }
     }
 
     /// A label's name in the scope of the local labels around it.
@@ -530,6 +545,37 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         live: bool,
     ) -> bool {
         let entered = self.flow_slot(flow, condition, live);
+        let id = std::ptr::from_ref(statement).addr();
+        let facts = if let Some(&facts) = flow.switch_facts.get(&id) {
+            facts
+        } else {
+            let facts = self.switch_facts(statement, condition);
+            _ = flow.switch_facts.insert(id, facts);
+            facts
+        };
+        flow.switches.push(SwitchFlow {
+            entered,
+            value: facts.value,
+            covered: facts.covered,
+        });
+        flow.targets.push(Target {
+            is_loop:   false,
+            breaks:    false,
+            continues: false,
+        });
+        let end = self.flow_statement(flow, body, false);
+        let target = flow.targets.pop().expect("this switch's target");
+        _ = flow.switches.pop();
+        end || target.breaks || (entered && !facts.has_default && !facts.covered)
+    }
+
+    /// Whether a switch's condition is a constant, whether a label matches
+    /// it or its labels cover its enumeration, and whether it has `default`.
+    fn switch_facts(
+        &mut self,
+        statement: &'tu Statement<'tu>,
+        condition: ExpressionSlot<'tu>,
+    ) -> SwitchFacts {
         let parsed = super::statements::slot_expression(condition);
         let value = parsed.and_then(|e| match self.evaluate_ignoring_side_effects(e) {
             | Some(super::emission::Value::Integer(value)) => Some(value),
@@ -560,20 +606,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 },
             );
         }
-        flow.switches.push(SwitchFlow {
-            entered,
+        SwitchFacts {
             value,
             covered,
-        });
-        flow.targets.push(Target {
-            is_loop:   false,
-            breaks:    false,
-            continues: false,
-        });
-        let end = self.flow_statement(flow, body, false);
-        let target = flow.targets.pop().expect("this switch's target");
-        _ = flow.switches.pop();
-        end || target.breaks || (entered && !has_default && !covered)
+            has_default,
+        }
     }
 
     /// Whether the innermost switch's condition reaches a case label.
@@ -889,8 +926,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.flow_initializer(flow, initializer, live),
             | E::LabelAddress(name) => {
                 let label = Self::label_key(flow, name.name);
-                flow.changed |=
-                    flow.address_taken.insert(label, ()).is_none() && flow.computed_goto;
+                if flow.address_taken.insert(label, ()).is_none() && flow.computed_goto {
+                    flow.changed = true;
+                    flow.revisits.reach_label(label);
+                }
                 live
             },
             | E::Generic(generic) => {
