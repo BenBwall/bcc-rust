@@ -58,4 +58,16 @@ sema-empty-body-lines-clang.c:34:20: warning: for loop has empty body [-Wempty-b
 sema-empty-body-lines-clang.c:34:20: note: put the semicolon on a separate line to silence this warning
    34 |   for (;;) /* c */ ;
       |                    ^
-10 warnings generated.
+sema-empty-body-lines-clang.c:47:15: warning: if statement has empty body [-Wempty-body]
+   47 |   IF_HEADER(x);
+      |               ^
+sema-empty-body-lines-clang.c:47:15: note: put the semicolon on a separate line to silence this warning
+   47 |   IF_HEADER(x);
+      |               ^
+sema-empty-body-lines-clang.c:48:16: warning: if statement has empty body [-Wempty-body]
+   48 |   OBJECT_HEADER;
+      |                ^
+sema-empty-body-lines-clang.c:48:16: note: put the semicolon on a separate line to silence this warning
+   48 |   OBJECT_HEADER;
+      |                ^
+12 warnings generated.

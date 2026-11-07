@@ -34,3 +34,16 @@ void f(int x) {
   for (;;) /* c */ ;
     { }
 }
+
+/* A header a macro writes still exempts a `;` after an empty macro. */
+#define IF_HEADER(x) if (x)
+#define WRAP(a) a
+#define OBJECT_HEADER if (x)
+#define NOTHING(x)
+void macro_headers(int x) {
+  IF_HEADER(x) NOTHING(x);
+  WRAP(IF_HEADER(x)) NOTHING(")");
+  OBJECT_HEADER NOTHING(1);
+  IF_HEADER(x);
+  OBJECT_HEADER;
+}

@@ -347,39 +347,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether the file spells something other than white space and
-    /// comments between `before` and `after`, two consecutive tokens it
-    /// spells: a macro that expanded to nothing.
+    /// comments between `before` and `after`, two consecutive tokens, the
+    /// second of which it spells: a macro that expanded to nothing. A
+    /// `before` a macro produced ends where that macro's invocation does.
     /// C99: §6.10.3p10, p. 152; PDF p. 164; §6.4.9p1-2, p. 66; PDF p. 78.
     fn empty_macro_between(&self, before: SourceVectors, after: SourceVectors) -> bool {
-        if self.context.produced_by_macro_expansion(before) {
-            return false;
-        }
-        let before = self.context.first_source_vector(before);
         let after = self.context.first_source_vector(after);
-        if before.source_file_index != after.source_file_index {
-            return false;
-        }
-        let Some(gap) = self
-            .context
-            .source_text(before.source_file_index)
-            .and_then(|text| text.get(before.end()..after.index as usize))
-        else {
+        let Some(text) = self.context.source_text(after.source_file_index) else {
             return false;
         };
-        let mut rest = gap.trim_start();
-        while !rest.is_empty() {
-            rest = if let Some(comment) = rest.strip_prefix("/*") {
-                comment.split_once("*/").map_or("", |(_, after)| after)
-            } else if let Some(comment) = rest.strip_prefix("//") {
-                comment.split_once('\n').map_or("", |(_, after)| after)
-            } else if let Some(splice) = rest.strip_prefix('\\') {
-                splice
-            } else {
-                return true;
+        let start = if self.context.produced_by_macro_expansion(before) {
+            let invocation = self.context.expansion_location(before);
+            if invocation.source_file_index != after.source_file_index {
+                return false;
             }
-            .trim_start();
-        }
-        false
+            invocation_end(text, invocation.end())
+        } else {
+            let before = self.context.first_source_vector(before);
+            if before.source_file_index != after.source_file_index {
+                return false;
+            }
+            before.end()
+        };
+        let Some(gap) = text.get(start..after.index as usize) else {
+            return false;
+        };
+        !skip_blank(gap).is_empty()
     }
 
     /// GCC's warning, or Clang's with its note at the same `;`.
@@ -411,4 +404,62 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         }
     }
+}
+
+/// White space, comments and line splices skipped from the start of `text`.
+/// C99: §5.1.1.2p1 items 2-3, p. 10; PDF p. 22.
+fn skip_blank(mut text: &str) -> &str {
+    loop {
+        let rest = text.trim_start();
+        text = if let Some(comment) = rest.strip_prefix("/*") {
+            comment.split_once("*/").map_or("", |(_, after)| after)
+        } else if let Some(comment) = rest.strip_prefix("//") {
+            comment.split_once('\n').map_or("", |(_, after)| after)
+        } else if let Some(splice) = rest.strip_prefix('\\') {
+            splice
+        } else {
+            return rest;
+        };
+    }
+}
+
+/// Where an invocation whose name ends at `name_end` in `text` ends: after
+/// its parenthesized arguments, when a `(` follows the name.
+/// C99: §6.10.3p10, p. 152; PDF p. 164.
+fn invocation_end(text: &str, name_end: usize) -> usize {
+    let Some(after_name) = text.get(name_end..) else {
+        return name_end;
+    };
+    let rest = skip_blank(after_name);
+    if !rest.starts_with('(') {
+        return name_end;
+    }
+    let open = text.len() - rest.len();
+    let mut depth = 0_usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, byte) in rest.bytes().enumerate() {
+        match quote {
+            | Some(q) =>
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == q {
+                    quote = None;
+                },
+            | None => match byte {
+                | b'"' | b'\'' => quote = Some(byte),
+                | b'(' => depth += 1,
+                | b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return open + offset + 1;
+                    }
+                },
+                | _ => (),
+            },
+        }
+    }
+    name_end
 }
