@@ -70,9 +70,11 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     NoStackProtector,
     /// GNU `no_instrument_function`: `-pg` leaves the function alone.
     NoInstrument,
-    /// GNU `no_sanitize` and its `_address` and `_thread` spellings: a function
-    /// a sanitizer leaves alone.
+    /// GNU `no_sanitize` and its `_address`, `_thread` and `_undefined`
+    /// spellings: a function a sanitizer leaves alone.
     NoSanitize,
+    /// GNU `returns_nonnull`: the function never returns a null pointer.
+    ReturnsNonnull,
     /// GNU `always_inline`: the inliner expands every direct call it can,
     /// and a GNU inline body is kept as a private definition.
     AlwaysInline,
@@ -278,7 +280,11 @@ fn gnu(name: &str) -> Option<Rule> {
         | "noinline" | "noipa" => Rule::NoInline,
         | "no_stack_protector" => Rule::NoStackProtector,
         | "no_instrument_function" => Rule::NoInstrument,
-        | "no_sanitize" | "no_sanitize_address" | "no_sanitize_thread" => Rule::NoSanitize,
+        | "no_sanitize"
+        | "no_sanitize_address"
+        | "no_sanitize_thread"
+        | "no_sanitize_undefined" => Rule::NoSanitize,
+        | "returns_nonnull" => Rule::ReturnsNonnull,
         | "selectany" => Rule::SelectAny,
         | "common" => Rule::Common(true),
         | "nocommon" => Rule::Common(false),
@@ -381,7 +387,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_profile_instrument_function"
         | "no_reorder"
         | "no_address_safety_analysis"
-        | "no_sanitize_undefined"
         | "no_sanitize_memory"
         | "no_sanitize_coverage"
         | "no_split_stack"
@@ -412,7 +417,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "reproducible"
         | "unsequenced"
         | "retain"
-        | "returns_nonnull"
         | "sentinel"
         | "simd"
         | "sized_by"
