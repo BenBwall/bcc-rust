@@ -628,6 +628,10 @@ fn parse_body<'t>(
             },
             | TokenKind::Slot(_) | TokenKind::Label(_) | TokenKind::Value(_) if !token.line_start =>
                 return Err(token.expected("a definition at the start of a line")),
+            | TokenKind::Ident("debug") => {
+                let declared = debug_info::parse_declare(body.cursor, body.builder.module())?;
+                body.builder.declare_variable(declared);
+            },
             | TokenKind::Slot(_) => body.stack_slot()?,
             | TokenKind::Label(_) => body.label_definition()?,
             | TokenKind::Block(_) => body.block_header()?,

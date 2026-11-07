@@ -65,6 +65,7 @@ use crate::{
         Body,
         DebugInfo,
         DebugLoc,
+        DeclaredVariable,
         Entity,
         Inst,
         InstData,
@@ -121,6 +122,10 @@ pub(super) struct Draft<'b, 's> {
     /// What each provisional location stands for: a callee's location and
     /// the location of the call it was copied for, which may be provisional.
     inlined_locations:  ArenaVec<'s, (DebugLoc, DebugLoc)>,
+    /// Where the function keeps its described variables, in terms of the
+    /// original values and slots and those the passes added. One whose slot or
+    /// address does not survive to lowering is left out then.
+    variables:          ArenaVec<'s, DeclaredVariable>,
     /// Whether a stack slot was removed, by slot index.
     removed_slots:      ArenaVec<'s, bool>,
     /// Slots copied from an inlined body, after the original slots.
@@ -255,6 +260,11 @@ impl<'b, 's> Draft<'b, 's> {
                 locations
             },
             inlined_locations: ArenaVec::new_in(scratch),
+            variables: {
+                let mut variables = ArenaVec::new_in(scratch);
+                variables.extend_from_slice(body.declared_variables());
+                variables
+            },
             call_diagnostics: {
                 let mut ids = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch);
                 for block in body.blocks() {
@@ -478,6 +488,17 @@ impl<'b, 's> Draft<'b, 's> {
             resolved.push(call.and_then(|call| debug.inlined(callee, call)));
         }
         resolved
+    }
+
+    /// Records where a variable of an inlined callee lives in this copy of
+    /// its body.
+    pub(super) fn add_variable(&mut self, variable: DeclaredVariable) {
+        self.variables.push(variable);
+    }
+
+    /// Where the function keeps its described variables.
+    pub(super) fn variables(&self) -> &[DeclaredVariable] {
+        &self.variables
     }
 
     /// The debug location of `inst`, if it has one.

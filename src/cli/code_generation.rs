@@ -376,6 +376,12 @@ pub(super) struct CodeGeneration {
     /// -gno-column-info).
     #[arg(long, overrides_with = "debug_columns")]
     pub(super) no_debug_columns: bool,
+    /// Keep every named local object in memory when no optimizer runs, as GCC
+    /// and Clang do at -O0 and as a debugger needs to read and set it. Every
+    /// personality does this, whether or not -g is given, because -g must not
+    /// change the code.
+    #[arg(long, hide = true)]
+    pub(super) stack_locals: bool,
     /// With --emit=ir or --emit=ir-abi, print the debug tables and each
     /// instruction's location.
     #[arg(long, requires = "emit")]
@@ -504,6 +510,12 @@ impl CodeGeneration {
             || target.is_wasm()
             || self.backend != BackEnd::Llvm
             || matches!(self.emit, Some(Emit::Wasm | Emit::Wat))
+    }
+
+    /// Whether locals asked to live in memory do: no optimizer runs, and the
+    /// back end is LLVM, the one that describes variables.
+    pub(super) fn stack_locals_apply(&self, target: Target) -> bool {
+        !self.optimization_macros().0 && !self.writes_no_debug_info(target)
     }
 
     /// What `-g` asks of the compilation. `None` without it, and where the

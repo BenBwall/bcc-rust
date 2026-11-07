@@ -361,6 +361,10 @@ impl Cli {
             .with_code_options(self.code_options())
             .with_optimization(self.code_generation.optimization_macros())
             .with_debug_info(self.code_generation.debug_options(self.target))
+            .with_stack_locals(
+                (self.code_generation.stack_locals || self.driver.driver_name.is_some())
+                    && self.code_generation.stack_locals_apply(self.target),
+            )
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
             .with_compiler_identity(self.compiler_identity.into())
