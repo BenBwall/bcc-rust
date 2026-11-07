@@ -595,6 +595,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Return(slot) => {
+                self.check_noreturn_return(s.source_vectors);
                 if let Some(function) = self.functions.current {
                     let control = self.function_records[function.id].control;
                     _ = self.control.jump(

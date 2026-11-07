@@ -25,6 +25,7 @@
 //! C99: §5.1.1.3p1, p. 11; PDF p. 23; §6.8, pp. 131-139; PDF pp. 143-151.
 
 mod known_conditions;
+mod return_flow;
 
 use rustc_hash::FxBuildHasher;
 
@@ -116,6 +117,17 @@ impl<'s> ReachabilityState<'s> {
     }
 }
 
+/// How a function can leave, which the warnings about reaching its end ask.
+#[derive(Clone, Copy, Default)]
+struct Exits {
+    /// Any `return` statement, reached or not, for what GCC's front end asks.
+    any_return:  bool,
+    /// The first `return` statement the walk reached.
+    live_return: Option<SourceVectors>,
+    /// A call the walk reached does not return.
+    abnormal:    bool,
+}
+
 /// One walk's knowledge, which only grows from pass to pass.
 struct Flow<'s> {
     /// Each waiting warning's expression, and whether it is reached.
@@ -137,6 +149,8 @@ struct Flow<'s> {
     switches:      ArenaVec<'s, SwitchFlow>,
     /// The local labels in scope, innermost last.
     local_labels:  ArenaVec<'s, (StringCacheId, usize)>,
+    /// How the function can leave.
+    exits:         Exits,
     /// This pass reached something it may already have passed.
     changed:       bool,
 }
@@ -159,6 +173,24 @@ struct SwitchFlow {
     /// Nothing reaches `default` or the statement's end directly: a case
     /// matches the constant condition, or the labels cover its enumeration.
     covered: bool,
+}
+
+impl<'s> Flow<'s> {
+    fn new(scratch: &'s Bump) -> Self {
+        Self {
+            anchors:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            jumped_to:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            address_taken: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            computed_goto: false,
+            repeating:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            known:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            targets:       ArenaVec::new_in(scratch),
+            switches:      ArenaVec::new_in(scratch),
+            local_labels:  ArenaVec::new_in(scratch),
+            exits:         Exits::default(),
+            changed:       false,
+        }
+    }
 }
 
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
@@ -204,18 +236,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             self.reachability.deferred = deferred;
             return;
         }
-        let mut flow = Flow {
-            anchors:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            jumped_to:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            address_taken: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            computed_goto: false,
-            repeating:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            known:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            targets:       ArenaVec::new_in(scratch),
-            switches:      ArenaVec::new_in(scratch),
-            local_labels:  ArenaVec::new_in(scratch),
-            changed:       false,
-        };
+        let mut flow = Flow::new(scratch);
         for warning in deferred.iter().filter(|w| w.function == function.id) {
             _ = flow.anchors.insert(warning.anchor, false);
         }
@@ -416,8 +437,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 no || target.breaks
             },
             | S::Return(slot) => {
-                if let Some(slot) = slot {
-                    _ = self.flow_slot(flow, slot, live);
+                let live = if let Some(slot) = slot {
+                    self.flow_slot(flow, slot, live)
+                } else {
+                    live
+                };
+                flow.exits.any_return = true;
+                if live && flow.exits.live_return.is_none() {
+                    flow.exits.live_return = Some(statement.source_vectors);
                 }
                 false
             },
@@ -947,6 +974,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         arguments: &'tu [&'tu Expression<'tu>],
     ) -> bool {
         if self.call_does_not_return(callee) {
+            flow.exits.abnormal = true;
             return true;
         }
         let designator = Self::without_parentheses(callee);
@@ -966,7 +994,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return false;
         }
         match self.context.string_cache.at(name.name) {
-            | "__builtin_trap" | "__builtin_verbose_trap" | "__builtin_eh_return" => true,
+            | "__builtin_trap" | "__builtin_verbose_trap" | "__builtin_eh_return" => {
+                flow.exits.abnormal = true;
+                true
+            },
             | "__builtin_assume" => arguments
                 .first()
                 .is_some_and(|&condition| self.known_condition(flow, condition) == Some(false)),
