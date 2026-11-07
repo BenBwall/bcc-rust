@@ -2438,12 +2438,38 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ty:      items[0].ty,
             });
         }
-        let fixed = if open_external {
+        // A vector AVX passes whole travels as a named one, since the callee
+        // has no `...` to read it from; Clang's `isNoProtoCallVariadic` makes
+        // such a call an ordinary one as well.
+        let open_variadic = open_external
+            && !items
+                .iter()
+                .any(|item| self.unit.travels_whole(item.ty).unwrap_or(false));
+        let fixed = if open_variadic {
             0
+        } else if open_external {
+            items.len()
         } else {
             call.fixed + hidden_count + usize::from(frame_argument)
         };
-        let variadic = open_external || (call.prototype && call.variadic);
+        let variadic = open_variadic || (call.prototype && call.variadic);
+        let target_attribute = self
+            .record
+            .binding
+            .is_some_and(|binding| self.unit.target_vector_abi(binding));
+        if direct.is_none_or(|binding| {
+            self.unit.sema.bindings[binding].linkage
+                != crate::translation_phases::semantic_analysis::Linkage::Internal
+        }) {
+            self.unit
+                .check_foreign_vectors(
+                    items[..fixed].iter().map(|item| item.ty),
+                    result,
+                    variadic,
+                    target_attribute,
+                )
+                .map_err(|kind| at(kind, source))?;
+        }
         let described = items[fixed..].iter().any(|item| {
             matches!(
                 repr(&self.unit.sema.types, item.ty),

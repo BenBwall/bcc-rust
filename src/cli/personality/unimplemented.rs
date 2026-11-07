@@ -11,8 +11,9 @@
 //! no layout, ABI or language rule silently differs from what the command
 //! line asked for. A `-m` option is judged for the target: `-mms-bitfields`
 //! is what a Windows target does and a layout change on Linux. Asking for a
-//! newer processor (`-march=native`, `-mavx2`) warns, since baseline x86-64
-//! code is correct on it.
+//! newer processor than `target/x86_features.rs` models (`-march=haswell`,
+//! `-mavx512f`) warns, since baseline x86-64 code is correct on it, unless
+//! lowering finds a vector whose convention it would change.
 //!
 //! The lists name patterns: `*` ends a prefix, a trailing `=` takes any
 //! value, and `-f[no-]name` stands for both `-fname` and `-fno-name`. The
@@ -30,6 +31,9 @@ pub(super) enum Treatment {
     Warn(&'static str),
     /// Refused with an error that gives the reason.
     Reject(&'static str),
+    /// An x86 option on a target that isn't x86, refused as the compiler
+    /// refuses it.
+    WrongTarget,
 }
 
 /// The treatment of `option`, a `-f` or `-m` option its compiler knows,
@@ -681,6 +685,15 @@ fn machine(option: &str, target: Target) -> Treatment {
         | Some(feature) => (true, feature),
         | None => (false, name),
     };
+    if target.is_wasm()
+        && (option.starts_with("-march=")
+            || BASELINE.contains(&feature)
+            || feature.starts_with("avx")
+            || feature.starts_with("amx")
+            || EXTENSIONS.contains(&feature))
+    {
+        return Treatment::WrongTarget;
+    }
     // bcc's code uses no MMX register, and its MMX intrinsics work in SSE
     // registers, as GCC's and Clang's do on x86-64; the option changes only
     // whether `__MMX__` is defined, which the GCC and Clang personalities

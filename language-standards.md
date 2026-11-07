@@ -2399,7 +2399,7 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `no_callee_saved_registers` and the other non-x86 conventions are refused |
 | Machine entries (Linux targets; refused by lowering on the others) | `interrupt` (handlers, below), `no_caller_saved_registers`, and under GCC's identity `naked` |
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked` under Clang's identity, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage` |
-| Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
+| Dropped with a warning | `common` (bcc emits ordinary definitions), `target` (refused where it would change how a vector of 32 bytes or more crosses objects; `docs/design/driver-modes.md`), `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
 | Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
 | Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
 | GCC identity only | `scalar_storage_order`: little-endian accepted, big-endian refused on records, ignored with a warning elsewhere (see above); unknown under the other identities |
@@ -2496,6 +2496,10 @@ was run):
   that supplied its name, that replacement's macro may expand again inside
   the call's replacement, as GCC and Clang choose (C11 §6.10.3.4p4 allows
   either); `TraceLoggingProvider.h` counts arguments that way.
+- `__builtin_cpu_supports`, `__builtin_cpu_is` and `__builtin_cpu_init` read
+  libgcc's or compiler-rt's `__cpu_model` and `__cpu_features2` on x86-64, with
+  each compiler's names, bits and words for an unknown name
+  (`target/cpu_model.rs`; `docs/design/driver-modes.md`). WebAssembly refuses them.
 - `__rdtsc` is Clang's x86 builtin in every x86 target and mode
   (`unsigned long long __rdtsc(void)`, `llvm.x86.rdtsc`); the interpreter
   gives an increasing counter and the native back end refuses it.

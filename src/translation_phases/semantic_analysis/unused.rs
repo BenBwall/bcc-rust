@@ -138,6 +138,10 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about what a `switch` handles may be on.
+    pub(super) switches: bool,
+    /// Whether a warning about reaching a function's end may be on.
+    pub(super) return_flow: bool,
     /// Whether `-Wsign-compare` is on.
     pub(super) sign_compare: bool,
     /// Whether `-Wmissing-field-initializers` is on.
@@ -195,6 +199,13 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            switches: on(&[
+                G::Switch,
+                G::SwitchEnum,
+                G::SwitchDefault,
+                G::SwitchOutsideRange,
+            ]),
+            return_flow: on(&[G::ReturnType, G::InvalidNoreturn, G::GccNoreturn]),
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,
@@ -699,7 +710,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some_and(|entry| self.unused.unused_tags.get(&entry.binding) == Some(&true))
     }
 
-    fn attribute_chain_exempts(&self, mut chain: Option<&SpecifierExtension<'tu>>) -> bool {
+    pub(super) fn attribute_chain_exempts(
+        &self,
+        mut chain: Option<&SpecifierExtension<'tu>>,
+    ) -> bool {
         while let Some(item) = chain {
             if let SpecifierExtensionKind::Attributes(attribute) = item.kind
                 && super::attributes::known_names(attribute, self.context)

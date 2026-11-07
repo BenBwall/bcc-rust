@@ -49,6 +49,7 @@ fn with_unit<R>(
             level,
             dwarf_version: None,
             columns: true,
+            physical: false,
         }))
         .with_stack_locals(stack_locals);
     let mut context = Context::with_configuration(&tu, configuration);
