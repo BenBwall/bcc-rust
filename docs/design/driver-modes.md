@@ -174,6 +174,13 @@ A computed `goto` in a function that takes no label's address is GCC's to
 accept and Clang's to refuse; bcc follows the compiler it answers as. The jump
 has nowhere defined to go, so `-O2` treats it as unreachable.
 
+On Linux with the LLVM back end, `-fsanitize=address` and `-fsanitize=thread`
+instrument the code and link the bundled clang's run-time library, and
+`no_sanitize`, `no_sanitize_address` and `no_sanitize_thread` keep a function out.
+The two can't be combined, as in both compilers. Other sanitizers, and lists of
+several in one option, are refused. `-fsanitize=undefined` needs checks written
+during lowering, which bcc doesn't have.
+
 The feature-test operators (`__has_include`, `__has_c_attribute`,
 `__has_attribute`, `__has_builtin`, `__has_feature`, `__has_extension`, and
 Clang's `__has_embed`) exist in every `-std=` under `--gcc-mode` and

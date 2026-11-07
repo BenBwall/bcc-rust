@@ -1627,6 +1627,163 @@ mod tests {
         );
     }
 
+    /// `AddressSanitizer` catches a real overflow, `no_sanitize` keeps a
+    /// function out of it, and the macros and feature tests answer as the
+    /// compilers do.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_sanitizers_instrument_and_link() {
+        let directory = Directory::new();
+        directory.write(
+            "o.c",
+            "#include <stdlib.h>\nvolatile int n = 8;\nint main(void) { char *p = malloc(8); int \
+             r = p[n]; free(p); return r; }\n",
+        );
+        directory.write(
+            "n.c",
+            "int plain(int *p) { return *p; }\n__attribute__((no_sanitize_address)) int a(int *p) \
+             { return *p; }\n__attribute__((no_sanitize(\"address\"))) int b(int *p) { return *p; \
+             }\n__attribute__((no_sanitize_thread)) int c(int *p) { return *p; }\n",
+        );
+        directory.write(
+            "m.c",
+            "#if __has_feature(address_sanitizer)\nint asan;\n#endif\n#if \
+             __has_feature(thread_sanitizer)\nint tsan;\n#endif\n#ifdef __SANITIZE_ADDRESS__\nint \
+             address;\n#endif\n#ifdef __SANITIZE_THREAD__\nint thread;\n#endif\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let build = directory.bcc(mode, &["-fsanitize=address", "-g", "o.c", "-o", "o"]);
+            // A bundled toolchain built without compiler-rt can't link it, and
+            // says which library is missing. The rest is checked without one.
+            if !stderr(&build).contains("libclang_rt.asan") {
+                succeeds(&build);
+                assert_eq!(stderr(&build), "", "{mode}");
+                let run = Command::new(directory.path("o"))
+                    .env("ASAN_OPTIONS", "detect_leaks=0")
+                    .output()
+                    .unwrap();
+                assert!(!run.status.success(), "{mode}");
+                assert!(
+                    stderr(&run).contains("AddressSanitizer: heap-buffer-overflow"),
+                    "{mode}: {}",
+                    stderr(&run)
+                );
+            }
+            // Taken back by a later option.
+            let args = [
+                "-fsanitize=address",
+                "-fno-sanitize=address",
+                "-S",
+                "n.c",
+                "-o",
+                "-",
+            ];
+            assert!(
+                !stdout(&directory.bcc(mode, &args)).contains("__asan"),
+                "{mode}"
+            );
+            // The functions a sanitizer checks.
+            let checked = |sanitizer: &str, reference: &str| -> Vec<String> {
+                let args = [sanitizer, "-O1", "-S", "n.c", "-o", "-"];
+                let text = stdout(&directory.bcc(mode, &args));
+                let mut current = "";
+                let mut names = Vec::new();
+                for line in text.lines() {
+                    if let Some(name) = line.strip_suffix(':')
+                        && !name.starts_with('.')
+                    {
+                        current = name;
+                    }
+                    if line.contains(reference) && !names.iter().any(|known| known == current) {
+                        names.push(current.to_owned());
+                    }
+                }
+                names
+            };
+            directory.write(
+                "a.c",
+                "__attribute__((no_sanitize(\"all\"))) int a(int *p) { return *p; }\n",
+            );
+            let args = ["-fsanitize=address", "-O1", "-S", "a.c", "-o", "-"];
+            assert!(
+                !stdout(&directory.bcc(mode, &args)).contains("__asan_report"),
+                "{mode}"
+            );
+            assert_eq!(
+                checked("-fsanitize=address", "__asan_report"),
+                ["plain", "c"],
+                "{mode}"
+            );
+            assert_eq!(
+                checked("-fsanitize=thread", "__tsan_read"),
+                ["plain", "a", "b"],
+                "{mode}"
+            );
+            let defined = |option: &str| {
+                stdout(&directory.bcc(mode, &[option, "-E", "-P", "m.c"]))
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            assert_eq!(
+                defined("-fsanitize=address"),
+                "int asan; int address;",
+                "{mode}"
+            );
+            assert_eq!(
+                defined("-fsanitize=thread"),
+                "int tsan; int thread;",
+                "{mode}"
+            );
+            // The two together are refused, unless a later option takes one
+            // back.
+            let both = [
+                "-fsanitize=address",
+                "-fsanitize=thread",
+                "-c",
+                "n.c",
+                "-o",
+                "n.o",
+            ];
+            assert!(!directory.bcc(mode, &both).status.success(), "{mode}");
+            succeeds(&directory.bcc(
+                mode,
+                &[
+                    "-fsanitize=address",
+                    "-fsanitize=thread",
+                    "-fno-sanitize=thread",
+                    "-c",
+                    "n.c",
+                    "-o",
+                    "n.o",
+                ],
+            ));
+            // On a nested function too, which only GCC has.
+            if mode == "--gcc-mode" {
+                directory.write(
+                    "i.c",
+                    "int f(int *p) {\n    __attribute__((no_sanitize_address)) int inner(int *q) \
+                     {\n        return *q;\n    }\n    return inner(p);\n}\n",
+                );
+                let args = ["-fsanitize=address", "-S", "i.c", "-o", "-"];
+                let output = stdout(&directory.bcc(mode, &args));
+                assert!(!output.contains("__asan_report"), "{output}");
+            }
+            // The rest stay refused, and off Linux too.
+            let refused = |args: &[&str]| {
+                !directory
+                    .bcc(mode, &[args, &["-c", "n.c", "-o", "n.o"]].concat())
+                    .status
+                    .success()
+            };
+            assert!(refused(&["-fsanitize=undefined"]), "{mode}");
+            assert!(
+                refused(&["--target=x86_64-w64-mingw32", "-fsanitize=address"]),
+                "{mode}"
+            );
+        }
+    }
+
     /// A distribution's hardening options do what they say on Linux, with the
     /// macros each compiler numbers its own way.
     #[cfg(target_os = "linux")]

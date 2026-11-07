@@ -409,7 +409,12 @@ impl<'tu> Unit<'_, 'tu, '_> {
             .module
             .declare_function(name, signature, crate::ir::Linkage::Internal);
         if let Some(attributes) = self.sema.entity_attributes(binding) {
-            self.module.function_mut(func).no_stack_protector = attributes.no_stack_protector;
+            let function = self.module.function_mut(func);
+            function.no_stack_protector = attributes.no_stack_protector;
+            function.no_sanitize = crate::ir::NoSanitize {
+                address: attributes.no_sanitize_address,
+                thread:  attributes.no_sanitize_thread,
+            };
         }
         _ = self.nested.functions.insert(binding, func);
         let data = self.sema.bindings[binding];

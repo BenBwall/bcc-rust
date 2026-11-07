@@ -236,6 +236,12 @@ impl<'ir> Module<'ir> {
             if function.no_stack_protector {
                 f.write_str(" no_stack_protector")?;
             }
+            if function.no_sanitize.address {
+                f.write_str(" no_sanitize_address")?;
+            }
+            if function.no_sanitize.thread {
+                f.write_str(" no_sanitize_thread")?;
+            }
             if let Some(external) = function.inline_copy_of {
                 write!(f, " inline_copy_of {}", display_name(external))?;
             }
