@@ -6919,6 +6919,57 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// A returned local address and a constant a conversion changes, which
+    /// both compilers report by default. Each row was measured against GCC
+    /// 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_value_warnings_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int *f(void) { int x; return &x; }\nchar c = 1000;\nchar d = 255;\nunsigned char e = \
+             -1;\n",
+        );
+        let text = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stderr(&output)
+        };
+        let gcc = text("--gcc-mode", &[]);
+        assert!(
+            gcc.contains("function returns address of local variable [-Wreturn-local-addr]"),
+            "{gcc}"
+        );
+        assert!(
+            gcc.contains("changes value from '1000' to '-24' [-Woverflow]"),
+            "{gcc}"
+        );
+        // GCC leaves a value either signedness holds to -Wsign-conversion.
+        assert!(!gcc.contains("'255'"), "{gcc}");
+        let clang = text("--clang-mode", &[]);
+        assert!(
+            clang.contains("address of stack memory associated with local variable 'x' returned"),
+            "{clang}"
+        );
+        assert!(
+            clang.contains("changes value from 1000 to -24 [-Wconstant-conversion]"),
+            "{clang}"
+        );
+        assert!(clang.contains("changes value from 255 to -1"), "{clang}");
+        assert!(!clang.contains("from -1 to 255"), "{clang}");
+        assert_eq!(
+            text("--gcc-mode", &["-Wno-return-local-addr", "-Wno-overflow"]),
+            ""
+        );
+        let args = ["-Wno-return-stack-address", "-Wno-constant-conversion"];
+        assert_eq!(text("--clang-mode", &args), "");
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();

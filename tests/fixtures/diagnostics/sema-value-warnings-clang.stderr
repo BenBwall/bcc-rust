@@ -1,0 +1,70 @@
+sema-value-warnings-clang.c:2:32: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+    2 | int *a1(void) { int x; return &x; }
+      |                                ^
+sema-value-warnings-clang.c:3:34: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+    3 | int *a2(void) { int x[3]; return x; }
+      |                                  ^
+sema-value-warnings-clang.c:4:35: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+    4 | int *a3(void) { int x[3]; return &x[1]; }
+      |                                   ^
+sema-value-warnings-clang.c:6:26: warning: address of stack memory associated with parameter 'p' returned [-Wreturn-stack-address]
+    6 | int *a5(int p) { return &p; }
+      |                          ^
+sema-value-warnings-clang.c:7:37: warning: address of stack memory associated with local variable 's' returned [-Wreturn-stack-address]
+    7 | int *a6(void) { struct S s; return &s.a; }
+      |                                     ^
+sema-value-warnings-clang.c:8:36: warning: address of stack memory associated with local variable 's' returned [-Wreturn-stack-address]
+    8 | int *a7(void) { struct S s; return s.b; }
+      |                                    ^
+sema-value-warnings-clang.c:10:36: warning: address of stack memory associated with local variable 'b' returned [-Wreturn-stack-address]
+   10 | char *a9(void) { char b[4]; return b + 1; }
+      |                                    ^
+sema-value-warnings-clang.c:11:39: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   11 | int *b1(void) { int x; return (int *)&x; }
+      |                                       ^
+sema-value-warnings-clang.c:12:40: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   12 | int *b2(int c) { int x, y; return c ? &x : &y; }
+      |                                        ^
+sema-value-warnings-clang.c:12:45: warning: address of stack memory associated with local variable 'y' returned [-Wreturn-stack-address]
+   12 | int *b2(int c) { int x, y; return c ? &x : &y; }
+      |                                             ^
+sema-value-warnings-clang.c:14:41: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   14 | void *b5(void) { int x; return (void *)&x; }
+      |                                         ^
+sema-value-warnings-clang.c:16:34: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   16 | int *b7(void) { int x; return &*&x; }
+      |                                  ^
+sema-value-warnings-clang.c:17:38: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   17 | long b8(void) { int x; return (long)&x; }
+      |                                      ^
+sema-value-warnings-clang.c:18:11: warning: implicit conversion from 'int' to 'char' changes value from 1000 to -24 [-Wconstant-conversion]
+   18 | char c1 = 1000;
+      |           ^~~~
+sema-value-warnings-clang.c:19:20: warning: implicit conversion from 'int' to 'unsigned char' changes value from 256 to 0 [-Wconstant-conversion]
+   19 | unsigned char c2 = 256;
+      |                    ^~~
+sema-value-warnings-clang.c:20:12: warning: implicit conversion from 'int' to 'short' changes value from 70000 to 4464 [-Wconstant-conversion]
+   20 | short c3 = 70000;
+      |            ^~~~~
+sema-value-warnings-clang.c:21:18: warning: implicit conversion from 'int' to 'signed char' changes value from -129 to 127 [-Wconstant-conversion]
+   21 | signed char c5 = -129;
+      |                  ^~~~
+sema-value-warnings-clang.c:23:11: warning: implicit conversion from 'int' to 'char' changes value from 255 to -1 [-Wconstant-conversion]
+   23 | char c7 = 255;
+      |           ^~~
+sema-value-warnings-clang.c:25:10: warning: implicit conversion from 'long' to 'int' changes value from 2147483648 to -2147483648 [-Wconstant-conversion]
+   25 | int c9 = 2147483648;
+      |          ^~~~~~~~~~
+sema-value-warnings-clang.c:26:22: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+   26 | void d(char c) { c = 300; char e = 128; unsigned char f = -1; (void)e; (void)f; }
+      |                      ^~~
+sema-value-warnings-clang.c:26:36: warning: implicit conversion from 'int' to 'char' changes value from 128 to -128 [-Wconstant-conversion]
+   26 | void d(char c) { c = 300; char e = 128; unsigned char f = -1; (void)e; (void)f; }
+      |                                    ^~~
+sema-value-warnings-clang.c:27:24: warning: implicit conversion from 'int' to 'char' changes value from 1000 to -24 [-Wconstant-conversion]
+   27 | char d2(void) { return 1000; }
+      |                        ^~~~
+sema-value-warnings-clang.c:29:20: warning: implicit conversion from 'int' to 'char' changes value from 1000 to -24 [-Wconstant-conversion]
+   29 | void d4(void) { d3(1000); }
+      |                    ^~~~
+23 warnings generated.

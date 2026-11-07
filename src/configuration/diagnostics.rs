@@ -911,6 +911,11 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// GCC's words for a function returning its own automatic object's
+    /// address.
+    ReturnLocalAddr => Some("return-local-addr"), Warning, false;
+    /// Clang's.
+    ReturnStackAddress => Some("return-stack-address"), Warning, false;
     /// `-Wextra`, which reports nothing itself.
     Extra => Some("extra"), Ignored, false;
     /// `-Wunused`, which reports nothing itself and holds
@@ -1016,7 +1021,10 @@ impl DiagnosticGroup {
     /// Whether only GCC has the group, so that Clang reports its option as
     /// unknown.
     pub(crate) const fn gcc_only(self) -> bool {
-        matches!(self, Self::Normalized | Self::PedanticNormalized)
+        matches!(
+            self,
+            Self::Normalized | Self::PedanticNormalized | Self::ReturnLocalAddr
+        )
     }
 
     pub(crate) fn parse(name: &str) -> Option<Self> {

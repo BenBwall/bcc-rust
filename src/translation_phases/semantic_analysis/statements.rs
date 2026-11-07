@@ -386,6 +386,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None,
                 );
             } else {
+                self.check_returned_address(e, result);
                 self.convert(e, result.unqualified(), ConversionKind::Assignment);
             }
         }

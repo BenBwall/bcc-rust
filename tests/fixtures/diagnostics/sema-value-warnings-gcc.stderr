@@ -1,0 +1,51 @@
+sema-value-warnings-gcc.c:2:31: warning: function returns address of local variable [-Wreturn-local-addr]
+    2 | int *a1(void) { int x; return &x; }
+      |                               ^~
+sema-value-warnings-gcc.c:3:34: warning: function returns address of local variable [-Wreturn-local-addr]
+    3 | int *a2(void) { int x[3]; return x; }
+      |                                  ^
+sema-value-warnings-gcc.c:4:34: warning: function returns address of local variable [-Wreturn-local-addr]
+    4 | int *a3(void) { int x[3]; return &x[1]; }
+      |                                  ^~~~~
+sema-value-warnings-gcc.c:6:25: warning: function returns address of local variable [-Wreturn-local-addr]
+    6 | int *a5(int p) { return &p; }
+      |                         ^~
+sema-value-warnings-gcc.c:7:36: warning: function returns address of local variable [-Wreturn-local-addr]
+    7 | int *a6(void) { struct S s; return &s.a; }
+      |                                    ^~~~
+sema-value-warnings-gcc.c:8:36: warning: function returns address of local variable [-Wreturn-local-addr]
+    8 | int *a7(void) { struct S s; return s.b; }
+      |                                    ^~~
+sema-value-warnings-gcc.c:10:38: warning: function returns address of local variable [-Wreturn-local-addr]
+   10 | char *a9(void) { char b[4]; return b + 1; }
+      |                                      ^
+sema-value-warnings-gcc.c:11:31: warning: function returns address of local variable [-Wreturn-local-addr]
+   11 | int *b1(void) { int x; return (int *)&x; }
+      |                               ^~~~~~~~~
+sema-value-warnings-gcc.c:14:32: warning: function returns address of local variable [-Wreturn-local-addr]
+   14 | void *b5(void) { int x; return (void *)&x; }
+      |                                ^~~~~~~~~~
+sema-value-warnings-gcc.c:16:31: warning: function returns address of local variable [-Wreturn-local-addr]
+   16 | int *b7(void) { int x; return &*&x; }
+      |                               ^~~~
+sema-value-warnings-gcc.c:18:11: warning: overflow in conversion from 'int' to 'char' changes value from '1000' to '-24' [-Woverflow]
+   18 | char c1 = 1000;
+      |           ^~~~
+sema-value-warnings-gcc.c:19:20: warning: unsigned conversion from 'int' to 'unsigned char' changes value from '256' to '0' [-Woverflow]
+   19 | unsigned char c2 = 256;
+      |                    ^~~
+sema-value-warnings-gcc.c:20:12: warning: overflow in conversion from 'int' to 'short int' changes value from '70000' to '4464' [-Woverflow]
+   20 | short c3 = 70000;
+      |            ^~~~~
+sema-value-warnings-gcc.c:21:18: warning: overflow in conversion from 'int' to 'signed char' changes value from '-129' to '127' [-Woverflow]
+   21 | signed char c5 = -129;
+      |                  ^~~~
+sema-value-warnings-gcc.c:26:22: warning: overflow in conversion from 'int' to 'char' changes value from '300' to '44' [-Woverflow]
+   26 | void d(char c) { c = 300; char e = 128; unsigned char f = -1; (void)e; (void)f; }
+      |                      ^~~
+sema-value-warnings-gcc.c:27:24: warning: overflow in conversion from 'int' to 'char' changes value from '1000' to '-24' [-Woverflow]
+   27 | char d2(void) { return 1000; }
+      |                        ^~~~
+sema-value-warnings-gcc.c:29:20: warning: overflow in conversion from 'int' to 'char' changes value from '1000' to '-24' [-Woverflow]
+   29 | void d4(void) { d3(1000); }
+      |                    ^~~~

@@ -7,4 +7,12 @@ warning: integer constant is so large that it is unsigned
   = note: C99 §6.4.4.1p5-6: no signed type in a decimal constant's list can represent this value, so C99 gives it no type
   = help: add a `u` suffix to make the unsigned type explicit
 
-1 warning generated.
+warning: implicit conversion from 'unsigned long long' to 'int' changes value from 18446744073709551615 to -1 [-Wconstant-conversion]
+ --> pp-forced-signed-to-unsigned-conversion.c:1:13
+  |
+1 | int value = 18446744073709551615;
+  |             ^^^^^^^^^^^^^^^^^^^^ this value is not what it seems
+  |
+  = note: C99 §6.3.1.3p3: converting a value the new type cannot represent gives an implementation-defined result
+
+2 warnings generated.
