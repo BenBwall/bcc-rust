@@ -52,7 +52,10 @@ mod driver;
 mod emit;
 mod object;
 
-use std::fmt;
+use std::{
+    cell::Cell,
+    fmt,
+};
 
 #[cfg(feature = "native")]
 pub(crate) use driver::{
@@ -63,12 +66,18 @@ pub(crate) use driver::{
     build_object,
     object_writer,
 };
+pub(crate) use emit::ListingLine;
+pub(crate) use mir::InstSource;
 pub(crate) use object::FunctionCode;
 pub(crate) use support::Unsupported;
 
 use self::{
     conv::CallConv,
-    emit::Emitter,
+    emit::{
+        Emitter,
+        LineCounter,
+        ListingRecorder,
+    },
     frame::Frame,
     support::Construct,
 };
@@ -248,18 +257,35 @@ pub(crate) fn emit_assembly_with<'m>(
     code: CodeOptions,
     out: &mut dyn fmt::Write,
 ) -> Result<(), NativeError<'m>> {
-    emit(module, target, code, out, |_, _| {})
+    emit(module, target, code, out, |_, _| {}, None)
+}
+
+/// Writes the module's assembly as [`emit_assembly_with`] does, also telling
+/// `listing` what each line of a function's code is for, so a reader of the
+/// listing can follow it back to the IR. Recording is what changes here: the
+/// listing is the same, as nothing that decides what code to generate reads
+/// what was recorded.
+pub(crate) fn emit_assembly_listing<'m>(
+    module: &'m Module<'_>,
+    target: Target,
+    code: CodeOptions,
+    out: &mut dyn fmt::Write,
+    listing: &mut dyn FnMut(ListingLine),
+) -> Result<(), NativeError<'m>> {
+    emit(module, target, code, out, |_, _| {}, Some(listing))
 }
 
 /// Writes the module's assembly as [`emit_assembly_with`] does, letting
-/// `adjust` change each function's allocation before the rewrite: the tests
-/// put every value in a spill slot this way.
+/// `adjust` change each function's allocation before the rewrite (the tests
+/// put every value in a spill slot this way), and telling `listing`, if any,
+/// what each line of a function's code is for.
 fn emit<'m>(
     module: &'m Module<'_>,
     target: Target,
     code: CodeOptions,
     out: &mut dyn fmt::Write,
     adjust: impl Fn(&mir::MFunction<'_>, &mut regalloc::Allocation<'_>),
+    listing: Option<&mut dyn FnMut(ListingLine)>,
 ) -> Result<(), NativeError<'m>> {
     if !module.triple().is_empty() && Target::parse(module.triple()) != Some(target) {
         return Err(NativeError::TargetMismatch {
@@ -279,7 +305,22 @@ fn emit<'m>(
     let references = support::GlobalReferences::collect(module, &stubs);
     support::check_module(module, target, &references)?;
     let conv = CallConv::of(target);
+    let track_sources = listing.is_some();
+    let lines = Cell::new(0);
+    let mut counter;
+    let out: &mut dyn fmt::Write = if track_sources {
+        counter = LineCounter { out, lines: &lines };
+        &mut counter
+    } else {
+        out
+    };
     let mut emitter = Emitter::new(module, target, out, &stubs);
+    if let Some(listing) = listing {
+        emitter.record_listing(ListingRecorder {
+            lines: &lines,
+            listing,
+        });
+    }
     emitter.header()?;
     let mut scratch = Bump::new();
     let indirect_returns_twice = module.returns_twice_escapes();
@@ -292,8 +333,11 @@ fn emit<'m>(
                 function,
                 body,
                 target,
-                code.tls_model,
-                indirect_returns_twice,
+                isel::SelectOptions {
+                    tls_model: code.tls_model,
+                    indirect_returns_twice,
+                    track_sources,
+                },
                 arena,
             )
             .map_err(|construct| Unsupported {

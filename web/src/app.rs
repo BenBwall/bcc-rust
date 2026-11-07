@@ -70,6 +70,7 @@ use crate::{
 };
 
 #[component]
+#[expect(clippy::too_many_lines, reason = "The page's one tree of views.")]
 pub fn App() -> impl IntoView {
     let state = State::new();
     // Effects run only in the browser, so prerendering never starts a Worker.
@@ -139,6 +140,8 @@ pub fn App() -> impl IntoView {
                                             optimize=state.optimize
                                             compilation=state.compilation
                                             shown=state.shown
+                                            links=state.links
+                                            reading=Signal::derive(move || state.link_reading())
                                             other=state.other_level
                                             live=state.live_status.into()
                                             theme=state.theme_name
@@ -264,6 +267,9 @@ pub(crate) struct State {
     /// What the pipeline view shows: `compilation`, or the last output while
     /// the next one compiles.
     shown:           Memo<Option<Compilation>>,
+    /// The links between the source and `compilation`'s output for the stage,
+    /// which every move of the pointer or the cursor reads.
+    links:           Memo<crate::pipeline::Links>,
     /// The same at the other level, for the optimizer comparison.
     other_level:     Memo<Option<Compilation>>,
     /// bcc's diagnostics as squiggles in the source editor: the pipeline's
@@ -298,6 +304,7 @@ impl State {
         let pending = RwSignal::new(false);
         let theme = RwSignal::new("dark");
         let mode = RwSignal::new(Mode::Machine);
+        let (stage, headers) = (RwSignal::new(Stage::Ir), RwSignal::new(false));
         let wasm_checks = RwSignal::new(wasm::Checks::default());
         let live = LiveViews::new(
             editor_text,
@@ -351,8 +358,8 @@ impl State {
             unavailable: RwSignal::new(None),
             announcement: RwSignal::new(String::new()),
             mode,
-            stage: RwSignal::new(Stage::Ir),
-            headers: RwSignal::new(false),
+            stage,
+            headers,
             theme,
             theme_name: Signal::derive(move || theme.get()),
             compiler: StoredValue::new_local(None),
@@ -371,6 +378,7 @@ impl State {
                 editor_text.with(|text| source.with(|source| text != source))
             }),
             compilation: live.compilation,
+            links: links_memo(live.compilation, stage, headers, editor_text),
             shown: live.shown,
             other_level: live.other_level,
             markers: markers(mode, editor_text, wasm_checks, live.markers),
@@ -1174,34 +1182,29 @@ impl State {
         if hovered == 0 {
             return Vec::new();
         }
-        let stage = self.stage.get();
-        let headers = self.headers.get();
-        self.compilation.with(|compilation| {
-            compilation
-                .as_ref()
-                .map(|compilation| {
-                    self.editor_text.with(|source| {
-                        let links = crate::pipeline::links(stage, compilation, source, headers);
-                        let mut marks: Vec<Decoration> = links
-                            .sources_for(hovered)
-                            .into_iter()
-                            .map(|line| Decoration::line(line, "link-line"))
-                            .collect();
-                        if let Some(range) = links.range_for(hovered) {
-                            marks.push(Decoration {
-                                start_line: range.line,
-                                start_column: range.column,
-                                end_line: range.end_line,
-                                end_column: range.end_column.max(range.column + 1),
-                                class_name: Some("link-range".to_owned()),
-                                z_index: 4,
-                                ..Decoration::default()
-                            });
-                        }
-                        marks
-                    })
-                })
-                .unwrap_or_default()
+        self.links.with(|links| {
+            let mut marks: Vec<Decoration> = links
+                .sources_for(hovered)
+                .into_iter()
+                .map(|line| Decoration::line(line, "link-line"))
+                .collect();
+            // The call an inlined instruction was copied for.
+            let origin = links.origin(hovered);
+            if origin.call != 0 && origin.call != origin.line {
+                marks.push(Decoration::line(origin.call, "link-call"));
+            }
+            if let Some(range) = links.range_for(hovered) {
+                marks.push(Decoration {
+                    start_line: range.line,
+                    start_column: range.column,
+                    end_line: range.end_line,
+                    end_column: range.end_column.max(range.column + 1),
+                    class_name: Some("link-range".to_owned()),
+                    z_index: 4,
+                    ..Decoration::default()
+                });
+            }
+            marks
         })
     }
 
@@ -1297,20 +1300,48 @@ fn compiler_failure(error: String) -> String {
     }
 }
 
+/// The links between the source and the output of `stage` in `compilation`.
+fn links_memo(
+    compilation: Memo<Option<Compilation>>,
+    stage: RwSignal<Stage>,
+    headers: RwSignal<bool>,
+    source: RwSignal<String>,
+) -> Memo<crate::pipeline::Links> {
+    Memo::new(move |_| {
+        let stage = stage.get();
+        let headers = headers.get();
+        compilation.with(|compilation| {
+            compilation
+                .as_ref()
+                .map(|compilation| {
+                    source.with(|source| {
+                        crate::pipeline::links(stage, compilation, source, headers)
+                    })
+                })
+                .unwrap_or_default()
+        })
+    })
+}
+
 /// The compilation of `text` at `level`, if it succeeded, with the
 /// precomputed LLVM IR for a lesson.
 fn compilation_of(compiled: &Compiled, text: &str, level: bool) -> Option<Compilation> {
-    let llvm = demos::matching(text).and_then(|demo| {
-        crate::pipeline::precomputed_llvm(demo.name.trim_end_matches(".c"), level)
-    });
+    let lesson = demos::matching(text).map(|demo| demo.name.trim_end_matches(".c"));
+    let llvm = lesson.and_then(|stem| crate::pipeline::precomputed_llvm(stem, level));
+    let llvm_lines = lesson
+        .filter(|_| llvm.is_some())
+        .map(|stem| crate::pipeline::precomputed_llvm_lines(stem, level))
+        .unwrap_or_default();
     let live = lookup(compiled, text, level).and_then(|result| result.as_ref().ok().cloned());
     match (live, llvm) {
         | (Some(live), llvm) => Some(Compilation {
             llvm: llvm.map(str::to_owned),
+            llvm_lines,
             ..live
         }),
         | (None, Some(llvm)) => Some(Compilation {
             llvm: Some(llvm.to_owned()),
+            llvm_lines,
             ..Compilation::default()
         }),
         | (None, None) => None,
@@ -1332,6 +1363,7 @@ fn shown(
         | Some(previous) if waiting && !live => Some(Compilation {
             // A lesson's precomputed LLVM IR is always current.
             llvm: current.and_then(|current| current.llvm.clone()),
+            llvm_lines: current.map_or_else(Vec::new, |current| current.llvm_lines.clone()),
             ..previous.clone()
         }),
         | _ => current.cloned(),
@@ -2069,6 +2101,13 @@ fn SourcePane(state: State) -> impl IntoView {
                 <span><i class="swatch swatch-target"></i>"click a line number to set a run target"</span>
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
+            <p
+                class="link-reading is-source"
+                aria-hidden="true"
+                hidden=move || state.mode.get() != Mode::Pipeline
+            >
+                {move || state.link_reading()}
+            </p>
             <footer class="source-legend" hidden=move || state.mode.get() != Mode::Pipeline>
                 <span class="legend-hover"><i class="swatch swatch-link"></i>"hover or click a line to find what it became"</span>
                 <span class="legend-tap"><i class="swatch swatch-link"></i>"tap a line to find what it became"</span>

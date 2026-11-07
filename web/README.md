@@ -45,12 +45,14 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   type, at `-O0` or `-O2`, with a note on what the optimizer changed. Its
   errors appear as squiggles in the source and in a diagnostics list, and the
   view says which stage stopped and why. Hovering a source line highlights
-  what it became (line by line for the front-end stages and for each
-  instruction of the IR that kept its source line, which at -O2 is often
-  none once the optimizer rebuilds a function; per function for the rest,
-  LLVM IR and the machine stages, whose output keeps no source locations),
-  and the reverse. Moving the cursor to a line (with the arrow keys, or a
-  tap on a touch screen) does the same.
+  what it became, line by line in every stage, and the reverse. The front-end
+  stages place each line themselves; the back-end stages read the compiler's
+  debug locations, which follow each instruction through the optimizer and
+  the native back end, so at -O2 a line scatters, reappears inlined in its
+  callers, or has nothing left, and the page says so. An instruction the
+  optimizer moved or merged has no location, which the page says too rather
+  than guess. Moving the cursor to a line (with the arrow keys, or a tap on a
+  touch screen) does the same.
 
 - **WebAssembly.** The program compiled to WebAssembly by bcc, in the
   browser, executed one

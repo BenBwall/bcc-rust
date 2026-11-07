@@ -114,12 +114,14 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// Best-effort O0-only storage; required uses and `used` remain mandatory.
     pub(super) retain_local_statics: bool,
     /// Whether instructions record the source line they came from: for the
-    /// WebAssembly back end's source map and for the site's IR views.
+    /// WebAssembly back end's source map.
     pub(super) source_lines: bool,
     /// The debug file of each source file index that has one.
     pub(super) debug_files: ArenaMap<'a, u32, crate::ir::DebugFile>,
     /// Whether debug locations hold columns (`-gno-column-info` clears it).
     pub(super) debug_columns: bool,
+    /// Whether debug locations hold physical lines (`DebugOptions::physical`).
+    pub(super) debug_physical: bool,
     /// Whether the unit describes variables and types: `-g` and above.
     pub(super) debug_variables: bool,
     /// Each object's description once made, keyed for shared types.
@@ -2780,6 +2782,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             source_lines: target.is_wasm(),
             debug_files: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             debug_columns: true,
+            debug_physical: false,
             debug_variables: false,
             debug_types: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             debug_typedefs: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),

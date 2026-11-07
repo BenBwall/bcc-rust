@@ -36,7 +36,8 @@
 //!   need memory; `extensions.rs` reports retained attribute refusals and
 //!   queries decoded symbol requests; `symbols.rs` maps retained entity
 //!   attributes to weak linkage, aliases, sections and constructor/destructor
-//!   lists.
+//!   lists; `tcc_runtime.rs` gives a `--tcc-mode` unit the bodies of the
+//!   `libtcc1.a` functions it references.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
 //!   conversions, including the floating ones; `saturation.rs` GCC's folds of
@@ -71,6 +72,7 @@ mod address_taken;
 mod extensions;
 mod module_items;
 mod symbols;
+pub(crate) mod tcc_runtime;
 
 // Function bodies
 mod alignment;
@@ -255,7 +257,6 @@ fn lower_unit<'tu, 'ir>(
         },
     };
     unit.retain_local_statics = options.retain_locals;
-    unit.source_lines |= options.source_lines;
     unit.stack_locals = context.configuration.stack_locals();
     unit.begin_debug_info(syntax);
     // A freestanding program supplies its own library, so no library
@@ -693,9 +694,6 @@ pub(crate) struct LoweringOptions {
     pub(crate) plain_inline:  bool,
     /// Optional O0 local static storage; see [`lower_with_options`].
     pub(crate) retain_locals: bool,
-    /// Record each instruction's source line on every target, as the
-    /// WebAssembly targets always do (`Body::inst_line`).
-    pub(crate) source_lines:  bool,
     #[cfg(feature = "recursive-lowering-study")]
     pub(crate) recursive:     bool,
     #[cfg(feature = "recursive-lowering-study")]
@@ -709,7 +707,6 @@ impl LoweringOptions {
         Self {
             plain_inline,
             retain_locals: true,
-            source_lines: false,
             #[cfg(feature = "recursive-lowering-study")]
             recursive: false,
             #[cfg(feature = "recursive-lowering-study")]
