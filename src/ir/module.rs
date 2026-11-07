@@ -233,6 +233,7 @@ impl<'ir> Module<'ir> {
     ) {
         let attributes = SymbolAttributes {
             alias:      attributes.alias,
+            ifunc:      attributes.ifunc,
             section:    attributes.section.map(|name| &*self.arena.alloc_str(name)),
             used:       attributes.used,
             visibility: attributes.visibility,
@@ -1133,6 +1134,10 @@ pub(crate) struct SymbolAttributes<'ir> {
     /// This symbol is another name for that definition of the same kind
     /// (LLVM's `alias`). An alias has no body or initializer of its own.
     pub(crate) alias:      Option<Symbol>,
+    /// The function this symbol's definition is chosen by when the program
+    /// loads (LLVM's `ifunc`). GNU extension: GCC manual, "Common Function
+    /// Attributes", ifunc.
+    pub(crate) ifunc:      Option<Symbol>,
     /// The object-file section that holds the definition.
     pub(crate) section:    Option<&'ir str>,
     /// The definition is kept even when nothing references it (LLVM's

@@ -681,6 +681,24 @@ impl<'id> Session<'id> {
         }
     }
 
+    /// A function `name` of type `ty` that `resolver` chooses at load time.
+    pub(super) fn ifunc(&self, name: &str, ty: Ty<'id>, resolver: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session; LLVM
+        // copies the counted name, and the resolver is a function in address
+        // space 0.
+        let raw = unsafe {
+            llvm_sys::core::LLVMAddGlobalIFunc(
+                self.module,
+                name.as_ptr().cast(),
+                name.len(),
+                ty.0,
+                0,
+                resolver.0,
+            )
+        };
+        Val(raw, PhantomData)
+    }
+
     /// A global alias of `aliasee` whose value has type `ty`.
     pub(super) fn alias(&self, name: &CStr, ty: Ty<'id>, aliasee: Val<'id>) -> Val<'id> {
         // SAFETY: The type system ties handles to this live session; the

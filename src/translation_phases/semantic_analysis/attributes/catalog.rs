@@ -62,6 +62,8 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     DllExport,
     /// GNU `noinline` and `noipa`: the inliner never expands the function.
     NoInline,
+    /// GNU `ifunc`: the function a resolver chooses when the program loads.
+    Ifunc,
     /// GNU `no_stack_protector`: no stack protector, whatever the options ask.
     NoStackProtector,
     /// GNU `no_sanitize` and its `_address` and `_thread` spellings: a function
@@ -261,7 +263,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "interrupt" => Rule::Interrupt,
         | "no_caller_saved_registers" => Rule::NoCallerSaved,
         | "ms_struct" | "gcc_struct" => Rule::RecordLayout,
-        | "ifunc" => Rule::Unsupported(U::Ifunc),
+        | "ifunc" => Rule::Ifunc,
         | "weakref" => Rule::Unsupported(U::Weakref),
         | "naked" => Rule::Naked,
         | "returns_twice" => Rule::ReturnsTwice,

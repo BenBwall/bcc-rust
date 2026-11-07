@@ -235,6 +235,7 @@ impl Unit<'_, '_, '_> {
             symbol,
             SymbolAttributes {
                 alias: None,
+                ifunc: None,
                 section: attributes.section,
                 used: attributes.used,
                 visibility,
@@ -307,7 +308,11 @@ impl Unit<'_, '_, '_> {
             match result {
                 | Ok((from, to)) => {
                     let mut attributes = self.module.symbol_attributes(from);
-                    attributes.alias = Some(to);
+                    if alias.ifunc {
+                        attributes.ifunc = Some(to);
+                    } else {
+                        attributes.alias = Some(to);
+                    }
                     self.module.set_symbol_attributes(from, attributes);
                 },
                 | Err(kind) => errors.push(at(kind, alias.source)),

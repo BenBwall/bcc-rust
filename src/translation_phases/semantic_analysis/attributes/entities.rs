@@ -142,7 +142,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | _ => {},
                 },
                 | Rule::Weak => self.weak_attribute(subject, attribute),
-                | Rule::Alias => self.alias_attribute(subject, attribute),
+                | Rule::Alias => self.alias_attribute(subject, attribute, false),
+                | Rule::Ifunc => self.ifunc_attribute(subject, attribute),
                 | Rule::Section => self.section_attribute(subject, attribute),
                 | Rule::Used => self.used_attribute(subject, attribute),
                 | Rule::Visibility => self.visibility_attribute(subject, attribute),
@@ -633,9 +634,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
+    /// GCC's and Clang's `ifunc("resolver")`: a declaration whose definition
+    /// is a resolver's choice when the program loads, and otherwise an
+    /// alias's kin; on anything but a function it is ignored with a warning.
+    /// The spelling table knows it on glibc's targets alone, as Clang does. GNU
+    /// extension: GCC manual, "Common Function Attributes".
+    fn ifunc_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        if !matches!(subject, Subject::Function { .. }) {
+            self.ignored(attribute);
+            return;
+        }
+        self.alias_attribute(subject, attribute, true);
+    }
+
     /// GCC `alias("target")` on a declaration that is not a definition;
     /// the target is resolved when the translation unit is complete.
-    fn alias_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+    fn alias_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>, ifunc: bool) {
         let Some(target) = self.string_argument(attribute) else {
             return;
         };
@@ -691,6 +705,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             // Block aliases are semantic definitions for redeclaration
             // diagnostics, but Clang never emits or resolves their targets.
             emitted: self.scopes[self.scope].kind == ScopeKind::File,
+            ifunc,
         });
     }
 
@@ -1338,6 +1353,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 );
                 continue;
             }
+            // A resolver returns the function to call, and its type says
+            // nothing else has to match the declaration's.
+            if request.ifunc {
+                let resolver = self.bindings[target].ty;
+                let returns_pointer = match self.types.nodes[resolver.index] {
+                    | TypeKind::Function { result, .. } =>
+                        matches!(self.types.nodes[result.index], TypeKind::Pointer(_)),
+                    | _ => false,
+                };
+                if !returns_pointer {
+                    self.error(
+                        SemanticErrorKind::IfuncResolver,
+                        request.source,
+                        None,
+                        Some(definition.name.source_vectors),
+                    );
+                    continue;
+                }
+                aliases.push(AliasFacts {
+                    binding: request.binding,
+                    target,
+                    source: request.source,
+                    ifunc: true,
+                });
+                continue;
+            }
             // An alias of a thread-local object is itself thread-local, as
             // Clang emits it. Clang also accepts an alias whose storage
             // duration differs from its target's and emits an alias that
@@ -1364,6 +1405,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 binding: request.binding,
                 target,
                 source: request.source,
+                ifunc: request.ifunc,
             });
         }
         symbols.aliases = aliases.leak();
@@ -1577,4 +1619,5 @@ struct AliasRequest {
     target:  StringCacheId,
     source:  SourceVectors,
     emitted: bool,
+    ifunc:   bool,
 }

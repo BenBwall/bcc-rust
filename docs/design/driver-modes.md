@@ -194,6 +194,11 @@ Clang: `-std=c99` selects a language, and each is still an extension under
 taking the second alternative of a `{att|intel}` group, on the LLVM back end. The
 native back end writes AT&T syntax whatever it is given.
 
+`ifunc` works on glibc's targets with the LLVM back end: the resolver runs when
+the program loads and chooses the function. Elsewhere it is an unknown attribute,
+as in Clang. The native back end and the interpreter have no such thing, so a call
+there is an undefined symbol.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`

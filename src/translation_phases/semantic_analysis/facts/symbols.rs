@@ -214,6 +214,8 @@ pub(crate) struct AliasFacts {
     pub(crate) binding: usize,
     pub(crate) target:  usize,
     pub(crate) source:  SourceVectors,
+    /// The target is a resolver that chooses the definition at load time.
+    pub(crate) ifunc:   bool,
 }
 
 /// A function to run before (`Constructor`) or after (`Destructor`) the
@@ -250,8 +252,6 @@ pub(crate) struct AttributeRefusal {
 pub(crate) enum UnsupportedAttribute {
     /// A calling convention other than the target's default C convention.
     CallingConvention,
-    /// GNU `ifunc`: a symbol resolved by a function at load time.
-    Ifunc,
     /// GNU `weakref`: a weak reference to another symbol.
     Weakref,
     /// GNU/MSVC `naked`: a body without prologue or epilogue.
@@ -282,7 +282,6 @@ impl UnsupportedAttribute {
     pub(crate) const fn description(self) -> &'static str {
         match self {
             | Self::CallingConvention => "calling conventions",
-            | Self::Ifunc => "the `ifunc` attribute",
             | Self::Weakref => "the `weakref` attribute",
             | Self::Naked => "naked functions",
             | Self::Multiversioning => "function multiversioning attributes",

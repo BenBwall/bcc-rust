@@ -1026,9 +1026,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entities.sort_unstable_by_key(|entity| entity.latest);
         for entity in entities {
             let b = self.bindings[entity.latest];
+            // An alias's or an `ifunc`'s definition is its target's.
             if b.linkage == Linkage::Internal
                 && entity.definition.is_none()
                 && !self.types.unanalyzed(b.ty)
+                && !self.declares_alias(self.function_identity(entity.latest))
             {
                 if let Some(&usage) = used.get(&self.function_identity(entity.latest)) {
                     self.error(
