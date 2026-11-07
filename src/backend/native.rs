@@ -333,9 +333,11 @@ fn emit<'m>(
                 function,
                 body,
                 target,
-                code.tls_model,
-                indirect_returns_twice,
-                track_sources,
+                isel::SelectOptions {
+                    tls_model: code.tls_model,
+                    indirect_returns_twice,
+                    track_sources,
+                },
                 arena,
             )
             .map_err(|construct| Unsupported {

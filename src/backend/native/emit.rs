@@ -152,11 +152,11 @@ pub(crate) struct LineCounter<'o> {
 }
 
 impl Write for LineCounter<'_> {
-    fn write_str(&mut self, text: &str) -> fmt::Result {
-        let lines = text.bytes().filter(|&byte| byte == b'\n').count();
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let lines = s.bytes().filter(|&byte| byte == b'\n').count();
         self.lines
             .set(self.lines.get() + u32::try_from(lines).map_err(|_| fmt::Error)?);
-        self.out.write_str(text)
+        self.out.write_str(s)
     }
 }
 

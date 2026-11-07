@@ -117,16 +117,14 @@ pub(crate) fn select<'a>(
     function: &Function<'_>,
     body: &Body<'_>,
     target: Target,
-    tls_model: TlsModel,
-    indirect_returns_twice: bool,
-    track_sources: bool,
+    options: SelectOptions,
     arena: &'a Bump,
 ) -> Result<MFunction<'a>, Construct> {
     let cfg = ControlFlowGraph::compute(body, arena);
     let tree = DominatorTree::compute(body, &cfg, arena);
-    let mut selector = Selector::new(module, function, body, target, tls_model, arena);
-    selector.indirect_returns_twice = indirect_returns_twice;
-    selector.func.tracks_sources = track_sources;
+    let mut selector = Selector::new(module, function, body, target, options.tls_model, arena);
+    selector.indirect_returns_twice = options.indirect_returns_twice;
+    selector.func.tracks_sources = options.track_sources;
     for (_, slot) in body.stack_slots() {
         // An object aligned above the stack's 16 bytes gets room to round
         // its address up at run time (see `over_aligned_address`).
@@ -254,6 +252,17 @@ fn lay_out_added_blocks<'a>(
     }
     order.extend((0..func.blocks.len()).filter(|&index| !placed[index]));
     func.relayout(&order, arena);
+}
+
+/// What selection needs to know beyond the function and the target.
+#[derive(Clone, Copy)]
+pub(crate) struct SelectOptions {
+    /// The `-ftls-model`.
+    pub(crate) tls_model:              TlsModel,
+    /// Whether an indirect call may reach a function that returns twice.
+    pub(crate) indirect_returns_twice: bool,
+    /// Whether to note what each instruction is for ([`InstSource`]).
+    pub(crate) track_sources:          bool,
 }
 
 /// How the selector represents an IR value.

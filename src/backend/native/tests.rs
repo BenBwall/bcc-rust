@@ -120,9 +120,11 @@ fn with_selection<R>(
         definition,
         body,
         target,
-        crate::target::TlsModel::default(),
-        module.returns_twice_escapes(),
-        false,
+        isel::SelectOptions {
+            tls_model:              crate::target::TlsModel::default(),
+            indirect_returns_twice: module.returns_twice_escapes(),
+            track_sources:          false,
+        },
         &scratch,
     )
     .unwrap();
