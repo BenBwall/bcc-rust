@@ -38,9 +38,12 @@
 //! through a `.refptr` stub. `used` needs nothing, since every symbol is
 //! emitted.
 
-use std::fmt::{
-    self,
-    Write,
+use std::{
+    cell::Cell,
+    fmt::{
+        self,
+        Write,
+    },
 };
 
 use super::{
@@ -53,6 +56,7 @@ use super::{
         Base,
         Callee,
         FrameObject,
+        InstSource,
         MBlock,
         MFunction,
         MInst,
@@ -121,6 +125,39 @@ pub(crate) struct Emitter<'o, 'm, 'ir> {
     /// The next number a [`MInst::SjljSetjmp`]'s resume labels take, unique
     /// in the listing.
     resume_uid:        u32,
+    /// What each listing line of a function is for, when asked.
+    recorder:          Option<ListingRecorder<'o>>,
+}
+
+/// One line of a listing that a function's code wrote.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct ListingLine {
+    /// The 0-based line in the listing.
+    pub(crate) line:     u32,
+    pub(crate) function: FuncId,
+    pub(crate) source:   InstSource,
+}
+
+/// Where the emitter records [`ListingLine`]s, and how many lines
+/// [`LineCounter`] has seen.
+pub(crate) struct ListingRecorder<'o> {
+    pub(crate) lines:   &'o Cell<u32>,
+    pub(crate) listing: &'o mut dyn FnMut(ListingLine),
+}
+
+/// Forwards what is written, counting its lines.
+pub(crate) struct LineCounter<'o> {
+    pub(crate) out:   &'o mut dyn Write,
+    pub(crate) lines: &'o Cell<u32>,
+}
+
+impl Write for LineCounter<'_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        let lines = text.bytes().filter(|&byte| byte == b'\n').count();
+        self.lines
+            .set(self.lines.get() + u32::try_from(lines).map_err(|_| fmt::Error)?);
+        self.out.write_str(text)
+    }
 }
 
 impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
@@ -138,6 +175,33 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             stubs: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             asm_uid: 0,
             resume_uid: 0,
+            recorder: None,
+        }
+    }
+
+    /// Records what each line of each function is for, as the function is
+    /// written.
+    pub(crate) fn record_listing(&mut self, recorder: ListingRecorder<'o>) {
+        self.recorder = Some(recorder);
+    }
+
+    /// How many lines are written, for [`Self::record`].
+    fn written(&self) -> u32 {
+        self.recorder
+            .as_ref()
+            .map_or(0, |recorder| recorder.lines.get())
+    }
+
+    /// The lines written since `from` are `function`'s code for `source`.
+    fn record(&mut self, from: u32, function: FuncId, source: InstSource) {
+        if let Some(recorder) = &mut self.recorder {
+            for line in from..recorder.lines.get() {
+                (recorder.listing)(ListingLine {
+                    line,
+                    function,
+                    source,
+                });
+            }
         }
     }
 
@@ -242,11 +306,13 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         if !self.elf {
             self.stubs.extend(func.indirect_symbols.iter().copied());
         }
+        let from = self.written();
         if function.entry == EntryConvention::Interrupt {
             self.handler_prologue(frame)?;
         } else {
             self.prologue(frame)?;
         }
+        self.record(from, id, InstSource::Entry);
         let aligned = aligned_blocks(func, arena);
         for (index, block) in func.blocks.iter().enumerate() {
             let block_id = MBlock::new(index);
@@ -258,12 +324,20 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(self.out, "{}:", BlockLabel(id, label))?;
             }
             let next = (index + 1 < func.blocks.len()).then(|| MBlock::new(index + 1));
-            for inst in &block.insts {
+            debug_assert!(
+                !func.tracks_sources || block.sources.len() == block.insts.len(),
+                "each instruction keeps its source"
+            );
+            for (position, inst) in block.insts.iter().enumerate() {
+                let from = self.written();
                 if let MInst::InlineAsm { index, .. } = *inst {
                     self.inline_asm(&func.asm[index as usize], id, frame)?;
-                    continue;
+                } else {
+                    self.instruction(id, inst, frame, next)?;
                 }
-                self.instruction(id, inst, frame, next)?;
+                if let Some(&source) = block.sources.get(position) {
+                    self.record(from, id, source);
+                }
             }
         }
         if self.elf {

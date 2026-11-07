@@ -4,6 +4,7 @@
 mod allocation;
 mod end_to_end;
 mod inline_asm;
+mod listing;
 mod machine_entry;
 pub(crate) mod object;
 pub(crate) mod object_coff;
@@ -121,6 +122,7 @@ fn with_selection<R>(
         target,
         crate::target::TlsModel::default(),
         module.returns_twice_escapes(),
+        false,
         &scratch,
     )
     .unwrap();
@@ -179,6 +181,7 @@ fn spilled_assembly(module: &Module<'_>, target: Target) -> Result<String, Strin
         CodeOptions::default(),
         &mut text,
         spill_everything,
+        None,
     )
     .map_err(|error| error.to_string())?;
     Ok(text)
