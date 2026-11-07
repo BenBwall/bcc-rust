@@ -28,18 +28,22 @@ use crate::backend::native::mir::{
 /// copies back.
 pub(super) fn combine(func: &mut MFunction<'_>) {
     for block in &mut func.blocks {
-        let insts = &mut block.insts;
         let mut index = 0;
-        while index + 1 < insts.len() {
-            if copies_back(insts[index], insts[index + 1]) {
-                _ = insts.remove(index + 1);
+        while index + 1 < block.insts.len() {
+            if copies_back(block.insts[index], block.insts[index + 1]) {
+                block.remove_inst(index + 1);
                 continue;
             }
-            if let Some(lea) = combined(insts[index], insts[index + 1])
-                && !flags_read_after(&insts[index + 2..])
+            if let Some(lea) = combined(block.insts[index], block.insts[index + 1])
+                && !flags_read_after(&block.insts[index + 2..])
             {
-                insts[index] = lea;
-                _ = insts.remove(index + 1);
+                block.insts[index] = lea;
+                // The `lea` is the addition, whatever the copy before it was
+                // for.
+                if !block.sources.is_empty() {
+                    block.sources[index] = block.sources[index + 1];
+                }
+                block.remove_inst(index + 1);
                 // The `lea` may combine with the next addition too.
                 continue;
             }

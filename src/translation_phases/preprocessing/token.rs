@@ -399,6 +399,16 @@ pub(crate) enum StringTokenType {
     EncodedString(LiteralId, LiteralEncoding),
 }
 
+impl StringTokenType {
+    /// The literal of a string of single bytes: an ordinary one or `u8`.
+    pub(crate) const fn narrow(self) -> Option<LiteralId> {
+        match self {
+            | Self::String(id) | Self::EncodedString(id, LiteralEncoding::Utf8) => Some(id),
+            | _ => None,
+        }
+    }
+}
+
 /// Literal values live outside the UTF-8 source-spelling interner.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct LiteralId(pub(crate) u32);

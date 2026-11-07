@@ -138,6 +138,8 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about reaching a function's end may be on.
+    pub(super) return_flow: bool,
     /// Whether `-Wsign-compare` is on.
     pub(super) sign_compare: bool,
     /// Whether `-Wmissing-field-initializers` is on.
@@ -193,6 +195,7 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            return_flow: on(&[G::ReturnType, G::InvalidNoreturn, G::GccNoreturn]),
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,

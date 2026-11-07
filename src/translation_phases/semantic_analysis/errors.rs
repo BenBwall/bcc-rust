@@ -121,6 +121,8 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
     ValueWarning(crate::configuration::DiagnosticGroup),
+    /// C99: §6.9.1p12, p. 142; PDF p. 154.
+    ReturnFlow(crate::configuration::DiagnosticGroup),
     /// The words are the diagnostic's name.
     /// C99: §6.7.8p21, p. 127; PDF p. 139.
     MissingFieldInitializer,
@@ -380,6 +382,18 @@ pub(crate) enum SemanticErrorKind {
     /// Clang: Microsoft's `__annotation` takes wide string literals only.
     /// MSVC extension: Microsoft Learn, "__annotation".
     AnnotationArgument,
+    /// `__builtin_cpu_supports` or `__builtin_cpu_is` of anything but a string
+    /// literal. GCC manual, "x86 Built-in Functions".
+    CpuBuiltinNotLiteral,
+    /// GCC: a name `__builtin_cpu_supports` or `__builtin_cpu_is` doesn't know.
+    CpuBuiltinParameter,
+    /// Clang: a name `__builtin_cpu_is` doesn't know.
+    CpuNameUnknown,
+    /// Clang: a name `__builtin_cpu_supports` doesn't know, which it warns
+    /// about and answers 0.
+    CpuFeatureUnknown,
+    /// Clang: a runtime processor query on a target without such processors.
+    CpuBuiltinTarget,
     /// C99: §6.5.2.5p1, p. 75; PDF p. 87.
     InvalidCompoundLiteral,
     /// An array of register storage converted to a pointer, which GCC and
@@ -1037,6 +1051,10 @@ impl SemanticErrorKind {
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
             | Self::AnnotationArgument => "not a wide string literal",
+            | Self::CpuBuiltinNotLiteral => "not a string literal",
+            | Self::CpuBuiltinParameter | Self::CpuNameUnknown | Self::CpuFeatureUnknown =>
+                "not a name this builtin knows",
+            | Self::CpuBuiltinTarget => "not on this target",
             | Self::SelectAnySubject => "not a data item with external linkage",
             | Self::InvalidArgumentType => "argument does not convert to the parameter type",
             | Self::InvalidCompoundLiteral => "invalid compound literal type",
@@ -1109,6 +1127,7 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::ValueWarning(_) => "this value is not what it seems",
+            | Self::ReturnFlow(_) => "control can reach this point",
             | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
@@ -1320,6 +1339,9 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::SignCompare
                     | crate::configuration::DiagnosticGroup::ReturnLocalAddr
                     | crate::configuration::DiagnosticGroup::ReturnStackAddress
+                    | crate::configuration::DiagnosticGroup::ReturnType
+                    | crate::configuration::DiagnosticGroup::InvalidNoreturn
+                    | crate::configuration::DiagnosticGroup::GccNoreturn
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
@@ -1745,6 +1767,11 @@ impl SemanticErrorKind {
                 "C99 §6.3.1.3p3: converting a value the new type cannot represent gives an \
                  implementation-defined result",
             ),
+            | Self::ReturnFlow(_) => (
+                "control reaches the end of the function",
+                "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
+                 reaches the closing brace",
+            ),
             | Self::SignCompare => (
                 "comparison of integers of different signs",
                 "C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand \
@@ -2041,6 +2068,27 @@ impl SemanticErrorKind {
                 "'selectany' can only be applied to data items with external linkage",
                 "Clang: Microsoft's `selectany` lets several translation units define one \
                  external object",
+            ),
+            | Self::CpuBuiltinNotLiteral => (
+                "expression is not a string literal",
+                "GCC \"x86 Built-in Functions\": the feature or processor is named by a string \
+                 literal",
+            ),
+            | Self::CpuBuiltinParameter => (
+                "parameter to builtin not valid",
+                "GCC \"x86 Built-in Functions\" lists the names",
+            ),
+            | Self::CpuNameUnknown => (
+                "invalid cpu name for builtin",
+                "Clang: `__builtin_cpu_is` takes the names in LLVM's `X86TargetParser.def`",
+            ),
+            | Self::CpuFeatureUnknown => (
+                "invalid cpu feature string for builtin",
+                "Clang: `__builtin_cpu_supports` of an unknown feature answers 0",
+            ),
+            | Self::CpuBuiltinTarget => (
+                "builtin is not supported on this target",
+                "Clang: runtime processor detection reads x86's `__cpu_model`",
             ),
             | Self::AnnotationArgument => (
                 "argument to `__annotation` must be a wide string literal",
@@ -2589,7 +2637,9 @@ impl SemanticErrorKind {
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
         match self {
-            | Self::PointerConstraint(group) | Self::ValueWarning(group) => Some(group),
+            | Self::PointerConstraint(group)
+            | Self::ValueWarning(group)
+            | Self::ReturnFlow(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
@@ -2792,8 +2842,18 @@ impl SemanticError {
     /// diagnostic formats.
     fn gnu_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
         use crate::configuration::DiagnosticFormat as Format;
+        if context.configuration.diagnostic_format() == Format::Gcc
+            && self.kind == SemanticErrorKind::CpuBuiltinNotLiteral
+        {
+            return Some("parameter to builtin must be a string constant or literal");
+        }
         let name = context.string_cache.at(self.name?);
         match (context.configuration.diagnostic_format(), self.kind) {
+            | (_, SemanticErrorKind::CpuBuiltinParameter) =>
+                Some(format_in!(arena, "parameter to builtin not valid: {name}")),
+            | (_, SemanticErrorKind::CpuNameUnknown) => Some("invalid cpu name for builtin"),
+            | (_, SemanticErrorKind::CpuFeatureUnknown) =>
+                Some("invalid cpu feature string for builtin"),
             | (Format::Gcc, SemanticErrorKind::UndeclaredIdentifier) => Some(format_in!(
                 arena,
                 "'{name}' undeclared (first use in this function)"
@@ -2909,6 +2969,7 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ValueWarning(_)
+                | SemanticErrorKind::ReturnFlow(_)
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
@@ -3080,6 +3141,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::AtomicBufferQualifiers
                 | SemanticErrorKind::UnknownAttribute
                 | SemanticErrorKind::IgnoredAttribute
+                | SemanticErrorKind::CpuFeatureUnknown
                 | SemanticErrorKind::IgnoredConvention
                 | SemanticErrorKind::ExcessiveRegsave(_)
                 | SemanticErrorKind::ReservedPriority

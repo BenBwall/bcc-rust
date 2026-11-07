@@ -112,7 +112,6 @@ pub(crate) fn lower_translation_unit_with_locals<'tu, 'ir>(
         LoweringControl {
             copies,
             retain_locals,
-            source_lines: false,
             #[cfg(feature = "recursive-lowering-study")]
             recursive: false,
         },
@@ -141,38 +140,7 @@ pub(crate) fn lower_translation_unit_recursive_with_locals<'tu, 'ir>(
         LoweringControl {
             copies,
             retain_locals,
-            source_lines: false,
             recursive: true,
-        },
-    )
-}
-
-/// [`lower_translation_unit_with_locals`] with each instruction's source
-/// line recorded on every target, for the explorer's line-by-line links
-/// between the source and its IR.
-pub(crate) fn lower_translation_unit_with_lines<'tu, 'ir>(
-    context: &Context<'tu>,
-    syntax: &ParsedTranslationUnit<'tu>,
-    sema: &SemanticTranslationUnit<'tu>,
-    arena: &'ir Bump,
-    optimizer: Option<&OptimizerOptions<'_>>,
-    profile: Profile,
-    emission: (InlineCopies, bool),
-) -> Result<DiagnosedModule<'ir>, MiddleEndError<'ir>> {
-    let (copies, retain_locals) = emission;
-    lower_diagnosed(
-        context,
-        syntax,
-        sema,
-        arena,
-        optimizer,
-        profile,
-        LoweringControl {
-            copies,
-            retain_locals,
-            source_lines: true,
-            #[cfg(feature = "recursive-lowering-study")]
-            recursive: false,
         },
     )
 }
@@ -181,8 +149,6 @@ pub(crate) fn lower_translation_unit_with_lines<'tu, 'ir>(
 struct LoweringControl {
     copies:        InlineCopies,
     retain_locals: bool,
-    /// Record each instruction's source line (`LoweringOptions`).
-    source_lines:  bool,
     #[cfg(feature = "recursive-lowering-study")]
     recursive:     bool,
 }
@@ -202,7 +168,6 @@ fn lower_diagnosed<'tu, 'ir>(
     let mut options =
         crate::lowering::LoweringOptions::default_for_build(copies == InlineCopies::Keep);
     options.retain_locals = control.retain_locals;
-    options.source_lines = control.source_lines;
     #[cfg(feature = "recursive-lowering-study")]
     {
         options.recursive = control.recursive;
@@ -295,7 +260,6 @@ fn compile_wide_bit_int_runtime<'ir>(
         LoweringControl {
             copies: InlineCopies::Resolve,
             retain_locals: false,
-            source_lines: false,
             #[cfg(feature = "recursive-lowering-study")]
             recursive: false,
         },

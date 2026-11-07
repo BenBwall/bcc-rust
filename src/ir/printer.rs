@@ -792,6 +792,9 @@ fn display_param_abi(abi: ParamAbi<'_>) -> impl fmt::Display + '_ {
                 if registers.complex {
                     f.write_str("complex, ")?;
                 }
+                if registers.whole != 0 {
+                    write!(f, "whole {}, ", registers.whole)?;
+                }
                 write!(f, "align {}", registers.align.bytes())?;
             }
             return f.write_char(')');
