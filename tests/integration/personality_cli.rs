@@ -1699,6 +1699,14 @@ mod tests {
                 macro_of(&["-fcf-protection=return"], "#define __CET__ 2\n"),
                 "{mode}"
             );
+            // GCC adds to what an earlier option asked for, and Clang replaces
+            // it.
+            let both = ["-fcf-protection=branch", "-fcf-protection=return"];
+            let added = if mode == "--gcc-mode" { 3 } else { 2 };
+            assert!(
+                macro_of(&both, &format!("#define __CET__ {added}\n")),
+                "{mode}"
+            );
             let (strong, all) = if mode == "--gcc-mode" { (3, 2) } else { (2, 3) };
             assert!(
                 macro_of(
@@ -1727,6 +1735,22 @@ mod tests {
                 1,
                 "{mode}: {output}"
             );
+            // On a nested function too, which only GCC has.
+            if mode == "--gcc-mode" {
+                directory.write(
+                    "i.c",
+                    "void g(char *);\nvoid f(void) {\n    __attribute__((no_stack_protector)) \
+                     void inner(void) {\n        char b[32];\n        g(b);\n    }\n    \
+                     inner();\n}\n",
+                );
+                let args = ["-fstack-protector-all", "-S", "i.c", "-o", "-"];
+                let output = stdout(&directory.bcc(mode, &args));
+                assert_eq!(
+                    output.matches("callq\t__stack_chk_fail").count(),
+                    1,
+                    "{output}"
+                );
+            }
             // The program stops at a smashed canary, and runs without one.
             directory.write(
                 "o.c",

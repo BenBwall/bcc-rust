@@ -427,6 +427,7 @@ impl Cli {
         if !matches!(self.target, Target::LinuxGnu | Target::LinuxMusl) {
             return hardening;
         }
+        let gcc = self.compiler_identity == Identity::Gcc;
         for option in &self.language_option {
             match option.as_str() {
                 | "-fstack-protector" => hardening.stack_protector = StackProtector::Basic,
@@ -437,12 +438,14 @@ impl Cli {
                     hardening.branch_protection = true;
                     hardening.return_protection = true;
                 },
+                // GCC adds to what earlier options asked for, and Clang
+                // replaces it.
                 | "-fcf-protection=branch" => {
                     hardening.branch_protection = true;
-                    hardening.return_protection = false;
+                    hardening.return_protection &= gcc;
                 },
                 | "-fcf-protection=return" => {
-                    hardening.branch_protection = false;
+                    hardening.branch_protection &= gcc;
                     hardening.return_protection = true;
                 },
                 | "-fcf-protection=none" => {
