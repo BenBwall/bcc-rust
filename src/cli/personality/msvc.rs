@@ -845,13 +845,14 @@ impl State {
             | "link" => self.linking = true,
             | "FA" | "FAs" | "FAc" | "FAcs" | "FAu" => self.listing = true,
             | "showIncludes" => self.bcc.push("--show-includes".into()),
+            // Debug information in the object, as clang-cl treats all three.
+            | "Zi" | "Z7" | "ZI" => self.bcc.push("--debug-level=2".into()),
             // Options that cannot change the program bcc builds: UTF-8
             // source and execution character sets (bcc's only ones),
             // calling conventions that x64 ignores, function-level linking,
             // string pooling, whole-program optimization, frame pointers
-            // and intrinsics (optimizations bcc may or may not make), debug
-            // information and tool files, warning levels, and parallel
-            // builds.
+            // and intrinsics (optimizations bcc may or may not make), tool
+            // files, warning levels, and parallel builds.
             | "utf-8"
             | "source-charset:utf-8"
             | "execution-charset:utf-8"
@@ -875,9 +876,6 @@ impl State {
             | "Qspectre-"
             | "FS"
             | "MP"
-            | "Zi"
-            | "Z7"
-            | "ZI"
             | "Zf"
             | "Oi"
             | "Oi-"

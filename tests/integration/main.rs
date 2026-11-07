@@ -26,6 +26,7 @@ mod cli;
 mod code_generation_cli;
 mod compile_resources;
 mod complex_integers;
+mod debug_info;
 mod diagnostic_parity;
 mod diagnostic_pragmas;
 mod diagnostics_golden;

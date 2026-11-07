@@ -354,6 +354,13 @@ fn assembler_arguments(args: &Cli, assembly: Assembly<'_>) -> Vec<OsString> {
             .into(),
         );
     }
+    // Line tables for the assembly, as GCC and Clang pass `-g` on to it.
+    if args.code_generation.debug_level() > 0 {
+        options.push("-g".into());
+        if let Some(version) = args.code_generation.dwarf_version {
+            options.push(format!("-gdwarf-{version}").into());
+        }
+    }
     options.extend(args.driver.assembler_option.iter().map(OsString::from));
     // Clang's warnings reach the user, so `-w` and `-Werror` apply to them.
     let configuration = args.configuration();

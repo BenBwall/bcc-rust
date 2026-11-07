@@ -26,6 +26,7 @@
 use crate::{
     ir::{
         Block,
+        DebugLoc,
         Entity,
         FuncId,
         InstData,
@@ -46,27 +47,32 @@ use crate::{
 /// A function body being lowered: blocks of operations, edges whose
 /// arguments can still grow, and the SSA variables of its scalar locals.
 pub(super) struct Draft<'s> {
-    scratch:           &'s Bump,
-    pub(super) blocks: ArenaVec<'s, DraftBlock<'s>>,
+    scratch:             &'s Bump,
+    pub(super) blocks:   ArenaVec<'s, DraftBlock<'s>>,
     /// The block of each IR label, in label order: the function's
     /// address-taken C labels. GNU extension: GCC "Labels as Values".
-    pub(super) labels: ArenaVec<'s, Block>,
-    pub(super) values: ArenaVec<'s, DraftValue>,
-    pub(super) slots:  ArenaVec<'s, StackSlotData>,
-    constants:         ArenaVec<'s, i128>,
-    variables:         ArenaVec<'s, Type>,
+    pub(super) labels:   ArenaVec<'s, Block>,
+    pub(super) values:   ArenaVec<'s, DraftValue>,
+    pub(super) slots:    ArenaVec<'s, StackSlotData>,
+    constants:           ArenaVec<'s, i128>,
+    variables:           ArenaVec<'s, Type>,
     /// The current definition of each variable at the end of each block.
-    definitions:       ArenaMap<'s, (Block, Var), Value>,
+    definitions:         ArenaMap<'s, (Block, Var), Value>,
     /// One `poison` per type, materialized in the entry block on emission.
-    poison:            [Option<Value>; Type::ALL.len()],
+    poison:              [Option<Value>; Type::ALL.len()],
     /// One uninitialized value per type, likewise.
-    uninit:            [Option<Value>; Type::ALL.len()],
-    current:           Block,
-    lookups:           ArenaVec<'s, Lookup>,
-    results:           ArenaVec<'s, Value>,
-    visited:           ArenaSet<'s, Block>,
+    uninit:              [Option<Value>; Type::ALL.len()],
+    current:             Block,
+    lookups:             ArenaVec<'s, Lookup>,
+    results:             ArenaVec<'s, Value>,
+    visited:             ArenaSet<'s, Block>,
     /// The source line of the instructions pushed from now on, or 0.
-    pub(super) line:   u32,
+    pub(super) line:     u32,
+    /// The debug location of the code being built, when the module has
+    /// debug information.
+    pub(super) location: Option<DebugLoc>,
+    /// Whether instructions record [`Self::location`].
+    pub(super) locating: bool,
 }
 
 /// A scalar local whose value lives in SSA values rather than memory.
@@ -76,11 +82,13 @@ pub(super) struct Var(u32);
 /// One block of a draft.
 pub(super) struct DraftBlock<'s> {
     /// Explicit parameters first, then those SSA construction adds.
-    pub(super) params:          ArenaVec<'s, Value>,
-    pub(super) insts:           ArenaVec<'s, (Op<'s>, Option<Value>)>,
+    pub(super) params: ArenaVec<'s, Value>,
+    pub(super) insts: ArenaVec<'s, (Op<'s>, Option<Value>)>,
     /// The source line of each instruction, or 0.
-    pub(super) lines:           ArenaVec<'s, u32>,
-    pub(super) terminator:      Option<Terminator<'s>>,
+    pub(super) lines: ArenaVec<'s, u32>,
+    /// The debug location of each instruction, when the function has them.
+    pub(super) locations: ArenaVec<'s, Option<DebugLoc>>,
+    pub(super) terminator: Option<Terminator<'s>>,
     /// The source line of the terminator: the line current when it was
     /// created (the `if`, `switch` or loop statement, a `return`, the closing
     /// brace for the implicit return), as GCC's and Clang's line tables
@@ -88,12 +96,14 @@ pub(super) struct DraftBlock<'s> {
     /// to the prologue, and for a terminator with no line: those take the
     /// line of the block's last instruction.
     pub(super) terminator_line: u32,
+    /// The debug location of the terminator, chosen as its line is.
+    pub(super) terminator_location: Option<DebugLoc>,
     /// Each incoming edge: the block it leaves and its index there.
-    pub(super) preds:           ArenaVec<'s, (Block, u32)>,
-    sealed:                     bool,
+    pub(super) preds: ArenaVec<'s, (Block, u32)>,
+    sealed: bool,
     /// Parameters added while the block was unsealed, still without their
     /// arguments.
-    incomplete:                 ArenaVec<'s, (Var, Value)>,
+    incomplete: ArenaVec<'s, (Var, Value)>,
 }
 
 /// A draft value: its type, where it comes from, and, once SSA
@@ -296,14 +306,16 @@ impl<'s> Draft<'s> {
     pub(super) fn create_block(&mut self, params: &[Type]) -> Block {
         let block = Block::new(self.blocks.len());
         self.blocks.push(DraftBlock {
-            params:          ArenaVec::new_in(self.scratch),
-            insts:           ArenaVec::new_in(self.scratch),
-            lines:           ArenaVec::new_in(self.scratch),
-            terminator:      None,
-            terminator_line: 0,
-            preds:           ArenaVec::new_in(self.scratch),
-            sealed:          false,
-            incomplete:      ArenaVec::new_in(self.scratch),
+            params:              ArenaVec::new_in(self.scratch),
+            insts:               ArenaVec::new_in(self.scratch),
+            lines:               ArenaVec::new_in(self.scratch),
+            locations:           ArenaVec::new_in(self.scratch),
+            terminator:          None,
+            terminator_line:     0,
+            terminator_location: None,
+            preds:               ArenaVec::new_in(self.scratch),
+            sealed:              false,
+            incomplete:          ArenaVec::new_in(self.scratch),
         });
         for &ty in params {
             _ = self.add_param(block, ty);
@@ -360,13 +372,15 @@ impl<'s> Draft<'s> {
                 u32::try_from(index).expect("a terminator has few edges"),
             ));
         }
-        let line = if block == Self::entry() && matches!(terminator, Terminator::Jump(_)) {
-            0
-        } else {
-            self.line
-        };
+        let (line, location) =
+            if block == Self::entry() && matches!(terminator, Terminator::Jump(_)) {
+                (0, None)
+            } else {
+                (self.line, self.location)
+            };
         self.blocks[block.index()].terminator = Some(terminator);
         self.blocks[block.index()].terminator_line = line;
+        self.blocks[block.index()].terminator_location = location;
     }
 
     pub(super) fn edge(&self, target: Block, args: &[Value]) -> Edge<'s> {
@@ -492,6 +506,11 @@ impl<'s> Draft<'s> {
         let value = result.map(|ty| self.new_value(ty, def));
         self.blocks[self.current.index()].insts.push((op, value));
         self.blocks[self.current.index()].lines.push(self.line);
+        if self.locating {
+            self.blocks[self.current.index()]
+                .locations
+                .push(self.location);
+        }
         value
     }
 
@@ -613,6 +632,8 @@ impl<'s> Draft<'s> {
             results: ArenaVec::new_in(scratch),
             visited: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             line: 0,
+            location: None,
+            locating: false,
         };
         let entry = draft.create_block(params);
         draft.blocks[entry.index()].sealed = true;

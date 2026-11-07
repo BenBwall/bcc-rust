@@ -336,6 +336,15 @@ fn verify_function_into<'m, 's>(
     for block in body.blocks() {
         for &inst in body.block_insts(block) {
             verifier.instruction(inst);
+            if let Some(location) = body.inst_location(inst)
+                && module.debug_info().root_function(location) != Some(func)
+            {
+                verifier.errors.push(VerifierError {
+                    item:     function.name,
+                    location: Location::Inst(inst),
+                    kind:     VerifierErrorKind::DebugLocation,
+                });
+            }
         }
     }
     verifier.dominance();
@@ -1430,6 +1439,9 @@ pub(crate) enum VerifierErrorKind {
     HandlerSignature,
     /// LLVM and the native symbol interfaces require NUL-free names.
     NulSymbolName,
+    /// An instruction's debug location does not exist, or its scope chain
+    /// does not end in this function, which LLVM's verifier rejects.
+    DebugLocation,
     /// An alias, section, constructor or destructor request breaks the rule
     /// named.
     SymbolAttribute(&'static str),
@@ -1680,6 +1692,8 @@ impl fmt::Display for VerifierErrorKind {
             | Self::StaticChain =>
                 f.write_str("a static chain must be a plain `ptr` last fixed parameter"),
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
+            | Self::DebugLocation =>
+                f.write_str("a debug location is missing or belongs to another function"),
             | Self::HandlerSignature => f.write_str(
                 "an interrupt handler takes a pointer and an optional i64, and returns nothing",
             ),

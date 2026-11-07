@@ -12,6 +12,7 @@ use super::{
         Block,
         BlockLabel,
         ConstId,
+        DebugLoc,
         Entity,
         GlobalId,
         Inst,
@@ -52,6 +53,8 @@ pub(crate) struct FunctionBuilder<'m, 'ir> {
     current:         Option<Block>,
     /// The source line the next instructions get.
     line:            u32,
+    /// The debug location the next instructions get.
+    location:        Option<DebugLoc>,
 }
 
 impl FunctionBuilder<'_, '_> {
@@ -72,6 +75,10 @@ impl FunctionBuilder<'_, '_> {
         let inst = self.body.insts.push(data);
         _ = self.body.results.push(result);
         _ = self.body.lines.push(self.line);
+        if let Some(location) = self.location {
+            self.body.locations.resize(inst.index(), None);
+            self.body.locations.push(Some(location));
+        }
         if let Some(value) = result {
             self.body.values[value] = ValueData {
                 ty:  self.module.result_type(&data).unwrap_or(Type::Ptr),
@@ -86,6 +93,12 @@ impl FunctionBuilder<'_, '_> {
     /// (0 for none).
     pub(crate) fn set_line(&mut self, line: u32) {
         self.line = line;
+    }
+
+    /// Gives the instructions inserted from now on the debug location
+    /// `location`.
+    pub(crate) const fn set_location(&mut self, location: Option<DebugLoc>) {
+        self.location = location;
     }
 
     /// Retains a frontend diagnostic ID while this call survives optimization.
@@ -573,6 +586,7 @@ impl<'m, 'ir> FunctionBuilder<'m, 'ir> {
             body,
             current: None,
             line: 0,
+            location: None,
         }
     }
 

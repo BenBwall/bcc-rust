@@ -630,8 +630,15 @@ impl Parser<'_> {
             | "b" => self.invocation.warning(format_args!(
                 "bounds checking (-b) is not supported; ignoring it"
             )),
-            // Debug information has no effect on the program.
-            | "g" => {},
+            // `-gstabs` and the like ask for what bcc does not write; a
+            // level or DWARF version is as in GCC.
+            | "g" =>
+                if value_text.is_empty()
+                    || value_text.starts_with("dwarf")
+                    || value_text.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    state.options.push(concat("-g", &value));
+                },
             | "c" => self.action(Action::Object, name),
             | "r" => self.action(Action::Relocatable, name),
             | "E" => self.action(Action::Preprocess, name),
@@ -1361,7 +1368,7 @@ Linker options:
   -soname      set name for shared library to be used at runtime
   -Wl,-opt[=val]  set linker option
 Debugger options:
-  -g           accepted; bcc writes no debug information
+  -g           generate debug information
   -b, -bt[N]   accepted with a warning; bcc has no bounds checker or backtraces
 Misc. options:
   -std=version define __STDC_VERSION__ according to version (c11/gnu11)

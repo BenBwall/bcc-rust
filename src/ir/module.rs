@@ -7,6 +7,7 @@ use std::fmt;
 use bitflags::bitflags;
 
 use super::{
+    DebugInfo,
     EntryConvention,
     Function,
     InlineAsm,
@@ -422,7 +423,19 @@ impl<'ir> Module<'ir> {
             user_interrupts: false,
             fast_math: crate::configuration::FastMathFlags::NONE,
             inline_asm: Table::new_in(arena),
+            debug_info: DebugInfo::new_in(arena),
         }
+    }
+
+    /// What `-g` asks a back end to describe.
+    pub(crate) const fn debug_info(&self) -> &DebugInfo<'ir> {
+        &self.debug_info
+    }
+
+    /// The module's debug information, to add to, with the arena its names
+    /// go in.
+    pub(crate) const fn debug_info_mut(&mut self) -> (&mut DebugInfo<'ir>, &'ir Bump) {
+        (&mut self.debug_info, self.arena)
     }
 
     pub(crate) fn arena(&self) -> &'ir Bump {
