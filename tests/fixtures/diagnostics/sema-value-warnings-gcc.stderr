@@ -49,3 +49,12 @@ sema-value-warnings-gcc.c:27:24: warning: overflow in conversion from 'int' to '
 sema-value-warnings-gcc.c:29:20: warning: overflow in conversion from 'int' to 'char' changes value from '1000' to '-24' [-Woverflow]
    29 | void d4(void) { d3(1000); }
       |                    ^~~~
+sema-value-warnings-gcc.c:36:33: warning: function returns address of local variable [-Wreturn-local-addr]
+   36 | char *e7(void) { char x; return (char *)(long)&x; }
+      |                                 ^~~~~~~~~~~~~~~~
+sema-value-warnings-gcc.c:38:33: warning: function returns address of local variable [-Wreturn-local-addr]
+   38 | char *e9(void) { char x; return (char *)((long)&x + 1); }
+      |                                 ^~~~~~~~~~~~~~~~~~~~~~
+sema-value-warnings-gcc.c:39:34: warning: function returns address of local variable [-Wreturn-local-addr]
+   39 | char *e10(void) { char x; return (char *)(1 + (long)&x); }
+      |                                  ^~~~~~~~~~~~~~~~~~~~~~

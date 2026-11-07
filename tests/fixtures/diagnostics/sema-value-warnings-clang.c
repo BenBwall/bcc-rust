@@ -27,3 +27,14 @@ void d(char c) { c = 300; char e = 128; unsigned char f = -1; (void)e; (void)f; 
 char d2(void) { return 1000; }
 void d3(char);
 void d4(void) { d3(1000); }
+_Bool e1(void) { int x; return (_Bool)&x; }
+_Bool e2(void) { int x; return &x; }
+long e3(void) { int x; return (long)&x - (long)&x; }
+long e4(void) { int x; return (long)&x + 1; }
+int e5(void) { int x; return (int)(long)&x; }
+char *e6(void) { char x; return (char *)(&x - &x); }
+char *e7(void) { char x; return (char *)(long)&x; }
+char *e8(void) { char x; return (char *)((long)&x - (long)&x); }
+char *e9(void) { char x; return (char *)((long)&x + 1); }
+char *e10(void) { char x; return (char *)(1 + (long)&x); }
+char *e11(void) { char x; return (char *)(_Bool)&x; }

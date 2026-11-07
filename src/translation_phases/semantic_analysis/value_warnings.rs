@@ -61,7 +61,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     "function returns address of local variable",
                 );
             }
-        } else {
+        } else if self.holds_address(result) {
+            // The conversion to a `_Bool` result keeps only the truth.
             self.clang_local_address(e);
         }
     }
@@ -86,19 +87,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         loop {
             e = match e.kind {
                 | E::Parenthesized { expression } => expression,
+                // GCC strips every conversion between pointers and
+                // integers, so an address survives a round trip through
+                // `long`.
                 | E::Cast {
                     operand_expression, ..
-                } if self.pointer_target(self.expression_info(e).ty).is_some() =>
-                    operand_expression,
+                } if self.holds_address(self.expression_info(e).ty) => operand_expression,
+                // Its first operand, after folding has moved a constant
+                // addend second and pointer arithmetic has put the pointer
+                // first.
                 | E::Binary {
-                    operator: B::Addition | B::Subtraction,
+                    operator: B::Addition,
                     left_expression,
                     right_expression,
                 } =>
-                    if self.address_valued(left_expression) {
-                        left_expression
-                    } else {
+                    if self.address_valued(right_expression) && !self.address_valued(left_expression)
+                        || self.expression_info(left_expression).integer.is_some()
+                    {
                         right_expression
+                    } else {
+                        left_expression
+                    },
+                // A difference with an address taken away may be valid, so
+                // GCC stops there.
+                | E::Binary {
+                    operator: B::Subtraction,
+                    left_expression,
+                    right_expression,
+                } =>
+                    if self.subtracts_address(right_expression) {
+                        return false;
+                    } else {
+                        left_expression
                     },
                 | E::Unary {
                     operator: U::AddressOf,
@@ -113,6 +133,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     fn address_valued(&self, e: &'tu Expression<'tu>) -> bool {
         self.array_valued(e) || self.pointer_target(self.expression_info(e).ty).is_some()
+    }
+
+    /// Whether a value of type `ty` can carry an address on: a pointer, or an
+    /// integer other than `_Bool`, whose conversion keeps only the truth.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.3.2.3p6, p. 47; PDF p. 59.
+    fn holds_address(&self, ty: TypeId) -> bool {
+        let ty = self.types.non_atomic(ty);
+        self.pointer_target(ty).is_some()
+            || !matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool))
+                && self.integer_type(ty).is_some()
+    }
+
+    /// Whether the subtrahend `e` is an address, through the integer
+    /// conversions GCC strips from it.
+    fn subtracts_address(&self, mut e: &'tu Expression<'tu>) -> bool {
+        loop {
+            if self.address_valued(e) {
+                return true;
+            }
+            e = match e.kind {
+                | E::Parenthesized { expression } => expression,
+                | E::Cast {
+                    operand_expression, ..
+                } if self.holds_address(self.expression_info(e).ty) => operand_expression,
+                | _ => return false,
+            };
+        }
     }
 
     /// Whether the object the lvalue `e` designates is one of this
@@ -177,20 +224,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let found = loop {
                 e = match e.kind {
                     | E::Parenthesized { expression } => expression,
-                    // Clang follows an address through any cast, to an
-                    // integer too.
+                    // Clang follows an address through a cast to a pointer
+                    // or an integer, but not to `_Bool`.
                     | E::Cast {
                         operand_expression, ..
-                    } if self.address_valued(operand_expression) => operand_expression,
+                    } if self.holds_address(self.expression_info(e).ty) => operand_expression,
+                    // Only pointer arithmetic, to its pointer operand.
                     | E::Binary {
                         operator: B::Addition | B::Subtraction,
                         left_expression,
                         right_expression,
-                    } =>
+                    } if self.pointer_target(self.expression_info(e).ty).is_some() =>
                         if self.address_valued(left_expression) {
                             left_expression
-                        } else {
+                        } else if self.address_valued(right_expression) {
                             right_expression
+                        } else {
+                            break None;
                         },
                     | E::Conditional(c) if pending[1].is_none() => {
                         pending[1] = Some(c.else_expression);
