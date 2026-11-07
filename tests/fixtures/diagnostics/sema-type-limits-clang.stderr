@@ -61,4 +61,40 @@ sema-type-limits-clang.c:27:11: warning: result of comparison of constant 70000 
 sema-type-limits-clang.c:29:10: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always false [-Wtautological-constant-out-of-range-compare]
    29 |   r += c > 300u;
       |          ^
-21 warnings generated.
+sema-type-limits-clang.c:40:10: warning: result of comparison of constant 200 with expression of type 'signed char' is always false [-Wtautological-constant-out-of-range-compare]
+   40 |   r += s == 200U;
+      |          ^~
+sema-type-limits-clang.c:41:10: warning: result of comparison of constant 200 with expression of type 'signed char' is always true [-Wtautological-constant-out-of-range-compare]
+   41 |   r += s != 200U;
+      |          ^~
+sema-type-limits-clang.c:42:10: warning: result of comparison 'signed char' <= 4294967295 is always true [-Wtautological-type-limit-compare]
+   42 |   r += s <= 4294967295U;
+      |          ^~
+sema-type-limits-clang.c:43:10: warning: result of comparison of unsigned expression >= 0 is always true [-Wtautological-unsigned-zero-compare]
+   43 |   r += s >= 0U;
+      |          ^~
+sema-type-limits-clang.c:45:10: warning: result of comparison of unsigned expression < 0 is always false [-Wtautological-unsigned-zero-compare]
+   45 |   r += i < 0U;
+      |          ^
+sema-type-limits-clang.c:46:10: warning: result of comparison 'int' <= 2147483647 is always true [-Wtautological-type-limit-compare]
+   46 |   r += i <= 2147483647;
+      |          ^~
+sema-type-limits-clang.c:47:10: warning: result of comparison of constant 4294967296 with expression of type 'int' is always false [-Wtautological-constant-out-of-range-compare]
+   47 |   r += i == 4294967296L;
+      |          ^~
+sema-type-limits-clang.c:48:10: warning: result of comparison 'unsigned int' <= 4294967295 is always true [-Wtautological-type-limit-compare]
+   48 |   r += u <= 4294967295U;
+      |          ^~
+sema-type-limits-clang.c:53:10: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always false [-Wtautological-constant-out-of-range-compare]
+   53 |   r += c > BIG;
+      |          ^
+sema-type-limits-clang.c:61:77: warning: result of comparison of unsigned expression < 0 is always false [-Wtautological-unsigned-zero-compare]
+   61 | int k(unsigned char c, unsigned u) { if (0) return c > 300; if (0) return u < 0; return 0; }
+      |                                                                             ^
+sema-type-limits-clang.c:62:56: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always false [-Wtautological-constant-out-of-range-compare]
+   62 | int q(unsigned char c) { return __builtin_constant_p(c > 300) + (0 ? (c <= 255) : 1); }
+      |                                                        ^
+sema-type-limits-clang.c:62:73: warning: result of comparison 'unsigned char' <= 255 is always true [-Wtautological-type-limit-compare]
+   62 | int q(unsigned char c) { return __builtin_constant_p(c > 300) + (0 ? (c <= 255) : 1); }
+      |                                                                         ^~
+33 warnings generated.

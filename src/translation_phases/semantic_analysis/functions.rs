@@ -2235,6 +2235,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         false
     }
 
+    /// Whether the expression being analyzed is an operand of `sizeof`,
+    /// `typeof` or `_Alignof`, which Clang does not analyze at all.
+    /// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    pub(super) fn unevaluated_operand(&self) -> bool {
+        self.functions.sizeof.is_some()
+            || self.in_reference_context(|kind| {
+                matches!(
+                    kind,
+                    ReferenceContextKind::Typeof(_) | ReferenceContextKind::Unevaluated
+                )
+            })
+    }
+
+    /// Whether the expression being analyzed is an operand of a `_Generic`, or
+    /// of a `&&`, `||` or `?:` that a constant decides: Clang analyzes it,
+    /// but drops its warnings about what runs.
+    /// C99: §6.5.13p4, p. 89; PDF p. 101; §6.5.14p4, p. 89; PDF p. 101;
+    /// §6.5.15p4, p. 90; PDF p. 102.
+    pub(super) fn skipped_operand(&self) -> bool {
+        self.functions.skipped_operand
+            || self.in_reference_context(|kind| {
+                matches!(kind, ReferenceContextKind::ConditionalArm { .. })
+            })
+    }
+
+    fn in_reference_context(&self, test: impl Fn(ReferenceContextKind<'tu>) -> bool) -> bool {
+        let mut next = self.functions.reference_context;
+        while let Some(index) = next {
+            let context = self.functions.reference_contexts[index];
+            if test(context.kind) {
+                return true;
+            }
+            next = context.parent;
+        }
+        false
+    }
+
     /// The skipped state of the code being analyzed, which an operand or
     /// arm starts from.
     pub(super) fn skipped_state(&self) -> Skipped {

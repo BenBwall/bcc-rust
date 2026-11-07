@@ -55,3 +55,54 @@ sema-type-limits-gcc.c:27:11: warning: comparison is always false due to limited
 sema-type-limits-gcc.c:29:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
    29 |   r += c > 300u;
       |          ^
+sema-type-limits-gcc.c:40:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   40 |   r += s == 200U;
+      |          ^~
+sema-type-limits-gcc.c:41:10: warning: comparison is always true due to limited range of data type [-Wtype-limits]
+   41 |   r += s != 200U;
+      |          ^~
+sema-type-limits-gcc.c:45:10: warning: comparison of unsigned expression in '< 0' is always false [-Wtype-limits]
+   45 |   r += i < 0U;
+      |          ^
+sema-type-limits-gcc.c:47:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   47 |   r += i == 4294967296L;
+      |          ^~
+sema-type-limits-gcc.c:50:10: warning: comparison of unsigned expression in '< 0' is always false [-Wtype-limits]
+   50 |   r += u < ZERO;
+      |          ^
+sema-type-limits-gcc.c:51:10: warning: comparison of unsigned expression in '>= 0' is always true [-Wtype-limits]
+   51 |   r += u >= (ZERO);
+      |          ^~
+sema-type-limits-gcc.c:52:10: warning: comparison of unsigned expression in '< 0' is always false [-Wtype-limits]
+   52 |   r += u < EZERO;
+      |          ^
+sema-type-limits-gcc.c:53:10: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   53 |   r += c > BIG;
+      |          ^
+sema-type-limits-gcc.c:54:17: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   54 |   r += sizeof(c > 300);
+      |                 ^
+sema-type-limits-gcc.c:55:17: warning: comparison of unsigned expression in '< 0' is always false [-Wtype-limits]
+   55 |   r += sizeof(u < 0);
+      |                 ^
+sema-type-limits-gcc.c:56:15: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   56 |   r += 0 ? (c > 300) : 1;
+      |               ^
+sema-type-limits-gcc.c:57:16: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   57 |   r += 0 && (c > 300);
+      |                ^
+sema-type-limits-gcc.c:58:29: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   58 |   r += _Generic(1, long: (c > 300), default: 1);
+      |                             ^
+sema-type-limits-gcc.c:61:54: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   61 | int k(unsigned char c, unsigned u) { if (0) return c > 300; if (0) return u < 0; return 0; }
+      |                                                      ^
+sema-type-limits-gcc.c:61:77: warning: comparison of unsigned expression in '< 0' is always false [-Wtype-limits]
+   61 | int k(unsigned char c, unsigned u) { if (0) return c > 300; if (0) return u < 0; return 0; }
+      |                                                                             ^
+sema-type-limits-gcc.c:62:56: warning: comparison is always false due to limited range of data type [-Wtype-limits]
+   62 | int q(unsigned char c) { return __builtin_constant_p(c > 300) + (0 ? (c <= 255) : 1); }
+      |                                                        ^
+sema-type-limits-gcc.c:62:73: warning: comparison is always true due to limited range of data type [-Wtype-limits]
+   62 | int q(unsigned char c) { return __builtin_constant_p(c > 300) + (0 ? (c <= 255) : 1); }
+      |                                                                         ^~
