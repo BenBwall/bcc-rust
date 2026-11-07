@@ -773,6 +773,8 @@ pub(crate) enum SemanticErrorKind {
     AliasTarget,
     /// Clang: a function aliases a function and a variable a variable.
     AliasKind,
+    /// An `ifunc` resolver that returns no pointer.
+    IfuncResolver,
     /// Clang: aliases that name each other in a cycle.
     AliasCycle,
     /// Clang `-Wattribute-alias`: alias and target have different types.
@@ -946,6 +948,7 @@ impl SemanticErrorKind {
             | Self::AliasDefinition => "definition with an alias attribute",
             | Self::AliasTarget => "alias target is not defined here",
             | Self::AliasKind => "alias and target differ in kind",
+            | Self::IfuncResolver => "this resolver returns no pointer",
             | Self::AliasCycle => "alias is part of a cycle",
             | Self::AliasTypeMismatch => "alias type differs from its target's",
             | Self::SectionMismatch => "different section",
@@ -1168,6 +1171,7 @@ impl SemanticErrorKind {
             | Self::AliasDefinition
             | Self::AliasTarget
             | Self::AliasKind
+            | Self::IfuncResolver
             | Self::AliasCycle
             | Self::AliasTypeMismatch
             | Self::SectionMismatch
@@ -2349,6 +2353,10 @@ impl SemanticErrorKind {
                 "alias must point to a defined variable or function",
                 "GCC Common Function Attributes: the target names a definition in the same \
                  translation unit, by its emitted symbol name",
+            ),
+            | Self::IfuncResolver => (
+                "ifunc resolver function must return a pointer",
+                "GCC Common Function Attributes: the resolver returns the function a call reaches",
             ),
             | Self::AliasKind => (
                 "alias and target must both be functions or both be variables",

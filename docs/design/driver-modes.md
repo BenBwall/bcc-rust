@@ -194,6 +194,11 @@ Clang: `-std=c99` selects a language, and each is still an extension under
 taking the second alternative of a `{att|intel}` group, on the LLVM back end. The
 native back end writes AT&T syntax whatever it is given.
 
+`ifunc` works on glibc's targets with the LLVM back end: the resolver runs when
+the program loads and chooses the function. Elsewhere it is an unknown attribute,
+as in Clang. The native back end and the interpreter have no such thing, so a call
+there is an undefined symbol.
+
 `-pg` on Linux makes each function call `mcount` and links the profiling startup
 file, so a run writes `gmon.out` for `gprof`, and `no_instrument_function` keeps a
 function out. `-p` still warns.

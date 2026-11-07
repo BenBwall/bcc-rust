@@ -1054,10 +1054,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 self.report_unused_function(b.name, definition);
             }
+            // An alias's or an `ifunc`'s definition is its target's.
             if !clang_after_error
                 && b.linkage == Linkage::Internal
                 && entity.definition.is_none()
                 && !self.types.unanalyzed(b.ty)
+                && !self.declares_alias(self.function_identity(entity.latest))
             {
                 if let Some(&usage) = used.get(&self.function_identity(entity.latest)) {
                     self.error(

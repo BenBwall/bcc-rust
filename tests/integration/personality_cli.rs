@@ -1841,6 +1841,79 @@ mod tests {
         }
     }
 
+    /// `ifunc`: a resolver chooses the definition when the program loads.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_ifunc_runs_what_its_resolver_chooses() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "static int one(void) { return 1; }\nstatic int two(void) { return 2; }\nstatic int \
+             (*resolve(void))(void) { return two; }\nint f(void) \
+             __attribute__((ifunc(\"resolve\")));\nstatic int s(void) \
+             __attribute__((ifunc(\"resolve\")));\nint main(void) {\n    (void)one;\n    int \
+             (*p)(void) = f;\n    return f() + s() + p() == 6 ? 0 : 1;\n}\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for optimization in ["-O0", "-O2"] {
+                let args = [optimization, "a.c", "-o", "a"];
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("a")).status().unwrap();
+                assert_eq!(run.code(), Some(0), "{mode} {optimization}");
+            }
+            for (source, why) in [
+                (
+                    "int f(void) __attribute__((ifunc(\"r\")));\n",
+                    "no resolver",
+                ),
+                (
+                    "int r(void);\nint f(void) __attribute__((ifunc(\"r\")));\n",
+                    "declared",
+                ),
+                (
+                    "static int r(void) { return 0; }\nint f(void) \
+                     __attribute__((ifunc(\"r\")));\n",
+                    "no pointer",
+                ),
+                (
+                    "static void *r(void) { return 0; }\nint f(void) \
+                     __attribute__((ifunc(\"r\")));\nint f(void) { return 1; }\n",
+                    "a definition too",
+                ),
+            ] {
+                directory.write("e.c", source);
+                let output = directory.bcc(mode, &["-c", "e.c", "-o", "e.o"]);
+                assert!(!output.status.success(), "{mode} {why}");
+            }
+            // On an object it's ignored with a warning, as in both.
+            directory.write(
+                "v.c",
+                "static void *r(void) { return 0; }\nint v __attribute__((ifunc(\"r\")));\n",
+            );
+            let output = directory.bcc(mode, &["-c", "v.c", "-o", "v.o"]);
+            succeeds(&output);
+            assert!(stderr(&output).contains("ifunc"), "{mode}");
+            // A static alias has its target's definition too.
+            directory.write(
+                "s.c",
+                "static int x(void) { return 1; }\nstatic int s(void) \
+                 __attribute__((alias(\"x\")));\nint main(void) { return s() - 1; }\n",
+            );
+            succeeds(&directory.bcc(mode, &["s.c", "-o", "s"]));
+            let run = Command::new(directory.path("s")).status().unwrap();
+            assert_eq!(run.code(), Some(0), "{mode}");
+            // Clang knows no such attribute off glibc's targets.
+            directory.write(
+                "w.c",
+                "static void *r(void) { return 0; }\nint f(void) __attribute__((ifunc(\"r\")));\n",
+            );
+            let args = ["--target=x86_64-w64-mingw32", "-c", "w.c", "-o", "w.o"];
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            assert!(stderr(&output).contains("ifunc"), "{mode}");
+        }
+    }
+
     /// A distribution's hardening options do what they say on Linux, with the
     /// macros each compiler numbers its own way.
     #[cfg(target_os = "linux")]
