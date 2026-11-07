@@ -1702,6 +1702,8 @@ impl State<'_> {
                     | "-Wno-tautological-unsigned-zero-compare"
                     | "-Wtautological-type-limit-compare"
                     | "-Wno-tautological-type-limit-compare"
+                    | "-Winvalid-noreturn"
+                    | "-Wno-invalid-noreturn"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an

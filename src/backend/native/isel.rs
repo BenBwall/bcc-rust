@@ -61,6 +61,7 @@ use super::{
         FrameObject,
         FrameSlotData,
         Index,
+        InstSource,
         MBlock,
         MFunction,
         MInst,
@@ -116,14 +117,14 @@ pub(crate) fn select<'a>(
     function: &Function<'_>,
     body: &Body<'_>,
     target: Target,
-    tls_model: TlsModel,
-    indirect_returns_twice: bool,
+    options: SelectOptions,
     arena: &'a Bump,
 ) -> Result<MFunction<'a>, Construct> {
     let cfg = ControlFlowGraph::compute(body, arena);
     let tree = DominatorTree::compute(body, &cfg, arena);
-    let mut selector = Selector::new(module, function, body, target, tls_model, arena);
-    selector.indirect_returns_twice = indirect_returns_twice;
+    let mut selector = Selector::new(module, function, body, target, options.tls_model, arena);
+    selector.indirect_returns_twice = options.indirect_returns_twice;
+    selector.func.tracks_sources = options.track_sources;
     for (_, slot) in body.stack_slots() {
         // An object aligned above the stack's 16 bytes gets room to round
         // its address up at run time (see `over_aligned_address`).
@@ -213,8 +214,10 @@ pub(crate) fn select<'a>(
                 selector.entry(uses_va_start)?;
             }
             for &inst in body.block_insts(block) {
+                selector.source = InstSource::Ir(inst);
                 selector.instruction(inst)?;
             }
+            selector.source = InstSource::Entry;
             spans.push((mblock.index(), first..selector.func.blocks.len()));
         }
     }
@@ -249,6 +252,17 @@ fn lay_out_added_blocks<'a>(
     }
     order.extend((0..func.blocks.len()).filter(|&index| !placed[index]));
     func.relayout(&order, arena);
+}
+
+/// What selection needs to know beyond the function and the target.
+#[derive(Clone, Copy)]
+pub(crate) struct SelectOptions {
+    /// The `-ftls-model`.
+    pub(crate) tls_model:              TlsModel,
+    /// Whether an indirect call may reach a function that returns twice.
+    pub(crate) indirect_returns_twice: bool,
+    /// Whether to note what each instruction is for ([`InstSource`]).
+    pub(crate) track_sources:          bool,
 }
 
 /// How the selector represents an IR value.
@@ -292,6 +306,9 @@ pub(super) struct Selector<'a, 'm, 'ir> {
     pub(super) indirect_returns_twice: bool,
     pub(super) arena:                  &'a Bump,
     pub(super) func:                   MFunction<'a>,
+    /// What the instructions being selected are for, if the function tracks
+    /// that.
+    pub(super) source:                 InstSource,
     /// Each value's representation.
     pub(super) values:                 ArenaVec<'a, ValueKind>,
     /// Each value's number of uses in reachable code.
@@ -344,6 +361,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             indirect_returns_twice: false,
             arena,
             func: MFunction::new_in(arena),
+            source: InstSource::Entry,
             values: filled(arena, body.value_count(), ValueKind::Unknown),
             uses: filled(arena, body.value_count(), 0),
             conditions: filled(arena, body.value_count(), 0),
@@ -362,7 +380,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
 
     /// Appends an instruction to the current block.
     pub(super) fn emit(&mut self, inst: MInst) {
-        self.func.blocks[self.current.index()].insts.push(inst);
+        let block = &mut self.func.blocks[self.current.index()];
+        block.insts.push(inst);
+        if self.func.tracks_sources {
+            block.sources.push(self.source);
+        }
     }
 
     pub(super) fn ty(&self, value: Value) -> Type {

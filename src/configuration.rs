@@ -89,6 +89,11 @@ pub(crate) struct DebugOptions {
     pub(crate) dwarf_version: Option<u8>,
     /// Whether locations hold columns (`-gno-column-info` clears it).
     pub(crate) columns:       bool,
+    /// Whether locations hold the physical file and line, as an editor shows
+    /// them, rather than what `#line` presumes: for the explorer, whose reader
+    /// looks at the file as written. A debugger wants the presumed place, as
+    /// GCC's and Clang's tables give it.
+    pub(crate) physical:      bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
