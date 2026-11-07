@@ -1034,6 +1034,9 @@ diagnostic_groups! {
     /// Clang: a construct it accepts and GCC refuses, such as `format` on a
     /// function without `...`.
     GccCompat => Some("gcc-compat"), ClangWarning, false;
+    /// Clang's K&R parameter whose promoted type a preceding prototype does
+    /// not give it.
+    KnrPromotedParameter => Some("knr-promoted-parameter"), ClangWarning, false;
     /// A `switch` over an enumeration that leaves an enumerator out with no
     /// `default`, or names a value outside it. `-Wall` holds it in GCC, and
     /// Clang reports it by default.

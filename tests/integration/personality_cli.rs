@@ -7897,6 +7897,42 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         }
     }
 
+    /// A prototype's `float` for a K&R `float` parameter: GCC and TCC accept
+    /// it silently and Clang with a warning, and callers pass the prototype's
+    /// type. TCC's own `133_old_func` test calls such a function.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn knr_definitions_keep_a_prototypes_unpromoted_types() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "#include <stdio.h>\nvoid func(float a, short s);\nvoid func(a, s)\nfloat a; short \
+             s;\n{ printf(\"%g %d\\n\", a, s); }\nint main(void) { func(2.5f, 7); func(10.0, 3); \
+             return 0; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["a.c", "-o", "a"]);
+            succeeds(&output);
+            let warned = stderr(&output).contains("[-Wknr-promoted-parameter]");
+            assert_eq!(
+                warned,
+                mode == "--clang-mode",
+                "{mode}: {}",
+                stderr(&output)
+            );
+            let run = Command::new(directory.path("a")).output().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout),
+                "2.5 7\n10 3\n",
+                "{mode}"
+            );
+        }
+        // A declaration that is not a definition still conflicts.
+        directory.write("b.c", "void g(float);\nvoid g();\n");
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "b.c"]);
+        assert!(!output.status.success());
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();
