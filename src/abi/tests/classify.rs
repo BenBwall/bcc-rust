@@ -285,19 +285,50 @@ fn split_binary128_unions_follow_the_psabi() {
         &[(0, F128), (0, F64), (8, F64)],
     );
     let whole = layout(16, 16, AggregateFlags::empty(), &[(0, F128), (0, F64)]);
-    let parts = |layout, registers: &mut ArgumentRegisters| match sysv::argument(layout, registers)
-        .unwrap()
-    {
-        | ArgPlan::Registers { parts, .. } => parts.types().to_vec(),
-        | other => panic!("{other:?}"),
-    };
+    let parts =
+        |layout, registers: &mut ArgumentRegisters| match sysv::argument(layout, registers, true)
+            .unwrap()
+        {
+            | ArgPlan::Registers { parts, .. } => parts.types().to_vec(),
+            | other => panic!("{other:?}"),
+        };
     let mut registers = ArgumentRegisters { gp: 6, sse: 0 };
     assert_eq!(parts(split, &mut registers), [F64, F64]);
     assert_eq!(registers, ArgumentRegisters { gp: 6, sse: 2 });
     assert_eq!(parts(whole, &mut ArgumentRegisters::default()), [F128]);
     let mut full = ArgumentRegisters { gp: 0, sse: 7 };
     assert!(matches!(
-        sysv::argument(split, &mut full).unwrap(),
+        sysv::argument(split, &mut full, true).unwrap(),
         ArgPlan::Stack { .. }
     ));
+}
+
+/// A vector's stack slot is aligned to its size, whatever `aligned` its typedef
+/// says, as `gcc -S` and `clang -S` place it; a record's follows its type.
+#[test]
+fn vector_stack_slots_are_aligned_to_their_size() {
+    use crate::abi::{
+        plan::ArgPlan,
+        sysv::ArgumentRegisters,
+    };
+    let vector = AggregateFlags::VECTOR;
+    for (size, align, flags, slot) in [
+        (32, 1, vector | AggregateFlags::WIDE, 32),
+        (32, 64, vector | AggregateFlags::WIDE, 32),
+        (32, 1, vector, 32),
+        (16, 1, vector, 16),
+        (8, 32, vector, 8),
+        (4, 1, vector, 8),
+        (64, 8, vector, 64),
+        (128, 1, vector, 128),
+        (32, 1, AggregateFlags::WIDE, 8),
+        (32, 64, AggregateFlags::WIDE, 64),
+    ] {
+        let mut full = ArgumentRegisters { gp: 6, sse: 8 };
+        let plan = sysv::argument(layout(size, align, flags, &[]), &mut full, true).unwrap();
+        let ArgPlan::Stack { align, .. } = plan else {
+            panic!("{size} {align} {flags:?}: {plan:?}");
+        };
+        assert_eq!(align.bytes(), slot, "{size} {flags:?}");
+    }
 }

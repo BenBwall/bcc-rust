@@ -67,7 +67,14 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
     for (index, &ty) in signature.params.iter().enumerate().skip(first) {
         let plan = match signature.param_abi(index) {
             | Some(ParamAbi::Aggregate(layout)) => match convention {
-                | Convention::SystemV => sysv::argument(layout, &mut registers)?,
+                | Convention::SystemV => {
+                    // psABI §3.5.7: an `__m256` among the `...` is on the
+                    // stack.
+                    let named = signature
+                        .variadic_fixed
+                        .is_none_or(|fixed| index < fixed as usize);
+                    sysv::argument(layout, &mut registers, named)?
+                },
                 | Convention::Win64 => win64::argument(layout),
                 | Convention::Wasm32 => wasm::argument(layout),
             },
@@ -141,11 +148,14 @@ pub(crate) enum ArgPlan<'s> {
         parts:  Parts,
     },
     /// In the stack's argument area, a copy of the aggregate (`byval`) in a
-    /// stack slot aligned to `align`, which may exceed the aggregate's.
+    /// stack slot aligned to `align`, which may differ from the aggregate's
+    /// ([`sysv::stack_align`](super::sysv::stack_align)).
     Stack {
         layout: AggregateLayout<'s>,
         align:  Align,
     },
+    /// Whole in one YMM register.
+    Vector(AggregateLayout<'s>),
     /// Not passed at all, as for an empty structure on System V.
     Ignore(AggregateLayout<'s>),
 }
@@ -167,6 +177,25 @@ pub(crate) enum ResultPlan<'s> {
     },
     /// Not returned at all, as for an empty structure on System V.
     Ignore(AggregateLayout<'s>),
+}
+
+impl<'s> ResultPlan<'s> {
+    /// A vector or a record wrapping one that comes back whole: in the YMM
+    /// registers its bytes fill, with AVX. Its return area is at least as
+    /// aligned as an XMM register, even for a packed record.
+    pub(super) fn wide(layout: AggregateLayout<'s>) -> Self {
+        Self::Registers {
+            layout,
+            registers: ResultRegisters {
+                complex:       false,
+                first:         Type::F128,
+                second:        Some(Type::F128),
+                second_offset: 16,
+                align:         raised(layout, Align::from_bytes(16).expect("a power of two")).align,
+                whole:         u8::try_from(layout.size).expect("a vector register's size"),
+            },
+        }
+    }
 }
 
 /// The scalar parts of an aggregate passed in registers, in order.
@@ -266,6 +295,7 @@ pub(super) fn lowered_signature<'s>(
                     first:         Type::I128,
                     second:        None,
                     align:         Align::from_bytes(16).unwrap(),
+                    whole:         0,
                 }),
             );
             params.push(Type::Ptr);
@@ -363,8 +393,17 @@ pub(super) fn lowered_signature<'s>(
                 }
                 describe(
                     &params,
-                    ParamAbi::ByVal(raised(without_scalars(layout), align)),
+                    ParamAbi::ByVal(AggregateLayout {
+                        align,
+                        ..without_scalars(layout)
+                    }),
                 );
+                params.push(Type::Ptr);
+            },
+            // Bytes in a register may be poison, as `ArgPlan::Registers`'s are,
+            // so the promise of the pointer doesn't reach the register.
+            | ArgPlan::Vector(layout) => {
+                describe(&params, ParamAbi::VectorRegister(without_scalars(layout)));
                 params.push(Type::Ptr);
             },
             | ArgPlan::Ignore(_) => {},

@@ -222,6 +222,7 @@ use crate::{
     },
     target::{
         CodeOptions,
+        Cpu,
         Relocation,
         StackProtector,
         Target,
@@ -1857,14 +1858,31 @@ impl<'id> Session<'id> {
                 LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault,
             | OptLevel::O3 => LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive,
         };
+        let x86 = self.code.x86_features;
+        let mut host = None;
+        let cpu = match x86.cpu() {
+            | None => c"x86-64".as_ptr(),
+            | Some(Cpu::V2) => c"x86-64-v2".as_ptr(),
+            | Some(Cpu::V3) => c"x86-64-v3".as_ptr(),
+            | Some(Cpu::Native) => {
+                // SAFETY: Returns a message this function disposes of with
+                // `host`.
+                let name = Message(unsafe { llvm_sys::target_machine::LLVMGetHostCPUName() });
+                let pointer = name.0.cast_const();
+                host = Some(name);
+                pointer
+            },
+        };
+        let mut buffer = [0; 256];
+        let features = x86.llvm_features(&mut buffer);
         // SAFETY: Known target, terminated triple/CPU/features, valid machine
         // options.
         let machine = Machine(unsafe {
             LLVMCreateTargetMachine(
                 llvm_target,
                 triple.as_ptr(),
-                c"x86-64".as_ptr(),
-                c"".as_ptr(),
+                cpu,
+                features.as_ptr(),
                 level,
                 match self.elf_relocation(target) {
                     | Some(Relocation::Pie(_) | Relocation::Pic(_)) => LLVMRelocMode::LLVMRelocPIC,
@@ -1874,6 +1892,7 @@ impl<'id> Session<'id> {
                 LLVMCodeModel::LLVMCodeModelDefault,
             )
         });
+        drop(host);
         if machine.0.is_null() {
             // SAFETY: Static terminated diagnostic copied into LLVM-owned
             // storage.
