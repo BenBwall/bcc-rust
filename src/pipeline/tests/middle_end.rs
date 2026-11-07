@@ -26,6 +26,7 @@ mod checked_builtins;
 mod clear_padding;
 mod compound_assignments;
 mod computed_goto;
+mod debug_info;
 mod declaration_initializers;
 mod encoded_strings;
 mod entity_attributes;

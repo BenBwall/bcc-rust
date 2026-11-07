@@ -49,6 +49,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             symbol_requests: ArenaVec::new_in(scratch),
             definitions: ArenaVec::new_in(tu),
             function_records: ArenaVec::new_in(tu),
+            enumerators: ArenaVec::new_in(tu),
             scopes: ArenaVec::new_in(tu),
             type_names: ArenaVec::new_in(scratch),
             retained_type_names: ArenaMap::with_hasher_in(FxBuildHasher, tu),

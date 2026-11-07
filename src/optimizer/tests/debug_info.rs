@@ -95,7 +95,8 @@ fn an_inlined_copy_keeps_its_line_and_names_the_call() {
     for location in inlined {
         let call = debug.location_data(location.inlined_at.unwrap()).unwrap();
         assert_eq!(call.line, 12);
-        assert_eq!(debug.scope(location.scope).unwrap().name, "twice");
+        let scope = debug.scope(location.scope).unwrap();
+        assert_eq!(module.function(scope.function()).name, "twice");
     }
 }
 
@@ -220,6 +221,79 @@ fn every_surviving_location_belongs_to_its_function() {
             }
         }
     }
+}
+
+/// A variable in a slot, in a function that is inlined and in one it is not.
+const VARIABLES: &str = "\
+debug file file0 @a.c
+debug unit file0 language c11 level 2
+debug scope scope0 @callee name @callee file file0 line 1 scope_line 1
+debug scope scope1 @main name @main file file0 line 5 scope_line 5
+debug variable var0 @inner scope scope0 file file0 line 2 type void
+debug variable var1 @outer scope scope1 file file0 line 6 type void
+debug loc loc0 file0 line 2 column 3 scope scope0
+debug loc loc1 file0 line 6 column 3 scope scope1
+
+function @callee(i32) -> i32 internal {
+    slot0 = stack_slot 4, align 4
+    debug declare var0 slot0 loc0
+block0(v0: i32):
+    v1 = stack_addr slot0 dbg loc0
+    store.i32 v0, v1, align 4 dbg loc0
+    v2 = load.i32 v1, align 4 dbg loc0
+    return v2 dbg loc0
+}
+
+function @main(i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
+    debug declare var1 slot0 loc1
+block0(v0: i32):
+    v1 = stack_addr slot0 dbg loc1
+    store.i32 v0, v1, align 4 dbg loc1
+    v2 = load.i32 v1, align 4 dbg loc1
+    v3 = call @callee(v2) dbg loc1
+    return v3 dbg loc1
+}
+";
+
+#[test]
+fn an_inlined_variable_follows_its_slot_and_names_the_call() {
+    let arena = Bump::new();
+    let module = optimized(&arena, VARIABLES, &only(&[Pass::Inline]));
+    let debug = module.debug_info();
+    let body = body_named(&module, "main");
+    let declared = body.declared_variables();
+    assert_eq!(declared.len(), 2, "{declared:?}");
+    let inner = declared
+        .iter()
+        .find(|item| debug.variable(item.variable).unwrap().name == "inner")
+        .unwrap();
+    assert_eq!(
+        inner.place,
+        crate::ir::VariablePlace::Slot(crate::ir::StackSlot::new(1))
+    );
+    let location = debug.location_data(inner.location).unwrap();
+    assert_eq!(
+        debug
+            .location_data(location.inlined_at.unwrap())
+            .unwrap()
+            .line,
+        6
+    );
+    assert_eq!(
+        debug.root_function(inner.location),
+        debug
+            .scope(crate::ir::DebugScope::new(1))
+            .map(crate::ir::Scope::function)
+    );
+}
+
+#[test]
+fn a_promoted_variable_loses_its_place_and_keeps_its_description() {
+    let arena = Bump::new();
+    let module = optimized(&arena, VARIABLES, &only(&[Pass::Promote]));
+    assert_eq!(body_named(&module, "main").declared_variables(), &[]);
+    assert_eq!(module.debug_info().variables().count(), 2);
 }
 
 const FUNCTIONS_PLAIN: &str = "\

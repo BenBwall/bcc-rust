@@ -35,6 +35,8 @@ use super::Target;
     reason = "Each flag is an independent command-line option."
 )]
 pub(crate) struct CodeOptions {
+    /// `-fstack-protector`, `-fcf-protection` and their kin.
+    pub(crate) hardening:                  Hardening,
     /// The relocation model the last `-fpic`-family flag selected, or
     /// `None` for the target's default.
     pub(crate) relocation:                 Option<Relocation>,
@@ -47,6 +49,9 @@ pub(crate) struct CodeOptions {
     /// §6.7.3 paragraph 6, p. 109; PDF p. 121 leaves what makes up an access
     /// to a volatile object implementation-defined.
     pub(crate) strict_volatile_bit_fields: bool,
+    /// `-masm=intel`: assembly is written, and `asm` statements read, in
+    /// Intel syntax. GCC manual, "x86 Options".
+    pub(crate) intel_syntax:               bool,
     /// Each function has a section of its own, which the linker's
     /// `--gc-sections` can remove: `-ffunction-sections`.
     pub(crate) function_sections:          bool,
@@ -56,6 +61,64 @@ pub(crate) struct CodeOptions {
     /// this, because its linker drops the information unless asked to keep
     /// it; no code generation does.
     pub(crate) debug_info:                 bool,
+}
+
+/// Which functions check a canary before they return: `-fstack-protector`
+/// and its `-strong` and `-all` forms. GCC manual, "Instrumentation Options".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum StackProtector {
+    #[default]
+    Off,
+    Basic,
+    Strong,
+    All,
+}
+
+/// Run-time checks and frame shapes a build asks for, on Linux. None changes
+/// what a program means. GCC manual, "Instrumentation Options" and "Code Gen
+/// Options".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each is a separate option's on or off, in any combination."
+)]
+pub(crate) struct Hardening {
+    pub(crate) stack_protector:    StackProtector,
+    /// `-fcf-protection=branch`: indirect branches land on `endbr64`.
+    pub(crate) branch_protection:  bool,
+    /// `-fcf-protection=return`: the object says it works with a shadow stack.
+    pub(crate) return_protection:  bool,
+    /// `-fstack-clash-protection`: a large frame probes each page.
+    pub(crate) stack_clash:        bool,
+    /// `-fno-omit-frame-pointer`: every function keeps a frame pointer.
+    pub(crate) keep_frame_pointer: bool,
+    /// `-fsanitize=address`: LLVM's `AddressSanitizer` checks each access.
+    pub(crate) sanitize_address:   bool,
+    /// `-fsanitize=thread`: LLVM's `ThreadSanitizer` records each access.
+    pub(crate) sanitize_thread:    bool,
+}
+
+impl Hardening {
+    pub(crate) const NONE: Self = Self {
+        stack_protector:    StackProtector::Off,
+        branch_protection:  false,
+        return_protection:  false,
+        stack_clash:        false,
+        keep_frame_pointer: false,
+        sanitize_address:   false,
+        sanitize_thread:    false,
+    };
+
+    /// What makes the bundled clang link the sanitizer's run-time library.
+    pub(crate) const fn sanitizer_link_flag(self) -> Option<&'static str> {
+        if self.sanitize_address {
+            Some("-fsanitize=address")
+        } else if self.sanitize_thread {
+            Some("-fsanitize=thread")
+        } else {
+            None
+        }
+    }
 }
 
 /// What code generation may assume where C leaves the behaviour

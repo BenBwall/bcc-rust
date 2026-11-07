@@ -231,6 +231,16 @@ impl CompilerConfiguration {
         self
     }
 
+    pub(crate) const fn with_stack_locals(mut self, stack_locals: bool) -> Self {
+        self.stack_locals = stack_locals;
+        self
+    }
+
+    /// Whether every named local object lives in memory.
+    pub(crate) const fn stack_locals(self) -> bool {
+        self.stack_locals
+    }
+
     /// What `-g` asks for, where the selected back end writes it.
     pub(crate) const fn debug_info(self) -> Option<super::DebugOptions> {
         self.debug_info
@@ -1007,10 +1017,12 @@ impl CompilerConfiguration {
         Self {
             target: crate::target::Target::LinuxGnu,
             code_options: crate::target::CodeOptions {
+                hardening:                  crate::target::Hardening::NONE,
                 relocation:                 None,
                 tls_model:                  crate::target::TlsModel::GlobalDynamic,
                 debug_info:                 false,
                 strict_volatile_bit_fields: false,
+                intel_syntax:               false,
                 function_sections:          false,
                 data_sections:              false,
             },
@@ -1031,6 +1043,7 @@ impl CompilerConfiguration {
             hosted: true,
             optimization: (false, false),
             debug_info: None,
+            stack_locals: false,
             gnu89_inline: None,
             char_signed: None,
             interchange_float_types: None,

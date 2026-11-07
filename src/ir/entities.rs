@@ -104,6 +104,10 @@ entities! {
     DebugScope => "scope";
     /// An interned source location of a module's debug information.
     DebugLoc => "loc";
+    /// A type a module's debug information describes.
+    DebugType => "type";
+    /// A local variable a module's debug information describes.
+    DebugVariable => "var";
 }
 
 /// A strict-aliasing access tag: an index into a per-module table of type
