@@ -556,6 +556,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             // `__builtin___clear_cache` needs nothing either.
             | CommonBuiltin::Prefetch | CommonBuiltin::Annotation | CommonBuiltin::ClearCache =>
                 Operand::Void,
+            | CommonBuiltin::CpuInit => self.cpu_init(source)?,
+            | CommonBuiltin::CpuQuery(processor) => self.cpu_query(instance, processor, source)?,
             // x86 `__rdtsc` reads the time-stamp counter, as Clang's
             // `llvm.x86.rdtsc`.
             | CommonBuiltin::ReadTimestamp => Operand::Value(self.inst(
@@ -1124,5 +1126,155 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let within = self.icmp(IntCC::Ule, offset, size);
         let zero = self.iconst(Type::I64, 0);
         Ok(self.choose(within, remainder, zero))
+    }
+}
+
+impl FunctionLowerer<'_, '_, '_, '_, '_> {
+    /// `__builtin_cpu_init`: calls the constructor that fills `__cpu_model`.
+    /// GCC's returns its `int`, Clang's nothing. libgcc and compiler-rt define
+    /// it, and `-lgcc` or the builtins library is on the link line of every
+    /// program the bundled clang links; a `-nostdlib` program provides its own,
+    /// as with GCC. GCC manual, "x86 Built-in Functions".
+    fn cpu_init(
+        &mut self,
+        source: crate::translation_phases::SourceVectors,
+    ) -> Result<Operand, LoweringError> {
+        let gcc = self.unit.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Gcc;
+        let result = gcc.then_some(Type::I32);
+        let signature = self.unit.module.intern(crate::ir::Signature {
+            params: &[],
+            aggregates: &[],
+            noundef: &[],
+            result,
+            variadic: false,
+            variadic_fixed: None,
+            extensions: &[],
+            result_extension: None,
+            result_noundef: false,
+            variadic_noundef: false,
+            chain: false,
+        });
+        let name = "__cpu_indicator_init";
+        let function = match self.unit.module.symbol(name) {
+            | Some(crate::ir::Symbol::Function(function)) => function,
+            | Some(_) =>
+                return Err(LoweringError::missing(
+                    "__cpu_indicator_init is not a function",
+                    source,
+                )),
+            | None =>
+                self.unit
+                    .module
+                    .declare_function(name, signature, crate::ir::Linkage::External),
+        };
+        Ok(match self.draft.push(Op::Call(function, &[]), result) {
+            | Some(value) => Operand::Value(value),
+            | None => Operand::Void,
+        })
+    }
+
+    /// `__builtin_cpu_supports` (`processor` false) and `__builtin_cpu_is`:
+    /// reads the bit or field the claimed compiler reads (`target::cpu_model`).
+    /// GCC's feature test gives the bit where it stands, but 1 for a word's
+    /// sign bit, and Clang's 1; both give 1 for a processor. Clang's unknown
+    /// feature, which it warned about, gives 0.
+    /// GCC manual, "x86 Built-in Functions".
+    fn cpu_query(
+        &mut self,
+        instance: &BuiltinCallFacts<'_>,
+        processor: bool,
+        source: crate::translation_phases::SourceVectors,
+    ) -> Result<Operand, LoweringError> {
+        let clang = self.unit.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang;
+        let mut literal = instance.operands[0]
+            .expression
+            .ok_or_else(|| LoweringError::missing("a processor query has no operand", source))?;
+        while let ExpressionType::Parenthesized { expression } = literal.kind {
+            literal = expression;
+        }
+        let ExpressionType::StringLiteral(
+            crate::translation_phases::preprocessing::StringTokenType::String(text),
+        ) = literal.kind
+        else {
+            return Err(LoweringError::missing(
+                "a processor query's name is not a string literal",
+                source,
+            ));
+        };
+        let name = self
+            .unit
+            .context
+            .literal_text_in(self.scratch, text, false)
+            .unwrap_or("");
+        if processor {
+            let (field, value) = crate::target::cpu_processor(name, clang).ok_or_else(|| {
+                LoweringError::missing("an unknown processor name was not refused", source)
+            })?;
+            let word = self.cpu_word("__cpu_model", 16, field.offset(), source)?;
+            let wanted = self.iconst(Type::I32, i128::from(value));
+            let same = self.icmp(IntCC::Eq, word, wanted);
+            return Ok(Operand::Value(self.convert(Opcode::Zext, Type::I32, same)));
+        }
+        let Some(bit) = crate::target::cpu_feature_bit(name, clang) else {
+            return Ok(Operand::Value(self.iconst(Type::I32, 0)));
+        };
+        let word = match bit / 32 {
+            | 0 => self.cpu_word("__cpu_model", 16, 12, source)?,
+            | index => self.cpu_word("__cpu_features2", 12, 4 * (u64::from(index) - 1), source)?,
+        };
+        let mask = self.iconst(Type::I32, i128::from(1_u32 << (bit % 32)));
+        let masked = self.binary_inst(Opcode::And, InstFlags::empty(), word, mask);
+        Ok(Operand::Value(if clang || bit % 32 == 31 {
+            let zero = self.iconst(Type::I32, 0);
+            let set = self.icmp(IntCC::Ne, masked, zero);
+            self.convert(Opcode::Zext, Type::I32, set)
+        } else {
+            masked
+        }))
+    }
+
+    /// Loads a word of the runtime library's processor data, which an ordinary
+    /// memory access may read since `__cpu_indicator_init` is an external call
+    /// that the optimizer keeps before it.
+    fn cpu_word(
+        &mut self,
+        name: &str,
+        size: u64,
+        offset: u64,
+        source: crate::translation_phases::SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let align = Align::from_bytes(4).expect("a power of two");
+        let global = match self.unit.module.symbol(name) {
+            | Some(crate::ir::Symbol::Global(global)) => global,
+            | Some(_) =>
+                return Err(LoweringError::missing(
+                    "the processor data is not an object",
+                    source,
+                )),
+            | None => self.unit.module.declare_global(
+                name,
+                crate::ir::GlobalDecl {
+                    linkage: crate::ir::Linkage::External,
+                    size,
+                    align,
+                    constant: false,
+                    thread_local: false,
+                },
+            ),
+        };
+        let base = self.inst(InstData::GlobalAddr { global }, Type::Ptr);
+        let addr = self.offset_address(base, offset);
+        Ok(self.inst(
+            InstData::Load {
+                ty: Type::I32,
+                flags: InstFlags::empty(),
+                align,
+                tag: None,
+                addr,
+            },
+            Type::I32,
+        ))
     }
 }

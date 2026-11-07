@@ -2749,6 +2749,13 @@ passes one-lane `float` and `double` vectors as
 values and others by reference and `sret`, where wasi-sdk's Clang splits
 them into lanes.
 
+A `target` attribute changes nothing about a function's code, so such a
+function keeps the command line's convention. Where GCC or Clang would pass a
+vector of 32 bytes or more otherwise (the attribute turns AVX on or off, or an
+option bcc only warns about such as `-mavx512f`), `check_foreign_vectors` refuses
+it for a function another object can reach, and a call of one. `static`
+functions, whose callers are all bcc's, stay as they are.
+
 The native back end writes no AVX instructions, so it refuses a signature
 with a YMM register (`Construct::VectorRegister`). It returns the `f128`/`i128`
 pair in XMM0 and XMM1, and

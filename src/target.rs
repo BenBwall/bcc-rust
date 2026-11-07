@@ -39,6 +39,9 @@ mod predefined;
 mod code_options;
 mod x86_features;
 
+// What `__builtin_cpu_supports` and `__builtin_cpu_is` read
+mod cpu_model;
+
 // ELF named-section policy shared by semantics and code generation
 pub(crate) mod sections;
 
@@ -47,6 +50,10 @@ pub(crate) use code_options::{
     CodeOptions,
     Relocation,
     TlsModel,
+};
+pub(crate) use cpu_model::{
+    cpu_feature_bit,
+    cpu_processor,
 };
 pub(crate) use model::{
     Layout,

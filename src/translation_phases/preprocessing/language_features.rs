@@ -1495,6 +1495,15 @@ fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
     else {
         return false;
     };
+    // Clang says it has no processor queries on WebAssembly, and refuses a call
+    // in words of its own (`cpu_builtin`).
+    if matches!(
+        descriptor.operation,
+        crate::builtins::BuiltinOperation::CpuInit | crate::builtins::BuiltinOperation::CpuQuery(_)
+    ) && context.configuration.target().is_wasm()
+    {
+        return false;
+    }
     if descriptor.syntax != SyntaxForm::OrdinaryCall {
         let id = context.string_cache.intern(spelling);
         return KeywordTokenType::classify(id, context.configuration).is_some();

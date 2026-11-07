@@ -3517,6 +3517,7 @@ mod tests {
     /// With AVX, 32-byte vectors and their wrappers travel in YMM registers, so
     /// bcc's objects link with GCC's and Clang's both ways, at `-O0` and `-O2`.
     /// Skipped without AVX on the machine or a reference compiler.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn avx_vectors_cross_objects_of_each_compiler() {
         if !std::is_x86_feature_detected!("avx2") {
@@ -3584,6 +3585,171 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// `__builtin_cpu_supports` and `__builtin_cpu_is` read libgcc's data as
+    /// each compiler does: GCC gives the bit where it stands and Clang 1, and
+    /// each words a bad name its own way. A function with a `target` attribute
+    /// that the query guards runs, computed in software.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn cpu_builtins_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "dispatch.c",
+            "#include <immintrin.h>\n#include <stdio.h>\n__attribute__((target(\"avx2\"))) static \
+             int sum(const int *p) {\n__m256i v = _mm256_loadu_si256((const __m256i \
+             *)p);\n__m256i w = _mm256_add_epi32(v, v);\nint o[8]; _mm256_storeu_si256((__m256i \
+             *)o, w);\nreturn o[0] + o[7];\n}\nint main(void) { int d[8] = {1,2,3,4,5,6,7,8};\nif \
+             (__builtin_cpu_supports(\"avx2\")) printf(\"%d\\n\", sum(d)); else puts(\"none\"); \
+             return 0; }\n",
+        );
+        directory.write(
+            "compare.c",
+            "#include <stdio.h>\n#define S(n) printf(n \" %d\\n\", \
+             __builtin_cpu_supports(n))\n#define I(n) printf(n \" %d\\n\", \
+             __builtin_cpu_is(n))\nint main(void) { S(\"cmov\"); S(\"mmx\"); S(\"popcnt\"); \
+             S(\"sse4.2\"); S(\"avx\"); S(\"avx2\"); S(\"fma\"); S(\"bmi2\"); S(\"avx512f\"); \
+             S(\"avx512vl\"); S(\"avx512vbmi2\"); S(\"gfni\"); S(\"aes\"); S(\"f16c\"); \
+             S(\"lzcnt\"); S(\"movbe\"); S(\"rdrnd\"); S(\"sha\"); S(\"xsave\"); S(\"x86-64\"); \
+             S(\"x86-64-v2\"); S(\"x86-64-v3\"); S(\"x86-64-v4\"); I(\"intel\"); I(\"amd\"); \
+             I(\"corei7\"); I(\"amdfam19h\"); I(\"znver4\"); I(\"haswell\"); return 0; }\n",
+        );
+        directory.write(
+            "bad.c",
+            "int f(const char *s) {\nint a = __builtin_cpu_supports(\"bogus\");\nint b = \
+             __builtin_cpu_supports(s);\nint c = __builtin_cpu_is(s);\nreturn a + b + c + \
+             __builtin_cpu_is(\"bogus\");\n}\n",
+        );
+        directory.write(
+            "unknown.c",
+            "int main(void) { return __builtin_cpu_supports(\"bogus\"); }\n",
+        );
+        directory.write(
+            "has.c",
+            "#if __has_builtin(__builtin_cpu_supports) && __has_builtin(__builtin_cpu_is) && \
+             __has_builtin(__builtin_cpu_init)\nyes\n#else\nno\n#endif\n",
+        );
+        let sum = if std::is_x86_feature_detected!("avx2") {
+            "18\n"
+        } else {
+            "none\n"
+        };
+        let clang = concat!(env!("CARGO_MANIFEST_DIR"), "/target/llvm/bin/clang");
+        for (mode, compiler) in [("--gcc-mode", "gcc"), ("--clang-mode", clang)] {
+            for flags in [
+                &["-O0"][..],
+                &["-O2"],
+                &["-O2", "-static"],
+                &["-O0", "-fPIE", "-pie"],
+            ] {
+                let mut args = flags.to_vec();
+                args.extend(["-w", "dispatch.c", "-o", "dispatch"]);
+                succeeds(&directory.bcc(mode, &args));
+                let run = Command::new(directory.path("dispatch")).output().unwrap();
+                assert_eq!(
+                    String::from_utf8_lossy(&run.stdout),
+                    sum,
+                    "{mode} {flags:?}"
+                );
+            }
+            // The feature bits of the table, against the compiler's own code.
+            succeeds(&directory.bcc(mode, &["-w", "compare.c", "-o", "ours"]));
+            let reference = Command::new(compiler)
+                .current_dir(directory.path("."))
+                .args(["-w", "compare.c", "-o", "theirs"])
+                .output();
+            if reference.is_ok_and(|output| output.status.success()) {
+                let ours = Command::new(directory.path("ours")).output().unwrap();
+                let theirs = Command::new(directory.path("theirs")).output().unwrap();
+                assert_eq!(
+                    String::from_utf8_lossy(&ours.stdout),
+                    String::from_utf8_lossy(&theirs.stdout),
+                    "{mode}"
+                );
+            }
+            let output = directory.bcc(mode, &["-E", "has.c"]);
+            assert!(stdout(&output).contains("yes"), "{mode}");
+            let output = directory.bcc(mode, &["--target=wasm32-unknown-unknown", "-E", "has.c"]);
+            assert!(stdout(&output).contains("no"), "{mode}");
+            let output = directory.bcc(
+                mode,
+                &[
+                    "--target=wasm32-unknown-unknown",
+                    "-S",
+                    "unknown.c",
+                    "-o",
+                    "unknown.s",
+                ],
+            );
+            assert_eq!(output.status.code(), Some(1), "{mode}");
+            assert!(
+                stderr(&output).contains("error: builtin is not supported on this target"),
+                "{}",
+                stderr(&output)
+            );
+        }
+        let value = |mode: &str, name: &str, expected: &str| {
+            directory.write(
+                "value.c",
+                &format!(
+                    "#include <stdio.h>\nint main(void) {{ printf(\"%d\\n\",                      \
+                     __builtin_cpu_supports(\"{name}\")); return 0; }}\n"
+                ),
+            );
+            succeeds(&directory.bcc(mode, &["-w", "value.c", "-o", "value"]));
+            let run = Command::new(directory.path("value")).output().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout),
+                expected,
+                "{mode} {name}"
+            );
+        };
+        value("--gcc-mode", "sse2", "16\n");
+        value("--clang-mode", "sse2", "1\n");
+        let output = directory.bcc("--gcc-mode", &["-c", "bad.c", "-o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        let words = stderr(&output);
+        assert!(
+            words.contains("error: parameter to builtin not valid: bogus"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: parameter to builtin must be a string constant or literal"),
+            "{words}"
+        );
+        let output = directory.bcc("--clang-mode", &["-c", "bad.c", "-o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        let words = stderr(&output);
+        assert!(
+            words.contains("warning: invalid cpu feature string for builtin"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: invalid cpu name for builtin"),
+            "{words}"
+        );
+        assert!(
+            words.contains("error: expression is not a string literal"),
+            "{words}"
+        );
+        // Clang's unknown feature warns and answers 0.
+        let output = directory.bcc("--clang-mode", &["unknown.c", "-o", "unknown"]);
+        succeeds(&output);
+        assert!(stderr(&output).contains("invalid cpu feature string"));
+        let run = Command::new(directory.path("unknown")).status().unwrap();
+        assert_eq!(run.code(), Some(0));
+        // `__builtin_cpu_init` is `int` in GCC and `void` in Clang.
+        directory.write(
+            "init.c",
+            "#include <stdio.h>\nint main(void) { printf(\"%zu\\n\", \
+             sizeof(__builtin_cpu_init()));              return 0; }\n",
+        );
+        for (mode, expected) in [("--gcc-mode", "4\n"), ("--clang-mode", "1\n")] {
+            succeeds(&directory.bcc(mode, &["-w", "init.c", "-o", "init"]));
+            let run = Command::new(directory.path("init")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{mode}");
         }
     }
 

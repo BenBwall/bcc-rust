@@ -227,6 +227,20 @@ can reach and calls of them:
 A `static` function's callers are all bcc's, so it keeps bcc's convention under each of
 these.
 
+`__builtin_cpu_supports`, `__builtin_cpu_is` and `__builtin_cpu_init` read `__cpu_model`
+and `__cpu_features2`, as GCC's and Clang's code does (`target/cpu_model.rs`). libgcc
+defines them, and the bundled clang links `-lgcc` with or without compiler-rt's
+builtins, so a program links wherever any program links; `-nostdlib` leaves them
+undefined, as in GCC. Each mode accepts the names its compiler accepts and reads the
+bits it reads. `__builtin_cpu_supports("avx2")` gives the bit where it stands in GCC
+(`1024`), and 1 in Clang. An unknown name is an error in GCC, `parameter to builtin not
+valid: bogus`, and in Clang's `__builtin_cpu_is`, `invalid cpu name for builtin`, while
+Clang's `__builtin_cpu_supports` warns, `invalid cpu feature string for builtin`, and
+answers 0. WebAssembly refuses all three, `builtin is not supported on this target`, and
+`__has_builtin` says it has none there. The Microsoft target needs
+`clang_rt.builtins` on the link line, as Clang does; `--interpret` stops at the unresolved
+`__cpu_model`.
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`

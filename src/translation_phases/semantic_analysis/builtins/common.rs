@@ -156,6 +156,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         match builtin {
+            | CommonBuiltin::CpuInit | CommonBuiltin::CpuQuery(_) =>
+                self.cpu_builtin(&mut info, builtin, args),
             // GCC types `__builtin_assoc_barrier` as its converted operand,
             // a scalar, a GNU vector or a structure or union. A constant one
             // folds, as in a static initializer, but is no integer constant
@@ -493,6 +495,75 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Unsupported(_) => {},
         }
         Some(info)
+    }
+
+    /// Checks a runtime processor query. Its text must be a string literal
+    /// naming what the claimed compiler knows. An unknown name is an error in
+    /// each compiler but for a feature in Clang, which warns and answers 0, as
+    /// it does in lowering. WebAssembly has no such processor: Clang refuses
+    /// them there, and GCC has no such target.
+    /// GCC manual, "x86 Built-in Functions"; Clang's `checkBuiltinCpu`.
+    fn cpu_builtin(
+        &mut self,
+        info: &mut ExpressionInfo<'tu>,
+        builtin: CommonBuiltin,
+        args: &[&'tu Expression<'tu>],
+    ) {
+        let clang = self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang;
+        if self.context.configuration.target().is_wasm() {
+            self.error(
+                SemanticErrorKind::CpuBuiltinTarget,
+                info.expression.source_vectors,
+                None,
+                None,
+            );
+            return;
+        }
+        let CommonBuiltin::CpuQuery(processor) = builtin else {
+            // GCC's returns the constructor's `int`, Clang's nothing.
+            if clang {
+                info.ty = self.types.scalar(Scalar::Void);
+            }
+            return;
+        };
+        let Some(&argument) = args.first() else {
+            return;
+        };
+        let mut literal = argument;
+        while let ExpressionType::Parenthesized { expression } = literal.kind {
+            literal = expression;
+        }
+        let ExpressionType::StringLiteral(
+            crate::translation_phases::preprocessing::StringTokenType::String(text),
+        ) = literal.kind
+        else {
+            self.error(
+                SemanticErrorKind::CpuBuiltinNotLiteral,
+                info.expression.source_vectors,
+                None,
+                None,
+            );
+            return;
+        };
+        let name = self
+            .context
+            .literal_text_in(self.scratch, text, false)
+            .unwrap_or("");
+        let known = if processor {
+            crate::target::cpu_processor(name, clang).is_some()
+        } else {
+            crate::target::cpu_feature_bit(name, clang).is_some()
+        };
+        if !known {
+            let kind = match (clang, processor) {
+                | (true, true) => SemanticErrorKind::CpuNameUnknown,
+                | (true, false) => SemanticErrorKind::CpuFeatureUnknown,
+                | (false, _) => SemanticErrorKind::CpuBuiltinParameter,
+            };
+            let name = self.context.string_cache.intern(name);
+            self.error(kind, info.expression.source_vectors, Some(name), None);
+        }
     }
 
     /// Under the Clang identity, the first operand or result of a
