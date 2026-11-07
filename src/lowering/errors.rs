@@ -90,6 +90,11 @@ pub(crate) enum Construct {
     /// "Variable Length".
     VariableSizeRecord,
     LabelAddress,
+    /// A vector of 32 bytes or more by value in a function other objects can
+    /// reach, where an option or attribute bcc ignores changes its convention.
+    ForeignVectorAbi,
+    /// A named vector in YMM of a variadic function, as GCC passes it.
+    VariadicNamedVector,
     /// MSVC `__asm` blocks.
     InlineAssembly,
     /// A GNU `asm` operand in a register class or of a type lowering does
@@ -195,6 +200,12 @@ impl Construct {
             | Self::VariableSizeRecord =>
                 "this use of a structure or union with a member of variable size",
             | Self::LabelAddress => "label addresses",
+            | Self::ForeignVectorAbi =>
+                "passing a vector of 32 bytes or more by value to or from another object when a \
+                 -march=, -m option or target attribute that bcc ignores changes how it travels",
+            | Self::VariadicNamedVector =>
+                "a named 32-byte vector parameter of a variadic function other objects can call, \
+                 which GCC passes in a YMM register and LLVM can only pass on the stack",
             | Self::InlineAssembly => "MSVC inline assembly",
             | Self::InlineAssemblyOperand =>
                 "inline assembly operands of this register class or type",
