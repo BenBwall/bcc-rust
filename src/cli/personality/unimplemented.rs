@@ -11,8 +11,9 @@
 //! no layout, ABI or language rule silently differs from what the command
 //! line asked for. A `-m` option is judged for the target: `-mms-bitfields`
 //! is what a Windows target does and a layout change on Linux. Asking for a
-//! newer processor (`-march=native`, `-mavx2`) warns, since baseline x86-64
-//! code is correct on it.
+//! newer processor than `target/x86_features.rs` models (`-march=haswell`,
+//! `-mavx512f`) warns, since baseline x86-64 code is correct on it, unless
+//! lowering finds a vector whose convention it would change.
 //!
 //! The lists name patterns: `*` ends a prefix, a trailing `=` takes any
 //! value, and `-f[no-]name` stands for both `-fname` and `-fno-name`. The
