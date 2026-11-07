@@ -363,10 +363,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | (B::RightShift, true) => B::LeftShift,
             | (op, _) => op,
         };
-        let magnitude = if negative_count {
-            right.value.unsigned_abs()
-        } else if right.wide.is_some() {
+        // A count `i128` does not hold clamps whichever way it shifts.
+        let magnitude = if right.wide.is_some() {
             u128::MAX
+        } else if negative_count {
+            right.value.unsigned_abs()
         } else {
             right.value.cast_unsigned()
         };

@@ -1,0 +1,15 @@
+sema-unused-variables-gcc.c:1:11: warning: unused parameter 'unused_parameter' [-Wunused-parameter]
+    1 | int g(int unused_parameter, int set_parameter) {
+      |           ^~~~~~~~~~~~~~~~
+sema-unused-variables-gcc.c:1:33: warning: parameter 'set_parameter' set but not used [-Wunused-but-set-parameter]
+    1 | int g(int unused_parameter, int set_parameter) {
+      |                                 ^~~~~~~~~~~~~
+sema-unused-variables-gcc.c:2:9: warning: unused variable 'unused' [-Wunused-variable]
+    2 |     int unused;
+      |         ^~~~~~
+sema-unused-variables-gcc.c:3:9: warning: variable 'set' set but not used [-Wunused-but-set-variable]
+    3 |     int set;
+      |         ^~~
+sema-unused-variables-gcc.c:5:16: warning: unused variable 'unused_static' [-Wunused-variable]
+    5 |     static int unused_static;
+      |                ^~~~~~~~~~~~~

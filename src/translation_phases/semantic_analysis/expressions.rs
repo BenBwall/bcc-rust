@@ -108,6 +108,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .and_then(NonZeroU8::new);
                     }
                     info.binding = Some(index);
+                    if self.unused.tracking {
+                        self.note_identifier_use(index, e);
+                    }
                     if self.function_extensions.function(index).is_none()
                         && !self.overload_previous.contains_key(&index)
                     {
@@ -397,15 +400,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 left_expression,
                 right_expression,
             } => {
+                if self.unused.values && operator == BinaryOperator::Comma {
+                    self.check_comma_left(left_expression, e);
+                }
                 info = self.type_binary(
                     e,
                     operator,
                     self.expression_info(left_expression),
                     self.expression_info(right_expression),
                 );
+                self.check_compared_signs(e, operator, left_expression, right_expression);
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
                 info = self.type_conditional(e, c);
+                if self.unused.sign_compare && matches!(e.kind, E::Conditional(_)) {
+                    self.check_conditional_sign(c.then_expression, c.else_expression);
+                }
             },
             | E::SizeofType(name) | E::AlignofType(name) => {
                 let ty = self

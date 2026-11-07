@@ -58,9 +58,16 @@ use super::{
         self,
         ClOption,
     },
+    unimplemented::{
+        Treatment,
+        treatment,
+    },
     version,
 };
-use crate::backend::llvm::operand;
+use crate::{
+    backend::llvm::operand,
+    cli::arguments::implements_language_option,
+};
 
 /// Options that clang-cl ignores with a warning when given bare, as for an
 /// unknown `/` option: Clang options it takes only after `/clang:`, and GCC's
@@ -170,8 +177,29 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 _ = arguments.next();
             }
         } else if clang_cl && text.starts_with('-') && !CLANG_ONLY_OPTIONS.contains(&text) {
-            // clang-cl also takes Clang's options; bcc reads most of them.
-            state.bcc.push(argument.into());
+            // clang-cl also takes Clang's options; bcc reads most of them, and
+            // treats the rest as its Clang personality does.
+            if text == "-fsyntax-only" {
+                state.syntax_only = true;
+            } else if text == "-fms-compatibility" {
+                // clang-cl's default, which bcc's Microsoft mode already
+                // follows.
+            } else if (text.starts_with("-f") || text.starts_with("-m"))
+                && !implements_language_option(text)
+            {
+                match treatment(text, crate::target::Target::WindowsMsvc) {
+                    | Treatment::Ignore => {},
+                    | Treatment::Warn(why) =>
+                        invocation.warning(format_args!("'{text}' is ignored: {why}")),
+                    | Treatment::Reject(why) => state.command_line_error(
+                        invocation,
+                        None,
+                        format_args!("'{text}' is not supported: {why}"),
+                    ),
+                }
+            } else {
+                state.bcc.push(argument.into());
+            }
         } else {
             // An option clang-cl knows takes its value from the next
             // argument after its bare name (`/imsvc /usr/include`), which
@@ -887,6 +915,12 @@ impl State {
             | "Ob2"
             | "Ob3"
             | "bigobj"
+            // C has no run-time type information, no default-library names in
+            // bcc's objects, and no precompiled header to turn off.
+            | "GR"
+            | "GR-"
+            | "Zl"
+            | "Y-"
             | "permissive"
             | "permissive-"
             | "Qpar"

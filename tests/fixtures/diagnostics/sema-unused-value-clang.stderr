@@ -1,0 +1,25 @@
+sema-unused-value-clang.c:3:5: warning: expression result unused [-Wunused-value]
+    3 |     a;
+      |     ^
+sema-unused-value-clang.c:4:7: warning: expression result unused [-Wunused-value]
+    4 |     a + 1;
+      |       ^
+sema-unused-value-clang.c:5:7: warning: equality comparison result unused [-Wunused-comparison]
+    5 |     a == 1;
+      |       ^~
+sema-unused-value-clang.c:6:5: warning: expression result unused [-Wunused-value]
+    6 |     *p;
+      |     ^
+sema-unused-value-clang.c:7:5: warning: expression result unused; should this cast be to 'void'? [-Wunused-value]
+    7 |     (void *)p;
+      |     ^~~~~~~~
+sema-unused-value-clang.c:8:5: warning: left operand of comma operator has no effect [-Wunused-value]
+    8 |     a, a = 1;
+      |     ^
+sema-unused-value-clang.c:9:12: warning: expression result unused [-Wunused-value]
+    9 |     a = 1, a;
+      |            ^
+sema-unused-value-clang.c:10:9: warning: expression result unused [-Wunused-value]
+   10 |     h() + 1;
+      |         ^
+8 warnings generated.
