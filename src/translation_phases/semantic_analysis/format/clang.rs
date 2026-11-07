@@ -2108,10 +2108,14 @@ enum Caller {
 /// conversions it means something with.
 type Flag = (Option<usize>, char, fn(Conversion) -> bool);
 
-/// What reading one specification gave.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "A specification is read and checked at once, never stored."
+/// What reading one specification gave. A specification's offsets make it
+/// large only where `usize` is 64 bits wide.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "A specification is read and checked at once, never stored."
+    )
 )]
 enum Parsed {
     Nothing,
