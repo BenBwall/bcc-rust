@@ -723,6 +723,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.6 paragraph 10, p. 96; PDF p. 108.
     fn operand_folding(&self, e: &'tu Expression<'tu>, info: &mut ExpressionInfo<'tu>) {
         use ExpressionType as E;
+        if self.context.configuration.folds_exceptional_constants()
+            && let Some(folding) = self.carried_exceptional(e, info)
+        {
+            info.folding = folding;
+            info.ice = false;
+            return;
+        }
         // C99 §6.6p10 permits additional constant forms. Preserve the
         // GNU-folded address difference and compound literal value
         // through enclosing arithmetic, a literal's read over an

@@ -282,6 +282,12 @@ pub(crate) enum SemanticErrorKind {
     /// value; the payload is the interned message.
     /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
     FloatOverflow(StringCacheId),
+    /// What GCC or Clang warns of an exceptional operation on integer
+    /// constants, in its words, with the group that controls it.
+    ExceptionalConstant(crate::configuration::DiagnosticGroup, StringCacheId),
+    /// GCC's `-pedantic` report of a folded value where a constant
+    /// expression is required, in its words.
+    PedanticConstant(StringCacheId),
     /// GCC's pedantic "overflow in constant expression": a static
     /// initializer's floating value converted out of an integer type's
     /// range, by a cast too, or arithmetic on one.
@@ -863,6 +869,7 @@ impl SemanticErrorKind {
             | Self::ImmediateOutOfRange { .. } => Some(DiagnosticGroup::ArgumentOutsideRange),
             | Self::ConstantConversion(_) => Some(DiagnosticGroup::ConstantConversion),
             | Self::FloatOverflow(_) => Some(DiagnosticGroup::Overflow),
+            | Self::ExceptionalConstant(group, _) => Some(group),
             | Self::PedanticOverflow => Some(DiagnosticGroup::PedanticOverflow),
             | Self::LiteralConversion(_) => Some(DiagnosticGroup::LiteralConversion),
             | Self::ExcessString | Self::ExcessElements(_) =>
@@ -980,6 +987,8 @@ impl SemanticErrorKind {
             | Self::ConstantConversion(_) => "the converted value differs",
             | Self::FloatOverflow(_) | Self::LiteralConversion(_) | Self::PedanticOverflow =>
                 "the value is not the integer's",
+            | Self::ExceptionalConstant(..) => "this operation has no defined value",
+            | Self::PedanticConstant(_) => "folded, but not a constant expression",
             | Self::ExcessString => "characters past the array's end are dropped",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
             | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
@@ -1259,6 +1268,14 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ConstantPromotion
                     | crate::configuration::DiagnosticGroup::ConstantConversion
                     | crate::configuration::DiagnosticGroup::Overflow
+                    | crate::configuration::DiagnosticGroup::IntegerOverflow
+                    | crate::configuration::DiagnosticGroup::ShiftCountOverflow
+                    | crate::configuration::DiagnosticGroup::ShiftCountNegative
+                    | crate::configuration::DiagnosticGroup::DivByZero
+                    | crate::configuration::DiagnosticGroup::DivisionByZero
+                    | crate::configuration::DiagnosticGroup::ShiftOverflow
+                    | crate::configuration::DiagnosticGroup::GccShiftOverflow
+                    | crate::configuration::DiagnosticGroup::ShiftNegativeValue
                     | crate::configuration::DiagnosticGroup::PedanticOverflow
                     | crate::configuration::DiagnosticGroup::Normalized
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
@@ -1316,6 +1333,17 @@ impl SemanticErrorKind {
                 "overflow in constant expression",
                 "C99 §6.6p4: a constant expression evaluates to a value its type represents; GCC \
                  folds an out-of-range conversion to the nearest bound",
+            ),
+            | Self::PedanticConstant(_) => (
+                "a value folded where a constant expression is required",
+                "C99 §6.6p6: an integer constant expression restricts its operands; GCC folds \
+                 this one as an extension",
+            ),
+            | Self::ExceptionalConstant(..) => (
+                "an operation on constants has no defined value",
+                "C99 §6.6p4: a constant expression is representable in its type; §6.5p5 and \
+                 §6.5.7p3 leave this operation undefined, and the selected compiler folds it \
+                 with a warning",
             ),
             | Self::FloatOverflow(_) | Self::LiteralConversion(_) => (
                 "floating value converted to an integer type changes",
@@ -2758,7 +2786,10 @@ impl ToDiagnostic for SemanticError {
                     "non-zero bytes"
                 }
             )
+        } else if let SemanticErrorKind::PedanticConstant(text) = self.kind {
+            format_in!(arena, "{} [-Wpedantic]", context.string_cache.at(text))
         } else if let SemanticErrorKind::ConstantConversion(text)
+        | SemanticErrorKind::ExceptionalConstant(_, text)
         | SemanticErrorKind::FloatOverflow(text)
         | SemanticErrorKind::LiteralConversion(text) = self.kind
         {
@@ -2935,6 +2966,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PartialInitializerOverride
                 | SemanticErrorKind::ConstantConversion(_)
                 | SemanticErrorKind::FloatOverflow(_)
+                | SemanticErrorKind::ExceptionalConstant(..)
                 | SemanticErrorKind::PedanticOverflow
                 | SemanticErrorKind::LiteralConversion(_)
                 | SemanticErrorKind::ExcessString

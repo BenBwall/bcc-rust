@@ -197,8 +197,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }) {
                 continue;
             }
-            self.work
-                .push(super::super::Work::Expression(argument.expression));
+            self.constant_expression(
+                argument.expression,
+                super::super::exceptional_constants::ConstantSite::Other,
+            );
         }
     }
 
@@ -229,10 +231,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .arguments
             .iter()
             .find(|argument| argument.index == index)?;
-        let info = self.expression_info(argument.expression);
-        info.integer
-            .filter(|_| info.ice)
-            .and_then(super::super::Integer::to_u64)
+        self.attribute_alignment_value(argument.expression)
     }
 
     /// GCC packed is member/record layout; aligned is a power-of-two byte
@@ -586,11 +585,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     continue;
                 }
                 let value = match operand {
-                    | super::super::SyntaxOperand::Expression(expression) => self
-                        .expression_info(expression)
-                        .integer
-                        .filter(|_| self.expression_info(expression).ice)
-                        .and_then(super::super::Integer::to_u64),
+                    | super::super::SyntaxOperand::Expression(expression) =>
+                        self.alignment_value(expression),
                     | super::super::SyntaxOperand::Type(_) =>
                         self.types.alignment(self.operand_type(operand)),
                 };

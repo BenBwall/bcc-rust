@@ -883,6 +883,14 @@ impl CompilerConfiguration {
         self.derive_features()
     }
 
+    /// Whether integer constant arithmetic C99 §6.6p4 gives no value folds
+    /// as GCC or Clang folds it, with a warning, rather than being refused.
+    /// Plain bcc has Clang's identity, so the identity cannot tell.
+    /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
+    pub(crate) const fn folds_exceptional_constants(self) -> bool {
+        self.compiler_extensions
+    }
+
     /// Whether `feature` is an operator that tests for features, which GCC
     /// and Clang define in every language mode and neither reports under
     /// `-pedantic`: code uses them to find out what it may use. GCC has no

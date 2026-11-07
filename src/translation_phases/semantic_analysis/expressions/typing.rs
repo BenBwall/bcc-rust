@@ -257,6 +257,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .integer
             .and_then(|v| self.wide.unary(v, op))
             .and_then(|v| self.bit_int_result(v, ty));
+        if info.integer.is_none()
+            && let Some(value) = operand.integer
+        {
+            self.fold_exceptional_unary(e, op, value, &mut info);
+        }
         if op == U::LogicalNot {
             info.integer =
                 Self::constant_truth(operand).map(|truth| Integer::int(i128::from(!truth)));
@@ -468,9 +473,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 info.static_address = self.address_value(pointer)
                     && if std::ptr::eq(pointer.expression, left.expression) {
-                        right.ice && right.integer.is_some()
+                        (right.ice || right.folding.exceptional()) && right.integer.is_some()
                     } else {
-                        left.ice && left.integer.is_some()
+                        (left.ice || left.folding.exceptional()) && left.integer.is_some()
                     };
                 // Array decay retains the designated register object, which
                 // GCC subscripts; reading a register pointer does not
@@ -505,7 +510,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if self.integer_type(rt).is_some() {
                         self.report_void_arithmetic(e, target);
                         info.ty = lt;
-                        if self.address_value(left) && right.ice && right.integer.is_some() {
+                        if self.address_value(left)
+                            && (right.ice || right.folding.exceptional())
+                            && right.integer.is_some()
+                        {
                             if op == B::Addition && Self::pointer_value(left) == Some(0) {
                                 self.error(
                                     SemanticErrorKind::NullPointerArithmetic,
@@ -552,7 +560,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.report_void_arithmetic(e, target);
                     }
                     info.ty = rt;
-                    if self.address_value(right) && left.ice && left.integer.is_some() {
+                    if self.address_value(right)
+                        && (left.ice || left.folding.exceptional())
+                        && left.integer.is_some()
+                    {
                         if Self::pointer_value(right) == Some(0) {
                             self.error(
                                 SemanticErrorKind::NullPointerArithmetic,
@@ -654,6 +665,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => {},
         }
         if self.arithmetic(info.ty) {
+            self.report_exceptional_operands(e, op, left, right, info.ty);
             info.unfolded_binary128 = left.unfolded_binary128 || right.unfolded_binary128;
             let operand_type = arithmetic_operands.unwrap_or(info.ty);
             if self.binary128_type(operand_type)
@@ -757,7 +769,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && let Some(value) = l.sign_bit_shift(op, r)
                 {
                     info.integer = Some(value);
-                    if !self.tainted {
+                    if self.context.configuration.folds_exceptional_constants() {
+                        self.fold_sign_bit_shift(l, r, value, true, e, &mut info);
+                    } else if !self.tainted {
                         self.context.report_extension(
                             crate::configuration::Feature::SignBitShifts,
                             "left shift into the sign bit",
@@ -768,7 +782,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && let Some((value, negative)) = l.wrapping_shift(op, r)
                 {
                     info.integer = Some(value);
-                    if !self.tainted {
+                    if self.context.configuration.folds_exceptional_constants() {
+                        self.fold_sign_bit_shift(l, r, value, false, e, &mut info);
+                    } else if !self.tainted {
                         self.context.report_extension(
                             crate::configuration::Feature::SignBitShifts,
                             if negative {
@@ -804,6 +820,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | B::LogicalOr
             ) {
                 info.integer = info.integer.and_then(|v| self.bit_int_result(v, info.ty));
+            }
+            if !floating
+                && info.integer.is_none()
+                && let Some((l, r)) = left.integer.zip(right.integer)
+            {
+                self.fold_exceptional_binary(e, op, l, r, &mut info);
             }
             if sign_bit && !self.tainted {
                 self.context.report_extension(
@@ -1444,7 +1466,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // GCC folds `__builtin_assoc_barrier` of a constant first.
         if (self.pointer_target(target).is_some() || self.nullptr_type(target))
             && (self.address_value(operand)
-                || ((operand.ice || operand.assoc_barrier) && operand.integer.is_some()))
+                || ((operand.ice || operand.assoc_barrier || operand.folding.exceptional())
+                    && operand.integer.is_some()))
         {
             info.constant = ConstantClass::Address;
             info.integer = operand.integer.map(|v| v.cast(64, false));

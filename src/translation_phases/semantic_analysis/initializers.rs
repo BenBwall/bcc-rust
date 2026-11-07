@@ -763,6 +763,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
         let bit_width = bits.map(|bits| bits.width);
         let bit_field = bits.is_some();
+        self.report_exceptional_initializer(e, info);
         let overflow = self.static_float_conversion(target, info, e, bit_width)
             || info.folding == ConstantFolding::Overflow;
         if overflow
@@ -825,12 +826,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 || (matches!(
                     self.types.nodes[self.types.non_atomic(target).index],
                     TypeKind::Pointer(_)
-                ) && info.ice
+                ) && (info.ice || info.folding.exceptional())
                     && info.integer.is_some())
         };
         if !valid {
             self.error(
-                if info.constant == ConstantClass::Arithmetic {
+                if info.constant == ConstantClass::Arithmetic
+                    && !self.context.configuration.folds_exceptional_constants()
+                {
                     SemanticErrorKind::ConstantOverflow
                 } else {
                     SemanticErrorKind::NonConstantInitializer
