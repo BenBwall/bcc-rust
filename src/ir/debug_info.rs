@@ -16,6 +16,12 @@
 //! is what lets `addr2line -i` and a debugger show the inlined frame. Each
 //! location an `at` names has a smaller id than the location that names it.
 //!
+//! With `-g` or `-g2` the tables also describe the program's data: the types
+//! ([`DebugTypeData`], reduced from semantic analysis's so that the IR does not
+//! depend on it), the local variables, which a body places in a stack slot or
+//! at an address ([`DeclaredVariable`]), and the globals. A scope is then a
+//! function or a block inside one, so that a shadowing name resolves as in C.
+//!
 //! The textual form prints these tables and each instruction's location only
 //! when asked ([`Module::display_located`]).
 //!
@@ -30,11 +36,17 @@ use super::entities::{
     DebugFile,
     DebugLoc,
     DebugScope,
+    DebugType,
+    DebugVariable,
     FuncId,
+    GlobalId,
+    StackSlot,
     Table,
+    Value,
 };
 use crate::util::bump::{
     ArenaMap,
+    ArenaVec,
     Bump,
 };
 
@@ -47,11 +59,14 @@ pub(crate) struct DebugInfo<'ir> {
     /// Each file's name, as the preprocessor knows it.
     files:        Table<'ir, DebugFile, &'ir str>,
     file_ids:     ArenaMap<'ir, &'ir str, DebugFile>,
-    scopes:       Table<'ir, DebugScope, Subprogram<'ir>>,
+    scopes:       Table<'ir, DebugScope, Scope<'ir>>,
     /// The scope of each function that has one.
     subprograms:  ArenaMap<'ir, FuncId, DebugScope>,
     locations:    Table<'ir, DebugLoc, SourceLocation>,
     location_ids: ArenaMap<'ir, SourceLocation, DebugLoc>,
+    types:        Table<'ir, DebugType, DebugTypeData<'ir>>,
+    variables:    Table<'ir, DebugVariable, Variable<'ir>>,
+    globals:      ArenaVec<'ir, GlobalVariable<'ir>>,
 }
 
 /// The facts of a compilation unit that a back end writes as debug
@@ -131,6 +146,42 @@ impl DebugLanguage {
     }
 }
 
+/// A scope: a function, or a block inside one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Scope<'ir> {
+    Subprogram(Subprogram<'ir>),
+    Block(LexicalBlock),
+}
+
+impl Scope<'_> {
+    /// The function the scope is in.
+    pub(crate) const fn function(&self) -> FuncId {
+        match self {
+            | Self::Subprogram(subprogram) => subprogram.function,
+            | Self::Block(block) => block.function,
+        }
+    }
+
+    /// The file a location in the scope belongs to unless it says otherwise.
+    pub(crate) const fn file(&self) -> DebugFile {
+        match self {
+            | Self::Subprogram(subprogram) => subprogram.file,
+            | Self::Block(block) => block.file,
+        }
+    }
+}
+
+/// A block scope, where a name declared in it hides an outer one.
+/// C99: §6.2.1 paragraph 4, pp. 29-30; PDF pp. 41-42.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct LexicalBlock {
+    pub(crate) parent:   DebugScope,
+    pub(crate) function: FuncId,
+    pub(crate) file:     DebugFile,
+    pub(crate) line:     u32,
+    pub(crate) column:   u32,
+}
+
 /// A function as debug information describes it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Subprogram<'ir> {
@@ -143,6 +194,208 @@ pub(crate) struct Subprogram<'ir> {
     pub(crate) line:       u32,
     /// The line its body opens on, where its prologue is reported.
     pub(crate) scope_line: u32,
+    /// Its function type, absent at `-g1`.
+    pub(crate) ty:         Option<DebugType>,
+}
+
+/// How a base type's bits are read, as `DW_AT_encoding` says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DebugEncoding {
+    Boolean,
+    Float,
+    Complex,
+    Signed,
+    SignedChar,
+    Unsigned,
+    UnsignedChar,
+}
+
+impl DebugEncoding {
+    /// The keyword of the IR's text form.
+    pub(crate) const fn keyword(self) -> &'static str {
+        match self {
+            | Self::Boolean => "boolean",
+            | Self::Float => "float",
+            | Self::Complex => "complex",
+            | Self::Signed => "signed",
+            | Self::SignedChar => "signed_char",
+            | Self::Unsigned => "unsigned",
+            | Self::UnsignedChar => "unsigned_char",
+        }
+    }
+
+    /// The encoding `keyword` names in the IR's text form.
+    pub(crate) fn from_keyword(keyword: &str) -> Option<Self> {
+        [
+            Self::Boolean,
+            Self::Float,
+            Self::Complex,
+            Self::Signed,
+            Self::SignedChar,
+            Self::Unsigned,
+            Self::UnsignedChar,
+        ]
+        .into_iter()
+        .find(|encoding| encoding.keyword() == keyword)
+    }
+}
+
+/// A qualifier on a type. C99: §6.7.3, pp. 108-109; PDF pp. 120-121.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DebugQualifier {
+    Const,
+    Volatile,
+    Restrict,
+    Atomic,
+}
+
+impl DebugQualifier {
+    /// The keyword of the IR's text form.
+    pub(crate) const fn keyword(self) -> &'static str {
+        match self {
+            | Self::Const => "const",
+            | Self::Volatile => "volatile",
+            | Self::Restrict => "restrict",
+            | Self::Atomic => "atomic",
+        }
+    }
+
+    /// The qualifier `keyword` names in the IR's text form.
+    pub(crate) fn from_keyword(keyword: &str) -> Option<Self> {
+        [Self::Const, Self::Volatile, Self::Restrict, Self::Atomic]
+            .into_iter()
+            .find(|qualifier| qualifier.keyword() == keyword)
+    }
+}
+
+/// A member of a described structure or union. An anonymous member has no
+/// name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct DebugMember<'ir> {
+    pub(crate) name:        Option<&'ir str>,
+    pub(crate) ty:          Option<DebugType>,
+    pub(crate) line:        u32,
+    /// From the start of the record, in bits.
+    pub(crate) offset_bits: u64,
+    /// The width of a bit-field.
+    pub(crate) bit_field:   Option<u32>,
+}
+
+/// An enumeration constant. C99: §6.7.2.2, pp. 104-105; PDF pp. 116-117.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct DebugEnumerator<'ir> {
+    pub(crate) name:  &'ir str,
+    pub(crate) value: i64,
+}
+
+/// A described structure or union.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct DebugRecord<'ir> {
+    pub(crate) union:      bool,
+    pub(crate) name:       Option<&'ir str>,
+    pub(crate) file:       DebugFile,
+    pub(crate) line:       u32,
+    pub(crate) size_bits:  u64,
+    pub(crate) align_bits: u32,
+    /// A type left incomplete, which only points or is pointed at.
+    pub(crate) complete:   bool,
+    pub(crate) members:    &'ir [DebugMember<'ir>],
+}
+
+/// A described type. `None` where a type is expected means `void`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DebugTypeData<'ir> {
+    Base {
+        name:      &'ir str,
+        size_bits: u64,
+        encoding:  DebugEncoding,
+    },
+    Pointer {
+        pointee: Option<DebugType>,
+    },
+    Qualified {
+        qualifier: DebugQualifier,
+        ty:        Option<DebugType>,
+    },
+    Array {
+        element:    Option<DebugType>,
+        /// `None` for an incomplete or variable-length array.
+        count:      Option<u64>,
+        size_bits:  u64,
+        align_bits: u32,
+    },
+    Vector {
+        element:    Option<DebugType>,
+        count:      u64,
+        size_bits:  u64,
+        align_bits: u32,
+    },
+    Record(DebugRecord<'ir>),
+    Enumeration {
+        name:        Option<&'ir str>,
+        file:        DebugFile,
+        line:        u32,
+        size_bits:   u64,
+        align_bits:  u32,
+        /// The compatible integer type. C99: §6.7.2.2 paragraph 4, p. 105;
+        /// PDF p. 117.
+        base:        Option<DebugType>,
+        enumerators: &'ir [DebugEnumerator<'ir>],
+    },
+    Typedef {
+        name: &'ir str,
+        ty:   Option<DebugType>,
+        file: DebugFile,
+        line: u32,
+    },
+    Function {
+        result:     Option<DebugType>,
+        parameters: &'ir [Option<DebugType>],
+        variadic:   bool,
+        prototyped: bool,
+    },
+}
+
+/// A local variable or parameter.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Variable<'ir> {
+    pub(crate) name:     &'ir str,
+    pub(crate) scope:    DebugScope,
+    pub(crate) file:     DebugFile,
+    pub(crate) line:     u32,
+    pub(crate) ty:       Option<DebugType>,
+    /// A parameter's 1-based position.
+    pub(crate) argument: Option<u32>,
+}
+
+/// Where a body keeps a variable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum VariablePlace {
+    Slot(StackSlot),
+    /// A value holding its address, for an object of variable size or one a
+    /// parameter's caller made.
+    Address(Value),
+}
+
+/// A variable's storage in one function body, in a side table beside the
+/// instructions: an instruction would count toward the inliner's budget and
+/// so change the code. C99: §6.2.4, p. 32; PDF p. 44.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct DeclaredVariable {
+    pub(crate) variable: DebugVariable,
+    pub(crate) place:    VariablePlace,
+    pub(crate) location: DebugLoc,
+}
+
+/// A global object, or a static local when it has a scope.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct GlobalVariable<'ir> {
+    pub(crate) global: GlobalId,
+    pub(crate) name:   &'ir str,
+    pub(crate) scope:  Option<DebugScope>,
+    pub(crate) file:   DebugFile,
+    pub(crate) line:   u32,
+    pub(crate) ty:     Option<DebugType>,
 }
 
 /// One instruction's source position; see the module docs.
@@ -168,6 +421,9 @@ impl<'ir> DebugInfo<'ir> {
             subprograms:  ArenaMap::with_hasher_in(FxBuildHasher, arena),
             locations:    Table::new_in(arena),
             location_ids: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            types:        Table::new_in(arena),
+            variables:    Table::new_in(arena),
+            globals:      ArenaVec::new_in(arena),
         }
     }
 
@@ -202,22 +458,74 @@ impl<'ir> DebugInfo<'ir> {
         arena: &'ir Bump,
         subprogram: Subprogram<'_>,
     ) -> DebugScope {
-        let scope = self.scopes.push(Subprogram {
+        let scope = self.scopes.push(Scope::Subprogram(Subprogram {
             name: arena.alloc_str(subprogram.name),
             ..subprogram
-        });
+        }));
         _ = self.subprograms.insert(subprogram.function, scope);
         scope
     }
 
-    /// Every scope, in the order they were added.
-    pub(crate) fn scopes(&self) -> impl Iterator<Item = (DebugScope, &Subprogram<'ir>)> {
+    /// Adds the scope of a block.
+    pub(crate) fn add_block(&mut self, block: LexicalBlock) -> DebugScope {
+        self.scopes.push(Scope::Block(block))
+    }
+
+    /// Every scope, in the order they were added. A block's parent comes
+    /// before it.
+    pub(crate) fn scopes(&self) -> impl Iterator<Item = (DebugScope, &Scope<'ir>)> {
         self.scopes.iter()
     }
 
     /// The data of `scope`, if the module has it.
-    pub(crate) fn scope(&self, scope: DebugScope) -> Option<&Subprogram<'ir>> {
+    pub(crate) fn scope(&self, scope: DebugScope) -> Option<&Scope<'ir>> {
         self.scopes.get(scope)
+    }
+
+    /// Adds a described type.
+    pub(crate) fn add_type(&mut self, data: DebugTypeData<'ir>) -> DebugType {
+        self.types.push(data)
+    }
+
+    /// Fills in a structure or union added before its members, which may
+    /// point back at it.
+    pub(crate) fn set_type(&mut self, ty: DebugType, data: DebugTypeData<'ir>) {
+        self.types[ty] = data;
+    }
+
+    /// Every described type, in the order they were added.
+    pub(crate) fn types(&self) -> impl Iterator<Item = (DebugType, &DebugTypeData<'ir>)> {
+        self.types.iter()
+    }
+
+    /// How many types the module describes.
+    pub(crate) fn type_count(&self) -> usize {
+        self.types.len()
+    }
+
+    /// Adds a variable.
+    pub(crate) fn add_variable(&mut self, variable: Variable<'ir>) -> DebugVariable {
+        self.variables.push(variable)
+    }
+
+    /// Every variable, in the order they were added.
+    pub(crate) fn variables(&self) -> impl Iterator<Item = (DebugVariable, &Variable<'ir>)> {
+        self.variables.iter()
+    }
+
+    /// The data of `variable`, if the module has it.
+    pub(crate) fn variable(&self, variable: DebugVariable) -> Option<&Variable<'ir>> {
+        self.variables.get(variable)
+    }
+
+    /// Adds a global object.
+    pub(crate) fn add_global(&mut self, global: GlobalVariable<'ir>) {
+        self.globals.push(global);
+    }
+
+    /// Every described global object.
+    pub(crate) fn globals(&self) -> &[GlobalVariable<'ir>] {
+        &self.globals
     }
 
     /// The scope of `function`, if it was lowered with debug information.
@@ -267,6 +575,6 @@ impl<'ir> DebugInfo<'ir> {
         while let Some(outer) = location.inlined_at {
             location = self.location_data(outer)?;
         }
-        Some(self.scope(location.scope)?.function)
+        Some(self.scope(location.scope)?.function())
     }
 }

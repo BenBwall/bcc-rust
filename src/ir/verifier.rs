@@ -15,14 +15,18 @@ use std::fmt;
 
 use super::{
     Body,
+    DebugTypeData,
     EntryConvention,
     FuncId,
     GlobalId,
     Module,
+    Scope,
+    VariablePlace,
     cfg::ControlFlowGraph,
     dominators::DominatorTree,
     entities::{
         Block,
+        DebugType,
         Entity,
         Inst,
         Value,
@@ -69,7 +73,38 @@ pub(crate) fn verify_module<'m, 's>(
         verify_function_into(module, func, profile, scratch, &mut errors);
     }
     verify_init_functions(module, &mut errors);
+    if !debug_types_exist(module) {
+        errors.push(VerifierError {
+            item:     "debug information",
+            location: Location::Item,
+            kind:     VerifierErrorKind::DebugType,
+        });
+    }
     errors
+}
+
+/// Every type the debug tables name exists, which back ends index by.
+fn debug_types_exist(module: &Module<'_>) -> bool {
+    let debug = module.debug_info();
+    let exists = |ty: Option<DebugType>| ty.is_none_or(|ty| ty.index() < debug.type_count());
+    debug.types().all(|(_, data)| match *data {
+        | DebugTypeData::Base { .. } => true,
+        | DebugTypeData::Pointer { pointee: ty }
+        | DebugTypeData::Qualified { ty, .. }
+        | DebugTypeData::Array { element: ty, .. }
+        | DebugTypeData::Vector { element: ty, .. }
+        | DebugTypeData::Enumeration { base: ty, .. }
+        | DebugTypeData::Typedef { ty, .. } => exists(ty),
+        | DebugTypeData::Record(record) => record.members.iter().all(|member| exists(member.ty)),
+        | DebugTypeData::Function {
+            result, parameters, ..
+        } => exists(result) && parameters.iter().all(|&parameter| exists(parameter)),
+    }) && debug.variables().all(|(_, variable)| exists(variable.ty))
+        && debug.globals().iter().all(|global| exists(global.ty))
+        && debug.scopes().all(|(_, scope)| match scope {
+            | Scope::Subprogram(subprogram) => exists(subprogram.ty),
+            | Scope::Block(_) => true,
+        })
 }
 
 /// An alias names an existing definition of its own kind that is not itself
@@ -345,6 +380,22 @@ fn verify_function_into<'m, 's>(
                     kind:     VerifierErrorKind::DebugLocation,
                 });
             }
+        }
+    }
+    for declared in body.declared_variables() {
+        let place = match declared.place {
+            | VariablePlace::Slot(slot) => slot.index() < body.stack_slots().count(),
+            | VariablePlace::Address(value) => value.index() < body.value_count(),
+        };
+        if !place
+            || module.debug_info().variable(declared.variable).is_none()
+            || module.debug_info().root_function(declared.location) != Some(func)
+        {
+            verifier.errors.push(VerifierError {
+                item:     function.name,
+                location: Location::Item,
+                kind:     VerifierErrorKind::DebugLocation,
+            });
         }
     }
     verifier.dominance();
@@ -1442,6 +1493,8 @@ pub(crate) enum VerifierErrorKind {
     /// An instruction's debug location does not exist, or its scope chain
     /// does not end in this function, which LLVM's verifier rejects.
     DebugLocation,
+    /// A debug table names a type that does not exist.
+    DebugType,
     /// An alias, section, constructor or destructor request breaks the rule
     /// named.
     SymbolAttribute(&'static str),
@@ -1694,6 +1747,7 @@ impl fmt::Display for VerifierErrorKind {
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
             | Self::DebugLocation =>
                 f.write_str("a debug location is missing or belongs to another function"),
+            | Self::DebugType => f.write_str("a debug table names a type that does not exist"),
             | Self::HandlerSignature => f.write_str(
                 "an interrupt handler takes a pointer and an optional i64, and returns nothing",
             ),

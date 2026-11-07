@@ -26,7 +26,9 @@ pub(super) use debug_info::{
     CompileUnit,
     DebugBuilder,
     FunctionDescription,
+    MemberDescription,
     Meta,
+    VariableDescription,
 };
 use llvm_sys::{
     LLVMDLLStorageClass,

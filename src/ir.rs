@@ -80,12 +80,24 @@ pub(crate) use bits::{
 pub(crate) use builder::FunctionBuilder;
 pub(crate) use cfg::ControlFlowGraph;
 pub(crate) use debug_info::{
+    DebugEncoding,
+    DebugEnumerator,
     DebugInfo,
     DebugLanguage,
     DebugLevel,
+    DebugMember,
+    DebugQualifier,
+    DebugRecord,
+    DebugTypeData,
     DebugUnit,
+    DeclaredVariable,
+    GlobalVariable,
+    LexicalBlock,
+    Scope,
     SourceLocation,
     Subprogram,
+    Variable,
+    VariablePlace,
 };
 pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
@@ -97,6 +109,8 @@ pub(crate) use entities::{
     DebugFile,
     DebugLoc,
     DebugScope,
+    DebugType,
+    DebugVariable,
     Entity,
     FuncId,
     GlobalId,

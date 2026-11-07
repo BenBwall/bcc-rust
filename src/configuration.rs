@@ -135,6 +135,9 @@ pub(crate) struct CompilerConfiguration {
     /// What `-g` asks for; `None` without it, or where the back end writes
     /// no debug information.
     debug_info: Option<DebugOptions>,
+    /// Every named local object lives in memory, as GCC and Clang keep them
+    /// at `-O0`, so a debugger reads and sets its current value.
+    stack_locals: bool,
     gnu89_inline: Option<bool>,
     /// Whether plain `char` is signed, overriding the target's choice, as
     /// `-fsigned-char` and `-funsigned-char` do.
