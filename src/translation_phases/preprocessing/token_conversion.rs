@@ -683,6 +683,15 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             } else {
                 self.parse_hexadecimal_integer(token, representation)
             }
+        } else if is_binary
+            && self.context.configuration.compiler_identity() == CompilerIdentity::Tcc
+            && contents.contains(['.', 'p', 'P'])
+            && let Some(hexadecimal) = binary_float_as_hexadecimal(contents, self.scratch)
+        {
+            // TCC's binary floating constant, `0b1.01p3`, is the hexadecimal
+            // constant with the same bits.
+            let contents = self.context.string_cache.intern(hexadecimal.as_str());
+            self.parse_hexadecimal_float(PreprocessorToken { contents, ..token })
         } else if is_binary {
             if self.context.configuration.accepts(Feature::BinaryConstants) {
                 self.context.report_extension(
@@ -2107,4 +2116,66 @@ const fn spelled_only_in_text(kind: PreprocessorTokenType) -> bool {
             | PreprocessorTokenType::UnavailableUniversalIdentifier
             | PreprocessorTokenType::Defined
     )
+}
+
+/// TCC's binary floating constant `contents`, written in `scratch` as the
+/// hexadecimal floating constant with the same value: binary digits, an
+/// optional point, a required binary exponent, and a suffix. `None` for
+/// anything else. Like TCC, a mantissa without digits (`0b.p0`, `0bp0`) is
+/// zero, and the constant may be of any length.
+/// TCC extension: `tccpp.c`, `parse_number`.
+fn binary_float_as_hexadecimal<'x>(contents: &str, scratch: &'x Bump) -> Option<ArenaString<'x>> {
+    let digits = contents.get(2..)?;
+    let exponent_at = digits.find(['p', 'P'])?;
+    let (mantissa, rest) = digits.split_at(exponent_at);
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if !whole
+        .bytes()
+        .chain(fraction.bytes())
+        .all(|b| b == b'0' || b == b'1')
+    {
+        return None;
+    }
+    // Four bits make a hexadecimal digit, plus `0x0.` and the exponent.
+    let mut text = ArenaString::with_capacity_in(mantissa.len() / 4 + rest.len() + 6, scratch);
+    text.push_str("0x");
+    // Whole digits group from the point leftward, fraction digits rightward.
+    let lead = (4 - whole.len() % 4) % 4;
+    let whole_bits = core::iter::repeat_n(b'0', lead).chain(whole.bytes());
+    if whole.is_empty() {
+        text.push('0');
+    }
+    let mut nibble = 0_u8;
+    for (index, bit) in whole_bits.enumerate() {
+        nibble = nibble * 2 + (bit - b'0');
+        if index % 4 == 3 {
+            text.push(hex_digit(nibble));
+            nibble = 0;
+        }
+    }
+    if !fraction.is_empty() {
+        text.push('.');
+        let trail = (4 - fraction.len() % 4) % 4;
+        for (index, bit) in fraction
+            .bytes()
+            .chain(core::iter::repeat_n(b'0', trail))
+            .enumerate()
+        {
+            nibble = nibble * 2 + (bit - b'0');
+            if index % 4 == 3 {
+                text.push(hex_digit(nibble));
+                nibble = 0;
+            }
+        }
+    }
+    text.push_str(rest);
+    Some(text)
+}
+
+const fn hex_digit(value: u8) -> char {
+    (if value < 10 {
+        b'0' + value
+    } else {
+        b'a' + value - 10
+    }) as char
 }

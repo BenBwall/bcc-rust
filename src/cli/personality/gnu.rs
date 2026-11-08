@@ -1701,6 +1701,8 @@ impl State<'_> {
                     | "-fno-approx-func"
                     | "-Wmain-return-type"
                     | "-Wno-main-return-type"
+                    | "-Wundefined-internal"
+                    | "-Wno-undefined-internal"
                     | "-Wformat-invalid-specifier"
                     | "-Wno-format-invalid-specifier"
                     | "-Wformat-insufficient-args"
