@@ -440,17 +440,17 @@ int main(void) {
     #[test]
     fn aggregates_move_through_registers_as_their_bytes() {
         let source =
-            "#include <stdio.h>\nstruct pair { int x, y; };\nstruct halves { short s[2]; };\nint \
-             main(void) {\nint a[2] = {0, 0};\n__asm__(\"movabsq $0x0000000200000001, %0\" : \
-             \"=r\"(a));\nstruct pair p = {0, 0};\n__asm__(\"movabsq $0x0000000400000003, %0\" : \
-             \"=r\"(p));\nint u[2] = {5, 6};\n__asm__(\"rolq $32, %0\" : \"+r\"(u));\nstruct pair \
-             q = {7, 8};\nlong long bits;\n__asm__(\"movq %1, %0\" : \"=r\"(bits) : \
-             \"r\"(q));\nstruct halves h = {{0, 0}};\n__asm__(\"movl $0x00090008, %0\" : \
-             \"=r\"(h));\nstruct pair x = {0, 0};\n__asm__(\"movq %1, %0\" : \"=x\"(x) : \
-             \"x\"(q));\nvolatile char c[1];\n__asm__(\"movb $65, %0\" : \"=q\"(c));\nstruct pair \
-             t;\n__asm__(\"\" : \"=r\"(t) : \"0\"(q));\nprintf(\"%d %d %d %d %d %d %llx %d %d %d \
-             %d %c %d %d\\n\", a[0], a[1], p.x, p.y, u[0], u[1], bits, h.s[0], h.s[1], x.x, x.y, \
-             c[0], t.x, t.y);\nreturn 0;\n}\n";
+            "int printf(const char *, ...);\nstruct pair { int x, y; };\nstruct halves { short \
+             s[2]; };\nint main(void) {\nint a[2] = {0, 0};\n__asm__(\"movabsq \
+             $0x0000000200000001, %0\" : \"=r\"(a));\nstruct pair p = {0, 0};\n__asm__(\"movabsq \
+             $0x0000000400000003, %0\" : \"=r\"(p));\nint u[2] = {5, 6};\n__asm__(\"rolq $32, \
+             %0\" : \"+r\"(u));\nstruct pair q = {7, 8};\nlong long bits;\n__asm__(\"movq %1, \
+             %0\" : \"=r\"(bits) : \"r\"(q));\nstruct halves h = {{0, 0}};\n__asm__(\"movl \
+             $0x00090008, %0\" : \"=r\"(h));\nstruct pair x = {0, 0};\n__asm__(\"movq %1, %0\" : \
+             \"=x\"(x) : \"x\"(q));\nvolatile char c[1];\n__asm__(\"movb $65, %0\" : \
+             \"=q\"(c));\nstruct pair t;\n__asm__(\"\" : \"=r\"(t) : \"0\"(q));\nprintf(\"%d %d \
+             %d %d %d %d %llx %d %d %d %d %c %d %d\\n\", a[0], a[1], p.x, p.y, u[0], u[1], bits, \
+             h.s[0], h.s[1], x.x, x.y, c[0], t.x, t.y);\nreturn 0;\n}\n";
         let interpreted = bcc(
             source,
             &["--target=x86_64-unknown-linux-gnu", "--interpret"],
