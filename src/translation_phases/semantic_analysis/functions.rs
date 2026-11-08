@@ -172,6 +172,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 binding,
                 definition: true,
             };
+            self.attributes.declaration_start = Some(f.declaration_specifiers.source_vectors);
             self.declaration_attributes(
                 subject,
                 f.declaration_specifiers.extensions,
@@ -431,6 +432,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 .extension_parameters
                                 .insert(self.bindings.len() - 1, size);
                         }
+                        self.inherit_pointer_format(prototype, self.bindings.len() - 1);
                     }
                     if let Some(minimum) = parameter.array_minimum {
                         _ = self

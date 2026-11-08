@@ -1261,6 +1261,52 @@ after a tag's keyword move, so a system header's macro that spells the tag hides
 the warning for the rest of that line, and the initializer's own spelling does
 not matter.
 
+#### Format strings
+
+`format.rs` implements `-Wformat` and its groups for calls to the standard
+library's `printf` and `scanf` families (by name, with external linkage, in a
+hosted mode where `-fno-builtin` leaves them builtins, and declared in the
+library's shape; `__builtin_` forms always) and to functions with GNU
+`format(printf|gnu_printf|scanf|gnu_scanf, N, M)`, on the Linux and Windows
+targets; the attribute may also sit on a function pointer or a member that
+points to a function, and its operands are integer constant expressions. Each
+compiler reads the format its own way: `format/gcc.rs` ports GCC 14's
+`c-format.cc` (its conversion tables, flag pairs, operand numbers, scan sets
+and `check_format_types`, which compares the argument after the default
+argument promotions), and `format/clang.rs` ports Clang 23's format-string
+parser and `ArgType::matchesType`, which looks through a promotion to the
+argument's own type, or to the parameter's for a function without `...`. On
+Windows GCC reads `printf`, `scanf` and `format(printf)` as MinGW's
+`ms_printf` and `ms_scanf` (`msformat-c.cc`: `I32`, `I64` and `I`, no `hh`,
+`z`, `t`, `j`, `%m` or `%F`), and Clang applies the Microsoft C runtime's rules
+(`I64` and `w`, `h` on character and string conversions, `%Z`, no `L` on an
+integer). `format/literal.rs` follows the format to its string literals
+(`u8` ones included: casts, both arms of a conditional unless its condition is
+constant, the selected expression of `_Generic` and `__builtin_choose_expr`,
+`format_arg` calls, `const` objects cut to their declared extent, and constant
+offsets into a string) and maps each byte back to its spelling, so a diagnostic points at the conversion it is about. GCC reports
+there when the string's first token holds the conversion and otherwise at the
+string with a "format string is defined here" note; Clang reports a type
+mismatch at the argument. `attributes/formats.rs` checks and retains `format`
+and `format_arg`, each compiler with its own errors and warnings.
+
+GCC's `-Wall` is its `-Wformat`, `-Wformat=2` adds `-Wformat-security` and
+`-Wformat-nonliteral`, and its groups report only while `-Wformat` is on;
+`-Werror=format` reaches the first level's groups and `-Wno-error=format`
+does not. Clang reports the whole group by default and controls each part on
+its own, `-Wnonnull` included; its `-Wformat-nonliteral` holds Clang 23's
+`-Wmissing-format-attribute`, whose suggested attribute the caller then has
+when its definition is its first declaration, and `-Wpedantic` turns on
+`-Wformat-pedantic`. GCC reports what concerns the call as a whole at its
+`input_location`, the first token on the line of the closing parenthesis. Typedef names in argument types are spelled as their
+types, as everywhere in bcc, and a string a macro's body wrote is reported at
+the invocation, without the compilers' macro notes. `strftime` and `strfmon`
+formats are not read, though GCC's non-literal warning covers `strftime`'s,
+and GCC's middle-end
+`-Wformat-overflow` and `-Wformat-truncation` are not modeled. GCC gives a
+typedef's `format` to the function type, so a pointer declared with the
+typedef has it too; bcc keeps the attribute only on what declares it.
+
 #### Remaining backend and quality work
 
 - Optional fallthrough/missing-return warnings are
