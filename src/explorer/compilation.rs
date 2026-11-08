@@ -228,19 +228,22 @@ pub(super) fn new_context<'tu>(
 }
 
 /// Where headers are searched: beside the source, where the in-memory
-/// headers are, and then the embedded resource headers.
+/// headers are, then the embedded resource headers, and then bcc's
+/// embedded C library headers.
+///
+/// The WASI target's C library is bcc's own. A browser has no C library
+/// for the other targets either, so the explorer declares the standard
+/// library from the same headers there, as a program's `<stdio.h>` would:
+/// a lesson that prints compiles through every stage, though the command
+/// line reads the host's C library instead.
+/// C99: §7.1.2 paragraph 1, p. 165; PDF p. 177 (standard headers).
 pub(super) fn header_search<'a>(tu: &'a Bump, options: &ExplorerOptions) -> HeaderSearch<'a> {
     let beside: &[&Path] = if options.files.is_empty() {
         &[]
     } else {
         tu.alloc_slice_fill_iter([Path::new("")])
     };
-    // The WASI target's C library is bcc's own, embedded.
-    let after: &[&Path] = if Target::parse(&options.target) == Some(Target::Wasm32Wasi) {
-        tu.alloc_slice_fill_iter([Path::new(crate::headers::WASI_DIRECTORY)])
-    } else {
-        &[]
-    };
+    let after: &[&Path] = tu.alloc_slice_fill_iter([Path::new(crate::headers::WASI_DIRECTORY)]);
     HeaderSearch {
         angled: beside,
         after,

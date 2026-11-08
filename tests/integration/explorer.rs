@@ -103,6 +103,35 @@ mod tests {
         }
     }
 
+    /// The explorer has no host C library, so it declares the standard
+    /// library from bcc's embedded headers for every target: a program
+    /// that prints, like the site's printf lesson, compiles through every
+    /// stage, and its `#include` is one the preprocessor stage shows.
+    #[test]
+    fn programs_that_print_compile_through_every_stage() {
+        let source = "#include <stdio.h>\n#include <string.h>\nint main(void) {\n    char name[] \
+                      = \"Ada\";\n    printf(\"%s has %d letters\\n\", name, \
+                      (int)strlen(name));\n    puts(\"Hello, world!\");\n    return 0;\n}\n";
+        for optimize in [false, true] {
+            let output = compile(source, &options(optimize));
+            assert!(
+                output.diagnostics.iter().all(|d| d.severity != "error"),
+                "{:#?}",
+                output.diagnostics
+            );
+            let ir = output.ir.as_deref().unwrap_or_default();
+            assert!(ir.contains("@printf"), "{ir}");
+            assert!(
+                output
+                    .asm
+                    .as_deref()
+                    .is_some_and(|asm| asm.contains("printf"))
+            );
+            let includes = &output.preprocessing.as_ref().unwrap().includes;
+            assert!(includes.len() >= 2, "{includes:#?}");
+        }
+    }
+
     #[test]
     fn every_view_matches_the_command_line() {
         for (name, source) in programs() {
@@ -1269,7 +1298,13 @@ mod tests {
                 .map(|d| d.rendered.as_str())
                 .collect();
             let summary = stderr.rfind("\n\n").map_or(0, |at| at + 2);
-            assert_eq!(rendered, stderr[..summary], "{source}");
+            // The explorer also searches bcc's embedded C library, which the
+            // command line leaves to the host's.
+            let expected = stderr[..summary].replace(
+                "            <built-in>\n",
+                "            <built-in>\n            <wasi-libc>\n",
+            );
+            assert_eq!(rendered, expected, "{source}");
             for diagnostic in &output.diagnostics {
                 assert_eq!(
                     diagnostic.file.as_deref(),
