@@ -483,7 +483,34 @@ fn arguments(
 pub fn value_text(value: &Value) -> Option<String> {
     match value {
         | Value::Indeterminate => None,
-        | Value::Integer { text } => Some(text.clone()),
+        | Value::Integer {
+            text,
+            character: Some(character),
+        } => Some(format!("{text} {character}")),
+        | Value::Integer { text, .. } => Some(text.clone()),
+        // A char array reads as its characters.
+        | Value::Array { elements }
+            if !elements.is_empty()
+                && elements.iter().all(|element| {
+                    matches!(
+                        element,
+                        Value::Integer {
+                            character: Some(_),
+                            ..
+                        }
+                    )
+                }) =>
+            Some(format!(
+                "{{{}}}",
+                elements
+                    .iter()
+                    .filter_map(|element| match element {
+                        | Value::Integer { character, .. } => character.clone(),
+                        | _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )),
         | Value::Array { elements } => Some(format!(
             "{{{}}}",
             elements

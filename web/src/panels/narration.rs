@@ -35,6 +35,9 @@ pub fn Narration(
     /// Recent steps before the current one: history index, title, category.
     recent: Memo<Vec<(usize, String, String)>>,
     on_jump: Callback<usize>,
+    /// Open the compiler pipeline at its Preprocessor stage, from the step
+    /// that ran `#include <stdio.h>`.
+    on_preprocessor: Callback<()>,
     /// The lesson's summary, shown before the engine has loaded.
     placeholder: Memo<&'static str>,
     /// Whether Run is stepping: the steps it passes through flash by, so
@@ -56,7 +59,7 @@ pub fn Narration(
     let returned = Memo::new(move |_| {
         snapshot.with(|state| {
             state.as_ref().and_then(|state| match &state.return_value {
-                | Some(crate::snapshot::Value::Integer { text }) => Some(text.clone()),
+                | Some(crate::snapshot::Value::Integer { text, .. }) => Some(text.clone()),
                 | _ => None,
             })
         })
@@ -132,6 +135,11 @@ pub fn Narration(
                     })))}
                 </p>
             </aside>
+            <p class="narration-stage" hidden=move || !event.with(|event| event.as_ref().is_some_and(|event| event.kind == "directive"))>
+                <button type="button" class="button ghost" on:click=move |_| on_preprocessor.run(())>
+                    "See the real preprocessor: open the Preprocessor stage"
+                </button>
+            </p>
             <p class="return-callout" hidden=move || returned.with(Option::is_none)>
                 "Program finished: main returned "<strong>{move || returned.get().unwrap_or_default()}</strong>
             </p>
