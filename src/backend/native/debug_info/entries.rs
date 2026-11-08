@@ -134,7 +134,11 @@ impl<'d> Entries<'d> {
 
     /// Writes `entry`, at `label` if it has one; its children follow until
     /// [`Self::end_children`].
-    pub(super) fn write(&mut self, entry: Entry<'d>, label: Option<&dyn fmt::Display>) -> fmt::Result {
+    pub(super) fn write(
+        &mut self,
+        entry: Entry<'d>,
+        label: Option<&dyn fmt::Display>,
+    ) -> fmt::Result {
         let code = match self.shapes.iter().position(|shape| {
             shape.tag == entry.shape.tag
                 && shape.children == entry.shape.children

@@ -190,35 +190,45 @@ pub(super) fn write(writer: &mut DebugWriter<'_, '_, '_>, out: &mut dyn Write) -
     let Description {
         entries, ranges, ..
     } = description;
+    writeln!(out, "\t.section\t.debug_abbrev,\"\",@progbits")?;
+    writeln!(out, ".Ldebug_abbrev:")?;
+    entries.abbreviations(out)?;
     // DWARF 5 §7.5.1.1: the unit's length, version 5, `DW_UT_compile`, the
     // address size and the abbreviations' offset.
-    writeln!(
-        out,
-        "\t.section\t.debug_abbrev,\"\",@progbits\n.Ldebug_abbrev:"
-    )?;
-    entries.abbreviations(out)?;
-    writeln!(
-        out,
-        "\t.section\t.debug_info,\"\",@progbits\n{UNIT}:\n\t.long\t.Ldebug_info_end-.\
-         Ldebug_info_start\n.Ldebug_info_start:\n\t.short\t5\n\t.byte\t1\n\t.byte\t8\n\t.long\t.\
-         Ldebug_abbrev"
-    )?;
+    writeln!(out, "\t.section\t.debug_info,\"\",@progbits")?;
+    writeln!(out, "{UNIT}:")?;
+    for line in [
+        "\t.long\t.Ldebug_info_end-.Ldebug_info_start",
+        ".Ldebug_info_start:",
+        "\t.short\t5",
+        "\t.byte\t1",
+        "\t.byte\t8",
+        "\t.long\t.Ldebug_abbrev",
+    ] {
+        writeln!(out, "{line}")?;
+    }
     out.write_str(entries.contents())?;
     writeln!(out, ".Ldebug_info_end:")?;
     if !ranges.is_empty() {
         // §7.28: the length, version 5, the address and segment selector
         // sizes, and no offset table.
-        writeln!(
-            out,
-            "\t.section\t.debug_rnglists,\"\",@progbits\n\t.long\t.Ldebug_rnglists_end-.\
-             Ldebug_rnglists_start\n.Ldebug_rnglists_start:\n\t.short\t5\n\t.byte\t8\n\t.\
-             byte\t0\n\t.long\t0"
-        )?;
+        for line in [
+            "\t.section\t.debug_rnglists,\"\",@progbits",
+            "\t.long\t.Ldebug_rnglists_end-.Ldebug_rnglists_start",
+            ".Ldebug_rnglists_start:",
+            "\t.short\t5",
+            "\t.byte\t8",
+            "\t.byte\t0",
+            "\t.long\t0",
+        ] {
+            writeln!(out, "{line}")?;
+        }
         out.write_str(&ranges)?;
         writeln!(out, ".Ldebug_rnglists_end:")?;
     }
     // The line table follows this label, which `DW_AT_stmt_list` names.
-    writeln!(out, "\t.section\t.debug_line,\"\",@progbits\n.Ldebug_line:")
+    writeln!(out, "\t.section\t.debug_line,\"\",@progbits")?;
+    writeln!(out, ".Ldebug_line:")
 }
 
 /// Finds where `frame` keeps the variables `body` places in stack slots.
@@ -242,7 +252,9 @@ pub(super) fn place_variables(
         // time, so it has no offset of its own from the frame.
         if inlined
             || body.stack_slot(slot).align.bytes() > 16
-            || variables.iter().any(|&(variable, _)| variable == declared.variable)
+            || variables
+                .iter()
+                .any(|&(variable, _)| variable == declared.variable)
         {
             continue;
         }
@@ -291,14 +303,12 @@ impl<'d> Description<'_, 'd, '_, '_> {
     }
 
     /// `DW_AT_decl_file` and `DW_AT_decl_line`.
-    fn declared(
-        &mut self,
-        entry: &mut Entry<'_>,
-        file: DebugFile,
-        line: u32,
-    ) -> fmt::Result {
+    fn declared(&mut self, entry: &mut Entry<'_>, file: DebugFile, line: u32) -> fmt::Result {
         let debug = self.writer.module.debug_info();
-        let number = self.writer.lines.number(self.entries.directives(), debug, file)?;
+        let number = self
+            .writer
+            .lines
+            .number(self.entries.directives(), debug, file)?;
         entry.unsigned(at::DECL_FILE, u64::from(number))?;
         entry.unsigned(at::DECL_LINE, u64::from(line))
     }

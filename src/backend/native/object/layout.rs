@@ -170,8 +170,7 @@ impl<'a> Object<'a> {
                         return Err(Error("string in a NOBITS section"));
                     }
                     let start = usize::try_from(offset).map_err(|_| Error("section too large"))?;
-                    self.sections[section].data[start..start + bytes.len()]
-                        .copy_from_slice(bytes);
+                    self.sections[section].data[start..start + bytes.len()].copy_from_slice(bytes);
                 },
                 | Kind::Code(code) => {
                     if self.sections[section].kind == 8 {

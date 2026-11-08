@@ -11,9 +11,9 @@
 //! `layout` resolves section offsets and fixups. `unwind` implements DWARF
 //! call-frame instructions (LSB 5.0 §10.6); `line_table` turns `.file` and
 //! `.loc` into the DWARF 5 line number program (§6.2); `elf` implements the
-//! ELF gABI and AMD64 psABI §4.4 relocations. For Windows, read `coff::encode`, then its
-//! listing, unwind and writer modules (Microsoft PE format and x64 EH).
-//! `inspection` lays out the ELF text without writing an object, for the
+//! ELF gABI and AMD64 psABI §4.4 relocations. For Windows, read `coff::encode`,
+//! then its listing, unwind and writer modules (Microsoft PE format and x64
+//! EH). `inspection` lays out the ELF text without writing an object, for the
 //! explorer's per-instruction machine-code view.
 
 mod coff;
@@ -93,9 +93,9 @@ struct Loc {
 }
 
 impl Loc {
+    const EPILOGUE_BEGIN: u8 = 8;
     const IS_STMT: u8 = 1;
     const PROLOGUE_END: u8 = 4;
-    const EPILOGUE_BEGIN: u8 = 8;
 }
 
 struct Section<'a> {

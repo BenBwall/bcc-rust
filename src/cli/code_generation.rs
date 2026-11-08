@@ -559,8 +559,7 @@ impl CodeGeneration {
             };
         }
         Some(if self.backend == BackEnd::Native {
-            "warning: --backend=native writes no debug information for Windows targets; ignoring \
-             -g"
+            "warning: --backend=native writes no debug information for Windows targets; ignoring -g"
         } else {
             "warning: the WebAssembly back end writes no debug information; ignoring -g"
         })

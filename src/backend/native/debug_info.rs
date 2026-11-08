@@ -80,24 +80,24 @@ pub(crate) struct DebugWriter<'d, 'm, 'ir> {
 
 /// A function the listing describes: one with a subprogram.
 struct Described<'d> {
-    function:    FuncId,
+    function:   FuncId,
     /// Its labels' number: `.Ldebug_begin<number>` and
     /// `.Ldebug_end<number>`.
-    number:      u32,
+    number:     u32,
     /// Whether its code is in `.text`, so one range of it can cover the
     /// compilation unit.
-    in_text:     bool,
+    in_text:    bool,
     /// Whether the canonical frame address is defined throughout its code;
     /// an interrupt handler has no caller frame and a naked function no
     /// frame of its own, so neither places a variable.
-    frame_base:  bool,
+    frame_base: bool,
     /// Where each placed variable is, from the canonical frame address.
-    variables:   ArenaVec<'d, (DebugVariable, i64)>,
+    variables:  ArenaVec<'d, (DebugVariable, i64)>,
     /// The runs of code in one scope, each up to the next one's start or
     /// the function's end.
-    runs:        ArenaVec<'d, (DebugScope, Mark)>,
+    runs:       ArenaVec<'d, (DebugScope, Mark)>,
     /// The scope of the code being written.
-    open_scope:  Option<DebugScope>,
+    open_scope: Option<DebugScope>,
 }
 
 /// A label the writer puts in a function's code.
@@ -122,7 +122,11 @@ impl<'d, 'm, 'ir> DebugWriter<'d, 'm, 'ir> {
     /// The writer of `module`'s debug information, or `None` if the module
     /// has no compilation unit to describe. `directory` is where relative
     /// file names are, which `DW_AT_comp_dir` records.
-    pub(crate) fn new(module: &'m Module<'ir>, directory: &'d str, arena: &'d Bump) -> Option<Self> {
+    pub(crate) fn new(
+        module: &'m Module<'ir>,
+        directory: &'d str,
+        arena: &'d Bump,
+    ) -> Option<Self> {
         let unit = module.debug_info().unit()?;
         Some(Self {
             module,

@@ -80,8 +80,9 @@ fn line_tables_match_the_assembler() {
     text.push_str(
         ".p2align 4, 0x90\n.Lend:\n.loc 0 40 1\nretq\n.cfi_endproc\n.section \
          .text.g,\"ax\",@progbits\ng:\n.loc 2 300 0 is_stmt 1\nretq\n.loc 2 300 0\nretq\n.zero \
-         17\n.section .text.h,\"axG\",@progbits,h,comdat\n.weak h\nh:\n.loc 1 1 1\nretq\n.text\nk:\n.loc \
-         3 5 5\nretq\n.section .debug_line,\"\",@progbits\n.Lline_table_start0:\n",
+         17\n.section .text.h,\"axG\",@progbits,h,comdat\n.weak h\nh:\n.loc 1 1 \
+         1\nretq\n.text\nk:\n.loc 3 5 5\nretq\n.section \
+         .debug_line,\"\",@progbits\n.Lline_table_start0:\n",
     );
     equivalent(&text).unwrap();
 }
@@ -114,14 +115,27 @@ fn debug_section_data_matches_the_assembler() {
     for value in [0_u64, 1, 63, 64, 127, 128, 16383, 16384, u64::MAX] {
         writeln!(text, ".uleb128 {value}").unwrap();
     }
-    for value in [0_i64, 1, -1, 63, 64, -64, -65, 8191, -8192, i64::MIN, i64::MAX] {
+    for value in [
+        0_i64,
+        1,
+        -1,
+        63,
+        64,
+        -64,
+        -65,
+        8191,
+        -8192,
+        i64::MIN,
+        i64::MAX,
+    ] {
         writeln!(text, ".sleb128 {value}").unwrap();
     }
     text.push_str(
-        ".section .debug_info,\"\",@progbits\n.Lunit:\n.long .Lunit_end-.Lunit_start\n.Lunit_start:\n.\
-         short 5\n.byte 1, 8\n.long .Labbrev\n.asciz \"bcc\\042x\\134y\\001\\377\"\n.ascii \
-         \"plain\"\n.asciz \"\"\n.quad .Lbegin\n.long .Lend-.Lbegin\n.quad f+1\n.long \
-         .Lline\n.Lunit_end:\n.section .debug_line,\"\",@progbits\n.Lline:\n",
+        ".section .debug_info,\"\",@progbits\n.Lunit:\n.long \
+         .Lunit_end-.Lunit_start\n.Lunit_start:\n.short 5\n.byte 1, 8\n.long .Labbrev\n.asciz \
+         \"bcc\\042x\\134y\\001\\377\"\n.ascii \"plain\"\n.asciz \"\"\n.quad .Lbegin\n.long \
+         .Lend-.Lbegin\n.quad f+1\n.long .Lline\n.Lunit_end:\n.section \
+         .debug_line,\"\",@progbits\n.Lline:\n",
     );
     equivalent(&text).unwrap();
 }
@@ -137,8 +151,16 @@ fn c_programs_describe_themselves_without_changing_their_code() {
     for (name, source) in PROGRAMS
         .iter()
         .map(|program| (program.name, program.source))
-        .chain(LOWERING_PROGRAMS.iter().map(|program| (program.name, program.source)))
-        .chain(BY_VALUE_PROGRAMS.iter().map(|program| (program.name, program.source)))
+        .chain(
+            LOWERING_PROGRAMS
+                .iter()
+                .map(|program| (program.name, program.source)),
+        )
+        .chain(
+            BY_VALUE_PROGRAMS
+                .iter()
+                .map(|program| (program.name, program.source)),
+        )
     {
         for optimize in [false, true] {
             let Some(plain) = listing(source, optimize, false) else {
@@ -232,7 +254,11 @@ fn verify(directory: &TempDir, name: &str, text: &str) {
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
     let path = directory.join(format!("{name}.o"));
     std::fs::write(&path, &*bytes).unwrap();
-    match Command::new("llvm-dwarfdump").arg("--verify").arg(&path).output() {
+    match Command::new("llvm-dwarfdump")
+        .arg("--verify")
+        .arg(&path)
+        .output()
+    {
         | Ok(output) => assert!(
             output.status.success(),
             "{name}: {}\n{text}",
@@ -270,7 +296,8 @@ static int in_header(int v) { return v + 1; }
 #line 3 \"odd \\\"name\\\\.h\"
 int odd(int v) { int vla[v + 1]; vla[v] = v; return vla[v] + in_header(v); }
 #line 9 \"test.c\"
-int main(void) { struct big b = { 1, 2, 3 }; return hot(1) + (int)by_value(b) + shadow(5) + odd(2); }
+int main(void) { struct big b = { 1, 2, 3 }; return hot(1) + (int)by_value(b) + shadow(5) + \
+                  odd(2); }
 ";
     for optimize in [false, true] {
         let text = listing(source, optimize, true).expect("the back end compiles the program");

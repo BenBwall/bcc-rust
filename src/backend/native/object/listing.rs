@@ -341,8 +341,10 @@ fn line_file<'a>(
 fn loc(args: &str, files: &[Option<LineFile<'_>>], is_stmt: &mut bool) -> Result<Loc> {
     let mut words = args.split_whitespace().peekable();
     let mut field = || -> Result<u32> {
-        u32::try_from(unsigned(words.next().ok_or(Error("missing .loc operand"))?)?)
-            .map_err(|_| Error(".loc operand too large"))
+        u32::try_from(unsigned(
+            words.next().ok_or(Error("missing .loc operand"))?,
+        )?)
+        .map_err(|_| Error(".loc operand too large"))
     };
     let file = field()?;
     let line = field()?;
@@ -415,7 +417,9 @@ fn quoted<'a>(text: &'a str, terminate: bool, arena: &'a Bump) -> Result<(&'a [u
                     digits += 1;
                 }
                 if digits > 0 {
-                    bytes.push(u8::try_from(value).map_err(|_| Error("octal escape exceeds a byte"))?);
+                    bytes.push(
+                        u8::try_from(value).map_err(|_| Error("octal escape exceeds a byte"))?,
+                    );
                     for _ in 0..digits {
                         _ = rest.next();
                     }

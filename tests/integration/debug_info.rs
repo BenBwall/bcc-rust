@@ -185,16 +185,19 @@ static int helper(int x)
     fn the_compile_unit_is_honest_about_its_producer_and_language() {
         let directory = Directory::new();
         for back_end in BACK_ENDS {
-            drop(directory.built(&with(back_end, &[
-                "--gcc-mode",
-                LINUX,
-                "-g",
-                "-std=c99",
-                "-c",
-                "a.c",
-                "-o",
-                "a.o",
-            ])));
+            drop(directory.built(&with(
+                back_end,
+                &[
+                    "--gcc-mode",
+                    LINUX,
+                    "-g",
+                    "-std=c99",
+                    "-c",
+                    "a.c",
+                    "-o",
+                    "a.o",
+                ],
+            )));
             let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "a.o") else {
                 return;
             };
@@ -218,7 +221,10 @@ static int helper(int x)
         let directory = Directory::new();
         for back_end in BACK_ENDS {
             for level in ["-O0", "-O2"] {
-                let args = with(back_end, &["--gcc-mode", LINUX, "-g", level, "-c", "a.c", "-o", "a.o"]);
+                let args = with(
+                    back_end,
+                    &["--gcc-mode", LINUX, "-g", level, "-c", "a.c", "-o", "a.o"],
+                );
                 drop(directory.built(&args));
                 let Some(table) = directory.tool("readelf", &["--debug-dump=decodedline"], "a.o")
                 else {
@@ -266,7 +272,10 @@ static int helper(int x)
             ]
             .map(|case| (back_end, case))
         }) {
-            drop(directory.built(&with(back_end, &["--gcc-mode", "-g", level, "a.c", "-o", "a"])));
+            drop(directory.built(&with(
+                back_end,
+                &["--gcc-mode", "-g", level, "a.c", "-o", "a"],
+            )));
             assert!(
                 Command::new(directory.path("a"))
                     .status()
@@ -318,13 +327,18 @@ static int helper(int x)
         std::fs::write(directory.path("code.c"), CODE).unwrap();
         for back_end in BACK_ENDS {
             for level in ["-O0", "-O1", "-O2", "-O3", "-Os", "-Og"] {
-                let plain = with(back_end, &["--gcc-mode", level, "-c", "code.c", "-o", "same.o"]);
+                let plain = with(
+                    back_end,
+                    &["--gcc-mode", level, "-c", "code.c", "-o", "same.o"],
+                );
                 drop(directory.built(&plain));
                 let Some(plain) = directory.tool("objdump", &["-d"], "same.o") else {
                     return;
                 };
-                let args =
-                    with(back_end, &["--gcc-mode", level, "-g", "-c", "code.c", "-o", "same.o"]);
+                let args = with(
+                    back_end,
+                    &["--gcc-mode", level, "-g", "-c", "code.c", "-o", "same.o"],
+                );
                 drop(directory.built(&args));
                 let debug = directory.tool("objdump", &["-d"], "same.o").unwrap();
                 assert_eq!(plain, debug, "{args:?}");
@@ -397,7 +411,14 @@ long use(int n)
     #[test]
     fn the_native_back_end_writes_dwarf_5() {
         let directory = Directory::new();
-        let args = ["--gcc-mode", "-Xbcc", "--backend=native", LINUX, "-gdwarf-4", "-c"];
+        let args = [
+            "--gcc-mode",
+            "-Xbcc",
+            "--backend=native",
+            LINUX,
+            "-gdwarf-4",
+            "-c",
+        ];
         let stderr = directory.built(&[&args[..], &["a.c", "-o", "a.o"]].concat());
         assert!(
             stderr.contains("writes DWARF 5; ignoring -gdwarf-4"),
@@ -472,7 +493,8 @@ long use(int n)
         std::fs::write(directory.path("t.c"), "int main(void) { return 3; }\n").unwrap();
         // The native back end writes no CodeView, and no DWARF in COFF.
         let windows = "--target=x86_64-w64-windows-gnu";
-        let stderr = directory.built(&["-g", "--backend=native", windows, "-c", "t.c", "-o", "t.o"]);
+        let stderr =
+            directory.built(&["-g", "--backend=native", windows, "-c", "t.c", "-o", "t.o"]);
         assert!(
             stderr.contains("writes no debug information for Windows targets"),
             "{stderr}"
@@ -564,7 +586,10 @@ int main(void)
         let directory = Directory::new();
         std::fs::write(directory.path("data.c"), DATA).unwrap();
         for back_end in BACK_ENDS {
-            let args = with(back_end, &["--gcc-mode", LINUX, "-g", "-c", "data.c", "-o", "data.o"]);
+            let args = with(
+                back_end,
+                &["--gcc-mode", LINUX, "-g", "-c", "data.c", "-o", "data.o"],
+            );
             drop(directory.built(&args));
             let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
                 return;
@@ -606,7 +631,10 @@ int main(void)
         let directory = Directory::new();
         std::fs::write(directory.path("data.c"), DATA).unwrap();
         for back_end in BACK_ENDS {
-            let args = with(back_end, &["--gcc-mode", LINUX, "-g1", "-c", "data.c", "-o", "data.o"]);
+            let args = with(
+                back_end,
+                &["--gcc-mode", LINUX, "-g1", "-c", "data.c", "-o", "data.o"],
+            );
             drop(directory.built(&args));
             let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
                 return;
@@ -630,7 +658,10 @@ int main(void)
     fn unoptimized_locals_have_their_lines() {
         let directory = Directory::new();
         for back_end in BACK_ENDS {
-            let args = with(back_end, &["--gcc-mode", LINUX, "-g", "-c", "a.c", "-o", "a.o"]);
+            let args = with(
+                back_end,
+                &["--gcc-mode", LINUX, "-g", "-c", "a.c", "-o", "a.o"],
+            );
             drop(directory.built(&args));
             let Some(table) = directory.tool("readelf", &["--debug-dump=decodedline"], "a.o")
             else {
@@ -660,7 +691,10 @@ int main(void)
 
     #[cfg(target_os = "linux")]
     fn gdb_session(directory: &Directory, back_end: &[&str]) {
-        drop(directory.built(&with(back_end, &["--gcc-mode", "-g", "data.c", "-o", "data"])));
+        drop(directory.built(&with(
+            back_end,
+            &["--gcc-mode", "-g", "data.c", "-o", "data"],
+        )));
         assert!(
             Command::new(directory.path("data"))
                 .status()
@@ -744,16 +778,19 @@ int main(void)
         let directory = Directory::new();
         std::fs::write(directory.path("data.c"), DATA).unwrap();
         for back_end in BACK_ENDS {
-            let args = with(back_end, &[
-                "--gcc-mode",
-                LINUX,
-                "-g",
-                "-O2",
-                "-c",
-                "data.c",
-                "-o",
-                "data.o",
-            ]);
+            let args = with(
+                back_end,
+                &[
+                    "--gcc-mode",
+                    LINUX,
+                    "-g",
+                    "-O2",
+                    "-c",
+                    "data.c",
+                    "-o",
+                    "data.o",
+                ],
+            );
             drop(directory.built(&args));
             let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
                 return;
