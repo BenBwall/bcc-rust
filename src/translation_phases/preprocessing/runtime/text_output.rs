@@ -250,17 +250,24 @@ impl Expander<'_, '_, '_, '_> {
     }
 
     /// Where the outermost macro invocation being read is, while one is,
-    /// including its last token before its frame is popped.
+    /// including its last token before its frame is popped. Only frames above
+    /// the innermost source file count: a header that `#include MACRO` names
+    /// is read on top of that macro's frame, but its tokens are spelled in
+    /// the header, outside any invocation (C99 §6.10.2p4, p. 149; PDF
+    /// p. 161).
     pub(in crate::translation_phases::preprocessing) fn outermost_invocation(
         &self,
     ) -> Option<&SourceVector> {
-        self.tokenizer_stack
-            .iter()
-            .find_map(|frame| match &frame.frame_type {
+        let mut outermost = None;
+        for frame in self.tokenizer_stack.iter().rev() {
+            match &frame.frame_type {
                 | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
                 | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } =>
-                    Some(invocation),
-                | _ => None,
-            })
+                    outermost = Some(invocation),
+                | TokenizerFrameType::SourceFile { .. } => break,
+                | _ => {},
+            }
+        }
+        outermost
     }
 }
