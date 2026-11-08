@@ -21,3 +21,9 @@ sema-return-type-gcc.c:27:5: warning: function declared 'noreturn' has a 'return
 sema-return-type-gcc.c:27:5: warning: 'noreturn' function does return
    27 |     return;
       |     ^~~~~~~
+sema-return-type-gcc.c:40:63: warning: control reaches end of non-void function [-Wreturn-type]
+   40 | static int after_break(int x) { while (x) { break; halts(); } }
+      |                                                               ^
+sema-return-type-gcc.c:41:1: warning: no return statement in function returning non-void [-Wreturn-type]
+   41 | static int only_polls(void) { for (;;) { poll_once(); } }
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

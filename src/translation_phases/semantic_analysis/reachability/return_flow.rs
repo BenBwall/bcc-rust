@@ -120,7 +120,8 @@ impl Analyzer<'_, '_, '_> {
             .functions
             .current
             .is_some_and(|function| function.syntax.declaration_specifiers.implicit_int);
-        if internal && !main && !implicit_int && !flow.exits.any_return && !flow.exits.abnormal {
+        let abnormal = flow.exits.abnormal || flow.exits.any_abnormal;
+        if internal && !main && !implicit_int && !flow.exits.any_return && !abnormal {
             self.return_flow_warning(
                 G::ReturnType,
                 start,
