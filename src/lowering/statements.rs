@@ -989,7 +989,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )
             })?;
             let data = self.unit.sema.bindings[binding];
-            if data.kind == BindingKind::Typedef || data.duration == Duration::Automatic {
+            // A block-scope static of variably modified type, such as
+            // `static int (*p)[n];`, has no linkage; its bounds are evaluated
+            // where the declaration is reached, as an automatic object's.
+            // C99 §6.7.5.2p2, p. 116; PDF p. 128; §6.8p3, p. 131; PDF p. 143.
+            if data.kind == BindingKind::Typedef
+                || data.duration == Duration::Automatic
+                || data.linkage == Linkage::None
+            {
                 self.prepare_bound_tasks(fact.site.bounds, &mut tasks, init.source_vectors)?;
             }
             tasks.push(Task::DeclareBinding(
