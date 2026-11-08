@@ -46,6 +46,7 @@ use crate::{
             Linkage,
             SemanticErrorKind,
             Work,
+            compiler_wording::VoidUse,
             integer::Integer,
             scopes::Namespace,
             types::{
@@ -62,6 +63,7 @@ use crate::{
             ArenaMap,
             ArenaVec,
         },
+        string_cache::StringCacheId,
     },
 };
 
@@ -408,6 +410,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 e.operator_source_vectors.unwrap_or(e.source_vectors),
                 super::super::compiler_wording::ConversionSite::Assignment,
             ) {
+                if self.void_value(right.ty) {
+                    return self.void_value_used(e, VoidUse::Assignment, left.ty);
+                }
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
             if compound.is_none() {
@@ -1255,7 +1260,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
         };
         let Some(&index) = self.member_indices.get(&(id, member.name)) else {
-            return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
+            return self.missing_member(e, ty, id, member.name);
         };
         let Some(field) = self.types.tags[id].fields.get().get(index).copied() else {
             return Self::expression_result(e, self.types.unknown());
@@ -1473,6 +1478,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && self.arithmetic(target)
                     && self.integer_type(target).is_none()))
         {
+            if self.void_value(from) {
+                return self.void_value_used(e, VoidUse::Cast, target);
+            }
             return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
         }
         let nullptr_cast = if self.nullptr_type(target) {
@@ -3136,6 +3144,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | LiteralEncoding::Utf16 => Scalar::UnsignedShort,
             | LiteralEncoding::Utf32 => Scalar::UnsignedInt,
         }
+    }
+
+    /// A member access whose record lacks the member, or is incomplete
+    /// and has no members yet, worded as the diagnostic format's compiler
+    /// words it.
+    /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
+    #[cold]
+    #[inline(never)]
+    fn missing_member(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        record: TypeId,
+        tag: usize,
+        member: StringCacheId,
+    ) -> ExpressionInfo<'tu> {
+        let incomplete = !self.types.tags[tag].complete.get();
+        let kind = if incomplete {
+            SemanticErrorKind::IncompleteMemberAccess
+        } else {
+            SemanticErrorKind::InvalidMemberAccess
+        };
+        if !e.recovered {
+            let words = self.member_wording(record, tag, member, incomplete);
+            self.error(
+                kind,
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+                words,
+                None,
+            );
+        }
+        Self::expression_result(e, self.types.unknown())
+    }
+
+    /// An expression that uses the value of a void expression, which has
+    /// none, worded as the diagnostic format's compiler words it.
+    /// C99: §6.3.2.2p1, p. 46; PDF p. 58.
+    #[cold]
+    #[inline(never)]
+    fn void_value_used(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        use_: VoidUse,
+        target: TypeId,
+    ) -> ExpressionInfo<'tu> {
+        if !e.recovered {
+            let words = self.void_value_wording(use_, target);
+            self.error(
+                SemanticErrorKind::VoidValueUsed,
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+                words,
+                None,
+            );
+        }
+        Self::expression_result(e, self.types.unknown())
     }
 
     #[cold]

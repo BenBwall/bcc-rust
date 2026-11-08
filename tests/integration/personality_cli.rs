@@ -1611,6 +1611,37 @@ mod tests {
         ] {
             assert!(calls.contains(expected), "{calls}");
         }
+        // Member access and void values, in each compiler's words.
+        directory.write(
+            "f.c",
+            "struct T; struct S { int y; };\nvoid v(void);\nint f(struct T *t, struct S *s) { \
+             return t->x + s->x; }\nvoid g(void) { int x = v(); x = v(); (long)v(); }\n",
+        );
+        for (mode, expected) in [
+            (
+                "--gcc-mode",
+                [
+                    "error: invalid use of undefined type 'struct T'\n",
+                    "error: 'struct S' has no member named 'x'\n",
+                    "error: void value not ignored as it ought to be\n",
+                    "error: invalid use of void expression\n",
+                ],
+            ),
+            (
+                "--clang-mode",
+                [
+                    "error: incomplete definition of type 'struct T'\n",
+                    "error: no member named 'x' in 'struct S'\n",
+                    "error: initializing 'int' with an expression of incompatible type 'void'\n",
+                    "error: assigning to 'int' from incompatible type 'void'\n",
+                ],
+            ),
+        ] {
+            let output = text(mode, "f.c");
+            for expected in expected {
+                assert!(output.contains(expected), "{mode}: {output}");
+            }
+        }
         assert!(text("--clang-mode", "c.c").starts_with("c.c:1:25: error: expected expression\n"));
         let related = text("--clang-mode", "d.c");
         assert!(
@@ -4712,6 +4743,26 @@ mod tests {
             (
                 "int main(void){ return 1 + ); }",
                 "e.c:1: error: expression expected before ')'\n",
+            ),
+            (
+                "int main(void){ struct T *t; return t->x; }",
+                "e.c:1: error: dereferencing incomplete type 'T'\n",
+            ),
+            (
+                "struct S { int y; }; int main(void){ struct S s; return s.x; }",
+                "e.c:1: error: field not found: x\n",
+            ),
+            (
+                "void f(void); int main(void){ int x = f(); return x; }",
+                "e.c:1: error: cannot convert 'void' to 'int'\n",
+            ),
+            (
+                "void f(void); int main(void){ char *p; p = f(); return 0; }",
+                "e.c:1: error: cannot convert 'void' to 'char *'\n",
+            ),
+            (
+                "void f(void); int main(void){ return (long)f(); }",
+                "e.c:1: error: cannot convert 'void' to 'long'\n",
             ),
             // A user's text keeps what only looks like an option.
             (
