@@ -384,13 +384,20 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     /// as a `constexpr` object's type receives it.
     /// C23 (N3220): §6.7.2 paragraph 16, p. 100; PDF p. 113; §6.7.4.1
     /// paragraph 10, p. 121; PDF p. 134.
-    pub(crate) fn const_object(&mut self, mut ty: TypeId) -> TypeId {
+    pub(crate) fn const_object(&mut self, ty: TypeId) -> TypeId {
+        self.qualified_object(ty, TypeQualifiers::CONST)
+    }
+
+    /// Adds `qualifiers` to an object type, to an array's elements for an
+    /// array.
+    /// C99: §6.7.3 paragraph 8, p. 109; PDF p. 121.
+    pub(crate) fn qualified_object(&mut self, mut ty: TypeId, added: TypeQualifiers) -> TypeId {
         let mut bounds = ArenaVec::new_in(self.scratch);
         while let TypeKind::Array(element, bound) = self.nodes[ty.index] {
             bounds.push((bound, ty.alignment, ty.qualifiers));
             ty = element;
         }
-        ty = ty.qualified(TypeQualifiers::CONST);
+        ty = ty.qualified(added);
         while let Some((bound, alignment, qualifiers)) = bounds.pop() {
             ty = self
                 .intern(TypeKind::Array(ty, bound))
