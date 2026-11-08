@@ -7411,7 +7411,7 @@ mod tests {
     /// `/wd`, `/we` and `/wN` name a warning by its number. `cl` only warns
     /// about a conversion between a pointer and an integer or between
     /// incompatible pointers, so it succeeds unless `/WX` is given.
-    /// clang-cl keeps Clang's rules and bcc's words.
+    /// clang-cl keeps Clang's rules and words.
     #[test]
     fn cl_diagnostics_take_cls_codes_words_and_levels() {
         let directory = Directory::new();
@@ -7556,13 +7556,128 @@ mod tests {
         assert_eq!(warnings(&["/we4113"]).0, Some(2));
         assert_eq!(warnings(&["/wd4133", "/WX"]).0, Some(2));
         assert_eq!(warnings(&["/wd4113", "/wd4090", "/WX"]).0, Some(0));
-        // clang-cl writes Clang's errors in bcc's words.
+        // clang-cl writes Clang's errors in Clang's words.
         let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "pointers.c"]);
         assert_eq!(clang_cl.status.code(), Some(1));
         let text = stderr(&clang_cl);
         assert!(!text.contains(" C40"), "{text}");
         assert!(text.contains("pointers.c(2,"), "{text}");
         assert!(text.contains("): error: "), "{text}");
+    }
+
+    /// clang-cl is Clang with `cl`'s locations: Clang's words, snippets,
+    /// notes and closing counts, `file(line,col):` before each, as the
+    /// pinned clang-cl writes them. `/WX` makes each warning an error
+    /// Clang marks `-Werror`, `/diagnostics:column` drops the snippets and
+    /// with them the counts, and `/diagnostics:classic` drops the column
+    /// too.
+    #[test]
+    fn clang_cl_writes_clangs_diagnostics_at_cls_locations() {
+        let directory = Directory::new();
+        directory.write(
+            "undeclared.c",
+            "int f(int x) { return x + undefined_thing; }\n",
+        );
+        directory.write("unused.c", "int f(void) { int unused; return 0; }\n");
+        directory.write(
+            "pointer.c",
+            "int main(void) { long x = 1; char *p = x; return 0; }\n",
+        );
+        directory.write(
+            "jump.c",
+            "void f(int n) { goto L; int a[n]; L:; (void)a; }\n",
+        );
+        let clang_cl = |args: &[&str]| {
+            let output = directory.bcc(
+                "--clang-cl-mode",
+                &[&["/c", "/nologo", "/W4"], args].concat(),
+            );
+            (output.status.code(), stderr(&output))
+        };
+        assert_eq!(
+            clang_cl(&["undeclared.c"]),
+            (
+                Some(1),
+                "undeclared.c(1,27): error: use of undeclared identifier 'undefined_thing'\n    1 \
+                 | int f(int x) { return x + undefined_thing; }\n      |                           \
+                 ^~~~~~~~~~~~~~~\n1 error generated.\n"
+                    .into()
+            )
+        );
+        let unused = "    1 | int f(void) { int unused; return 0; }\n      |                   ^~~~~~\n";
+        assert_eq!(
+            clang_cl(&["unused.c"]),
+            (
+                Some(0),
+                format!(
+                    "unused.c(1,19): warning: unused variable 'unused' \
+                     [-Wunused-variable]\n{unused}1 warning generated.\n"
+                )
+            )
+        );
+        assert_eq!(
+            clang_cl(&["/WX", "unused.c"]),
+            (
+                Some(1),
+                format!(
+                    "unused.c(1,19): error: unused variable 'unused' \
+                     [-Werror,-Wunused-variable]\n{unused}1 error generated.\n"
+                )
+            )
+        );
+        assert_eq!(clang_cl(&["/diagnostics:caret", "unused.c"]), clang_cl(&["unused.c"]));
+        assert_eq!(
+            clang_cl(&["/diagnostics:column", "unused.c"]),
+            (
+                Some(0),
+                "unused.c(1,19): warning: unused variable 'unused' [-Wunused-variable]\n".into()
+            )
+        );
+        assert_eq!(
+            clang_cl(&["/diagnostics:classic", "unused.c"]),
+            (
+                Some(0),
+                "unused.c(1): warning: unused variable 'unused' [-Wunused-variable]\n".into()
+            )
+        );
+        // Clang counts warnings first, and a warning `/WX` makes an error
+        // stays beside the error at its place.
+        let (status, text) = clang_cl(&["pointer.c"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.starts_with(
+                "pointer.c(1,36): error: incompatible integer to pointer conversion \
+                 initializing 'char *' with an expression of type 'long' [-Wint-conversion]\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("\npointer.c(1,36): warning: unused variable 'p' [-Wunused-variable]\n"),
+            "{text}"
+        );
+        assert!(text.ends_with("\n1 warning and 1 error generated.\n"), "{text}");
+        let (status, text) = clang_cl(&["/WX", "pointer.c"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.contains(
+                "\npointer.c(1,36): error: unused variable 'p' [-Werror,-Wunused-variable]\n"
+            ),
+            "{text}"
+        );
+        assert!(text.ends_with("\n2 errors generated.\n"), "{text}");
+        // A note takes the same location form.
+        let (status, text) = clang_cl(&["jump.c"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.contains("\njump.c(1,29): note: "),
+            "{text}"
+        );
+        // `cl` keeps its own codes and words.
+        let cl = directory.bcc("--msvc-mode", &["/c", "/nologo", "/W4", "undeclared.c"]);
+        assert_eq!(
+            stderr(&cl),
+            "undeclared.c(1): error C2065: 'undefined_thing': undeclared identifier\n"
+        );
     }
 
     /// `cl` reads its options from command files (`@file`, UTF-8 or UTF-16

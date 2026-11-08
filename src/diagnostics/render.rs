@@ -28,6 +28,7 @@ use crate::{
     translation_phases::{
         Context,
         ErrorSeverity,
+        SourceVector,
     },
     util::{
         bump::{
@@ -77,8 +78,8 @@ impl Renderer {
                 | DiagnosticFormat::Msvc { column: false, .. } =>
                     write!(out, "{file}({}): ", vector.line),
                 | DiagnosticFormat::Tcc => write!(out, "{file}:{}: ", vector.line),
-                | _ if !presentation.column => write!(out, "{file}:{}: ", vector.line),
-                | _ => write!(out, "{file}:{}:{}: ", vector.line, vector.column),
+                | _ => Self::write_compiler_location(&mut out, file, vector, presentation)
+                    .and_then(|()| out.write_char(' ')),
             };
         }
         // TCC names no warning options, so a message drops the `[-W…]`
@@ -276,15 +277,12 @@ impl Renderer {
         let format = context.configuration.diagnostic_format();
         let presentation = context.configuration.diagnostic_presentation();
         let file = vector.source_file_index;
-        let _ = write!(
+        let _ = Self::write_compiler_location(
             out,
-            "{}:{}:",
             context.get_source_file(file).display(),
-            vector.line
+            vector,
+            presentation,
         );
-        if presentation.column {
-            let _ = write!(out, "{}:", vector.column);
-        }
         let _ = writeln!(
             out,
             " {} {}",
@@ -328,6 +326,24 @@ impl Renderer {
                 },
                 scratch,
             );
+        }
+    }
+
+    /// Writes a place as GCC and Clang lead a diagnostic or a note with it:
+    /// `file:line:col:`, or `file(line,col):` in `cl`'s form as clang-cl
+    /// writes it, without the column under `-fno-show-column`.
+    fn write_compiler_location(
+        out: &mut ArenaString<'_>,
+        file: impl Display,
+        vector: &SourceVector,
+        presentation: DiagnosticPresentation,
+    ) -> fmt::Result {
+        let (line, column) = (vector.line, vector.column);
+        match (presentation.msvc_locations, presentation.column) {
+            | (true, true) => write!(out, "{file}({line},{column}):"),
+            | (true, false) => write!(out, "{file}({line}):"),
+            | (false, true) => write!(out, "{file}:{line}:{column}:"),
+            | (false, false) => write!(out, "{file}:{line}:"),
         }
     }
 
