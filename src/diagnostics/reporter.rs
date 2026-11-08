@@ -194,7 +194,13 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
 
     pub(crate) fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
         self.flush(context, out)?;
-        if context.configuration.fatal_errors() && self.errors != 0 {
+        // GCC ends with this line after any fatal error, `-Wfatal-errors`
+        // or not.
+        let gcc = context.configuration.diagnostic_format()
+            == crate::configuration::DiagnosticFormat::Gcc;
+        if (context.configuration.fatal_errors() || (gcc && self.fatal_reported))
+            && self.errors != 0
+        {
             writeln!(out, "compilation terminated.")?;
         }
         // GCC, MSVC and TCC print no summary.
