@@ -121,6 +121,10 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
     ShadowOrBody(crate::configuration::DiagnosticGroup),
+    /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
+    KnrPromotedParameter,
+    /// C99: §6.8.4.2p5, p. 134; PDF p. 146.
+    SwitchCases(crate::configuration::DiagnosticGroup),
     /// C99: §6.9.1p12, p. 142; PDF p. 154.
     ReturnFlow(crate::configuration::DiagnosticGroup),
     /// The words are the diagnostic's name.
@@ -1127,6 +1131,8 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::ShadowOrBody(_) => "this may not be what it looks like",
+            | Self::KnrPromotedParameter => "the prototype gives it another type",
+            | Self::SwitchCases(_) => "this switch may not handle every value",
             | Self::ReturnFlow(_) => "control can reach this point",
             | Self::MissingFieldInitializer => "later members are left zero",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
@@ -1342,6 +1348,12 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ShadowCompatibleLocal
                     | crate::configuration::DiagnosticGroup::ShadowAll
                     | crate::configuration::DiagnosticGroup::EmptyBody
+                    | crate::configuration::DiagnosticGroup::KnrPromotedParameter
+                    | crate::configuration::DiagnosticGroup::Switch
+                    | crate::configuration::DiagnosticGroup::SwitchEnum
+                    | crate::configuration::DiagnosticGroup::SwitchDefault
+                    | crate::configuration::DiagnosticGroup::SwitchOutsideRange
+                    | crate::configuration::DiagnosticGroup::ConstantSwitchCondition
                     | crate::configuration::DiagnosticGroup::ReturnType
                     | crate::configuration::DiagnosticGroup::InvalidNoreturn
                     | crate::configuration::DiagnosticGroup::GccNoreturn
@@ -1761,6 +1773,15 @@ impl SemanticErrorKind {
                 "hidden declaration or empty body",
                 "C99 §6.2.1p4 hides an outer declaration in an inner scope, and §6.8.3p3 makes \
                  a lone semicolon a statement",
+            ),
+            | Self::KnrPromotedParameter => (
+                "K&R parameter type",
+                "C99 §6.7.5.3p15: a parameter an identifier list declares is compatible with a \
+                 prototype's only after the default argument promotions",
+            ),
+            | Self::SwitchCases(_) => (
+                "switch cases",
+                "C99 §6.8.4.2p5: a value no case matches goes to default, or past the switch",
             ),
             | Self::ReturnFlow(_) => (
                 "control reaches the end of the function",
@@ -2634,9 +2655,11 @@ impl SemanticErrorKind {
         match self {
             | Self::PointerConstraint(group)
             | Self::ShadowOrBody(group)
+            | Self::SwitchCases(group)
             | Self::ReturnFlow(group) => Some(group),
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
+            | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),
             | Self::Main(rule) => rule.group(),
@@ -2964,6 +2987,8 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ShadowOrBody(_)
+                | SemanticErrorKind::KnrPromotedParameter
+                | SemanticErrorKind::SwitchCases(_)
                 | SemanticErrorKind::ReturnFlow(_)
         ) {
             self.name.map_or(message, |name| {

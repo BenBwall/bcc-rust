@@ -730,6 +730,7 @@ pinned by the `.args` sidecars.
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
 | `ShadowOrBody` | Shadowing: [GCC](sema-shadow-gcc.c), [Clang](sema-shadow-clang.c); by declaration kind: [GCC](sema-shadow-kinds-gcc.c), [Clang](sema-shadow-kinds-clang.c); of a system header's declarations: [GCC](sema-shadow-system-gcc.c), [Clang](sema-shadow-system-clang.c); empty bodies: [GCC](sema-empty-body-gcc.c), [Clang](sema-empty-body-clang.c); multiline headers and empty macros: [Clang](sema-empty-body-lines-clang.c) |
+| `SwitchCases` | [GCC](sema-switch-gcc.c), [Clang](sema-switch-clang.c); constant and converted conditions: [GCC](sema-switch-constant-gcc.c), [Clang](sema-switch-constant-clang.c) |
 | `ReturnFlow` | [GCC](sema-return-type-gcc.c), [Clang](sema-return-type-clang.c) |
 | `MissingFieldInitializer` | [GCC](sema-missing-fields-gcc.c), [Clang](sema-missing-fields-clang.c), [GCC with a system macro](sema-missing-fields-system-gcc.c) |
 | `Unused` | GCC's words: [variables and parameters](sema-unused-variables-gcc.c), [file scope](sema-unused-file-scope-gcc.c), [labels](sema-unused-label-gcc.c), [values](sema-unused-value-gcc.c); Clang's: [variables and parameters](sema-unused-variables-clang.c), [file scope](sema-unused-file-scope-clang.c), [labels](sema-unused-label-clang.c), [values](sema-unused-value-clang.c); [`-Werror`](sema-unused-werror-clang.c) |

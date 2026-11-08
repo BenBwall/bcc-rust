@@ -235,6 +235,7 @@ impl CompilerConfiguration {
         ] {
             self.warning_options[group as usize].apply_all(enabled);
         }
+        self.warning_options[DiagnosticGroup::Switch as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::ReturnType as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
         // GCC's `-Wunused`, given or refused in either order, outranks
@@ -931,6 +932,22 @@ diagnostic_groups! {
     /// A body that is only `;`. `-Wextra` holds it in GCC, and Clang reports
     /// it by default.
     EmptyBody => Some("empty-body"), ClangWarning, false;
+    /// Clang's K&R parameter whose promoted type a preceding prototype does
+    /// not give it.
+    KnrPromotedParameter => Some("knr-promoted-parameter"), ClangWarning, false;
+    /// A `switch` over an enumeration that leaves an enumerator out with no
+    /// `default`, or names a value outside it. `-Wall` holds it in GCC, and
+    /// Clang reports it by default.
+    Switch => Some("switch"), ClangWarning, false;
+    /// An enumerator a `switch` leaves to its `default`.
+    SwitchEnum => Some("switch-enum"), Ignored, false;
+    /// A `switch` with no `default`.
+    SwitchDefault => Some("switch-default"), Ignored, false;
+    /// GCC's `case` its controlling type cannot hold; Clang's is `-Wswitch`.
+    SwitchOutsideRange => Some("switch-outside-range"), Warning, false;
+    /// Clang's constant `switch` condition that no `case` matches, which no
+    /// option controls.
+    ConstantSwitchCondition => None, Warning, false;
     /// Control can reach the end of a non-void function. `-Wall` holds it in
     /// GCC, and Clang reports it by default.
     ReturnType => Some("return-type"), ClangWarning, false;
@@ -1001,6 +1018,7 @@ impl DiagnosticGroup {
     /// them.
     const UNDER_ALL: &[Self] = &[
         Self::Unused,
+        Self::Switch,
         Self::ReturnType,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
@@ -1051,6 +1069,7 @@ impl DiagnosticGroup {
                 | Self::PedanticNormalized
                 | Self::ShadowLocal
                 | Self::ShadowCompatibleLocal
+                | Self::SwitchOutsideRange
         )
     }
 
@@ -1174,6 +1193,7 @@ impl WarningSettings {
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
                 | DiagnosticGroup::EmptyBody
+                | DiagnosticGroup::Switch
                 | DiagnosticGroup::ReturnType
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
