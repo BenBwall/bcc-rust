@@ -1861,7 +1861,8 @@ impl<'id> Session<'id> {
         let x86 = self.code.x86_features;
         let mut host = None;
         let cpu = match x86.cpu() {
-            | None => c"x86-64".as_ptr(),
+            // Only a function's `target` attribute names other processors.
+            | None | Some(Cpu::Named(_)) => c"x86-64".as_ptr(),
             | Some(Cpu::V2) => c"x86-64-v2".as_ptr(),
             | Some(Cpu::V3) => c"x86-64-v3".as_ptr(),
             | Some(Cpu::Native) => {

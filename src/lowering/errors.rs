@@ -5,6 +5,7 @@
 use std::fmt;
 
 use crate::{
+    configuration::CompilerIdentity,
     diagnostics::{
         Diagnostic,
         Explanation,
@@ -22,7 +23,10 @@ use crate::{
             UnsupportedAttribute,
         },
     },
-    util::bump::Bump,
+    util::{
+        bump::Bump,
+        string_cache::StringCacheId,
+    },
 };
 
 /// One reason lowering produced no IR for a function, an object or the
@@ -56,7 +60,7 @@ pub(crate) enum LoweringErrorKind {
     /// for unmodeled extensions.
     UnanalyzedType,
     #[cfg(test)]
-    CallDiagnostic(crate::util::string_cache::StringCacheId),
+    CallDiagnostic(StringCacheId),
     UnmodeledType(UnmodeledType),
     /// A call of a builtin semantic analysis has no contract for: GCC's
     /// spelling where [`crate::builtins::unimplemented`] names it, else
@@ -77,6 +81,21 @@ pub(crate) enum LoweringErrorKind {
     /// after a callee's named parameters. GCC reports the same error.
     /// GNU extension: GCC manual, "Constructing Calls".
     InvalidArgumentPack(bool),
+    /// A direct call of `always_inline` function `callee` from `caller`,
+    /// which lacks its feature `feature`, as both compilers refuse it.
+    /// GNU extension: GCC manual, "x86 Function Attributes", `target`.
+    TargetFeature {
+        callee:  StringCacheId,
+        caller:  StringCacheId,
+        feature: &'static str,
+    },
+    /// A call of x86 builtin `builtin` from a function that lacks its
+    /// feature `feature`, as Clang refuses it.
+    /// Clang extension: Clang Language Extensions, "Builtin Functions".
+    BuiltinFeature {
+        builtin: &'static str,
+        feature: &'static str,
+    },
 }
 
 /// A construct outside the prototype subset of `middle-end.md`.
@@ -95,6 +114,9 @@ pub(crate) enum Construct {
     ForeignVectorAbi,
     /// A named vector in YMM of a variadic function, as GCC passes it.
     VariadicNamedVector,
+    /// A vector of 32 bytes or more by value in a function whose `target`
+    /// attribute gives such vectors other registers than bcc's calls use.
+    TargetVectorRegisters,
     /// MSVC `__asm` blocks.
     InlineAssembly,
     /// A GNU `asm` operand in a register class or of a type lowering does
@@ -202,7 +224,11 @@ impl Construct {
             | Self::LabelAddress => "label addresses",
             | Self::ForeignVectorAbi =>
                 "passing a vector of 32 bytes or more by value to or from another object when a \
-                 -march=, -m option or target attribute that bcc ignores changes how it travels",
+                 target attribute, or a -march= or -m option that bcc ignores, changes how it \
+                 travels",
+            | Self::TargetVectorRegisters =>
+                "passing a vector of 32 bytes or more by value to or from a function whose target \
+                 attribute turns AVX off or AVX-512 on, under the command line's AVX",
             | Self::VariadicNamedVector =>
                 "a named 32-byte vector parameter of a variadic function other objects can call, \
                  which GCC passes in a YMM register and LLVM can only pass on the stack",
@@ -295,6 +321,10 @@ impl LoweringErrorKind {
             | Self::InvalidFileScopeAsm(fault) => fault.message(),
             | Self::InvalidArgumentPack(false) => "invalid use of '__builtin_va_arg_pack ()'",
             | Self::InvalidArgumentPack(true) => "invalid use of '__builtin_va_arg_pack_len ()'",
+            | Self::TargetFeature { .. } =>
+                "an always_inline function needs a target feature the calling function lacks",
+            | Self::BuiltinFeature { .. } =>
+                "a builtin needs a target feature the calling function lacks",
         }
     }
 }
@@ -306,8 +336,6 @@ impl ToDiagnostic for LoweringError {
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
-        #[cfg(not(test))]
-        let _ = context;
         let message = match self.kind {
             #[cfg(test)]
             | LoweringErrorKind::CallDiagnostic(message) =>
@@ -329,6 +357,36 @@ impl ToDiagnostic for LoweringError {
                 "{}: a builtin this compiler does not know",
                 self.kind.message()
             ),
+            | LoweringErrorKind::TargetFeature {
+                callee,
+                caller,
+                feature,
+            } => {
+                let (callee, caller) = (
+                    context.string_cache.at(callee),
+                    context.string_cache.at(caller),
+                );
+                if context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+                    format_in!(
+                        arena,
+                        "inlining failed in call to 'always_inline' '{callee}': target specific \
+                         option mismatch"
+                    )
+                } else {
+                    format_in!(
+                        arena,
+                        "always_inline function '{callee}' requires target feature '{feature}', \
+                         but would be inlined into function '{caller}' that is compiled without \
+                         support for '{feature}'"
+                    )
+                }
+            },
+            | LoweringErrorKind::BuiltinFeature { builtin, feature } =>
+                if context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+                    format_in!(arena, "'{builtin}' needs isa option -m{feature}")
+                } else {
+                    format_in!(arena, "'{builtin}' needs target feature {feature}")
+                },
             | kind => kind.message(),
         };
         let explanation = Explanation::new(arena, message);
@@ -346,6 +404,10 @@ impl ToDiagnostic for LoweringError {
             | LoweringErrorKind::InvalidFileScopeAsm(_) => explanation
                 .label("invalid file-scope asm")
                 .note("asm outside a function takes exactly one narrow string literal"),
+            | LoweringErrorKind::TargetFeature { .. }
+            | LoweringErrorKind::BuiltinFeature { .. } => explanation
+                .label("called here")
+                .note("a function may use only the instructions its target features allow"),
             | LoweringErrorKind::InvalidArgumentPack(_) => explanation
                 .label("no call supplies the anonymous arguments here")
                 .note(

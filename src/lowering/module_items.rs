@@ -1021,9 +1021,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// Whether `binding` has a `target` attribute that changes how vectors of
     /// 32 bytes and more travel.
     pub(super) fn target_vector_abi(&self, binding: usize) -> bool {
-        self.sema
-            .entity_attributes(binding)
-            .is_some_and(|attributes| attributes.target_vector_abi)
+        self.attribute_target(binding).is_some_and(|target| {
+            self.context
+                .configuration
+                .code_options()
+                .x86_features
+                .target_changes_vector_abi(target)
+        })
     }
 
     /// Refuses what GCC or Clang would pass or return otherwise than bcc, for a

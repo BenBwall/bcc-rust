@@ -5259,7 +5259,7 @@ mod tests {
         let reads = |mode: &str, options: &[&str]| {
             let args = [options, &["-w", "-c", "v.c", "-o", "v.o"]].concat();
             let output = directory.bcc(mode, &args);
-            let refused = stderr(&output).contains("ignores changes how it travels");
+            let refused = stderr(&output).contains("ignores, changes how it travels");
             assert_eq!(output.status.success(), !refused, "{}", stderr(&output));
             refused
         };
@@ -5314,7 +5314,7 @@ mod tests {
             let args = [options, &["/c", "v.c"]].concat();
             let output = directory.bcc("--clang-cl-mode", &args);
             assert_eq!(
-                stderr(&output).contains("ignores changes how it travels"),
+                stderr(&output).contains("ignores, changes how it travels"),
                 refused,
                 "{options:?}: {}",
                 stderr(&output)

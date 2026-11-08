@@ -35,6 +35,7 @@ use crate::{
     },
     target::Target,
     util::bump::{
+        ArenaString,
         ArenaVec,
         Bump,
     },
@@ -99,7 +100,8 @@ pub(super) fn declare<'id, 'a, 'm>(
             math_without_errno(api, value, module, function.name);
         }
         sections(api, value, function.attributes);
-        machine_entry(api, value, module, function);
+        machine_entry(api, value, function);
+        code_features(api, value, module, function, arena);
         functions.push(value);
     }
     // A private inline copy becomes its external function's
@@ -116,6 +118,7 @@ pub(super) fn declare<'id, 'a, 'm>(
             if let Some(keyword) = function.inlining.keyword() {
                 api.attribute(value, FUNCTION_INDEX, keyword, 0, None, false);
             }
+            code_features(api, value, module, function, arena);
             functions[id.index()] = value;
         }
     }
@@ -375,12 +378,7 @@ fn null_pointer_validity<'id>(api: &Session<'id>, function: Val<'id>, module: &M
 /// itself (`function.rs`).
 /// GNU extension: GCC manual, "x86 Function Attributes"; LLVM Language
 /// Reference, "Calling Conventions".
-fn machine_entry<'id>(
-    api: &Session<'id>,
-    function: Val<'id>,
-    module: &Module<'_>,
-    data: &crate::ir::Function<'_>,
-) {
+fn machine_entry<'id>(api: &Session<'id>, function: Val<'id>, data: &crate::ir::Function<'_>) {
     let defined = data.body.is_some();
     match data.entry {
         | EntryConvention::C => {},
@@ -405,16 +403,55 @@ fn machine_entry<'id>(
                 api.attribute(function, FUNCTION_INDEX, "naked", 0, None, false);
             },
     }
-    if defined {
-        let uintr = data.entry == EntryConvention::Interrupt && module.user_interrupts();
-        match (module.general_regs_only(), uintr) {
-            | (true, true) =>
-                api.string_attribute(function, "target-features", "-x87,-mmx,-sse,+uintr"),
-            | (true, false) => api.string_attribute(function, "target-features", "-x87,-mmx,-sse"),
-            | (false, true) => api.string_attribute(function, "target-features", "+uintr"),
-            | (false, false) => {},
+}
+
+/// The processor and features LLVM writes a defined function's code for,
+/// where they differ from the target machine's, as Clang gives every
+/// function: those of its x86 `target` attribute, which name every feature
+/// the function has and those it turns off, for LLVM reads them in place of
+/// the machine's; then no x87 or SSE code under `-mgeneral-regs-only`, and
+/// `uiret` for a handler under `-muintr`. GNU extension: GCC manual, "x86
+/// Function Attributes", `target` and `interrupt`.
+fn code_features<'id>(
+    api: &Session<'id>,
+    function: Val<'id>,
+    module: &Module<'_>,
+    data: &crate::ir::Function<'_>,
+    arena: &Bump,
+) {
+    if data.body.is_none() {
+        return;
+    }
+    let mut features = ArenaString::new_in(arena);
+    if let Some(target) = data.target {
+        if let Some(cpu) = target.llvm_cpu() {
+            api.string_attribute(function, "target-cpu", cpu);
+        }
+        if let Some(tune) = target.llvm_tune() {
+            api.string_attribute(function, "tune-cpu", tune);
+        }
+        for (on, name) in target.llvm_features() {
+            push_feature(&mut features, if on { "+" } else { "-" });
+            features.push_str(name);
         }
     }
+    if module.general_regs_only() {
+        push_feature(&mut features, "-x87,-mmx,-sse");
+    }
+    if data.entry == EntryConvention::Interrupt && module.user_interrupts() {
+        push_feature(&mut features, "+uintr");
+    }
+    if !features.is_empty() {
+        api.string_attribute(function, "target-features", &features);
+    }
+}
+
+/// Starts the next entry of a feature list with `text`.
+fn push_feature(features: &mut ArenaString<'_>, text: &str) {
+    if !features.is_empty() {
+        features.push(',');
+    }
+    features.push_str(text);
 }
 
 /// LLVM's `x86_intrcc` calling convention, `CallingConv::X86_INTR`.

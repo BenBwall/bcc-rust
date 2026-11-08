@@ -268,6 +268,7 @@ impl Unit<'_, '_, '_> {
                 | MachineEntry::NoCallerSaved => EntryConvention::PreserveRegisters,
                 | MachineEntry::Naked => EntryConvention::Naked,
             };
+            function.target = attributes.target.map(|target| target.code());
             // Nothing can run a handler's or a naked function's body in
             // another function's frame.
             if matches!(

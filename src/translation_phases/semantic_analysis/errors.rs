@@ -810,6 +810,17 @@ pub(crate) enum SemanticErrorKind {
     /// Clang: `alias` and `section` apply to functions and global variables.
     /// GNU extension: GCC manual, "Common Variable Attributes".
     AttributeSubject,
+    /// A `target` attribute's text that one compiler ignores, in its words
+    /// (the diagnostic's name): Clang's `-Wignored-attributes` warning for a
+    /// part it does not know, or GCC's `-Wattributes` one for an empty text,
+    /// under the group it carries.
+    /// GNU extension: GCC manual, "x86 Function Attributes", `target`.
+    /// Clang extension: Clang Attributes Reference, "target".
+    TargetAttribute(crate::configuration::DiagnosticGroup),
+    /// A `target` attribute one compiler refuses, in its words (the
+    /// diagnostic's name), as GCC refuses a part it does not know.
+    /// GNU extension: GCC manual, "x86 Function Attributes", `target`.
+    InvalidTargetAttribute,
     /// Clang: a weak declaration needs external linkage.
     /// GNU extension: GCC manual, "Common Function Attributes", weak.
     WeakInternal,
@@ -997,6 +1008,8 @@ impl SemanticErrorKind {
             | Self::InvalidPriority => "priority outside 0 to 65535",
             | Self::ReservedPriority => "reserved priority",
             | Self::AttributeSubject => "not a function or global variable",
+            | Self::TargetAttribute(_) => "attribute ignored here",
+            | Self::InvalidTargetAttribute => "invalid target attribute",
             | Self::WeakInternal => "weak declaration without external linkage",
             | Self::AliasDefinition => "definition with an alias attribute",
             | Self::AliasTarget => "alias target is not defined here",
@@ -1249,6 +1262,8 @@ impl SemanticErrorKind {
             | Self::InvalidPriority
             | Self::ReservedPriority
             | Self::AttributeSubject
+            | Self::TargetAttribute(_)
+            | Self::InvalidTargetAttribute
             | Self::WeakInternal
             | Self::AliasDefinition
             | Self::AliasTarget
@@ -2534,6 +2549,16 @@ impl SemanticErrorKind {
                 "attribute only applies to functions and global variables",
                 "Clang: alias and section name a symbol, which automatic variables do not have",
             ),
+            | Self::TargetAttribute(_) => (
+                "target attribute ignored",
+                "Clang Attributes Reference, target: Clang ignores an attribute whose text names \
+                 a feature or processor it does not know",
+            ),
+            | Self::InvalidTargetAttribute => (
+                "invalid target attribute",
+                "GCC x86 Function Attributes, target: the text lists features and options GCC \
+                 knows, separated by commas",
+            ),
             | Self::WeakInternal => (
                 "weak declaration cannot have internal linkage",
                 "GCC Common Function Attributes: weak makes an external symbol overridable; \
@@ -2720,6 +2745,7 @@ impl SemanticErrorKind {
         match self {
             | Self::PointerConstraint(group)
             | Self::Parentheses(group)
+            | Self::TargetAttribute(group)
             | Self::Format(group, _)
             | Self::SwitchCases(group)
             | Self::ReturnFlow(group) => Some(group),
@@ -3087,6 +3113,8 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::KnrPromotedParameter
                 | SemanticErrorKind::SwitchCases(_)
                 | SemanticErrorKind::ReturnFlow(_)
+                | SemanticErrorKind::TargetAttribute(_)
+                | SemanticErrorKind::InvalidTargetAttribute
         ) {
             self.name.map_or(message, |name| {
                 arena.alloc_str(context.string_cache.at(name))
