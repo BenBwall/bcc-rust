@@ -16,56 +16,60 @@ use crate::util::bump::{
     Bump,
 };
 
-// Tags, DWARF 5 §7.5.3, Table 7.3.
-pub(super) const TAG_ARRAY_TYPE: u16 = 0x01;
-pub(super) const TAG_ENUMERATION_TYPE: u16 = 0x04;
-pub(super) const TAG_FORMAL_PARAMETER: u16 = 0x05;
-pub(super) const TAG_LEXICAL_BLOCK: u16 = 0x0B;
-pub(super) const TAG_MEMBER: u16 = 0x0D;
-pub(super) const TAG_POINTER_TYPE: u16 = 0x0F;
-pub(super) const TAG_COMPILE_UNIT: u16 = 0x11;
-pub(super) const TAG_STRUCTURE_TYPE: u16 = 0x13;
-pub(super) const TAG_SUBROUTINE_TYPE: u16 = 0x15;
-pub(super) const TAG_TYPEDEF: u16 = 0x16;
-pub(super) const TAG_UNION_TYPE: u16 = 0x17;
-pub(super) const TAG_UNSPECIFIED_PARAMETERS: u16 = 0x18;
-pub(super) const TAG_SUBRANGE_TYPE: u16 = 0x21;
-pub(super) const TAG_BASE_TYPE: u16 = 0x24;
-pub(super) const TAG_CONST_TYPE: u16 = 0x26;
-pub(super) const TAG_ENUMERATOR: u16 = 0x28;
-pub(super) const TAG_SUBPROGRAM: u16 = 0x2E;
-pub(super) const TAG_VARIABLE: u16 = 0x34;
-pub(super) const TAG_VOLATILE_TYPE: u16 = 0x35;
-pub(super) const TAG_RESTRICT_TYPE: u16 = 0x37;
-pub(super) const TAG_UNSPECIFIED_TYPE: u16 = 0x3B;
-pub(super) const TAG_ATOMIC_TYPE: u16 = 0x47;
+/// Tags, DWARF 5 §7.5.3, Table 7.3.
+pub(super) mod tag {
+    pub(crate) const ARRAY_TYPE: u16 = 0x01;
+    pub(crate) const ENUMERATION_TYPE: u16 = 0x04;
+    pub(crate) const FORMAL_PARAMETER: u16 = 0x05;
+    pub(crate) const LEXICAL_BLOCK: u16 = 0x0B;
+    pub(crate) const MEMBER: u16 = 0x0D;
+    pub(crate) const POINTER_TYPE: u16 = 0x0F;
+    pub(crate) const COMPILE_UNIT: u16 = 0x11;
+    pub(crate) const STRUCTURE_TYPE: u16 = 0x13;
+    pub(crate) const SUBROUTINE_TYPE: u16 = 0x15;
+    pub(crate) const TYPEDEF: u16 = 0x16;
+    pub(crate) const UNION_TYPE: u16 = 0x17;
+    pub(crate) const UNSPECIFIED_PARAMETERS: u16 = 0x18;
+    pub(crate) const SUBRANGE_TYPE: u16 = 0x21;
+    pub(crate) const BASE_TYPE: u16 = 0x24;
+    pub(crate) const CONST_TYPE: u16 = 0x26;
+    pub(crate) const ENUMERATOR: u16 = 0x28;
+    pub(crate) const SUBPROGRAM: u16 = 0x2E;
+    pub(crate) const VARIABLE: u16 = 0x34;
+    pub(crate) const VOLATILE_TYPE: u16 = 0x35;
+    pub(crate) const RESTRICT_TYPE: u16 = 0x37;
+    pub(crate) const UNSPECIFIED_TYPE: u16 = 0x3B;
+    pub(crate) const ATOMIC_TYPE: u16 = 0x47;
+}
 
-// Attributes, DWARF 5 §7.5.4, Table 7.5, and GNU's vector flag.
-pub(super) const AT_LOCATION: u16 = 0x02;
-pub(super) const AT_NAME: u16 = 0x03;
-pub(super) const AT_BYTE_SIZE: u16 = 0x0B;
-pub(super) const AT_STMT_LIST: u16 = 0x10;
-pub(super) const AT_LOW_PC: u16 = 0x11;
-pub(super) const AT_HIGH_PC: u16 = 0x12;
-pub(super) const AT_LANGUAGE: u16 = 0x13;
-pub(super) const AT_COMP_DIR: u16 = 0x1B;
-pub(super) const AT_CONST_VALUE: u16 = 0x1C;
-pub(super) const AT_PRODUCER: u16 = 0x25;
-pub(super) const AT_PROTOTYPED: u16 = 0x27;
-pub(super) const AT_COUNT: u16 = 0x37;
-pub(super) const AT_DATA_MEMBER_LOCATION: u16 = 0x38;
-pub(super) const AT_DECL_FILE: u16 = 0x3A;
-pub(super) const AT_DECL_LINE: u16 = 0x3B;
-pub(super) const AT_DECLARATION: u16 = 0x3C;
-pub(super) const AT_ENCODING: u16 = 0x3E;
-pub(super) const AT_EXTERNAL: u16 = 0x3F;
-pub(super) const AT_FRAME_BASE: u16 = 0x40;
-pub(super) const AT_TYPE: u16 = 0x49;
-pub(super) const AT_RANGES: u16 = 0x55;
-pub(super) const AT_DATA_BIT_OFFSET: u16 = 0x6B;
-pub(super) const AT_LINKAGE_NAME: u16 = 0x6E;
-pub(super) const AT_BIT_SIZE: u16 = 0x0D;
-pub(super) const AT_GNU_VECTOR: u16 = 0x2107;
+/// Attributes, DWARF 5 §7.5.4, Table 7.5, and GNU's vector flag.
+pub(super) mod at {
+    pub(crate) const LOCATION: u16 = 0x02;
+    pub(crate) const NAME: u16 = 0x03;
+    pub(crate) const BYTE_SIZE: u16 = 0x0B;
+    pub(crate) const BIT_SIZE: u16 = 0x0D;
+    pub(crate) const STMT_LIST: u16 = 0x10;
+    pub(crate) const LOW_PC: u16 = 0x11;
+    pub(crate) const HIGH_PC: u16 = 0x12;
+    pub(crate) const LANGUAGE: u16 = 0x13;
+    pub(crate) const COMP_DIR: u16 = 0x1B;
+    pub(crate) const CONST_VALUE: u16 = 0x1C;
+    pub(crate) const PRODUCER: u16 = 0x25;
+    pub(crate) const PROTOTYPED: u16 = 0x27;
+    pub(crate) const COUNT: u16 = 0x37;
+    pub(crate) const DATA_MEMBER_LOCATION: u16 = 0x38;
+    pub(crate) const DECL_FILE: u16 = 0x3A;
+    pub(crate) const DECL_LINE: u16 = 0x3B;
+    pub(crate) const DECLARATION: u16 = 0x3C;
+    pub(crate) const ENCODING: u16 = 0x3E;
+    pub(crate) const EXTERNAL: u16 = 0x3F;
+    pub(crate) const FRAME_BASE: u16 = 0x40;
+    pub(crate) const TYPE: u16 = 0x49;
+    pub(crate) const RANGES: u16 = 0x55;
+    pub(crate) const DATA_BIT_OFFSET: u16 = 0x6B;
+    pub(crate) const LINKAGE_NAME: u16 = 0x6E;
+    pub(crate) const GNU_VECTOR: u16 = 0x2107;
+}
 
 // Forms, DWARF 5 §7.5.6, Table 7.6.
 const FORM_ADDR: u8 = 0x01;
@@ -90,7 +94,8 @@ pub(super) struct Entries<'d> {
     arena:  &'d Bump,
     /// The shapes, whose codes count from 1.
     shapes: ArenaVec<'d, Shape<'d>>,
-    pub(super) text: ArenaString<'d>,
+    /// The directives of the entries written so far.
+    text:   ArenaString<'d>,
 }
 
 /// An abbreviation (§7.5.3).
@@ -147,6 +152,16 @@ impl<'d> Entries<'d> {
         writeln!(self.text, "\t.uleb128\t{code}")?;
         self.text.push_str(&entry.values);
         Ok(())
+    }
+
+    /// Where a directive between two entries goes, such as a `.file`.
+    pub(super) fn directives(&mut self) -> &mut dyn Write {
+        &mut self.text
+    }
+
+    /// The contents of `.debug_info` after the unit's header.
+    pub(super) fn contents(&self) -> &str {
+        &self.text
     }
 
     /// The end of the children of the entry written last that has them.

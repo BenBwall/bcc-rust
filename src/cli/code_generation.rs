@@ -518,7 +518,7 @@ impl CodeGeneration {
     }
 
     /// Whether locals asked to live in memory do: no optimizer runs, and the
-    /// back end is LLVM, the one that describes variables.
+    /// back end describes variables: LLVM, or the native back end on ELF.
     pub(super) fn stack_locals_apply(&self, target: Target) -> bool {
         !self.optimization_macros().0 && !self.writes_no_debug_info(target)
     }

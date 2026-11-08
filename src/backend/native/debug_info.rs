@@ -12,12 +12,13 @@
 //! abbreviations (`entries.rs`) as data directives in `.debug_info` and
 //! `.debug_abbrev`, with the range lists of `.debug_rnglists`.
 //!
-//! For `int add(int a, int b) { return a + b; }` at `-O0` the listing reads
-//! `.Ldebug_begin0:`, `.loc 0 1 0` before the prologue, `.loc 0 1 30
-//! prologue_end` before the load of `a`, `.Ldebug_end0:` after the code,
-//! and a `DW_TAG_subprogram` whose `DW_AT_frame_base` is the canonical frame
-//! address, with a `DW_TAG_formal_parameter` for `a` at `DW_OP_fbreg -20`,
-//! its stack slot's offset from that address.
+//! For `int add(int a, int b) { return a + b; }` at `-O0`, with its
+//! parameters in memory, the listing reads `.Ldebug_begin0:` at the function,
+//! `.loc 0 1 0` before the stores of the parameters, `.loc 0 1 32
+//! prologue_end` before the load of `a`, and `.Ldebug_end0:` after the code.
+//! Its `DW_TAG_subprogram` has the canonical frame address as its
+//! `DW_AT_frame_base`, and the `DW_TAG_formal_parameter` of `a` is at
+//! `DW_OP_fbreg -16`, its stack slot's offset from that address.
 //!
 //! Read [`DebugWriter`], then `lines.rs`, `description.rs` and `entries.rs`.
 //!
@@ -58,6 +59,7 @@ use crate::{
         EntryConvention,
         FuncId,
         Module,
+        Scope,
     },
     util::bump::{
         ArenaVec,
@@ -149,7 +151,7 @@ impl<'d, 'm, 'ir> DebugWriter<'d, 'm, 'ir> {
         let Some(scope) = debug.subprogram_of(function) else {
             return self.lines.unknown(out);
         };
-        let Some(crate::ir::Scope::Subprogram(subprogram)) = debug.scope(scope).copied() else {
+        let Some(Scope::Subprogram(subprogram)) = debug.scope(scope).copied() else {
             return self.lines.unknown(out);
         };
         let number = u32::try_from(self.functions.len()).map_err(|_| fmt::Error)?;

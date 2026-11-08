@@ -241,3 +241,48 @@ fn verify(directory: &TempDir, name: &str, text: &str) {
         | Err(error) => eprintln!("SKIP llvm-dwarfdump --verify: {error}"),
     }
 }
+
+/// What the test programs may miss: code outside `.text`, which makes the
+/// unit's code a range list; a block whose code comes in several runs;
+/// files that `#line` names with a directory, with a quote and a
+/// backslash, and with the main file's name; static locals; a
+/// variable-length array; and a structure passed by value.
+#[test]
+fn unusual_programs_describe_themselves() {
+    let directory = TempDir::new("native-debug-info-unusual");
+    let source = "\
+struct big { long a, b, c; };
+__attribute__((section(\".text.hot\"))) int hot(int x) { return x * 3; }
+long by_value(struct big b) { return b.a + b.c; }
+int shadow(int n)
+{
+  int total = 0;
+  for (int i = 0; i < n; i++) {
+    int total = i * 2;
+    if (total > 4)
+      break;
+    { static int seen; seen += total; }
+  }
+  return total;
+}
+#line 7 \"/abs/dir/header.h\"
+static int in_header(int v) { return v + 1; }
+#line 3 \"odd \\\"name\\\\.h\"
+int odd(int v) { int vla[v + 1]; vla[v] = v; return vla[v] + in_header(v); }
+#line 9 \"test.c\"
+int main(void) { struct big b = { 1, 2, 3 }; return hot(1) + (int)by_value(b) + shadow(5) + odd(2); }
+";
+    for optimize in [false, true] {
+        let text = listing(source, optimize, true).expect("the back end compiles the program");
+        assert!(
+            text.contains(".section\t.debug_rnglists"),
+            "the unit's code is in two sections\n{text}"
+        );
+        assert!(
+            text.contains("\"odd \\042name\\134.h\""),
+            "the file name is escaped\n{text}"
+        );
+        equivalent(&text).unwrap();
+        verify(&directory, "unusual", &text);
+    }
+}

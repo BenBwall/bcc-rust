@@ -23,7 +23,13 @@ use super::{
     DebugWriter,
     Described,
     Mark,
-    entries::*,
+    entries::{
+        Entries,
+        Entry,
+        UNIT,
+        at,
+        tag,
+    },
 };
 use crate::{
     backend::native::{
@@ -36,6 +42,7 @@ use crate::{
     ir::{
         Body,
         DebugEncoding,
+        DebugFile,
         DebugLanguage,
         DebugQualifier,
         DebugScope,
@@ -43,7 +50,9 @@ use crate::{
         DebugTypeData,
         DebugVariable,
         Entity,
+        GlobalVariable,
         Linkage,
+        Module,
         PRODUCER,
         Scope,
         Symbol,
@@ -114,26 +123,26 @@ pub(super) fn write(writer: &mut DebugWriter<'_, '_, '_>, out: &mut dyn Write) -
         blocks,
         statics,
     };
-    let mut entry = description.entries.entry(TAG_COMPILE_UNIT, true);
-    entry.string(AT_PRODUCER, PRODUCER)?;
+    let mut entry = description.entries.entry(tag::COMPILE_UNIT, true);
+    entry.string(at::PRODUCER, PRODUCER)?;
     entry.short(
-        AT_LANGUAGE,
+        at::LANGUAGE,
         match unit.language {
             | DebugLanguage::C89 => 0x01,
             | DebugLanguage::C99 => 0x0C,
             | DebugLanguage::C11 => 0x1D,
         },
     )?;
-    entry.string(AT_NAME, description.writer.lines.root_name())?;
-    entry.offset(AT_STMT_LIST, &".Ldebug_line")?;
-    entry.string(AT_COMP_DIR, description.writer.lines.directory())?;
+    entry.string(at::NAME, description.writer.lines.root_name())?;
+    entry.offset(at::STMT_LIST, &".Ldebug_line")?;
+    entry.string(at::COMP_DIR, description.writer.lines.directory())?;
     let functions = &description.writer.functions;
     if let (Some(first), Some(last)) = (functions.first(), functions.last())
         && functions.iter().all(|function| function.in_text)
     {
         let (begin, end) = (Mark::Begin(first.number), Mark::End(last.number));
-        entry.address(AT_LOW_PC, &begin)?;
-        entry.length(AT_HIGH_PC, &end, &begin)?;
+        entry.address(at::LOW_PC, &begin)?;
+        entry.length(at::HIGH_PC, &end, &begin)?;
     } else if !functions.is_empty() {
         let mut runs = ArenaVec::new_in(description.writer.arena);
         runs.extend(
@@ -141,9 +150,9 @@ pub(super) fn write(writer: &mut DebugWriter<'_, '_, '_>, out: &mut dyn Write) -
                 .iter()
                 .map(|function| (Mark::Begin(function.number), Mark::End(function.number))),
         );
-        entry.address(AT_LOW_PC, &0)?;
+        entry.address(at::LOW_PC, &0)?;
         let list = description.list(&runs)?;
-        entry.offset(AT_RANGES, &list)?;
+        entry.offset(at::RANGES, &list)?;
     }
     description.entries.write(entry, None)?;
     for (id, data) in debug.types() {
@@ -166,15 +175,15 @@ pub(super) fn write(writer: &mut DebugWriter<'_, '_, '_>, out: &mut dyn Write) -
         description.subprogram(index)?;
     }
     if description.unknown {
-        let mut entry = description.entries.entry(TAG_UNSPECIFIED_TYPE, false);
-        entry.string(AT_NAME, "unknown")?;
+        let mut entry = description.entries.entry(tag::UNSPECIFIED_TYPE, false);
+        entry.string(at::NAME, "unknown")?;
         description.entries.write(entry, Some(&UNKNOWN))?;
     }
     if description.index {
-        let mut entry = description.entries.entry(TAG_BASE_TYPE, false);
-        entry.string(AT_NAME, "__ARRAY_SIZE_TYPE__")?;
-        entry.byte(AT_BYTE_SIZE, 8)?;
-        entry.byte(AT_ENCODING, 0x07)?;
+        let mut entry = description.entries.entry(tag::BASE_TYPE, false);
+        entry.string(at::NAME, "__ARRAY_SIZE_TYPE__")?;
+        entry.byte(at::BYTE_SIZE, 8)?;
+        entry.byte(at::ENCODING, 0x07)?;
         description.entries.write(entry, Some(&INDEX))?;
     }
     description.entries.end_children()?;
@@ -194,7 +203,7 @@ pub(super) fn write(writer: &mut DebugWriter<'_, '_, '_>, out: &mut dyn Write) -
          Ldebug_info_start\n.Ldebug_info_start:\n\t.short\t5\n\t.byte\t1\n\t.byte\t8\n\t.long\t.\
          Ldebug_abbrev"
     )?;
-    out.write_str(&entries.text)?;
+    out.write_str(entries.contents())?;
     writeln!(out, ".Ldebug_info_end:")?;
     if !ranges.is_empty() {
         // §7.28: the length, version 5, the address and segment selector
@@ -214,7 +223,7 @@ pub(super) fn write(writer: &mut DebugWriter<'_, '_, '_>, out: &mut dyn Write) -
 
 /// Finds where `frame` keeps the variables `body` places in stack slots.
 pub(super) fn place_variables(
-    module: &crate::ir::Module<'_>,
+    module: &Module<'_>,
     body: &Body<'_>,
     frame: &Frame<'_>,
     variables: &mut ArenaVec<'_, (DebugVariable, i64)>,
@@ -266,7 +275,7 @@ impl<'d> Description<'_, 'd, '_, '_> {
     /// `DW_AT_type` naming `ty`, or nothing for `void`.
     fn type_of(entry: &mut Entry<'_>, ty: Option<DebugType>) -> fmt::Result {
         match ty {
-            | Some(ty) => entry.reference(AT_TYPE, &TypeLabel(ty.index())),
+            | Some(ty) => entry.reference(at::TYPE, &TypeLabel(ty.index())),
             | None => Ok(()),
         }
     }
@@ -276,7 +285,7 @@ impl<'d> Description<'_, 'd, '_, '_> {
     fn object_type(&mut self, entry: &mut Entry<'_>, ty: Option<DebugType>) -> fmt::Result {
         if ty.is_none() {
             self.unknown = true;
-            return entry.reference(AT_TYPE, &UNKNOWN);
+            return entry.reference(at::TYPE, &UNKNOWN);
         }
         Self::type_of(entry, ty)
     }
@@ -285,13 +294,13 @@ impl<'d> Description<'_, 'd, '_, '_> {
     fn declared(
         &mut self,
         entry: &mut Entry<'_>,
-        file: crate::ir::DebugFile,
+        file: DebugFile,
         line: u32,
     ) -> fmt::Result {
         let debug = self.writer.module.debug_info();
-        let number = self.writer.lines.number(&mut self.entries.text, debug, file)?;
-        entry.unsigned(AT_DECL_FILE, u64::from(number))?;
-        entry.unsigned(AT_DECL_LINE, u64::from(line))
+        let number = self.writer.lines.number(self.entries.directives(), debug, file)?;
+        entry.unsigned(at::DECL_FILE, u64::from(number))?;
+        entry.unsigned(at::DECL_LINE, u64::from(line))
     }
 
     /// A range list of `runs`, merged where one ends at the next one's
@@ -317,24 +326,24 @@ impl<'d> Description<'_, 'd, '_, '_> {
                 size_bits,
                 encoding,
             } => {
-                let mut entry = self.entries.entry(TAG_BASE_TYPE, false);
-                entry.string(AT_NAME, name)?;
-                entry.unsigned(AT_BYTE_SIZE, size_bits / 8)?;
-                entry.byte(AT_ENCODING, encoding_code(encoding))?;
+                let mut entry = self.entries.entry(tag::BASE_TYPE, false);
+                entry.string(at::NAME, name)?;
+                entry.unsigned(at::BYTE_SIZE, size_bits / 8)?;
+                entry.byte(at::ENCODING, encoding_code(encoding))?;
                 self.entries.write(entry, Some(&label))
             },
             | DebugTypeData::Pointer { pointee } => {
-                let mut entry = self.entries.entry(TAG_POINTER_TYPE, false);
+                let mut entry = self.entries.entry(tag::POINTER_TYPE, false);
                 Self::type_of(&mut entry, pointee)?;
                 self.entries.write(entry, Some(&label))
             },
             | DebugTypeData::Qualified { qualifier, ty } => {
                 let mut entry = self.entries.entry(
                     match qualifier {
-                        | DebugQualifier::Const => TAG_CONST_TYPE,
-                        | DebugQualifier::Volatile => TAG_VOLATILE_TYPE,
-                        | DebugQualifier::Restrict => TAG_RESTRICT_TYPE,
-                        | DebugQualifier::Atomic => TAG_ATOMIC_TYPE,
+                        | DebugQualifier::Const => tag::CONST_TYPE,
+                        | DebugQualifier::Volatile => tag::VOLATILE_TYPE,
+                        | DebugQualifier::Restrict => tag::RESTRICT_TYPE,
+                        | DebugQualifier::Atomic => tag::ATOMIC_TYPE,
                     },
                     false,
                 );
@@ -347,19 +356,19 @@ impl<'d> Description<'_, 'd, '_, '_> {
                 self.array(&label, element, Some(count), true),
             | DebugTypeData::Record(record) => {
                 let tag = if record.union {
-                    TAG_UNION_TYPE
+                    tag::UNION_TYPE
                 } else {
-                    TAG_STRUCTURE_TYPE
+                    tag::STRUCTURE_TYPE
                 };
                 let children = record.complete && !record.members.is_empty();
                 let mut entry = self.entries.entry(tag, children);
                 if let Some(name) = record.name {
-                    entry.string(AT_NAME, name)?;
+                    entry.string(at::NAME, name)?;
                 }
                 if record.complete {
-                    entry.unsigned(AT_BYTE_SIZE, record.size_bits / 8)?;
+                    entry.unsigned(at::BYTE_SIZE, record.size_bits / 8)?;
                 } else {
-                    entry.flag(AT_DECLARATION);
+                    entry.flag(at::DECLARATION);
                 }
                 self.declared(&mut entry, record.file, record.line)?;
                 self.entries.write(entry, Some(&label))?;
@@ -367,19 +376,19 @@ impl<'d> Description<'_, 'd, '_, '_> {
                     return Ok(());
                 }
                 for member in record.members {
-                    let mut entry = self.entries.entry(TAG_MEMBER, false);
+                    let mut entry = self.entries.entry(tag::MEMBER, false);
                     if let Some(name) = member.name {
-                        entry.string(AT_NAME, name)?;
+                        entry.string(at::NAME, name)?;
                     }
                     self.object_type(&mut entry, member.ty)?;
                     self.declared(&mut entry, record.file, member.line)?;
                     // A bit-field's place is in bits from the record's start
                     // (§5.7.6).
                     if let Some(width) = member.bit_field {
-                        entry.unsigned(AT_BIT_SIZE, u64::from(width))?;
-                        entry.unsigned(AT_DATA_BIT_OFFSET, member.offset_bits)?;
+                        entry.unsigned(at::BIT_SIZE, u64::from(width))?;
+                        entry.unsigned(at::DATA_BIT_OFFSET, member.offset_bits)?;
                     } else {
-                        entry.unsigned(AT_DATA_MEMBER_LOCATION, member.offset_bits / 8)?;
+                        entry.unsigned(at::DATA_MEMBER_LOCATION, member.offset_bits / 8)?;
                     }
                     self.entries.write(entry, None)?;
                 }
@@ -395,21 +404,21 @@ impl<'d> Description<'_, 'd, '_, '_> {
                 ..
             } => {
                 let children = !enumerators.is_empty();
-                let mut entry = self.entries.entry(TAG_ENUMERATION_TYPE, children);
+                let mut entry = self.entries.entry(tag::ENUMERATION_TYPE, children);
                 Self::type_of(&mut entry, base)?;
                 if let Some(name) = name {
-                    entry.string(AT_NAME, name)?;
+                    entry.string(at::NAME, name)?;
                 }
-                entry.unsigned(AT_BYTE_SIZE, size_bits / 8)?;
+                entry.unsigned(at::BYTE_SIZE, size_bits / 8)?;
                 self.declared(&mut entry, file, line)?;
                 self.entries.write(entry, Some(&label))?;
                 if !children {
                     return Ok(());
                 }
                 for enumerator in enumerators {
-                    let mut entry = self.entries.entry(TAG_ENUMERATOR, false);
-                    entry.string(AT_NAME, enumerator.name)?;
-                    entry.signed(AT_CONST_VALUE, enumerator.value)?;
+                    let mut entry = self.entries.entry(tag::ENUMERATOR, false);
+                    entry.string(at::NAME, enumerator.name)?;
+                    entry.signed(at::CONST_VALUE, enumerator.value)?;
                     self.entries.write(entry, None)?;
                 }
                 self.entries.end_children()
@@ -420,9 +429,9 @@ impl<'d> Description<'_, 'd, '_, '_> {
                 file,
                 line,
             } => {
-                let mut entry = self.entries.entry(TAG_TYPEDEF, false);
+                let mut entry = self.entries.entry(tag::TYPEDEF, false);
                 Self::type_of(&mut entry, ty)?;
-                entry.string(AT_NAME, name)?;
+                entry.string(at::NAME, name)?;
                 self.declared(&mut entry, file, line)?;
                 self.entries.write(entry, Some(&label))
             },
@@ -433,9 +442,9 @@ impl<'d> Description<'_, 'd, '_, '_> {
                 prototyped,
             } => {
                 let children = !parameters.is_empty() || variadic;
-                let mut entry = self.entries.entry(TAG_SUBROUTINE_TYPE, children);
+                let mut entry = self.entries.entry(tag::SUBROUTINE_TYPE, children);
                 if prototyped {
-                    entry.flag(AT_PROTOTYPED);
+                    entry.flag(at::PROTOTYPED);
                 }
                 Self::type_of(&mut entry, result)?;
                 self.entries.write(entry, Some(&label))?;
@@ -443,12 +452,12 @@ impl<'d> Description<'_, 'd, '_, '_> {
                     return Ok(());
                 }
                 for &parameter in parameters {
-                    let mut entry = self.entries.entry(TAG_FORMAL_PARAMETER, false);
+                    let mut entry = self.entries.entry(tag::FORMAL_PARAMETER, false);
                     self.object_type(&mut entry, parameter)?;
                     self.entries.write(entry, None)?;
                 }
                 if variadic {
-                    let entry = self.entries.entry(TAG_UNSPECIFIED_PARAMETERS, false);
+                    let entry = self.entries.entry(tag::UNSPECIFIED_PARAMETERS, false);
                     self.entries.write(entry, None)?;
                 }
                 self.entries.end_children()
@@ -465,17 +474,17 @@ impl<'d> Description<'_, 'd, '_, '_> {
         count: Option<u64>,
         vector: bool,
     ) -> fmt::Result {
-        let mut entry = self.entries.entry(TAG_ARRAY_TYPE, true);
+        let mut entry = self.entries.entry(tag::ARRAY_TYPE, true);
         if vector {
-            entry.flag(AT_GNU_VECTOR);
+            entry.flag(at::GNU_VECTOR);
         }
         self.object_type(&mut entry, element)?;
         self.entries.write(entry, Some(label))?;
-        let mut entry = self.entries.entry(TAG_SUBRANGE_TYPE, false);
+        let mut entry = self.entries.entry(tag::SUBRANGE_TYPE, false);
         self.index = true;
-        entry.reference(AT_TYPE, &INDEX)?;
+        entry.reference(at::TYPE, &INDEX)?;
         if let Some(count) = count {
-            entry.unsigned(AT_COUNT, count)?;
+            entry.unsigned(at::COUNT, count)?;
         }
         self.entries.write(entry, None)?;
         self.entries.end_children()
@@ -484,20 +493,20 @@ impl<'d> Description<'_, 'd, '_, '_> {
     /// A global object or static local: at its address if the listing
     /// defines it, and a declaration if the module does not. A
     /// thread-local one is described without a location.
-    fn global(&mut self, global: &crate::ir::GlobalVariable<'_>) -> fmt::Result {
+    fn global(&mut self, global: &GlobalVariable<'_>) -> fmt::Result {
         let module = self.writer.module;
         let object = module.global(global.global);
-        let mut entry = self.entries.entry(TAG_VARIABLE, false);
-        entry.string(AT_NAME, global.name)?;
+        let mut entry = self.entries.entry(tag::VARIABLE, false);
+        entry.string(at::NAME, global.name)?;
         self.object_type(&mut entry, global.ty)?;
         if object.linkage != Linkage::Internal {
-            entry.flag(AT_EXTERNAL);
+            entry.flag(at::EXTERNAL);
         }
         self.declared(&mut entry, global.file, global.line)?;
         if !defines(module, Symbol::Global(global.global)) {
-            entry.flag(AT_DECLARATION);
+            entry.flag(at::DECLARATION);
         } else if !object.thread_local {
-            entry.expression(AT_LOCATION, &[OP_ADDR], Some(&Name(object.name)))?;
+            entry.expression(at::LOCATION, &[OP_ADDR], Some(&Name(object.name)))?;
         }
         self.entries.write(entry, None)
     }
@@ -517,29 +526,29 @@ impl<'d> Description<'_, 'd, '_, '_> {
             return Ok(());
         };
         let function = module.function(function_id);
-        let mut entry = self.entries.entry(TAG_SUBPROGRAM, true);
+        let mut entry = self.entries.entry(tag::SUBPROGRAM, true);
         let begin = Mark::Begin(number);
-        entry.address(AT_LOW_PC, &begin)?;
-        entry.length(AT_HIGH_PC, &Mark::End(number), &begin)?;
+        entry.address(at::LOW_PC, &begin)?;
+        entry.length(at::HIGH_PC, &Mark::End(number), &begin)?;
         if frame_base {
-            entry.expression(AT_FRAME_BASE, &[OP_CALL_FRAME_CFA], None)?;
+            entry.expression(at::FRAME_BASE, &[OP_CALL_FRAME_CFA], None)?;
         }
         if subprogram.name != function.name {
-            entry.string(AT_LINKAGE_NAME, function.name)?;
+            entry.string(at::LINKAGE_NAME, function.name)?;
         }
-        entry.string(AT_NAME, subprogram.name)?;
+        entry.string(at::NAME, subprogram.name)?;
         self.declared(&mut entry, subprogram.file, subprogram.line)?;
         if let Some(&DebugTypeData::Function {
             result, prototyped, ..
         }) = subprogram.ty.and_then(|ty| debug.type_data(ty))
         {
             if prototyped {
-                entry.flag(AT_PROTOTYPED);
+                entry.flag(at::PROTOTYPED);
             }
             Self::type_of(&mut entry, result)?;
         }
         if function.linkage != Linkage::Internal {
-            entry.flag(AT_EXTERNAL);
+            entry.flag(at::EXTERNAL);
         }
         self.entries.write(entry, None)?;
         self.scope_contents(index, scope)?;
@@ -563,9 +572,9 @@ impl<'d> Description<'_, 'd, '_, '_> {
                 continue;
             };
             let tag = if variable.argument.is_some() {
-                TAG_FORMAL_PARAMETER
+                tag::FORMAL_PARAMETER
             } else {
-                TAG_VARIABLE
+                tag::VARIABLE
             };
             let place = self.writer.functions[index]
                 .variables
@@ -577,9 +586,9 @@ impl<'d> Description<'_, 'd, '_, '_> {
                 let mut bytes = ArenaVec::new_in(self.writer.arena);
                 bytes.push(OP_FBREG);
                 sleb128(&mut bytes, offset);
-                entry.expression(AT_LOCATION, &bytes, None)?;
+                entry.expression(at::LOCATION, &bytes, None)?;
             }
-            entry.string(AT_NAME, variable.name)?;
+            entry.string(at::NAME, variable.name)?;
             self.declared(&mut entry, variable.file, variable.line)?;
             self.object_type(&mut entry, variable.ty)?;
             self.entries.write(entry, None)?;
@@ -593,13 +602,13 @@ impl<'d> Description<'_, 'd, '_, '_> {
                 self.scope_contents(index, block)?;
                 continue;
             }
-            let mut entry = self.entries.entry(TAG_LEXICAL_BLOCK, true);
+            let mut entry = self.entries.entry(tag::LEXICAL_BLOCK, true);
             if let [(begin, end)] = runs[..] {
-                entry.address(AT_LOW_PC, &begin)?;
-                entry.length(AT_HIGH_PC, &end, &begin)?;
+                entry.address(at::LOW_PC, &begin)?;
+                entry.length(at::HIGH_PC, &end, &begin)?;
             } else {
                 let list = self.list(&runs)?;
-                entry.offset(AT_RANGES, &list)?;
+                entry.offset(at::RANGES, &list)?;
             }
             self.entries.write(entry, None)?;
             self.scope_contents(index, block)?;
