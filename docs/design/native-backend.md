@@ -34,7 +34,7 @@ implements; everything else is the plan.
    construct and the function. Refusals are counted by the surveys; wrong code
    is a bug.
 
-Non-goals for now: debug information (DWARF line tables and CodeView), position
+Non-goals for now: CodeView debug information for Windows, position
 independent shared libraries, other architectures, instruction scheduling, and
 importing LLVM-optimized IR back into bcc IR (so "LLVM optimizer + native code
 generator" is not an arm).
@@ -904,10 +904,23 @@ assembly text to LLVM MC as module-level inline assembly through LLVM-C
 (`LLVMSetModuleInlineAsm2` on an empty module, then the existing object
 emission), which removes the clang process for `-c` but not the dependency.
 
-Debug information is a non-goal for now. When it comes, DWARF line tables
-(`.loc` directives in text first) on ELF and CodeView `.cv_loc` on COFF need
-only an IR-instruction-to-source map from lowering; variable locations need
-the allocator's `Allocation` per instruction range.
+`-g` on ELF writes DWARF 5 (`native/debug_info.rs`). Selection already maps
+each machine instruction to the IR instruction it came from for the explorer,
+and lowering maps that to a source position, so the emitter writes a `.loc`
+before each instruction whose position changes, and labels where a function
+and each run of one scope's code begin and end. After the globals it writes
+the entries (`DW_TAG_compile_unit`, the types, globals, subprograms, lexical
+blocks bounded by their runs, and variables) as data directives in
+`.debug_info` and `.debug_abbrev`, with `.debug_rnglists` for a block of
+several runs. The frame base is `DW_OP_call_frame_cfa`, which the `.cfi_*`
+directives already define however `%rsp` moves, and a variable in a stack
+slot is at `DW_OP_fbreg`, its slot's offset from that address, which holds for
+the whole function. A variable kept in registers has no location (the
+allocator's per-range locations are not followed), so at `-O1` and above most
+read as optimized out. The direct encoder turns `.file` and `.loc` into
+`.debug_line` and `.debug_line_str` as MC does (`object/line_table.rs`), byte
+for byte, which the object tests check on every test program. COFF gets
+neither DWARF nor CodeView: the command line warns that it ignores `-g` there.
 
 ## Source layout
 
@@ -923,8 +936,9 @@ Following [CONTRIBUTING.md](../../CONTRIBUTING.md#source-layout):
 | `native/regalloc.rs` | the allocator's entry and `Allocation`, with `regalloc/edges.rs` (critical edges, jump threading, loop rotation), `regalloc/liveness.rs` (liveness, dead code, intervals, fixed ranges), `regalloc/intervals.rs`, `regalloc/coalesce.rs`, `regalloc/scan.rs` (the split-interval scan), `regalloc/resolve.rs` (pieces and moves), `regalloc/rewrite.rs` (physical rewrite and parallel moves), `regalloc/checker.rs` (the symbolic checker) and `regalloc/peephole.rs` (`lea` combining) |
 | `native/frame.rs` | frame layout, prologue and epilogue |
 | `native/emit.rs` | AT&T text: instructions, functions, globals, symbols |
+| `native/debug_info.rs`, `native/debug_info/` | DWARF 5 for `-g` on ELF: `.loc` rows and `.file` names (`lines.rs`), the entries (`description.rs`) and their encoding and abbreviations (`entries.rs`) |
 | `native/driver.rs` | the choice of object writer, assembly or direct object output, and bundled clang linking |
-| `native/object.rs`, `native/object/` | private listing parser, x86 encoder and relaxation, ELF64 writer, DWARF CFI records; the COFF writer and its unwind tables in `object/coff.rs` and `object/coff/` |
+| `native/object.rs`, `native/object/` | private listing parser, x86 encoder and relaxation, ELF64 writer, DWARF CFI records, the DWARF line table (`object/line_table.rs`); the COFF writer and its unwind tables in `object/coff.rs` and `object/coff/` |
 | `native/tests.rs`, `native/tests/` | selection, allocation and end-to-end tests |
 
 Arenas: the module's `'ir` arena outlives the back end; each function is
@@ -985,7 +999,7 @@ Sizes are estimated Rust lines including tests.
 | 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `i128` register pairs and division libcalls; `f80` through x87 memory sequences and `f128` libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 | done |
 | 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | done, with the red zone and loop alignment added after stage 5 (#85); B1/A1 1.05× on native Linux (from 1.42×), 1.03× with those two in a pinned run; checker clean on every test and on the whole torture corpus (1,890 sources, debug builds, no checker failure) |
 | 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 | done: direct COFF objects are the Windows default and ran in native Windows CI; direct ELF objects stay opt-in (`--native-object`) |
-| 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | open |
+| 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | DWARF 5 on ELF done, with variables at `-O0` and types; gdb 15 steps through the test programs and reads their locals; CodeView open |
 
 ## Implementation status
 
