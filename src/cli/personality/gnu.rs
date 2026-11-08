@@ -1707,6 +1707,8 @@ impl State<'_> {
                     | "-Wno-implicit-const-int-float-conversion"
                     | "-Wimplicit-int-float-conversion"
                     | "-Wno-implicit-int-float-conversion"
+                    | "-Wunused-local-typedef"
+                    | "-Wno-unused-local-typedef"
                     | "-Wlogical-op-parentheses"
                     | "-Wno-logical-op-parentheses"
                     | "-Wbitwise-op-parentheses"

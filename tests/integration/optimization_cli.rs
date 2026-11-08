@@ -231,6 +231,81 @@ mod tests {
         }
     }
 
+    /// After `fold` decides the inlined `never ()`, nothing reaches the
+    /// branch on `a`, but it stays until `simplify-cfg` removes unreachable
+    /// blocks. Merging the `b < 0` test into it as into the arm's only
+    /// predecessor removed the arm the `c` branch still leads to, and the
+    /// compiler panicked (reduced from lz4 1.10.0's `lib/lz4.c`). Every
+    /// level, back end and the interpreter print what GCC prints.
+    #[test]
+    fn a_decided_branch_keeps_the_arm_live_code_reaches() {
+        // Declared rather than included, as a Windows host has no C headers.
+        const SOURCE: &str = "int printf(const char *, ...);
+int puts(const char *);
+static int never(void) { return 0; }
+int pick(int a, int b, int c) {
+    if (never()) {
+        if (a) goto test;
+        goto done;
+    }
+    if (c) return 3;
+test:
+    if (b < 0) return 7;
+done:
+    return b;
+}
+int main(void) {
+    for (int a = 0; a < 2; a++)
+        for (int b = -1; b < 2; b++)
+            for (int c = 0; c < 2; c++) printf(\"%d \", pick(a, b, c));
+    puts(\"\");
+    return 0;
+}
+";
+        const EXPECTED: &str = "7 3 0 3 1 3 7 3 0 3 1 3 \n";
+        let bcc = |flags: &[&str]| {
+            Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(flags)
+                .args(["--input", SOURCE])
+                .output()
+                .unwrap()
+        };
+        for level in ["-O0", "-O1", "-O2", "-O3", "-Os"] {
+            let output = bcc(&[level, "--interpret"]);
+            assert!(output.status.success(), "{level}: {output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stdout), EXPECTED, "{level}");
+        }
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let path = std::env::temp_dir().join(format!("decided-branch-{}", std::process::id()));
+        let run = |what: &str| {
+            let run = Command::new(&path).output().unwrap();
+            assert!(run.status.success(), "{what}: {run:?}");
+            assert_eq!(String::from_utf8_lossy(&run.stdout), EXPECTED, "{what}");
+        };
+        for level in ["-O0", "-O2"] {
+            for backend in ["llvm", "native"] {
+                let output = bcc(&[level, "--backend", backend, "-o", path.to_str().unwrap()]);
+                assert!(output.status.success(), "{level} {backend}: {output:?}");
+                run(&format!("{level} {backend}"));
+            }
+        }
+        let source = path.with_extension("c");
+        std::fs::write(&source, SOURCE).unwrap();
+        let gcc = Command::new("gcc")
+            .args(["-O2", "-o"])
+            .arg(&path)
+            .arg(&source)
+            .output();
+        std::fs::remove_file(&source).unwrap();
+        match gcc {
+            | Ok(output) if output.status.success() => run("gcc -O2"),
+            | _ => eprintln!("skipping the GCC comparison: gcc did not build the program"),
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn optimization_flags_select_working_codegen_pipelines() {
         for level in ["-O0", "-O1", "-O2", "-O3", "-Os", "-Oz", "-Og"] {

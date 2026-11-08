@@ -212,6 +212,8 @@ impl CompilerConfiguration {
             | DiagnosticGroup::Conversion if clang => DiagnosticGroup::CLANG_CONVERSION,
             | DiagnosticGroup::ImplicitIntFloatConversion =>
                 &[DiagnosticGroup::ImplicitConstIntFloatConversion],
+            | DiagnosticGroup::UnusedLocalTypedefs if clang =>
+                &[DiagnosticGroup::UnusedLocalTypedef],
             | _ => &[],
         };
         for &child in children {
@@ -1020,6 +1022,11 @@ diagnostic_groups! {
     ReturnLocalAddr => Some("return-local-addr"), Warning, false;
     /// Clang's.
     ReturnStackAddress => Some("return-stack-address"), Warning, false;
+    /// A typedef a block declares and never uses, in GCC's spelling, which
+    /// Clang accepts too.
+    UnusedLocalTypedefs => Some("unused-local-typedefs"), Ignored, false;
+    /// Clang's own spelling, which its warning names.
+    UnusedLocalTypedef => Some("unused-local-typedef"), Ignored, false;
     /// `-Wparentheses`, which reports the rest of its family itself. `-Wall`
     /// holds it in GCC, and Clang reports most of it by default.
     Parentheses => Some("parentheses"), ClangWarning, false;
@@ -1235,6 +1242,8 @@ impl DiagnosticGroup {
         Self::UnusedLabel,
         Self::UnusedValue,
         Self::UnusedComparison,
+        Self::UnusedLocalTypedefs,
+        Self::UnusedLocalTypedef,
     ];
 
     /// Whether only GCC has the group, so that Clang reports its option as
@@ -1384,6 +1393,8 @@ impl WarningSettings {
                 | DiagnosticGroup::UnusedLabel
                 | DiagnosticGroup::UnusedValue
                 | DiagnosticGroup::UnusedComparison
+                | DiagnosticGroup::UnusedLocalTypedefs
+                | DiagnosticGroup::UnusedLocalTypedef
                 | DiagnosticGroup::Main
                 | DiagnosticGroup::UnknownPragmas
                 | DiagnosticGroup::PointerBoolConversion => all,
