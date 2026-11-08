@@ -7604,6 +7604,22 @@ mod tests {
                     .into()
             )
         );
+        // Clang reports no unused variable in a scope an unrecoverable
+        // error occurred in.
+        directory.write(
+            "trapped.c",
+            "int f(int x) { int unused; return x + undefined_thing; }\n",
+        );
+        assert_eq!(
+            clang_cl(&["trapped.c"]),
+            (
+                Some(1),
+                "trapped.c(1,39): error: use of undeclared identifier 'undefined_thing'\n    1 | int \
+                 f(int x) { int unused; return x + undefined_thing; }\n      |                                       \
+                 ^~~~~~~~~~~~~~~\n1 error generated.\n"
+                    .into()
+            )
+        );
         let unused =
             "    1 | int f(void) { int unused; return 0; }\n      |                   ^~~~~~\n";
         assert_eq!(
