@@ -7,8 +7,3 @@ sema-extension-pedantic-gcc.c:5:33: warning: ISO C does not support '__FUNCTION_
 sema-extension-pedantic-gcc.c:8:70: warning: ISO C does not support '__FUNCTION__' predefined identifier [-Wpedantic]
     8 | const char *outside(int c) { return c ? __extension__ __FUNCTION__ : __FUNCTION__; }
       |                                                                      ^~~~~~~~~~~~
-error: cannot build `a.out`: clang failed (exit status: 1):
-ld.lld: error: undefined symbol: main
->>> referenced by /lib/x86_64-linux-gnu/Scrt1.o:(_start)
-clang: error: linker command failed with exit code 1 (use -v to see invocation)
-
