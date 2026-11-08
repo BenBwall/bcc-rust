@@ -26,11 +26,65 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   the step's numbered note hangs off it, the current full expression is
   wired up as a schematic whose wires fill with values (Figure 2), and a
   datasheet lists the objects (Table 1). Objects with static storage
-  duration (file-scope and `static` ones) are created one step each before
-  `main` and kept in a group of their own, outside every call. A structure
+  duration (file-scope and `static` ones, and the unnamed char array of
+  each string literal, named by its spelling) are created one step each
+  before `main` and kept in a group of their own, outside every call. A
+  char shows its character beside its value (`65 'A'`), and a char array
+  its characters. A structure
   is drawn as its members: one cell per member under the head, with a
   hatched cell for each run of padding bcc's x86-64 layout leaves, and a row
-  per member in the datasheet with its byte offsets.
+  per member in the datasheet with its byte offsets. A program that writes
+  output has a terminal screen (Figure 3, Standard output) with everything
+  written so far at the playhead and the bytes the step wrote lit in
+  vermilion; Back and Forward show it as it was at each step. The machine
+  runs `#include <stdio.h>` itself, as the first step, saying what
+  translation phase 4 does, with a button to the Preprocessor stage; each
+  call to `printf`, `puts` or `putchar` is one step, whose note says which
+  argument fed which conversion and what text it wrote, and what a
+  precision (`%.3d`, `%.2s`) did. It runs an object-like `#define NAME
+  value` too, when the value is one number, character constant or string
+  literal: the directive is a step of phase 4 (`#define N` stands for `10`),
+  and each use of the name leads with the replacement standing in for it
+  before the program ran, with the same button. Adjacent string literals
+  are one array, whose step says that phase 6 joined them. A `const` object
+  shows its type as `const int`; assigning to it does not compile, and the
+  page says the program breaks a rule of C rather than leaves the subset,
+  while a store through a pointer whose `const` a cast removed stops as
+  undefined behavior. A cast is a step of its own that says whether the
+  value was kept or, for an int that does not fit in a char, wrapped as bcc
+  and GCC do (implementation-defined), and `x += y` is narrated as `x = x +
+  (y)` with `x` evaluated once. The machine knows every integer type, from
+  `char` to `unsigned long long`, with its x86-64 width (a declaration says
+  it, and that C promises only a minimum range); each cell under the
+  playhead is as wide as its object's bytes and says how many, as the
+  datasheet does beside each type. A value narrower than int is promoted in a
+  step of its own, and when a binary operator's operands differ in type, a
+  step says which one the usual arithmetic conversions convert and why
+  (rank, or signedness), so `-1 < 1u` shows `-1 + 2^32 = 4294967295` before
+  it compares. Unsigned arithmetic that leaves its range is reduced modulo
+  2^N, and its step says that this is defined, unlike signed overflow, which
+  stops; a store or a cast into a signed type that cannot hold the value is
+  implementation-defined, and the step says bcc and GCC wrap. Shifts stop on
+  a count out of range and on left-shifting a negative or overflowing signed
+  value, `sizeof` is a step yielding a `size_t`, and a condition may count
+  down with `k-- > 0`. The floating types are there too: `float`, `double`
+  and `long double` as x86-64 stores them (IEEE 754 binary32 and binary64,
+  which C99 Annex F makes them, and the x87 80-bit format in 16 bytes),
+  computed in software so every host agrees. A floating constant's step
+  shows the exact value stored (`0.1` becomes
+  `0.1000000000000000055511151231257827…`, the nearest double); each
+  conversion to, from or between floating types is narrated (an int
+  converts exactly or rounds, a double truncates toward zero into an int,
+  and stops as undefined when its integral part does not fit); each
+  arithmetic step gives the exact result before rounding; a comparison
+  shows both exact values, so `0.1 + 0.2 == 0.3` visibly yields 0; and
+  division by zero gives inf or NaN under Annex F, which the step says bcc
+  follows. A step that produces a floating value draws its sign, exponent
+  and fraction bits under the lead sentence, and each floating cell under
+  the playhead shows its bytes. printf writes `%f %e %g %a` (and `%Lf` for
+  a long double) exactly as glibc does. Any other directive (a function-like macro,
+  `#if`, another header) stops the machine before its first step with a
+  card that sends the reader to the Preprocessor stage.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
   the first translation phases to machine code: the logical lines after
   line splicing (phases 1-2), the preprocessing tokens (phase 3), the
@@ -359,7 +413,45 @@ learner's own program (opened or edited) otherwise.
 
 The lesson "Before the compiler: the preprocessor" (`demos/macros.c`)
 exercises these stages and opens at the preprocessor. The abstract machine
-has no preprocessor, so it rejects that lesson as outside its subset.
+runs only `#include <stdio.h>` and object-like `#define` itself, so it stops
+that lesson at its first other directive.
+
+The lesson "Hello, world: printf and strings" (`demos/hello.c`), second in
+the list, is the first program most programmers write: `#include
+<stdio.h>`, `puts`, a `char name[] = "Ada";` and `printf("%s has %d
+letters\n", name, len)`, with a loop that counts letters through a
+prototype declared before `main`. In the pipeline view it stops at the
+`#include`, as any program that includes `<stdio.h>` does there (see the
+Preprocessor stage above); its LLVM IR is precomputed by the native compiler,
+which finds the host's headers. Its Clang module is a WASI command linked
+with wasi-libc (see the WebAssembly view).
+
+The lesson "Names for values: #define, const and casts"
+(`demos/constants.c`), third in the list, follows it with what a first week
+adds: `#define LIMIT 4` and `#define LABEL "total"` (each a step of phase 4,
+and each use narrated as its replacement), a `const int step`, a loop that
+adds it with `+=`, `(char)300`, which wraps to 44, and `printf(LABEL " is
+%.3d\n", total)`, whose format is two literals joined into one array and
+whose precision pads 56 to `056`. It includes `<stdio.h>`, so the pipeline
+view and the Clang module treat it as the printf lesson's.
+
+The lesson "Unsigned numbers wrap; signed numbers don't"
+(`demos/unsigned.c`), after "Integer promotions", computes `2u - 3`, which
+wraps to 4294967295, counts an `unsigned` down with a test (`i < 3`) that
+stands in for the `i >= 0` that never fails, so it stops only after `i`
+wraps, then counts down correctly with `for (unsigned int k = 3; k-- > 0;)`.
+It takes a `size_t` from `sizeof`, shows `-1 < 1u` converting -1 to
+unsigned before it compares, and shifts `1u` into the top bit and out
+again, printing each result with `%u`, `%zu` and `%d`. Like the printf
+lesson it includes `<stdio.h>`.
+
+The lesson "Floating point: close, not exact" (`demos/floating.c`), after
+the unsigned lesson, averages two ints into a double, which truncates
+first, `7 / 2` being int division, until a cast makes the division
+floating; shows `0.1 + 0.2 == 0.3` yielding 0 with the two exact values on
+screen; sums `0.1` ten times into `0.99999999999999989`; truncates
+`(int)2.99` to 2; and prints the stored values with `%.17g`. Like the printf
+lesson it includes `<stdio.h>`.
 
 How live compilation runs:
 
@@ -478,7 +570,11 @@ are two:
   `proc_exit`, 125 instructions before `main` at `-O0`. When bcc refuses a program for WebAssembly (`setjmp`,
   `_Float16`, …), the view shows its diagnostics.
 - `Precompiled` serves the lessons, compiled by clang at `-O0 -g` into
-  `web/wasm/`, whose DWARF line tables the stepper reads.
+  `web/wasm/`, whose DWARF line tables the stepper reads. A lesson calls no
+  library function and is a bare module whose entry point is `main`, except
+  one that includes `<stdio.h>`: it is a WASI command linked with wasi-libc,
+  a copy of which `generate.sh` strips of its debug information, so that only
+  the lesson's own code has C lines.
 
 The view steps bcc's module unless the learner switches to Clang's, which
 only the lessons have; the browser's local storage keeps that choice for
@@ -511,7 +607,8 @@ themes, layout, components, and the classes the editor decorations use). In
 `src/`, `lib.rs` maps the modules. `app.rs` owns the page state, controls,
 keyboard shortcuts and layout. `panels/` renders the note (`narration.rs`),
 the tape (`tape.rs`, which also records the run's lanes), the cells under its
-playhead, the expression schematic, the objects' datasheet, the encoders
+playhead, the expression schematic, standard output (`output.rs`), the
+objects' datasheet, the encoders
 (`knob.rs`) and the pipeline view, with the front-end stages' cards and
 source marks in `panels/front_end.rs`. `editor.rs` mounts Monaco, and
 `highlight.rs` colours the prerendered fallback. `app/wasm.rs` holds the

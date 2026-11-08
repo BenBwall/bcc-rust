@@ -5,19 +5,40 @@
 //! Each builder returns an [`Event`] whose clauses are the rules the
 //! operation applied (see `clauses.rs` for the citations).
 
+mod floating;
+
 use std::fmt::Write;
+
+use floating::{
+    conversion_words,
+    floating_declaration,
+};
+pub(super) use floating::{
+    floating_constant,
+    floating_precision,
+};
 
 use super::{
     clauses::{
         self,
         Clause,
     },
+    integers::{
+        Common,
+        Integer,
+        modulo_text,
+        power_text,
+    },
     layout,
     machine::Machine,
+    memory::article,
     model::{
+        Arithmetic,
         Diagnostic,
+        DirectiveKind,
         Event,
         EventKind,
+        Macro,
         Op,
         Operand,
         Program,
@@ -66,6 +87,29 @@ pub(super) enum Topic {
     ExitStatus,
     Undefined,
     IndeterminateRead,
+    Preprocessor,
+    StringLiteral,
+    StringInitializer,
+    CharacterConstant,
+    Format,
+    VariadicPromotion,
+    Macro,
+    Concatenation,
+    Const,
+    Cast,
+    CompoundAssign,
+    IntegerSizes,
+    Unsigned,
+    ArithmeticConversion,
+    SignedConversion,
+    Shift,
+    Sizeof,
+    FloatingPoint,
+    FloatingSizes,
+    IntegerToFloating,
+    Truncation,
+    NotANumber,
+    AnnexF,
 }
 
 impl Topic {
@@ -184,6 +228,117 @@ impl Topic {
             | Self::IndeterminateRead =>
                 "In practice the read returns whatever was left in that register or stack slot, so \
                  the result can change between runs, compilers and optimization levels.",
+            | Self::Preprocessor =>
+                "#include pastes text in before the compiler reads the program, which is why it \
+                 comes first: C needs a function declared before a call to it. The header only \
+                 declares printf; the code that prints is in the C library, which the linker adds \
+                 to the program.",
+            | Self::StringLiteral =>
+                "C has no string type: a string is an array of chars ended by a null character, \
+                 and its length is stored nowhere. printf, puts and every other string function \
+                 find the end by looking for the null, so an array without one is not a string, \
+                 and reading it as one runs past its end.",
+            | Self::StringInitializer =>
+                "`char s[] = \"hi\";` makes an array of your own, a copy you may change. `char *p \
+                 = \"hi\";` only points at the literal's array, which you must not change: storing \
+                 through p is undefined, and on most systems it crashes, because literals live in \
+                 read-only memory.",
+            | Self::CharacterConstant =>
+                "A char is a small integer: 'A' is just another way to write 65 in ASCII, and 'A' \
+                 + 1 is 'B'. That is why a loop can compare a char with '\\0' or count from 'a' to \
+                 'z'.",
+            | Self::Format =>
+                "printf trusts its format: nothing at run time checks that each conversion matches \
+                 the argument it takes. A %d given a pointer, or a conversion with no argument \
+                 left, is undefined, and in a real program prints garbage or crashes. Compilers \
+                 warn about it when the format is a literal (-Wformat).",
+            | Self::Macro =>
+                "A macro is text substitution, not a variable: it has no type, no storage and no \
+                 address, and the compiler never sees its name. `#define N 10` costs no memory, \
+                 and a debugger usually cannot show N, because by the time the program runs every \
+                 N has become 10.",
+            | Self::Concatenation =>
+                "Adjacent literals are how C writes a long string across several lines, or builds \
+                 one from macros: `\"bcc \" VERSION`. The joining happens while the program is \
+                 translated; C has no operator that joins strings while it runs.",
+            | Self::Const =>
+                "const is a promise the compiler checks: an assignment to a const object does not \
+                 compile. It is not a lock on memory: a cast can remove the const from a pointer, \
+                 and storing through that pointer into the object is undefined behavior, which a \
+                 real program may or may not survive.",
+            | Self::Cast =>
+                "A cast tells the compiler that a conversion is intended, so it no longer warns. \
+                 It does not check that the value fits: (char)300 quietly becomes 44, and a cast \
+                 that removes const compiles even though storing through the result can be \
+                 undefined.",
+            | Self::CompoundAssign =>
+                "`x += 2` is shorthand for `x = x + 2`, except that `x` is evaluated once. That \
+                 matters when the left side does work: `a[next()] += 1` calls next once, while \
+                 `a[next()] = a[next()] + 1` calls it twice and may change two different elements.",
+            | Self::IntegerSizes =>
+                "C sets only minimum ranges: an int must hold at least -32767 to 32767, and a long \
+                 at least 32 bits. On x86-64 Linux a short is 2 bytes, an int 4, and a long and a \
+                 long long 8, but on 64-bit Windows a long is only 4. When the width matters, \
+                 <stdint.h> names exact ones such as uint32_t.",
+            | Self::Unsigned =>
+                "Unsigned arithmetic never overflows: a result outside the type's range is reduced \
+                 modulo 2^N, so 0u - 1 is the largest value. That is defined and portable, unlike \
+                 signed overflow, which is undefined. It is also why a countdown that tests `i >= \
+                 0` never ends when i is unsigned.",
+            | Self::ArithmeticConversion =>
+                "When a signed and an unsigned operand of the same rank meet, the signed one \
+                 becomes unsigned, so -1 < 1u is false: -1 turns into 4294967295. Comparing an int \
+                 with sizeof or a size_t has the same trap, and compilers warn about it \
+                 (-Wsign-compare).",
+            | Self::SignedConversion =>
+                "Implementation-defined means each compiler must choose a result and document it. \
+                 Every x86-64 compiler keeps the low bits, but C does not promise it, and \
+                 -Wconversion warns because the value changed.",
+            | Self::Shift =>
+                "x << n multiplies by 2^n and x >> n divides by 2^n, but only for counts from 0 to \
+                 the width minus 1: shifting a 32-bit int by 32 is undefined, and x86-64 quietly \
+                 shifts by 0 instead. Shifting a negative value left is undefined too, which is \
+                 why bit manipulation uses unsigned types.",
+            | Self::Sizeof =>
+                "sizeof is worked out while the program is compiled: its operand is never \
+                 evaluated, so sizeof x++ leaves x alone. On an array it counts the whole array, \
+                 so sizeof a / sizeof a[0] is its length, but only where a has not decayed to a \
+                 pointer, as it has in a function's parameter.",
+            | Self::FloatingPoint =>
+                "Most decimal fractions have no exact binary form: 0.1 is stored as the nearest \
+                 double, 0.1000000000000000055511151231257827…, and each operation rounds its \
+                 result again, so 0.1 + 0.2 is not 0.3 and ten 0.1s do not add up to exactly 1. \
+                 printf(\"%.17g\") shows enough digits to tell any two doubles apart. Compare \
+                 floating results with a tolerance, not ==, and count money in integer cents.",
+            | Self::FloatingSizes =>
+                "On x86-64 a float is 4 bytes with about 7 significant decimal digits, a double 8 \
+                 bytes with about 16, and a long double the x87's 80-bit format, padded to 16 \
+                 bytes, with about 19. C promises much less (6 digits for float, 10 for double), \
+                 and long double varies most: on 64-bit Windows it is just a double, on ARM64 \
+                 Linux a 128-bit format. Use double unless you have a reason not to.",
+            | Self::IntegerToFloating =>
+                "Every int converts to a double exactly, but only where the program converts it. \
+                 In `double average = total / count;` the division happens first, in int, and only \
+                 its truncated result becomes a double. Converting an operand first, as in \
+                 `(double)total / count`, makes the division itself floating.",
+            | Self::Truncation =>
+                "Converting to an integer cuts the fraction off, toward zero: (int)2.99 is 2 and \
+                 (int)-2.99 is -2, never 3. To round to the nearest integer, use lround from \
+                 <math.h>. A value whose integral part does not fit, like (int)3e9, is undefined; \
+                 x86-64 gives -2147483648 for it, and an optimizer may assume it never happens.",
+            | Self::NotANumber =>
+                "A NaN, not a number, comes from operations such as 0.0 / 0.0 that have no \
+                 meaningful result. It compares unequal to everything, itself included, so x != x \
+                 is true only for a NaN, and it spreads: any arithmetic with a NaN gives a NaN.",
+            | Self::AnnexF =>
+                "Floating division by zero does not stop a program that follows Annex F: x / 0.0 \
+                 is an infinity and 0.0 / 0.0 a NaN, which printf writes as inf and nan. Integer \
+                 division by zero is still undefined, and on x86-64 it kills the program with \
+                 SIGFPE.",
+            | Self::VariadicPromotion =>
+                "A function with `...` cannot say what types its extra arguments have, so C widens \
+                 them to a few standard types first. printf can then read every small integer as \
+                 an int, which is why %c takes an int and why there is no conversion for a char.",
         }
     }
 }
@@ -204,11 +359,70 @@ pub(super) enum Designation {
     Updated,
     /// Select one of its members: the left operand of `.`.
     Member,
+    /// Read, combine and store it: the left operand of a compound
+    /// assignment such as `+=`.
+    Compound,
 }
 
 /// The initial state's event: nothing has run yet. A program with
 /// `statics` objects of static storage duration initializes them first.
-pub(super) fn start(range: SourceRange, statics: usize) -> Event {
+pub(super) fn start(range: SourceRange, program: &Program) -> Event {
+    let statics = program.statics.len();
+    let defines = program
+        .directives
+        .iter()
+        .any(|directive| matches!(directive.kind, DirectiveKind::Define { .. }));
+    if defines {
+        return noted(
+            explained(
+                Event::new(
+                    EventKind::Start,
+                    range,
+                    String::from("Ready to translate and run the program"),
+                ),
+                "Nothing has run yet: first the preprocessor runs the lines that start with #, \
+                 then the static objects get their values, and then each Step performs one \
+                 evaluation.",
+                "Nothing has run yet. Before the program can run, it is translated: in \
+                 translation phase 4 the preprocessor executes the directives, the lines that \
+                 start with #, one step each here. A #define makes its name a macro, and the \
+                 preprocessor replaces every later use of the name, so the program that runs \
+                 never mentions it. Then, before main is called, every object with static storage \
+                 duration gets its initial value, and each Step performs one evaluation of the \
+                 abstract machine, explaining the rule of C behind it.",
+                &[
+                    clauses::ABSTRACT_MACHINE,
+                    clauses::TRANSLATION_PHASES,
+                    clauses::STARTUP,
+                ],
+            ),
+            Topic::AbstractMachine,
+        );
+    }
+    if !program.directives.is_empty() {
+        return noted(
+            explained(
+                Event::new(
+                    EventKind::Start,
+                    range,
+                    String::from("Ready to translate and run the program"),
+                ),
+                "Nothing has run yet: first the preprocessor runs the #include line, then the \
+                 static objects get their values, and then each Step performs one evaluation.",
+                "Nothing has run yet. Before the program can run, it is translated: the \
+                 preprocessor executes the #include directive in translation phase 4. Then, \
+                 before main is called, every object with static storage duration (each string \
+                 literal's array among them) gets its initial value, and each Step performs one \
+                 evaluation of the abstract machine, explaining the rule of C behind it.",
+                &[
+                    clauses::ABSTRACT_MACHINE,
+                    clauses::TRANSLATION_PHASES,
+                    clauses::STARTUP,
+                ],
+            ),
+            Topic::AbstractMachine,
+        );
+    }
     if statics == 0 {
         return noted(
             explained(
@@ -247,6 +461,177 @@ pub(super) fn start(range: SourceRange, statics: usize) -> Event {
         ),
         Topic::AbstractMachine,
     )
+}
+
+/// Translation phase 4 runs the program's directive `index`: `#include
+/// <stdio.h>`, whose declarations replace the line, or an object-like
+/// `#define`.
+pub(super) fn directive(program: &Program, index: usize) -> Event {
+    let directive = &program.directives[index];
+    let range = directive.range;
+    if let DirectiveKind::Define { index, again } = directive.kind {
+        return define(&program.macros[index], range, again);
+    }
+    let index = program.directives[..index]
+        .iter()
+        .filter(|earlier| earlier.kind == DirectiveKind::Include)
+        .count();
+    let again = if index == 0 {
+        ""
+    } else {
+        " This file already included <stdio.h>; a standard header included again has no further \
+         effect."
+    };
+    let mut cited = vec![
+        clauses::TRANSLATION_PHASES,
+        clauses::SOURCE_INCLUSION,
+        clauses::LIBRARY_HEADERS,
+    ];
+    if index > 0 {
+        cited.push(clauses::HEADER_ORDER);
+    }
+    noted(
+        explained(
+            Event::new(
+                EventKind::Directive,
+                range,
+                String::from("#include <stdio.h>: declare printf, puts and putchar"),
+            ),
+            "Before the program runs, the preprocessor replaces this line with the header \
+             <stdio.h>, whose declarations of printf, puts and putchar let the code below call \
+             them.",
+            &format!(
+                "C translates a source file in phases, and in phase 4 the preprocessor executes \
+                 directives, the lines that start with #. #include <stdio.h> is replaced by the \
+                 entire contents of the standard header <stdio.h>, which declares the library's \
+                 input and output functions, each with a prototype. This machine declares the \
+                 three it runs: printf, puts and putchar, which write to standard output, shown \
+                 in the Output panel. The header holds only declarations: the functions \
+                 themselves are compiled code in the C library. The compiler pipeline's \
+                 Preprocessor stage shows what the real preprocessor makes of this file.{again}"
+            ),
+            &cited,
+        ),
+        Topic::Preprocessor,
+    )
+}
+
+/// Translation phase 4 runs `#define`, defining the object-like macro
+/// `defined` (or repeating its identical definition, when `again`).
+///
+/// C99: §6.10.3 paragraph 9, p. 152; PDF p. 164.
+fn define(defined: &Macro, range: SourceRange, again: bool) -> Event {
+    let (name, replacement, kind) = (&defined.name, &defined.replacement, defined.kind);
+    if again {
+        return noted(
+            explained(
+                Event::new(
+                    EventKind::Directive,
+                    range,
+                    format!("#define {name} again: nothing changes"),
+                ),
+                &format!(
+                    "{name} is already a macro for `{replacement}`, and C allows defining it \
+                     again with exactly the same replacement, which changes nothing."
+                ),
+                &format!(
+                    "In translation phase 4 the preprocessor executes this #define, but {name} is \
+                     already defined with the replacement list `{replacement}`. A macro may be \
+                     defined again only with an identical replacement list; this one is, so the \
+                     directive has no effect. A different replacement would be an error the \
+                     compiler must report."
+                ),
+                &[
+                    clauses::TRANSLATION_PHASES,
+                    clauses::MACRO_REDEFINITION,
+                    clauses::OBJECT_LIKE_MACRO,
+                ],
+            ),
+            Topic::Macro,
+        );
+    }
+    noted(
+        explained(
+            Event::new(
+                EventKind::Directive,
+                range,
+                format!("#define {name}: {name} stands for {replacement}"),
+            ),
+            &format!(
+                "Before the program runs, the preprocessor makes {name} a macro: from here to the \
+                 end of the file, every {name} is replaced by `{replacement}`."
+            ),
+            &format!(
+                "C translates a source file in phases, and in phase 4 the preprocessor executes \
+                 directives, the lines that start with #. `#define {name} {replacement}` defines \
+                 an object-like macro: each later instance of the name {name} is replaced by the \
+                 replacement list, here the {kind} `{replacement}`, before the compiler proper \
+                 reads the program, and the directive line itself is then deleted. {name} is not \
+                 a variable: it has no type, no storage and no address, and nothing of it exists \
+                 when the program runs. The machine marks each replaced use when it evaluates it, \
+                 and the compiler pipeline's Preprocessor stage shows the real preprocessor doing \
+                 the replacement."
+            ),
+            &[clauses::TRANSLATION_PHASES, clauses::OBJECT_LIKE_MACRO],
+        ),
+        Topic::Macro,
+    )
+}
+
+/// `event`, which used the replacement of the macro `used` where the source
+/// spells its name. Phase 4 replaced the name before the program ran, so an
+/// evaluation of the replacement leads with that; a declaration that used it
+/// (in an array size or a static initializer) says so in its details.
+///
+/// C99: §6.10.3 paragraph 9, p. 152; PDF p. 164.
+pub(super) fn macro_use(mut event: Event, used: &Macro, source: &str, lead: bool) -> Event {
+    let (name, replacement) = (&used.name, &used.replacement);
+    let line = source[..used.range.start]
+        .bytes()
+        .filter(|&byte| byte == b'\n')
+        .count()
+        + 1;
+    let replaced = format!(
+        "`{name}` is not a variable: the #define on line {line} made it a macro, and in \
+         translation phase 4, before the program was compiled, the preprocessor replaced this \
+         {name} with its replacement list, `{replacement}`. The compiler, and this machine, see \
+         only `{replacement}`."
+    );
+    if !event.clauses.contains(&clauses::OBJECT_LIKE_MACRO) {
+        event.clauses.insert(0, clauses::OBJECT_LIKE_MACRO);
+    }
+    if !lead {
+        let _ = write!(event.explanation, " In the declaration, {replaced}");
+        return event;
+    }
+    let summary = lowered(&event.summary);
+    event.summary = format!(
+        "`{name}` is a macro the preprocessor replaced with `{replacement}` before the program \
+         ran: {summary}"
+    );
+    event.explanation = format!("{replaced} {}", event.explanation);
+    event.title = if event.title.starts_with("Before main") {
+        format!("{}, from the macro {name}", event.title)
+    } else {
+        format!("Macro {name}: {}", lowered(&event.title))
+    };
+    noted(event, Topic::Macro)
+}
+
+/// `text` with a leading "The" or a capitalized verb in lower case, to
+/// continue a sentence.
+fn lowered(text: &str) -> String {
+    let first_word = text.split(' ').next().unwrap_or_default();
+    let common = matches!(
+        first_word,
+        "The" | "Evaluate" | "Before" | "Convert" | "Decay" | "Each" | "This" | "A" | "An"
+    );
+    if !common {
+        return String::from(text);
+    }
+    let mut lowered = String::from(text);
+    lowered[..1].make_ascii_lowercase();
+    lowered
 }
 
 /// The event for a diagnostic that stops execution. Undefined behavior is
@@ -308,10 +693,13 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             "Outside the supported subset",
             sentence(&diagnostic.message),
             String::from(
-                "The abstract machine runs a small subset of C: int and char objects, int \
-                 pointers, fixed int arrays, structures, file-scope and static objects, \
-                 functions, if, while and for. The compiler pipeline and WebAssembly views \
-                 compile the whole language.",
+                "The abstract machine runs a subset of C: the integer types (char, short, int, \
+                 long and long long, signed and unsigned), const ones among them, pointers to \
+                 them, arrays of them, string literals, structures, file-scope and static \
+                 objects, functions and prototypes, if, while and for, arithmetic, comparisons \
+                 and shifts, sizeof, casts between integer types, compound assignments such as \
+                 +=, #define for constants, and printf, puts and putchar from <stdio.h>. The \
+                 compiler pipeline and WebAssembly views compile the whole language.",
             ),
             None,
         ),
@@ -329,7 +717,15 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     }
     match diagnostic.undefined {
         | Some(Undefined::QuotientOverflow) => event.clauses.push(clauses::QUOTIENT),
+        | Some(Undefined::SignedOverflow) => event.clauses.push(clauses::UNSIGNED_WRAP),
+        | Some(Undefined::ShiftNegative | Undefined::ShiftOverflow) =>
+            event.clauses.push(clauses::SHIFT_COUNT),
         | Some(Undefined::NullSubscript) => event.clauses.push(clauses::POINTER_ARITHMETIC),
+        | Some(Undefined::Unterminated) => event.clauses.push(clauses::CONVERSIONS),
+        | Some(Undefined::WrongArgument) => event
+            .clauses
+            .extend([clauses::CONVERSIONS, clauses::VARIADIC_TYPES]),
+        | Some(Undefined::StringLiteralWrite) => event.clauses.push(clauses::STRING_LITERAL),
         | _ => {},
     }
     match topic {
@@ -355,8 +751,22 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
     match diagnostic.undefined {
         | Some(Undefined::SignedOverflow) => (
             "Undefined behavior: signed overflow",
-            "The exact result does not fit in an int, and C defines no behavior for signed \
-             overflow.",
+            "The exact result does not fit in its signed type, and C defines no behavior for \
+             signed overflow, though an unsigned type would have wrapped.",
+        ),
+        | Some(Undefined::ShiftCount) => (
+            "Undefined behavior: shift count out of range",
+            "A shift count must be at least 0 and less than the width of the promoted left \
+             operand; C gives any other count no meaning.",
+        ),
+        | Some(Undefined::ShiftNegative) => (
+            "Undefined behavior: left shift of a negative value",
+            "C defines E1 << E2 for a signed E1 only when E1 is not negative.",
+        ),
+        | Some(Undefined::ShiftOverflow) => (
+            "Undefined behavior: left shift overflow",
+            "The shifted value E1 × 2^E2 does not fit in the signed result type, and C defines no \
+             result then.",
         ),
         | Some(Undefined::QuotientOverflow) => (
             "Undefined behavior: the quotient does not fit",
@@ -366,6 +776,11 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
         | Some(Undefined::DivisionByZero) => (
             "Undefined behavior: division by zero",
             "C defines no quotient or remainder for an integer division by zero.",
+        ),
+        | Some(Undefined::FloatingConversion) => (
+            "Undefined behavior: a floating value that does not fit",
+            "Converting a floating value to an integer type keeps its integral part, and C \
+             defines the result only when that part fits in the type.",
         ),
         | Some(Undefined::NullIndirection) => (
             "Undefined behavior: null pointer dereference",
@@ -396,6 +811,43 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Pointer arithmetic may move only within an array and to one past its end; this \
              result would leave both.",
         ),
+        | Some(Undefined::StringLiteralWrite) => (
+            "Undefined behavior: modifying a string literal",
+            "A string literal's array belongs to the program's constants, and C gives no meaning \
+             to changing it; real programs usually crash here, as literals sit in read-only \
+             memory.",
+        ),
+        | Some(Undefined::ConstWrite) => (
+            "Undefined behavior: modifying a const object",
+            "The object was defined const, and C gives no meaning to changing it through a \
+             pointer whose const a cast removed; a real program may crash, or keep using the old \
+             value.",
+        ),
+        | Some(Undefined::Unterminated) => (
+            "Undefined behavior: a string without its null",
+            "A string ends at its first null character, and this array has none from here on, so \
+             reading the string would run past the end of the array.",
+        ),
+        | Some(Undefined::NullString) => (
+            "Undefined behavior: a null pointer for a string",
+            "A library function that reads a string needs a pointer to one; a null pointer points \
+             to no characters at all.",
+        ),
+        | Some(Undefined::MissingArgument) => (
+            "Undefined behavior: printf has too few arguments",
+            "Each conversion takes the next argument, and this one has none left to take, so \
+             printf would read whatever happens to be where an argument would be.",
+        ),
+        | Some(Undefined::WrongArgument) => (
+            "Undefined behavior: printf argument of the wrong type",
+            "printf reads each argument as the type its conversion names, and this argument has \
+             another type, so C gives the result no meaning.",
+        ),
+        | Some(Undefined::InvalidConversion) => (
+            "Undefined behavior: invalid conversion specification",
+            "printf's format must spell each conversion as the standard defines it, and this one \
+             is not one of them.",
+        ),
         | None => (
             "Undefined behavior",
             "C places no requirements on what the program does from here.",
@@ -425,6 +877,21 @@ impl Machine {
             },
             | Op::Increment { .. } =>
                 Some(format!("Next: update {}", location(top.operands.last()))),
+            | Op::Compound(..) => {
+                let length = top.operands.len();
+                let target = length
+                    .checked_sub(2)
+                    .and_then(|index| top.operands.get(index));
+                Some(format!("Next: update {}", location(target)))
+            },
+            | Op::InitializeString { .. } => Some(format!(
+                "Next: store the string's characters into {}",
+                location(top.operands.last())
+            )),
+            | Op::Library(library, _) => Some(format!(
+                "Next: {} writes to standard output",
+                library.name()
+            )),
             | _ => None,
         }
     }
@@ -476,12 +943,26 @@ impl Machine {
         let object = &self.state.objects[id - 1];
         let function = self.function_name(object.frame_id);
         let what = match ty {
-            | Type::Array(count) => format!(
+            | Type::Array(Arithmetic::INT, count) => format!(
                 "an array of {count} ints ({} bytes on x86-64). Each element's value is",
                 count.saturating_mul(4)
             ),
-            | Type::Pointer =>
-                String::from("an int * object, a pointer to int (8 bytes on x86-64). Its value is"),
+            | Type::Array(Arithmetic::CHAR, count) => format!(
+                "an array of {count} chars ({count} byte{}). Each element's value is",
+                if count == 1 { "" } else { "s" }
+            ),
+            | Type::Array(element, count) => format!(
+                "an array of {count} {}s, {} bytes each ({} bytes on x86-64). Each element's \
+                 value is",
+                element.spelling(),
+                element.bytes(),
+                count.saturating_mul(element.bytes())
+            ),
+            | Type::Pointer(element, _) => format!(
+                "{} object, a pointer to {} (8 bytes on x86-64). Its value is",
+                article(&object.r#type),
+                element.spelling()
+            ),
             | Type::StructPointer(_) => format!(
                 "a {} object, a pointer to a structure (8 bytes on x86-64). Its value is",
                 object.r#type
@@ -491,29 +972,47 @@ impl Machine {
                 object.r#type,
                 self.layout_text(id)
             ),
-            | Type::Char => String::from("a char object (1 byte). Its value is"),
-            | Type::Int => String::from("an int object (4 bytes on x86-64). Its value is"),
+            | Type::Integer(Integer::Char) => String::from("a char object (1 byte). Its value is"),
+            | Type::Integer(Integer::Int) =>
+                String::from("an int object (4 bytes on x86-64). Its value is"),
+            | Type::Integer(integer) => format!(
+                "{} object ({}). Its value is",
+                article(integer.spelling()),
+                width_text(integer)
+            ),
+            | Type::Floating(floating) =>
+                format!("{}. Its value is", floating_declaration(floating)),
         };
         let kind = match ty {
-            | Type::Array(count) => format!("an array of {count} ints"),
-            | Type::Pointer => String::from("a pointer to int"),
+            | Type::Array(element, count) => format!("an array of {count} {}s", element.spelling()),
+            | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
             | Type::StructPointer(_) => String::from("a pointer to a structure"),
             | Type::Struct(_) => format!("a {}", object.r#type),
-            | Type::Char => String::from("a char object"),
-            | Type::Int => String::from("an int object"),
+            | Type::Integer(integer) => format!("{} object", article(integer.spelling())),
+            | Type::Floating(floating) => format!("{} object", article(floating.spelling())),
         };
         let summary = format!(
             "The machine draws `{name}` here, {kind} in {function}'s frame; C has it exist from \
              the start of its block, with no value until one is stored.",
             name = object.name,
         );
-        let text = format!(
+        let mut text = format!(
             "The declaration of `{name}` is reached, so the machine creates {what} indeterminate \
              until something is stored. The object lives in {function}'s frame: it has automatic \
              storage duration.",
             name = object.name,
         );
         let mut cited = vec![clauses::AUTOMATIC_LIFETIME, clauses::INDETERMINATE];
+        let constant = self.metadata[id - 1].constant;
+        if constant {
+            let _ = write!(
+                text,
+                " It is defined const: its initializer gives it its value, and after that the \
+                 program may not change it. An assignment to it, ++ or -- does not compile, since \
+                 a const object is not a modifiable lvalue."
+            );
+            cited.push(clauses::MODIFIABLE_LVALUE);
+        }
         if matches!(ty, Type::Struct(_)) {
             cited.extend([
                 clauses::STRUCTURE_TYPE,
@@ -521,6 +1020,26 @@ impl Machine {
                 clauses::MEMBER_ALIGNMENT,
                 clauses::TRAILING_PADDING,
             ]);
+        }
+        // Types other than int and char state their width, which C leaves
+        // to the implementation within minimum ranges.
+        let element = match ty {
+            | Type::Array(element, _) => element.ty(),
+            | ty => ty,
+        };
+        let sized = matches!(
+            element,
+            Type::Integer(integer) if !matches!(integer, Integer::Int | Integer::Char)
+        );
+        let floating = element.floating().is_some();
+        if sized {
+            cited.push(clauses::INTEGER_LIMITS);
+            if ty.integer().is_some_and(|integer| !integer.signed()) {
+                cited.push(clauses::UNSIGNED_TYPES);
+            }
+        }
+        if floating {
+            cited.extend([clauses::FLOATING_TYPES, clauses::FLOATING_FORMATS]);
         }
         let mut event = noted(
             explained(
@@ -535,6 +1054,12 @@ impl Machine {
             ),
             if matches!(ty, Type::Struct(_)) && self.padded(ty) {
                 Topic::Padding
+            } else if constant {
+                Topic::Const
+            } else if sized {
+                Topic::IntegerSizes
+            } else if floating {
+                Topic::FloatingSizes
             } else {
                 Topic::Indeterminate
             },
@@ -548,10 +1073,13 @@ impl Machine {
     pub(super) fn static_storage(&self, program: &Program, index: usize, id: usize) -> Event {
         let declared = &program.statics[index];
         let object = &self.state.objects[id - 1];
+        if declared.literal {
+            return self.string_literal(declared.range, id, declared.parts);
+        }
         let name = &object.name;
         let shown = self.short_value(&object.value);
-        let pointer = matches!(declared.ty, Type::Pointer | Type::StructPointer(_));
-        let aggregate = matches!(declared.ty, Type::Array(_) | Type::Struct(_));
+        let pointer = declared.ty.is_pointer();
+        let aggregate = matches!(declared.ty, Type::Array(..) | Type::Struct(_));
         let (place, scope) = declared.function.as_ref().map_or_else(
             || {
                 (
@@ -632,6 +1160,17 @@ impl Machine {
             );
             cited.extend([clauses::MEMBER_ORDER, clauses::MEMBER_ALIGNMENT]);
         }
+        let topic = if declared.constant {
+            let _ = write!(
+                text,
+                " It is defined const, so the program may never change it: an assignment to it \
+                 does not compile."
+            );
+            cited.push(clauses::MODIFIABLE_LVALUE);
+            Topic::Const
+        } else {
+            Topic::StaticStorage
+        };
         let mut event = noted(
             explained(
                 Event::new(EventKind::StaticStorage, declared.range, title),
@@ -639,11 +1178,268 @@ impl Machine {
                 &text,
                 &cited,
             ),
-            Topic::StaticStorage,
+            topic,
         );
         event.objects.push(id);
         event.result = Some(Operand::Value(object.value.clone()));
         event
+    }
+
+    /// Before `main`: the array of the string literal at `range`, object
+    /// `id`, exists with its characters and a null.
+    fn string_literal(&self, range: SourceRange, id: usize, parts: usize) -> Event {
+        let object = &self.state.objects[id - 1];
+        let name = &object.name;
+        let characters = self.characters(&object.value);
+        let count = layout::count(&object.value);
+        if parts > 1 {
+            return self.joined_literal(range, id, parts);
+        }
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::StaticStorage,
+                    range,
+                    format!("Before main: the string literal {name} ({})", object.r#type),
+                ),
+                &format!(
+                    "The string literal {name} is an array of {count} chars with static storage \
+                     duration, existing before main runs: {characters}."
+                ),
+                &format!(
+                    "In translation phase 7 a null character, '\\0', is added to the end of each \
+                     string literal's characters, and they initialize an unnamed array of static \
+                     storage duration just long enough to hold them: here {} = {characters}. Like \
+                     every static object it exists before main is called and lasts for the whole \
+                     run, and wherever the literal appears in an expression it stands for this \
+                     array. The program must not modify it: a store into it is undefined, which \
+                     is why a pointer to one is usually declared `const char *`.",
+                    object.r#type
+                ),
+                &[
+                    clauses::STRING_LITERAL,
+                    clauses::STRING_LITERAL_WRITE,
+                    clauses::STARTUP,
+                ],
+            ),
+            Topic::StringLiteral,
+        );
+        event.objects.push(id);
+        event.result = Some(Operand::Value(object.value.clone()));
+        event
+    }
+
+    /// Before `main`: the array of a string literal the source writes as
+    /// `parts` adjacent literals, which translation phase 6 joined.
+    ///
+    /// C99: §5.1.1.2 paragraph 1 item 6, p. 10; PDF p. 22.
+    /// C99: §6.4.5 paragraph 4, p. 62; PDF p. 74.
+    fn joined_literal(&self, range: SourceRange, id: usize, parts: usize) -> Event {
+        let object = &self.state.objects[id - 1];
+        let name = &object.name;
+        let characters = self.characters(&object.value);
+        let count = layout::count(&object.value);
+        let mut joined = Vec::new();
+        if let Value::Array(elements) = &object.value {
+            for element in elements {
+                if let &Value::Integer(character) = element {
+                    joined.push(character.to_le_bytes()[0]);
+                }
+            }
+        }
+        let _null = joined.pop();
+        let literal = super::library::quoted(&joined);
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::StaticStorage,
+                    range,
+                    format!("Before main: {parts} literals joined into {literal}"),
+                ),
+                &format!(
+                    "Translation phase 6 joined the {parts} adjacent string literals {name} into \
+                     one, {literal}: a single array of {count} chars with one null at its end."
+                ),
+                &format!(
+                    "The source writes {parts} string literals side by side, {name}. Before the \
+                     program runs, translation phase 6 concatenates adjacent string literals into \
+                     one, after phase 5 has replaced their escape sequences, so this is one \
+                     literal, {literal}, not {parts}. Phase 7 then adds a single null character, \
+                     '\\0', at the end, and the characters initialize one unnamed array of static \
+                     storage duration: here {} = {characters}. Like every static object it exists \
+                     before main is called, and the program must not modify it.",
+                    object.r#type
+                ),
+                &[
+                    clauses::LITERAL_CONCATENATION_PHASE,
+                    clauses::STRING_CONCATENATION,
+                    clauses::STRING_LITERAL,
+                    clauses::STARTUP,
+                ],
+            ),
+            Topic::Concatenation,
+        );
+        event.objects.push(id);
+        event.result = Some(Operand::Value(object.value.clone()));
+        event
+    }
+
+    /// `char s[] = "...";`: `bytes`, then zeros, were stored into the
+    /// char array at leaf `offset` of `target`; `stored` is their values.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One string initialization's complete observation."
+    )]
+    pub(super) fn initialized_string(
+        &self,
+        range: SourceRange,
+        target: usize,
+        offset: i32,
+        bytes: &[u8],
+        stored: Value,
+        full_expression: bool,
+        parts: usize,
+    ) -> Event {
+        let length = layout::count(&stored);
+        let whole = self.array_name(target, offset);
+        let literal = super::library::quoted(bytes);
+        let characters = self.characters(&stored);
+        let null = if bytes.len() < length {
+            let zeros = length - bytes.len() - 1;
+            if zeros == 0 {
+                String::from(" and its null character")
+            } else {
+                format!(
+                    " and its null character, and the {zeros} element{} after them are zero",
+                    if zeros == 1 { "" } else { "s" }
+                )
+            }
+        } else {
+            String::from(
+                ", filling the array exactly: there is no room for the null, so the array holds \
+                 characters but no string",
+            )
+        };
+        let mut text = format!(
+            "A string literal may initialize a char array: its characters{null}. Here {whole} \
+             becomes {characters}. The array is the program's own, so it may be changed later. \
+             The literal only spells the initial characters: C still describes it as an array of \
+             static storage duration, but nothing can refer to that array, so the machine does \
+             not draw it."
+        );
+        let mut cited = vec![clauses::STRING_INITIALIZER, clauses::PARTIAL_INITIALIZER];
+        if parts > 1 {
+            let _ = write!(
+                text,
+                " The source writes the literal as {parts} adjacent string literals; translation \
+                 phase 6 joined them into this one before the program ran."
+            );
+            cited.extend([
+                clauses::LITERAL_CONCATENATION_PHASE,
+                clauses::STRING_CONCATENATION,
+            ]);
+        }
+        if full_expression {
+            text.push_str(" The initializer is a full expression: a sequence point follows.");
+        }
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::Initialize,
+                    range,
+                    format!("Initialize {whole} from {literal}"),
+                ),
+                &format!("The characters of {literal}{null} initialize {whole}, one element each."),
+                &text,
+                &cited,
+            ),
+            if parts > 1 {
+                Topic::Concatenation
+            } else {
+                Topic::StringInitializer
+            },
+        );
+        event.sequence_point = full_expression;
+        event.operands.push(Operand::Address {
+            target,
+            offset,
+            structure: None,
+        });
+        event.operands.push(Operand::Value(stored.clone()));
+        event.objects.push(target);
+        result(event, Operand::Value(stored))
+    }
+
+    /// A value narrower than int passed through `...` gets the default
+    /// argument promotions.
+    pub(super) fn default_promotion(
+        &self,
+        range: SourceRange,
+        from: Arithmetic,
+        value: Value,
+        promoted: Value,
+    ) -> Event {
+        let from = match from {
+            | Arithmetic::Floating(_) => return Self::float_promotion(range, value, promoted),
+            | Arithmetic::Integer(integer) => integer,
+        };
+        let shown = self.short_value(&value);
+        let character = match value {
+            | Value::Integer(integer) if from.is_char() => format!(" ({})", char_text(integer)),
+            | _ => String::new(),
+        };
+        let name = from.spelling();
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::IntegerPromotion,
+                    range,
+                    format!("Promote {name} {shown} to int for `...`"),
+                ),
+                &format!(
+                    "This argument goes through printf's `...`, so the default argument \
+                     promotions apply: the {name} {shown}{character} arrives as the int {shown}."
+                ),
+                &format!(
+                    "printf's prototype, int printf(const char *format, ...), gives a type only \
+                     to the format. Every later argument matches the `...`, and C applies the \
+                     default argument promotions to it: the integer promotions, which turn {} \
+                     into an int with the same value. So the {name} {shown}{character} reaches \
+                     printf as the int {shown}.",
+                    article(name)
+                ),
+                &[
+                    clauses::VARIADIC_ARGUMENTS,
+                    clauses::DEFAULT_PROMOTIONS,
+                    clauses::INTEGER_PROMOTIONS,
+                ],
+            ),
+            Topic::VariadicPromotion,
+        );
+        event.from_type = Some(String::from(name));
+        event.result_type = Some(String::from("int"));
+        event.operands.push(Operand::Value(value.clone()));
+        result(event, Operand::Value(value))
+    }
+
+    /// The elements of a char array value as character constants:
+    /// `{'h', 'i', '\0'}`.
+    fn characters(&self, value: &Value) -> String {
+        let Value::Array(elements) = value else {
+            return self.value_text(value);
+        };
+        let mut text = String::from("{");
+        for (index, element) in elements.iter().enumerate() {
+            if index > 0 {
+                text.push_str(", ");
+            }
+            match element {
+                | Value::Integer(integer) => text.push_str(&char_text(*integer)),
+                | other => text.push_str(&self.short_value(other)),
+            }
+        }
+        text.push('}');
+        text
     }
 
     /// Execution reaches the declaration of the block-scope static `id`.
@@ -929,8 +1725,8 @@ impl Machine {
                     within = rest;
                     ty = member.ty;
                 },
-                | Type::Array(_) => {
-                    bytes += within * 4;
+                | Type::Array(element, _) => {
+                    bytes += within * element.bytes();
                     break;
                 },
                 | _ => break,
@@ -1026,6 +1822,25 @@ impl Machine {
                 format!("{lvalue} The next step reads it and stores the updated value back."),
                 &[clauses::IDENTIFIER, clauses::LVALUE],
             ),
+            | Designation::Compound => (
+                format!("`{name}` is the object to update"),
+                format!(
+                    "A compound assignment works on the object itself: `{name}` is located once \
+                     here, and read, combined and stored into in one later step."
+                ),
+                format!(
+                    "{lvalue} A compound assignment evaluates its left operand only once, so this \
+                     is the only step that locates `{name}`. Once the right operand has its \
+                     value, one step reads `{name}`, applies the operator and stores the result \
+                     back. C leaves the order of evaluating the two operands unspecified; this \
+                     machine does the left one first."
+                ),
+                &[
+                    clauses::IDENTIFIER,
+                    clauses::LVALUE,
+                    clauses::COMPOUND_ASSIGNMENT,
+                ],
+            ),
         };
         let mut event = explained(
             Event::new(EventKind::Designate, range, title),
@@ -1052,7 +1867,7 @@ impl Machine {
             | Operand::Value(_) => None,
         };
         let location = self.location_of(id, offset, structure);
-        let mut event = if matches!(self.object_type(id), Some(Type::Array(_))) {
+        let mut event = if self.object_type(id).is_some_and(Type::is_array) {
             let text = format!(
                 "An initializer list fills the array's elements in increasing index order, so the \
                  next value initializes {location}."
@@ -1101,6 +1916,34 @@ impl Machine {
 
     pub(super) fn decay(&self, range: SourceRange, id: usize, value: Value) -> Event {
         let object = &self.state.objects[id - 1];
+        if object.literal {
+            let mut event = noted(
+                explained(
+                    Event::new(
+                        EventKind::ArrayDecay,
+                        range,
+                        format!("{} becomes a pointer to its first char", object.name),
+                    ),
+                    &format!(
+                        "The string literal {name} is an array of chars, so in an expression it \
+                         becomes a pointer to its first element, {name}[0].",
+                        name = object.name
+                    ),
+                    &format!(
+                        "A string literal stands for its array, {ty}, which has existed since \
+                         before main. Like every array used in an expression, it is not copied: \
+                         it is converted to a pointer to its first element. That pointer is all a \
+                         function such as printf receives; it finds the end of the string by its \
+                         null character.",
+                        ty = object.r#type
+                    ),
+                    &[clauses::ARRAY_DECAY, clauses::STRING_LITERAL],
+                ),
+                Topic::ArrayDecay,
+            );
+            event.objects.push(id);
+            return result(event, Operand::Value(value));
+        }
         let text = format!(
             "`{name}` is an array ({ty}). Used in an expression, an array is not copied: it is \
              converted to a pointer to its first element, {name}[0]. This is array-to-pointer \
@@ -1137,7 +1980,13 @@ impl Machine {
         value: Value,
     ) -> Event {
         let location = self.location(target, offset);
-        let shown = self.value_text(&value);
+        let mut shown = self.value_text(&value);
+        let leaf = self.leaf_type(target, offset).and_then(Type::arithmetic);
+        if let (Some(Arithmetic::Integer(integer)), Value::Integer(number)) = (leaf, &value)
+            && integer.is_char()
+        {
+            let _ = write!(shown, " ({})", char_text(*number));
+        }
         let summary = format!(
             "The expression needs the value of {location}, so the machine reads it: {shown}."
         );
@@ -1164,33 +2013,210 @@ impl Machine {
             structure: None,
         });
         event.objects.push(target);
+        event.result_type = leaf.map(|arithmetic| String::from(arithmetic.spelling()));
         result(event, Operand::Value(value))
     }
 
-    pub(super) fn promote(&self, range: SourceRange, value: Value) -> Event {
+    /// The integer promotion of a value of type `from`, narrower than int.
+    pub(super) fn promote(&self, range: SourceRange, from: Integer, value: Value) -> Event {
         let shown = self.short_value(&value);
-        let text = format!(
-            "The char value {shown} is about to take part in arithmetic or a comparison, so the \
-             integer promotions first convert it to int. The value stays {shown}; only its type \
-             changes, from char to int."
+        let name = from.spelling();
+        let mut text = format!(
+            "The {name} value {shown} is about to take part in arithmetic, a comparison or a \
+             shift, so the integer promotions first convert it to int. The value stays {shown}; \
+             only its type changes, from {name} to int."
         );
+        if !from.signed() {
+            let _ = write!(
+                text,
+                " An int holds every {name} value (0 to {}), so even this unsigned type promotes \
+                 to int, not to unsigned int.",
+                from.max()
+            );
+        }
+        let cited: &[Clause] = if from == Integer::Char {
+            &[clauses::INTEGER_PROMOTIONS, clauses::CHAR_SIGNEDNESS]
+        } else {
+            &[clauses::INTEGER_PROMOTIONS, clauses::INTEGER_RANK]
+        };
         let mut event = noted(
             explained(
                 Event::new(
                     EventKind::IntegerPromotion,
                     range,
-                    format!("Promote char {shown} to int"),
+                    format!("Promote {name} {shown} to int"),
                 ),
                 &format!(
-                    "C does no arithmetic in char, so the char {shown} becomes the int {shown} \
-                     first: same value, wider type."
+                    "C does no arithmetic in {name}, so the {name} {shown} becomes the int \
+                     {shown} first: same value, wider type."
                 ),
                 &text,
-                &[clauses::INTEGER_PROMOTIONS, clauses::CHAR_SIGNEDNESS],
+                cited,
             ),
             Topic::Promotion,
         );
+        event.from_type = Some(String::from(name));
+        event.result_type = Some(String::from("int"));
         event.operands.push(Operand::Value(value.clone()));
+        result(event, Operand::Value(value))
+    }
+
+    /// The usual arithmetic conversion of the operand at `range`, the left
+    /// one when `depth` is 1, from `from` to the common type `to`, since
+    /// the other operand has type `other`; `whole` is the operator's
+    /// expression as written.
+    ///
+    /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One conversion's complete observation."
+    )]
+    pub(super) fn arithmetic_conversion(
+        range: SourceRange,
+        whole: &str,
+        from: Integer,
+        to: Integer,
+        other: Integer,
+        depth: usize,
+        value: i128,
+        converted: i128,
+    ) -> Event {
+        let side = if depth == 1 { "left" } else { "right" };
+        let (a, b, target) = (from.spelling(), other.spelling(), to.spelling());
+        let why = match from.common(other).1 {
+            | Common::Rank => format!(
+                "both are {}, so the one of lower rank, {a}, converts to {target}",
+                if from.signed() { "signed" } else { "unsigned" }
+            ),
+            | Common::Unsigned if from.rank() == other.rank() => format!(
+                "{a} and {b} have the same rank, and then the signed operand converts to the \
+                 unsigned type, {target}"
+            ),
+            | Common::Unsigned => format!(
+                "the unsigned type, {b}, ranks above {a}, so the signed operand converts to it"
+            ),
+            | Common::Signed => format!(
+                "the signed type {b} ranks above {a} and is wider ({} bits against {}), so it \
+                 holds every {a} value, and the unsigned operand converts to it",
+                other.bits(),
+                from.bits()
+            ),
+            | Common::BothUnsigned | Common::Same => format!(
+                "the signed type ranks higher but is no wider ({} bits each), so it cannot hold \
+                 every value of the unsigned one: both operands convert to {target}, the unsigned \
+                 type of the signed one's rank",
+                to.bits()
+            ),
+        };
+        let changed = value != converted;
+        let (outcome, clause) = if changed {
+            (
+                format!(
+                    "Converting to an unsigned type reduces the value modulo {}: {}.",
+                    power_text(to.bits()),
+                    modulo_text(value, converted, to.bits())
+                ),
+                clauses::UNSIGNED_CONVERSION,
+            )
+        } else {
+            (
+                format!(
+                    "{value} fits in {target}, so the value stays {value}; only its type changes."
+                ),
+                clauses::INTEGER_UNCHANGED,
+            )
+        };
+        let summary = if changed {
+            format!(
+                "`{whole}` mixes {} and {}, so the {side} operand converts to {target}: {}.",
+                article(a),
+                article(b),
+                modulo_text(value, converted, to.bits())
+            )
+        } else {
+            format!(
+                "`{whole}` mixes {} and {}, so the {side} operand, {value}, converts to {target} \
+                 and keeps its value.",
+                article(a),
+                article(b)
+            )
+        };
+        let text = format!(
+            "Before the operator can compute, the usual arithmetic conversions bring both \
+             operands to one common type. The {side} operand is {} and the other is {}: {why}. \
+             {outcome} Integer conversion rank orders the types char, short, int, long and long \
+             long; each unsigned type ranks with its signed one.",
+            article(a),
+            article(b)
+        );
+        let title = if changed {
+            format!("Convert {value} to {target} → {converted}")
+        } else {
+            format!("Convert {value} to {target}")
+        };
+        let mut event = noted(
+            explained(
+                Event::new(EventKind::ArithmeticConversion, range, title),
+                &summary,
+                &text,
+                &[clauses::USUAL_ARITHMETIC, clauses::INTEGER_RANK, clause],
+            ),
+            Topic::ArithmeticConversion,
+        );
+        event.from_type = Some(String::from(a));
+        event.result_type = Some(String::from(target));
+        event.operands.push(Operand::Value(Value::Integer(value)));
+        result(event, Operand::Value(Value::Integer(converted)))
+    }
+
+    /// `sizeof` at `range` gave `size`, the size of its operand's type `ty`.
+    ///
+    /// C99: §6.5.3.4 paragraphs 2 and 4, p. 80; PDF p. 92.
+    pub(super) fn size_of(
+        &self,
+        range: SourceRange,
+        source: &str,
+        size: usize,
+        ty: Type,
+        value: Value,
+    ) -> Event {
+        let form = snippet(source, range);
+        let spelled = ty.spelling(&self.structures);
+        let plural = if size == 1 { "" } else { "s" };
+        let mut text = format!(
+            "sizeof yields the size in bytes of its operand's type, {spelled}: {size} \
+             byte{plural} on x86-64."
+        );
+        let mut cited = vec![clauses::SIZEOF, clauses::SIZEOF_RESULT, clauses::SIZE_T];
+        if let Type::Array(element, count) = ty {
+            let _ = write!(
+                text,
+                " That is the whole array, {count} elements of {} byte{} each: an array operand \
+                 of sizeof does not decay to a pointer.",
+                element.bytes(),
+                if element.bytes() == 1 { "" } else { "s" }
+            );
+            cited.push(clauses::ARRAY_DECAY);
+        }
+        text.push_str(
+            " The operand only supplies a type and is not evaluated, so nothing is read. The \
+             result has type size_t, the unsigned integer type <stdio.h> and <stddef.h> define \
+             for sizes, which is unsigned long on x86-64.",
+        );
+        let mut event = noted(
+            explained(
+                Event::new(EventKind::Sizeof, range, format!("`{form}` is {size}")),
+                &format!(
+                    "`{form}` is the size of {} in bytes, {size}, a size_t; its operand is not \
+                     evaluated.",
+                    article(&spelled)
+                ),
+                &text,
+                &cited,
+            ),
+            Topic::Sizeof,
+        );
+        event.result_type = Some(String::from("unsigned long"));
         result(event, Operand::Value(value))
     }
 
@@ -1312,12 +2338,50 @@ impl Machine {
         &self,
         range: SourceRange,
         operator: &str,
+        ty: Option<Arithmetic>,
         value: Value,
         output: Value,
     ) -> Event {
         let input = self.short_value(&value);
         let shown = self.short_value(&output);
+        if let Some(Arithmetic::Floating(format)) = ty {
+            let mut event = Self::floating_unary(range, operator, format, &input, &shown);
+            event.operands.push(Operand::Value(value));
+            return result(event, Operand::Value(output));
+        }
+        let ty = ty.and_then(Arithmetic::integer);
+        let unsigned = ty.filter(|ty| !ty.signed());
         let (title, summary, text, clause) = match operator {
+            | "-" if let Some(ty) = unsigned => {
+                let name = ty.spelling();
+                let exact = match value {
+                    | Value::Integer(integer) => -integer,
+                    | _ => 0,
+                };
+                let reduced = if exact == 0 {
+                    format!("-({input}) is 0, which needs no reduction")
+                } else {
+                    format!(
+                        "-({input}) is {exact}, which is reduced modulo {}: {}",
+                        power_text(ty.bits()),
+                        modulo_text(exact, exact + (1_i128 << ty.bits()), ty.bits())
+                    )
+                };
+                (
+                    format!("Negate {input} in {name} → {shown}"),
+                    format!(
+                        "The operand is {}, so the negation is unsigned and wraps: -({input}) is \
+                         {shown}, which is defined.",
+                        article(name)
+                    ),
+                    format!(
+                        "Unary minus negates its promoted operand, here {}. An unsigned type has \
+                         no negative values, so {reduced}. Unsigned arithmetic never overflows.",
+                        article(name)
+                    ),
+                    clauses::UNARY_MINUS,
+                )
+            },
             | "!" => (
                 format!("Logical not: !{input} → {shown}"),
                 format!("`!` turns 0 into 1 and anything else into 0, so `!{input}` is {shown}."),
@@ -1330,7 +2394,10 @@ impl Machine {
             | "-" => (
                 format!("Negate {input} → {shown}"),
                 format!("Unary minus negates the value: `-({input})` is {shown}."),
-                format!("Unary minus negates its int operand: -({input}) is {shown}."),
+                format!(
+                    "Unary minus negates its {} operand: -({input}) is {shown}.",
+                    ty.unwrap_or(Integer::Int).spelling()
+                ),
                 clauses::UNARY_MINUS,
             ),
             | _ => (
@@ -1346,21 +2413,43 @@ impl Machine {
             &text,
             &[clause],
         );
+        if unsigned.is_some() && operator == "-" {
+            event.clauses.push(clauses::UNSIGNED_WRAP);
+            event = noted(event, Topic::Unsigned);
+        }
+        event.result_type = ty.map(|ty| String::from(ty.spelling()));
         event.operands.push(Operand::Value(value));
         result(event, Operand::Value(output))
     }
 
     /// The event for a binary operator; `&[]` is `&E1[E2]`, which C99
     /// §6.5.3.2p3 evaluates as `E1 + E2` without the indirection.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One operator's complete observation."
+    )]
     pub(super) fn binary(
         &self,
         range: SourceRange,
         source: &str,
         operator: &str,
+        ty: Option<Arithmetic>,
         left: Value,
         right: Value,
         output: Value,
     ) -> Event {
+        if let Some(Arithmetic::Floating(format)) = ty {
+            let mut event = if matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=") {
+                Self::floating_comparison(range, source, operator, format, &left, &right, &output)
+            } else {
+                Self::floating_arithmetic(range, operator, format, &left, &right, &output)
+            };
+            event
+                .operands
+                .extend([Operand::Value(left), Operand::Value(right)]);
+            return result(event, Operand::Value(output));
+        }
+        let ty = ty.and_then(Arithmetic::integer);
         let (operator, element) = match operator {
             | "&[]" => ("+", true),
             | _ => (operator, false),
@@ -1402,10 +2491,20 @@ impl Machine {
                     (&right, &left)
                 };
                 let written = snippet(source, range);
+                let noun = match *pointer {
+                    | Value::Pointer {
+                        target: Some(target),
+                        first,
+                        ..
+                    } => self
+                        .leaf_type(target, first)
+                        .and_then(Type::arithmetic)
+                        .map_or("int", Arithmetic::spelling),
+                    | _ => "int",
+                };
                 let moved = match count {
-                    | &Value::Integer(count) if operator == "-" =>
-                        movement(count.saturating_neg(), "int"),
-                    | &Value::Integer(count) => movement(count, "int"),
+                    | &Value::Integer(count) if operator == "-" => movement(-count, noun),
+                    | &Value::Integer(count) => movement(count, noun),
                     | _ => String::from("by the count"),
                 };
                 let sign = if operator == "-" {
@@ -1504,6 +2603,20 @@ impl Machine {
                 } else {
                     clauses::RELATIONAL
                 };
+                let common = ty.unwrap_or(Integer::Int);
+                let within = if common == Integer::Int {
+                    String::new()
+                } else {
+                    format!(
+                        " Both operands have the common type {}, and the values are compared \
+                         there.",
+                        common.spelling()
+                    )
+                };
+                let mut cited = vec![clause, clauses::EVALUATION_ORDER];
+                if common != Integer::Int {
+                    cited.insert(1, clauses::USUAL_ARITHMETIC);
+                }
                 noted(
                     explained(
                         Event::new(
@@ -1516,30 +2629,61 @@ impl Machine {
                         ),
                         &format!(
                             "A comparison yields an int: 1 when the relation holds and 0 when it \
-                             does not. {a} {operator} {b} {truth}, so the result is \
+                             does not.{within} {a} {operator} {b} {truth}, so the result is \
                              {shown}.{UNORDERED}"
                         ),
-                        &[clause, clauses::EVALUATION_ORDER],
+                        &cited,
                     ),
                     Topic::Comparison,
                 )
             },
+            | _ if matches!(operator, "<<" | ">>") => self.shift(
+                range,
+                operator,
+                ty.unwrap_or(Integer::Int),
+                &left,
+                &right,
+                &output,
+            ),
+            | _ if ty.is_some_and(|ty| !ty.signed()) => Self::unsigned_arithmetic(
+                range,
+                operator,
+                ty.unwrap_or(Integer::UnsignedInt),
+                &left,
+                &right,
+                &output,
+            ),
+            | _ if ty.is_some_and(|ty| ty != Integer::Int) => {
+                let ty = ty.unwrap_or(Integer::Int);
+                let name = ty.spelling();
+                let (verb, clause, topic) = arithmetic_words(operator);
+                noted(
+                    explained(
+                        Event::new(
+                            EventKind::Arithmetic,
+                            range,
+                            format!("Compute {a} {operator} {b} = {shown}"),
+                        ),
+                        &format!(
+                            "{a} {operator} {b} = {shown}, computed in {name}; the result fits in \
+                             {}, so it is well defined.",
+                            article(name)
+                        ),
+                        &format!(
+                            "The operands have the common type {name}, so the machine {verb} in \
+                             {name}: {a} {operator} {b} = {shown}. The result fits in {} ({} to \
+                             {}), so it is well defined.{UNORDERED}",
+                            article(name),
+                            ty.min(),
+                            ty.max()
+                        ),
+                        &[clause, clauses::USUAL_ARITHMETIC, clauses::EVALUATION_ORDER],
+                    ),
+                    topic,
+                )
+            },
             | _ => {
-                let (verb, clause, topic) = match operator {
-                    | "+" => ("adds", clauses::ADDITION, Topic::IntRange),
-                    | "-" => ("subtracts", clauses::ADDITION, Topic::IntRange),
-                    | "*" => ("multiplies", clauses::MULTIPLICATION, Topic::IntRange),
-                    | "/" => (
-                        "divides, truncating toward zero,",
-                        clauses::DIVISION,
-                        Topic::Division,
-                    ),
-                    | _ => (
-                        "takes the remainder of the division",
-                        clauses::DIVISION,
-                        Topic::Division,
-                    ),
-                };
+                let (verb, clause, topic) = arithmetic_words(operator);
                 noted(
                     explained(
                         Event::new(
@@ -1562,10 +2706,201 @@ impl Machine {
                 )
             },
         };
+        event.result_type = ty.map(|ty| {
+            if matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=") {
+                String::from("int")
+            } else {
+                String::from(ty.spelling())
+            }
+        });
         event
             .operands
             .extend([Operand::Value(left), Operand::Value(right)]);
         result(event, Operand::Value(output))
+    }
+
+    /// `left operator right` computed in the unsigned type `ty`, whose
+    /// result is reduced modulo 2^N when it does not fit.
+    ///
+    /// C99: §6.2.5 paragraph 9, p. 34; PDF p. 46.
+    fn unsigned_arithmetic(
+        range: SourceRange,
+        operator: &str,
+        ty: Integer,
+        left: &Value,
+        right: &Value,
+        output: &Value,
+    ) -> Event {
+        let (Value::Integer(a), Value::Integer(b), Value::Integer(shown)) = (left, right, output)
+        else {
+            return Event::new(EventKind::Arithmetic, range, String::from("Compute"));
+        };
+        let (a, b, shown) = (*a, *b, *shown);
+        let name = ty.spelling();
+        let (verb, clause, _) = arithmetic_words(operator);
+        let exact = match operator {
+            | "+" => a.checked_add(b),
+            | "-" => a.checked_sub(b),
+            | "*" => a.checked_mul(b),
+            | _ => Some(shown),
+        };
+        let wrapped = exact != Some(shown);
+        let power = power_text(ty.bits());
+        let (title, summary, text) = if wrapped {
+            let exact = exact.map_or_else(
+                || String::from("more than 2^127"),
+                |exact| format!("{exact}"),
+            );
+            let reduced = exact.parse::<i128>().map_or_else(
+                |_| format!("reduced to {shown}"),
+                |exact| modulo_text(exact, shown, ty.bits()),
+            );
+            (
+                format!("Compute {a} {operator} {b} = {shown} (wrapped)"),
+                format!(
+                    "{a} {operator} {b} is {exact}, outside {name}, so the result is reduced \
+                     modulo 2^{}: {shown}. That is defined, unlike signed overflow.",
+                    ty.bits()
+                ),
+                format!(
+                    "The operands have the common type {name}, so the machine {verb} in {name}: \
+                     the exact result is {exact}, outside its range of 0 to {}. An unsigned \
+                     result never overflows: C reduces it modulo one more than the largest value, \
+                     {power}, so {reduced}. Had the operands been signed, a result out of range \
+                     would be undefined behavior.{UNORDERED}",
+                    ty.max()
+                ),
+            )
+        } else {
+            (
+                format!("Compute {a} {operator} {b} = {shown}"),
+                format!(
+                    "{a} {operator} {b} = {shown}, computed in {name}; the result is within 0 to \
+                     {}, so nothing wraps.",
+                    ty.max()
+                ),
+                format!(
+                    "The operands have the common type {name}, so the machine {verb} in {name}: \
+                     {a} {operator} {b} = {shown}. An unsigned result outside 0 to {} would be \
+                     reduced modulo {power}; this one is inside, so it needs no \
+                     reduction.{UNORDERED}",
+                    ty.max()
+                ),
+            )
+        };
+        noted(
+            explained(
+                Event::new(EventKind::Arithmetic, range, title),
+                &summary,
+                &text,
+                &[
+                    clause,
+                    clauses::UNSIGNED_WRAP,
+                    clauses::USUAL_ARITHMETIC,
+                    clauses::EVALUATION_ORDER,
+                ],
+            ),
+            Topic::Unsigned,
+        )
+    }
+
+    /// `left << right` or `left >> right` in `ty`, the promoted left
+    /// operand's type.
+    ///
+    /// C99: §6.5.7 paragraphs 3-5, pp. 84-85; PDF pp. 96-97.
+    fn shift(
+        &self,
+        range: SourceRange,
+        operator: &str,
+        ty: Integer,
+        left: &Value,
+        right: &Value,
+        output: &Value,
+    ) -> Event {
+        let (a, b, shown) = (
+            self.short_value(left),
+            self.short_value(right),
+            self.short_value(output),
+        );
+        let name = ty.spelling();
+        let (number, count, result) = match (left, right, output) {
+            | (Value::Integer(a), Value::Integer(b), Value::Integer(c)) => (*a, *b, *c),
+            | _ => (0, 0, 0),
+        };
+        let promoted = format!(
+            "Each operand of a shift gets the integer promotions on its own, and the result has \
+             the promoted left operand's type, {name}; no common type is formed."
+        );
+        let (summary, detail, clause) = if operator == "<<" {
+            let exact = number << count;
+            if exact == result {
+                (
+                    format!("`<<` shifts {a} left by {b} bits, multiplying it by 2^{b}: {shown}."),
+                    format!(
+                        "{a} << {b} moves every bit {b} places up and fills the vacated bits with \
+                         zeros, which multiplies by 2^{b}: {a} × 2^{b} = {shown}, which fits in \
+                         {}.",
+                        article(name)
+                    ),
+                    clauses::LEFT_SHIFT,
+                )
+            } else {
+                (
+                    format!(
+                        "{a} << {b} is {exact}, which {name} cannot hold, so it is reduced modulo \
+                         2^{}: {shown}, defined for an unsigned type.",
+                        ty.bits()
+                    ),
+                    format!(
+                        "{a} << {b} is {a} × 2^{b} = {exact}. The bits shifted past the top of \
+                         the {}-bit {name} are lost: for an unsigned type that is the reduction \
+                         modulo {}, {}, and it is defined.",
+                        ty.bits(),
+                        power_text(ty.bits()),
+                        modulo_text(exact, result, ty.bits())
+                    ),
+                    clauses::LEFT_SHIFT,
+                )
+            }
+        } else if number < 0 {
+            (
+                format!(
+                    "`>>` of the negative {a} is implementation-defined; bcc and GCC shift in \
+                     copies of the sign bit, giving {shown}."
+                ),
+                format!(
+                    "{a} >> {b} shifts a negative signed value right. C leaves the result to the \
+                     implementation; bcc, GCC and Clang shift arithmetically, copying the sign \
+                     bit into the vacated bits, which divides by 2^{b} rounding down: {shown}."
+                ),
+                clauses::RIGHT_SHIFT,
+            )
+        } else {
+            (
+                format!(
+                    "`>>` shifts {a} right by {b} bits, dividing it by 2^{b} and dropping the \
+                     remainder: {shown}."
+                ),
+                format!(
+                    "{a} >> {b} moves every bit {b} places down; the bits shifted out are lost, \
+                     so the result is the integral part of {a} / 2^{b}: {shown}."
+                ),
+                clauses::RIGHT_SHIFT,
+            )
+        };
+        noted(
+            explained(
+                Event::new(
+                    EventKind::Arithmetic,
+                    range,
+                    format!("Compute {a} {operator} {b} = {shown}"),
+                ),
+                &summary,
+                &format!("{promoted} {detail}{UNORDERED}"),
+                &[clauses::SHIFT_COUNT, clause, clauses::EVALUATION_ORDER],
+            ),
+            Topic::Shift,
+        )
     }
 
     #[expect(
@@ -1577,13 +2912,28 @@ impl Machine {
         range: SourceRange,
         initializer: bool,
         full_expression: bool,
-        char_value: bool,
+        from: Type,
         target: usize,
         offset: i32,
         previous: Option<&Value>,
         value: Value,
         stored: Value,
     ) -> Event {
+        let leaf = self.leaf_type(target, offset);
+        if let (Some(from), Some(to)) = (from.arithmetic(), leaf.and_then(Type::arithmetic))
+            && let Some(event) = self.floating_store(
+                range,
+                initializer,
+                full_expression,
+                (from, to),
+                target,
+                offset,
+                value.clone(),
+                stored.clone(),
+            )
+        {
+            return event;
+        }
         let location = self.location(target, offset);
         let shown = self.short_value(&stored);
         let (kind, title, clause) = if initializer {
@@ -1600,64 +2950,102 @@ impl Machine {
             )
         };
         let converted = value != stored;
-        let leaf = self.leaf_type(target, offset);
-        let char_conversion = converted && leaf == Some(Type::Char);
-        let mut text = if char_conversion {
-            let operation = if initializer {
-                "Initialization"
-            } else {
-                "Simple assignment"
-            };
-            format!(
-                "The value to store is the int {}. {operation} converts it to {location}'s type, \
-                 char, whose range is -128 to 127. It does not fit, so the result is \
-                 implementation-defined: bcc, GCC and Clang on x86-64 keep the low 8 bits, so \
+        // The integer conversion the store makes, from the value's type to
+        // the object's (C99 §6.5.16.1p2, §6.7.8p11, §6.3.1.3).
+        let integers = match (from, leaf, &value, &stored) {
+            | (
+                Type::Integer(from),
+                Some(Type::Integer(to)),
+                &Value::Integer(number),
+                &Value::Integer(result),
+            ) => Some((from, to, number, result)),
+            | _ => None,
+        };
+        let operation = if initializer {
+            "Initialization"
+        } else {
+            "Simple assignment"
+        };
+        let mut text = match integers {
+            | Some((from, to, number, result)) if number != result && to.signed() => format!(
+                "The value to store is the {} {number}. {operation} converts it to {location}'s \
+                 type, {}, whose range is {} to {}. It does not fit, so the result is \
+                 implementation-defined: bcc, GCC and Clang on x86-64 keep the low {} bits, so \
                  {location} now holds {shown}.",
-                self.short_value(&value)
-            )
-        } else if initializer {
-            format!(
+                from.spelling(),
+                to.spelling(),
+                to.min(),
+                to.max(),
+                to.bits()
+            ),
+            | Some((from, to, number, result)) if number != result => format!(
+                "The value to store is the {} {number}. {operation} converts it to {location}'s \
+                 type, {}, which holds 0 to {}. Converting to an unsigned type is always defined: \
+                 C adds or subtracts {} until the value fits, {}, so {location} now holds {shown}.",
+                from.spelling(),
+                to.spelling(),
+                to.max(),
+                power_text(to.bits()),
+                modulo_text(number, result, to.bits())
+            ),
+            | _ if initializer => format!(
                 "The initializer's value, {}, is stored in {location} as its first value.",
                 self.value_text(&value)
-            )
-        } else {
-            let before = previous.map_or_else(
-                || String::from("its old value"),
-                |previous| self.value_text(previous),
-            );
-            format!(
-                "Simple assignment: {} replaces the value stored in {location} (previously \
-                 {before}). Writing the object is the assignment's side effect.",
-                self.value_text(&value)
-            )
+            ),
+            | _ => {
+                let before = previous.map_or_else(
+                    || String::from("its old value"),
+                    |previous| self.value_text(previous),
+                );
+                format!(
+                    "Simple assignment: {} replaces the value stored in {location} (previously \
+                     {before}). Writing the object is the assignment's side effect.",
+                    self.value_text(&value)
+                )
+            },
         };
-        let mut summary = if char_conversion {
-            format!(
-                "{} does not fit in a char, so {location} gets {shown}; C leaves that result to \
+        let mut summary = match integers {
+            | Some((_, to, number, result)) if number != result && to.signed() => format!(
+                "{number} does not fit in {}, so {location} gets {shown}; C leaves that result to \
                  the implementation.",
-                self.short_value(&value)
-            )
-        } else if converted {
-            format!("Storing the constant 0 into a pointer makes {location} a null pointer.")
-        } else if initializer {
-            format!("The initializer gives {location} its first value, {shown}.")
-        } else {
-            let before = previous.map_or_else(
-                || String::from("its old value"),
-                |previous| self.short_value(previous),
-            );
-            format!("The assignment stores {shown} into {location}, replacing {before}.")
+                article(to.spelling())
+            ),
+            | Some((_, to, number, result)) if number != result => format!(
+                "{number} does not fit in {}, so storing it reduces it modulo 2^{}: {}.",
+                article(to.spelling()),
+                to.bits(),
+                modulo_text(number, result, to.bits())
+            ),
+            | _ if converted && leaf.is_some_and(Type::is_pointer) =>
+                format!("Storing the constant 0 into a pointer makes {location} a null pointer."),
+            | _ if initializer =>
+                format!("The initializer gives {location} its first value, {shown}."),
+            | _ => {
+                let before = previous.map_or_else(
+                    || String::from("its old value"),
+                    |previous| self.short_value(previous),
+                );
+                format!("The assignment stores {shown} into {location}, replacing {before}.")
+            },
         };
-        if !converted && !char_value && leaf == Some(Type::Char) {
+        if let Some((from, to, number, result)) = integers
+            && number == result
+            && from != to
+            && !(from.is_char() && to == Integer::Int)
+        {
             let _ = write!(
                 text,
-                " The int {shown} is converted to {location}'s type, char; it fits in -128 to \
-                 127, so the value is unchanged."
+                " The {} {shown} is converted to {location}'s type, {}; it fits in {} to {}, so \
+                 the value is unchanged.",
+                from.spelling(),
+                to.spelling(),
+                to.min(),
+                to.max()
             );
         }
         let mut cited = vec![clause];
         let mut topic = None;
-        if converted && matches!(leaf, Some(Type::Pointer | Type::StructPointer(_))) {
+        if converted && leaf.is_some_and(Type::is_pointer) {
             let _ = write!(
                 text,
                 " The integer constant 0 is a null pointer constant: storing it into a pointer \
@@ -1665,9 +3053,20 @@ impl Machine {
                  holds NULL."
             );
             cited.push(clauses::NULL_POINTER);
-        } else if char_conversion {
-            cited.push(clauses::SIGNED_CONVERSION);
-            topic = Some(Topic::ImplementationDefined);
+        } else if let Some((_, to, number, result)) = integers
+            && number != result
+        {
+            if to.signed() {
+                cited.push(clauses::SIGNED_CONVERSION);
+                topic = Some(if to == Integer::Char {
+                    Topic::ImplementationDefined
+                } else {
+                    Topic::SignedConversion
+                });
+            } else {
+                cited.push(clauses::UNSIGNED_CONVERSION);
+                topic = Some(Topic::Unsigned);
+            }
         }
         if full_expression {
             text.push_str(" The full expression ends here, a sequence point.");
@@ -1680,6 +3079,12 @@ impl Machine {
         let mut event = explained(Event::new(kind, range, title), &summary, &text, &cited);
         if let Some(topic) = topic {
             event = noted(event, topic);
+        }
+        if let Some((from, to, ..)) = integers
+            && from != to
+        {
+            event.from_type = Some(String::from(from.spelling()));
+            event.result_type = Some(String::from(to.spelling()));
         }
         event.sequence_point = full_expression;
         event.operands.extend([
@@ -1704,6 +3109,7 @@ impl Machine {
         source: &str,
         delta: i32,
         prefix: bool,
+        nested: bool,
         target: usize,
         offset: i32,
         current: Value,
@@ -1723,27 +3129,125 @@ impl Machine {
              is now {new}."
         );
         let arithmetic = if delta > 0 { "addition" } else { "subtraction" };
-        if *sum != stored {
-            let _ = write!(
-                text,
-                " The {arithmetic} happens in int; the int result did not fit in a char, so the \
-                 implementation-defined conversion kept its low 8 bits."
-            );
-        } else if self.leaf_type(target, offset) == Some(Type::Char) {
-            let _ = write!(
-                text,
-                " The char is promoted to int for the {arithmetic}, and the int result, which \
-                 fits, is converted back to char when it is stored."
-            );
+        let leaf = self.leaf_type(target, offset).and_then(Type::integer);
+        let exact = match &current {
+            | Value::Integer(integer) => Some(integer + i128::from(delta)),
+            | _ => None,
+        };
+        let mut topic = Topic::Increment;
+        let mut cited = Vec::new();
+        match leaf {
+            | Some(ty) if *sum != stored && ty.signed() => {
+                let _ = write!(
+                    text,
+                    " The {arithmetic} happens in int; the int result did not fit in {}, so the \
+                     implementation-defined conversion kept its low {} bits.",
+                    article(ty.spelling()),
+                    ty.bits()
+                );
+                cited.push(clauses::SIGNED_CONVERSION);
+            },
+            | Some(ty) if *sum != stored => {
+                let _ = write!(
+                    text,
+                    " The {arithmetic} happens in int, giving {}; converting that back to {} \
+                     reduces it modulo {}, which is defined: {new}.",
+                    self.short_value(sum),
+                    ty.spelling(),
+                    ty.max() + 1
+                );
+                cited.push(clauses::UNSIGNED_CONVERSION);
+                topic = Topic::Unsigned;
+            },
+            | Some(ty) if !ty.signed() && exact.is_some_and(|exact| !ty.fits(exact)) => {
+                let exact = exact.unwrap_or_default();
+                let _ = write!(
+                    text,
+                    " The {arithmetic} happens in {}: the exact result, {exact}, is outside its \
+                     range of 0 to {}, so it is reduced modulo {}: {}. That is defined for an \
+                     unsigned type; for a signed one it would be overflow, undefined behavior.",
+                    ty.spelling(),
+                    ty.max(),
+                    power_text(ty.bits()),
+                    modulo_text(exact, ty.convert(exact), ty.bits())
+                );
+                cited.push(clauses::UNSIGNED_WRAP);
+                topic = Topic::Unsigned;
+            },
+            | Some(ty) if ty.promoted() != ty => {
+                let _ = write!(
+                    text,
+                    " The {} is promoted to int for the {arithmetic}, and the int result, which \
+                     fits, is converted back to {} when it is stored.",
+                    ty.spelling(),
+                    ty.spelling()
+                );
+            },
+            | _ => {},
         }
-        text.push_str(" The full expression ends here, a sequence point.");
-        let summary = format!("`{form}` {verb} {location}, so it changes from {old} to {new}.");
+        if let Some(format) = self.leaf_type(target, offset).and_then(Type::floating) {
+            let _ = write!(
+                text,
+                " For a {} the 1 is a {} too, and the exact result is rounded to the nearest {}.",
+                format.spelling(),
+                format.spelling(),
+                format.spelling()
+            );
+            cited.push(clauses::FLOATING_OPERATIONS);
+        }
+        let yielded = if prefix {
+            stored.clone()
+        } else {
+            current.clone()
+        };
+        let summary = if nested {
+            let which = if prefix { "new" } else { "old" };
+            format!(
+                "`{form}` yields {location}'s {which} value, {}, to the condition, and changes \
+                 {location} from {old} to {new}.",
+                self.short_value(&yielded)
+            )
+        } else if topic == Topic::Unsigned {
+            format!(
+                "`{form}` {verb} {location}: {old} becomes {new}, reduced modulo 2^{}, which is \
+                 defined for an unsigned type.",
+                leaf.map_or(32, Integer::bits)
+            )
+        } else {
+            format!("`{form}` {verb} {location}, so it changes from {old} to {new}.")
+        };
+        if nested {
+            let (which, why) = if prefix {
+                ("new", "a prefix operator yields the value after the update")
+            } else {
+                (
+                    "old",
+                    "a postfix operator yields the value before the update",
+                )
+            };
+            let _ = write!(
+                text,
+                " As an operand of the condition, `{form}` yields the {which} value, {}: {why}. \
+                 The store into {location} is a side effect, which C completes by the next \
+                 sequence point, the end of the condition; this machine makes it now. Nothing \
+                 else in the condition touches {location}, so no other access can clash with it.",
+                self.short_value(&yielded)
+            );
+        } else {
+            text.push_str(" The full expression ends here, a sequence point.");
+        }
         let increment = match (prefix, delta > 0) {
             | (true, true) => clauses::PREFIX_INCREMENT,
             | (true, false) => clauses::PREFIX_DECREMENT,
             | (false, true) => clauses::POSTFIX_INCREMENT,
             | (false, false) => clauses::POSTFIX_DECREMENT,
         };
+        cited.insert(0, increment);
+        cited.push(if nested {
+            clauses::UNSEQUENCED
+        } else {
+            clauses::FULL_EXPRESSION
+        });
         let mut event = noted(
             explained(
                 Event::new(
@@ -1753,11 +3257,11 @@ impl Machine {
                 ),
                 &summary,
                 &text,
-                &[increment, clauses::FULL_EXPRESSION],
+                &cited,
             ),
-            Topic::Increment,
+            topic,
         );
-        event.sequence_point = true;
+        event.sequence_point = !nested;
         event.operands.extend([
             Operand::Address {
                 target,
@@ -1765,6 +3269,474 @@ impl Machine {
                 structure: None,
             },
             Operand::Value(current),
+        ]);
+        event.objects.push(target);
+        event.result_type = leaf.map(|ty| String::from(ty.spelling()));
+        if nested {
+            // The condition uses the yielded value; the object holds the
+            // stored one.
+            event.operands.push(Operand::Value(stored));
+            return result(event, Operand::Value(yielded));
+        }
+        result(event, Operand::Value(stored))
+    }
+
+    /// `(to) value`: the cast at `range` converted `value`, of type
+    /// `from`, to `converted`.
+    ///
+    /// C99: §6.5.4 paragraph 4, p. 81; PDF p. 93.
+    /// C99: §6.3.1.3 paragraphs 1 and 3, p. 43; PDF p. 55.
+    pub(super) fn cast(
+        &self,
+        range: SourceRange,
+        source: &str,
+        from: Type,
+        to: Type,
+        value: Value,
+        converted: Value,
+    ) -> Event {
+        if let Some(event) =
+            Self::floating_cast(range, source, from, to, value.clone(), converted.clone())
+        {
+            return event;
+        }
+        let form = snippet(source, range);
+        let name = to.spelling(&self.structures);
+        let name = name.as_str();
+        let old = self.short_value(&value);
+        let new = self.short_value(&converted);
+        let source_type = from.spelling(&self.structures);
+        let source_type = source_type.as_str();
+        let (title, summary, text, cited, topic): (String, String, String, Vec<Clause>, Topic) =
+            if from == to {
+                (
+                    format!("Cast to {name}: no conversion, {new}"),
+                    format!(
+                        "`({name})` names the type the value already has, so the cast changes \
+                         nothing: the value stays {new}."
+                    ),
+                    format!(
+                        "A cast converts its operand's value to the type it names. The operand is \
+                         already {}, so this cast specifies no conversion, and C says such a cast \
+                         has no effect on the type or the value: {new}.",
+                        article(source_type)
+                    ),
+                    vec![clauses::CAST],
+                    Topic::Cast,
+                )
+            } else if from.is_pointer() {
+                let target = self.value_text(&converted);
+                if to.points_to_const() {
+                    (
+                        format!("Cast to {name}: add const"),
+                        format!(
+                            "`{form}` makes a pointer to const from a plain pointer: it still \
+                             points to the same place, but nothing may be changed through it."
+                        ),
+                        format!(
+                            "A cast converts its operand's value to the type it names, here from \
+                             {source_type} to {name}. A pointer to a type converts to a pointer \
+                             to the const version of that type and still points to the same \
+                             place: {target}. Through the new pointer the object may be read but \
+                             not changed."
+                        ),
+                        vec![clauses::CAST, clauses::QUALIFIED_POINTER],
+                        Topic::Cast,
+                    )
+                } else {
+                    (
+                        format!("Cast to {name}: remove const"),
+                        format!(
+                            "`{form}` removes the const from the pointer; it still points to the \
+                             same place, but storing through it into an object defined const \
+                             would be undefined."
+                        ),
+                        format!(
+                            "A cast converts its operand's value to the type it names, here from \
+                             {source_type} to {name}. The pointer still points to the same place, \
+                             {target}, and C lets a cast drop the const, so the compiler no \
+                             longer stops a store through it. Reading through it is fine. But if \
+                             the object it points to was defined const, an attempt to modify it \
+                             through this pointer is undefined behavior: the const was a promise \
+                             about the object, not about the pointer."
+                        ),
+                        vec![clauses::CAST, clauses::CONST_WRITE],
+                        Topic::Const,
+                    )
+                }
+            } else if converted == value {
+                (
+                    format!("Cast {old} to {name}: the value fits"),
+                    format!(
+                        "The cast converts the {source_type} {old} to {name}; {old} fits in {}, \
+                         so the value is unchanged.",
+                        range_text(to)
+                    ),
+                    format!(
+                        "A cast converts its operand's value to the type it names, here from \
+                         {source_type} to {name}. When the new type can represent the value, the \
+                         conversion keeps it: {old} fits in {}, so the result is the {name} \
+                         {new}.{}",
+                        range_text(to),
+                        if to == Type::INT && from == Type::CHAR {
+                            " Every char value fits in an int."
+                        } else {
+                            ""
+                        }
+                    ),
+                    vec![clauses::CAST, clauses::INTEGER_UNCHANGED],
+                    Topic::Cast,
+                )
+            } else if let (Type::Integer(target), &Value::Integer(number), &Value::Integer(result)) =
+                (to, &value, &converted)
+                && (target != Integer::Char)
+            {
+                let modulo = modulo_text(number, result, target.bits());
+                if target.signed() {
+                    (
+                        format!("Cast {old} to {name} → {new}"),
+                        format!(
+                            "{old} does not fit in {}, so the result is implementation-defined; \
+                             bcc and GCC wrap it to {new}.",
+                            article(name)
+                        ),
+                        format!(
+                            "A cast converts its operand's value to the type it names, here from \
+                             {source_type} to {name}, which holds {} to {}, and {old} is outside \
+                             that range. Converting a value that does not fit into a signed type \
+                             gives an implementation-defined result (or raises an \
+                             implementation-defined signal): each compiler must choose and \
+                             document one. bcc and GCC wrap the value modulo {}, keeping its low \
+                             {} bits: {modulo}.",
+                            target.min(),
+                            target.max(),
+                            power_text(target.bits()),
+                            target.bits()
+                        ),
+                        vec![clauses::CAST, clauses::SIGNED_CONVERSION],
+                        Topic::Cast,
+                    )
+                } else {
+                    (
+                        format!("Cast {old} to {name} → {new}"),
+                        format!(
+                            "Converting to {name} is defined for every value: {modulo}, reduced \
+                             modulo 2^{}.",
+                            target.bits()
+                        ),
+                        format!(
+                            "A cast converts its operand's value to the type it names, here from \
+                             {source_type} to {name}, which holds 0 to {}. {old} is outside that \
+                             range, and for an unsigned type C defines the result exactly: it \
+                             adds or subtracts one more than the largest value, {}, until the \
+                             value fits, which keeps its low {} bits: {modulo}. Unlike a \
+                             conversion to a signed type, this is the same on every compiler.",
+                            target.max(),
+                            power_text(target.bits()),
+                            target.bits()
+                        ),
+                        vec![clauses::CAST, clauses::UNSIGNED_CONVERSION],
+                        Topic::Unsigned,
+                    )
+                }
+            } else {
+                (
+                    format!("Cast {old} to char → {new}"),
+                    format!(
+                        "{old} does not fit in a char, so the result is implementation-defined; \
+                         bcc and GCC wrap it to {new}."
+                    ),
+                    format!(
+                        "A cast converts its operand's value to the type it names, here from \
+                         {source_type} to char. Plain char is signed on x86-64 and holds -128 to \
+                         127, and {old} is outside that range. Converting a value that does not \
+                         fit into a signed type gives an implementation-defined result (or raises \
+                         an implementation-defined signal): each compiler must choose and \
+                         document one. bcc and GCC wrap the value modulo 256, keeping its low 8 \
+                         bits, so {old} becomes {new}. Where plain char is unsigned, as on ARM \
+                         Linux, the cast would give {} instead.",
+                        match value {
+                            | Value::Integer(integer) => integer.rem_euclid(256),
+                            | _ => 0,
+                        }
+                    ),
+                    vec![
+                        clauses::CAST,
+                        clauses::SIGNED_CONVERSION,
+                        clauses::CHAR_SIGNEDNESS,
+                    ],
+                    Topic::Cast,
+                )
+            };
+        let mut event = noted(
+            explained(
+                Event::new(EventKind::Cast, range, title),
+                &summary,
+                &text,
+                &cited,
+            ),
+            topic,
+        );
+        event.from_type = Some(String::from(source_type));
+        event.result_type = Some(String::from(name));
+        event.operands.push(Operand::Value(value));
+        if let Value::Pointer {
+            target: Some(target),
+            ..
+        } = converted
+        {
+            event.objects.push(target);
+        }
+        result(event, Operand::Value(converted))
+    }
+
+    /// `E1 op= E2` read `current` from the object at leaf `offset` of
+    /// `target`, combined it with `right` into `combined`, and stored
+    /// `stored`, its conversion to the object's type.
+    ///
+    /// C99: §6.5.16.2 paragraph 3, p. 93; PDF p. 105.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One compound assignment's complete observation."
+    )]
+    pub(super) fn compound(
+        &self,
+        range: SourceRange,
+        source: &str,
+        operator: &str,
+        (common, right_type): (Option<Arithmetic>, Option<Arithmetic>),
+        target: usize,
+        offset: i32,
+        [current, right, left, right_converted]: [Value; 4],
+        combined: &Value,
+        stored: Value,
+    ) -> Event {
+        let location = self.location(target, offset);
+        let form = snippet(source, range);
+        let (old, operand, new) = (
+            self.short_value(&current),
+            self.short_value(&right),
+            self.short_value(&stored),
+        );
+        let (left_text, right_text) = form
+            .split_once(&format!("{operator}="))
+            .map_or((location.as_str(), ""), |(left, right)| {
+                (left.trim(), right.trim())
+            });
+        let meaning = format!("{left_text} = {left_text} {operator} ({right_text})");
+        let pointer = matches!(current, Value::Pointer { .. });
+        let floating = common.and_then(Arithmetic::floating);
+        let common = common.and_then(Arithmetic::integer);
+        let (verb, clause) = match operator {
+            | _ if pointer => ("moves it", clauses::POINTER_ARITHMETIC),
+            | "/" if floating.is_some() => ("divides by", clauses::DIVISION),
+            | "+" => ("adds", clauses::ADDITION),
+            | "-" => ("subtracts", clauses::ADDITION),
+            | "*" => ("multiplies by", clauses::MULTIPLICATION),
+            | "/" => ("divides, truncating toward zero, by", clauses::DIVISION),
+            | "<<" => ("shifts it left by", clauses::LEFT_SHIFT),
+            | ">>" => ("shifts it right by", clauses::RIGHT_SHIFT),
+            | _ => ("takes the remainder of dividing by", clauses::DIVISION),
+        };
+        let action = if pointer {
+            let count = match right {
+                | Value::Integer(count) if operator == "-" => -count,
+                | Value::Integer(count) => count,
+                | _ => 0,
+            };
+            let noun = match self.leaf_type(target, offset) {
+                | Some(Type::Pointer(element, _)) => element.spelling(),
+                | _ => "int",
+            };
+            format!("moves it {}", movement(count, noun))
+        } else {
+            format!("{verb} {operand}")
+        };
+        let mut text = format!(
+            "`{form}` means `{meaning}`, except that {left_text} is evaluated only once: an \
+             earlier step located {location}, and this step reads it ({old}), {action}, and \
+             stores the result back. {location} is now {new}."
+        );
+        let mut cited = vec![clauses::COMPOUND_ASSIGNMENT, clause];
+        let leaf = self.leaf_type(target, offset).and_then(Type::integer);
+        let integers = match (common, leaf, &current, &right, combined) {
+            | (
+                Some(common),
+                Some(leaf),
+                &Value::Integer(current),
+                &Value::Integer(right),
+                &Value::Integer(combined),
+            ) => Some((common, leaf, current, right, combined)),
+            | _ => None,
+        };
+        if let Some((common, leaf, current_value, right_value, result)) = integers {
+            let name = common.spelling();
+            // The conversions that bring the operands to the operator's
+            // type, when it is not int (C99 §6.3.1.8p1).
+            if common != Integer::Int && common != leaf.promoted() {
+                let _ = write!(
+                    text,
+                    " The usual arithmetic conversions make the operation {name}: {} is converted \
+                     to {name}{}.",
+                    location,
+                    if left == current {
+                        String::new()
+                    } else {
+                        format!(
+                            ", {}",
+                            modulo_text(
+                                current_value,
+                                common.convert(current_value),
+                                common.bits()
+                            )
+                        )
+                    }
+                );
+                cited.push(clauses::USUAL_ARITHMETIC);
+            }
+            if right_converted != right && !matches!(operator, "<<" | ">>") {
+                let _ = write!(
+                    text,
+                    " The usual arithmetic conversions make the operation {name}, so the right \
+                     operand, {operand}, is converted to {name}: {}.",
+                    modulo_text(right_value, common.convert(right_value), common.bits())
+                );
+                cited.extend([clauses::USUAL_ARITHMETIC, clauses::UNSIGNED_CONVERSION]);
+            }
+            // An unsigned operation whose exact result did not fit wrapped.
+            let (a, b) = match (&left, &right_converted) {
+                | (&Value::Integer(a), &Value::Integer(b)) => (a, b),
+                | _ => (0, 0),
+            };
+            let exact = match operator {
+                | "+" => a.checked_add(b),
+                | "-" => a.checked_sub(b),
+                | "*" => a.checked_mul(b),
+                | "<<" => u32::try_from(b).ok().and_then(|b| a.checked_shl(b)),
+                | _ => Some(result),
+            };
+            if !common.signed()
+                && let Some(exact) = exact
+                && exact != result
+            {
+                let _ = write!(
+                    text,
+                    " In {name} the exact result, {exact}, is reduced modulo {}: {}, which is \
+                     defined for an unsigned type.",
+                    power_text(common.bits()),
+                    modulo_text(exact, result, common.bits())
+                );
+                cited.push(clauses::UNSIGNED_WRAP);
+            }
+            let back = &stored != combined;
+            if back && leaf.signed() {
+                let _ = write!(
+                    text,
+                    " The arithmetic happens in {name}, giving {result}; that does not fit in {}, \
+                     so the implementation-defined conversion back to {} keeps its low {} bits, \
+                     as bcc and GCC do.",
+                    article(leaf.spelling()),
+                    leaf.spelling(),
+                    leaf.bits()
+                );
+                cited.push(clauses::SIGNED_CONVERSION);
+            } else if back {
+                let _ = write!(
+                    text,
+                    " The arithmetic happens in {name}, giving {result}; converting that back to \
+                     {} reduces it modulo {}, which is defined: {}.",
+                    leaf.spelling(),
+                    power_text(leaf.bits()),
+                    modulo_text(result, leaf.convert(result), leaf.bits())
+                );
+                cited.push(clauses::UNSIGNED_CONVERSION);
+            } else if leaf.promoted() != leaf {
+                let _ = write!(
+                    text,
+                    " The {} is promoted to int for the arithmetic, and the int result, which \
+                     fits, is converted back to {} when it is stored.",
+                    leaf.spelling(),
+                    leaf.spelling()
+                );
+            }
+        } else if pointer {
+            text.push_str(" Pointer arithmetic counts elements, not bytes.");
+        } else if let Some(format) = floating {
+            let name = format.spelling();
+            let leaf = self.leaf_type(target, offset).and_then(Type::arithmetic);
+            if let (Some(leaf), Some(right_type)) = (leaf, right_type) {
+                if let Some((words, used, _)) =
+                    conversion_words(leaf, Arithmetic::Floating(format), &current, &left)
+                {
+                    let _ = write!(
+                        text,
+                        " The usual arithmetic conversions make the operation {name}: {words}."
+                    );
+                    cited.extend(used);
+                }
+                if let Some((words, used, _)) = conversion_words(
+                    right_type,
+                    Arithmetic::Floating(format),
+                    &right,
+                    &right_converted,
+                ) {
+                    let _ = write!(
+                        text,
+                        " The usual arithmetic conversions make the operation {name}: {words}."
+                    );
+                    cited.extend(used);
+                }
+                let _ = write!(
+                    text,
+                    " The {name} result, {}, is the exact one rounded to the nearest {name}.",
+                    self.short_value(combined)
+                );
+                cited.extend([clauses::USUAL_ARITHMETIC, clauses::FLOATING_OPERATIONS]);
+                if let Some((words, used, _)) =
+                    conversion_words(Arithmetic::Floating(format), leaf, combined, &stored)
+                {
+                    let _ = write!(text, " Storing it back: {words}.");
+                    cited.extend(used);
+                }
+            }
+        }
+        text.push_str(" The full expression ends here, a sequence point.");
+        cited.push(clauses::FULL_EXPRESSION);
+        let summary = format!(
+            "`{form}` is `{meaning}` with {left_text} evaluated once: {location} changes from \
+             {old} to {new}."
+        );
+        let unsigned = common.is_some_and(|common| !common.signed());
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::CompoundAssign,
+                    range,
+                    format!("Update {location}: {old} → {new}"),
+                ),
+                &summary,
+                &text,
+                &cited,
+            ),
+            if unsigned && cited.contains(&clauses::UNSIGNED_WRAP) {
+                Topic::Unsigned
+            } else {
+                Topic::CompoundAssign
+            },
+        );
+        event.sequence_point = true;
+        event.result_type = self
+            .leaf_type(target, offset)
+            .and_then(Type::arithmetic)
+            .map(|leaf| String::from(leaf.spelling()));
+        event.operands.extend([
+            Operand::Address {
+                target,
+                offset,
+                structure: None,
+            },
+            Operand::Value(current),
+            Operand::Value(right),
         ]);
         event.objects.push(target);
         result(event, Operand::Value(stored))
@@ -1894,6 +3866,10 @@ impl Machine {
         result(event, Operand::Value(value))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One call's complete observation."
+    )]
     pub(super) fn called(
         &self,
         range: SourceRange,
@@ -1901,6 +3877,7 @@ impl Machine {
         frame: usize,
         recursive: bool,
         arguments: &[Value],
+        types: &[Type],
         parameters: Vec<usize>,
     ) -> Event {
         let mut bindings = String::new();
@@ -1951,6 +3928,44 @@ impl Machine {
             clauses::CALL_SEQUENCE_POINT,
             clauses::PARAMETERS,
         ];
+        // Each argument converts to its parameter's type as if by
+        // assignment (C99 §6.5.2.2p7).
+        for ((argument, ty), id) in arguments.iter().zip(types).zip(&parameters) {
+            let object = &self.state.objects[id - 1];
+            if let (Some(from), Some(to)) = (
+                ty.arithmetic(),
+                self.object_type(*id).and_then(Type::arithmetic),
+            ) && let Some((words, clauses_used, _)) =
+                conversion_words(from, to, argument, &object.value)
+            {
+                let _ = write!(
+                    text,
+                    " The argument for `{}` converts to the parameter's type, {}, as if by \
+                     assignment: {words}.",
+                    object.name,
+                    to.spelling()
+                );
+                cited.push(clauses::VARIADIC_ARGUMENTS);
+                cited.extend(clauses_used);
+                continue;
+            }
+            if let (&Value::Integer(value), Type::Integer(from), Value::Integer(converted)) =
+                (argument, *ty, &object.value)
+                && let Some(Type::Integer(to)) = self.object_type(*id)
+                && from != to
+                && !(from.is_char() && to == Integer::Int)
+            {
+                let (words, clause) = conversion_text(from, to, value, *converted);
+                let _ = write!(
+                    text,
+                    " The argument for `{}` converts to the parameter's type, {}, as if by \
+                     assignment: {words}.",
+                    object.name,
+                    to.spelling()
+                );
+                cited.extend([clauses::VARIADIC_ARGUMENTS, clause]);
+            }
+        }
         if recursive {
             text.push_str(
                 " This call is recursive: an earlier activation of the same function is still \
@@ -2003,6 +4018,7 @@ impl Machine {
         range: SourceRange,
         function: &str,
         frame: usize,
+        (from, returns, original): (Type, Type, Value),
         value: Value,
         ended: Vec<usize>,
         fallthrough: bool,
@@ -2010,6 +4026,24 @@ impl Machine {
     ) -> Event {
         let shown = self.short_value(&value);
         let names = self.names(&ended);
+        // The value converts to the return type as if by assignment (C99
+        // §6.8.6.4p3).
+        let floating = from
+            .arithmetic()
+            .zip(returns.arithmetic())
+            .and_then(|(from, to)| conversion_words(from, to, &original, &value))
+            .map(|(words, cited, _)| (words, cited.first().copied().unwrap_or(clauses::RETURN)));
+        let conversion = match (from, returns, &original, &value) {
+            | _ if floating.is_some() => floating,
+            | (
+                Type::Integer(from),
+                Type::Integer(to),
+                &Value::Integer(number),
+                &Value::Integer(converted),
+            ) if from != to && !(from.is_char() && to == Integer::Int) =>
+                Some(conversion_text(from, to, number, converted)),
+            | _ => None,
+        };
         let mut text = if fallthrough {
             String::from(
                 "Execution reached the closing brace of main. For main only, that is the same as \
@@ -2041,17 +4075,28 @@ impl Machine {
                 shell_status(&value)
             );
         }
+        if let Some((words, _)) = &conversion {
+            let _ = write!(
+                text,
+                " The value converts to {function}'s return type, {}, as if by assignment: \
+                 {words}.",
+                returns.spelling(&self.structures)
+            );
+        }
         if !ended.is_empty() {
             let _ = write!(
                 text,
                 " Frame #{frame} is destroyed, ending the lifetime of {names}."
             );
         }
-        let cited = if call.is_some() {
-            [clauses::RETURN, clauses::AUTOMATIC_LIFETIME]
+        let mut cited = if call.is_some() {
+            vec![clauses::RETURN, clauses::AUTOMATIC_LIFETIME]
         } else {
-            [clauses::MAIN_RETURN, clauses::AUTOMATIC_LIFETIME]
+            vec![clauses::MAIN_RETURN, clauses::AUTOMATIC_LIFETIME]
         };
+        if let Some((_, clause)) = conversion {
+            cited.insert(1, clause);
+        }
         let summary = if fallthrough {
             String::from(
                 "Reaching main's closing brace returns 0, so the program ends with exit status 0.",
@@ -2144,6 +4189,7 @@ impl Machine {
         match value {
             | Value::Indeterminate => String::from("an indeterminate value"),
             | Value::Integer(integer) => format!("{integer}"),
+            | Value::Floating(real) => real.short(),
             | Value::Pointer { target: None, .. } => String::from("a null pointer"),
             | &Value::Pointer {
                 target: Some(target),
@@ -2199,6 +4245,7 @@ impl Machine {
         match value {
             | Value::Indeterminate => String::from("?"),
             | Value::Integer(integer) => format!("{integer}"),
+            | Value::Floating(real) => real.short(),
             | Value::Pointer { target: None, .. } => String::from("NULL"),
             | &Value::Pointer {
                 target: Some(target),
@@ -2303,12 +4350,61 @@ pub(super) fn enter_block(range: SourceRange) -> Event {
     )
 }
 
-pub(super) fn constant(range: SourceRange, integer: i32, value: Operand) -> Event {
+/// A character constant, spelled `spelling`, evaluates to `integer`.
+pub(super) fn character(
+    range: SourceRange,
+    integer: i128,
+    spelling: &str,
+    value: Operand,
+) -> Event {
     let text = format!(
-        "The integer constant {integer} has type int, because its value fits in an int. \
-         Evaluating a constant just produces its value."
+        "{spelling} is a character constant. Its type is int, not char, and its value is the \
+         character's code in the execution character set (ASCII on x86-64): {integer}."
     );
-    result(
+    let mut event = noted(
+        explained(
+            Event::new(
+                EventKind::Constant,
+                range,
+                format!("Evaluate the character constant {spelling}"),
+            ),
+            &format!("The character constant {spelling} is the int {integer}, its code."),
+            &text,
+            &[clauses::CHARACTER_CONSTANT],
+        ),
+        Topic::CharacterConstant,
+    );
+    event.result_type = Some(String::from("int"));
+    result(event, value)
+}
+
+/// A char value as a character constant: `'A'`, `'\n'`, or its code when
+/// it is no single byte.
+fn char_text(value: i128) -> String {
+    i8::try_from(value).map_or_else(
+        |_| format!("{value}"),
+        |byte| super::library::character_name(byte.to_ne_bytes()[0]),
+    )
+}
+
+/// The integer constant spelled `spelling`, of type `ty`, evaluates to
+/// `integer`.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+pub(super) fn constant(
+    range: SourceRange,
+    integer: i128,
+    ty: Integer,
+    spelling: &str,
+    value: Operand,
+) -> Event {
+    let name = ty.spelling();
+    let suffix = spelling.trim_start_matches(|character: char| character.is_ascii_digit());
+    let mut event = if ty == Integer::Int && suffix.is_empty() {
+        let text = format!(
+            "The integer constant {integer} has type int, because its value fits in an int. \
+             Evaluating a constant just produces its value."
+        );
         explained(
             Event::new(
                 EventKind::Constant,
@@ -2318,9 +4414,48 @@ pub(super) fn constant(range: SourceRange, integer: i32, value: Operand) -> Even
             &format!("The constant {integer} is simply the int value {integer}."),
             &text,
             &[clauses::INTEGER_CONSTANT],
-        ),
-        value,
-    )
+        )
+    } else {
+        let list = match suffix.to_ascii_lowercase().as_str() {
+            | "" => "int, long and long long",
+            | "u" => "unsigned int, unsigned long and unsigned long long",
+            | "l" => "long and long long",
+            | "ul" | "lu" => "unsigned long and unsigned long long",
+            | "ll" => "long long",
+            | _ => "unsigned long long",
+        };
+        let why = if suffix.is_empty() {
+            format!(
+                "{integer} is too large for an int, and a decimal constant without a suffix takes \
+                 the first of {list} that can hold it"
+            )
+        } else {
+            format!(
+                "its suffix {suffix} gives it the list {list}, and {name} is the first of them \
+                 that can hold {integer}"
+            )
+        };
+        let text = format!(
+            "The integer constant {spelling} has type {name}: {why}. Evaluating a constant just \
+             produces its value."
+        );
+        let mut event = explained(
+            Event::new(
+                EventKind::Constant,
+                range,
+                format!("Evaluate the constant {spelling}"),
+            ),
+            &format!("The constant {spelling} is the {name} value {integer}."),
+            &text,
+            &[clauses::INTEGER_CONSTANT],
+        );
+        if !ty.signed() {
+            event.clauses.push(clauses::UNSIGNED_TYPES);
+        }
+        event
+    };
+    event.result_type = Some(String::from(name));
+    result(event, value)
 }
 
 pub(super) fn implicit_zero(range: SourceRange, value: Operand) -> Event {
@@ -2408,7 +4543,7 @@ fn explained(mut event: Event, summary: &str, text: &str, cited: &[Clause]) -> E
 }
 
 /// `event` with the note on `topic`.
-fn noted(mut event: Event, topic: Topic) -> Event {
+pub(super) fn noted(mut event: Event, topic: Topic) -> Event {
     event.note = String::from(topic.text());
     event
 }
@@ -2420,7 +4555,7 @@ fn result(mut event: Event, operand: Operand) -> Event {
 
 /// How far an offset of `delta` elements moves a pointer: "0 ints",
 /// "1 int forward", "2 elements back".
-fn movement(delta: i32, noun: &str) -> String {
+fn movement(delta: i128, noun: &str) -> String {
     let count = delta.unsigned_abs();
     let plural = if count == 1 { "" } else { "s" };
     let direction = match delta.signum() {
@@ -2435,6 +4570,16 @@ fn snippet(source: &str, range: SourceRange) -> &str {
     source.get(range.start..range.end).unwrap_or("")
 }
 
+/// `text` with its first letter capitalized.
+fn sentence_case(text: &str) -> String {
+    let mut characters = text.chars();
+    characters.next().map_or_else(String::new, |first| {
+        let mut output = String::from(first.to_ascii_uppercase());
+        output.push_str(characters.as_str());
+        output
+    })
+}
+
 /// `text` as a sentence: capitalized, ending in a full stop.
 fn sentence(text: &str) -> String {
     let mut characters = text.chars();
@@ -2444,4 +4589,86 @@ fn sentence(text: &str) -> String {
         output.push('.');
         output
     })
+}
+
+/// The range of values an integer type holds, as the narration says it.
+fn range_text(ty: Type) -> String {
+    match ty {
+        | Type::Integer(Integer::Char) => String::from("a char (-128 to 127)"),
+        | Type::Integer(Integer::Int) => String::from("an int"),
+        | Type::Integer(integer) => format!(
+            "{} ({} to {})",
+            article(integer.spelling()),
+            integer.min(),
+            integer.max()
+        ),
+        | _ => String::from("the type"),
+    }
+}
+
+/// An integer type's width on x86-64 and its range, with the range C
+/// promises: "4 bytes on x86-64, 0 to 4294967295; C promises at least 0 to
+/// 65535".
+fn width_text(integer: Integer) -> String {
+    let bytes = integer.bytes();
+    format!(
+        "{bytes} byte{} on x86-64, {} to {}; C promises only {}",
+        if bytes == 1 { "" } else { "s" },
+        integer.min(),
+        integer.max(),
+        integer.minimum()
+    )
+}
+
+/// The words for converting `value` of type `from` to `to`, giving
+/// `converted`, and the rule that defines it: kept, reduced modulo 2^N, or
+/// wrapped as the implementation chooses.
+fn conversion_text(from: Integer, to: Integer, value: i128, converted: i128) -> (String, Clause) {
+    let (a, b) = (from.spelling(), to.spelling());
+    if value == converted {
+        (
+            format!("the {a} {value} fits in {b}, so it keeps its value"),
+            clauses::INTEGER_UNCHANGED,
+        )
+    } else if !to.signed() {
+        (
+            format!(
+                "converting the {a} {value} to the unsigned type {b} reduces it modulo {}: {}",
+                power_text(to.bits()),
+                modulo_text(value, converted, to.bits())
+            ),
+            clauses::UNSIGNED_CONVERSION,
+        )
+    } else {
+        (
+            format!(
+                "the {a} {value} does not fit in {b} ({} to {}), so the result is \
+                 implementation-defined; bcc and GCC wrap it: {}",
+                to.min(),
+                to.max(),
+                modulo_text(value, converted, to.bits())
+            ),
+            clauses::SIGNED_CONVERSION,
+        )
+    }
+}
+
+/// What an arithmetic operator does, the rule that defines it, and the
+/// topic its note explains.
+fn arithmetic_words(operator: &str) -> (&'static str, Clause, Topic) {
+    match operator {
+        | "+" => ("adds", clauses::ADDITION, Topic::IntRange),
+        | "-" => ("subtracts", clauses::ADDITION, Topic::IntRange),
+        | "*" => ("multiplies", clauses::MULTIPLICATION, Topic::IntRange),
+        | "/" => (
+            "divides, truncating toward zero,",
+            clauses::DIVISION,
+            Topic::Division,
+        ),
+        | _ => (
+            "takes the remainder of the division",
+            clauses::DIVISION,
+            Topic::Division,
+        ),
+    }
 }

@@ -359,14 +359,28 @@ impl Reel {
 }
 
 impl Lane {
-    fn label(&self) -> String {
-        if self.ordinal > 1 {
-            format!("{} #{}", self.name, self.ordinal)
+    /// The lane's name as its label shows it. A string literal's array is
+    /// named by its spelling, which can be long: the label keeps the start.
+    fn shown_name(&self) -> String {
+        if self.name.starts_with('"') {
+            shorten(&self.name, LITERAL_LABEL)
         } else {
             self.name.clone()
         }
     }
+
+    fn label(&self) -> String {
+        let name = self.shown_name();
+        if self.ordinal > 1 {
+            format!("{name} #{}", self.ordinal)
+        } else {
+            name
+        }
+    }
 }
+
+/// The most characters of a string literal a lane's label shows.
+const LITERAL_LABEL: usize = 11;
 
 impl Group {
     /// The lane for a new `object`: the first of its name whose occupant is
@@ -483,7 +497,34 @@ fn arguments(
 pub fn value_text(value: &Value) -> Option<String> {
     match value {
         | Value::Indeterminate => None,
-        | Value::Integer { text } => Some(text.clone()),
+        | Value::Integer {
+            text,
+            character: Some(character),
+        } => Some(format!("{text} {character}")),
+        | Value::Integer { text, .. } | Value::Floating { text, .. } => Some(text.clone()),
+        // A char array reads as its characters.
+        | Value::Array { elements }
+            if !elements.is_empty()
+                && elements.iter().all(|element| {
+                    matches!(
+                        element,
+                        Value::Integer {
+                            character: Some(_),
+                            ..
+                        }
+                    )
+                }) =>
+            Some(format!(
+                "{{{}}}",
+                elements
+                    .iter()
+                    .filter_map(|element| match element {
+                        | Value::Integer { character, .. } => character.clone(),
+                        | _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )),
         | Value::Array { elements } => Some(format!(
             "{{{}}}",
             elements
@@ -941,7 +982,7 @@ pub fn Deck(
                         view! {
                             <div class=format!("deck-label is-lane {}", palette::class(&lane.name)) title=format!("{} {}", lane.ty, lane.name) aria-hidden="true">
                                 <span class="deck-swatch"></span>
-                                <span class="deck-name">{lane.name.clone()}</span>
+                                <span class="deck-name">{lane.shown_name()}</span>
                                 {(lane.ordinal > 1).then(|| view! { <span class="deck-ordinal">{format!("#{}", lane.ordinal)}</span> })}
                                 <span class="deck-type">{lane.ty.clone()}</span>
                             </div>

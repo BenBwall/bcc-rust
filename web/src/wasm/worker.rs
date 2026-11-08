@@ -716,7 +716,7 @@ mod tests {
         let mut snapshots = vec![program.snapshot.clone()];
         while snapshots.last().unwrap().can_step() {
             snapshots.push(worker.control(WasmControl::Run(WasmRun::Step)).unwrap());
-            assert!(snapshots.len() < 20_000, "runaway");
+            assert!(snapshots.len() < 60_000, "runaway");
         }
         (program, snapshots)
     }
@@ -761,6 +761,13 @@ mod tests {
                 );
             }
             let last = snapshots.last().unwrap();
+            // A lesson that uses the C library is a WASI command: wasi-libc's
+            // `_start` returns nothing, and calls proc_exit only for a
+            // nonzero status, so a main that returns 0 just finishes.
+            if crate::wasm::is_command(demo.source) {
+                assert_eq!(command_status(last), 0, "{}", demo.name);
+                continue;
+            }
             assert_eq!(last.status, "finished", "{}", demo.name);
             assert_eq!(last.results.len(), 1, "{}", demo.name);
             assert!(
@@ -973,6 +980,19 @@ mod tests {
         (program, last)
     }
 
+    /// The exit status of a WASI command that ran to its end: what it
+    /// passed to `proc_exit`, or 0 when `_start` returned.
+    fn command_status(snapshot: &WasmSnapshot) -> i32 {
+        match snapshot.status.as_str() {
+            | "exited" => snapshot.exit.unwrap(),
+            | "finished" => {
+                assert_eq!(snapshot.results.len(), 0, "_start returns nothing");
+                0
+            },
+            | other => panic!("the command did not end: {other}"),
+        }
+    }
+
     fn stdout(snapshot: &WasmSnapshot) -> String {
         snapshot
             .output
@@ -983,8 +1003,9 @@ mod tests {
     }
 
     /// bcc's module of every lesson runs in the stepper to the same outcome
-    /// as clang's: the same output (none) and `main`'s result, which clang's
-    /// module returns to the host and bcc's passes to `proc_exit`. Even the
+    /// as clang's: the same output and `main`'s result, which clang's bare
+    /// module returns to the host and bcc's (and clang's for a lesson that
+    /// uses the C library) passes to `proc_exit`. Even the
     /// two lessons with undefined behavior agree: at `-O0` both compilers
     /// read the same zeroed shadow stack memory.
     #[cfg(feature = "compiler")]
@@ -994,9 +1015,13 @@ mod tests {
         for demo in &DEMOS {
             let (_, clang) = run_to_end(Precompiled.compile(demo.source).unwrap());
             let (program, bcc) = run_to_end(Bcc.compile(demo.source).unwrap());
-            assert_eq!(clang.status, "finished", "{}", demo.name);
             assert_eq!(bcc.status, "exited", "{}: {:?}", demo.name, bcc.narration);
-            let returned: i32 = clang.results[0].text.parse().unwrap();
+            let returned = if crate::wasm::is_command(demo.source) {
+                command_status(&clang)
+            } else {
+                assert_eq!(clang.status, "finished", "{}", demo.name);
+                clang.results[0].text.parse().unwrap()
+            };
             assert_eq!(bcc.exit, Some(returned), "{}", demo.name);
             assert_eq!(stdout(&bcc), stdout(&clang), "{}", demo.name);
             assert!(
@@ -1066,9 +1091,18 @@ mod tests {
             let mut steps = 0;
             let mut on_c_line = false;
             while snapshot.can_step() {
+                // Every place is checked for the first 200 000 instructions;
+                // the rest (the floating lesson's exact printf conversions
+                // in bcc's C library take millions) runs to the end at
+                // once, bounded by the stepper's own step limit.
+                if steps == 200_000 {
+                    snapshot = worker
+                        .control(WasmControl::Run(WasmRun::Continue))
+                        .unwrap();
+                    break;
+                }
                 snapshot = worker.control(WasmControl::Run(WasmRun::Step)).unwrap();
                 steps += 1;
-                assert!(steps < 200_000, "{}: runaway", demo.name);
                 for place in snapshot.next.iter().chain(&snapshot.last) {
                     let line = program.wat.lines().nth(place.wat_line - 1).unwrap();
                     assert!(!line.trim().is_empty(), "{} step {steps}", demo.name);
@@ -1247,7 +1281,13 @@ int main(int argc, char **argv) {
             if let Ok(module) = Precompiled.compile(demo.source) {
                 clang.load(module).unwrap();
                 let start = clang.control(WasmControl::StartAtMain).unwrap();
-                assert_eq!(start.step, 0, "{}", demo.name);
+                // A WASI command's startup code runs first.
+                assert_eq!(
+                    start.step == 0,
+                    !crate::wasm::is_command(demo.source),
+                    "{}",
+                    demo.name
+                );
             }
         }
     }
@@ -1301,7 +1341,13 @@ int main(int argc, char **argv) {
                 .custom(crate::wasm::LESSON_SECTION)
                 .unwrap_or_else(|| panic!("{}: no bcc.lesson section", demo.name));
             assert!(
-                recorded == format!("{}\n{}", crate::wasm::LESSON_FLAGS, demo.source).as_bytes(),
+                recorded
+                    == format!(
+                        "{}\n{}",
+                        crate::wasm::lesson_flags(demo.source),
+                        demo.source
+                    )
+                    .as_bytes(),
                 "{} was built from other source or flags; run web/wasm/generate.sh",
                 demo.name
             );
