@@ -2801,6 +2801,17 @@ impl SemanticError {
                 };
                 return Some((arena.alloc_str(name), option));
             },
+            // GCC words an attribute it drops by its name, under its one
+            // `-Wattributes`.
+            | (F::Gcc, SemanticErrorKind::IgnoredAttribute) =>
+                return Some((
+                    format_in!(arena, "'{name}' attribute ignored"),
+                    Some("attributes"),
+                )),
+            | (F::Gcc, SemanticErrorKind::UnknownAttribute) => {
+                let message = format_in!(arena, "'{name}' attribute directive ignored");
+                return Some((message, Some("attributes")));
+            },
             // An error by default, which `-Wno-parentheses` controls.
             | (
                 F::Clang,
@@ -2899,7 +2910,11 @@ impl SemanticError {
     fn promoted_option<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
         use crate::configuration::DiagnosticFormat as F;
         let group = self.kind.group()?;
-        let name = group.name()?;
+        let name = if gcc_attributes(context, self.kind) {
+            "attributes"
+        } else {
+            group.name()?
+        };
         if self.severity() != ErrorSeverity::Error
             || group.default_severity() != ErrorSeverity::Warning
         {
@@ -3036,6 +3051,16 @@ impl SemanticError {
             | _ => return None,
         })
     }
+}
+
+/// Whether `kind` is an attribute GCC drops, which GCC's format names under
+/// its one `-Wattributes`.
+fn gcc_attributes(context: &Context<'_>, kind: SemanticErrorKind) -> bool {
+    context.configuration.diagnostic_format() == crate::configuration::DiagnosticFormat::Gcc
+        && matches!(
+            kind,
+            SemanticErrorKind::IgnoredAttribute | SemanticErrorKind::UnknownAttribute
+        )
 }
 
 impl ToDiagnostic for SemanticError {
