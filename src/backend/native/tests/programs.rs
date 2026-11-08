@@ -1058,6 +1058,37 @@ int main(void) {
     return 0;
 }"#,
     },
+    Program {
+        // Objects of disjoint block scopes share frame offsets; those whose
+        // address a call receives or a comparison reads keep their own.
+        name:   "block_scope_objects",
+        source: r#"int printf(const char *, ...);
+struct pair { long a, b; };
+static long sum(const long *p, int n) { long s = 0; for (int i = 0; i < n; i++) s += p[i]; return s; }
+static volatile long seed = 1;
+int main(void) {
+    long total = seed;
+    for (int round = 0; round < 5; round++) {
+        if (round & 1) {
+            long a[8];
+            for (int i = 0; i < 8; i++) a[i] = i * round + total;
+            total += a[round] + a[7 - round];
+        } else {
+            long b[8];
+            for (int i = 0; i < 8; i++) b[i] = i + round - total;
+            total += b[round] * 2 + b[(round + 3) & 7];
+        }
+        { struct pair p = { round, total }; volatile long keep = p.a; total += keep + p.b % 7; }
+        { struct pair q; q.a = total & 15; q.b = round; total -= q.b - q.a; }
+        { long c[4] = { total, round, 3, 4 }; long d[4]; for (int i = 0; i < 4; i++) d[i] = c[3 - i] * 2; total += d[0] - d[3]; }
+    }
+    { long kept[4] = { 1, 2, 3, total }; total += sum(kept, 4); }
+    { long other[4] = { 5, 6, 7, 8 }; total += sum(other, 4); }
+    { long x[2], y[2]; x[0] = seed; y[0] = 2; printf("%d %ld\n", x != y, x[0] + y[0]); }
+    printf("%ld\n", total);
+    return 0;
+}"#,
+    },
 ];
 
 /// Programs with `long double` values, which the interpreter does not

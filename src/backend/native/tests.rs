@@ -3,6 +3,7 @@
 
 mod allocation;
 mod end_to_end;
+mod frame;
 mod inline_asm;
 mod listing;
 mod machine_entry;

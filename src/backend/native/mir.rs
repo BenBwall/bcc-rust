@@ -47,6 +47,10 @@ pub(crate) struct MFunction<'a> {
     pub(crate) classes:          ArenaVec<'a, RegClass>,
     /// IR stack slots first, by their index, then back-end temporaries.
     pub(crate) slots:            ArenaVec<'a, FrameSlotData>,
+    /// The IR stack slot whose offset each IR stack slot takes: itself, or
+    /// one it shares with (`frame/sharing.rs`).
+    /// Empty when none shares; back-end temporaries keep their own.
+    pub(crate) slot_homes:       ArenaVec<'a, u32>,
     /// The function's read-only constants, 16 bytes each, addressed through
     /// [`Base::Constant`].
     pub(crate) constants:        ArenaVec<'a, u128>,
@@ -101,6 +105,7 @@ impl<'a> MFunction<'a> {
             hints:            ArenaVec::new_in(arena),
             classes:          ArenaVec::new_in(arena),
             slots:            ArenaVec::new_in(arena),
+            slot_homes:       ArenaVec::new_in(arena),
             constants:        ArenaVec::new_in(arena),
             outgoing:         0,
             incoming:         0,

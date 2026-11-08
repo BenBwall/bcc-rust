@@ -612,6 +612,22 @@ The size `N` subtracted after the pushes makes `entry_rsp - 8·pushes - N`
 Microsoft "x64 stack usage": "The stack will always be maintained 16-byte
 aligned, except within the prolog"). Every call is made at that alignment.
 
+- **Slot sharing.** Objects never in use at once share frame space, as
+  LLVM's `StackColoring` and `StackSlotColoring` passes share it. A spilled
+  register takes the first spill slot none of whose registers is live in
+  any of its ranges, holes left open (`regalloc/resolve.rs`). Two IR stack
+  slots share an offset when both are reached only through `load`s,
+  `store`s, atomics, `copy` and `fill` of addresses derived by `ptr_add`,
+  `subobject` and `select`, and their lifetimes are disjoint: the
+  instructions that access a slot, and those after which it is live, that
+  is, reached by an access and able to reach a read without passing a write
+  of the whole slot (`frame/sharing.rs`). The IR has no lifetime markers, so
+  a slot whose address escapes keeps its own offset for the whole function,
+  which covers the block its object lives in (C99 §6.2.4p5). A function
+  that calls one that returns twice shares neither kind: a value live across
+  `setjmp` may be dead on the path to the `longjmp` that resumes it. In
+  CPython 3.12's `_PyEval_EvalFrameDefault`, one function with a case per
+  opcode, sharing takes the frame from 5448 bytes to 344 (LLVM's: 328).
 - **System V red zone.** A leaf function may use the 128 bytes below `%rsp`
   without moving it (psABI §3.2.2). A function whose frame below the pushes
   is at most 128 bytes keeps it there, laid out as above but addressed
