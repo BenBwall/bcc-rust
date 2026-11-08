@@ -849,7 +849,16 @@ impl State {
             | "O2" | "Ox" | "Ot" => self.bcc.push("-O2".into()),
             | "Od" => self.bcc.push("-O0".into()),
             | "W0" | "w" => self.set_warning_level(0, &["-w"]),
-            | "W1" | "W2" | "W3" => self.set_warning_level(option.as_bytes()[1] - b'0', &[]),
+            // clang-cl maps `/W1` to `/W3` to `-Wall` (Clang's
+            // `CLCompatOptions.td`); `cl`'s levels name coded warnings only.
+            | "W1" | "W2" | "W3" => self.set_warning_level(
+                option.as_bytes()[1] - b'0',
+                if invocation.personality == Personality::ClangCl {
+                    &["-Wall"]
+                } else {
+                    &[]
+                },
+            ),
             | "W4" | "Wall" => self.set_warning_level(4, &["-Wall", "-Wextra"]),
             | "WX" => {
                 self.warnings_error = true;
