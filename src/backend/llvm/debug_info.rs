@@ -47,6 +47,7 @@ use crate::{
         GlobalVariable,
         Linkage,
         Module,
+        PRODUCER,
         Scope,
         SourceLocation,
     },
@@ -64,10 +65,6 @@ const TAG_CONST: u32 = 0x26;
 const TAG_VOLATILE: u32 = 0x35;
 const TAG_RESTRICT: u32 = 0x37;
 const TAG_ATOMIC: u32 = 0x47;
-
-/// The name `DW_AT_producer` gives: this compiler, whatever personality's
-/// options it was given, and not one of the compilers it is compatible with.
-const PRODUCER: &str = concat!("bcc-rust ", env!("CARGO_PKG_VERSION"));
 
 /// The `DIBuilder` of `module`, if the module has debug information, after
 /// recording the debug format in the LLVM module.

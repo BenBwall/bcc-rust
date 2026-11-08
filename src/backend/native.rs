@@ -26,9 +26,10 @@
 //! - Machine IR: `mir.rs`.
 //! - Passes: `isel.rs` with `isel/`, `regalloc.rs` with `regalloc/`,
 //!   `frame.rs`.
-//! - Output: `emit.rs` (shared listing), `object.rs` with `object/` (ELF and
-//!   COFF encoding, relaxation and unwind), `driver.rs` (the object writer
-//!   choice, output and linking).
+//! - Output: `emit.rs` (shared listing), `debug_info.rs` with `debug_info/`
+//!   (DWARF for `-g` on ELF), `object.rs` with `object/` (ELF and COFF
+//!   encoding, relaxation, unwind and line tables), `driver.rs` (the object
+//!   writer choice, output and linking).
 //! - `tests.rs` and `tests/`: selection, allocation and end-to-end tests.
 //!
 //! The back end is not a C translation phase; it implements the target ABIs
@@ -47,6 +48,7 @@ mod isel;
 mod regalloc;
 
 // Output
+mod debug_info;
 #[cfg(feature = "native")]
 mod driver;
 mod emit;
@@ -73,6 +75,7 @@ pub(crate) use support::Unsupported;
 
 use self::{
     conv::CallConv,
+    debug_info::DebugWriter,
     emit::{
         Emitter,
         LineCounter,
@@ -305,16 +308,27 @@ fn emit<'m>(
     let references = support::GlobalReferences::collect(module, &stubs);
     support::check_module(module, target, &references)?;
     let conv = CallConv::of(target);
-    let track_sources = listing.is_some();
+    // DWARF on ELF only: CodeView, which Windows debuggers read, is not
+    // written.
+    let debug_arena = Bump::new();
+    let debug = if code.debug_info && matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
+        DebugWriter::new(module, compilation_directory(&debug_arena), &debug_arena)
+    } else {
+        None
+    };
+    let track_sources = listing.is_some() || debug.is_some();
     let lines = Cell::new(0);
     let mut counter;
-    let out: &mut dyn fmt::Write = if track_sources {
+    let out: &mut dyn fmt::Write = if listing.is_some() {
         counter = LineCounter { out, lines: &lines };
         &mut counter
     } else {
         out
     };
     let mut emitter = Emitter::new(module, target, out, &stubs);
+    if let Some(debug) = debug {
+        emitter.describe(debug);
+    }
     if let Some(listing) = listing {
         emitter.record_listing(ListingRecorder {
             lines: &lines,
@@ -365,7 +379,14 @@ fn emit<'m>(
         scratch.reset();
     }
     emitter.globals(&references)?;
+    emitter.debug_sections()?;
     Ok(())
+}
+
+/// The working directory, which `DW_AT_comp_dir` records and relative source
+/// names are relative to; empty if it cannot be read.
+fn compilation_directory(arena: &Bump) -> &str {
+    std::env::current_dir().map_or("", |path| arena.alloc_str(&path.to_string_lossy()))
 }
 
 /// Each function's machine code, instruction by instruction, from the

@@ -413,7 +413,7 @@ pub(super) fn uleb128(data: &mut ArenaVec<'_, u8>, mut value: u64) {
 }
 
 /// Appends `value` as a signed LEB128 number (DWARF 5 §7.6).
-pub(super) fn sleb128(data: &mut ArenaVec<'_, u8>, mut value: i64) {
+pub(in crate::backend::native) fn sleb128(data: &mut ArenaVec<'_, u8>, mut value: i64) {
     loop {
         let byte = value.to_le_bytes()[0] & 0x7F;
         value >>= 7;

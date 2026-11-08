@@ -29,6 +29,7 @@ pub(crate) use inspection::{
     FunctionCode,
     functions,
 };
+pub(super) use line_table::sleb128;
 
 use crate::util::bump::{
     ArenaMap,
