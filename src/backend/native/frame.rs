@@ -9,10 +9,13 @@
 //!  callee-saved pushes        8 bytes each (`%rbp` among them with a frame pointer;
 //!                             first, at CFA - 16, when the frame address is taken;
 //!                             on Win64 the frame address is 0(%rsp) instead)
-//!  stack slots                each at its alignment (at most 16)
+//!  stack slots                each at its alignment (at most 16); slots
+//!                             never in use at once share one
+//!                             (`sharing.rs`)
 //!  register save area         System V variadic functions: 176 bytes
 //!  Win64 SSE saves            16 bytes each for `%xmm6`-`%xmm15`
-//!  spill slots                8 bytes each
+//!  spill slots                8 bytes each, shared by registers never
+//!                             live at once (`regalloc/resolve.rs`)
 //!  outgoing arguments         from 0(%rsp), after Win64's home area
 //! ```
 //!
@@ -56,6 +59,10 @@
 //! its body needs below the entry `%rsp`, whose value a read of a register
 //! variable in `%rsp` still gives ([`FrameObject::EntryStack`]); a body of
 //! assembly alone needs nothing, so the function has no code but its own.
+
+mod sharing;
+
+pub(crate) use sharing::share_stack_slots;
 
 use super::{
     conv::{
@@ -196,12 +203,19 @@ impl<'a> Frame<'a> {
             end += u64::from(REGISTER_SAVE_BYTES);
         }
         let mut slots = ArenaVec::with_capacity_in(func.slots.len(), arena);
-        for slot in &func.slots {
+        for (index, slot) in func.slots.iter().enumerate() {
+            if home(func, index) != index {
+                slots.push(0);
+                continue;
+            }
             let align = slot.align.max(1);
             aligned |= align >= 16;
             end = end.next_multiple_of(u64::from(align));
             slots.push(end);
             end += u64::from(slot.size);
+        }
+        for index in 0..slots.len() {
+            slots[index] = slots[home(func, index)];
         }
         let pushes = 8 * u64::try_from(saved.len()).expect("at most 16 registers");
         let mut entry_rsp = 0;
@@ -309,6 +323,13 @@ impl<'a> Frame<'a> {
     pub(crate) fn cfa_offset(&self) -> u32 {
         self.allocation() + 8 * u32::try_from(self.saved.len()).expect("at most 16 registers") + 8
     }
+}
+
+/// The slot whose offset slot `index` of `func` takes.
+fn home(func: &MFunction<'_>, index: usize) -> usize {
+    func.slot_homes
+        .get(index)
+        .map_or(index, |&home| home as usize)
 }
 
 /// The registers a handler or a function with `no_caller_saved_registers`

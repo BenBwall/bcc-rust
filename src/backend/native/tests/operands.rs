@@ -22,6 +22,7 @@ use crate::{
         Base,
         Callee,
         Cond,
+        DynamicTls,
         FrameObject,
         Index,
         MBlock,
@@ -35,6 +36,7 @@ use crate::{
         ShiftAmount,
         ShiftOp,
         SymbolRef,
+        TlsOffset,
         UnaryOp,
         VReg,
         Width,
@@ -367,6 +369,10 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
             if let Callee::Reg(target) = callee {
                 at.reg(target, Read);
             }
+            // `leaq sym@TLSGD(%rip), %rdi` (or `@TLSLD`) before the call.
+            if matches!(callee, Callee::TlsGetAddr { .. }) && !clobbers.contains(PReg::Rdi) {
+                at.phys(PReg::Rdi, Write);
+            }
             for register in uses.iter() {
                 at.phys(register, Read);
             }
@@ -682,6 +688,8 @@ fn forms() -> Vec<MInst> {
         Call => [
             Callee::Symbol(SymbolRef::Runtime("memcpy")),
             Callee::Reg(v()),
+            Callee::TlsGetAddr { symbol: SymbolRef::Runtime("tls"), model: DynamicTls::General },
+            Callee::TlsGetAddr { symbol: SymbolRef::Runtime("tls"), model: DynamicTls::Local },
         ].into_iter().flat_map(|callee| [false, true].map(|returns_twice| MInst::Call {
             callee,
             uses: PRegSet::of(&[PReg::Rdi, PReg::Rsi, PReg::Xmm0]),
@@ -696,7 +704,12 @@ fn forms() -> Vec<MInst> {
         }),
         JmpIndirect => [MInst::JmpIndirect { target: v(), dests: 0 }],
         ThreadPointer => [MInst::ThreadPointer { dst: v() }],
-        TlsLea => [MInst::TlsLea { dst: v(), base: v(), symbol: SymbolRef::Runtime("tls") }],
+        TlsLea => [TlsOffset::Thread, TlsOffset::Module].map(|offset| MInst::TlsLea {
+            dst: v(),
+            base: v(),
+            symbol: SymbolRef::Runtime("tls"),
+            offset,
+        }),
         XMov => wide.into_iter().flat_map(|width| {
             [Operand::Reg(v()), Operand::Mem(mem())].map(|src| MInst::XMov { width, dst: v(), src })
         }).collect::<Vec<_>>(),

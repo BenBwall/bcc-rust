@@ -49,6 +49,7 @@ mod mingw_target_macros;
 mod msvc;
 mod native_runner;
 mod native_section_parity;
+mod native_shared_libraries;
 mod nested_functions;
 mod optimization_cli;
 mod overloadable;

@@ -34,8 +34,8 @@ implements; everything else is the plan.
    construct and the function. Refusals are counted by the surveys; wrong code
    is a bug.
 
-Non-goals for now: debug information (DWARF line tables and CodeView), position
-independent shared libraries, other architectures, instruction scheduling, and
+Non-goals for now: debug information (DWARF line tables and CodeView), other
+architectures, instruction scheduling, and
 importing LLVM-optimized IR back into bcc IR (so "LLVM optimizer + native code
 generator" is not an arm).
 
@@ -612,6 +612,22 @@ The size `N` subtracted after the pushes makes `entry_rsp - 8·pushes - N`
 Microsoft "x64 stack usage": "The stack will always be maintained 16-byte
 aligned, except within the prolog"). Every call is made at that alignment.
 
+- **Slot sharing.** Objects never in use at once share frame space, as
+  LLVM's `StackColoring` and `StackSlotColoring` passes share it. A spilled
+  register takes the first spill slot none of whose registers is live in
+  any of its ranges, holes left open (`regalloc/resolve.rs`). Two IR stack
+  slots share an offset when both are reached only through `load`s,
+  `store`s, atomics, `copy` and `fill` of addresses derived by `ptr_add`,
+  `subobject` and `select`, and their lifetimes are disjoint: the
+  instructions that access a slot, and those after which it is live, that
+  is, reached by an access and able to reach a read without passing a write
+  of the whole slot (`frame/sharing.rs`). The IR has no lifetime markers, so
+  a slot whose address escapes keeps its own offset for the whole function,
+  which covers the block its object lives in (C99 §6.2.4p5). A function
+  that calls one that returns twice shares neither kind: a value live across
+  `setjmp` may be dead on the path to the `longjmp` that resumes it. In
+  CPython 3.12's `_PyEval_EvalFrameDefault`, one function with a case per
+  opcode, sharing takes the frame from 5448 bytes to 344 (LLVM's: 328).
 - **System V red zone.** A leaf function may use the 128 bytes below `%rsp`
   without moving it (psABI §3.2.2). A function whose frame below the pushes
   is at most 128 bytes keeps it there, laid out as above but addressed
@@ -870,14 +886,25 @@ Sections and symbols per format:
 | named section | `.section name,"ax"`/`"aw"`/`"a",@progbits` | `.section name,"xr"`/`"dw"`/`"dr"` |
 | visibility | `.hidden sym`, `.protected sym` | — |
 | constructors, destructors | `.init_array[.prio]`, `.fini_array[.prio]` | MinGW `.ctors[.65535-prio]`, `.dtors[...]`; MSVC `.CRT$XC*`, `.CRT$XT*` |
-| defined data reference | `sym(%rip)` (`R_X86_64_PC32`) | `sym(%rip)` (`IMAGE_REL_AMD64_REL32`) |
+| defined data reference | `sym(%rip)` (`R_X86_64_PC32`); with `-fpic`, `movq sym@GOTPCREL(%rip), %r` unless internal, hidden or protected | `sym(%rip)` (`IMAGE_REL_AMD64_REL32`) |
 | undefined data reference | `movq sym@GOTPCREL(%rip), %r` (`GOTPCRELX`) | MinGW: `movq .refptr.sym(%rip), %r` through a `.refptr.sym` stub, as Clang emits it, but `sym(%rip)` for hidden or protected data; MSVC: `sym(%rip)` |
-| direct call | `call f` / `call f@PLT` if undefined (`PLT32`) | `call f` (`REL32`; import thunks for DLL functions) |
-| function address | `leaq f(%rip)` / `movq f@GOTPCREL(%rip)` if undefined | `leaq f(%rip)` |
+| direct call | `call f` / `call f@PLT` if undefined or, with `-fpic`, preemptible (`PLT32`) | `call f` (`REL32`; import thunks for DLL functions) |
+| function address | `leaq f(%rip)` / `movq f@GOTPCREL(%rip)` if undefined or, with `-fpic`, preemptible | `leaq f(%rip)` |
 | non-executable stack | `.section .note.GNU-stack,"",@progbits` | — |
 
 Clang's default executables on Linux are position-independent, which is why
-undefined data and function addresses go through the GOT. On Windows GNU,
+undefined data and function addresses go through the GOT. Shared-library code
+(`-fpic`, `-fPIC`) goes through the GOT and PLT for every symbol another
+module may preempt: one with default visibility, even when this module
+defines it (`binds_locally` in `native.rs`). Its thread-locals use
+general-dynamic (`data16; leaq sym@TLSGD(%rip), %rdi; data16; data16; rex64;
+call __tls_get_addr@PLT`) or, for internal, hidden and protected
+definitions, local-dynamic (`leaq sym@TLSLD(%rip), %rdi; call
+__tls_get_addr@PLT; leaq sym@DTPOFF(%rax)`), modelled as calls that clobber
+the caller-saved registers. Static initializers holding addresses are
+`R_X86_64_64` relocations, which the linker turns into dynamic relocations;
+read-only ones go in `.data.rel.ro`, so a library has no text relocations.
+`-fpie`/`-fPIE` is the executable model already described. On Windows GNU,
 `main` begins with `call __main` (MinGW's constructor runner), as Clang and
 GCC emit it.
 
@@ -891,7 +918,8 @@ assembler. It has three parts behind the same MIR-after-allocation input:
 2. **Unwind generation** from the frame layout, as described above.
 3. **ELF and COFF writers**: sections (`.text`, `.data`, `.rodata`/`.rdata`,
    `.bss`, `.eh_frame` with `.rela.eh_frame`, or `.pdata`/`.xdata`), the symbol
-   and string tables, and relocations (`R_X86_64_PC32`/`PLT32`/`GOTPCRELX`/`64`;
+   and string tables, and relocations (`R_X86_64_PC32`/`PLT32`/`GOTPCRELX`/`64`,
+   and the TLS `TPOFF32`/`GOTTPOFF`/`TLSGD`/`TLSLD`/`DTPOFF32`;
    `IMAGE_REL_AMD64_REL32`/`ADDR64`/`ADDR32NB`). The output still links with
    bundled LLD.
 
@@ -1201,7 +1229,8 @@ compiled, not refused:
   landing blocks for labeled blocks with parameters (see "Block parameters
   become parallel copies").
 - **Thread-local globals**: ELF local-exec for definitions and initial-exec
-  for declarations through `%fs:0`; Windows through `_tls_index` and the
+  for declarations through `%fs:0` (in a shared library, general-dynamic and
+  local-dynamic through `__tls_get_addr`); Windows through `_tls_index` and the
   TEB's `ThreadLocalStoragePointer`; `.tdata`/`.tbss` and `.tls$`.
 - **Symbol attributes** (`weak`, aliases, `section`, `used`, visibility,
   function alignment, constructors and destructors with priorities) as the

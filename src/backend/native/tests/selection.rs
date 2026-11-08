@@ -3,6 +3,7 @@
 
 use super::{
     assembly,
+    assembly_with,
     function_text,
     refusal,
     with_allocation,
@@ -17,7 +18,12 @@ use crate::{
         Width,
     },
     ir::Entity,
-    target::Target,
+    target::{
+        CodeOptions,
+        Relocation,
+        Target,
+        TlsModel,
+    },
 };
 
 const ADD: &str = "abi lowered
@@ -1101,6 +1107,136 @@ fn elf_thread_locals_use_local_exec_for_definitions_and_initial_exec_otherwise()
         "{text}"
     );
     assert!(text.contains(".section\t.tbss,\"awT\",@nobits"), "{text}");
+}
+
+/// `-fPIC` code options with the `-ftls-model` `tls_model`.
+fn pic(tls_model: TlsModel) -> CodeOptions {
+    CodeOptions {
+        relocation: Relocation::parse("-fPIC"),
+        tls_model,
+        ..CodeOptions::default()
+    }
+}
+
+#[test]
+fn shared_library_thread_locals_call_tls_get_addr() {
+    let text = assembly_with(
+        THREAD_LOCALS,
+        Target::LinuxGnu,
+        pic(TlsModel::GlobalDynamic),
+    );
+    let f = function_text(&text, "f");
+    // The exported definition and the declaration may be another module's:
+    // general-dynamic, padded to the bytes the linker rewrites.
+    for symbol in ["seed", "shared"] {
+        let lea = format!("\tdata16\n\tleaq\t{symbol}@TLSGD(%rip), %rdi\n");
+        let sequence = format!("{lea}\tdata16\n\tdata16\n\trex64\n\tcallq\t__tls_get_addr@PLT\n");
+        assert!(f.contains(&sequence), "{sequence}\n{f}");
+    }
+    // The internal one is the module's own: local-dynamic.
+    assert!(
+        f.contains("\tleaq\tzeroed@TLSLD(%rip), %rdi\n\tcallq\t__tls_get_addr@PLT\n"),
+        "{f}"
+    );
+    assert!(f.contains("leaq\tzeroed@DTPOFF(%"), "{f}");
+    assert!(!f.contains("%fs:0"), "{f}");
+    // A static model named by `-ftls-model` wins, as in GCC and Clang.
+    let initial = assembly_with(THREAD_LOCALS, Target::LinuxGnu, pic(TlsModel::InitialExec));
+    let f = function_text(&initial, "f");
+    assert_eq!(f.matches("@GOTTPOFF(%rip), %").count(), 3, "{f}");
+    assert!(!f.contains("__tls_get_addr"), "{f}");
+    // A local-dynamic request reaches a preemptible symbol general-dynamic.
+    let local = assembly_with(THREAD_LOCALS, Target::LinuxGnu, pic(TlsModel::LocalDynamic));
+    let f = function_text(&local, "f");
+    assert!(f.contains("seed@TLSGD(%rip)"), "{f}");
+    assert!(f.contains("zeroed@TLSLD(%rip)"), "{f}");
+}
+
+/// Definitions of each linkage and visibility, a declaration, and calls
+/// and address uses of each.
+const PREEMPTION: &str = "abi lowered
+global @exported external size 4, align 4 = bytes \"01000000\"
+global @internal internal size 4, align 4 = bytes \"02000000\"
+global @hidden external size 4, align 4 hidden = bytes \"03000000\"
+global @protected external size 4, align 4 protected = bytes \"04000000\"
+global @weak weak size 4, align 4 = bytes \"05000000\"
+global @declared external size 4, align 4
+function @exported_fn() external {
+block0:
+    return
+}
+function @internal_fn() internal noinline {
+block0:
+    return
+}
+function @hidden_fn() external hidden {
+block0:
+    return
+}
+function @declared_fn() external
+function @f() -> ptr external {
+block0:
+    v0 = global_addr @exported
+    v1 = load.i32 v0, align 4
+    v2 = global_addr @internal
+    store.i32 v1, v2, align 4
+    v3 = global_addr @hidden
+    store.i32 v1, v3, align 4
+    v4 = global_addr @protected
+    store.i32 v1, v4, align 4
+    v5 = global_addr @weak
+    store.i32 v1, v5, align 4
+    v6 = global_addr @declared
+    store.i32 v1, v6, align 4
+    call @exported_fn()
+    call @internal_fn()
+    call @hidden_fn()
+    call @declared_fn()
+    v7 = func_addr @exported_fn
+    store.ptr v7, v2, align 8
+    v8 = func_addr @hidden_fn
+    return v8
+}
+";
+
+#[test]
+fn shared_library_code_reaches_preemptible_symbols_through_the_got_and_plt() {
+    let text = assembly_with(PREEMPTION, Target::LinuxGnu, pic(TlsModel::GlobalDynamic));
+    let f = function_text(&text, "f");
+    for line in [
+        "movq\texported@GOTPCREL(%rip), %",
+        "movq\tweak@GOTPCREL(%rip), %",
+        "movq\tdeclared@GOTPCREL(%rip), %",
+        "internal(%rip)",
+        "hidden(%rip)",
+        "protected(%rip)",
+        "callq\texported_fn@PLT\n",
+        "callq\tinternal_fn\n",
+        "callq\thidden_fn\n",
+        "callq\tdeclared_fn@PLT\n",
+        "movq\texported_fn@GOTPCREL(%rip), %",
+        "leaq\thidden_fn(%rip), %",
+    ] {
+        assert!(f.contains(line), "{line}\n{f}");
+    }
+    for line in [
+        "\texported(%rip)",
+        "\tweak(%rip)",
+        "internal@GOTPCREL",
+        "hidden@GOTPCREL",
+        "protected@GOTPCREL",
+    ] {
+        assert!(!f.contains(line), "{line}\n{f}");
+    }
+    // An executable's definitions come first in symbol lookup, so the
+    // default position-independent executable reaches every definition
+    // directly and only the declarations through the GOT and PLT.
+    let executable = assembly(PREEMPTION, Target::LinuxGnu);
+    let f = function_text(&executable, "f");
+    assert_eq!(f.matches("@GOTPCREL(%rip)").count(), 1, "{f}");
+    assert!(f.contains("declared@GOTPCREL(%rip)"), "{f}");
+    assert!(f.contains("callq\texported_fn\n"), "{f}");
+    assert!(f.contains("callq\tdeclared_fn@PLT\n"), "{f}");
 }
 
 #[test]

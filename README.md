@@ -127,7 +127,8 @@ As in Clang, Linux code is position-independent executable code by default
 shared library. `-ftls-model=global-dynamic|local-dynamic|initial-exec|local-exec`
 names the least specific thread-local access model, as in GCC and Clang
 ([middle-end.md](middle-end.md#module) has the rules). The native back end
-generates executable code only and refuses `-fpic`, `-fPIC` and `-shared`.
+builds shared libraries too: its `-fpic`/`-fPIC` code reaches preemptible
+symbols through the GOT and PLT and thread-locals through `__tls_get_addr`.
 
 `--backend=native` replaces LLVM with bcc's own x86-64 code generator
 ([design](docs/design/native-backend.md)): it writes AT&T assembly for System V
