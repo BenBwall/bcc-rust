@@ -7802,6 +7802,27 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(!output.status.success());
     }
 
+    /// `#pragma once` marks a file, not a spelling of its path: GCC, Clang and
+    /// TCC (its own `18_include` test) read the header once however it is
+    /// reached. bcc knows a file's identity on Unix hosts only.
+    #[cfg(unix)]
+    #[test]
+    fn pragma_once_marks_the_file_whatever_path_reaches_it() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write("sub/h.h", "#pragma once\nint counter_seen;\n");
+        directory.write(
+            "sub/a.c",
+            "#include \"h.h\"\n#include \"./h.h\"\n#include \"../sub/h.h\"\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "sub/a.c"]);
+            succeeds(&output);
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(text.matches("counter_seen").count(), 1, "{mode}: {text}");
+        }
+    }
+
     /// A call to a static function defined nowhere is a warning in GCC and
     /// Clang, and the link is what fails.
     #[test]
