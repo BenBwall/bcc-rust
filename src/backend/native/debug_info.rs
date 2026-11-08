@@ -136,9 +136,9 @@ impl<'d, 'm, 'ir> DebugWriter<'d, 'm, 'ir> {
         self.lines.root(out)
     }
 
-    /// Starts `function`, right after its label: its begin label and the row
-    /// of its prologue, or line 0 if it has no subprogram. `in_text` says
-    /// whether its code is in `.text`.
+    /// Starts `function`, right after its label: its begin label, and line 0
+    /// if it has no subprogram. `in_text` says whether its code is in
+    /// `.text`.
     pub(crate) fn begin_function(
         &mut self,
         out: &mut dyn Write,
@@ -169,8 +169,19 @@ impl<'d, 'm, 'ir> DebugWriter<'d, 'm, 'ir> {
             .expect("pushed above")
             .runs
             .push((scope, Mark::Begin(number)));
-        self.lines
-            .prologue(out, self.module.debug_info(), subprogram.file, subprogram.scope_line)
+        self.lines.begin(subprogram.file, subprogram.scope_line);
+        Ok(())
+    }
+
+    /// Before the function's prologue: its row, at the line its body opens
+    /// on, unless the prologue is `empty`. A function without one starts at
+    /// its first statement if its first instruction has a position, as with
+    /// LLVM.
+    pub(crate) fn prologue(&mut self, out: &mut dyn Write, empty: bool) -> fmt::Result {
+        if empty {
+            return Ok(());
+        }
+        self.lines.prologue(out, self.module.debug_info())
     }
 
     /// Before the code of `function` that `source` asked for: its row, if

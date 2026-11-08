@@ -37,6 +37,9 @@ pub(super) struct Lines<'d> {
     is_stmt:   bool,
     /// Whether the next row is the first of the function's body.
     prologue:  bool,
+    /// The file and line of the function's prologue, until a row is
+    /// written.
+    entry:     Option<(DebugFile, u32)>,
 }
 
 impl<'d> Lines<'d> {
@@ -59,6 +62,7 @@ impl<'d> Lines<'d> {
             last_line: 0,
             is_stmt: true,
             prologue: false,
+            entry: None,
         }
     }
 
@@ -119,17 +123,20 @@ impl<'d> Lines<'d> {
         Ok(number)
     }
 
-    /// The row of a function's prologue: the line its body opens on, column
-    /// 0, a statement, as GCC and Clang write it.
-    pub(super) fn prologue(
-        &mut self,
-        out: &mut dyn Write,
-        debug: &DebugInfo<'_>,
-        file: DebugFile,
-        line: u32,
-    ) -> fmt::Result {
-        let file = self.number(out, debug, file)?;
+    /// Starts a function whose prologue is at `line` of `file`.
+    pub(super) const fn begin(&mut self, file: DebugFile, line: u32) {
         self.prologue = true;
+        self.entry = Some((file, line));
+    }
+
+    /// The row of a function's prologue, if no row has followed its start:
+    /// the line its body opens on, column 0, a statement, as GCC and Clang
+    /// write it.
+    pub(super) fn prologue(&mut self, out: &mut dyn Write, debug: &DebugInfo<'_>) -> fmt::Result {
+        let Some((file, line)) = self.entry.take() else {
+            return Ok(());
+        };
+        let file = self.number(out, debug, file)?;
         self.write(out, (file, line, 0), true, false)
     }
 
@@ -137,6 +144,7 @@ impl<'d> Lines<'d> {
     /// not taken for the previous function's last line.
     pub(super) fn unknown(&mut self, out: &mut dyn Write) -> fmt::Result {
         self.prologue = false;
+        self.entry = None;
         match self.row {
             | Some((file, line, _)) if line != 0 => self.write(out, (file, 0, 0), false, false),
             | _ => Ok(()),
@@ -145,7 +153,7 @@ impl<'d> Lines<'d> {
 
     /// The row of code at `location`, if it has a new position. Code with no
     /// position keeps the row before it, except at the top of a block, where
-    /// it gets line 0.
+    /// it gets line 0, and at the top of a function, the prologue's row.
     pub(super) fn locate(
         &mut self,
         out: &mut dyn Write,
@@ -153,6 +161,10 @@ impl<'d> Lines<'d> {
         location: Option<SourceLocation>,
         block_start: bool,
     ) -> fmt::Result {
+        if location.is_none_or(|location| location.line == 0) {
+            self.prologue(out, debug)?;
+        }
+        self.entry = None;
         let Some(location) = location else {
             return match self.row {
                 | Some((file, line, _)) if block_start && line != 0 =>

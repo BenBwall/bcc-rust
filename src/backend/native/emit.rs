@@ -330,6 +330,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         if !self.elf {
             self.stubs.extend(func.indirect_symbols.iter().copied());
         }
+        if let Some(debug) = &mut self.debug {
+            debug.prologue(self.out, !frame.writes_prologue())?;
+        }
         let from = self.written();
         if function.entry == EntryConvention::Interrupt {
             self.handler_prologue(frame)?;
