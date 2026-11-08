@@ -1,0 +1,72 @@
+sema-format-gcc.c:4:1: warning: 'format' attribute argument 2 value '3' exceeds the number of function parameters 1 [-Wattributes]
+    4 | void bad_index(const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+      | ^~~~
+sema-format-gcc.c:5:1: error: 'format' attribute argument 2 value '1' refers to parameter type 'int'
+    5 | void bad_string(int fmt, ...) __attribute__((format(printf, 1, 2)));
+      | ^~~~
+sema-format-gcc.c:7:14: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+    7 |     printf("%d\n", l);
+      |              ^
+sema-format-gcc.c:8:17: warning: format '%s' expects a matching 'char *' argument [-Wformat=]
+    8 |     printf("%d %s\n", i);
+      |                 ^
+sema-format-gcc.c:9:12: warning: too many arguments for format [-Wformat-extra-args]
+    9 |     printf("%d\n", i, i);
+      |            ^~~~~~
+sema-format-gcc.c:10:12: warning: too many arguments for format [-Wformat-extra-args]
+   10 |     printf("%y\n", i);
+      |            ^~~~~~
+sema-format-gcc.c:10:14: warning: unknown conversion type character 'y' in format [-Wformat=]
+   10 |     printf("%y\n", i);
+      |              ^
+sema-format-gcc.c:11:14: warning: field width specifier '*' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   11 |     printf("%*d\n", l, i);
+      |              ^
+sema-format-gcc.c:12:16: warning: format '%hhd' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   12 |     printf("%hhd %ls %p\n", l, s, i);
+      |                ^
+sema-format-gcc.c:12:20: warning: format '%ls' expects argument of type 'wchar_t *', but argument 3 has type 'char *' [-Wformat=]
+   12 |     printf("%hhd %ls %p\n", l, s, i);
+      |                    ^
+sema-format-gcc.c:12:23: warning: format '%p' expects argument of type 'void *', but argument 4 has type 'int' [-Wformat=]
+   12 |     printf("%hhd %ls %p\n", l, s, i);
+      |                       ^
+sema-format-gcc.c:13:5: warning: format not a string literal and no format arguments [-Wformat-security]
+   13 |     printf(s);
+      |     ^~~~~~~~~
+sema-format-gcc.c:14:5: warning: format not a string literal, argument types not checked [-Wformat-nonliteral]
+   14 |     printf(s, i);
+      |     ^~~~~~~~~~~~
+sema-format-gcc.c:15:12: warning: zero-length gnu_printf format string [-Wformat-zero-length]
+   15 |     printf("");
+      |            ^~
+sema-format-gcc.c:16:14: warning: embedded '\0' in format [-Wformat-contains-nul]
+   16 |     printf("a\0b");
+      |              ^
+sema-format-gcc.c:17:12: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   17 |     printf("a" "%d\n", l);
+      |            ^~~~~~~~~~
+sema-format-gcc.c:17:18: note: format string is defined here
+   17 |     printf("a" "%d\n", l);
+      |                  ^
+sema-format-gcc.c:18:18: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   18 |     printf(c ? "%d\n" : "%s\n", l);
+      |                  ^
+sema-format-gcc.c:18:27: warning: format '%s' expects argument of type 'char *', but argument 2 has type 'long int' [-Wformat=]
+   18 |     printf(c ? "%d\n" : "%s\n", l);
+      |                           ^
+sema-format-gcc.c:19:12: warning: '0' flag ignored with '-' flag in gnu_printf format [-Wformat=]
+   19 |     printf("%-05d\n", i);
+      |            ^~~~~~~~~
+sema-format-gcc.c:20:13: warning: format '%d' expects argument of type 'int *', but argument 2 has type 'long int' [-Wformat=]
+   20 |     scanf("%d %s", l, ip);
+      |             ^
+sema-format-gcc.c:20:16: warning: format '%s' expects argument of type 'char *', but argument 3 has type 'int *' [-Wformat=]
+   20 |     scanf("%d %s", l, ip);
+      |                ^
+sema-format-gcc.c:21:5: warning: writing into constant object (argument 2) [-Wformat=]
+   21 |     scanf("%d", cip);
+      |     ^~~~~~~~~~~~~~~~
+sema-format-gcc.c:22:19: warning: format '%s' expects argument of type 'char *', but argument 3 has type 'int' [-Wformat=]
+   22 |     log_line(1, "%s\n", i);
+      |                   ^

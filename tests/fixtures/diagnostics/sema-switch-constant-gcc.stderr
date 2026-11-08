@@ -1,0 +1,39 @@
+sema-switch-constant-gcc.c:7:15: warning: enumeration value 'B' not handled in switch [-Wswitch]
+    7 | int b(void) { switch ((enum e)B) { case A: return 1; } return 0; }
+      |               ^~~~~~
+sema-switch-constant-gcc.c:9:15: warning: enumeration value 'B' not handled in switch [-Wswitch]
+    9 | int d(void) { switch (global) { case A: return 1; } return 0; }
+      |               ^~~~~~
+sema-switch-constant-gcc.c:9:15: warning: enumeration value 'C' not handled in switch [-Wswitch]
+    9 | int d(void) { switch (global) { case A: return 1; } return 0; }
+      |               ^~~~~~
+sema-switch-constant-gcc.c:10:39: warning: enumeration value 'B' not handled in switch [-Wswitch]
+   10 | int e(void) { const enum e local = C; switch (local) { case A: return 1; } return 0; }
+      |                                       ^~~~~~
+sema-switch-constant-gcc.c:10:39: warning: enumeration value 'C' not handled in switch [-Wswitch]
+   10 | int e(void) { const enum e local = C; switch (local) { case A: return 1; } return 0; }
+      |                                       ^~~~~~
+sema-switch-constant-gcc.c:11:16: warning: enumeration value 'B' not handled in switch [-Wswitch]
+   11 | int f(int x) { switch ((x++, (enum e)A)) { case A: return 1; } return 0; }
+      |                ^~~~~~
+sema-switch-constant-gcc.c:11:16: warning: enumeration value 'C' not handled in switch [-Wswitch]
+   11 | int f(int x) { switch ((x++, (enum e)A)) { case A: return 1; } return 0; }
+      |                ^~~~~~
+sema-switch-constant-gcc.c:14:32: warning: case value '4294967294' not in enumerated type 'enum u' [-Wswitch]
+   14 | int i(enum u x) { switch (x) { case -2: case -1: case 0: return 1; } return 0; }
+      |                                ^~~~
+sema-switch-constant-gcc.c:16:39: warning: enumeration value 'B' not handled in switch [-Wswitch]
+   16 | int l(int flag, enum e x, enum e y) { switch (flag ? x : y) { case A: return 1; } return 0; }
+      |                                       ^~~~~~
+sema-switch-constant-gcc.c:16:39: warning: enumeration value 'C' not handled in switch [-Wswitch]
+   16 | int l(int flag, enum e x, enum e y) { switch (flag ? x : y) { case A: return 1; } return 0; }
+      |                                       ^~~~~~
+sema-switch-constant-gcc.c:17:29: warning: enumeration value 'B' not handled in switch [-Wswitch]
+   17 | int m(int flag, enum e x) { switch (flag ? x : B) { case A: return 1; } return 0; }
+      |                             ^~~~~~
+sema-switch-constant-gcc.c:17:29: warning: enumeration value 'C' not handled in switch [-Wswitch]
+   17 | int m(int flag, enum e x) { switch (flag ? x : B) { case A: return 1; } return 0; }
+      |                             ^~~~~~
+sema-switch-constant-gcc.c:20:19: warning: enumeration value 'M3' not handled in switch [-Wswitch]
+   20 | int p(enum m x) { switch (x) { case M1: return 1; } return 0; }
+      |                   ^~~~~~

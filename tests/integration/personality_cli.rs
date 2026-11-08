@@ -4232,6 +4232,137 @@ mod tests {
         }
     }
 
+    /// The format checks of each compiler and the groups its options turn
+    /// on: GCC's `-Wall` is its `-Wformat`, whose groups report only while
+    /// it is on and which `-Wformat=2` extends with `-Wformat-security`;
+    /// Clang reports the whole group by default, each part on its own.
+    #[test]
+    fn format_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int printf(const char *, ...);\nvoid f(long l, char *s, int i) {\n    \
+             printf(\"%d\\n\", l);\n    printf(\"%d\\n\", i, i);\n    printf(\"\", i);\n    \
+             printf(s);\n    printf(\"%d %d\\n\", i);\n    printf(\"%y\\n\");\n    \
+             printf(\"a\\0b\");\n}\n",
+        );
+        let flags = |mode: &str, target: Option<&str>, args: &[&str]| {
+            let args: Vec<&str> = target
+                .into_iter()
+                .chain(args.iter().copied())
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            let text = stderr(&output);
+            let mut flags: Vec<String> = text
+                .lines()
+                .filter(|line| line.starts_with("a.c:"))
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.dedup();
+            flags.join(" ")
+        };
+        let gcc = "format-contains-nul format-extra-args format-zero-length format=";
+        let clang = "format format-extra-args format-insufficient-args format-invalid-specifier \
+                     format-security format-zero-length";
+        // Each row was measured against GCC 14.2 and Clang 23.1, and for the
+        // Windows targets, where GCC checks `ms_printf` and Clang the
+        // Microsoft C runtime's formats, against MinGW's GCC 13.3 and Clang
+        // 23.1 for `x86_64-pc-windows-msvc`. The host's own target is a
+        // Windows one on a Windows host.
+        let rows = [
+            ("--gcc-mode", &[][..], ""),
+            ("--gcc-mode", &["-Wall"][..], gcc),
+            ("--gcc-mode", &["-Wformat"][..], gcc),
+            (
+                "--gcc-mode",
+                &["-Wformat=2"][..],
+                "format-contains-nul format-extra-args format-security format-zero-length format=",
+            ),
+            ("--gcc-mode", &["-Wformat=2", "-Wformat"][..], gcc),
+            ("--gcc-mode", &["-Wall", "-Wno-format"][..], ""),
+            ("--gcc-mode", &["-Wno-format", "-Wall"][..], ""),
+            ("--gcc-mode", &["-Wformat-security"][..], ""),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Wformat-security"][..],
+                "format-contains-nul format-extra-args format-security format-zero-length format=",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wno-format-extra-args", "-Wall"][..],
+                "format-contains-nul format-zero-length format=",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Werror=format"][..],
+                "error=format-contains-nul error=format-extra-args error=format-zero-length \
+                 error=format=",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Werror", "-Wno-error=format"][..],
+                "error=format-contains-nul error=format-extra-args error=format-zero-length \
+                 format=",
+            ),
+            ("--clang-mode", &[][..], clang),
+            ("--clang-mode", &["-Wno-format"][..], ""),
+            ("--clang-mode", &["-Wformat=0"][..], ""),
+            ("--clang-mode", &["-Wno-format", "-Wall"][..], clang),
+            ("--clang-mode", &["-Wall", "-Wno-format"][..], ""),
+            ("--clang-mode", &["-Wformat=2"][..], clang),
+            (
+                "--clang-mode",
+                &["-Wno-format", "-Wformat-security"][..],
+                "format-security",
+            ),
+            (
+                "--clang-mode",
+                &["-Wno-format-security"][..],
+                "format format-extra-args format-insufficient-args format-invalid-specifier \
+                 format-zero-length",
+            ),
+            (
+                "--clang-mode",
+                &["-Werror=format"][..],
+                "error,-Wformat error,-Wformat-extra-args error,-Wformat-insufficient-args \
+                 error,-Wformat-invalid-specifier error,-Wformat-security \
+                 error,-Wformat-zero-length",
+            ),
+            ("--clang-mode", &["-Werror", "-Wno-error=format"][..], clang),
+        ];
+        for target in [
+            None,
+            Some("--target=x86_64-w64-mingw32"),
+            Some("--target=x86_64-pc-windows-msvc"),
+        ] {
+            for (mode, args, expected) in rows {
+                assert_eq!(
+                    flags(mode, target, args),
+                    expected,
+                    "{mode} {target:?} {args:?}"
+                );
+            }
+        }
+        // Each compiler's own groups are unknown to the other.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wformat-invalid-specifier", "-fsyntax-only", "a.c"],
+        );
+        assert!(!output.status.success(), "{}", stderr(&output));
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-Wformat-contains-nul", "-fsyntax-only", "a.c"],
+        );
+        assert!(
+            stderr(&output).contains("unknown warning option '-Wformat-contains-nul'"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// Plain `_Complex` means `_Complex double` to GCC and Clang: Clang
     /// warns, GCC only under `-pedantic`, and `-pedantic-errors` refuses it
     /// in both (gcc.c-torture/execute/20070614-1.c).
@@ -7628,6 +7759,199 @@ mod tests {
         assert_eq!(stderr(&directory.bcc("--gcc-mode", &args)), "");
         let args = ["-ffreestanding", "-fsyntax-only", "m.c"];
         assert!(stderr(&directory.bcc("--clang-mode", &args)).contains("does not return"));
+    }
+
+    /// What a `switch` handles, under the options each compiler has for it.
+    /// Each row was measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_switch_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "enum e { A, B, C };\nint f(enum e x) { switch (x) { case A: return 1; } return 0; \
+             }\nint g(enum e x) { switch (x) { case A: return 1; default: return 0; } }\nint \
+             h(unsigned char x) { switch (x) { case 300: return 1; } return 0; }\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            let mut flags: Vec<String> = stderr(&output)
+                .lines()
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.dedup();
+            flags.join(" ")
+        };
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], "switch-outside-range"),
+            ("--gcc-mode", &["-Wall"][..], "switch switch-outside-range"),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Wno-switch"][..],
+                "switch-outside-range",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Wswitch-enum", "-Wswitch-default"][..],
+                "switch switch-default switch-enum switch-outside-range",
+            ),
+            ("--clang-mode", &[][..], "switch"),
+            ("--clang-mode", &["-Wno-switch"][..], ""),
+            (
+                "--clang-mode",
+                &["-Wswitch-enum", "-Wswitch-default"][..],
+                "switch switch-default switch-enum",
+            ),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
+        // Clang names the enumerators together, GCC one at a time.
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "a.c"]);
+        assert!(
+            stderr(&output).contains("enumeration values 'B' and 'C' not handled in switch"),
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "a.c"]);
+        assert!(
+            stderr(&output).contains("enumeration value 'C' not handled in switch"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    /// Valid switches both compilers accept under `-Werror` (PR #322's
+    /// review): a constant condition its case matches, a `case` that
+    /// matches an enumerator once converted, and an enumerator marked
+    /// unused. GCC names `-Wswitch-enum` for a `case` outside the
+    /// enumeration when `-Wswitch` is off, and Clang's constant condition no
+    /// `case` matches has no option. Each row was measured against GCC 14.2
+    /// and Clang 23.1.
+    #[test]
+    fn gnu_switch_warnings_spare_constant_and_converted_cases() {
+        let directory = Directory::new();
+        directory.write(
+            "valid.c",
+            "enum e { A, B, C __attribute__((unused)) };
+enum u { U = 0xffffffffU, V = 0 };
+int f(void) { switch ((enum e)A) { case A: return 1; } return 0; }
+int g(enum u x) { switch (x) { case -1: case 0: return 1; } return 0; }
+int h(enum e x) { switch (x) { case A: case B: return 1; } return 0; }
+",
+        );
+        for (mode, args) in [
+            ("", &["-Werror"][..]),
+            ("--clang-mode", &["-Werror"][..]),
+            ("--gcc-mode", &["-Wall", "-Werror"][..]),
+        ] {
+            let mut args = args.to_vec();
+            args.extend(["-fsyntax-only", "valid.c"]);
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} {args:?}");
+        }
+        directory.write(
+            "outside.c",
+            "enum e { A, B };
+int f(enum e x) { switch (x) { case A: case B: case 5: return 1; } return 0; }
+int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
+",
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wswitch-enum", "-fsyntax-only", "outside.c"],
+        );
+        succeeds(&output);
+        assert!(
+            stderr(&output).contains(
+                "outside.c:2:48: warning: case value '5' not in enumerated type 'enum e' \
+                 [-Wswitch-enum]"
+            ),
+            "{}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("enumeration value 'B' not handled in switch [-Wswitch-enum]"),
+            "{}",
+            stderr(&output)
+        );
+        for args in [&[][..], &["-Wno-switch"][..]] {
+            let mut args = args.to_vec();
+            args.extend(["-fsyntax-only", "outside.c"]);
+            let output = directory.bcc("--clang-mode", &args);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains(
+                    "outside.c:3:23: warning: no case matching constant switch condition '1'\n"
+                ),
+                "{args:?}: {}",
+                stderr(&output)
+            );
+        }
+    }
+
+    /// A prototype's `float` for a K&R `float` parameter: GCC and TCC accept
+    /// it silently and Clang with a warning, and callers pass the prototype's
+    /// type. TCC's own `133_old_func` test calls such a function.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn knr_definitions_keep_a_prototypes_unpromoted_types() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "#include <stdio.h>\nvoid func(float a, short s);\nvoid func(a, s)\nfloat a; short \
+             s;\n{ printf(\"%g %d\\n\", a, s); }\nint main(void) { func(2.5f, 7); func(10.0, 3); \
+             return 0; }\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["a.c", "-o", "a"]);
+            succeeds(&output);
+            let warned = stderr(&output).contains("[-Wknr-promoted-parameter]");
+            assert_eq!(
+                warned,
+                mode == "--clang-mode",
+                "{mode}: {}",
+                stderr(&output)
+            );
+            let run = Command::new(directory.path("a")).output().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout),
+                "2.5 7\n10 3\n",
+                "{mode}"
+            );
+        }
+        // A declaration that is not a definition still conflicts.
+        directory.write("b.c", "void g(float);\nvoid g();\n");
+        let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "b.c"]);
+        assert!(!output.status.success());
+    }
+
+    /// `#pragma once` marks a file, not a spelling of its path: GCC, Clang and
+    /// TCC (its own `18_include` test) read the header once however it is
+    /// reached. bcc knows a file's identity on Unix hosts only.
+    #[cfg(unix)]
+    #[test]
+    fn pragma_once_marks_the_file_whatever_path_reaches_it() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write("sub/h.h", "#pragma once\nint counter_seen;\n");
+        directory.write(
+            "sub/a.c",
+            "#include \"h.h\"\n#include \"./h.h\"\n#include \"../sub/h.h\"\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "sub/a.c"]);
+            succeeds(&output);
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(text.matches("counter_seen").count(), 1, "{mode}: {text}");
+        }
     }
 
     /// A returned local address and a constant a conversion changes, which
@@ -11677,6 +12001,50 @@ mod tests {
                 defines(&stdout(&output), "CR_DECIMAL_DIG").is_none(),
                 "{mode}"
             );
+        }
+    }
+
+    /// TCC's `libtcc1.a` defines the `<stdatomic.h>` fences and flag
+    /// operations, so a TCC program may take their addresses (tcc's
+    /// `tests2/151_atomic_header.c`); under `--tcc-mode` each unit carries
+    /// the ones it references as weak definitions, which a program's own
+    /// definition replaces. GCC and Clang leave them to libatomic.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tcc_programs_reach_the_libtcc1_atomic_functions() {
+        let directory = Directory::new();
+        directory.write(
+            "flags.c",
+            "#include <stdatomic.h>\n#include <stdio.h>\nint main(void) {\n  atomic_flag f = \
+             ATOMIC_FLAG_INIT;\n  _Bool (*set)(volatile atomic_flag *) = \
+             &atomic_flag_test_and_set;\n  void (*clear)(volatile atomic_flag *, memory_order) = \
+             &atomic_flag_clear_explicit;\n  void (*thread)(memory_order) = \
+             &atomic_thread_fence;\n  void (*signal)(memory_order) = &atomic_signal_fence;\n  int \
+             a = set(&f), b = set(&f);\n  clear(&f, memory_order_release);\n  int c = \
+             (atomic_flag_test_and_set)(&f);\n  thread(memory_order_seq_cst);\n  \
+             signal(memory_order_acquire);\n  printf(\"%d %d %d\\n\", a, b, c);\n  return 0;\n}\n",
+        );
+        succeeds(&directory.bcc("--tcc-mode", &["flags.c", "-o", "flags.exe"]));
+        let run = Command::new(directory.path("flags.exe")).output().unwrap();
+        assert_eq!(stdout(&run), "0 1 0\n");
+        directory.write(
+            "use.c",
+            "#include <stdatomic.h>\nint main(void) {\n  void (*p)(memory_order) = \
+             atomic_signal_fence;\n  p(memory_order_acquire);\n  \
+             (atomic_signal_fence)(memory_order_release);\n  return 0;\n}\n",
+        );
+        directory.write(
+            "own.c",
+            "#include <stdio.h>\nvoid atomic_signal_fence(int order) { printf(\"own %d\\n\", \
+             order); }\n",
+        );
+        succeeds(&directory.bcc("--tcc-mode", &["use.c", "own.c", "-o", "own.exe"]));
+        let run = Command::new(directory.path("own.exe")).output().unwrap();
+        assert_eq!(stdout(&run), "own 2\nown 3\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["use.c", "-o", "use.exe"]);
+            assert!(!output.status.success(), "{mode}");
+            assert!(stderr(&output).contains("atomic_signal_fence"), "{mode}");
         }
     }
 }

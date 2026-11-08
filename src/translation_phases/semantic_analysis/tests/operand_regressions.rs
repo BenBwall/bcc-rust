@@ -147,6 +147,22 @@ fn null_pointer_alternatives_precede_pointer_pair_rules() {
     clean("int f(void); void g(void *p) { f==p; }");
 }
 
+/// Only a cast to `void *` itself is a null pointer constant: against
+/// `(const void *)0` the other pointer converts to a pointer to qualified
+/// `void`, as GCC, Clang and TCC give it.
+#[test]
+fn a_qualified_void_pointer_cast_is_no_null_pointer_constant() {
+    clean(
+        "void f(void) { (void)_Generic(0 ? (volatile int *)0 : (const void *)0, const volatile \
+         void *: 0); (void)_Generic(0 ? (volatile int *)0 : (void *)0, volatile int *: 0); }",
+    );
+    rejects(
+        "void f(void) { (void)_Generic(0 ? (volatile int *)0 : (const void *)0, volatile int *: \
+         0); }",
+        SemanticErrorKind::InvalidGenericSelection,
+    );
+}
+
 #[test]
 fn one_void_alternative_gives_a_conditional_void_type() {
     // GCC and Clang: the whole expression is void and the other

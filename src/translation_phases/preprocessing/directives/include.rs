@@ -544,7 +544,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             });
             return None;
         };
-        if self.state.once_set.contains(&source_file_index) {
+        if self
+            .state
+            .once_set
+            .contains(&self.context.file_identity(source_file_index))
+        {
             None
         } else {
             Some((source_file_index, search_index))

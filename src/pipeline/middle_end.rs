@@ -20,6 +20,7 @@ use crate::{
     configuration::{
         CStandard,
         CompilerConfiguration,
+        CompilerIdentity,
         ExtensionPolicy,
     },
     headers::HeaderSearch,
@@ -29,6 +30,7 @@ use crate::{
     },
     lowering::{
         LoweringErrors,
+        tcc_runtime,
         wide_bit_int_runtime,
     },
     optimizer::{
@@ -187,9 +189,17 @@ fn lower_diagnosed<'tu, 'ir>(
     )
     .map_err(MiddleEndError::Lowering)?;
     if wide_bit_int_runtime::needed(&module) {
-        let mut runtime = compile_wide_bit_int_runtime(context, arena)?;
+        let mut runtime = compile_runtime(context, arena, &BIT_INT_RUNTIME)?;
         scratch.reset();
         wide_bit_int_runtime::link(&mut module, &mut runtime, &scratch)
+            .map_err(|fact| runtime_error(arena, fact))?;
+    }
+    if context.configuration.compiler_identity() == CompilerIdentity::Tcc
+        && tcc_runtime::needed(&module)
+    {
+        let mut runtime = compile_runtime(context, arena, &TCC_RUNTIME)?;
+        scratch.reset();
+        tcc_runtime::link(&mut module, &mut runtime, &scratch)
             .map_err(|fact| runtime_error(arena, fact))?;
     }
     if let Some(options) = optimizer {
@@ -222,14 +232,37 @@ fn lower_diagnosed<'tu, 'ir>(
     })
 }
 
+/// A runtime written in C that bcc compiles into the modules that need it:
+/// its source, the name it parses under, and the fact a failure reports.
+struct Runtime {
+    source:  &'static str,
+    path:    &'static str,
+    failure: &'static str,
+}
+
 /// The runtime of the `_BitInt` types of more than 128 bits
-/// (`lowering/wide_bit_int/runtime.c`), compiled for the unit's target into
-/// `arena`: optimized C17 with GNU extensions, whatever the unit's language
-/// mode, as the bundled WebAssembly runtime is built. It does not compile
-/// only through a bug of bcc, reported as a missing fact.
-fn compile_wide_bit_int_runtime<'ir>(
+/// (`lowering/wide_bit_int/runtime.c`).
+const BIT_INT_RUNTIME: Runtime = Runtime {
+    source:  wide_bit_int_runtime::SOURCE,
+    path:    "bitint-runtime.c",
+    failure: "the _BitInt runtime does not compile",
+};
+
+/// The functions of TCC's `libtcc1.a` (`lowering/tcc_runtime/libtcc1.c`).
+const TCC_RUNTIME: Runtime = Runtime {
+    source:  tcc_runtime::SOURCE,
+    path:    "libtcc1.c",
+    failure: "the TCC runtime does not compile",
+};
+
+/// `runtime` compiled for the unit's target into `arena`: optimized C17
+/// with GNU extensions, whatever the unit's language mode, as the bundled
+/// WebAssembly runtime is built. It does not compile only through a bug of
+/// bcc, reported as a missing fact.
+fn compile_runtime<'ir>(
     context: &Context<'_>,
     arena: &'ir Bump,
+    runtime: &Runtime,
 ) -> Result<Module<'ir>, MiddleEndError<'ir>> {
     let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
         .with_gnu_extensions(true)
@@ -238,16 +271,16 @@ fn compile_wide_bit_int_runtime<'ir>(
         .with_suppress_warnings(true);
     let tu = Bump::new();
     let mut runtime_context = Context::with_configuration(&tu, configuration);
-    let source = tu.alloc_str(wide_bit_int_runtime::SOURCE);
+    let source = tu.alloc_str(runtime.source);
     let unit = parse_translation_unit(
         &mut runtime_context,
-        Path::new("bitint-runtime.c"),
+        Path::new(runtime.path),
         source,
         HeaderSearch::default(),
     );
     let sema = analyze_translation_unit(&mut runtime_context, &unit);
     if !sema.lowerable(&runtime_context) {
-        return Err(runtime_error(arena, "the _BitInt runtime does not compile"));
+        return Err(runtime_error(arena, runtime.failure));
     }
     let optimizer = OptimizerOptions::default();
     lower_diagnosed(
@@ -267,7 +300,7 @@ fn compile_wide_bit_int_runtime<'ir>(
     .map(|diagnosed| diagnosed.module)
 }
 
-/// A failure of the `_BitInt` runtime, `fact`, as a lowering error.
+/// A failure of a bundled runtime, `fact`, as a lowering error.
 fn runtime_error<'ir>(arena: &'ir Bump, fact: &'static str) -> MiddleEndError<'ir> {
     MiddleEndError::Lowering(LoweringErrors {
         errors: arena.alloc_slice_copy(&[crate::lowering::LoweringError {

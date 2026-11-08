@@ -143,6 +143,8 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::Main(_)
                 | semantic_analysis::SemanticErrorKind::SignCompare
                 | semantic_analysis::SemanticErrorKind::ValueWarning(_)
+                | semantic_analysis::SemanticErrorKind::KnrPromotedParameter
+                | semantic_analysis::SemanticErrorKind::SwitchCases(_)
                 | semantic_analysis::SemanticErrorKind::ReturnFlow(_)
                 | semantic_analysis::SemanticErrorKind::MissingFieldInitializer
                 | semantic_analysis::SemanticErrorKind::ImplicitFunctionDeclaration
@@ -153,8 +155,8 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::ImplicitIntTypeName
                 | semantic_analysis::SemanticErrorKind::ReturnMismatch
                 | semantic_analysis::SemanticErrorKind::VoidReturnMismatch
-                | semantic_analysis::SemanticErrorKind::DeclarationMissingParameterType =>
-                    error.kind.group(),
+                | semantic_analysis::SemanticErrorKind::DeclarationMissingParameterType
+                | semantic_analysis::SemanticErrorKind::Format(..) => error.kind.group(),
                 | semantic_analysis::SemanticErrorKind::CallAttributeWarning =>
                     Some(G::AttributeWarning),
                 | semantic_analysis::SemanticErrorKind::PredefinedOutsideFunction =>
