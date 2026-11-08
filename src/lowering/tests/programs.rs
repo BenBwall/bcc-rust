@@ -395,6 +395,17 @@ int main(void) {
 int main(void) { return scale(7, 6); }",
         expected: 42,
     },
+    // GNU extension: GCC manual, "Statement Exprs". An expression statement
+    // ending inside a folded conditional's skipped arm clears the joins the
+    // conditional marked (Perl 5.40's `re_comp.c`, through its asserts).
+    Program {
+        name:     "folded_conditional_statement_expressions",
+        source:   "static int g(int f) {
+ return 0 ? (f ? ({ if (f) ; 1; }) : 1) : ({ if (f) ; 2; }); }
+static int h(int f) { return 1 ? ({ if (f) ; 3; }) : (f ? ({ if (f) ; 4; }) : 5); }
+int main(void) { return g(1) + h(0) == 5 ? 0 : 1; }",
+        expected: 0,
+    },
 ];
 
 /// Prints each program's IR, for inspection with `--nocapture`.
