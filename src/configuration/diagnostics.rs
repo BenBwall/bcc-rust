@@ -319,6 +319,7 @@ impl CompilerConfiguration {
         // Clang's `-Wmain` and `-Wpointer-bool-conversion` are on already, and
         // its `-Wall` does not hold them.
         if self.identity.rules() != super::RuleSet::Clang {
+            self.warning_options[DiagnosticGroup::UnknownPragmas as usize].apply_all(enabled);
             self.warning_options[DiagnosticGroup::Main as usize].apply_all(enabled);
             self.warning_options[DiagnosticGroup::PointerBoolConversion as usize]
                 .apply_all(enabled);
@@ -1386,6 +1387,7 @@ impl WarningSettings {
                 | DiagnosticGroup::UnusedLocalTypedefs
                 | DiagnosticGroup::UnusedLocalTypedef
                 | DiagnosticGroup::Main
+                | DiagnosticGroup::UnknownPragmas
                 | DiagnosticGroup::PointerBoolConversion => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
                 | _ => None,

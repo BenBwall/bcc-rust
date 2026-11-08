@@ -93,6 +93,7 @@ mod nested;
 mod places;
 #[cfg(feature = "recursive-lowering-study")]
 mod recursive;
+mod sanitizer;
 mod saturation;
 mod statements;
 mod vectors;
@@ -423,6 +424,15 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             self.track_line(task);
         }
         match task {
+            | Task::Statement(statement)
+            | Task::StatementValue(statement)
+            | Task::StatementEffects(statement) =>
+                self.ub.statement = Some(statement.source_vectors),
+            | Task::Declaration(declaration) =>
+                self.ub.statement = Some(declaration.source_vectors),
+            | _ => {},
+        }
+        match task {
             | Task::Statement(statement) => self.statement(statement, StatementMode::Discard),
             | Task::StatementValue(statement) => self.statement(statement, StatementMode::Value),
             | Task::StatementEffects(statement) =>
@@ -545,9 +555,18 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.builtin_effects(expression, context),
             | Task::SnapshotArgument(expression) => self.snapshot_argument(expression),
             | Task::ForwardPack(expression) => self.forward_pack(expression),
-            | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
-            | Task::Finish(expression) => self.finish(expression),
-            | Task::FinishBuiltin(expression, builtin) => self.finish_builtin(expression, builtin),
+            | Task::Convert { expression, skip } => {
+                self.ub.site = Some(expression);
+                self.convert_recorded(expression, skip)
+            },
+            | Task::Finish(expression) => {
+                self.ub.site = Some(expression);
+                self.finish(expression)
+            },
+            | Task::FinishBuiltin(expression, builtin) => {
+                self.ub.site = Some(expression);
+                self.finish_builtin(expression, builtin)
+            },
             | Task::FinishVectorBuiltin(expression) => self.finish_vector_builtin(expression),
             | Task::OmittedConditional {
                 expression,
@@ -557,6 +576,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             } => self.omitted_conditional(expression, conditional, otherwise, merge),
             | Task::Assembly(statement) => self.finish_assembly(statement),
             | Task::ReadForUpdate(expression) => {
+                self.ub.site = Some(expression);
                 let place = *self.operands.last().expect("the place is on the stack");
                 self.operands.push(place);
                 self.read_for_update(expression)
@@ -670,6 +690,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// This function's non-local goto receiver, if a nested function jumps
     /// to one of its labels.
     receiver:            Option<Receiver>,
+    /// What `UndefinedBehaviorSanitizer`'s checks remember (`sanitizer.rs`).
+    ub:                  sanitizer::FunctionSanitizer<'s, 'tu>,
 }
 
 /// Where a nested function's jump to a label of a function around it
