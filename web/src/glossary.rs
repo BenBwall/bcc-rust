@@ -30,7 +30,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 26] = [
+pub static TERMS: [Term; 35] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -40,6 +40,26 @@ pub static TERMS: [Term; 26] = [
                      happens. A compiler may produce any code that behaves the same way.",
         clause:     "5.1.2.3",
         page:       25,
+    },
+    Term {
+        id:         "translation-phase",
+        name:       "Translation phase",
+        phrases:    &["translation phases", "translation phase"],
+        definition: "One of the eight steps that turn a source file into a program, before it \
+                     runs: phase 4 executes directives and expands macros, phase 6 joins adjacent \
+                     string literals, phase 7 compiles.",
+        clause:     "5.1.1.2",
+        page:       21,
+    },
+    Term {
+        id:         "macro",
+        name:       "Macro",
+        phrases:    &["macros", "macro"],
+        definition: "A name #define gives to a replacement list. The preprocessor replaces each \
+                     later use of the name before the program is compiled, so a macro has no type \
+                     and no storage.",
+        clause:     "6.10.3p9",
+        page:       164,
     },
     Term {
         id:         "object",
@@ -57,6 +77,15 @@ pub static TERMS: [Term; 26] = [
         definition: "Reading the value stored in the object an lvalue designates. It happens \
                      whenever an lvalue is used for its value rather than as a place.",
         clause:     "6.3.2.1p2",
+        page:       58,
+    },
+    Term {
+        id:         "modifiable-lvalue",
+        name:       "Modifiable lvalue",
+        phrases:    &["modifiable lvalue"],
+        definition: "An lvalue the program may store into: not an array and not const-qualified. \
+                     The left side of = and the operand of ++ must be one.",
+        clause:     "6.3.2.1p1",
         page:       58,
     },
     Term {
@@ -219,10 +248,51 @@ pub static TERMS: [Term; 26] = [
         id:         "usual-arithmetic-conversions",
         name:       "Usual arithmetic conversions",
         phrases:    &["usual arithmetic conversions"],
-        definition: "The rule that converts both operands of an arithmetic operator to one common \
-                     type before computing. Two ints need no conversion.",
+        definition: "The rule that converts both operands of an arithmetic operator or a \
+                     comparison to one common type before computing: the lower-ranked operand \
+                     converts, and a signed one converts to unsigned when the unsigned type ranks \
+                     at least as high, so -1 < 1u is false. Two ints need no conversion.",
         clause:     "6.3.1.8p1",
         page:       56,
+    },
+    Term {
+        id:         "integer-conversion-rank",
+        name:       "Integer conversion rank",
+        phrases:    &["integer conversion rank", "rank"],
+        definition: "The order of the integer types that the conversions use: char, short, int, \
+                     long and long long, from lowest to highest. An unsigned type has the rank of \
+                     its signed one.",
+        clause:     "6.3.1.1p1",
+        page:       54,
+    },
+    Term {
+        id:         "unsigned-type",
+        name:       "Unsigned type",
+        phrases:    &["unsigned types", "unsigned type"],
+        definition: "An integer type written with unsigned, the same size as its signed type, \
+                     that holds only values from 0 up: unsigned int holds 0 to 4294967295 on \
+                     x86-64. Its arithmetic never overflows.",
+        clause:     "6.2.5p6",
+        page:       45,
+    },
+    Term {
+        id:         "modulo-reduction",
+        name:       "Reduction modulo 2^N",
+        phrases:    &["reduced modulo", "reduces it modulo", "reduces the value modulo"],
+        definition: "What an unsigned type does with a value it cannot hold: it adds or subtracts \
+                     2^N, one more than its largest value, until the value fits, so -1 becomes \
+                     the largest value. This is defined, unlike signed overflow.",
+        clause:     "6.2.5p9",
+        page:       46,
+    },
+    Term {
+        id:         "size-t",
+        name:       "size_t",
+        phrases:    &["size_t"],
+        definition: "The unsigned integer type of sizeof's result, defined by <stddef.h> and \
+                     <stdio.h>: unsigned long on x86-64. printf prints it with %zu.",
+        clause:     "7.17p2",
+        page:       266,
     },
     Term {
         id:         "array-decay",
@@ -259,6 +329,24 @@ pub static TERMS: [Term; 26] = [
                      pointer type gives one.",
         clause:     "6.3.2.3p3",
         page:       59,
+    },
+    Term {
+        id:         "cast",
+        name:       "Cast",
+        phrases:    &["casts", "cast"],
+        definition: "A parenthesized type name before an expression, such as (char)300, which \
+                     converts the expression's value to that type.",
+        clause:     "6.5.4p4",
+        page:       93,
+    },
+    Term {
+        id:         "constraint",
+        name:       "Constraint",
+        phrases:    &["constraints", "constraint"],
+        definition: "A rule the compiler must check: a program that breaks one, such as assigning \
+                     to a const object, gets a diagnostic and does not compile.",
+        clause:     "3.8",
+        page:       17,
     },
     Term {
         id:         "undefined-behavior",

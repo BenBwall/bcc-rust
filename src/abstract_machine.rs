@@ -15,23 +15,26 @@
 //! forward replays it exactly.
 //!
 //! Read `parser.rs` and `expressions.rs` for compilation, `machine.rs` and
-//! `memory.rs` for execution, `narration.rs` for the explanations and
+//! `memory.rs` for execution, `integers.rs` for the integer types and their
+//! conversions, `narration.rs` for the explanations and
 //! `clauses.rs` for the cited rules, `model.rs` for the public observation
 //! types, and `json.rs` for the versioned wire format. `lexer.rs` retains
 //! byte ranges. `tests.rs` exercises actual execution, events, rejection, UB
 //! and replay.
 //!
 //! This independent subset does not invoke bcc's syntax/semantic frontend.
-//! It uses a signed 32-bit int model, a signed 8-bit plain char, structures
-//! laid out as bcc lays them out for x86-64 (`layout.rs`), and scalar-based
-//! pointer offsets. File-scope and `static` objects are created and
-//! initialized one per step before `main` runs.
+//! It models the standard integer types with the widths bcc gives them on
+//! x86-64 Linux (8-bit char, signed; 16-bit short; 32-bit int; 64-bit long
+//! and long long), structures laid out as bcc lays them out for x86-64
+//! (`layout.rs`), and scalar-based pointer offsets. File-scope and `static`
+//! objects are created and initialized one per step before `main` runs.
 //! Operand evaluation is left-to-right; nested side effects are rejected.
 //! It is an educational execution model, not a C conformance checker.
 //!
 //! C99: §6.7.8 paragraph 10, p. 126; PDF p. 138 (indeterminate locals).
 //! C99: §6.2.4 paragraph 2, p. 32; PDF p. 44 (object lifetime).
 //! C99: §6.5 paragraph 5, p. 67; PDF p. 79 (arithmetic exceptions).
+//! C99: §6.2.5 paragraph 9, p. 34; PDF p. 46 (unsigned arithmetic wraps).
 //! C99: §6.5.6 paragraph 8, p. 83; PDF p. 95 (pointer bounds).
 //! C99: §5.1.2 paragraph 1, p. 11; PDF p. 23 (static initialization before
 //! startup).
@@ -51,8 +54,10 @@ mod lexer;
 mod parser;
 
 // Execution and observations
+mod integers;
 mod json;
 mod layout;
+mod library;
 mod machine;
 mod memory;
 mod model;
@@ -151,7 +156,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 3.
+    /// Encodes the current observation using schema version 5.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()
@@ -205,6 +210,15 @@ impl Program {
             &self.structures,
         ));
         text
+    }
+
+    /// Whether the program can write to standard output: it includes
+    /// `<stdio.h>`, whose functions the machine runs.
+    #[must_use]
+    pub fn writes_output(&self) -> bool {
+        self.directives
+            .iter()
+            .any(|directive| directive.kind == model::DirectiveKind::Include)
     }
 
     /// The name of function `function`, in definition order.

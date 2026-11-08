@@ -39,6 +39,15 @@ mod tests {
             .flat_map(|directory| std::fs::read_dir(root.join(directory)).unwrap())
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.extension().is_some_and(|extension| extension == "c"))
+            // The lessons that print include the C library's `<stdio.h>`,
+            // which the explorer, built without a C library, cannot find; the
+            // site shows that stop, and their precomputed LLVM IR.
+            .filter(|path| {
+                !std::fs::read_to_string(path)
+                    .unwrap()
+                    .lines()
+                    .any(|line| line.trim() == "#include <stdio.h>")
+            })
             .map(|path| {
                 (
                     path.strip_prefix(root).unwrap().display().to_string(),
