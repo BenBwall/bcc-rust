@@ -538,7 +538,9 @@ nothing recurses.
 Allocation order: caller-saved registers first (no save cost) — `%rax %rcx
 %rdx %rsi %rdi %r8 %r9` on System V, `%rax %rcx %rdx %r8 %r9` on Win64 — then
 callee-saved `%rbx %r12 %r13 %r14 %r15 %rbp` (plus `%rsi %rdi` on Win64).
-The frame pointer is omitted, so `%rbp` is allocatable. SSE registers go
+The frame pointer is omitted, so `%rbp` is allocatable, except in a function
+that keeps one (a moving stack, or every function under
+`-fno-omit-frame-pointer`; see "Frame layout"). SSE registers go
 `%xmm0`-`%xmm13`; on Win64 `%xmm6` and up are callee-saved and saved by the
 frame when written. x87 values are never allocated (see "Legalization").
 
@@ -617,7 +619,7 @@ aligned, except within the prolog"). Every call is made at that alignment.
   is at most 128 bytes keeps it there, laid out as above but addressed
   `size` bytes lower from the unmoved `%rsp`, with no `sub`/`add` and no
   CFA change after the pushes, provided it makes no call (libcalls such as
-  `memmove` included), has no dynamic allocation or frame pointer, names
+  `memmove` included), has no dynamic allocation, names
   `%rsp` in no instruction (`stack_save`), has no `va_start` save area and
   no slot aligned above 16. Win64 has no red zone ("x64 ABI conventions":
   memory below `%rsp` is volatile), so its frames always move `%rsp`.
@@ -640,6 +642,20 @@ aligned, except within the prolog"). Every call is made at that alignment.
   $align-1`, `and $-align`, into a register every use goes through. The frame,
   its unwind information and `%rbp` stay as they are; stack arguments aligned
   above 16, which need the caller's stack realigned, are still refused.
+- **Frame pointers** (2026-11-08). A function whose stack moves keeps one,
+  and so does every function but a naked one under
+  `-fno-omit-frame-pointer` (GCC manual, "Optimize Options"), which reaches
+  the native back end as `Hardening::keep_frame_pointer`. On System V it is
+  GCC's and Clang's: `pushq %rbp; movq %rsp, %rbp` first
+  (`.cfi_def_cfa_register %rbp`), then the other pushes and the
+  allocation, so `%rbp` points at the caller's `%rbp` with the return
+  address above it and the frames form the chain `__builtin_frame_address`
+  and `__builtin_return_address` above level 0 walk. The epilogue pops `%rbp`
+  last and only then moves the CFA back to `%rsp + 8`. A fixed-size frame is
+  still addressed from `%rsp` (a leaf's still in the red zone); a moving one
+  from `%rbp` at negative offsets, and its epilogue starts with `lea
+  -8·pushes(%rbp), %rsp` over the other pushes. Win64 keeps its own form, as
+  below; the command line passes the option on Linux targets only.
 
 **Prologue and epilogue**:
 
@@ -770,11 +786,12 @@ GCC's `__builtin_setjmp` (`sjlj_setjmp`) saves no register at all:
 words 0 and 2 of the buffer and jumps to the resume address in word 1
 (LLVM's `EH_SjLj_SetJmp` and `EH_SjLj_LongJmp`). `MInst::SjljSetjmp`
 therefore clobbers every register but `%rsp`, and `%rbp` unless it
-addresses the frame: nothing lives in a register across it, the prologue
+holds a frame pointer: nothing lives in a register across it, the prologue
 saves every callee-saved register, and the same coalescing rule keeps each
-value live across it in its own spill slot. At the resume label a frame
+value live across it in its own spill slot. A System V frame pointer is the
+frame address the jump restores; at the resume label a Win64 frame
 addressed from `%rbp` derives `%rbp` from the frame address it arrives
-with, a fixed distance above the frame's base.
+with.
 
 ### Atomic operations
 
@@ -1116,10 +1133,11 @@ Implemented in the priority order of the stage 1 refusals:
   `uadd_overflow` and `umul_overflow`, the `__divti3` family (register pairs
   on System V; pointers to 16-byte copies and an `%xmm0` result on Win64), and
   Win64's `registers(i128)` results through `movups` of `%xmm0`.
-- **Dynamic stack** (`isel/stack.rs`): such functions keep `%rbp = %rsp`
-  after the allocation, address the fixed frame from it, allocate right above
-  the outgoing argument area, probe new pages on Windows, and end with the
-  frame-pointer epilogue `lea size(%rbp), %rsp`.
+- **Dynamic stack** (`isel/stack.rs`): such functions keep a frame pointer,
+  address the fixed frame from it, allocate right above the outgoing
+  argument area, and probe new pages on Windows. On Win64 `%rbp = %rsp`
+  after the allocation and the epilogue starts with `lea size(%rbp), %rsp`;
+  on System V `%rbp` links the frame as "Frame pointers" describes.
 - **Two peepholes**: a multiply by a power of two is a shift, and `zext` of a
   narrow load reuses the load's zero-extended register.
 

@@ -147,7 +147,7 @@ pub(crate) fn allocate<'a>(
         intervals,
         &fixed,
         conv,
-        func.dynamic,
+        func.frame_pointer(),
         &rep_hints,
         &layout,
         arena,

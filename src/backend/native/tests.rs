@@ -74,6 +74,23 @@ fn assembly(ir: &str, target: Target) -> String {
     text
 }
 
+/// [`assembly`] under `-fno-omit-frame-pointer`.
+fn framed_assembly(ir: &str, target: Target) -> String {
+    let arena = Bump::new();
+    let module = parse_module(&arena, ir).unwrap_or_else(|error| panic!("{error}\n{ir}"));
+    let mut code = CodeOptions::default();
+    code.hardening.keep_frame_pointer = true;
+    let mut text = String::new();
+    super::emit_assembly_with(&module, target, code, &mut text)
+        .unwrap_or_else(|error| panic!("{error}\n{ir}"));
+    if matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
+        object::equivalent(&text).unwrap();
+    } else {
+        object_coff::equivalent(&text, target).unwrap();
+    }
+    text
+}
+
 /// The refusal of a textual post-ABI module for `target`.
 fn refusal(ir: &str, target: Target) -> String {
     let arena = Bump::new();
@@ -124,6 +141,7 @@ fn with_selection<R>(
             tls_model:              crate::target::TlsModel::default(),
             indirect_returns_twice: module.returns_twice_escapes(),
             track_sources:          false,
+            keep_frame_pointer:     false,
         },
         &scratch,
     )

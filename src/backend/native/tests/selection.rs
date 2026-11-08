@@ -3,6 +3,7 @@
 
 use super::{
     assembly,
+    framed_assembly,
     function_text,
     refusal,
     with_allocation,
@@ -673,18 +674,24 @@ block0(v0: ptr):
             "{target:?}: {g}"
         );
     }
-    // A frame whose `%rsp` moves is addressed from `%rbp`; the resume
-    // label restores it from the frame address `%rbp` arrives with.
+    // A frame whose `%rsp` moves is addressed from `%rbp`. On System V
+    // `%rbp` links the frame and is the frame address the jump restores; on
+    // Win64 the resume label derives it from that address.
     let dynamic = ir.replace(
         "    v6 = sjlj_setjmp v0",
         "    v9 = dyn_alloca.i64 v1, align 16\n    v6 = sjlj_setjmp v9",
     );
-    let text = assembly(&dynamic, Target::LinuxGnu);
-    let f = function_text(&text, "f");
-    let label = f.find(".LSJ0:\n").expect(f);
-    let fixup = &f[label..];
-    assert!(fixup.starts_with(".LSJ0:\n\tleaq\t-"), "{f}");
-    assert!(fixup.contains("(%rbp), %rbp\n\tmovl\t$1, %eax"), "{f}");
+    for (target, resume) in [
+        (Target::LinuxGnu, ".LSJ0:\n\tmovl\t$1, %eax"),
+        (
+            Target::WindowsGnu,
+            ".LSJ0:\n\tleaq\t0(%rbp), %rbp\n\tmovl\t$1, %eax",
+        ),
+    ] {
+        let text = assembly(&dynamic, target);
+        let f = function_text(&text, "f");
+        assert!(f.contains(resume), "{target:?}: {f}");
+    }
 }
 
 /// Nothing is coalesced across a `__builtin_setjmp` either: a second
@@ -1045,6 +1052,134 @@ block0(v0: i64):
     let f = function_text(&text, "f");
     assert!(f.contains("pushq\t%rbp\n"), "{f}");
     assert!(f.contains("subq\t$16, %rsp\n"), "{f}");
+}
+
+/// Six values live across a call: with `%rbp` free, one of them takes it.
+const SIX_ACROSS_A_CALL: &str = "abi lowered
+function @g(ptr) external
+function @f(i64, i64, i64, i64, i64, i64) -> i64 external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64, v1: i64, v2: i64, v3: i64, v4: i64, v5: i64):
+    v6 = stack_addr slot0
+    store.i64 v0, v6, align 8
+    call @g(v6)
+    v7 = iadd.i64 v0, v1
+    v8 = iadd.i64 v7, v2
+    v9 = iadd.i64 v8, v3
+    v10 = iadd.i64 v9, v4
+    v11 = iadd.i64 v10, v5
+    return v11
+}
+";
+
+/// `-fno-omit-frame-pointer` on System V: `%rbp` is pushed first and set
+/// to its own slot, so it holds the caller's frame pointer as GCC's and
+/// Clang's prologues leave it, the CFA is addressed from it, and no value
+/// takes it. GCC manual, "Optimize Options", `-fomit-frame-pointer`.
+#[test]
+fn kept_frame_pointers_link_each_frame_to_its_caller() {
+    let plain = assembly(SIX_ACROSS_A_CALL, Target::LinuxGnu);
+    assert!(
+        function_text(&plain, "f").matches("%rbp").count() > 3,
+        "%rbp is allocatable without a frame pointer:\n{plain}"
+    );
+    let text = framed_assembly(SIX_ACROSS_A_CALL, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.starts_with(
+            "\nf:\n\t.cfi_startproc\n\tpushq\t%rbp\n\t.cfi_def_cfa_offset 16\n\t.cfi_offset %rbp, \
+             -16\n\tmovq\t%rsp, %rbp\n\t.cfi_def_cfa_register %rbp\n\tpushq\t%rbx\n\t.cfi_offset \
+             %rbx, -24\n"
+        ),
+        "{f}"
+    );
+    // Pushed, described, set, popped: nothing else names it.
+    assert_eq!(f.matches("%rbp").count(), 5, "{f}");
+    assert_eq!(f.matches(".cfi_def_cfa_offset").count(), 1, "{f}");
+    assert!(
+        f.contains("\tpopq\t%rbx\n\tpopq\t%rbp\n\t.cfi_def_cfa %rsp, 8\n\tretq\n"),
+        "{f}"
+    );
+}
+
+/// A leaf keeps its frame pointer and its frame in the red zone below
+/// `%rsp`, as GCC's leaves do; the frame address is `%rbp` itself.
+#[test]
+fn a_kept_frame_pointer_leaves_a_leaf_in_the_red_zone() {
+    let text = framed_assembly(
+        "abi lowered
+function @f(i64) -> ptr external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64):
+    v1 = stack_addr slot0
+    store.i64 volatile v0, v1, align 8
+    v2 = frame_address
+    return v2
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(f.contains("\tpushq\t%rbp\n"), "{f}");
+    assert!(f.contains("\tmovq\t%rsp, %rbp\n"), "{f}");
+    assert!(!f.contains("subq"), "{f}");
+    assert!(f.contains(", -8(%rsp)\n"), "{f}");
+    assert!(f.contains("\tleaq\t0(%rsp), %rax\n"), "{f}");
+}
+
+/// A moving stack addresses its fixed frame below the linked `%rbp`: the
+/// frame address is `%rbp`, the return address the word above it, and the
+/// epilogue finds the other pushes from it.
+#[test]
+fn a_moving_stack_addresses_its_frame_below_the_linked_frame_pointer() {
+    let ir = "abi lowered
+function @g(ptr, ptr, ptr) external
+function @f(i64) external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64):
+    v1 = dyn_alloca.i64 v0, align 16
+    v2 = stack_addr slot0
+    store.i64 v0, v2, align 8
+    v3 = frame_address
+    v4 = return_address
+    call @g(v1, v3, v4)
+    v5 = load.i64 v2, align 8
+    call @g(v1, v2, v1)
+    return
+}
+";
+    for text in [
+        assembly(ir, Target::LinuxGnu),
+        framed_assembly(ir, Target::LinuxGnu),
+    ] {
+        let f = function_text(&text, "f");
+        assert!(
+            f.starts_with("\nf:\n\t.cfi_startproc\n\tpushq\t%rbp\n\t.cfi_def_cfa_offset 16\n"),
+            "{f}"
+        );
+        assert!(f.contains("\tleaq\t0(%rbp), %rsi\n"), "{f}");
+        assert!(f.contains("\tmovq\t8(%rbp), %rdx\n"), "{f}");
+        assert!(f.contains(", -"), "the slot lies below %rbp:\n{f}");
+        assert!(
+            f.contains(
+                "\tleaq\t-8(%rbp), %rsp\n\tpopq\t%rbx\n\tpopq\t%rbp\n\t.cfi_def_cfa %rsp, 8\n"
+            ),
+            "{f}"
+        );
+    }
+}
+
+/// Win64 keeps its own frame pointer, the establisher frame its unwind
+/// information names, under `-fno-omit-frame-pointer` too.
+#[test]
+fn win64_kept_frame_pointers_name_the_establisher_frame() {
+    let text = framed_assembly(SIX_ACROSS_A_CALL, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("\tmovq\t%rsp, %rbp\n\t.seh_setframe %rbp, 0\n\t.seh_endprologue\n"),
+        "{f}"
+    );
+    assert!(f.contains("(%rbp), %rsp\n"), "{f}");
 }
 
 #[test]
