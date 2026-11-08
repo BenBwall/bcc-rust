@@ -205,10 +205,18 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
                         // its cell stays narrow enough for a phone's strip.
                         let long = text.as_deref().is_some_and(|text| text.chars().count() > 5);
                         let marks = pointed(object.id, leaf.unwrap_or(0));
+                        // A floating value shows its bytes, lowest address
+                        // first: the value's own and, for long double, the
+                        // padding after them.
+                        let raw = match &value {
+                            | Value::Floating { bytes, .. } => Some(bytes.clone()),
+                            | _ => None,
+                        };
                         let plural = if bytes == 1 { "" } else { "s" };
                         let description = format!(
-                            "{name}, {ty}, {bytes} byte{plural}: {}{}",
+                            "{name}, {ty}, {bytes} byte{plural}: {}{}{}",
                             text.as_deref().unwrap_or("indeterminate"),
+                            raw.as_deref().map(|raw| format!(", stored as the bytes {raw}")).unwrap_or_default(),
                             kind.as_deref().map(|kind| format!(", {}", verb(kind))).unwrap_or_default()
                         );
                         view! {
@@ -222,6 +230,7 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
                             >
                                 <span class="cell-type" aria-hidden="true">{ty}<span class="cell-bytes">{format!("{bytes}B")}</span></span>
                                 <b class="cell-value" aria-hidden="true">{text.unwrap_or_else(|| "?".to_owned())}</b>
+                                {raw.map(|raw| view! { <span class="cell-raw" aria-hidden="true">{raw}</span> })}
                                 <span class="cell-name" aria-hidden="true">{name}<span class="cell-pointers">{marks}</span></span>
                             </li>
                         }

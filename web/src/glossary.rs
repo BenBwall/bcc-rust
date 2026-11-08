@@ -30,7 +30,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 35] = [
+pub static TERMS: [Term; 42] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -293,6 +293,81 @@ pub static TERMS: [Term; 35] = [
                      <stdio.h>: unsigned long on x86-64. printf prints it with %zu.",
         clause:     "7.17p2",
         page:       266,
+    },
+    Term {
+        id:         "floating-type",
+        name:       "Floating type",
+        phrases:    &["real floating types", "floating types", "floating type"],
+        definition: "A type that holds numbers with a fraction, approximately: float, double and \
+                     long double, each holding every value of the one before. On x86-64 they are \
+                     IEEE 754 binary32 and binary64 and the x87 80-bit extended format.",
+        clause:     "6.2.5p10",
+        page:       46,
+    },
+    Term {
+        id:         "significand",
+        name:       "Significand",
+        phrases:    &["significand"],
+        definition: "The digits of a floating value, a binary fraction such as 1.1001100… that \
+                     the exponent scales by a power of two. Its width, 53 bits for a double, is \
+                     the type's precision; a value that needs more bits is rounded.",
+        clause:     "5.2.4.2.2p2",
+        page:       35,
+    },
+    Term {
+        id:         "round-to-nearest",
+        name:       "Rounding to nearest",
+        phrases:    &[
+            "rounds to the nearest",
+            "rounded to the nearest",
+            "rounding",
+        ],
+        definition: "What a floating operation does with an exact result its type cannot hold: it \
+                     takes the nearest value the type has, and of two equally near the one whose \
+                     last bit is 0. Every program starts in this mode.",
+        clause:     "F.7.3p1",
+        page:       461,
+    },
+    Term {
+        id:         "truncation",
+        name:       "Truncation toward zero",
+        phrases:    &["truncating toward zero", "truncates toward zero"],
+        definition: "What converting a floating value to an integer does: it drops the fraction, \
+                     so 2.99 becomes 2 and -2.99 becomes -2. If what is left does not fit in the \
+                     integer type, the behavior is undefined.",
+        clause:     "6.3.1.4p1",
+        page:       55,
+    },
+    Term {
+        id:         "nan",
+        name:       "NaN",
+        phrases:    &["not a number", "a NaN"],
+        definition: "Not a Number: the value a floating operation gives when it has no meaningful \
+                     result, such as 0.0 / 0.0. A NaN compares unequal to everything, itself \
+                     included, and spreads through arithmetic.",
+        clause:     "5.2.4.2.2p3",
+        page:       35,
+    },
+    Term {
+        id:         "infinity",
+        name:       "Infinity",
+        phrases:    &["an infinity", "infinity"],
+        definition: "A floating value beyond every finite one, written inf by printf: the result \
+                     of dividing a nonzero value by zero, or of a result too large for its type, \
+                     under Annex F.",
+        clause:     "5.2.4.2.2p3",
+        page:       35,
+    },
+    Term {
+        id:         "annex-f",
+        name:       "Annex F",
+        phrases:    &["Annex F", "IEC 60559", "IEEE 754"],
+        definition: "The part of the C standard that binds the floating types and operators to \
+                     IEEE 754 (IEC 60559). An implementation that defines __STDC_IEC_559__, as \
+                     bcc does, follows it: division by zero gives an infinity or a NaN instead of \
+                     being undefined.",
+        clause:     "F.1p1",
+        page:       456,
     },
     Term {
         id:         "array-decay",
