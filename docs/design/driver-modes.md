@@ -301,8 +301,11 @@ previous `-march=`'s, and an explicit option outranks them wherever it stands:
 Random combinations of these options defined the same feature macros as GCC 13, GCC
 14's cc1 and Clang 23.
 
-Intrinsics compile without them, because bcc's headers compute on any x86-64, and a
-`target` attribute changes nothing about a function's code.
+Intrinsics compile without them, because bcc's headers compute on any x86-64, except
+those whose header function carries a `target` attribute (AVX, AVX2, AES, POPCNT),
+which need the feature in the calling function, as in both compilers. A function's
+`target` attribute gives its own code its features (`language-standards.md`, "Attribute
+status").
 
 These options apply only to x86-64. On a WebAssembly target `--clang-mode` refuses
 them as Clang does, with `unsupported option '-mavx2' for target
@@ -321,8 +324,10 @@ can reach and calls of them:
   change how it travels (`-mavx512f`, `-march=haswell`, `-march=x86-64-v4`), or, for
   64 bytes, under `-march=native` on an AVX-512 processor.
 - The same in a function with a `target` attribute that changes AVX, or a call from
-  one: GCC passes YMM there, Clang refuses mismatched calls, and bcc ignores the
-  attribute.
+  one: GCC passes YMM there and Clang refuses mismatched calls, while bcc keeps the
+  command line's convention for every function. A `static` function whose attribute
+  turns AVX off or AVX-512 on under the command line's AVX is refused too, since LLVM
+  would pass its vectors in other registers than bcc's calls do.
 - Under `--gcc-mode`, a variadic function's named 32-byte vector, which GCC passes in
   YMM0 and LLVM only on the stack. `--clang-mode` keeps Clang's stack.
 - `--backend=native` refuses any YMM signature, since it writes no AVX instructions.

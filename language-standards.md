@@ -2397,9 +2397,10 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Implemented (call contracts) | `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`, `enable_if`, `unavailable`; unsupported predicate shapes diagnose and unmodeled object-size origins remain unknown |
 | Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` and `gcc_struct`, which give the record Microsoft's or System V's bit-field layout whatever the target's, with each identity's rules where GCC and Clang differ (union bit-field alignment, zero-width fields in packed records, an attribute on an earlier declaration); under Clang's rules a `gcc_struct` record on an MSVC target is an error, as in Clang 23, but at its definition rather than where its layout is first needed |
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `no_callee_saved_registers` and the other non-x86 conventions are refused |
+| Implemented (x86 code features) | `target("...")` on functions: features (`avx2`, `no-avx`, ...), `arch=` and `tune=`, below |
 | Machine entries (Linux targets; refused by lowering on the others) | `interrupt` (handlers, below), `no_caller_saved_registers`, and under GCC's identity `naked` |
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked` under Clang's identity, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage` |
-| Dropped with a warning | `common` (bcc emits ordinary definitions), `target` (refused where it would change how a vector of 32 bytes or more crosses objects; `docs/design/driver-modes.md`), `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
+| Dropped with a warning | `common` (bcc emits ordinary definitions), `target("default")` (the multiversioning default), `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
 | Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
 | Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls (`no_sanitize` and its spellings keep a function out of the sanitizers bcc has), `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull` (which `-fsanitize=returns-nonnull-attribute` checks), `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
 | GCC identity only | `scalar_storage_order`: little-endian accepted, big-endian refused on records, ignored with a warning elsewhere (see above); unknown under the other identities |
@@ -2423,6 +2424,60 @@ and keep the handler's own frame out of the red zone. The red zone of the code i
 interrupts is that code's to give up, by `-mno-red-zone`, which System V targets
 still refuse. The interpreter and the WebAssembly back end refuse handlers and
 naked functions by name.
+
+An x86 `target("...")` attribute gives a function its own features, read over the
+command line's: a comma list of features (`avx2`, `sse4.2`, `no-avx`), `arch=CPU`,
+which gives the processor's features as defaults, and `tune=CPU`. The predefined
+macros stay the command line's, as in both compilers. Which names each compiler takes
+and what each feature and processor turns on in each are measured from GCC 14.2 and
+Clang 23 (`scripts/measure_x86_target_attribute.py` writes
+`src/target/x86_features/table.rs`); the parsing, faults and merging are in
+`src/target/x86_features.rs` and `semantic_analysis/attributes/function_target.rs`.
+
+- Clang takes one string literal, trims each part and its processor names, and
+  ignores the whole attribute with its `-Wignored-attributes` warning (`unsupported
+  'foo' in the 'target' attribute string; 'target' attribute ignored`, `unknown CPU`,
+  `unknown tune CPU`, `duplicate 'arch='`, and `fpmath=` anywhere); not a function,
+  more arguments or no string literal are errors. GCC takes one or more strings as one
+  list, reads each part as written, and refuses an unknown part, processor, repeated
+  `arch=`/`tune=`, bad `fpmath=`/`prefer-vector-width=` value or
+  `no-general-regs-only` with its error; an empty string warns under `-Wattributes`,
+  and an object or typedef gets bcc's ignored-attribute warning. GCC also takes
+  `fpmath=`, `prefer-vector-width=`, `cld`, `ieee-fp`, `recip` and the other code
+  options, which bcc accepts with nothing to do.
+- In Clang `arch=` replaces the processor's defaults and keeps the explicit
+  features; in GCC it also forgets every feature turned on or off before it, the
+  command line's too, so `"avx2,arch=core2"` has no AVX2 there.
+- Over an entity's declarations, Clang keeps a declaration's first `target`, which
+  later declarations inherit; another text on a redeclaration declares a
+  multiversioned function, which is refused, and an attribute after the definition is
+  ignored with Clang's warning. GCC reads each `target` of a declaration in turn, and a
+  later declaration's replace an earlier one's, even after the definition.
+- A direct call of an `always_inline` function whose features the caller lacks, when
+  either has a `target`, is an error in each compiler's words in emitted code, at every
+  level: Clang's `always_inline function 'f' requires target feature 'avx2', but would
+  be inlined into function 'g' ...` and GCC's `inlining failed in call to
+  'always_inline' 'f': target specific option mismatch`. The intrinsics of bcc's AVX,
+  AVX2, AES and POPCNT headers, whose functions carry `target`, are refused so outside
+  a function with their feature, as both compilers refuse them. Clang names the first
+  feature the callee's attribute names; for one only its `arch=` brings, Clang's
+  choice follows its hash table, and bcc names the first missing in name order. GCC
+  also refuses such a call in a `static` function nothing emits, which bcc does not
+  check.
+- A call of an `__builtin_ia32_*` builtin that needs a feature the caller lacks is
+  Clang's `'__builtin_ia32_pavgb256' needs target feature avx2` (measured for each
+  builtin bcc knows) or, under GCC's identity, `needs isa option -mavx2`. GCC declares
+  such builtins only where something enables their feature. Lowering has no x86
+  instructions, so a call the features allow is still refused as an unsupported
+  builtin.
+- A `target` that turns off x87, MMX, FXSR, SSE or SSE2, or asks for
+  `general-regs-only`, is refused when the function is emitted, as is a `static`
+  function whose attribute turns AVX off or AVX-512 on under the command line's AVX
+  while it passes a vector of 32 bytes or more by value; an external one keeps the
+  refusal of `docs/design/driver-modes.md`.
+- `target("default")` and `target_clones` keep being ignored with a warning: bcc has
+  no multiversioning. `#pragma GCC target` is ignored silently and `#pragma clang
+  attribute` with `-Wunknown-pragmas`; neither is implemented.
 
 A `naked` function has no prologue or epilogue, and falls off its end into a
 trap, as GCC's does. GCC documents only basic `asm` in one; a C body also compiles,

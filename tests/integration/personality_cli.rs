@@ -5326,7 +5326,7 @@ mod tests {
     /// `__builtin_cpu_supports` and `__builtin_cpu_is` read libgcc's data as
     /// each compiler does: GCC gives the bit where it stands and Clang 1, and
     /// each words a bad name its own way. A function with a `target` attribute
-    /// that the query guards runs, computed in software.
+    /// that the query guards runs with the attribute's instructions.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn cpu_builtins_follow_each_compiler() {
