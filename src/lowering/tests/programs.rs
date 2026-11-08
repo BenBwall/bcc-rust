@@ -395,6 +395,26 @@ int main(void) {
 int main(void) { return scale(7, 6); }",
         expected: 42,
     },
+    // C99 §6.6p9: a row of a static two-dimensional array is an address
+    // constant once it decays, as in PostgreSQL's ecpg `descriptor.c`.
+    Program {
+        name:     "static_subarray_addresses",
+        source:   "static char rows[3][8] = {\"zero\", \"one\", \"two\"};
+static char *last = rows[2];
+static char *inner = &rows[1][1];
+static int grid[2][3][4];
+static int *cell = grid[1][2];
+static int (*plane)[4] = grid[1];
+struct var { char *name; int *type; };
+static char *pick(int i) { static char names[2][8]; static int type;
+ static struct var vars[2] = { {names[0], &type}, {names[1], &type} };
+ names[i][0] = (char)('a' + i); return vars[i].name; }
+int main(void) {
+ if (last[0] != 't' || inner[0] != 'n') return 1;
+ if (cell - &grid[0][0][0] != 20 || (int *)plane - &grid[0][0][0] != 12) return 2;
+ return pick(0)[0] + pick(1)[0] == 'a' + 'b' ? 0 : 3; }",
+        expected: 0,
+    },
 ];
 
 /// Prints each program's IR, for inspection with `--nocapture`.
