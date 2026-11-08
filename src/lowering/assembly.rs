@@ -74,6 +74,7 @@ use crate::{
             AsmRegisterClass,
             AsmRole,
             ControlTarget,
+            TypeId,
             TypeKind,
         },
     },
@@ -248,6 +249,13 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             // A widened output keeps its low bits, a flag zero-extends, and
             // a value in the other kind of register keeps its bits.
             let value = self.reinterpret(value, value_type, false);
+            // An aggregate's bytes are the integer's, stored as GCC and
+            // Clang store them, with the object's qualifiers.
+            if self.aggregate_bytes(ty, source)?.is_some() {
+                let address = aggregate_address(place, source)?;
+                self.store(value, address, place.ty, source)?;
+                continue;
+            }
             let item = Item {
                 operand: Operand::Value(value),
                 ty,
@@ -333,7 +341,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             ));
         }
         let value_ty = place.ty.unqualified();
-        let value_type = self.value_type(value_ty, source)?;
+        let value_type = self.register_type(value_ty, source)?;
         let (constraint, register) = match operand.kind {
             | AsmOperandKind::Register(class) => {
                 let (constraint, register) = register_class(class, value_type, source)?;
@@ -399,13 +407,13 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             };
             let output_facts = &facts.operands[output as usize];
             let info = self.info(output_facts.expression)?;
-            let own = self.value_type(info.ty.unqualified(), source)?;
+            let own = self.register_type(info.ty.unqualified(), source)?;
             let info = self.info(operand.expression)?;
             let converted = self
                 .conversions(operand.expression)
                 .last()
                 .map_or(info.ty, |conversion| conversion.ty);
-            let input = match self.value_type(converted.unqualified(), source)? {
+            let input = match self.register_type(converted.unqualified(), source)? {
                 | Type::Ptr => Type::I64,
                 | ty => ty,
             };
@@ -449,7 +457,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             },
             | AsmOperandKind::Register(class) => {
                 let item = item.ok_or_else(missing)?;
-                let value_type = self.value_type(item.ty, source)?;
+                let value_type = self.register_type(item.ty, source)?;
                 let (constraint, register) = register_class(class, value_type, source)?;
                 let constraint = self.pinned(operand, constraint)?;
                 let value = self.register_value(item, register, source)?;
@@ -460,7 +468,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 let (tied, _) = outputs.get(output as usize).ok_or_else(|| {
                     LoweringError::missing("a tied asm output is missing", source)
                 })?;
-                let own = self.value_type(item.ty, source)?;
+                let own = self.register_type(item.ty, source)?;
                 if own.is_int() && own.bits() < tied.ty.bits() {
                     print = Some(own);
                 }
@@ -545,6 +553,72 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         Ok((address, ty, bytes))
     }
 
+    /// The IR type of a register operand of C type `ty`: its scalar type, or
+    /// for an array, structure or union of 1, 2, 4 or 8 bytes the integer of
+    /// that size, as which the register moves its bytes, as Clang does.
+    /// GNU extension: GCC manual, "Extended Asm".
+    fn register_type(&self, ty: TypeId, source: SourceVectors) -> Result<Type, LoweringError> {
+        match self.aggregate_bytes(ty, source)? {
+            | None => self.value_type(ty, source),
+            | Some(1) => Ok(Type::I8),
+            | Some(2) => Ok(Type::I16),
+            | Some(4) => Ok(Type::I32),
+            | Some(8) => Ok(Type::I64),
+            | Some(_) => Err(LoweringError::unsupported(
+                Construct::InlineAssemblyOperand,
+                source,
+            )),
+        }
+    }
+
+    /// The size of an array, structure or union, or `None` for another
+    /// type.
+    fn aggregate_bytes(
+        &self,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Option<u64>, LoweringError> {
+        if self.repr(ty.unqualified(), source)? != types::Repr::Aggregate {
+            return Ok(None);
+        }
+        let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| LoweringError {
+            kind,
+            source: Some(source),
+        })?;
+        Ok(Some(layout.size))
+    }
+
+    /// A register operand's value: a scalar's, or an aggregate object's
+    /// bytes loaded as the integer of its size.
+    fn operand_value(&mut self, item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
+        if self.aggregate_bytes(item.ty, source)?.is_none() {
+            return self.value(item, source);
+        }
+        let ty = self.register_type(item.ty, source)?;
+        let address = aggregate_address(item, source)?;
+        let align = super::alignment::storage_alignment(&self.unit.sema.types, item.ty).map_err(
+            |kind| LoweringError {
+                kind,
+                source: Some(source),
+            },
+        )?;
+        let flags = if types::is_volatile(item.ty) {
+            crate::ir::InstFlags::VOLATILE
+        } else {
+            crate::ir::InstFlags::empty()
+        };
+        Ok(self.inst(
+            InstData::Load {
+                ty,
+                flags,
+                align,
+                tag: None,
+                addr: address,
+            },
+            ty,
+        ))
+    }
+
     /// An operand's value in `register`'s type: the same bits, reinterpreted
     /// between an integer and a floating type of one width.
     fn register_value(
@@ -553,7 +627,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         register: Type,
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
-        let value = self.value(item, source)?;
+        let value = self.operand_value(item, source)?;
         let ty = self.draft.value_type(value);
         Ok(if ty == register {
             value
@@ -573,7 +647,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
         let signed = self.repr(item.ty, source)?.signed();
-        let value = self.value(item, source)?;
+        let value = self.operand_value(item, source)?;
         Ok(self.reinterpret(value, output, signed))
     }
 
@@ -697,6 +771,17 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                     LoweringError::missing("asm statement facts are not retained", source)
                 })
         })
+    }
+}
+
+/// The address of an aggregate operand's object.
+fn aggregate_address(item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
+    match item.operand {
+        | Operand::Place(Place::Memory(address)) | Operand::Aggregate(address) => Ok(address),
+        | _ => Err(LoweringError::missing(
+            "an aggregate asm operand is not in memory",
+            source,
+        )),
     }
 }
 
@@ -867,13 +952,7 @@ fn size_modifier(ty: Type) -> Option<u8> {
 
 /// A register output's slot and lvalue, the register type it shares with
 /// its tied inputs, and its value's IR and C types.
-type Write = (
-    Value,
-    Item,
-    Type,
-    Type,
-    crate::translation_phases::semantic_analysis::TypeId,
-);
+type Write = (Value, Item, Type, Type, TypeId);
 
 /// The prefix of an `asm goto` statement's local labels; `.L` keeps them
 /// out of the symbol table on ELF and COFF.
