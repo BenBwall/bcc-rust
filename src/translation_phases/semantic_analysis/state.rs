@@ -73,6 +73,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             old_parameter_mode: false,
             runtime_bound: false,
             inhibited_evaluations: 0,
+            extension_operands: 0,
             constant_contexts: 0,
             constant_site: super::exceptional_constants::ConstantSite::default(),
             expression_depth: 0,

@@ -85,7 +85,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | "__PRETTY_FUNCTION__" => Predefined::Pretty,
             | _ => return None,
         };
-        self.report_predefined_identifier(name);
         let current = self
             .functions
             .current
