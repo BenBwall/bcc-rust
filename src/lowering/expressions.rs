@@ -1970,6 +1970,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let signed = representation.signed();
         let a = self.value(left, source)?;
         let mut b = self.value(right, source)?;
+        // The shift count before the shift narrows it, for its check.
+        let count = b;
         if matches!(representation, Repr::Float { .. }) {
             let opcode = match operator {
                 | B::Multiplication => Opcode::Fmul,
@@ -2028,8 +2030,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         };
         match operator {
             | B::Division | B::Modulo => self.check_division([a, b], ty, signed, source),
-            | B::LeftShift | B::RightShift =>
-                self.check_shift(operator == B::LeftShift, a, b, ty, right.ty, signed, source),
+            | B::LeftShift | B::RightShift => self.check_shift(
+                operator == B::LeftShift,
+                a,
+                [count, b],
+                ty,
+                right.ty,
+                signed,
+                source,
+            ),
             | _ => {},
         }
         let value = self.binary_inst(opcode, flags, a, b);

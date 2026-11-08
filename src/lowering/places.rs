@@ -698,7 +698,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// Under `-ftrapv`, traps before a call of the library's `abs`, `labs`
     /// or `llabs` (or their `__builtin_` forms) whose argument is the most
     /// negative value, whose absolute value overflows, as GCC and Clang
-    /// check their expansions of these builtins; with the library builtins
+    /// check their expansions of these builtins, and under
+    /// `-fsanitize=signed-integer-overflow` reports it as their negation
+    /// overflow; with the library builtins
     /// off (`-fno-builtin-abs`), a call by the library's name is the
     /// library's alone, as in GCC, while `__builtin_abs` still traps.
     /// C99: §7.20.6.1 paragraph 2, p. 320; PDF p. 332.
@@ -716,7 +718,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 Linkage,
             },
         };
-        if !self.unit.context.configuration.trapv() {
+        let trapv = self.unit.context.configuration.trapv();
+        let checked = self.checks(crate::target::sanitizers::UbChecks::SIGNED_INTEGER_OVERFLOW);
+        if !trapv && !checked {
             return Ok(());
         }
         let data = self.unit.sema.bindings[binding];
@@ -755,9 +759,25 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         if !ty.is_int() {
             return Ok(());
         }
-        let minimum = self.iconst(ty, i128::MIN >> (128 - ty.bits()));
-        let overflow = self.icmp(IntCC::Eq, value, minimum);
-        self.trap_if(overflow);
+        if checked {
+            let representation = self.repr(argument.ty, source)?;
+            let zero = self.iconst(ty, 0);
+            let negated = self.binary_inst(Opcode::Isub, InstFlags::empty(), zero, value);
+            self.check_signed_overflow(
+                Opcode::Isub,
+                representation,
+                [zero, value],
+                negated,
+                argument.ty,
+                true,
+                source,
+            );
+        }
+        if trapv {
+            let minimum = self.iconst(ty, i128::MIN >> (128 - ty.bits()));
+            let overflow = self.icmp(IntCC::Eq, value, minimum);
+            self.trap_if(overflow);
+        }
         Ok(())
     }
 

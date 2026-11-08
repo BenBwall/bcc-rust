@@ -185,6 +185,73 @@ int main(int argc, char **argv) {
         }
     }
 
+    /// Cases a review found (PR #324), each as GCC 13 and Clang 23 report it
+    /// or stay quiet: a member of a record that is itself a member of a
+    /// packed record has the packed place's alignment; a shift count is
+    /// checked at its own width; `abs` of the most negative value is a
+    /// negation overflow; and Clang compares a 128-bit index whole.
+    #[test]
+    fn edge_cases_report_as_each_compiler() {
+        let directory = Directory::new();
+        let cases = [
+            (
+                "packed",
+                "extern int printf(const char *, ...);\nstruct S { int x; };\nstruct \
+                 __attribute__((packed)) P { char c; struct S s; };\n__attribute__((noinline)) \
+                 int readp(struct P *p) { return p->s.x; }\nstatic struct P p \
+                 __attribute__((aligned(16))) = {1, {42}};\nint main(void) { printf(\"%d\\n\", \
+                 readp(&p)); }\n",
+                None,
+                None,
+            ),
+            (
+                "shift",
+                "extern int printf(const char *, ...);\nint main(void) { volatile unsigned long n \
+                 = 4294967296UL; volatile unsigned x = 1; printf(\"%u\\n\", x << n); }\n",
+                Some("shift exponent 4294967296 is too large for 32-bit type 'unsigned int'"),
+                Some("shift exponent 4294967296 is too large for 32-bit type 'unsigned int'"),
+            ),
+            (
+                "abs",
+                "extern int printf(const char *, ...);\nint main(void) { volatile int x = \
+                 -2147483647 - 1; printf(\"%d\\n\", __builtin_abs(x)); }\n",
+                Some("negation of -2147483648 cannot be represented in type 'int'"),
+                Some("negation of -2147483648 cannot be represented in type 'int'"),
+            ),
+            (
+                "index",
+                "int main(void) { int a[2] = {0}; volatile __int128 i = (__int128)1 << 64; return \
+                 a[i]; }\n",
+                None,
+                Some("index 0x00000000000000010000000000000000 out of bounds for type 'int[2]'"),
+            ),
+        ];
+        for (name, source, gcc, clang) in cases {
+            let file = format!("{name}.c");
+            directory.write(&file, source);
+            for (mode, expected) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                for back_end in [&[][..], &["-Xbcc", "--backend=native"]] {
+                    let mut args = vec!["-fsanitize=undefined", "-w", &file, "-o", name];
+                    args.extend_from_slice(back_end);
+                    let build = directory.bcc(mode, &args);
+                    if !build.status.success() && stderr(&build).contains("ubsan") {
+                        continue;
+                    }
+                    succeeds(&build);
+                    let run = Command::new(directory.path(name)).output().unwrap();
+                    let text = stderr(&run);
+                    match expected {
+                        | Some(message) => assert!(
+                            text.contains(&format!("runtime error: {message}")),
+                            "{name} {mode} {back_end:?}: {text}"
+                        ),
+                        | None => assert_eq!(text, "", "{name} {mode} {back_end:?}"),
+                    }
+                }
+            }
+        }
+    }
+
     /// `-fno-sanitize-recover` ends the program at the first report, and
     /// `unreachable` always does; a division by zero reports before the
     /// division runs.

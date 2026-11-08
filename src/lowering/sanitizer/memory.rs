@@ -211,8 +211,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | _ if matches!(base_expression.kind, ExpressionType::Identifier(_)) => return,
             | _ => self.report_site(base_expression),
         };
-        let align = super::super::alignment::storage_alignment(&self.unit.sema.types, record)
+        // A record that is itself a member of a packed record has only the
+        // alignment its place there gives it, as Clang's lvalue keeps.
+        let mut align = super::super::alignment::storage_alignment(&self.unit.sema.types, record)
             .unwrap_or(Align::BYTE);
+        if let Some(&place) = self.ub.required.get(&base)
+            && place.bytes() < align.bytes()
+        {
+            align = place;
+        }
         self.check_pointer(base, record, Access::Member, align, site, None);
     }
 
@@ -416,8 +423,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let signed = self
             .repr(index_ty, source)
             .is_ok_and(super::super::types::Repr::signed);
-        let wide = self.extend(index, signed, Type::I64);
-        let count = self.iconst(Type::I64, i128::from(count));
+        // Clang compares a 128-bit index whole; GCC takes it as `sizetype`.
+        let compared = if !self.gcc_reports() && self.draft.value_type(index).bits() > 64 {
+            self.draft.value_type(index)
+        } else {
+            Type::I64
+        };
+        let wide = self.extend(index, signed, compared);
+        let count = self.iconst(compared, i128::from(count));
         let condition = if accessed { IntCC::Uge } else { IntCC::Ugt };
         let failed = self.icmp(condition, wide, count);
         let site = self.front_end_site(source);

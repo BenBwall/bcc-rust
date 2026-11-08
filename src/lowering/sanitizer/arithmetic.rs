@@ -84,11 +84,12 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
         });
     }
 
-    /// Checks the shift of `value` by `count`, already converted to the
-    /// value's width. `ty` and `count_ty` are the promoted operands' C types.
-    /// A left shift of a signed value may not move a set bit into or past the
-    /// sign bit, except where `-fwrapv` defines it, or before C99 in GCC.
-    /// C99: §6.5.7 paragraphs 3-4, p. 84; PDF p. 96.
+    /// Checks the shift of `value` by `count`, at the count's own width, and
+    /// `narrowed`, the count converted to the value's width. `ty` and
+    /// `count_ty` are the promoted operands' C types. A left shift of a signed
+    /// value may not move a set bit into or past the sign bit, except where
+    /// `-fwrapv` defines it, or before C99 in GCC. C99: §6.5.7 paragraphs 3-4,
+    /// p. 84; PDF p. 96.
     #[expect(
         clippy::too_many_arguments,
         reason = "Both operands are reported with their C types."
@@ -97,7 +98,7 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
         &mut self,
         left: bool,
         value: Value,
-        count: Value,
+        [count, narrowed]: [Value; 2],
         ty: TypeId,
         count_ty: TypeId,
         signed: bool,
@@ -113,10 +114,13 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
         if !exponent && !base {
             return;
         }
+        // The count is checked at its own width, before the shift narrows
+        // it to the value's (Clang's and GCC's `count > width - 1`).
         let width = self.draft.value_type(value).bits();
         let ty_ir = self.draft.value_type(value);
         let largest = self.iconst(ty_ir, i128::from(width - 1));
-        let in_range = self.icmp(IntCC::Ule, count, largest);
+        let limit = self.iconst(self.draft.value_type(count), i128::from(width - 1));
+        let in_range = self.icmp(IntCC::Ule, count, limit);
         let plain = InstFlags::empty();
         let mut failures = [None, None];
         if exponent {
@@ -126,7 +130,7 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
         if base {
             // The bits that would reach the sign bit or past it, by a count
             // kept in range where it is not.
-            let rest = self.binary_inst(Opcode::Isub, plain, largest, count);
+            let rest = self.binary_inst(Opcode::Isub, plain, largest, narrowed);
             let zero = self.iconst(ty_ir, 0);
             let amount = self.choose(in_range, rest, zero);
             let moved = self.binary_inst(Opcode::Lshr, plain, value, amount);
