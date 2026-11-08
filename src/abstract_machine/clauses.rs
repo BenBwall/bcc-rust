@@ -273,4 +273,107 @@ clauses! {
     /// C99: §6.9.1 paragraph 9, p. 142; PDF p. 154.
     PARAMETERS = "6.9.1p9", "p. 142; PDF p. 154", "Function definitions",
         "Each parameter is a local object with automatic storage duration, private to this call.";
+    /// C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+    TRANSLATION_PHASES = "5.1.1.2p1", "pp. 9-10; PDF pp. 21-22", "Translation phases",
+        "A source file is translated in phases; in phase 4 the preprocessor executes directives \
+         such as #include, long before the program runs.";
+    /// C99: §6.4.4.4 paragraph 10, p. 61; PDF p. 73.
+    CHARACTER_CONSTANT = "6.4.4.4p10", "p. 61; PDF p. 73", "Character constants",
+        "A character constant such as 'a' is an int whose value is the character's code: 'a' is \
+         97.";
+    /// C99: §6.4.5 paragraph 5, pp. 62-63; PDF pp. 74-75.
+    STRING_LITERAL = "6.4.5p5", "pp. 62-63; PDF pp. 74-75", "String literals",
+        "A string literal is an array of char with static storage duration, holding its \
+         characters and a null character, '\\0', added at the end.";
+    /// C99: §6.4.5 paragraph 6, p. 63; PDF p. 75.
+    STRING_LITERAL_WRITE = "6.4.5p6", "p. 63; PDF p. 75", "String literals",
+        "A program must not modify a string literal's array: doing so is undefined, and \
+         identical literals may even share one array.";
+    /// C99: §6.5.2.2 paragraph 6, pp. 71-72; PDF pp. 83-84.
+    DEFAULT_PROMOTIONS = "6.5.2.2p6", "pp. 71-72; PDF pp. 83-84", "Function calls",
+        "The default argument promotions are the integer promotions (and float to double): a \
+         char argument becomes an int.";
+    /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
+    VARIADIC_ARGUMENTS = "6.5.2.2p7", "p. 72; PDF p. 84", "Function calls",
+        "Arguments matching a prototype's parameters are converted to their types; the arguments \
+         after them, matching its `...`, get the default argument promotions.";
+    /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+    ADDRESS_CONSTANT = "6.6p9", "p. 96; PDF p. 108", "Constant expressions",
+        "The address of an object with static storage duration, such as a string literal's \
+         array, is a constant a static object may be initialized with.";
+    /// C99: §6.7.8 paragraph 14, p. 126; PDF p. 138.
+    STRING_INITIALIZER = "6.7.8p14", "p. 126; PDF p. 138", "Initialization",
+        "A string literal can initialize a char array: its characters, and its null if there is \
+         room, fill the elements in order.";
+    /// C99: §6.10.2 paragraph 2, p. 149; PDF p. 161.
+    SOURCE_INCLUSION = "6.10.2p2", "p. 149; PDF p. 161", "Source file inclusion",
+        "#include <name> is replaced by the entire contents of the header that name \
+         identifies.";
+    /// C99: §7.1.1 paragraph 1, p. 164; PDF p. 176.
+    STRING = "7.1.1p1", "p. 164; PDF p. 176", "Definitions of terms",
+        "A string is a sequence of characters ending with the first null character; a pointer to \
+         a string points to its first character.";
+    /// C99: §7.1.2 paragraph 1, p. 165; PDF p. 177.
+    LIBRARY_HEADERS = "7.1.2p1", "p. 165; PDF p. 177", "Standard headers",
+        "Each library function is declared, with a prototype, in a header that #include makes \
+         available.";
+    /// C99: §7.1.2 paragraph 4, p. 165; PDF p. 177.
+    HEADER_ORDER = "7.1.2p4", "p. 165; PDF p. 177", "Standard headers",
+        "A standard header may be included more than once with no further effect, and must be \
+         included before the first use of what it declares.";
+    /// C99: §7.1.4 paragraph 1, pp. 166-167; PDF pp. 178-179.
+    LIBRARY_ARGUMENTS = "7.1.4p1", "pp. 166-167; PDF pp. 178-179", "Use of library functions",
+        "Passing a library function an invalid argument, such as a null pointer where it needs \
+         a string, is undefined.";
+    /// C99: §7.1.4 paragraph 3, p. 167; PDF p. 179.
+    LIBRARY_SEQUENCE_POINT = "7.1.4p3", "p. 167; PDF p. 179", "Use of library functions",
+        "There is a sequence point just before a library function returns.";
+    /// C99: §7.15.1.1 paragraph 2, pp. 249-250; PDF pp. 261-262.
+    VARIADIC_TYPES = "7.15.1.1p2", "pp. 249-250; PDF pp. 261-262", "The va_arg macro",
+        "A function reading its `...` arguments must read each with its promoted type; an int \
+         may stand for an unsigned int only if its value fits in both.";
+    /// C99: §7.19.6.1 paragraph 2, p. 274; PDF p. 286.
+    FPRINTF = "7.19.6.1p2", "p. 274; PDF p. 286", "The fprintf function",
+        "printf's format string says how to convert each later argument to text; too few \
+         arguments is undefined, and extra ones are evaluated and ignored.";
+    /// C99: §7.19.6.1 paragraph 4, p. 275; PDF p. 287.
+    CONVERSION_SPECIFICATION = "7.19.6.1p4", "p. 275; PDF p. 287", "The fprintf function",
+        "A conversion specification starts with % and has flags, a minimum field width, a \
+         precision, a length modifier and a conversion specifier, in that order; a shorter \
+         result is padded with spaces to the width.";
+    /// C99: §7.19.6.1 paragraph 6, pp. 275-276; PDF pp. 287-288.
+    PRINTF_FLAGS = "7.19.6.1p6", "pp. 275-276; PDF pp. 287-288", "The fprintf function",
+        "The - flag pads on the right instead of the left; the 0 flag pads a number with zeros, \
+         and is undefined for %c and %s.";
+    /// C99: §7.19.6.1 paragraph 8, pp. 277-280; PDF pp. 289-292.
+    CONVERSIONS = "7.19.6.1p8", "pp. 277-280; PDF pp. 289-292", "The fprintf function",
+        "%d and %i write an int in decimal, %u and %x an unsigned int in decimal and hexadecimal, \
+         %c one character, %s a string up to its null, and %% a percent sign.";
+    /// C99: §7.19.6.1 paragraph 9, p. 280; PDF p. 292.
+    PRINTF_UNDEFINED = "7.19.6.1p9", "p. 280; PDF p. 292", "The fprintf function",
+        "An invalid conversion specification, or an argument of the wrong type for its \
+         conversion, is undefined.";
+    /// C99: §7.19.6.3 paragraph 2, p. 290; PDF p. 302.
+    PRINTF = "7.19.6.3p2", "p. 290; PDF p. 302", "The printf function",
+        "printf is fprintf writing to standard output.";
+    /// C99: §7.19.6.3 paragraph 3, p. 290; PDF p. 302.
+    PRINTF_RETURN = "7.19.6.3p3", "p. 290; PDF p. 302", "The printf function",
+        "printf returns the number of characters it wrote.";
+    /// C99: §7.19.7.3 paragraph 2, p. 297; PDF p. 309.
+    FPUTC = "7.19.7.3p2", "p. 297; PDF p. 309", "The fputc function",
+        "The character to write is converted to unsigned char first, so -56 writes the byte \
+         200.";
+    /// C99: §7.19.7.3 paragraph 3, p. 297; PDF p. 309.
+    FPUTC_RETURN = "7.19.7.3p3", "p. 297; PDF p. 309", "The fputc function",
+        "fputc, and so putchar, returns the character it wrote, as an unsigned char converted to \
+         int.";
+    /// C99: §7.19.7.9 paragraph 2, p. 299; PDF p. 311.
+    PUTCHAR = "7.19.7.9p2", "p. 299; PDF p. 311", "The putchar function",
+        "putchar(c) writes one character to standard output, like fputc(c, stdout).";
+    /// C99: §7.19.7.10 paragraph 2, p. 299; PDF p. 311.
+    PUTS = "7.19.7.10p2", "p. 299; PDF p. 311", "The puts function",
+        "puts writes a string to standard output, without its null, and then a new-line.";
+    /// C99: §7.19.7.10 paragraph 3, p. 299; PDF p. 311.
+    PUTS_RETURN = "7.19.7.10p3", "p. 299; PDF p. 311", "The puts function",
+        "puts returns a nonnegative value when it succeeds; which one is up to the library.";
 }

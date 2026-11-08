@@ -20,6 +20,7 @@ use super::{
         ExpressionNode,
         Function,
         Instruction,
+        Library,
         MAX_CELLS,
         MAX_CODE,
         MAX_DEPTH,
@@ -39,25 +40,33 @@ use super::{
 
 pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
     let mut parser = Parser {
-        tokens:         lexer::lex(source)?,
-        position:       0,
-        code:           Vec::new(),
-        expressions:    Vec::new(),
-        symbols:        Vec::new(),
-        scope:          0,
-        nesting:        0,
-        calls:          Vec::new(),
+        tokens: lexer::lex(source)?,
+        source,
+        position: 0,
+        code: Vec::new(),
+        expressions: Vec::new(),
+        symbols: Vec::new(),
+        scope: 0,
+        nesting: 0,
+        calls: Vec::new(),
         function_index: 0,
-        nodes:          Vec::new(),
-        structures:     Vec::new(),
-        complete:       Vec::new(),
-        statics:        Vec::new(),
-        signatures:     Vec::new(),
-        returns:        Type::Int,
+        function_name: None,
+        nodes: Vec::new(),
+        structures: Vec::new(),
+        complete: Vec::new(),
+        statics: Vec::new(),
+        signatures: Vec::new(),
+        prototypes: Vec::new(),
+        directives: Vec::new(),
+        returns: Type::Int,
     };
     let mut functions: Vec<Function> = Vec::new();
     let mut total_code = 0;
     while !parser.at("") {
+        if parser.current().text.starts_with('#') {
+            parser.directive()?;
+            continue;
+        }
         if parser.at("struct") && parser.peek(2) == "{" {
             parser.structure_definition()?;
             continue;
@@ -88,10 +97,6 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
                     "functions return int or a structure in this subset",
                 )),
         };
-        parser.function_index = functions.len();
-        if functions.iter().any(|function| function.name == name.text) {
-            return Err(parser.error("duplicate function definition"));
-        }
         if parser.symbols.iter().any(|symbol| symbol.name == name.text) {
             return Err(Diagnostic::new(
                 "unsupported",
@@ -99,44 +104,40 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
                 "a function and a file-scope object share this name",
             ));
         }
+        parser.library_conflict(name)?;
+        let header = parser.function_header(name)?;
+        if parser.take(";") {
+            parser.prototype(name, returns, &header)?;
+            parser.symbols.retain(|symbol| symbol.scope == 0);
+            continue;
+        }
+        if !parser.at("{") {
+            return Err(parser
+                .error("only function definitions and prototypes are supported at file scope"));
+        }
+        if functions.iter().any(|function| function.name == name.text) {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                "duplicate function definition",
+            ));
+        }
+        let mut parameters = Vec::new();
+        for (parameter, ty) in header {
+            let Some(parameter) = parameter else {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    name.range,
+                    "a function definition names each of its parameters",
+                ));
+            };
+            parameters.push((String::from(parameter.text), ty));
+        }
+        parser.agrees_with_prototypes(name, returns, &parameters)?;
+        parser.function_index = functions.len();
+        parser.function_name = Some(String::from(name.text));
         parser.signatures.push((String::from(name.text), returns));
         parser.returns = returns;
-        parser.expect("(")?;
-        let mut parameters = Vec::new();
-        parser.scope = 1;
-        if parser.take("void") {
-            parser.expect(")")?;
-        } else if !parser.take(")") {
-            loop {
-                let base = parser.base_type()?;
-                let pointer = parser.take("*");
-                let parameter = parser.identifier()?;
-                let ty = match (base, pointer) {
-                    | (Base::Int, false) => Type::Int,
-                    | (Base::Int, true) => Type::Pointer,
-                    | (Base::Struct(id), false) =>
-                        parser.complete_structure(id, parameter.range)?,
-                    | (Base::Struct(id), true) => Type::StructPointer(id),
-                    | (Base::Char, _) =>
-                        return Err(Diagnostic::new(
-                            "unsupported",
-                            parameter.range,
-                            "parameters are int, int *, a structure or a pointer to one in this \
-                             subset",
-                        )),
-                };
-                parser.add_symbol(parameter, ty, 1, None)?;
-                parameters.push((String::from(parameter.text), ty));
-                if parser.take(")") {
-                    break;
-                }
-                parser.expect(",")?;
-            }
-        }
-        parser.scope = 0;
-        if !parser.at("{") {
-            return Err(parser.error("only function definitions are supported at file scope"));
-        }
         parser.block()?;
         parser.emit(Op::Fallthrough, name.range)?;
         total_code += parser.code.len();
@@ -153,6 +154,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             code: std::mem::take(&mut parser.code),
             nodes: roots(std::mem::take(&mut parser.nodes)),
         });
+        parser.function_name = None;
         parser.symbols.retain(|symbol| symbol.scope == 0);
     }
     let Some(entry) = functions
@@ -168,22 +170,33 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         name,
         arguments,
         range,
-        caller,
+        declared,
     } in &parser.calls
     {
         let Some(index) = functions.iter().position(|function| function.name == *name) else {
-            return Err(Diagnostic::new(
-                "unsupported",
-                *range,
-                "call to an undefined function; library functions are not supported",
-            ));
+            let message = if *declared {
+                format_message("`", name, "` is declared but never defined")
+            } else if Library::named(name).is_some() {
+                format_message(
+                    "`",
+                    name,
+                    "` is a library function declared in <stdio.h>; write #include <stdio.h> \
+                     before its first use",
+                )
+            } else {
+                String::from(
+                    "call to an undefined function; the only library functions are printf, puts \
+                     and putchar, from <stdio.h>",
+                )
+            };
+            return Err(Diagnostic::new("unsupported", *range, &message));
         };
-        if index > *caller {
+        if !*declared {
             return Err(Diagnostic::new(
                 "unsupported",
                 *range,
-                "function must be declared before its call in C99; forward declarations are \
-                 outside this subset",
+                "in C99 a function must be declared before its call: define it earlier, or \
+                 declare it first with a prototype such as `int f(int);` (C99 §6.5.1p2)",
             ));
         }
         let function = &functions[index];
@@ -210,11 +223,13 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         entry,
         structures: parser.structures.into(),
         statics: parser.statics,
+        directives: parser.directives,
     })
 }
 
 pub(super) struct Parser<'a> {
     pub tokens:         Vec<Token<'a>>,
+    pub source:         &'a str,
     pub position:       usize,
     pub code:           Vec<Instruction>,
     pub expressions:    Vec<Expr>,
@@ -223,6 +238,8 @@ pub(super) struct Parser<'a> {
     pub nesting:        usize,
     pub calls:          Vec<CallSite>,
     pub function_index: usize,
+    /// The function whose body is being compiled.
+    pub function_name:  Option<String>,
     /// The current function's expression-tree nodes.
     pub nodes:          Vec<ExpressionNode>,
     /// Structure types by index; an incomplete one (declared by `struct T *`
@@ -233,6 +250,10 @@ pub(super) struct Parser<'a> {
     pub statics:        Vec<Static>,
     /// Each function defined so far, or being defined, and its return type.
     pub signatures:     Vec<(String, Type)>,
+    /// Each function declared by a prototype so far.
+    pub prototypes:     Vec<Prototype>,
+    /// Each `#include <stdio.h>` so far.
+    pub directives:     Vec<SourceRange>,
     /// The return type of the function being compiled.
     pub returns:        Type,
 }
@@ -247,7 +268,13 @@ impl<'a> Parser<'a> {
             if self.at("") {
                 return Err(self.error("expected closing brace"));
             }
-            if self.at("int") || self.at("char") || self.at("struct") || self.at("static") {
+            if self.current().text.starts_with('#') {
+                return Err(self.error(
+                    "a directive inside a function is outside this subset; the machine runs \
+                     #include <stdio.h> at file scope",
+                ));
+            }
+            if self.at_declaration() {
                 self.declaration()?;
             } else {
                 self.statement()?;
@@ -316,8 +343,8 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 Ok(())
             },
-            | "int" | "char" | "struct" | "static" | "else" | "break" | "continue" | "goto"
-            | "do" | "switch" => Err(self.error("unsupported statement in this subset")),
+            | "int" | "char" | "struct" | "static" | "const" | "else" | "break" | "continue"
+            | "goto" | "do" | "switch" => Err(self.error("unsupported statement in this subset")),
             | _ => {
                 self.expression_statement()?;
                 self.expect(";")
@@ -348,7 +375,7 @@ impl<'a> Parser<'a> {
         self.expect("(")?;
         self.scope += 1;
         self.emit(Op::Enter, token.range)?;
-        if self.at("int") || self.at("char") {
+        if self.at("int") || self.at("char") || self.at("const") {
             self.declaration()?;
         } else {
             if !self.at(";") {
@@ -408,14 +435,52 @@ impl<'a> Parser<'a> {
         let base = self.base_type()?;
         let pointer = self.take("*");
         let name = self.identifier()?;
-        let array = self.array_suffix()?;
+        let array = self.declarator_array()?;
         let ty = self.declared_type(base, pointer, array, name.range)?;
         if is_static {
             return self.static_local(name, ty);
         }
         match ty {
-            | Type::Array(_) | Type::Struct(_) => self.aggregate_declaration(name, ty),
+            | Type::Array(_) | Type::Struct(_) | Type::CharArray(_) =>
+                self.aggregate_declaration(name, ty),
             | _ => self.scalar_declaration(name, ty),
+        }
+    }
+
+    /// Whether a block-scope declaration starts here.
+    fn at_declaration(&self) -> bool {
+        ["int", "char", "struct", "static", "const"]
+            .iter()
+            .any(|keyword| self.at(keyword))
+    }
+
+    /// A declarator's optional `[N]`, or `[]` when a string literal
+    /// initializer follows, whose length it takes: the literal's
+    /// characters and its null (C99 §6.7.8p22).
+    fn declarator_array(&mut self) -> Result<Option<usize>, Diagnostic> {
+        if !(self.at("[") && self.peek(1) == "]") {
+            return self.array_suffix();
+        }
+        let open = self.current();
+        self.position += 2;
+        let literal = self.tokens.get(self.position + 1).copied();
+        match literal {
+            | Some(literal) if self.at("=") && literal.text.starts_with('"') => {
+                let length = lexer::literal_bytes(self.source, literal)?.len() + 1;
+                if length > MAX_CELLS {
+                    return Err(Diagnostic::limit(
+                        literal.range,
+                        "array size must be between 1 and 512",
+                    ));
+                }
+                Ok(Some(length))
+            },
+            | _ => Err(Diagnostic::new(
+                "unsupported",
+                open.range,
+                "an array of unknown size needs a string literal initializer in this subset; give \
+                 its size",
+            )),
         }
     }
 
@@ -464,9 +529,24 @@ impl<'a> Parser<'a> {
         self.add_symbol(name, ty, self.scope, None)?;
         self.emit(Op::Declare(String::from(name.text), ty), name.range)?;
         if self.take("=") {
+            if let Type::CharArray(length) = ty
+                && self.current().text.starts_with('"')
+            {
+                let element = self.tree(name.text, name.range, Vec::new())?;
+                self.emit_node(
+                    Op::Address(Place::Local(String::from(name.text))),
+                    name.range,
+                    element,
+                )?;
+                self.string_initializer(element, name.range, length, true)?;
+                return self.expect(";");
+            }
             if !self.at("{") {
                 if !matches!(ty, Type::Struct(_)) {
-                    return Err(self.error("an array is initialized by a brace-enclosed list"));
+                    return Err(self.error(
+                        "an array is initialized by a brace-enclosed list, or a char array by a \
+                         string literal",
+                    ));
                 }
                 self.whole_initializer(name, ty)?;
                 return self.expect(";");
@@ -490,13 +570,23 @@ impl<'a> Parser<'a> {
             }
             // The initializer list is one full expression: its last store
             // ends it (C99 §6.8p4).
-            if let Some(Op::Store {
-                full_expression, ..
-            }) = self
+            if let Some(
+                Op::Store {
+                    full_expression, ..
+                }
+                | Op::InitializeString {
+                    full_expression, ..
+                },
+            ) = self
                 .code
                 .iter_mut()
                 .rev()
-                .find(|instruction| matches!(instruction.op, Op::Store { .. }))
+                .find(|instruction| {
+                    matches!(
+                        instruction.op,
+                        Op::Store { .. } | Op::InitializeString { .. }
+                    )
+                })
                 .map(|instruction| &mut instruction.op)
             {
                 *full_expression = true;
@@ -526,14 +616,19 @@ impl<'a> Parser<'a> {
         let mut index = 0;
         while !self.at("}") {
             let (member_type, leaf) = match ty {
-                | Type::Array(length) => {
+                | Type::Array(length) | Type::CharArray(length) => {
                     if self.at("[") {
                         return Err(self.error("array designators are outside this subset"));
                     }
                     if index >= length {
                         return Err(self.error("too many array initializer elements"));
                     }
-                    (Type::Int, offset + index)
+                    let element = if matches!(ty, Type::CharArray(_)) {
+                        Type::Char
+                    } else {
+                        Type::Int
+                    };
+                    (element, offset + index)
                 },
                 | Type::Struct(id) => {
                     if self.take(".") {
@@ -554,7 +649,13 @@ impl<'a> Parser<'a> {
             };
             let at = i32::try_from(leaf).map_err(|_| self.error("object too large"))?;
             match member_type {
-                | Type::Array(_) | Type::Struct(_) if self.at("{") => {
+                | Type::CharArray(length) if self.current().text.starts_with('"') => {
+                    let label = self.label(name.text, shape, at, None);
+                    let element = self.element(name, &label, at, None)?;
+                    self.string_initializer(element, name.range, length, false)?;
+                    mentioned[leaf..leaf + length].fill(true);
+                },
+                | Type::Array(_) | Type::Struct(_) | Type::CharArray(_) if self.at("{") => {
                     // A later initializer of the same subobject replaces it
                     // whole, so a scalar the new list leaves out is zero
                     // again, not what an earlier list stored (C99 §6.7.8p19,
@@ -562,7 +663,7 @@ impl<'a> Parser<'a> {
                     mentioned[leaf..leaf + member_type.leaves(&self.structures)].fill(false);
                     self.initializer_list(name, shape, member_type, leaf, mentioned)?;
                 },
-                | Type::Array(_) =>
+                | Type::Array(_) | Type::CharArray(_) =>
                     return Err(self.error(
                         "brace the initializer of each nested array; brace elision is outside \
                          this subset",
@@ -629,6 +730,59 @@ impl<'a> Parser<'a> {
         Ok(node)
     }
 
+    /// `= "..."` for the char array of `length` elements designated by
+    /// tree node `element`: the literal's characters, then its null if
+    /// there is room, initialize successive elements, and the rest are
+    /// zero. The literal names no object of its own here: only its
+    /// characters are used (C99 §6.7.8p14, p21).
+    fn string_initializer(
+        &mut self,
+        element: usize,
+        target: SourceRange,
+        length: usize,
+        full_expression: bool,
+    ) -> Result<(), Diagnostic> {
+        let literal = self.current();
+        let bytes = lexer::literal_bytes(self.source, literal)?;
+        if bytes.len() > length {
+            return Err(Diagnostic::new(
+                "unsupported",
+                literal.range,
+                &format!(
+                    "the string literal has {} characters, more than the {length} elements of the \
+                     array it initializes (C99 §6.7.8p2)",
+                    bytes.len()
+                ),
+            ));
+        }
+        self.position += 1;
+        self.adjacent_literal()?;
+        let value = self.tree(literal.text, literal.range, Vec::new())?;
+        let range = combined(target, literal.range);
+        let root = self.tree("=", range, vec![element, value])?;
+        self.emit_node(
+            Op::InitializeString {
+                bytes,
+                length,
+                full_expression,
+            },
+            range,
+            root,
+        )
+    }
+
+    /// Reject a string literal right after another one: translation phase
+    /// 6 would join them.
+    pub fn adjacent_literal(&self) -> Result<(), Diagnostic> {
+        if self.current().text.starts_with('"') {
+            return Err(self.error(
+                "adjacent string literals are joined in translation phase 6, which is outside \
+                 this subset; write them as one literal",
+            ));
+        }
+        Ok(())
+    }
+
     /// Store an initializer element. Only the list's last store ends the
     /// full expression; the declaration marks it.
     fn initialize(
@@ -662,6 +816,16 @@ impl<'a> Parser<'a> {
         };
         let expression = self.expression(0)?;
         let range = self.expressions[expression].range;
+        let modifies = self.at("=") || prefix.is_some() || self.at("++") || self.at("--");
+        if modifies && self.expressions[expression].readonly {
+            return Err(Diagnostic::new(
+                "unsupported",
+                range,
+                "this char is reached through a const char *, so it is not a modifiable lvalue: \
+                 the program promised not to change it through this pointer (C99 §6.5.16p2, \
+                 §6.3.2.1p1)",
+            ));
+        }
         if self.take("=") {
             if prefix.is_some() {
                 return Err(self.error("nested increments are outside this subset"));
@@ -697,11 +861,14 @@ impl<'a> Parser<'a> {
         };
         if let Some(delta) = prefix.or(postfix) {
             let operand = &self.expressions[expression];
-            if !matches!(operand.ty, Type::Int | Type::Char | Type::Pointer) {
+            if !matches!(
+                operand.ty,
+                Type::Int | Type::Char | Type::Pointer | Type::CharPointer(_)
+            ) {
                 return Err(Diagnostic::new(
                     "unsupported",
                     range,
-                    "++ and -- update an int, a char or an int pointer in this subset",
+                    "++ and -- update an int, a char or a pointer to int or char in this subset",
                 ));
             }
             if prefix.is_none()
@@ -847,6 +1014,13 @@ impl<'a> Parser<'a> {
             matches!(expression.kind, ExprKind::Number(0)),
         ) {
             Ok(())
+        } else if (expected, expression.ty) == (Type::CharPointer(false), Type::CharPointer(true)) {
+            Err(Diagnostic::new(
+                "unsupported",
+                expression.range,
+                "a const char * does not convert to a char *: that would let a store change chars \
+                 the program promised not to change (C99 §6.5.16.1p1)",
+            ))
         } else {
             Err(Diagnostic::new(
                 "unsupported",
@@ -857,10 +1031,8 @@ impl<'a> Parser<'a> {
     }
 
     pub fn require_scalar(&self, expression: usize) -> Result<(), Diagnostic> {
-        if matches!(
-            self.expressions[expression].ty,
-            Type::Int | Type::Char | Type::Pointer | Type::StructPointer(_)
-        ) {
+        let ty = self.expressions[expression].ty;
+        if matches!(ty, Type::Int | Type::Char) || ty.is_pointer() {
             Ok(())
         } else {
             Err(self.error("expected a scalar expression"))
@@ -869,6 +1041,221 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    /// A preprocessing directive at file scope. The machine runs
+    /// `#include <stdio.h>` itself, as translation phase 4 would: it
+    /// declares `printf`, `puts` and `putchar` for the rest of the file.
+    /// Every other directive is outside the subset.
+    ///
+    /// C99: §6.10.2 paragraph 2, p. 149; PDF p. 161.
+    /// C99: §7.1.2 paragraph 1, p. 165; PDF p. 177.
+    fn directive(&mut self) -> Result<(), Diagnostic> {
+        let token = self.current();
+        let words: String = token.text[1..]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let header = words
+            .strip_prefix("include")
+            .map(str::trim_start)
+            .filter(|header| header.starts_with('<') || header.starts_with('"'));
+        match header {
+            | Some("<stdio.h>") => {},
+            | Some(other) =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    token.range,
+                    &format_message(
+                        "the machine provides only <stdio.h>, not ",
+                        other,
+                        "; the compiler pipeline view runs the real preprocessor",
+                    ),
+                )),
+            | None =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    token.range,
+                    "the machine runs only #include <stdio.h> itself; other directives are \
+                     executed by the preprocessor, which the compiler pipeline view shows",
+                )),
+        }
+        for name in ["printf", "puts", "putchar"] {
+            let defined = self.signatures.iter().any(|(function, _)| function == name)
+                || self
+                    .prototypes
+                    .iter()
+                    .any(|prototype| prototype.name == name)
+                || self.symbols.iter().any(|symbol| symbol.name == name);
+            if defined {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    token.range,
+                    &format_message(
+                        "<stdio.h> declares `",
+                        name,
+                        "`, which this program already declares as something else",
+                    ),
+                ));
+            }
+        }
+        self.directives.push(token.range);
+        self.position += 1;
+        Ok(())
+    }
+
+    /// The library function `name` names, when `<stdio.h>` has been
+    /// included.
+    pub fn library(&self, name: &str) -> Option<Library> {
+        Library::named(name).filter(|_| !self.directives.is_empty())
+    }
+
+    /// Reject a declaration of `name` at file scope that `<stdio.h>` already
+    /// declares.
+    fn library_conflict(&self, name: Token<'_>) -> Result<(), Diagnostic> {
+        if self.library(name.text).is_some() {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                &format_message(
+                    "`",
+                    name.text,
+                    "` is already declared by <stdio.h> as a library function; give yours another \
+                     name",
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// A function declarator's parenthesized parameter list: each
+    /// parameter's name (absent in a prototype that omits it) and type.
+    /// Named parameters enter the function's scope.
+    fn function_header(
+        &mut self,
+        name: Token<'a>,
+    ) -> Result<Vec<(Option<Token<'a>>, Type)>, Diagnostic> {
+        self.expect("(")?;
+        let mut parameters = Vec::new();
+        self.scope = 1;
+        if self.take("void") {
+            self.expect(")")?;
+        } else if self.at(")") {
+            if self.peek(1) == ";" {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    name.range,
+                    "empty parentheses declare a function without a prototype; write (void) for \
+                     no parameters",
+                ));
+            }
+            self.position += 1;
+        } else {
+            loop {
+                let base = self.base_type()?;
+                let pointer = self.take("*");
+                let parameter = if self.at(",") || self.at(")") {
+                    None
+                } else {
+                    Some(self.identifier()?)
+                };
+                let range = parameter.map_or(self.current().range, |token| token.range);
+                let ty = match (base, pointer) {
+                    | (Base::Int, false) => Type::Int,
+                    | (Base::Int, true) => Type::Pointer,
+                    | (Base::Char, false) => Type::Char,
+                    | (Base::Char, true) => Type::CharPointer(false),
+                    | (Base::ConstChar, true) => Type::CharPointer(true),
+                    | (Base::Struct(id), false) => self.complete_structure(id, range)?,
+                    | (Base::Struct(id), true) => Type::StructPointer(id),
+                    | (Base::ConstChar, false) =>
+                        return Err(Diagnostic::new(
+                            "unsupported",
+                            range,
+                            "const is supported only in `const char *` in this subset",
+                        )),
+                };
+                if self.at("[") {
+                    return Err(self.error(
+                        "array parameters are outside this subset; write the pointer they adjust \
+                         to, such as `char *s`",
+                    ));
+                }
+                if let Some(parameter) = parameter {
+                    self.add_symbol(parameter, ty, 1, None)?;
+                }
+                parameters.push((parameter, ty));
+                if self.take(")") {
+                    break;
+                }
+                self.expect(",")?;
+            }
+        }
+        self.scope = 0;
+        Ok(parameters)
+    }
+
+    /// `T name(parameters);`: a prototype that lets calls before the
+    /// definition check their arguments (C99 §6.9.1p7, §6.7.5.3p15).
+    fn prototype(
+        &mut self,
+        name: Token<'a>,
+        returns: Type,
+        header: &[(Option<Token<'a>>, Type)],
+    ) -> Result<(), Diagnostic> {
+        let parameters: Vec<Type> = header.iter().map(|&(_, ty)| ty).collect();
+        let named: Vec<(String, Type)> = parameters.iter().map(|&ty| (String::new(), ty)).collect();
+        self.agrees_with_prototypes(name, returns, &named)?;
+        if let Some((_, defined)) = self
+            .signatures
+            .iter()
+            .find(|(function, _)| function == name.text)
+            && *defined != returns
+        {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                "this prototype's return type differs from the function's definition",
+            ));
+        }
+        self.prototypes.push(Prototype {
+            name: String::from(name.text),
+            returns,
+            parameters,
+        });
+        Ok(())
+    }
+
+    /// Two declarations of one function must give it compatible types:
+    /// the same return type and the same parameter types (C99 §6.7.5.3p15).
+    fn agrees_with_prototypes(
+        &self,
+        name: Token<'_>,
+        returns: Type,
+        parameters: &[(String, Type)],
+    ) -> Result<(), Diagnostic> {
+        for prototype in self
+            .prototypes
+            .iter()
+            .filter(|prototype| prototype.name == name.text)
+        {
+            let same = prototype.returns == returns
+                && prototype.parameters.len() == parameters.len()
+                && prototype
+                    .parameters
+                    .iter()
+                    .zip(parameters)
+                    .all(|(declared, (_, ty))| declared == ty);
+            if !same {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    name.range,
+                    "this declaration's type differs from the function's prototype; both must \
+                     give the same return and parameter types (C99 §6.7.5.3p15)",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn identifier(&mut self) -> Result<Token<'a>, Diagnostic> {
         let token = self.tokens[self.position];
         if !is_identifier(token.text) {
@@ -920,10 +1307,21 @@ impl<'a> Parser<'a> {
     /// before declares an incomplete structure type, which only a pointer
     /// may use until its definition.
     fn base_type(&mut self) -> Result<Base, Diagnostic> {
+        if self.take("const") {
+            if self.take("char") && self.at("*") {
+                return Ok(Base::ConstChar);
+            }
+            return Err(self.error("const is supported only in `const char *` in this subset"));
+        }
         if self.take("int") {
             return Ok(Base::Int);
         }
         if self.take("char") {
+            if self.at("const") {
+                return Err(self.error(
+                    "write `const char *`; other placements of const are outside this subset",
+                ));
+            }
             return Ok(Base::Char);
         }
         if !self.take("struct") {
@@ -993,7 +1391,8 @@ impl<'a> Parser<'a> {
     }
 
     /// The type a declarator gives its base type: `int`, `int *`,
-    /// `int[N]`, `char`, `struct T` or `struct T *`.
+    /// `int[N]`, `char`, `char *`, `const char *`, `char[N]`, `struct T`
+    /// or `struct T *`.
     fn declared_type(
         &self,
         base: Base,
@@ -1008,7 +1407,11 @@ impl<'a> Parser<'a> {
             | (Base::Int, false, Some(length)) => Ok(Type::Array(length)),
             | (_, true, Some(_)) => unsupported("arrays of pointers are outside this subset"),
             | (Base::Char, false, None) => Ok(Type::Char),
-            | (Base::Char, ..) => unsupported("only scalar char objects are supported"),
+            | (Base::Char, true, None) => Ok(Type::CharPointer(false)),
+            | (Base::Char, false, Some(length)) => Ok(Type::CharArray(length)),
+            | (Base::ConstChar, true, None) => Ok(Type::CharPointer(true)),
+            | (Base::ConstChar, ..) =>
+                unsupported("const is supported only in `const char *` in this subset"),
             | (Base::Struct(id), false, None) => self.complete_structure(id, range),
             | (Base::Struct(id), true, None) => Ok(Type::StructPointer(id)),
             | (Base::Struct(_), false, Some(_)) =>
@@ -1017,8 +1420,9 @@ impl<'a> Parser<'a> {
     }
 
     /// `struct tag { members };` at file scope. Members are int, char,
-    /// int *, int arrays, complete structures and pointers to structures
-    /// (including this one); several may share a line (`int x, y;`).
+    /// pointers to int or char, int and char arrays, complete structures
+    /// and pointers to structures (including this one); several may share
+    /// a line (`int x, y;`).
     fn structure_definition(&mut self) -> Result<(), Diagnostic> {
         self.expect("struct")?;
         let tag = self.identifier()?;
@@ -1110,8 +1514,9 @@ impl<'a> Parser<'a> {
         pointer: bool,
         name: Token<'a>,
     ) -> Result<(), Diagnostic> {
-        let array = self.array_suffix()?;
+        let array = self.declarator_array()?;
         let ty = self.declared_type(base, pointer, array, name.range)?;
+        self.library_conflict(name)?;
         if self
             .signatures
             .iter()
@@ -1132,7 +1537,7 @@ impl<'a> Parser<'a> {
     /// `main` and keeps its value between calls; the declaration names it
     /// and does nothing when execution reaches it.
     fn static_local(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
-        let function = self.signatures.last().map(|(function, _)| function.clone());
+        let function = self.function_name.clone();
         let index = self.static_object(name, ty, function)?;
         self.add_symbol(name, ty, self.scope, Some(index))?;
         self.emit(Op::StaticLocal(index), name.range)?;
@@ -1164,7 +1569,37 @@ impl<'a> Parser<'a> {
             function,
             value: ty.shaped(&self.structures, &leaves),
             explicit,
+            literal: false,
             range,
+        });
+        Ok(self.statics.len() - 1)
+    }
+
+    /// The array of static storage duration the string literal `token`
+    /// denotes: its characters and a terminating null (C99 §6.4.5p5).
+    /// Each literal in the source is its own array; it exists before
+    /// `main` like every static object.
+    pub fn string_literal(&mut self, token: Token<'a>) -> Result<usize, Diagnostic> {
+        if self.statics.len() >= MAX_OBJECTS {
+            return Err(Diagnostic::limit(token.range, "object limit reached"));
+        }
+        let mut bytes = lexer::literal_bytes(self.source, token)?;
+        bytes.push(0);
+        if bytes.len() > MAX_CELLS {
+            return Err(Diagnostic::limit(
+                token.range,
+                "a string literal may hold at most 511 characters here",
+            ));
+        }
+        let ty = Type::CharArray(bytes.len());
+        self.statics.push(Static {
+            name: String::from(token.text),
+            ty,
+            function: None,
+            value: Value::Array(bytes.into_iter().map(char_value).collect()),
+            explicit: true,
+            literal: true,
+            range: token.range,
         });
         Ok(self.statics.len() - 1)
     }
@@ -1191,7 +1626,22 @@ impl<'a> Parser<'a> {
         leaves: &mut [Value],
     ) -> Result<(), Diagnostic> {
         match ty {
-            | Type::Array(_) | Type::Struct(_) => {
+            | Type::CharArray(length) if self.current().text.starts_with('"') => {
+                let literal = self.current();
+                let bytes = lexer::literal_bytes(self.source, literal)?;
+                if bytes.len() > length {
+                    return Err(self.error(
+                        "the string literal has more characters than the array has elements (C99 \
+                         §6.7.8p2)",
+                    ));
+                }
+                for (at, byte) in bytes.into_iter().enumerate() {
+                    leaves[offset + at] = char_value(byte);
+                }
+                self.position += 1;
+                self.adjacent_literal()
+            },
+            | Type::Array(_) | Type::Struct(_) | Type::CharArray(_) => {
                 self.expect("{")?;
                 if self.at("}") {
                     return Err(self.error("empty initializer lists are outside the C99 subset"));
@@ -1199,11 +1649,16 @@ impl<'a> Parser<'a> {
                 let mut index = 0;
                 while !self.at("}") {
                     let (member, leaf) = match ty {
-                        | Type::Array(length) => {
+                        | Type::Array(length) | Type::CharArray(length) => {
                             if index >= length {
                                 return Err(self.error("too many array initializer elements"));
                             }
-                            (Type::Int, offset + index)
+                            let element = if matches!(ty, Type::CharArray(_)) {
+                                Type::Char
+                            } else {
+                                Type::Int
+                            };
+                            (element, offset + index)
                         },
                         | Type::Struct(id) => {
                             if self.take(".") {
@@ -1225,7 +1680,14 @@ impl<'a> Parser<'a> {
                         | _ =>
                             return Err(self.error("braces initialize only arrays and structures")),
                     };
-                    if matches!(member, Type::Array(_) | Type::Struct(_)) && !self.at("{") {
+                    let string = matches!(member, Type::CharArray(_))
+                        && self.current().text.starts_with('"');
+                    if matches!(
+                        member,
+                        Type::Array(_) | Type::Struct(_) | Type::CharArray(_)
+                    ) && !self.at("{")
+                        && !string
+                    {
                         return Err(self.error(
                             "brace the initializer of each nested array or structure; brace \
                              elision is outside this subset",
@@ -1243,6 +1705,16 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect("}")
+            },
+            | Type::Int | Type::Char if self.current().text.starts_with('\'') => {
+                let token = self.current();
+                let value = self.character_constant(token)?;
+                self.position += 1;
+                leaves[offset] = Value::Integer(value);
+                if ty == Type::Char {
+                    leaves[offset] = char_value(value.to_le_bytes()[0]);
+                }
+                Ok(())
             },
             | Type::Int | Type::Char => {
                 let negative = self.take("-");
@@ -1285,11 +1757,25 @@ impl<'a> Parser<'a> {
                 leaves[offset] = Value::Integer(integer);
                 Ok(())
             },
-            | Type::Pointer | Type::StructPointer(_) => {
+            | Type::CharPointer(_) if self.current().text.starts_with('"') => {
+                // The literal's array exists before main, so its address
+                // is a constant (C99 §6.6p9).
+                let literal = self.current();
+                let index = self.string_literal(literal)?;
+                self.position += 1;
+                self.adjacent_literal()?;
+                let length = match self.statics[index].ty {
+                    | Type::CharArray(length) => i32::try_from(length).unwrap_or(i32::MAX),
+                    | _ => 1,
+                };
+                leaves[offset] = Value::pointer(index + 1, 0, 0, length);
+                Ok(())
+            },
+            | Type::Pointer | Type::StructPointer(_) | Type::CharPointer(_) => {
                 if !self.take("0") {
                     return Err(self.error(
-                        "a static pointer's initializer must be a constant; this subset takes \
-                         only 0, the null pointer constant",
+                        "a static pointer's initializer must be a constant; this subset takes 0, \
+                         the null pointer constant, or a string literal for a char pointer",
                     ));
                 }
                 leaves[offset] = Value::null();
@@ -1312,7 +1798,15 @@ impl<'a> Parser<'a> {
 pub(super) enum Base {
     Int,
     Char,
+    /// `const char`, which this subset takes only before `*`.
+    ConstChar,
     Struct(usize),
+}
+
+/// The char value a byte holds: plain char is signed with 8 bits on x86-64
+/// (C99 §6.2.5p15).
+pub(super) fn char_value(byte: u8) -> Value {
+    Value::Integer(i32::from(i8::from_ne_bytes([byte])))
 }
 
 /// The structure type `ty` is, if it is one.
@@ -1378,15 +1872,19 @@ pub(super) fn is_identifier(text: &str) -> bool {
         )
 }
 
-fn compatible(expected: Type, actual: Type, null: bool) -> bool {
+/// Whether a value of type `actual` may be stored in an object of type
+/// `expected` (as assignment converts it), `null` when it is the constant 0.
+/// A `char *` converts to a `const char *`, never the reverse (C99
+/// §6.5.16.1p1).
+pub(super) fn compatible(expected: Type, actual: Type, null: bool) -> bool {
     expected == actual
         || matches!(
             (expected, actual),
-            (Type::Char, Type::Int) | (Type::Int, Type::Char)
+            (Type::Char, Type::Int)
+                | (Type::Int, Type::Char)
+                | (Type::CharPointer(true), Type::CharPointer(false))
         )
-        || (matches!(expected, Type::Pointer | Type::StructPointer(_))
-            && actual == Type::Int
-            && null)
+        || (expected.is_pointer() && actual == Type::Int && null)
 }
 
 /// Set each node's full-expression root. A parent follows its children, so a
@@ -1412,5 +1910,14 @@ pub(super) struct CallSite {
     pub name:      String,
     pub arguments: Vec<(Type, bool)>,
     pub range:     SourceRange,
-    pub caller:    usize,
+    /// Whether a definition or prototype declared the function before the
+    /// call.
+    pub declared:  bool,
+}
+
+/// A function declared by a prototype: `int f(int);`.
+pub(super) struct Prototype {
+    pub name:       String,
+    pub returns:    Type,
+    pub parameters: Vec<Type>,
 }
