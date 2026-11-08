@@ -42,6 +42,7 @@ pub(crate) use diagnostics::{
     DiagnosticFormat,
     DiagnosticGroup,
     DiagnosticPresentation,
+    GroupMask,
     PragmaClass,
     WarningOption,
 };
