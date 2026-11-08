@@ -1113,10 +1113,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 self.convert(argument, parameter, ConversionKind::Assignment);
             } else {
-                if let Some(&parameter) = parameters.get(index) {
-                    // A visible old-style definition supplies parameter types
-                    // for diagnostics, while calls still use default
-                    // promotions.
+                // A visible old-style definition supplies parameter types
+                // for Clang's diagnostics, while calls still use default
+                // promotions. No constraint applies (C99 6.5.2.2p6 makes a
+                // mismatch undefined), and GCC and TCC check nothing.
+                if let Some(&parameter) = parameters.get(index)
+                    && !matches!(
+                        self.context.configuration.compiler_identity(),
+                        crate::configuration::CompilerIdentity::Gcc
+                            | crate::configuration::CompilerIdentity::Tcc
+                    )
+                {
                     _ = self.assignment_conversion(parameter, info);
                 }
                 let ty = self.converted(info);
