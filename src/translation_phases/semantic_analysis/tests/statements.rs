@@ -633,7 +633,8 @@ fn statement_analysis_has_no_native_stack_limit() {
         for prefix in ["if(1)", "while(1)", "{"] {
             let mut source = String::from("void f(void) {");
             source.push_str(&prefix.repeat(10_000));
-            source.push(';');
+            // A block, which Clang's `-Wempty-body` leaves alone.
+            source.push_str("{}");
             if prefix == "{" {
                 source.push_str(&"}".repeat(10_000));
             }

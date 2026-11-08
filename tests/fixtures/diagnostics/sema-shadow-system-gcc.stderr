@@ -1,0 +1,6 @@
+sema-shadow-system-gcc.c:5:55: warning: declaration of 'optind' shadows a previous local [-Wshadow]
+    6 | void f(void) { int optind = 0; (void)optind; { enum { optind = 2 }; } }
+      |                                                       ^~~~~~
+sema-shadow-system-gcc.c:5:20: note: shadowed declaration is here
+    6 | void f(void) { int optind = 0; (void)optind; { enum { optind = 2 }; } }
+      |                    ^~~~~~

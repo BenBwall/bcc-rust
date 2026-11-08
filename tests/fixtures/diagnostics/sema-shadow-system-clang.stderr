@@ -1,0 +1,19 @@
+sema-shadow-system-clang.c:5:20: warning: declaration shadows a variable in the global scope [-Wshadow]
+    6 | void f(void) { int optind = 0; (void)optind; { enum { optind = 2 }; } }
+      |                    ^~~~~~
+sema-shadow-system.h:1:12: note: previous declaration is here
+sema-shadow-system-clang.c:5:55: warning: declaration shadows a local variable [-Wshadow]
+    6 | void f(void) { int optind = 0; (void)optind; { enum { optind = 2 }; } }
+      |                                                       ^~~~~~
+sema-shadow-system-clang.c:5:20: note: previous declaration is here
+    6 | void f(void) { int optind = 0; (void)optind; { enum { optind = 2 }; } }
+      |                    ^~~~~~
+sema-shadow-system-clang.c:6:28: warning: declaration shadows a typedef in the global scope [-Wshadow]
+    7 | void g(void) { typedef int systype; int sysfun = 0; (void)sysfun; }
+      |                            ^~~~~~~
+sema-shadow-system.h:2:13: note: previous declaration is here
+sema-shadow-system-clang.c:7:12: warning: declaration shadows a variable in the global scope [-Wshadow]
+    8 | void h(int optind) { (void)optind; }
+      |            ^~~~~~
+sema-shadow-system.h:1:12: note: previous declaration is here
+4 warnings generated.

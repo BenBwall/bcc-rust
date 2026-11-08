@@ -1,0 +1,97 @@
+sema-empty-body-lines-clang.c:7:11: warning: for loop has empty body [-Wempty-body]
+    7 |   for (;;);
+      |           ^
+sema-empty-body-lines-clang.c:7:11: note: put the semicolon on a separate line to silence this warning
+    7 |   for (;;);
+      |           ^
+sema-empty-body-lines-clang.c:12:16: warning: for loop has empty body [-Wempty-body]
+   12 |   for (x = 0;;);
+      |                ^
+sema-empty-body-lines-clang.c:12:16: note: put the semicolon on a separate line to silence this warning
+   12 |   for (x = 0;;);
+      |                ^
+sema-empty-body-lines-clang.c:15:5: warning: for loop has empty body [-Wempty-body]
+   15 |   ;);
+      |     ^
+sema-empty-body-lines-clang.c:15:5: note: put the semicolon on a separate line to silence this warning
+   15 |   ;);
+      |     ^
+sema-empty-body-lines-clang.c:18:4: warning: while loop has empty body [-Wempty-body]
+   18 |   );
+      |    ^
+sema-empty-body-lines-clang.c:18:4: note: put the semicolon on a separate line to silence this warning
+   18 |   );
+      |    ^
+sema-empty-body-lines-clang.c:21:4: warning: if statement has empty body [-Wempty-body]
+   21 |   );
+      |    ^
+sema-empty-body-lines-clang.c:21:4: note: put the semicolon on a separate line to silence this warning
+   21 |   );
+      |    ^
+sema-empty-body-lines-clang.c:23:7: warning: if statement has empty body [-Wempty-body]
+   23 |      );
+      |       ^
+sema-empty-body-lines-clang.c:23:7: note: put the semicolon on a separate line to silence this warning
+   23 |      );
+      |       ^
+sema-empty-body-lines-clang.c:26:13: warning: switch statement has empty body [-Wempty-body]
+   26 |   switch (x);
+      |             ^
+sema-empty-body-lines-clang.c:26:13: note: put the semicolon on a separate line to silence this warning
+   26 |   switch (x);
+      |             ^
+sema-empty-body-lines-clang.c:31:8: warning: if statement has empty body [-Wempty-body]
+   31 |   IF(x);
+      |        ^
+sema-empty-body-lines-clang.c:31:8: note: put the semicolon on a separate line to silence this warning
+   31 |   IF(x);
+      |        ^
+sema-empty-body-lines-clang.c:32:10: warning: while loop has empty body [-Wempty-body]
+   32 |   LOOP(x);
+      |          ^
+sema-empty-body-lines-clang.c:32:10: note: put the semicolon on a separate line to silence this warning
+   32 |   LOOP(x);
+      |          ^
+sema-empty-body-lines-clang.c:34:20: warning: for loop has empty body [-Wempty-body]
+   34 |   for (;;) /* c */ ;
+      |                    ^
+sema-empty-body-lines-clang.c:34:20: note: put the semicolon on a separate line to silence this warning
+   34 |   for (;;) /* c */ ;
+      |                    ^
+sema-empty-body-lines-clang.c:47:15: warning: if statement has empty body [-Wempty-body]
+   47 |   IF_HEADER(x);
+      |               ^
+sema-empty-body-lines-clang.c:47:15: note: put the semicolon on a separate line to silence this warning
+   47 |   IF_HEADER(x);
+      |               ^
+sema-empty-body-lines-clang.c:48:16: warning: if statement has empty body [-Wempty-body]
+   48 |   OBJECT_HEADER;
+      |                ^
+sema-empty-body-lines-clang.c:48:16: note: put the semicolon on a separate line to silence this warning
+   48 |   OBJECT_HEADER;
+      |                ^
+sema-empty-body-lines-clang.c:53:23: warning: if statement has empty body [-Wempty-body]
+   53 |   IF_HEADER(x /* ) */);
+      |                       ^
+sema-empty-body-lines-clang.c:53:23: note: put the semicolon on a separate line to silence this warning
+   53 |   IF_HEADER(x /* ) */);
+      |                       ^
+sema-empty-body-lines-clang.c:54:23: warning: if statement has empty body [-Wempty-body]
+   54 |   IF_HEADER(x /* ( */);
+      |                       ^
+sema-empty-body-lines-clang.c:54:23: note: put the semicolon on a separate line to silence this warning
+   54 |   IF_HEADER(x /* ( */);
+      |                       ^
+sema-empty-body-lines-clang.c:55:23: warning: if statement has empty body [-Wempty-body]
+   55 |   IF_HEADER(x /* " */);
+      |                       ^
+sema-empty-body-lines-clang.c:55:23: note: put the semicolon on a separate line to silence this warning
+   55 |   IF_HEADER(x /* " */);
+      |                       ^
+sema-empty-body-lines-clang.c:56:23: warning: if statement has empty body [-Wempty-body]
+   56 |   IF_HEADER(x /* ' */);
+      |                       ^
+sema-empty-body-lines-clang.c:56:23: note: put the semicolon on a separate line to silence this warning
+   56 |   IF_HEADER(x /* ' */);
+      |                       ^
+16 warnings generated.

@@ -138,6 +138,10 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about a hidden declaration may be on.
+    pub(super) shadow: bool,
+    /// Whether `-Wempty-body` may be on.
+    pub(super) empty_body: bool,
     /// Whether a warning about operators' grouping may be on.
     pub(super) parentheses: bool,
     /// Whether a warning about what a `switch` handles may be on.
@@ -201,6 +205,8 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            shadow: on(&[G::Shadow, G::ShadowLocal, G::ShadowCompatibleLocal]),
+            empty_body: on(&[G::EmptyBody]),
             parentheses: on(&[
                 G::Parentheses,
                 G::ChainedComparison,
