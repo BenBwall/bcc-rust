@@ -121,6 +121,8 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.5.8p6, p. 86; PDF p. 98.
     TypeLimits(crate::configuration::DiagnosticGroup),
+    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
+    ShadowOrBody(crate::configuration::DiagnosticGroup),
     /// C99: §6.5p3, p. 67; PDF p. 79.
     Parentheses(crate::configuration::DiagnosticGroup),
     /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
@@ -1151,6 +1153,7 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::TypeLimits(_) => "the types decide this comparison",
+            | Self::ShadowOrBody(_) => "this may not be what it looks like",
             | Self::Parentheses(_) => "this may not group as written",
             | Self::KnrPromotedParameter => "the prototype gives it another type",
             | Self::SwitchCases(_) => "this switch may not handle every value",
@@ -1387,6 +1390,11 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::TautologicalConstantOutOfRangeCompare
                     | crate::configuration::DiagnosticGroup::TautologicalUnsignedZeroCompare
                     | crate::configuration::DiagnosticGroup::TautologicalTypeLimitCompare
+                    | crate::configuration::DiagnosticGroup::Shadow
+                    | crate::configuration::DiagnosticGroup::ShadowLocal
+                    | crate::configuration::DiagnosticGroup::ShadowCompatibleLocal
+                    | crate::configuration::DiagnosticGroup::ShadowAll
+                    | crate::configuration::DiagnosticGroup::EmptyBody
                     | crate::configuration::DiagnosticGroup::Parentheses
                     | crate::configuration::DiagnosticGroup::ChainedComparison
                     | crate::configuration::DiagnosticGroup::LogicalOpParentheses
@@ -1837,6 +1845,11 @@ impl SemanticErrorKind {
             | Self::TypeLimits(_) => (
                 "comparison decided by type",
                 "C99 §6.5.8p6: the result is the same for every value the operand's type can hold",
+            ),
+            | Self::ShadowOrBody(_) => (
+                "hidden declaration or empty body",
+                "C99 §6.2.1p4 hides an outer declaration in an inner scope, and §6.8.3p3 makes \
+                 a lone semicolon a statement",
             ),
             | Self::Parentheses(_) => (
                 "suspicious grouping",
@@ -2734,6 +2747,7 @@ impl SemanticErrorKind {
         match self {
             | Self::PointerConstraint(group)
             | Self::TypeLimits(group)
+            | Self::ShadowOrBody(group)
             | Self::Parentheses(group)
             | Self::Format(group, _)
             | Self::SwitchCases(group)
@@ -3096,6 +3110,7 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::TypeLimits(_)
+                | SemanticErrorKind::ShadowOrBody(_)
                 | SemanticErrorKind::Parentheses(_)
                 | SemanticErrorKind::Format(..)
                 | SemanticErrorKind::FormatAttribute
@@ -3237,6 +3252,13 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FlexibleArrayDesignator =>
                     "initialized flexible array member is here",
                 | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
+                | SemanticErrorKind::ShadowOrBody(
+                    crate::configuration::DiagnosticGroup::EmptyBody,
+                ) => "put the semicolon on a separate line to silence this warning",
+                | SemanticErrorKind::ShadowOrBody(_)
+                    if context.configuration.compiler_identity()
+                        == crate::configuration::CompilerIdentity::Gcc =>
+                    "shadowed declaration is here",
                 | SemanticErrorKind::UndefinedInternal(Some(_)) => "used here",
                 | SemanticErrorKind::Format(_, note) => note.words(context, arena),
                 | SemanticErrorKind::FormatAttributeCount(count) =>

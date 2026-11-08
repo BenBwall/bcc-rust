@@ -140,6 +140,10 @@ pub(super) struct UnusedState<'s> {
     pub(super) values: bool,
     /// Whether a warning about a comparison the types decide may be on.
     pub(super) type_limits: bool,
+    /// Whether a warning about a hidden declaration may be on.
+    pub(super) shadow: bool,
+    /// Whether `-Wempty-body` may be on.
+    pub(super) empty_body: bool,
     /// Whether a warning about operators' grouping may be on.
     pub(super) parentheses: bool,
     /// Whether a warning about what a `switch` handles may be on.
@@ -210,6 +214,8 @@ impl<'s> UnusedState<'s> {
                 G::TautologicalUnsignedZeroCompare,
                 G::TautologicalTypeLimitCompare,
             ]),
+            shadow: on(&[G::Shadow, G::ShadowLocal, G::ShadowCompatibleLocal]),
+            empty_body: on(&[G::EmptyBody]),
             parentheses: on(&[
                 G::Parentheses,
                 G::ChainedComparison,

@@ -371,6 +371,20 @@ impl Context<'_> {
         arena.encode(end - 1, end)
     }
 
+    /// The vector of the token just before `inner` when `outer`, which holds
+    /// `inner`, holds that token too: the `)` before a statement's body.
+    pub(crate) fn token_before(
+        outer: SourceVectors,
+        inner: SourceVectors,
+    ) -> Option<SourceVectors> {
+        if outer.length() == 0 || inner.length() == 0 {
+            return None;
+        }
+        let (arena, start) = SourceArena::decode(inner);
+        let (outer_arena, outer_start) = SourceArena::decode(outer);
+        (arena == outer_arena && start > outer_start).then(|| arena.encode(start - 1, start))
+    }
+
     /// Whether `source`'s expansion location is in the main source file, not
     /// in a file it includes. `source` must not be empty.
     pub(crate) fn in_main_file(&self, source: SourceVectors) -> bool {

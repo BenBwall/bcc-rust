@@ -730,6 +730,7 @@ pinned by the `.args` sidecars.
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
 | `TypeLimits` | [GCC](sema-type-limits-gcc.c), [Clang](sema-type-limits-clang.c) |
+| `ShadowOrBody` | Shadowing: [GCC](sema-shadow-gcc.c), [Clang](sema-shadow-clang.c); by declaration kind: [GCC](sema-shadow-kinds-gcc.c), [Clang](sema-shadow-kinds-clang.c); of a system header's declarations: [GCC](sema-shadow-system-gcc.c), [Clang](sema-shadow-system-clang.c); empty bodies: [GCC](sema-empty-body-gcc.c), [Clang](sema-empty-body-clang.c); multiline headers and empty macros: [Clang](sema-empty-body-lines-clang.c) |
 | `Parentheses` | [GCC](sema-parentheses-gcc.c), [Clang](sema-parentheses-clang.c) |
 | `SwitchCases` | [GCC](sema-switch-gcc.c), [Clang](sema-switch-clang.c); constant and converted conditions: [GCC](sema-switch-constant-gcc.c), [Clang](sema-switch-constant-clang.c) |
 | `ReturnFlow` | [GCC](sema-return-type-gcc.c), [Clang](sema-return-type-clang.c) |
