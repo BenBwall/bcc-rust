@@ -1598,6 +1598,19 @@ mod tests {
             text("--gcc-mode", "c.c")
                 .starts_with("c.c:1:25: error: expected expression before ';' token\n")
         );
+        // GCC says which way a call misses its prototype, naming the callee.
+        directory.write(
+            "e.c",
+            "int f(int);\nint (*p)(int);\nvoid g(void) { f(1, 2); p(1, 2); f(); }\n",
+        );
+        let calls = text("--gcc-mode", "e.c");
+        for expected in [
+            "e.c:3:16: error: too many arguments to function 'f'\n",
+            "e.c:3:25: error: too many arguments to function 'p'\n",
+            "e.c:3:34: error: too few arguments to function 'f'\n",
+        ] {
+            assert!(calls.contains(expected), "{calls}");
+        }
         assert!(text("--clang-mode", "c.c").starts_with("c.c:1:25: error: expected expression\n"));
         let related = text("--clang-mode", "d.c");
         assert!(
@@ -4663,6 +4676,42 @@ mod tests {
             (
                 "int x = 1; int x = 2;",
                 "e.c:1: error: redefinition of 'x'\n",
+            ),
+            (
+                "int main(void){ int i; long l = &i; return 0; }",
+                "e.c:1: warning: assignment makes integer from pointer without a cast\n",
+            ),
+            (
+                "int main(void){ int *p = 5; return 0; }",
+                "e.c:1: warning: assignment makes pointer from integer without a cast\n",
+            ),
+            (
+                "int f(int); int main(void){ return f(1, 2); }",
+                "e.c:1: error: too many arguments to function\n",
+            ),
+            (
+                "int f(int, int); int main(void){ return f(1); }",
+                "e.c:1: error: too few arguments to function\n",
+            ),
+            (
+                "struct S s;",
+                "e.c:1: error: initialization of incomplete type\n",
+            ),
+            (
+                "int main(void){ int a = 1 }",
+                "e.c:1: error: ';' expected (got '}')\n",
+            ),
+            (
+                "int main(void){ return 1 return }",
+                "e.c:1: error: ';' expected (got 'return')\n",
+            ),
+            (
+                "int main(void){ return 1 +; }",
+                "e.c:1: error: expression expected before ';'\n",
+            ),
+            (
+                "int main(void){ return 1 + ); }",
+                "e.c:1: error: expression expected before ')'\n",
             ),
             // A user's text keeps what only looks like an option.
             (
@@ -11212,14 +11261,14 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         succeeds(&output);
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: warning: incompatible integer and pointer conversion\nptr.c:1: warning: \
-             assignment from incompatible pointer type\n"
+            "ptr.c:1: warning: assignment makes pointer from integer without a cast\nptr.c:1: \
+             warning: assignment from incompatible pointer type\n"
         );
         let output = directory.bcc("--tcc-mode", &["-Werror", "-c", "ptr.c"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: error: incompatible integer and pointer conversion\n"
+            "ptr.c:1: error: assignment makes pointer from integer without a cast\n"
         );
         // `$` follows `-f[no-]dollars-in-identifiers`, in every personality.
         directory.write("dollar.c", "int a$b = 3;\n");

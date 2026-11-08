@@ -1793,6 +1793,36 @@ impl ParserError<'_> {
     }
 }
 
+impl ParserError<'_> {
+    /// TCC's words for a missing `;` or expression, in TCC's diagnostic
+    /// format: `skip` in TCC's `tccpp.c` and `unary` in its `tccgen.c` name
+    /// the token found as TCC spells it, `<eof>` at the end of input.
+    fn tcc_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
+        if context.configuration.diagnostic_format() != crate::configuration::DiagnosticFormat::Tcc
+        {
+            return None;
+        }
+        let found = match (self.found, self.found_spelling) {
+            | (None, _) | (_, None) => "<eof>",
+            | (Some(token @ TokenType::Operator(_)), spelling) => {
+                let found = format_in!(arena, "{}", token.found(spelling));
+                found.trim_matches('`')
+            },
+            | (Some(_), Some(spelling)) => spelling,
+        };
+        match self.error_type {
+            | ParserErrorType::ExpectedStatementExpression("expression operand", _) =>
+                Some(format_in!(arena, "expression expected before '{found}'")),
+            | ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
+            | ParserErrorType::ExpectedSemicolonInStatement(..) =>
+                Some(format_in!(arena, "';' expected (got '{found}')")),
+            | _ if self.error_type.expects_terminating_semicolon() =>
+                Some(format_in!(arena, "';' expected (got '{found}')")),
+            | _ => None,
+        }
+    }
+}
+
 impl ToDiagnostic for ParserError<'_> {
     fn diagnostic_in<'d>(
         &self,
@@ -1815,6 +1845,7 @@ impl ToDiagnostic for ParserError<'_> {
         if let Some(words) = self.gnu_message(context, arena) {
             explanation.message = words;
         }
+        let tcc = self.tcc_message(context, arena);
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
                 // The likely fix is known, so lead with it.
@@ -1832,6 +1863,9 @@ impl ToDiagnostic for ParserError<'_> {
                 }
             }
             explanation.help.clear();
+        }
+        if let Some(words) = tcc {
+            explanation.message = words;
         }
         if self.warning_group == Some(ParserWarningGroup::RepeatedSpecifiers) {
             explanation = explanation.note(

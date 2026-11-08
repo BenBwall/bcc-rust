@@ -1,4 +1,4 @@
-//! GCC's and Clang's words for the pointer conversion constraints they
+//! GCC's, Clang's and TCC's words for the pointer conversion constraints they
 //! report by default (`-Wint-conversion`, `-Wincompatible-pointer-types`
 //! and Clang's `-Wincompatible-function-pointer-types`), in their
 //! diagnostic formats: each names the conversion's context and both types,
@@ -69,6 +69,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let format = self.context.configuration.diagnostic_format();
         if self.context.configuration.msvc_wording() {
             return self.msvc_conversion_wording(group, site, target, from);
+        }
+        // TCC words every assignment-like conversion as an assignment and
+        // names no types (`verify_assign_cast` in TCC's `tccgen.c`).
+        if format == DiagnosticFormat::Tcc && group == DiagnosticGroup::IntConversion {
+            let text = if self.pointer_target(target).is_some() {
+                "assignment makes pointer from integer without a cast"
+            } else {
+                "assignment makes integer from pointer without a cast"
+            };
+            return Some(self.context.string_cache.intern(text));
         }
         if site == ConversionSite::Other
             || !matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang)
