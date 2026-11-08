@@ -126,6 +126,19 @@ pub(super) fn prepare<'ir>(
                 )
             };
             if options.backend == BackEnd::Native {
+                // The native back end writes no AddressSanitizer or
+                // ThreadSanitizer instrumentation; the checks of
+                // `-fsanitize=undefined` are ordinary IR it compiles.
+                if code.hardening.sanitize_address || code.hardening.sanitize_thread {
+                    return Err(message(
+                        arena,
+                        format_args!(
+                            "error: --backend=native has no AddressSanitizer or ThreadSanitizer \
+                             instrumentation"
+                        ),
+                        FAILURE_STATUS,
+                    ));
+                }
                 if options.output_kind() == OutputKind::SharedLibrary {
                     return Err(message(
                         arena,
@@ -148,8 +161,15 @@ pub(super) fn prepare<'ir>(
                         .map(drop)
                         .map_err(failure)?;
                 }
-                native::build(&text, path, target, options.output_kind(), writer)
-                    .map_err(failure)?;
+                native::build(
+                    &text,
+                    path,
+                    target,
+                    options.output_kind(),
+                    writer,
+                    code.hardening,
+                )
+                .map_err(failure)?;
             } else if diagnosed.call_diagnostics.is_empty() {
                 llvm::compile_module(
                     module,
@@ -187,6 +207,18 @@ pub(super) fn prepare<'ir>(
             Output::Built
         },
         | (None, None) => {
+            // The interpreter has no UndefinedBehaviorSanitizer library to
+            // report a failed check; trapping checks it runs.
+            if code.hardening.undefined.needs_runtime() {
+                return Err(message(
+                    arena,
+                    format_args!(
+                        "error: --interpret has no UndefinedBehaviorSanitizer run-time library; \
+                         use -fsanitize-trap=undefined"
+                    ),
+                    FAILURE_STATUS,
+                ));
+            }
             let host = DefaultHost::for_target(arena, target);
             interpreter::check_module(module, &host, interpreter::Limits::default()).map_err(
                 |e| {

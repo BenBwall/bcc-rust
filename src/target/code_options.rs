@@ -98,6 +98,8 @@ pub(crate) struct Hardening {
     pub(crate) sanitize_address:   bool,
     /// `-fsanitize=thread`: LLVM's `ThreadSanitizer` records each access.
     pub(crate) sanitize_thread:    bool,
+    /// `-fsanitize=undefined` and its checks, which lowering writes.
+    pub(crate) undefined:          super::sanitizers::UndefinedSanitizer,
     /// `-pg`: each function calls `mcount` on entry, for `gprof`.
     pub(crate) profile:            bool,
 }
@@ -111,15 +113,27 @@ impl Hardening {
         keep_frame_pointer: false,
         sanitize_address:   false,
         sanitize_thread:    false,
+        undefined:          super::sanitizers::UndefinedSanitizer::NONE,
         profile:            false,
     };
 
     /// What makes the bundled clang link the run-time support these need: a
     /// sanitizer's library, or the profiling startup file.
+    /// `UndefinedBehaviorSanitizer`'s reports come from the library the
+    /// compiler bcc answers as links: Clang's, which its address and thread
+    /// sanitizers' libraries contain, or GCC's `libubsan`, which GCC links
+    /// whether or not the program calls it. Beside the bundled clang's
+    /// `AddressSanitizer` or `ThreadSanitizer`, GCC's would be a second
+    /// sanitizer run time in the process, so Clang's reports there too.
     pub(crate) fn link_flags(self) -> impl Iterator<Item = &'static str> {
+        let undefined = self.undefined.needs_runtime();
+        let gcc_library =
+            undefined && self.undefined.gcc && !self.sanitize_address && !self.sanitize_thread;
         [
             self.sanitize_address.then_some("-fsanitize=address"),
             self.sanitize_thread.then_some("-fsanitize=thread"),
+            (undefined && !gcc_library).then_some("-fsanitize=undefined"),
+            gcc_library.then_some("-Wl,--push-state,--no-as-needed,-lubsan,--pop-state"),
             self.profile.then_some("-pg"),
         ]
         .into_iter()

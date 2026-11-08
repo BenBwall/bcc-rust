@@ -81,20 +81,41 @@ pub(crate) fn object_writer(
 /// user `.pdata` section, a non-ASCII export name or more sections than a
 /// regular COFF object holds. Encoding finishes before any output is opened,
 /// so a refusal leaves nothing to undo.
+/// `hardening` adds the run-time library a sanitizer's checks call to an
+/// executable's link.
 pub(crate) fn build(
     text: &str,
     out_path: &Path,
     target: Target,
     kind: OutputKind,
     writer: ObjectWriter,
+    hardening: crate::target::Hardening,
 ) -> io::Result<()> {
+    let runtime = Runtime(hardening);
     match writer {
-        | ObjectWriter::Direct => build_object(text, out_path, target, kind),
+        | ObjectWriter::Direct => encode_object(text, out_path, target, kind, runtime, |error| {
+            Err(io::Error::other(error))
+        }),
         | ObjectWriter::DirectOrAssembler =>
-            encode_object(text, out_path, target, kind, |refusal| {
-                assemble_refused(text, out_path, target, kind, refusal)
+            encode_object(text, out_path, target, kind, runtime, |refusal| {
+                assemble_refused(text, out_path, target, kind, runtime, refusal)
             }),
-        | ObjectWriter::Assembler => assemble(text, out_path, target, kind),
+        | ObjectWriter::Assembler => assemble_with(text, out_path, target, kind, runtime),
+    }
+}
+
+/// The run-time libraries the options' checks call, which an executable's
+/// link adds after the listing's own.
+#[derive(Clone, Copy, Default)]
+struct Runtime(crate::target::Hardening);
+
+impl Runtime {
+    /// The libraries `text` needs, then the checks'.
+    fn libraries<'a>(self, text: &str, arena: &'a Bump) -> &'a [&'a str] {
+        let mut all = crate::util::bump::ArenaVec::new_in(arena);
+        all.extend_from_slice(libraries(text));
+        all.extend(self.0.link_flags());
+        all.leak()
     }
 }
 
@@ -111,6 +132,7 @@ fn assemble_refused(
     out_path: &Path,
     target: Target,
     kind: OutputKind,
+    runtime: Runtime,
     refusal: super::object::Error,
 ) -> io::Result<()> {
     let arena = Bump::new();
@@ -128,7 +150,13 @@ fn assemble_refused(
     toolchain
         .assemble(assembly.path(), object.path(), target, OutputKind::Object)
         .map_err(|assembler| FallbackError::io(refusal, assembler))?;
-    toolchain.assemble_linking(object.path(), out_path, target, kind, libraries(text))
+    toolchain.assemble_linking(
+        object.path(),
+        out_path,
+        target,
+        kind,
+        runtime.libraries(text, &arena),
+    )
 }
 
 /// Writes `text` to a temporary `.s` file beside `out_path` and assembles
@@ -139,6 +167,17 @@ pub(crate) fn assemble(
     target: Target,
     kind: OutputKind,
 ) -> io::Result<()> {
+    assemble_with(text, out_path, target, kind, Runtime::default())
+}
+
+/// [`assemble`], linking `runtime`'s libraries too.
+fn assemble_with(
+    text: &str,
+    out_path: &Path,
+    target: Target,
+    kind: OutputKind,
+    runtime: Runtime,
+) -> io::Result<()> {
     // The direct encoder refuses file-scope and inline assembly, so such
     // listings are only assembled.
     #[cfg(test)]
@@ -147,19 +186,29 @@ pub(crate) fn assemble(
     #[cfg(test)]
     if matches!(target, Target::LinuxGnu | Target::LinuxMusl) && encodable {
         super::tests::object::equivalent(text)?;
-        return build_object(text, out_path, target, kind);
+        return encode_object(text, out_path, target, kind, runtime, |error| {
+            Err(io::Error::other(error))
+        });
     }
     #[cfg(test)]
     if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) && encodable {
         super::tests::object_coff::equivalent(text, target)?;
-        return build_object(text, out_path, target, kind);
+        return encode_object(text, out_path, target, kind, runtime, |error| {
+            Err(io::Error::other(error))
+        });
     }
     let toolchain = Toolchain::bundled(target)?;
     let arena = Bump::new();
     let (assembly, mut file) = TemporaryObject::create(out_path, "s", &arena)?;
     file.write_all(text.as_bytes())?;
     drop(file);
-    toolchain.assemble_linking(assembly.path(), out_path, target, kind, libraries(text))
+    toolchain.assemble_linking(
+        assembly.path(),
+        out_path,
+        target,
+        kind,
+        runtime.libraries(text, &arena),
+    )
 }
 
 /// Builds direct ELF or COFF bytes from the private emitter listing.
@@ -170,7 +219,7 @@ pub(crate) fn build_object(
     target: Target,
     kind: OutputKind,
 ) -> io::Result<()> {
-    encode_object(text, out_path, target, kind, |error| {
+    encode_object(text, out_path, target, kind, Runtime::default(), |error| {
         Err(io::Error::other(error))
     })
 }
@@ -182,6 +231,7 @@ fn encode_object(
     out_path: &Path,
     target: Target,
     kind: OutputKind,
+    runtime: Runtime,
     refused: impl FnOnce(super::object::Error) -> io::Result<()>,
 ) -> io::Result<()> {
     if kind == OutputKind::SharedLibrary {
@@ -209,7 +259,7 @@ fn encode_object(
         out_path,
         target,
         kind,
-        libraries(text),
+        runtime.libraries(text, &arena),
     )
 }
 
