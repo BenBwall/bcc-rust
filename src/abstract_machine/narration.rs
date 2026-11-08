@@ -604,10 +604,17 @@ pub(super) fn macro_use(mut event: Event, used: &Macro, source: &str, lead: bool
         let _ = write!(event.explanation, " In the declaration, {replaced}");
         return event;
     }
+    // The replacement leads, and the step itself follows: what it did with
+    // the replacement, or what translation phase 6 then did to it.
     let summary = lowered(&event.summary);
+    let joined = if summary.starts_with("translation phase") {
+        ", and "
+    } else {
+        ": "
+    };
     event.summary = format!(
-        "`{name}` is a macro the preprocessor replaced with `{replacement}` before the program \
-         ran: {summary}"
+        "Before the program ran, the preprocessor replaced the macro `{name}` with \
+         `{replacement}`{joined}{summary}"
     );
     event.explanation = format!("{replaced} {}", event.explanation);
     event.title = if event.title.starts_with("Before main") {
@@ -624,7 +631,16 @@ fn lowered(text: &str) -> String {
     let first_word = text.split(' ').next().unwrap_or_default();
     let common = matches!(
         first_word,
-        "The" | "Evaluate" | "Before" | "Convert" | "Decay" | "Each" | "This" | "A" | "An"
+        "The"
+            | "Evaluate"
+            | "Before"
+            | "Convert"
+            | "Decay"
+            | "Each"
+            | "This"
+            | "A"
+            | "An"
+            | "Translation"
     );
     if !common {
         return String::from(text);
@@ -983,11 +999,22 @@ impl Machine {
             | Type::Floating(floating) =>
                 format!("{}. Its value is", floating_declaration(floating)),
         };
+        // A const object says so where it is created: it keeps the value its
+        // initializer gives it.
+        let qualifier = if self.metadata[id - 1].constant {
+            "const "
+        } else {
+            ""
+        };
         let kind = match ty {
             | Type::Array(element, count) => format!("an array of {count} {}s", element.spelling()),
             | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
             | Type::StructPointer(_) => String::from("a pointer to a structure"),
             | Type::Struct(_) => format!("a {}", object.r#type),
+            | Type::Integer(integer) if !qualifier.is_empty() =>
+                format!("a {qualifier}{} object", integer.spelling()),
+            | Type::Floating(floating) if !qualifier.is_empty() =>
+                format!("a {qualifier}{} object", floating.spelling()),
             | Type::Integer(integer) => format!("{} object", article(integer.spelling())),
             | Type::Floating(floating) => format!("{} object", article(floating.spelling())),
         };
@@ -1200,11 +1227,15 @@ impl Machine {
                 Event::new(
                     EventKind::StaticStorage,
                     range,
-                    format!("Before main: the string literal {name} ({})", object.r#type),
+                    format!(
+                        "Before main: the string literal `{name}` ({})",
+                        object.r#type
+                    ),
                 ),
                 &format!(
-                    "The string literal {name} is an array of {count} chars with static storage \
-                     duration, existing before main runs: {characters}."
+                    "The string literal `{name}` is an array of {count} chars, the last of them a \
+                     null character; it has static storage duration, so it exists before main \
+                     runs."
                 ),
                 &format!(
                     "In translation phase 7 a null character, '\\0', is added to the end of each \
@@ -1254,11 +1285,12 @@ impl Machine {
                 Event::new(
                     EventKind::StaticStorage,
                     range,
-                    format!("Before main: {parts} literals joined into {literal}"),
+                    format!("Before main: {parts} literals joined into `{literal}`"),
                 ),
                 &format!(
-                    "Translation phase 6 joined the {parts} adjacent string literals {name} into \
-                     one, {literal}: a single array of {count} chars with one null at its end."
+                    "Translation phase 6 joined the {parts} adjacent string literals `{name}` \
+                     into one, `{literal}`: a single array of {count} chars with one null at its \
+                     end."
                 ),
                 &format!(
                     "The source writes {parts} string literals side by side, {name}. Before the \
@@ -1922,11 +1954,11 @@ impl Machine {
                     Event::new(
                         EventKind::ArrayDecay,
                         range,
-                        format!("{} becomes a pointer to its first char", object.name),
+                        format!("`{}` becomes a pointer to its first char", object.name),
                     ),
                     &format!(
-                        "The string literal {name} is an array of chars, so in an expression it \
-                         becomes a pointer to its first element, {name}[0].",
+                        "The string literal `{name}` is an array of chars, so in an expression it \
+                         becomes a pointer to its first element, `{name}[0]`.",
                         name = object.name
                     ),
                     &format!(
@@ -2691,9 +2723,20 @@ impl Machine {
                             range,
                             format!("Compute {a} {operator} {b} = {shown}"),
                         ),
-                        &format!(
-                            "{a} {operator} {b} = {shown}, computed in int; the result fits in an \
-                             int, so it is well defined."
+                        &dropped_remainder(operator, &left, &right).map_or_else(
+                            || {
+                                format!(
+                                    "{a} {operator} {b} = {shown}, computed in int; the result \
+                                     fits in an int, so it is well defined."
+                                )
+                            },
+                            |remainder| {
+                                format!(
+                                    "{a} {operator} {b} = {shown}: dividing one int by another \
+                                     gives an int, so the remainder, {remainder}, is dropped and \
+                                     the quotient truncates toward zero."
+                                )
+                            },
                         ),
                         &format!(
                             "Both operands are int, so the usual arithmetic conversions leave \
@@ -3755,10 +3798,18 @@ impl Machine {
                 range,
                 String::from("Discard the result"),
             ),
-            &format!(
-                "The statement's value, {}, is not used: the statement ran only for its effects.",
-                self.short_value(&value),
-            ),
+            &match called(snippet(source, range)) {
+                | Some(function) => format!(
+                    "The value `{function}` returned, {}, is not used: the statement called it \
+                     only for what it does.",
+                    self.short_value(&value),
+                ),
+                | None => format!(
+                    "The statement's value, {}, is not used: the statement ran only for its \
+                     effects.",
+                    self.short_value(&value),
+                ),
+            },
             &text,
             &[clauses::EXPRESSION_STATEMENT, clauses::FULL_EXPRESSION],
         );
@@ -4380,6 +4431,56 @@ pub(super) fn character(
 
 /// A char value as a character constant: `'A'`, `'\n'`, or its code when
 /// it is no single byte.
+/// The remainder an integer division `left / right` discards, when it
+/// discards one.
+///
+/// C99: §6.5.5 paragraph 6, p. 82; PDF p. 94.
+fn dropped_remainder(operator: &str, left: &Value, right: &Value) -> Option<i128> {
+    match (operator, left, right) {
+        | ("/", &Value::Integer(left), &Value::Integer(right)) if right != 0 && left % right != 0 =>
+            Some(left % right),
+        | _ => None,
+    }
+}
+
+/// The function an expression statement such as `printf("hi\n")` calls,
+/// when the whole statement is that one call.
+fn called(statement: &str) -> Option<&str> {
+    let statement = statement.trim().trim_end_matches(';').trim_end();
+    let open = statement.find('(')?;
+    let function = statement[..open].trim();
+    let identifier = function
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && function
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_');
+    // The parenthesis after the name must close at the end of the statement,
+    // skipping those inside string and character literals.
+    let mut depth = 0_usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (at, character) in statement.char_indices().skip_while(|&(at, _)| at < open) {
+        match quote {
+            | Some(_) if escaped => escaped = false,
+            | Some(_) if character == '\\' => escaped = true,
+            | Some(end) if character == end => quote = None,
+            | Some(_) => {},
+            | None if matches!(character, '"' | '\'') => quote = Some(character),
+            | None if character == '(' => depth += 1,
+            | None if character == ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (identifier && at + 1 == statement.len()).then_some(function);
+                }
+            },
+            | None => {},
+        }
+    }
+    None
+}
+
 fn char_text(value: i128) -> String {
     i8::try_from(value).map_or_else(
         |_| format!("{value}"),

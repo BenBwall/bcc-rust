@@ -2027,13 +2027,21 @@ fn string_literals_are_static_char_arrays_with_a_null() {
             state
                 .event
                 .title
-                .starts_with("Before main: the string literal \"abc\"")
+                .starts_with("Before main: the string literal `\"abc\"`")
         })
         .expect("the literal's array is created");
     assert!(
-        literal.event.summary.contains("{'a', 'b', 'c', '\\0'}"),
+        literal
+            .event
+            .summary
+            .contains("`\"abc\"` is an array of 4 chars"),
         "{}",
         literal.event.summary
+    );
+    assert!(
+        literal.event.explanation.contains("{'a', 'b', 'c', '\\0'}"),
+        "{}",
+        literal.event.explanation
     );
     assert!(cited(literal).contains(&"6.4.5p5"));
     let decay = states
@@ -2391,7 +2399,7 @@ fn the_constants_lesson_narrates_define_const_cast_and_compound_assignment() {
     assert_eq!(limit.event.title, "Macro LIMIT: evaluate the constant 4");
     assert!(
         limit.event.summary.starts_with(
-            "`LIMIT` is a macro the preprocessor replaced with `4` before the program ran: the \
+            "Before the program ran, the preprocessor replaced the macro `LIMIT` with `4`: the \
              constant 4"
         ),
         "{}",
@@ -2414,6 +2422,14 @@ fn the_constants_lesson_narrates_define_const_cast_and_compound_assignment() {
         "{}",
         joined.event.title
     );
+    assert!(
+        joined.event.summary.starts_with(
+            "Before the program ran, the preprocessor replaced the macro `LABEL` with \
+             `\"total\"`, and translation phase 6 joined"
+        ),
+        "{}",
+        joined.event.summary
+    );
     assert!(cited(joined).contains(&"6.4.5p4"));
     assert!(
         last.objects
@@ -2432,6 +2448,24 @@ fn the_constants_lesson_narrates_define_const_cast_and_compound_assignment() {
         .find(|state| state.event.title == "Create `step` (const int)")
         .expect("step is declared");
     assert!(declared.event.explanation.contains("defined const"));
+    assert!(
+        declared.event.summary.contains("a const int object"),
+        "{}",
+        declared.event.summary
+    );
+    // printf's result is named as what printf returned.
+    let discarded = states
+        .iter()
+        .find(|state| state.event.title == "Discard the result")
+        .expect("printf's result is discarded");
+    assert!(
+        discarded
+            .event
+            .summary
+            .starts_with("The value `printf` returned, 13,"),
+        "{}",
+        discarded.event.summary
+    );
     // The cast wraps, and says the result is implementation-defined.
     let cast = states
         .iter()
@@ -4186,4 +4220,23 @@ fn the_floating_lesson_is_close_but_not_exact() {
     for state in &steps {
         assert!(!state.event.title.is_empty() && !state.event.summary.is_empty());
     }
+    // int division says what it drops, and exact values are set as code.
+    let lead = |title: &str| {
+        steps
+            .iter()
+            .find(|state| state.event.title == title)
+            .map(|state| state.event.summary.clone())
+            .expect(title)
+    };
+    assert_eq!(
+        lead("Compute 7 / 2 = 3"),
+        "7 / 2 = 3: dividing one int by another gives an int, so the remainder, 1, is dropped and \
+         the quotient truncates toward zero."
+    );
+    assert!(
+        lead("Compute 0.1 + 0.2 = 0.30000000000000004")
+            .starts_with("No double holds the exact sum `0.3000000000000000166533453693773481"),
+        "{}",
+        lead("Compute 0.1 + 0.2 = 0.30000000000000004")
+    );
 }
