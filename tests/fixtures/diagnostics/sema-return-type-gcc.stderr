@@ -7,9 +7,7 @@ sema-return-type-gcc.c:8:1: warning: control reaches end of non-void function [-
 sema-return-type-gcc.c:16:1: warning: control reaches end of non-void function [-Wreturn-type]
    16 | }
       | ^
-sema-return-type-gcc.c:20:1: warning: no return statement in function returning non-void [-Wreturn-type]
-   20 | static int unlowered(void) {
-      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-return-type-gcc.c:21:1: warning: no return statement in function returning non-void [-Wreturn-type]
    21 | }
       | ^
 sema-return-type-gcc.c:25:1: warning: 'noreturn' function does return
@@ -26,4 +24,4 @@ sema-return-type-gcc.c:40:63: warning: control reaches end of non-void function 
       |                                                               ^
 sema-return-type-gcc.c:41:1: warning: no return statement in function returning non-void [-Wreturn-type]
    41 | static int only_polls(void) { for (;;) { poll_once(); } }
-      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      | ^~~~~~
