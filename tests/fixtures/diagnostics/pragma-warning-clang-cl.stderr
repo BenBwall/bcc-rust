@@ -22,4 +22,4 @@ pragma-warning-clang-cl.c:14:20: warning: pragma diagnostic pop could not pop, n
 pragma-warning-clang-cl.c:8:23: error: call to undeclared function 'g2'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
     8 | int f2(void) { return g2(); }
       |                       ^~
-1 error and 7 warnings generated.
+7 warnings and 1 error generated.

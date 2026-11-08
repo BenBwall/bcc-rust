@@ -208,13 +208,18 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         {
             writeln!(out, "compilation terminated.")?;
         }
-        // GCC, MSVC and TCC print no summary.
+        // GCC, MSVC and TCC print no summary, and Clang prints it only with
+        // its snippets (`CompilerInstance::printDiagnosticStats` checks
+        // `ShowCarets`), warnings first.
+        let format = context.configuration.diagnostic_format();
+        let clang = format == crate::configuration::DiagnosticFormat::Clang;
         if matches!(
-            context.configuration.diagnostic_format(),
+            format,
             crate::configuration::DiagnosticFormat::Gcc
                 | crate::configuration::DiagnosticFormat::Msvc { .. }
                 | crate::configuration::DiagnosticFormat::Tcc
-        ) {
+        ) || (clang && !context.configuration.diagnostic_presentation().caret)
+        {
             return Ok(());
         }
         let errors = count_of(self.errors, "error");
@@ -223,6 +228,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             | (0, 0) => Ok(()),
             | (_, 0) => writeln!(out, "{errors} generated."),
             | (0, _) => writeln!(out, "{warnings} generated."),
+            | _ if clang => writeln!(out, "{warnings} and {errors} generated."),
             | _ => writeln!(out, "{errors} and {warnings} generated."),
         }
     }
