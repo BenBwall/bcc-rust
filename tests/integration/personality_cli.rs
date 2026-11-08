@@ -7807,6 +7807,48 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(!stderr(&quiet).contains("ignoring"), "{}", stderr(&quiet));
     }
 
+    /// A `_Pragma` operator's unknown pragma is reported at the line that
+    /// invokes it, and withheld where that is in a system header: a system
+    /// macro invoked in user code warns, and a user macro a system header
+    /// invokes does not. Each line was measured against GCC 14.2.
+    #[test]
+    fn gcc_reports_an_unknown_pragma_operator_where_it_is_invoked() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sys")).unwrap();
+        directory.write(
+            "sys/psys.h",
+            "_Pragma(\"mystery foo\")\n#define DO_PRAGMA _Pragma(\"mystery \
+             bar\")\nDO_PRAGMA\n#define SYS_P(x) _Pragma(#x)\nUSER_P(mystery user)\n",
+        );
+        directory.write(
+            "p.c",
+            "#define USER_P(x) _Pragma(#x)\n#include <psys.h>\nDO_PRAGMA\nSYS_P(mystery \
+             sysp)\nUSER_P(nosuch bar)\nint x;\n  _Pragma(\"mystery direct\") int y;\n",
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wall", "-isystem", "sys", "-fsyntax-only", "p.c"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        let warned: Vec<(&str, &str)> = text
+            .lines()
+            .filter_map(|line| line.split_once(": warning: ignoring '"))
+            .filter_map(|(at, rest)| Some((at.rsplit_once(':')?.0, rest.split_once('\'')?.0)))
+            .collect();
+        assert_eq!(
+            warned,
+            [
+                ("p.c:3", "#pragma mystery bar"),
+                ("p.c:4", "#pragma mystery sysp"),
+                ("p.c:5", "#pragma nosuch bar"),
+                ("p.c:7", "#pragma mystery direct"),
+            ],
+            "{text}"
+        );
+        assert!(!text.contains("<pragma string>"), "{text}");
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();

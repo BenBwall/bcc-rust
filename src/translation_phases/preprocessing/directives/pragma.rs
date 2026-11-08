@@ -438,13 +438,21 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
 
     /// GCC's `-Wunknown-pragmas`, under GCC's identity, for the pragma whose
     /// first token is `first`: GCC names its first two names, or one and a
-    /// space.
-    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+    /// space. A `_Pragma` operator's is reported where the operator was
+    /// invoked, and withheld where that is in a system header.
+    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171; §6.10.9p1, p. 161;
+    /// PDF p. 173.
     fn gcc_ignored_pragma(&mut self, first: PreprocessorToken, second: Option<&str>) {
+        let site = match &self.state.pragma_operator {
+            | Some(invocation) => self
+                .context
+                .push_source_vectors(std::slice::from_ref(invocation)),
+            | None => first.source_vectors,
+        };
         if self.context.configuration.compiler_identity() != CompilerIdentity::Gcc
             || self
                 .context
-                .group_severity(DiagnosticGroup::UnknownPragmas, first.source_vectors)
+                .group_severity(DiagnosticGroup::UnknownPragmas, site)
                 .is_none()
         {
             return;
@@ -456,7 +464,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         let text = self.context.diagnostic_text(&text);
         self.context.preprocessor_error(PreprocessorError {
             error_type:     PreprocessorErrorType::IgnoredPragma(text),
-            source_vectors: first.source_vectors,
+            source_vectors: site,
         });
     }
 
