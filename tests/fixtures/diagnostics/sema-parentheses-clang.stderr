@@ -1,0 +1,67 @@
+sema-parentheses-clang.c:2:15: warning: '&&' within '||' [-Wlogical-op-parentheses]
+    2 |     int r = a && b || c;
+      |               ^~
+sema-parentheses-clang.c:4:12: warning: operator '<<' has lower precedence than '+'; '+' will be evaluated first [-Wshift-op-parentheses]
+    4 |     r += a + b << c;
+      |            ^
+sema-parentheses-clang.c:5:12: warning: operator '>>' has lower precedence than '-'; '-' will be evaluated first [-Wshift-op-parentheses]
+    5 |     r += a - b >> c;
+      |            ^
+sema-parentheses-clang.c:6:12: warning: & has lower precedence than ==; == will be evaluated first [-Wparentheses]
+    6 |     r += a & b == c;
+      |            ^
+sema-parentheses-clang.c:7:12: warning: '&' within '|' [-Wbitwise-op-parentheses]
+    7 |     r += a & b | c;
+      |            ^
+sema-parentheses-clang.c:8:12: warning: '^' within '|' [-Wbitwise-op-parentheses]
+    8 |     r += a ^ b | c;
+      |            ^
+sema-parentheses-clang.c:9:16: warning: ^ has lower precedence than ==; == will be evaluated first [-Wparentheses]
+    9 |     r += a | b ^ c == 1;
+      |                ^
+sema-parentheses-clang.c:9:16: warning: '^' within '|' [-Wbitwise-op-parentheses]
+    9 |     r += a | b ^ c == 1;
+      |                ^
+sema-parentheses-clang.c:10:10: warning: logical not is only applied to the left hand side of this comparison [-Wlogical-not-parentheses]
+   10 |     r += !a == b;
+      |          ^~
+sema-parentheses-clang.c:12:10: warning: logical not is only applied to the left hand side of this comparison [-Wlogical-not-parentheses]
+   12 |     r += !a == 0;
+      |          ^~
+sema-parentheses-clang.c:13:10: warning: logical not is only applied to the left hand side of this bitwise operator [-Wlogical-not-parentheses]
+   13 |     r += !a & b;
+      |          ^~
+sema-parentheses-clang.c:15:22: warning: operator '?:' has lower precedence than '+'; '+' will be evaluated first [-Wparentheses]
+   15 |     r += a + (b < c) ? 1 : 2;
+      |                      ^~~~~
+sema-parentheses-clang.c:16:22: warning: operator '?:' has lower precedence than '&'; '&' will be evaluated first [-Wbitwise-conditional-parentheses]
+   16 |     r += a & (b < c) ? 1 : 2;
+      |                      ^~~~~
+sema-parentheses-clang.c:18:11: warning: using the result of an assignment as a condition without parentheses [-Wparentheses]
+   18 |     if (a = b)
+      |           ^
+sema-parentheses-clang.c:20:11: warning: using the result of an assignment as a condition without parentheses [-Wparentheses]
+   20 |     if (a |= b)
+      |           ^~
+sema-parentheses-clang.c:22:12: warning: equality comparison with extraneous parentheses [-Wparentheses-equality]
+   22 |     if ((a == b))
+      |            ^~
+sema-parentheses-clang.c:24:15: warning: equality comparison with extraneous parentheses [-Wparentheses-equality]
+   24 |     while ((a == b))
+      |               ^~
+sema-parentheses-clang.c:31:9: warning: add explicit braces to avoid dangling else [-Wdangling-else]
+   31 |         else
+      |         ^~~~
+sema-parentheses-clang.c:37:13: warning: add explicit braces to avoid dangling else [-Wdangling-else]
+   37 |             else
+      |             ^~~~
+sema-parentheses-clang.c:39:5: warning: switch condition has boolean value [-Wswitch-bool]
+   39 |     switch (a == b) {
+      |     ^~~~~~~~~~~~~~~~~
+   40 |     default:
+      |     ^~~~~~~~
+   41 |         break;
+      |         ^~~~~~
+   42 |     }
+      |     ^
+20 warnings generated.
