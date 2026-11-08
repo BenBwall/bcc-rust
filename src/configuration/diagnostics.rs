@@ -507,15 +507,9 @@ impl CompilerConfiguration {
             .unwrap_or(self.extension_policy == ExtensionPolicy::Deny)
     }
 
-    /// One bit per [`DiagnosticGroup`] that a pragma naming the warning
-    /// option `name` reaches, parents' children included.
-    pub(crate) fn pragma_group_mask(self, name: &str) -> u128 {
-        const {
-            assert!(
-                DiagnosticGroup::COUNT <= u128::BITS as usize,
-                "a mask holds one bit per group"
-            );
-        }
+    /// The groups a pragma naming the warning option `name` reaches,
+    /// parents' children included.
+    pub(crate) fn pragma_group_mask(self, name: &str) -> GroupMask {
         let mut cleared = self;
         cleared.warning_options = [WarningSettings::DEFAULT; DiagnosticGroup::COUNT];
         let set = cleared.with_pragma_class(name, PragmaClass::Error);
@@ -523,7 +517,7 @@ impl CompilerConfiguration {
             .iter()
             .enumerate()
             .filter(|(_, settings)| **settings != WarningSettings::DEFAULT)
-            .fold(0, |mask, (group, _)| mask | (1 << group))
+            .fold(GroupMask::EMPTY, |mask, (group, _)| mask.with(group))
     }
 
     /// Enables every group that is off by default, for tests that observe
@@ -1433,5 +1427,39 @@ impl WarningSettings {
                 }
             },
         }
+    }
+}
+
+/// A set of [`DiagnosticGroup`]s, one bit each, as wide as the groups need.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GroupMask([u64; GroupMask::WORDS]);
+
+impl GroupMask {
+    pub(crate) const EMPTY: Self = Self([0; Self::WORDS]);
+    const WORDS: usize = DiagnosticGroup::COUNT.div_ceil(64);
+
+    /// The set with the group at index `group` added.
+    const fn with(mut self, group: usize) -> Self {
+        self.0[group / 64] |= 1 << (group % 64);
+        self
+    }
+
+    pub(crate) const fn contains(self, group: DiagnosticGroup) -> bool {
+        let index = group as usize;
+        self.0[index / 64] >> (index % 64) & 1 != 0
+    }
+
+    pub(crate) fn union(mut self, other: Self) -> Self {
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word |= other;
+        }
+        self
+    }
+
+    pub(crate) fn difference(mut self, other: Self) -> Self {
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word &= !other;
+        }
+        self
     }
 }
