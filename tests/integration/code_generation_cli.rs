@@ -2199,9 +2199,11 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     /// return address check: with `-fno-omit-frame-pointer`,
     /// `__builtin_frame_address` and `__builtin_return_address` above level 0
     /// walk the frame-pointer chain through LLVM and the native back end, and
-    /// print what `gcc -O0 -fno-omit-frame-pointer` prints. The interpreter's frames link no
-    /// machine frames, so it stops at the first walk. GNU extension: GCC
-    /// manual, "Return Address".
+    /// print what `gcc -O0 -fno-omit-frame-pointer` prints. As in GCC, an
+    /// unoptimized compilation keeps frame pointers unasked, and
+    /// `-fomit-frame-pointer` or `-O1` drops them. The interpreter's frames
+    /// link no machine frames, so it stops at the first walk. GNU extension:
+    /// GCC manual, "Return Address" and "Optimize Options".
     #[test]
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn outer_frame_addresses_walk_kept_frame_pointers() {
@@ -2234,24 +2236,22 @@ int main(void) { char str[] = "__builtin_frame_address"; char *fp0 = __builtin_f
         let executable = temporary("frame-chain.exe");
         let mut failures = Vec::new();
         for flags in [
-            &["--backend=llvm", "--opt=none"][..],
-            &["--backend=llvm", "--opt=bcc"][..],
-            &["--backend=native", "--opt=none"][..],
-            &["--backend=native", "--opt=bcc"][..],
-            &["--backend=native", "--native-object"][..],
+            &["-fno-omit-frame-pointer", "--backend=llvm", "--opt=none"][..],
+            &["-fno-omit-frame-pointer", "--backend=llvm", "--opt=bcc"][..],
+            &["-fno-omit-frame-pointer", "--backend=native", "--opt=none"][..],
+            &["-fno-omit-frame-pointer", "--backend=native", "--opt=bcc"][..],
+            &[
+                "-fno-omit-frame-pointer",
+                "--backend=native",
+                "--native-object",
+            ][..],
+            &["-O0", "--backend=llvm"][..],
+            &["-O0", "--backend=native"][..],
+            &["--backend=native"][..],
         ] {
             let built = bcc(
                 SOURCE,
-                &[
-                    &[
-                        target,
-                        "-fno-omit-frame-pointer",
-                        "-o",
-                        executable.to_str().unwrap(),
-                    ][..],
-                    flags,
-                ]
-                .concat(),
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
             );
             assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
             let run = run_native(&mut Command::new(&executable)).unwrap();
@@ -2265,6 +2265,21 @@ int main(void) { char str[] = "__builtin_frame_address"; char *fp0 = __builtin_f
         }
         std::fs::remove_file(executable).unwrap();
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+        for backend in ["--backend=llvm", "--backend=native"] {
+            let framed = |flags: &[&str]| {
+                let output = bcc(
+                    "int f(int x) { return x + 1; }",
+                    &[&[target, backend, "-S", "-o", "-"][..], flags].concat(),
+                );
+                assert!(output.status.success(), "{}", text(&output.stderr));
+                text(&output.stdout).contains("movq\t%rsp, %rbp")
+            };
+            assert!(framed(&[]), "{backend}");
+            assert!(framed(&["-O0"]), "{backend}");
+            assert!(framed(&["-O2", "-fno-omit-frame-pointer"]), "{backend}");
+            assert!(!framed(&["-O0", "-fomit-frame-pointer"]), "{backend}");
+            assert!(!framed(&["-O1"]), "{backend}");
+        }
     }
 
     /// C11 atomics under contention

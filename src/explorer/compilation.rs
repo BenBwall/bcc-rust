@@ -186,7 +186,8 @@ pub(super) fn failed(message: fmt::Arguments<'_>) -> ExplorerOutput {
 }
 
 /// The command line's configuration for `--target`, `--std`, `-O2` or
-/// `-O0`, `--max-nesting-depth` and `--source-date-epoch`.
+/// `-O0` (and the frame pointers that keeps), `--max-nesting-depth` and
+/// `--source-date-epoch`.
 fn configure(options: &ExplorerOptions) -> Result<CompilerConfiguration, String> {
     let mode = LanguageMode::parse(&options.std)
         .ok_or_else(|| format!("unknown language standard `{}`", options.std))?;
@@ -198,15 +199,16 @@ fn configure(options: &ExplorerOptions) -> Result<CompilerConfiguration, String>
         super::WASM_MAX_NESTING_DEPTH
     };
     let depth = options.max_nesting_depth.unwrap_or(default_depth).max(1);
-    Ok(
-        CompilerConfiguration::new(mode.standard, ExtensionPolicy::Allow)
-            .with_gnu_extensions(mode.gnu)
-            .with_target(target)
-            .with_optimization((options.optimize, false))
-            .with_source_date_epoch(Some(options.source_date_epoch.unwrap_or(0)))
-            .with_max_nesting_depth(depth)
-            .with_repeated_specifier_warnings(true),
-    )
+    let configuration = CompilerConfiguration::new(mode.standard, ExtensionPolicy::Allow)
+        .with_gnu_extensions(mode.gnu)
+        .with_target(target)
+        .with_optimization((options.optimize, false))
+        .with_source_date_epoch(Some(options.source_date_epoch.unwrap_or(0)))
+        .with_max_nesting_depth(depth)
+        .with_repeated_specifier_warnings(true);
+    let mut code = configuration.code_options();
+    code.hardening = crate::target::Hardening::initial(target, options.optimize);
+    Ok(configuration.with_code_options(code))
 }
 
 /// A context that finds only the explorer's in-memory headers and the

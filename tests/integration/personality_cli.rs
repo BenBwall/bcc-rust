@@ -11675,8 +11675,12 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(!plain.contains("null_pointer_is_valid"), "{plain}");
         assert!(plain.contains("getelementptr inbounds i8"), "{plain}");
         let null = llvm(&["-fno-delete-null-pointer-checks"]);
+        // An unoptimized Linux function keeps its frame pointer too.
         assert!(
-            null.contains("attributes #0 = { null_pointer_is_valid }"),
+            null.contains("attributes #0 = { null_pointer_is_valid }")
+                || null.contains(
+                    "attributes #0 = { null_pointer_is_valid \"frame-pointer\"=\"all\" }"
+                ),
             "{null}"
         );
         let restored = llvm(&[

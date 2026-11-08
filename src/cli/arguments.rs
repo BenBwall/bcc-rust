@@ -446,10 +446,13 @@ impl Cli {
         }
     }
 
-    /// The run-time checks the options ask for, each from its last option.
-    /// Only Linux has them: the personalities warn about them on Windows.
+    /// The run-time checks the options ask for, each from its last option,
+    /// over what an unoptimized or optimized compilation starts with
+    /// ([`Hardening::initial`]). Only Linux has them: the personalities warn
+    /// about them on Windows.
     fn hardening(&self) -> Hardening {
-        let mut hardening = Hardening::default();
+        let mut hardening =
+            Hardening::initial(self.target, self.code_generation.optimization_macros().0);
         if !matches!(self.target, Target::LinuxGnu | Target::LinuxMusl) {
             return hardening;
         }
