@@ -1341,8 +1341,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
         );
         info.bit_field = field.width;
+        // TCC gives a bit-field of a type wider than `int` the type `int`
+        // when its width fits, as GCC and Clang promote it, only in System
+        // V's layout; in Microsoft's it keeps its declared type (TCC's
+        // `struct_layout`, `tccgen.c`).
+        let record = self.types.tags[declaring_tag];
+        let declared_type = self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Tcc
+            && record
+                .microsoft_layout
+                .get()
+                .unwrap_or(self.types.target.ms_bitfields)
+            && self
+                .integer_type(field_ty)
+                .is_some_and(|(bits, _)| bits > 32);
         info.promotion_width = field
             .width
+            .filter(|_| !declared_type)
             .and_then(|width| u8::try_from(width).ok())
             .and_then(NonZeroU8::new);
         info.register = !indirect && base.register;

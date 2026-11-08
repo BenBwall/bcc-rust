@@ -10096,17 +10096,17 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             options.extend(args);
             gcc(&options)
         };
-        let refused = linux(&["-c", "-mms-bitfields", "x.c", "-o", "x.o"]);
+        let refused = linux(&["-c", "-mabi=ms", "x.c", "-o", "x.o"]);
         assert_eq!(refused.status.code(), Some(1));
         assert!(
-            stderr(&refused).contains("'-mms-bitfields' is not supported"),
+            stderr(&refused).contains("'-mabi=ms' is not supported"),
             "{}",
             stderr(&refused)
         );
         // `--target` may come after the option.
         succeeds(&gcc(&[
             "-c",
-            "-mms-bitfields",
+            "-mabi=ms",
             "--target=x86_64-w64-mingw32",
             "x.c",
             "-o",
@@ -10115,7 +10115,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         let windows = gcc(&[
             "-c",
             "--target=x86_64-w64-mingw32",
-            "-mno-ms-bitfields",
+            "-mabi=sysv",
             "x.c",
             "-o",
             "w.o",
@@ -10123,7 +10123,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert_eq!(windows.status.code(), Some(1), "{}", stderr(&windows));
         succeeds(&linux(&[
             "-c",
-            "-mno-ms-bitfields",
+            "-mabi=sysv",
             "-mlong-double-80",
             "x.c",
             "-o",

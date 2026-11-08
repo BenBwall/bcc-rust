@@ -549,6 +549,20 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     StorageOrderPragmaOperand {
         missing: bool,
     },
+    /// TCC's `#pragma comment` not in the form `comment(kind, "text")`,
+    /// which TCC refuses with this error. C99: implementation-defined
+    /// pragma behavior, §6.10.6p1, p. 159; PDF p. 171.
+    MalformedTccPragma,
+    /// An option in TCC's `#pragma comment(option, "...")` that bcc does
+    /// not apply from a pragma, and why. C99: §6.10.6p1, p. 159; PDF p. 171.
+    TccPragmaOption {
+        option: &'tu str,
+        reason: &'static str,
+    },
+    /// TCC's `#pragma comment(lib, "name")` naming a library bcc's link
+    /// does not already have, which TCC would add. C99: §6.10.6p1, p. 159;
+    /// PDF p. 171.
+    TccPragmaLibrary(&'tu str),
     /// `#include_next` or `__has_include_next`, named by the payload, in the
     /// primary source file, where there is no entry to continue after; the
     /// lookup searches as `#include` would, as GCC's and Clang's do. The
@@ -1393,6 +1407,19 @@ impl PreprocessorErrorType<'_> {
                  scalar_storage_order` [-Wpragmas]"
             })
             .label("pragma ignored"),
+            | Self::MalformedTccPragma =>
+                new("malformed #pragma directive").label("TCC reads `comment(kind, \"text\")` here"),
+            | Self::TccPragmaOption { option, reason } => new(format_in!(
+                arena,
+                "'{option}' is not supported in `#pragma comment(option)`: {reason}"
+            ))
+            .label("TCC would apply it from here on"),
+            | Self::TccPragmaLibrary(library) => new(format_in!(
+                arena,
+                "'#pragma comment(lib, \"{library}\")' is ignored: bcc adds no library from a \
+                 pragma; link with -l{library}"
+            ))
+            .label("TCC would link this library"),
             | Self::IncludeNextInPrimarySource(spelling) =>
                 new(format_in!(arena, "`{spelling}` in the primary source file"))
                     .label("searches from the start of the include path")
@@ -1778,6 +1805,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::PragmaMessage { error: true, .. }
             | PreprocessorErrorType::PragmaDiagnostic(PragmaDiagnosticProblem::ExpectedString)
             | PreprocessorErrorType::HashMustBeFirstCharacterOnLine
+            | PreprocessorErrorType::MalformedTccPragma
+            | PreprocessorErrorType::TccPragmaOption { .. }
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(severity)
             | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(severity)
@@ -1826,7 +1855,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::StringizedTrailingBackslash
             | PreprocessorErrorType::StorageOrderPragmaOperand { .. }
             | PreprocessorErrorType::IncludeNextInPrimarySource(..)
-            | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..) => ErrorSeverity::Warning,
+            | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..)
+            | PreprocessorErrorType::TccPragmaLibrary(..) => ErrorSeverity::Warning,
         }
     }
 }

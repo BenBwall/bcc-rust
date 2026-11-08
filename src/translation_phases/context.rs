@@ -182,6 +182,9 @@ pub(crate) struct Context<'tu> {
     /// GCC identity only.
     pub(crate) storage_order_pragmas:
         ArenaVec<'tu, super::pragma_storage_order::StorageOrderPragma>,
+    /// The bit-field layouts TCC's `#pragma comment(option, "...")` sets,
+    /// in order, under the TCC identity only.
+    pub(crate) layout_pragmas: ArenaVec<'tu, super::pragma_comment::LayoutPragma>,
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: RegionVec<SourceVector>,
     retained_vectors: RegionVec<SourceVector>,

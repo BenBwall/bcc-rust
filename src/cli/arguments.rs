@@ -916,6 +916,8 @@ enum LanguageFlag {
     PackStruct(u32),
     /// `-fpack-struct` (true) or `-fno-pack-struct`, which also clears N.
     PackAll(bool),
+    /// `-mms-bitfields` (true) or `-mno-ms-bitfields`.
+    MsBitfields(bool),
     /// `-fvisibility=default|hidden|protected|internal`.
     Visibility(crate::configuration::DefaultVisibility),
     /// `-fpermissive` (true) or `-fno-permissive`: GCC's C type-safety
@@ -1119,6 +1121,8 @@ impl LanguageFlag {
             | "-fno-permissive" => return Some(Self::Permissive(false)),
             | "-fpack-struct" => return Some(Self::PackAll(true)),
             | "-fno-pack-struct" => return Some(Self::PackAll(false)),
+            | "-mms-bitfields" => return Some(Self::MsBitfields(true)),
+            | "-mno-ms-bitfields" => return Some(Self::MsBitfields(false)),
             | _ => {},
         }
         if text
@@ -1251,6 +1255,7 @@ impl LanguageFlag {
             | Self::PackAll(false) => configuration
                 .with_pack_structures(false)
                 .with_default_pack(0),
+            | Self::MsBitfields(enabled) => configuration.with_ms_bitfields(enabled),
             | Self::Visibility(visibility) => configuration.with_default_visibility(visibility),
             | Self::Permissive(enabled) => configuration.with_permissive(enabled),
         }

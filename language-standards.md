@@ -2395,7 +2395,7 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Implemented (entity) | `noinline`, `noipa`, `always_inline`, diagnostic `nonnull`, `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions, `selectany`, `returns_twice` (the same retained fact the external-symbol catalog gives `setjmp`, `_setjmp`, `__sigsetjmp`, `vfork` and their MinGW-w64 spellings; the native back end refuses calls to such functions) |
 | Implemented (call diagnostics) | GNU `error("message")`, `warning("message")`, including `gnu::` spelling; emitted direct calls after bcc and LLVM IR optimization, with `-Wattribute-warning` control |
 | Implemented (call contracts) | `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`, `enable_if`, `unavailable`; unsupported predicate shapes diagnose and unmodeled object-size origins remain unknown |
-| Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` and `gcc_struct`, which give the record Microsoft's or System V's bit-field layout whatever the target's, with each identity's rules where GCC and Clang differ (union bit-field alignment, zero-width fields in packed records, an attribute on an earlier declaration); under Clang's rules a `gcc_struct` record on an MSVC target is an error, as in Clang 23, but at its definition rather than where its layout is first needed |
+| Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` and `gcc_struct`, which give the record Microsoft's or System V's bit-field layout whatever the target's (`-mms-bitfields` and `-mno-ms-bitfields` give it to every record that names neither, as in GCC 14 and Clang 23), with each identity's rules where GCC and Clang differ (union bit-field alignment, zero-width fields in packed records, an attribute on an earlier declaration); under Clang's rules a `gcc_struct` record on an MSVC target is an error, as in Clang 23, but at its definition rather than where its layout is first needed |
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `no_callee_saved_registers` and the other non-x86 conventions are refused |
 | Machine entries (Linux targets; refused by lowering on the others) | `interrupt` (handlers, below), `no_caller_saved_registers`, and under GCC's identity `naked` |
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked` under Clang's identity, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage` |
@@ -2994,11 +2994,29 @@ wins. The `--gcc-mode` and `--clang-mode` links still leave the functions to
 libatomic. `(const void *)0` is no null pointer constant in any identity:
 §6.3.2.3p3 allows only a cast to `void *` itself (`94_generic`).
 
+TCC's `-mms-bitfields`, and `#pragma comment(option, "-mms-bitfields")`
+and `"-mno-ms-bitfields"` (`95_bitfields_ms`), select TCC's own Microsoft
+layout (`struct_layout` in `tccgen.c`), which `--tcc-mode` follows rather
+than GCC's `ms_struct`: bit-fields share a run by basic type (`_Bool` and
+`char` do not), a zero-width bit-field ends a run only after one of its own
+type and then reserves a unit, every union member reserves its type's bytes,
+`packed` is ignored, an `aligned` request survives `#pragma pack`, and a
+record such a request raises past the pack is rounded only to the pack (an
+array of it then has elements its alignment does not hold, as in TCC). A
+`long long` bit-field that fits in 32 bits has type `int` only in TCC's
+System V layout. The pragma applies from where it is to every record whose
+definition ends after it; bcc follows only these two options and a char
+signedness option that asks for the signedness in effect, refuses the
+others, and adds no library for `#pragma comment(lib, "...")` (`m` is
+linked anyway; another name draws a warning).
+
 TCC differences bcc does not model: an `aligned(n)` member or bit-field
 takes `n` as its alignment even below its type's (TCC's `struct { char c;
-__attribute__((aligned(1))) int x; }` is 5 bytes), and TCC's
-`-mms-bitfields`, which `#pragma comment(option, "-mms-bitfields")` sets in
-`95_bitfields_ms`, has no `--tcc-mode` equivalent on Linux.
+__attribute__((aligned(1))) int x; }` is 5 bytes; under `#pragma pack` in
+TCC's Microsoft layout bcc follows it); TCC ignores `ms_struct` and
+`gcc_struct`, which `--tcc-mode` reads; TCC lays out a Windows target's
+records as a Linux one's unless given `-mms-bitfields`; and in TCC's System
+V layout a zero-width bit-field in a union reserves its type's bytes.
 
 ### `_BitInt` widths
 
