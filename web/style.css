@@ -684,7 +684,7 @@
   .note.narration, .machine-side { background: var(--device); }
   .machine-side { display: grid; gap: 22px; align-content: start; padding: 16px 18px 20px; }
 
-  .note.narration { position: relative; padding: 16px 20px 20px; }
+  .note.narration { position: relative; padding: 16px 20px 20px; overflow-wrap: anywhere; }
   .note-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 2px; font-size: 11.5px; font-weight: 700; letter-spacing: .02em; color: var(--ink); }
   .note-title:focus { outline: none; }
   .note-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
