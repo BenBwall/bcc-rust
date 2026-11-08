@@ -142,3 +142,68 @@ fn folded_conditions_keep_their_side_effects() {
         }
     }
 }
+
+/// `__builtin_constant_p` of what GCC's fold turns into an integer, or keeps
+/// as a comma, pinned to GCC 13 and Clang 23 at `-O0`. GCC also folds
+/// `i - i`, which bcc leaves to the evaluator Clang's rules share.
+#[test]
+fn gcc_rules_answer_constant_queries_from_the_fold() {
+    // Each operand, then GCC's and Clang's answers.
+    const QUERIES: &[(&str, bool, bool)] = &[
+        ("i && 0", true, false),
+        ("i || 1", true, false),
+        ("!(i && 0)", true, false),
+        ("i * 0", true, false),
+        ("0 * i", true, false),
+        ("i & 0", true, false),
+        ("i && 0 ? i : 34", true, false),
+        ("i || 1 ? 34 : i", true, false),
+        ("(char)(i && 0)", true, false),
+        ("(1, 7)", false, true),
+        ("((1, 7))", false, true),
+        ("1 + (1, 7)", false, true),
+        ("(i, 0) && 1", false, false),
+        ("v && 0", false, false),
+        ("0 ? (1, 2) : 3", true, true),
+        ("i && 1", false, false),
+        ("i * 1", false, false),
+        ("1 + 2", true, true),
+    ];
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let mut checks = String::new();
+        for &(operand, gcc, clang) in QUERIES {
+            let expected = if identity == CompilerIdentity::Gcc {
+                gcc
+            } else {
+                clang
+            };
+            checks.push_str(&format!(
+                "if (__builtin_constant_p({operand}) != {}) return {};\n",
+                i32::from(expected),
+                checks.lines().count() + 1
+            ));
+        }
+        let source = format!(
+            "static int i_init = 3;\nstatic int s = __builtin_constant_p(i_init && 0);\nint \
+             main(void) {{\nint i = i_init; volatile int v = 1;\n(void)i; \
+             (void)v;\n{checks}return s != {};\n}}\n",
+            i32::from(identity == CompilerIdentity::Gcc)
+        );
+        let target = Target::LinuxGnu;
+        for (optimize, profile) in STAGES {
+            with_configured_module(
+                &source,
+                target,
+                optimize,
+                profile,
+                CompilerConfiguration::default()
+                    .with_target(target)
+                    .with_compiler_identity(identity)
+                    .with_gnu_extensions(true),
+                |module, target| {
+                    assert_eq!(interpret(module, target).0, 0, "{identity:?}\n{source}");
+                },
+            );
+        }
+    }
+}

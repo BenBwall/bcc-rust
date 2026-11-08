@@ -1004,6 +1004,11 @@ selected arm. Arithmetic folds such as `X * 0`, and comparisons and casts of
 a folded operand, stay unfolded. A `?:`, loop or `switch` condition such a fold
 decides is not modeled either: lowering's constant branches still drop the
 dead code, but an internal function referenced only there is still emitted.
+The same fold answers `__builtin_constant_p` under GCC's rules before the
+shared evaluator: a side-effect-free `i && 0`, `i * 0` or `i && 0 ? i : 34`
+is a constant, and an evaluated comma, as in `(1, 7)`, is none, since GCC's C
+front end keeps it as a `COMPOUND_EXPR`; other GCC folds (`i - i`) are left to
+the evaluator.
 Every lowering consumer of a conditional or logical operator, as a value, as a
 branch condition or in an effects-only recipe, reads the same operand elision
 facts before ordinary constant shortcuts. The common operand of GNU `x ?: y`

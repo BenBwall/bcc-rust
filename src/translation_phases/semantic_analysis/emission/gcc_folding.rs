@@ -11,8 +11,18 @@
 //! The model covers parentheses, `__extension__`, `!`, the comma, `&&` and
 //! `||`; GCC folds more (`X * 0`, `X & 0`, comparisons and casts of a folded
 //! operand), which stays unfolded here and so retains more code than GCC.
+//!
+//! The same fold answers `__builtin_constant_p` under GCC's rules: an operand
+//! without side effects that it folds to an integer, such as `i && 0`,
+//! `i * 0` or `i && 0 ? i : 34`, is a constant, and one whose evaluated
+//! part holds a comma, which GCC's C front end keeps as a `COMPOUND_EXPR`,
+//! is not: `(1, 7)` and `1 + (1, 7)` are no constants to GCC, though Clang
+//! evaluates them.
 //! C99: §6.5.13 paragraphs 3-4, p. 89; PDF p. 101; §6.5.14 paragraphs 3-4,
-//! pp. 89-90; PDF pp. 101-102; §6.5.17 paragraph 2, p. 94; PDF p. 106.
+//! pp. 89-90; PDF pp. 101-102; §6.5.15 paragraph 4, p. 90; PDF p. 102;
+//! §6.5.17 paragraph 2, p. 94; PDF p. 106.
+//! GNU extension: GCC manual, "Other Built-in Functions Provided by GCC",
+//! `__builtin_constant_p`.
 
 use super::super::Analyzer;
 use crate::translation_phases::parsing::syntax::{
@@ -44,6 +54,125 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         }
         self.gcc_truth(condition, 0)
+    }
+
+    /// What GCC answers for `__builtin_constant_p (operand)` where its fold
+    /// decides it ([`GccConstant`]), or `None` to leave the answer to the
+    /// evaluator Clang's rules share. GNU extension: GCC manual, "Other
+    /// Built-in Functions Provided by GCC", `__builtin_constant_p`.
+    pub(in crate::translation_phases::semantic_analysis) fn gcc_constant_query(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+    ) -> Option<bool> {
+        if self.context.configuration.compiler_identity().rules()
+            != crate::configuration::RuleSet::Gcc
+            || self.has_side_effects(operand)
+        {
+            return None;
+        }
+        match self.gcc_constant(operand, 0) {
+            | GccConstant::Folded => Some(true),
+            | GccConstant::Comma => Some(false),
+            | GccConstant::Unknown => None,
+        }
+    }
+
+    /// Whether GCC's fold turns `e`, which has no side effects, into an
+    /// integer constant, or keeps a comma it evaluates.
+    fn gcc_constant(&mut self, e: &'tu Expression<'tu>, depth: u32) -> GccConstant {
+        if depth == DEPTH {
+            return GccConstant::Unknown;
+        }
+        let next = depth + 1;
+        match e.kind {
+            | ExpressionType::Parenthesized { expression }
+            | ExpressionType::Unary {
+                operator:
+                    UnaryOperator::Extension
+                    | UnaryOperator::LogicalNot
+                    | UnaryOperator::Plus
+                    | UnaryOperator::Minus
+                    | UnaryOperator::BitwiseNot,
+                operand_expression: expression,
+            }
+            | ExpressionType::Cast {
+                operand_expression: expression,
+                ..
+            } => self
+                .gcc_constant(expression, next)
+                .or_truth(self.gcc_truth(e, next)),
+            | ExpressionType::Binary {
+                operator: BinaryOperator::Comma,
+                ..
+            } => GccConstant::Comma,
+            | ExpressionType::Binary {
+                operator: operator @ (BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr),
+                left_expression,
+                right_expression,
+            } => {
+                let live = operator == BinaryOperator::LogicalAnd;
+                let left = self.gcc_constant(left_expression, next);
+                if left == GccConstant::Comma {
+                    return left;
+                }
+                // The right operand matters only where the left one lets it
+                // run, and is the value only after a constant left one.
+                match self.gcc_truth(left_expression, next) {
+                    | Some(truth) if truth != live => GccConstant::Folded,
+                    | Some(_) => self
+                        .gcc_constant(right_expression, next)
+                        .or_truth(self.gcc_truth(e, next)),
+                    | None => match self.gcc_constant(right_expression, next) {
+                        | GccConstant::Comma => GccConstant::Comma,
+                        | _ => GccConstant::Unknown.or_truth(self.gcc_truth(e, next)),
+                    },
+                }
+            },
+            | ExpressionType::Conditional(c) => {
+                if self.gcc_constant(c.condition_expression, next) == GccConstant::Comma {
+                    return GccConstant::Comma;
+                }
+                match self.gcc_truth(c.condition_expression, next) {
+                    | Some(true) => self.gcc_constant(c.then_expression, next),
+                    | Some(false) => self.gcc_constant(c.else_expression, next),
+                    | None => GccConstant::Unknown,
+                }
+            },
+            // `X * 0` and `X & 0` are zero, `X` having no side effects.
+            | ExpressionType::Binary {
+                operator: BinaryOperator::Multiplication | BinaryOperator::BitwiseAnd,
+                left_expression,
+                right_expression,
+            } if [left_expression, right_expression].iter().any(|operand| {
+                self.expression_info(operand)
+                    .integer
+                    .is_some_and(|value| value.is_zero())
+            }) && self.integer_type(self.expression_info(e).ty).is_some() =>
+            {
+                let left = self.gcc_constant(left_expression, next);
+                let right = self.gcc_constant(right_expression, next);
+                if left == GccConstant::Comma || right == GccConstant::Comma {
+                    GccConstant::Comma
+                } else {
+                    GccConstant::Folded
+                }
+            },
+            | ExpressionType::Binary {
+                left_expression,
+                right_expression,
+                ..
+            } => {
+                let left = self.gcc_constant(left_expression, next);
+                let right = self.gcc_constant(right_expression, next);
+                if left == GccConstant::Comma || right == GccConstant::Comma {
+                    GccConstant::Comma
+                } else {
+                    GccConstant::Unknown
+                }
+            },
+            | _ if self.expression_info(e).integer.is_some() => GccConstant::Folded,
+            | _ => GccConstant::Unknown,
+        }
     }
 
     /// GCC's fold of `e` to a truth value, with or without side effects.
@@ -90,6 +219,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | _ => None,
+        }
+    }
+}
+
+/// What GCC's fold makes of a `__builtin_constant_p` operand.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GccConstant {
+    /// An integer constant.
+    Folded,
+    /// A comma the operand evaluates, which GCC keeps.
+    Comma,
+    /// Anything else, left to the shared evaluator.
+    Unknown,
+}
+
+impl GccConstant {
+    /// `self`, or a constant where the enclosing truth value folds.
+    fn or_truth(self, truth: Option<bool>) -> Self {
+        match (self, truth) {
+            | (Self::Comma, _) => Self::Comma,
+            | (_, Some(_)) => Self::Folded,
+            | (other, None) => other,
         }
     }
 }
