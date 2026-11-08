@@ -30,7 +30,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 42] = [
+pub static TERMS: [Term; 47] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -62,6 +62,26 @@ pub static TERMS: [Term; 42] = [
         page:       164,
     },
     Term {
+        id:         "header",
+        name:       "Header",
+        phrases:    &["headers", "header"],
+        definition: "A set of declarations the C library provides, such as <stdio.h>. #include \
+                     pastes it into the program in translation phase 4, so the program can call \
+                     the functions it declares; the functions' code is in the library itself.",
+        clause:     "7.1.2p1",
+        page:       177,
+    },
+    Term {
+        id:         "conversion-specification",
+        name:       "Conversion specification",
+        phrases:    &["conversion specifications", "conversion specification"],
+        definition: "A directive in printf's format that starts with %, such as %d or %.3f: it \
+                     takes the next argument, turns it into text as its letter says, and writes \
+                     that text in its place.",
+        clause:     "7.19.6.1p4",
+        page:       287,
+    },
+    Term {
         id:         "object",
         name:       "Object",
         phrases:    &["objects", "object"],
@@ -69,6 +89,26 @@ pub static TERMS: [Term; 42] = [
                      element of an array.",
         clause:     "3.14",
         page:       17,
+    },
+    Term {
+        id:         "string-literal",
+        name:       "String literal",
+        phrases:    &["string literals", "string literal"],
+        definition: "Characters between double quotes, such as \"Ada\". Each becomes an unnamed \
+                     char array of static storage duration, one element longer than the \
+                     characters for the null character at its end, which the program must not \
+                     modify.",
+        clause:     "6.4.5p5",
+        page:       74,
+    },
+    Term {
+        id:         "null-character",
+        name:       "Null character",
+        phrases:    &["null character"],
+        definition: "The char whose bits are all 0, written '\\0'. It ends a string: printf, puts \
+                     and the other library functions read characters until they reach it.",
+        clause:     "5.2.1p2",
+        page:       29,
     },
     Term {
         id:         "lvalue-conversion",
@@ -130,12 +170,21 @@ pub static TERMS: [Term; 42] = [
         page:       143,
     },
     Term {
+        id:         "compound-assignment",
+        name:       "Compound assignment",
+        phrases:    &["compound assignments", "compound assignment"],
+        definition: "An assignment such as x += y, which means x = x + (y), except that x is \
+                     evaluated only once.",
+        clause:     "6.5.16.2p3",
+        page:       105,
+    },
+    Term {
         id:         "static-storage",
         name:       "Static storage duration",
         phrases:    &["static storage duration", "static storage"],
-        definition: "How long objects declared outside every function, or with static, last: \
-                     the whole run of the program. They are initialized once, before main is \
-                     called, to their constant initializer or to zero.",
+        definition: "How long objects declared outside every function, or with static, last: the \
+                     whole run of the program. They are initialized once, before main is called, \
+                     to their constant initializer or to zero.",
         clause:     "6.2.4p3",
         page:       44,
     },
