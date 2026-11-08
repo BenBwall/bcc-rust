@@ -141,7 +141,7 @@ impl<'a> Object<'a> {
                         2
                     }
                 },
-                | Kind::Cfi(..) | Kind::Loc(_) => 0,
+                | Kind::Cfi(..) | Kind::Loc(_) | Kind::SectionChange => 0,
             };
             section.size = section
                 .size

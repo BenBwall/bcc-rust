@@ -3,10 +3,10 @@
 //! (`MCDwarfLineTable::emit`), so that a direct object and an assembled one
 //! agree byte for byte.
 //!
-//! A `.loc` gives the row of the instruction or data that follows it. The
-//! rows of each section form one sequence, in the order the section's first
-//! row was seen, which ends at the end of the section (§6.2.5.3,
-//! `DW_LNE_end_sequence`). The header names the directories and files through
+//! A `.loc` gives the row of the instruction or data that follows it in its
+//! section, or of where it is if another `.loc` comes first. The rows of each section form
+//! one sequence, in the order the section's first row was seen, which ends
+//! at the end of the section (§6.2.5.3, `DW_LNE_end_sequence`). The header names the directories and files through
 //! `.debug_line_str` (`DW_FORM_line_strp`, §7.5.5), which holds each string
 //! once, in the order the header first names it. A sequence's first address
 //! is relocated against its section (`R_X86_64_64`) and each name against
@@ -70,7 +70,14 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
     let mut pending = None;
     for item in &object.items {
         match item.kind {
-            | Kind::Loc(loc) => pending = Some(loc),
+            // MC's `emitDwarfLocDirective` gives a `.loc` that another
+            // follows before any code its row there.
+            | Kind::Loc(loc) => {
+                if let Some(previous) = pending.replace(loc) {
+                    rows.push((item.section, item.offset, previous));
+                }
+            },
+            | Kind::SectionChange => pending = None,
             // MC's `MCDwarfLineEntry::make`, from emitting an instruction,
             // bytes or a value.
             | Kind::Code(_) | Kind::Branch { .. } | Kind::Bytes(_) | Kind::Value(..) =>

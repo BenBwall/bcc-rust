@@ -60,12 +60,13 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
             let first = parts.next().unwrap_or("");
             match name {
                 | ".text" | ".data" | ".bss" => {
-                    section = object.section(
+                    let to = object.section(
                         name,
                         if name == ".bss" { 8 } else { 1 },
                         if name == ".text" { 6 } else { 3 },
                         None,
                     )?;
+                    switch(&mut object, &mut section, to);
                     continue;
                 },
                 | ".section" => {
@@ -127,7 +128,8 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                     {
                         kind = existing.kind;
                     }
-                    section = object.section(name, kind, flags, group)?;
+                    let to = object.section(name, kind, flags, group)?;
+                    switch(&mut object, &mut section, to);
                     continue;
                 },
                 | ".globl" | ".weak" | ".hidden" | ".protected" | ".type" => {
@@ -275,6 +277,19 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
         });
     }
     Ok(object)
+}
+
+/// Makes `to` the current section, marking the change, which drops a
+/// pending `.loc` as MC's `changeSection` does.
+fn switch(object: &mut Object<'_>, section: &mut usize, to: usize) {
+    if *section != to {
+        object.items.push(Item {
+            section: to,
+            offset:  0,
+            kind:    Kind::SectionChange,
+        });
+        *section = to;
+    }
 }
 
 /// `.file number ["directory"] "name"`: the line table's file `number`,

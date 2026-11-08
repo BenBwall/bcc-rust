@@ -155,6 +155,8 @@ enum Kind<'a> {
     Cfi(&'a str, &'a str),
     /// A `.loc`, which takes effect at the next instruction or data.
     Loc(Loc),
+    /// A change of the current section, which drops a pending `.loc`.
+    SectionChange,
 }
 
 #[derive(Clone, Copy)]

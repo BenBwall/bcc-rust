@@ -2,9 +2,43 @@
 //! against the pinned clang assembler, byte for byte, and the DWARF the
 //! emitter writes for C programs.
 
-use std::fmt::Write as _;
+use std::{
+    fmt::Write as _,
+    path::Path,
+    process::Command,
+};
 
-use super::object::equivalent;
+use super::{
+    object::equivalent,
+    programs::PROGRAMS,
+};
+use crate::{
+    abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,
+    backend::native::emit_assembly_with,
+    configuration::{
+        CompilerConfiguration,
+        DebugOptions,
+    },
+    headers::HeaderSearch,
+    ir::{
+        DebugLevel,
+        Profile,
+    },
+    lowering::tests::programs::PROGRAMS as LOWERING_PROGRAMS,
+    optimizer::OptimizerOptions,
+    pipeline::{
+        analyze_translation_unit,
+        lower_translation_unit,
+        parse_translation_unit,
+    },
+    target::{
+        CodeOptions,
+        Target,
+    },
+    test_support::TempDir,
+    translation_phases::Context,
+    util::bump::Bump,
+};
 
 /// Rows across relaxed branches and alignment, in three sections (one a
 /// COMDAT group), with line advances and address advances at each
@@ -52,13 +86,21 @@ fn line_tables_match_the_assembler() {
     equivalent(&text).unwrap();
 }
 
-/// A listing with files and no rows has a header alone, and data that
-/// follows a `.loc` takes its row, as MC gives it one.
+/// A listing with files and no rows has a header alone. As MC places rows,
+/// data that follows a `.loc` takes its row, so does a `.loc` that another
+/// follows before any code, and a change of section drops a pending one,
+/// even one changed back.
 #[test]
 fn line_tables_without_code_rows_match_the_assembler() {
-    equivalent(".file 0 \"/w\" \"a.c\"\n.file 1 \"/w/x\" \"b.h\"\n").unwrap();
-    equivalent(".file 0 \"/w\" \"a.c\"\n.data\n.loc 0 2 3\n.byte 1\n.text\n.loc 0 5 1\nretq\n")
-        .unwrap();
+    for body in [
+        ".file 1 \"/w/x\" \"b.h\"\n",
+        ".data\n.loc 0 2 3\n.byte 1\n.text\n.loc 0 5 1\nretq\n",
+        ".loc 0 2 0\n.cfi_startproc\n.L0:\n.loc 0 2 9 prologue_end\nretq\n.cfi_endproc\n.loc 0 7 \
+         1\n.loc 0 8 1\n.data\n.byte 1\n",
+        ".loc 0 3 1\n.data\nretq\n.text\n.loc 0 4 1\n.data\n.text\nretq\n.loc 0 5 1\n.text\nretq\n",
+    ] {
+        equivalent(&format!(".file 0 \"/w\" \"a.c\"\n{body}")).unwrap();
+    }
 }
 
 /// The data directives of the debug sections: LEB128 constants at their
@@ -82,4 +124,120 @@ fn debug_section_data_matches_the_assembler() {
          .Lline\n.Lunit_end:\n.section .debug_line,\"\",@progbits\n.Lline:\n",
     );
     equivalent(&text).unwrap();
+}
+
+/// Each native, lowering and by-value test program at `-O0` with its locals
+/// in memory, and through the bcc optimizer: `-g` leaves the code as it was,
+/// the direct object matches the assembler's byte for byte, and
+/// `llvm-dwarfdump --verify`, where it is installed, accepts the object.
+#[test]
+fn c_programs_describe_themselves_without_changing_their_code() {
+    let directory = TempDir::new("native-debug-info");
+    let mut described = 0;
+    for (name, source) in PROGRAMS
+        .iter()
+        .map(|program| (program.name, program.source))
+        .chain(LOWERING_PROGRAMS.iter().map(|program| (program.name, program.source)))
+        .chain(BY_VALUE_PROGRAMS.iter().map(|program| (program.name, program.source)))
+    {
+        for optimize in [false, true] {
+            let Some(plain) = listing(source, optimize, false) else {
+                continue;
+            };
+            let text = listing(source, optimize, true).expect("-g refuses nothing more");
+            assert_eq!(
+                code(&text),
+                code(&plain),
+                "{name} (optimized: {optimize}): -g changed the code"
+            );
+            assert!(text.contains(".loc\t"), "{name}: no rows\n{text}");
+            equivalent(&text).unwrap();
+            verify(&directory, name, &text);
+            described += 1;
+        }
+    }
+    assert!(described > 100, "only {described} programs compiled");
+}
+
+/// The native listing of `source` for x86-64 Linux, lowered with `-g` if
+/// `debug` and with the locals in memory unless `optimize`, as the command
+/// line keeps them under a compiler personality at `-O0`; `None` if the
+/// back end refuses the program.
+fn listing(source: &str, optimize: bool, debug: bool) -> Option<String> {
+    let tu = Bump::new();
+    let source = tu.alloc_str(source);
+    let configuration = CompilerConfiguration::default()
+        .with_target(Target::LinuxGnu)
+        .with_debug_info(debug.then_some(DebugOptions {
+            level:         DebugLevel::Full,
+            dwarf_version: None,
+            columns:       true,
+            physical:      false,
+        }))
+        .with_stack_locals(!optimize);
+    let mut context = Context::with_configuration(&tu, configuration);
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("test.c"),
+        source,
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &unit);
+    if !sema.lowerable(&context) {
+        return None;
+    }
+    let ir = Bump::new();
+    let options = OptimizerOptions::default();
+    let module = lower_translation_unit(
+        &context,
+        &unit,
+        &sema,
+        &ir,
+        optimize.then_some(&options),
+        Profile::PostAbi,
+    )
+    .ok()?;
+    let mut text = String::new();
+    let code = CodeOptions {
+        debug_info: debug,
+        ..CodeOptions::default()
+    };
+    emit_assembly_with(&module, Target::LinuxGnu, code, &mut text).ok()?;
+    Some(text)
+}
+
+/// A listing without its debug information: its rows, files and labels,
+/// and the debug sections that end it.
+fn code(text: &str) -> String {
+    let end = text.find("\t.section\t.debug_abbrev").unwrap_or(text.len());
+    text[..end]
+        .lines()
+        .filter(|line| {
+            !line.starts_with("\t.loc\t")
+                && !line.starts_with("\t.file\t")
+                && !line.starts_with(".Ldebug_")
+        })
+        .fold(String::new(), |mut code, line| {
+            code.push_str(line);
+            code.push('\n');
+            code
+        })
+}
+
+/// Runs `llvm-dwarfdump --verify` on the direct object of `text`, if the
+/// tool is installed.
+fn verify(directory: &TempDir, name: &str, text: &str) {
+    let arena = Bump::new();
+    let bytes = crate::backend::native::object::encode(text, &arena)
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let path = directory.join(format!("{name}.o"));
+    std::fs::write(&path, &*bytes).unwrap();
+    match Command::new("llvm-dwarfdump").arg("--verify").arg(&path).output() {
+        | Ok(output) => assert!(
+            output.status.success(),
+            "{name}: {}\n{text}",
+            String::from_utf8_lossy(&output.stdout)
+        ),
+        | Err(error) => eprintln!("SKIP llvm-dwarfdump --verify: {error}"),
+    }
 }

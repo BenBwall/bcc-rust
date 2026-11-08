@@ -65,7 +65,6 @@ pub(super) const AT_RANGES: u16 = 0x55;
 pub(super) const AT_DATA_BIT_OFFSET: u16 = 0x6B;
 pub(super) const AT_LINKAGE_NAME: u16 = 0x6E;
 pub(super) const AT_BIT_SIZE: u16 = 0x0D;
-pub(super) const AT_ALIGNMENT: u16 = 0x88;
 pub(super) const AT_GNU_VECTOR: u16 = 0x2107;
 
 // Forms, DWARF 5 §7.5.6, Table 7.6.
