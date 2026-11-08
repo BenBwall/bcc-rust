@@ -1,0 +1,43 @@
+sema-shadow-kinds-clang.c:7:12: warning: declaration shadows a local variable [-Wshadow]
+    7 |   { enum { p = 3 }; }
+      |            ^
+sema-shadow-kinds-clang.c:6:12: note: previous declaration is here
+    6 | void f(int p) {
+      |            ^
+sema-shadow-kinds-clang.c:9:17: warning: declaration shadows a typedef in function 'f' [-Wshadow]
+    9 |   { typedef int LT; }
+      |                 ^~
+sema-shadow-kinds-clang.c:8:15: note: previous declaration is here
+    8 |   typedef int LT;
+      |               ^~
+sema-shadow-kinds-clang.c:10:17: warning: declaration shadows a typedef in the global scope [-Wshadow]
+   10 |   { typedef int GT; }
+      |                 ^~
+sema-shadow-kinds-clang.c:3:13: note: previous declaration is here
+    3 | typedef int GT;
+      |             ^~
+sema-shadow-kinds-clang.c:11:12: warning: declaration shadows a variable in the global scope [-Wshadow]
+   11 |   { enum { sv = 1 }; }
+      |            ^~
+sema-shadow-kinds-clang.c:5:12: note: previous declaration is here
+    5 | static int sv;
+      |            ^~
+sema-shadow-kinds-clang.c:16:12: warning: declaration shadows a local variable [-Wshadow]
+   16 |   { enum { lv = 4 }; }
+      |            ^~
+sema-shadow-kinds-clang.c:15:7: note: previous declaration is here
+   15 |   int lv = 0;
+      |       ^~
+sema-shadow-kinds-clang.c:17:12: warning: declaration shadows a variable in the global scope [-Wshadow]
+   17 |   { enum { GE = 5 }; }
+      |            ^~
+sema-shadow-kinds-clang.c:2:8: note: previous declaration is here
+    2 | enum { GE = 1 };
+      |        ^~
+sema-shadow-kinds-clang.c:18:12: warning: declaration shadows a variable in the global scope [-Wshadow]
+   18 |   { enum { gf = 7 }; }
+      |            ^~
+sema-shadow-kinds-clang.c:4:5: note: previous declaration is here
+    4 | int gf(void);
+      |     ^~
+7 warnings generated.

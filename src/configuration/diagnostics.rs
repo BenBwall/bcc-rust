@@ -212,6 +212,12 @@ impl CompilerConfiguration {
             | DiagnosticGroup::Conversion if clang => DiagnosticGroup::CLANG_CONVERSION,
             | DiagnosticGroup::ImplicitIntFloatConversion =>
                 &[DiagnosticGroup::ImplicitConstIntFloatConversion],
+            | DiagnosticGroup::Shadow => &[
+                DiagnosticGroup::ShadowLocal,
+                DiagnosticGroup::ShadowCompatibleLocal,
+            ],
+            | DiagnosticGroup::ShadowLocal => &[DiagnosticGroup::ShadowCompatibleLocal],
+            | DiagnosticGroup::ShadowAll => &[DiagnosticGroup::Shadow],
             | DiagnosticGroup::UnusedLocalTypedefs if clang =>
                 &[DiagnosticGroup::UnusedLocalTypedef],
             | _ => &[],
@@ -341,6 +347,7 @@ impl CompilerConfiguration {
         for group in [
             DiagnosticGroup::SignCompare,
             DiagnosticGroup::MissingFieldInitializers,
+            DiagnosticGroup::EmptyBody,
         ] {
             self.warning_options[group as usize].apply_all(enabled);
         }
@@ -1022,6 +1029,18 @@ diagnostic_groups! {
     ReturnLocalAddr => Some("return-local-addr"), Warning, false;
     /// Clang's.
     ReturnStackAddress => Some("return-stack-address"), Warning, false;
+    /// A declaration that hides another one in an enclosing scope.
+    Shadow => Some("shadow"), Ignored, false;
+    /// GCC's `-Wshadow=local`: one that hides a local declaration.
+    ShadowLocal => Some("shadow=local"), Ignored, false;
+    /// GCC's `-Wshadow=compatible-local`: one that hides a local of a
+    /// compatible type.
+    ShadowCompatibleLocal => Some("shadow=compatible-local"), Ignored, false;
+    /// Clang's `-Wshadow-all`, which holds `-Wshadow` in C.
+    ShadowAll => Some("shadow-all"), Ignored, false;
+    /// A body that is only `;`. `-Wextra` holds it in GCC, and Clang reports
+    /// it by default.
+    EmptyBody => Some("empty-body"), ClangWarning, false;
     /// A typedef a block declares and never uses, in GCC's spelling, which
     /// Clang accepts too.
     UnusedLocalTypedefs => Some("unused-local-typedefs"), Ignored, false;
@@ -1227,6 +1246,7 @@ impl DiagnosticGroup {
     /// them.
     const UNDER_EXTRA: &[Self] = &[
         Self::SignCompare,
+        Self::EmptyBody,
         Self::MissingFieldInitializers,
         Self::UnusedParameter,
         Self::UnusedButSetParameter,
@@ -1254,6 +1274,8 @@ impl DiagnosticGroup {
             Self::Normalized
                 | Self::PedanticNormalized
                 | Self::ReturnLocalAddr
+                | Self::ShadowLocal
+                | Self::ShadowCompatibleLocal
                 | Self::FormatContainsNul
                 | Self::SwitchOutsideRange
         )
@@ -1378,6 +1400,7 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::EmptyBody
                 | DiagnosticGroup::Parentheses
                 | DiagnosticGroup::DanglingElse
                 | DiagnosticGroup::LogicalNotParentheses

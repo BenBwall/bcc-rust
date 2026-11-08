@@ -83,6 +83,7 @@ mod missing_fields;
 mod parentheses;
 mod predefined;
 mod reachability;
+mod shadowing;
 mod sign_compare;
 mod statements;
 mod traversal;
