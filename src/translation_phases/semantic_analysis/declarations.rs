@@ -233,6 +233,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .set(attributes.packed || self.context.configuration.pack_structures());
                     self.types.tags[tag].alignment.set(attributes.alignment);
                     self.record_layout(tag, s.attributes, true);
+                    // A record that names no layout takes the one
+                    // `-m[no-]ms-bitfields` gives, or TCC's option pragma in
+                    // effect where its definition ends.
+                    let record = self.types.tags[tag];
+                    if record.microsoft_layout.get().is_none() {
+                        record.microsoft_layout.set(
+                            crate::translation_phases::pragma_comment::ms_bitfields_at(
+                                &self.context.layout_pragmas,
+                                s.body_end_position.max(s.pack_position),
+                                self.context.configuration.ms_bitfields(),
+                            ),
+                        );
+                    }
                     if self.types.tags[tag].microsoft_layout.get() == Some(false)
                         && self.context.configuration.compiler_identity().rules() == RuleSet::Clang
                         && self.context.configuration.target() == crate::target::Target::WindowsMsvc

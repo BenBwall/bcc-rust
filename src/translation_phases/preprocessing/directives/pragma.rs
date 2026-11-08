@@ -4,6 +4,7 @@
 //! C99: #pragma, §6.10.6, p. 159; PDF p. 171; _Pragma destringizing,
 //! §6.10.9 paragraph 1, p. 161; PDF p. 173.
 
+mod comment;
 mod diagnostic;
 
 use std::fmt::Write as _;
@@ -59,7 +60,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// warning`/`error` and the diagnostic pragmas are bcc's
     /// implementation-defined pragmas. `#pragma
     /// weak` keeps only the name it makes weak, for the emission model of
-    /// semantic analysis. Other pragmas
+    /// semantic analysis, and TCC's `#pragma comment` its bit-field layout
+    /// (`comment.rs`). Other pragmas
     /// are ignored (paragraph 1), and one that does not begin with an
     /// identifier draws a warning first. `from` is the physical
     /// invocation's byte offset, including when `_Pragma` supplies tokens
@@ -142,6 +144,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 == CompilerIdentity::Gcc =>
                         {
                             consumed_newline = self.pragma_storage_order(token);
+                            break 'base;
+                        },
+                        | "comment"
+                            if self.context.configuration.compiler_identity()
+                                == CompilerIdentity::Tcc =>
+                        {
+                            self.pragma_comment(token);
+                            consumed_newline = true;
                             break 'base;
                         },
                         | "once" => {

@@ -165,6 +165,9 @@ pub(crate) struct CompilerConfiguration {
     /// Every structure is packed and `#pragma pack` ignored (`-fpack-struct`
     /// without a value).
     pack_structures: bool,
+    /// The bit-field layout of records that ask for none (`-mms-bitfields`
+    /// true, `-mno-ms-bitfields` false); `None` keeps the target's.
+    ms_bitfields: Option<bool>,
     /// The visibility of definitions that name none (`-fvisibility=`).
     default_visibility: DefaultVisibility,
     /// One bit per [`RelaxedFloatingPoint`] option in effect.

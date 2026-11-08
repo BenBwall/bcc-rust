@@ -700,8 +700,9 @@ pub(crate) struct Tag<'tu> {
     /// GNU packed and aligned on the record definition.
     pub(crate) packed:               Cell<bool>,
     /// GNU `ms_struct` (true) or `gcc_struct` (false) on the record
-    /// definition: Microsoft's or System V's bit-field layout, whatever the
-    /// target's. GNU extension: GCC manual, "x86 Type Attributes".
+    /// definition, or else `-m[no-]ms-bitfields` or TCC's option pragma:
+    /// Microsoft's or System V's bit-field layout, whatever the target's.
+    /// GNU extension: GCC manual, "x86 Type Attributes".
     pub(crate) microsoft_layout:     Cell<Option<bool>>,
     /// GNU `transparent_union` on a union that qualifies for it: a
     /// prototyped call converts an argument of a member's type to the union.
