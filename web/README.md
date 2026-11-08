@@ -147,8 +147,12 @@ times that, and a longer run scrolls, the tape moving under a playhead that
 stays in the middle of the screen. Calls are grouped by function and depth
 on the call stack, so a loop's repeated calls share one set of lanes; a group
 with no call at the playhead folds to one row of call bars, and its label
-opens it. The static objects' group comes first and never folds: its rule
-runs from the first of them to the end of the run.
+opens it. The static objects' group comes first, and its rule runs from the
+first of them to the end of the run. It stays open, except in a program
+whose only static objects are its string literals' arrays (one that
+prints): there it starts folded, so the literals' lanes do not push the
+program's own objects and the note down the screen, and its label, which
+counts the literals, opens it.
 
 The page has light and dark themes (the device in daylight and under low
 light; its screens stay black in both) and works down to phone width. At
