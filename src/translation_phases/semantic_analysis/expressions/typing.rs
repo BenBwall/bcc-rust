@@ -507,6 +507,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && matches!(self.types.nodes[pointer.ty.index], TypeKind::Array(..))
                     && (gcc_subscript
                         || !matches!(pointer.expression.kind, ExpressionType::Identifier(_)));
+                self.fold_string_element(&mut info, pointer, [left, right]);
             },
             | B::Multiplication | B::Division | B::Modulo => {
                 if !(self.arithmetic(lt) && self.arithmetic(rt))
@@ -3080,6 +3081,57 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             }
         }
+    }
+
+    /// Gives the element `info` of a string literal, one of the operands
+    /// `left` and `right`, subscripted by an integer constant within it, its
+    /// terminating null included, the value that element holds: an arithmetic
+    /// constant, which GCC and Clang both fold in a static initializer (`char c
+    /// = "ab"[1];`), and no integer constant expression (§6.6p6), so an
+    /// integer-constant context reports it as Clang's `-Wgnu-folding-constant`
+    /// does or refuses it as GCC does. An index past the end folds nothing, as
+    /// in both compilers. C99: §6.4.5 paragraph 5, p. 62; PDF p. 74 (the
+    /// elements); implementation latitude of §6.6 paragraph 10, p. 96; PDF p.
+    /// 108.
+    fn fold_string_element(
+        &mut self,
+        info: &mut ExpressionInfo<'tu>,
+        pointer: ExpressionInfo<'tu>,
+        [left, right]: [ExpressionInfo<'tu>; 2],
+    ) {
+        let index = if std::ptr::eq(pointer.expression, left.expression) {
+            right
+        } else {
+            left
+        };
+        let mut literal = pointer.expression;
+        while let ExpressionType::Parenthesized { expression } = literal.kind {
+            literal = expression;
+        }
+        let ExpressionType::StringLiteral(value) = literal.kind else {
+            return;
+        };
+        let Some(position) = index
+            .integer
+            .filter(|_| index.ice && !index.folding.exceptional())
+            .and_then(Integer::to_i128)
+            .and_then(|position| usize::try_from(position).ok())
+        else {
+            return;
+        };
+        let units = self.literal_units(value);
+        let unit = match position.cmp(&units.len()) {
+            | std::cmp::Ordering::Less => units[position],
+            | std::cmp::Ordering::Equal => 0,
+            | std::cmp::Ordering::Greater => return,
+        };
+        let Some((bits, signed)) = self.integer_type(info.ty) else {
+            return;
+        };
+        info.integer = Some(Integer::int(i128::from(unit)).cast(bits, signed));
+        info.constant = ConstantClass::Arithmetic;
+        info.ice = false;
+        info.folding = ConstantFolding::Address;
     }
 
     /// C99: §6.4.5p5-6, pp. 62-63; PDF pp. 74-75. The count includes the final
