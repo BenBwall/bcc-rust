@@ -24,7 +24,7 @@ pub struct Demo {
     pub source:  &'static str,
 }
 
-pub static DEMOS: [Demo; 11] = [
+pub static DEMOS: [Demo; 12] = [
     Demo {
         key:     "tour",
         title:   "Objects, loops and calls",
@@ -48,6 +48,18 @@ pub static DEMOS: [Demo; 11] = [
         path:    &[],
         name:    "hello.c",
         source:  include_str!("../demos/hello.c"),
+    },
+    Demo {
+        key:     "constants",
+        title:   "Names for values: #define, const and casts",
+        summary: "A macro is replaced before the program runs, a const object may not change, a \
+                  cast converts a value, and += updates an object in one step.",
+        topics:  &["#define", "const", "casts"],
+        faults:  false,
+        stage:   None,
+        path:    &[],
+        name:    "constants.c",
+        source:  include_str!("../demos/constants.c"),
     },
     Demo {
         key:     "path",
