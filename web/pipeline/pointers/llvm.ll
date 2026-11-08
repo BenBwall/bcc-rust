@@ -3,7 +3,7 @@ source_filename = "bcc"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
-define i32 @sum(ptr noundef %v0, ptr noundef %v1) {
+define i32 @sum(ptr noundef %v0, ptr noundef %v1) #0 {
 block0:
   br label %block1
 
@@ -23,7 +23,7 @@ block3:                                           ; preds = %block1
   ret i32 %v4
 }
 
-define i32 @main() {
+define i32 @main() #0 {
 block0:
   %slot0 = alloca [16 x i8], align 16
   store i32 2, ptr %slot0, align 16
@@ -37,6 +37,8 @@ block0:
   %v19 = call i32 @sum(ptr noundef %slot0, ptr noundef %v18)
   ret i32 %v19
 }
+
+attributes #0 = { "frame-pointer"="all" }
 
 !llvm.module.flags = !{!0, !1}
 
