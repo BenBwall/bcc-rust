@@ -7954,6 +7954,25 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         }
     }
 
+    /// A file that includes itself through a macro can name itself the same
+    /// way again: the macro's replacement ends with the directive's line, as
+    /// GCC, Clang and TCC (its own `95_bitfields` test) read it.
+    #[test]
+    fn a_header_named_by_a_macro_can_name_itself_again() {
+        let directory = Directory::new();
+        directory.write(
+            "s.c",
+            "#ifdef L2\nint level_two;\n#elif defined L1\n#define L2\n#include \
+             SELF\n#else\n#define SELF \"s.c\"\n#define L1\n#include SELF\n#endif\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "s.c"]);
+            succeeds(&output);
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(text.contains("int level_two;"), "{mode}: {text}");
+        }
+    }
+
     /// A call to a static function defined nowhere is a warning in GCC and
     /// Clang, and the link is what fails.
     #[test]
