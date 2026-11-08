@@ -697,6 +697,24 @@ impl Context<'_> {
             .map_or_else(SourcePosition::default, |vector| vector.position(self))
     }
 
+    /// Whether `before` is spelled right before `after`, in the same file:
+    /// the two were written next to each other, wherever macro replacement
+    /// later put them. Libcpp's `PREV_WHITE` is set by the white space so
+    /// written, not by what replacement places before a token.
+    pub(in crate::translation_phases) fn adjacent_spellings(
+        &self,
+        before: SourceVectors,
+        after: SourceVectors,
+    ) -> bool {
+        let (Some(last), Some(first)) = (
+            self.get_source_vectors(before).last(),
+            self.get_source_vectors(after).first(),
+        ) else {
+            return false;
+        };
+        last.source_file_index == first.source_file_index && last.end() == first.index as usize
+    }
+
     pub(in crate::translation_phases) fn first_source_vector(
         &self,
         source_vectors: SourceVectors,
