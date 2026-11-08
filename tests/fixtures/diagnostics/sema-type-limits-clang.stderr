@@ -97,4 +97,10 @@ sema-type-limits-clang.c:62:56: warning: result of comparison of constant 300 wi
 sema-type-limits-clang.c:62:73: warning: result of comparison 'unsigned char' <= 255 is always true [-Wtautological-type-limit-compare]
    62 | int q(unsigned char c) { return __builtin_constant_p(c > 300) + (0 ? (c <= 255) : 1); }
       |                                                                         ^~
-33 warnings generated.
+sema-type-limits-clang.c:73:10: warning: result of comparison of constant 300 with expression of type 'unsigned char' is always false [-Wtautological-constant-out-of-range-compare]
+   73 |   r += c > ID(300);
+      |          ^
+sema-type-limits-clang.c:74:10: warning: result of comparison of unsigned expression < 0 is always false [-Wtautological-unsigned-zero-compare]
+   74 |   r += u < false;
+      |          ^
+35 warnings generated.

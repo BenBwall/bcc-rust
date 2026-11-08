@@ -61,3 +61,14 @@ int g(signed char s, unsigned u, unsigned char c, int i, short h) {
 int k(unsigned char c, unsigned u) { if (0) return c > 300; if (0) return u < 0; return 0; }
 int q(unsigned char c) { return __builtin_constant_p(c > 300) + (0 ? (c <= 255) : 1); }
 int r(unsigned __int128 u) { return u <= (((unsigned __int128)1 << 127) - 1); }
+#define ID(x) x
+#define false 0
+int m(unsigned u, unsigned char c) {
+  int r = 0;
+  r += u < ID(0);
+  r += u >= ID((0));
+  r += c <= ID(255);
+  r += c > ID(300);
+  r += u < false;
+  return r;
+}

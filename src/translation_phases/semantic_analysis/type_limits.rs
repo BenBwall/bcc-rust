@@ -162,11 +162,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         // Clang leaves a constant the range holds alone when an enumerator or
-        // a macro wrote it (`IsEnumConstOrFromMacro`).
+        // a macro wrote it, in its replacement list or an argument, unless
+        // the macro spells a boolean (`IsEnumConstOrFromMacro`).
         if in_range {
             let written = Self::without_parentheses(constant_expression);
             if matches!(written.kind, E::Identifier(_))
-                || self.context.written_by_macro_body(written.source_vectors)
+                || self
+                    .context
+                    .outermost_macro_name(written.source_vectors)
+                    .is_some_and(|name| !matches!(name, "true" | "false" | "YES" | "NO"))
             {
                 return;
             }

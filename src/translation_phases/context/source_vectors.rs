@@ -322,6 +322,18 @@ impl Context<'_> {
         self.expansion_starts[arena as usize].get(start).is_some()
     }
 
+    /// The name of the outermost macro whose invocation produced the first
+    /// token of `source`, from its replacement list or an argument, or
+    /// `None` when a file spells that token outside any invocation. Clang
+    /// asks for the innermost macro's name (`Lexer::getImmediateMacroName`);
+    /// only the outermost invocation is kept. `source` must not be empty.
+    pub(crate) fn outermost_macro_name(&self, source: SourceVectors) -> Option<&str> {
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.expansion_starts[arena as usize];
+        let site = &sites.ends[sites.get(start)? as usize];
+        self.source_text(site.source_file_index)?.get(site.range())
+    }
+
     /// Whether a macro's replacement list, not its argument or the file,
     /// wrote the first token of `source`. `source` must not be empty.
     pub(crate) fn written_by_macro_body(&self, source: SourceVectors) -> bool {
