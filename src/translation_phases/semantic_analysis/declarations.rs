@@ -181,12 +181,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return;
                 }
                 // A program's own typedef of the name hides the built-in one.
-                let declared = self
+                let typedef = self
                     .lookup(Namespace::Ordinary, name.name)
-                    .and_then(|entry| {
-                        let binding = self.bindings[entry.binding];
-                        (binding.kind == BindingKind::Typedef).then_some(binding.ty)
-                    });
+                    .filter(|entry| self.bindings[entry.binding].kind == BindingKind::Typedef);
+                if let Some(entry) = typedef {
+                    self.note_typedef_use(entry.binding);
+                }
+                let declared = typedef.map(|entry| self.bindings[entry.binding].ty);
                 let builtin = self
                     .builtin_typedef(name.name)
                     .filter(|_| declared.is_none());

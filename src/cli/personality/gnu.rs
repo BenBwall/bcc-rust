@@ -1701,6 +1701,8 @@ impl State<'_> {
                     | "-fno-approx-func"
                     | "-Wmain-return-type"
                     | "-Wno-main-return-type"
+                    | "-Wunused-local-typedef"
+                    | "-Wno-unused-local-typedef"
                     | "-Wlogical-op-parentheses"
                     | "-Wno-logical-op-parentheses"
                     | "-Wbitwise-op-parentheses"
