@@ -7604,7 +7604,8 @@ mod tests {
                     .into()
             )
         );
-        let unused = "    1 | int f(void) { int unused; return 0; }\n      |                   ^~~~~~\n";
+        let unused =
+            "    1 | int f(void) { int unused; return 0; }\n      |                   ^~~~~~\n";
         assert_eq!(
             clang_cl(&["unused.c"]),
             (
@@ -7625,7 +7626,10 @@ mod tests {
                 )
             )
         );
-        assert_eq!(clang_cl(&["/diagnostics:caret", "unused.c"]), clang_cl(&["unused.c"]));
+        assert_eq!(
+            clang_cl(&["/diagnostics:caret", "unused.c"]),
+            clang_cl(&["unused.c"])
+        );
         assert_eq!(
             clang_cl(&["/diagnostics:column", "unused.c"]),
             (
@@ -7646,8 +7650,8 @@ mod tests {
         assert_eq!(status, Some(1));
         assert!(
             text.starts_with(
-                "pointer.c(1,36): error: incompatible integer to pointer conversion \
-                 initializing 'char *' with an expression of type 'long' [-Wint-conversion]\n"
+                "pointer.c(1,36): error: incompatible integer to pointer conversion initializing \
+                 'char *' with an expression of type 'long' [-Wint-conversion]\n"
             ),
             "{text}"
         );
@@ -7655,7 +7659,10 @@ mod tests {
             text.contains("\npointer.c(1,36): warning: unused variable 'p' [-Wunused-variable]\n"),
             "{text}"
         );
-        assert!(text.ends_with("\n1 warning and 1 error generated.\n"), "{text}");
+        assert!(
+            text.ends_with("\n1 warning and 1 error generated.\n"),
+            "{text}"
+        );
         let (status, text) = clang_cl(&["/WX", "pointer.c"]);
         assert_eq!(status, Some(1));
         assert!(
@@ -7668,10 +7675,38 @@ mod tests {
         // A note takes the same location form.
         let (status, text) = clang_cl(&["jump.c"]);
         assert_eq!(status, Some(1));
-        assert!(
-            text.contains("\njump.c(1,29): note: "),
-            "{text}"
+        assert!(text.contains("\njump.c(1,29): note: "), "{text}");
+        // Clang's words for the syntax and directives it expected, at a
+        // caret without a range.
+        directory.write("declarator.c", "int 123;\n");
+        assert_eq!(
+            clang_cl(&["declarator.c"]),
+            (
+                Some(1),
+                "declarator.c(1,5): error: expected identifier or '('\n    1 | int 123;\n      |     \
+                 ^\n1 error generated.\n"
+                    .into()
+            )
         );
+        directory.write(
+            "directives.c",
+            "#if 1 2\n#endif\n#define 1\nconst const int x;\n",
+        );
+        let (status, text) = clang_cl(&["/WX", "directives.c"]);
+        assert_eq!(status, Some(1));
+        for line in
+            [
+                "directives.c(1,7): error: token is not a valid binary operator in a preprocessor \
+                 subexpression\n",
+                "\ndirectives.c(3,9): error: macro name must be an identifier\n    3 | #define \
+                 1\n      |         ^\n",
+                "\ndirectives.c(4,7): error: duplicate 'const' declaration specifier \
+                 [-Werror,-Wduplicate-decl-specifier]\n    4 | const const int x;\n      |       \
+                 ^\n3 errors generated.\n",
+            ]
+        {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
         // `cl` keeps its own codes and words.
         let cl = directory.bcc("--msvc-mode", &["/c", "/nologo", "/W4", "undeclared.c"]);
         assert_eq!(
