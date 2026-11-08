@@ -508,6 +508,12 @@ fn old_style_definitions_merge_promoted_parameters() {
             ));
         },
     );
+    // GCC, Clang and TCC accept a prototype's `float` for a K&R `float`
+    // parameter, which Clang warns about.
+    with_source("void g(float); void g(a) float a; {}", |context, _| {
+        assert_eq!(context.pending_error_count(), 1);
+        assert_eq!(context.error_count(), 0);
+    });
     with_source(
         "int f(double); int f(a) int a; {return a;}",
         |context, _| {

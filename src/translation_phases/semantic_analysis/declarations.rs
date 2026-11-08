@@ -39,6 +39,7 @@ use super::{
 use crate::{
     configuration::{
         CStandard,
+        CompilerIdentity,
         RuleSet,
     },
     translation_phases::{
@@ -644,6 +645,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if self.storage_half(base) {
                     self.error(SemanticErrorKind::Fp16Return, source, None, None);
                 }
+                let base = self.function_result(base);
                 self.enter(ScopeKind::Prototype);
                 let parameters = self.scratch.alloc(Collection::new());
                 self.work.push(Work::FunctionParameters(
@@ -661,7 +663,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.error(SemanticErrorKind::Fp16Return, source, None, None);
                 }
                 let ty = self.types.intern(TypeKind::Function {
-                    result:     base,
+                    result:     self.function_result(base),
                     parameters: &[],
                     prototype:  false,
                     variadic:   false,
@@ -701,6 +703,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }),
             | _ => self.values.push(base),
         }
+    }
+
+    /// The result type of a function declared to return `base`. C99 keeps
+    /// the qualifiers, as Clang does in every revision; C17 (DR 423) drops
+    /// them, which GCC applies from C11 on and TCC always, so `const int
+    /// f(void);` and `int f(void) {}` declare one type there.
+    /// C99: §6.7.5.3 paragraph 5, pp. 118-119; PDF pp. 130-131.
+    /// C17: §6.7.6.3 paragraph 5, pp. 96-97; PDF pp. 109-110.
+    fn function_result(&self, base: TypeId) -> TypeId {
+        let configuration = &self.context.configuration;
+        let drops = match configuration.compiler_identity() {
+            | CompilerIdentity::Tcc => true,
+            | CompilerIdentity::Gcc => configuration.standard() >= CStandard::C11,
+            | _ => false,
+        };
+        if drops { base.unqualified() } else { base }
     }
 
     /// Resolves storage class, linkage inheritance and duration independently.
@@ -851,8 +869,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && ((!function && !self.types.unanalyzed(ty))
                 || typedef
                 || (self.context.configuration.hosted()
-                    && self.context.configuration.compiler_identity()
-                        == crate::configuration::CompilerIdentity::Msvc
+                    && self.context.configuration.compiler_identity() == CompilerIdentity::Msvc
                     && self.context.string_cache.at(name.name) == "main"))
         {
             self.error(
@@ -1069,6 +1086,69 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether an identifier-list definition of type `defined` matches the
+    /// prototype `prior` once each parameter whose promoted type is the
+    /// prototype's promoted type is taken at the prototype's type, as GCC,
+    /// Clang and TCC take `void f(float); void f(a) float a;`.
+    /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
+    fn knr_keeps_prototype(&mut self, prior: TypeId, defined: TypeId) -> bool {
+        let (
+            TypeKind::Function {
+                result: prior_result,
+                parameters: prior_parameters,
+                prototype: true,
+                variadic: false,
+            },
+            TypeKind::Function {
+                result,
+                parameters,
+                prototype: false,
+                ..
+            },
+        ) = (
+            self.types.nodes[prior.index],
+            self.types.nodes[defined.index],
+        )
+        else {
+            return false;
+        };
+        if self.types.composite(prior_result, result).is_none() {
+            return false;
+        }
+        // An identifier-list definition is declared before its parameters'
+        // types are known; `old_signature` compares them once they are.
+        if parameters.is_empty() {
+            return self.functions.old_style_definition && !prior_parameters.is_empty();
+        }
+        if prior_parameters.len() != parameters.len() {
+            return false;
+        }
+        prior_parameters
+            .iter()
+            .zip(parameters.iter())
+            .all(|(&expected, &given)| {
+                self.types.composite(expected, given).is_some()
+                    || self.default_promoted(expected) == self.default_promoted(given)
+            })
+    }
+
+    /// `ty` after the default argument promotions.
+    /// C99: §6.5.2.2p6, p. 71; PDF p. 83.
+    fn default_promoted(&mut self, ty: TypeId) -> TypeId {
+        match self.types.nodes[self.types.non_atomic(ty).index] {
+            | TypeKind::Scalar(
+                Scalar::Bool
+                | Scalar::Char
+                | Scalar::SignedChar
+                | Scalar::UnsignedChar
+                | Scalar::Short
+                | Scalar::UnsignedShort,
+            ) => self.types.scalar(Scalar::Int),
+            | TypeKind::Scalar(Scalar::Float) => self.types.scalar(Scalar::Double),
+            | _ => ty.unqualified(),
+        }
+    }
+
     pub(super) fn bind(
         &mut self,
         name: Identifier,
@@ -1240,6 +1320,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if Some(index) == composite_prior {
                     ty = composite;
                 }
+            } else if kind == BindingKind::Function && self.knr_keeps_prototype(old.ty, ty) {
+                // The definition takes the prototype's types; see
+                // `keep_prototype_parameters`.
+                if Some(index) == composite_prior {
+                    ty = old.ty;
+                }
             } else {
                 self.error(
                     SemanticErrorKind::IncompatibleDeclaration,
@@ -1329,8 +1415,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // alignment of its nonzero bit-fields, and packing shrinks one to its
         // bits; Clang's ignores their alignment in a union. MSVC targets
         // follow `cl`, as Clang's Microsoft layout does.
+        let gcc_rules = self.context.configuration.compiler_identity().rules() == RuleSet::Gcc;
         let gcc_ms = ms
-            && self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
+            && gcc_rules
             && self.context.configuration.target() != crate::target::Target::WindowsMsvc;
         let mut ms_unit: Option<(u64, u64, u64)> = None; // size, byte start, used bits
         let mut required = u64::from(tag.alignment.get());
@@ -1605,8 +1692,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         // a field that would straddle a unit of its
                         // alignment starts the next one; otherwise an
                         // `aligned` request the pack does not cap aligns it.
+                        // GCC's, which TCC follows, aligns a larger request
+                        // to the pack instead, so such a field still starts
+                        // a new byte under `pack(1)`.
                         // A packed field's own alignment is one bit.
                         let explicit = u64::from(member.explicit_alignment);
+                        let requested = if pack != 0 && gcc_rules {
+                            explicit.min(u64::from(pack))
+                        } else {
+                            explicit
+                        };
                         let field_align = if packed && pack == 0 {
                             explicit.checked_mul(8)?.max(1)
                         } else {
@@ -1616,8 +1711,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             align_up(bit_end, bits.max(explicit.checked_mul(8)?))?
                         } else if pack == 0 && bit_end.checked_rem(field_align)? + width > bits {
                             align_up(bit_end, field_align)?
-                        } else if explicit != 0 && (pack == 0 || explicit <= u64::from(pack)) {
-                            align_up(bit_end, explicit.checked_mul(8)?)?
+                        } else if requested != 0 && (pack == 0 || requested <= u64::from(pack)) {
+                            align_up(bit_end, requested.checked_mul(8)?)?
                         } else {
                             bit_end
                         };
