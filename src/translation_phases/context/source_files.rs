@@ -123,6 +123,24 @@ impl<'tu> Context<'tu> {
         }
     }
 
+    /// What makes the host file at source file `index` the file it is,
+    /// whatever path reached it: its device and inode, as GCC and Clang tell
+    /// a header `#pragma once` marked from another path to it. Elsewhere, and
+    /// in memory, the path alone.
+    pub(crate) fn file_identity(&self, index: u32) -> (u64, u64) {
+        let host = matches!(self.file_system, FileSystem::Host);
+        #[cfg(unix)]
+        if host {
+            use std::os::unix::fs::MetadataExt as _;
+            if let Ok(metadata) = std::fs::metadata(self.get_source_file(index)) {
+                return (metadata.dev(), metadata.ino());
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = host;
+        (u64::MAX, u64::from(index))
+    }
+
     /// The length of the `#embed` resource at `path`, if it can be read.
     pub(crate) fn resource_length(&self, path: &Path) -> Option<u64> {
         match self.file_system {
