@@ -76,3 +76,9 @@ sema-value-warnings-gcc.c:48:56: warning: function returns address of local vari
 sema-value-warnings-gcc.c:49:44: warning: function returns address of local variable [-Wreturn-local-addr]
    49 | int *f9(void) { int x; return (1 ? &x : 0) + 1; }
       |                                            ^
+sema-value-warnings-gcc.c:52:45: warning: function returns address of local variable [-Wreturn-local-addr]
+   52 | int *f12(int a) { int x; return (0 ? a++ : 0, &x); }
+      |                                             ^
+sema-value-warnings-gcc.c:53:63: warning: function returns address of local variable [-Wreturn-local-addr]
+   53 | int *f13(int a) { int x; return (0 && a++, (void)(1 ? 0 : a++), &x); }
+      |                                                               ^
