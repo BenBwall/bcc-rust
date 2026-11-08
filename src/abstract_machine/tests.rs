@@ -390,8 +390,8 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "struct s { int x; }; int main(void) { struct s a = {1, 2}; return a.x; }",
         "struct s; int main(void) { struct s a; return 0; }",
         "int main(void) { static int x = 1 + 1; return x; }",
-        "int main(void) { return 1.5; }",
-        "int main(void) { if (0) { double x; } return 0; }",
+        "int main(void) { return 1.5 % 2; }",
+        "int main(void) { if (0) { _Bool x; } return 0; }",
         "int main(void) { int i = 0; return i++ + i; }",
         "int f(void) { return 1; } int main(void) { return f() + f(); }",
         "int main(void) { return missing(); }",
@@ -405,8 +405,13 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "int main(void) { return 0 && 1 / 0; }",
         "int main(void) { return 1 & 2; }",
         "int main(void) { return ~1; }",
-        "int main(void) { float x; return 0; }",
-        "int main(void) { long double x; return 0; }",
+        "int main(void) { double _Complex x; return 0; }",
+        "int main(void) { long float x; return 0; }",
+        "int main(void) { unsigned double x; return 0; }",
+        "int main(void) { double x = 1e999; return 0; }",
+        "int main(void) { double x = 0x1.8; return 0; }",
+        "int main(void) { double d = 1.0; d <<= 1; return 0; }",
+        "int main(void) { double d = 1.0; return (int)d % 2.0; }",
         "int main(void) { return 0x10; }",
         "int main(void) { return 99999999999999999999; }",
         "int main(void) { return 1lul; }",
@@ -458,7 +463,7 @@ fn snapshots_use_schema_ranges_pointer_ids_and_escaped_source() {
                   a; return *p; }";
     let session = run(source);
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":6"), "versioned schema");
+    assert!(json.contains("\"schema_version\":7"), "versioned schema");
     assert!(
         json.contains(
             "\"kind\":\"pointer\",\"target\":1,\"offset\":0,\"first\":0,\"length\":1,\"structure\"\
@@ -1276,7 +1281,7 @@ fn storing_zero_into_a_pointer_explains_the_null_pointer() {
 fn schema_three_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":6"));
+    assert!(json.contains("\"schema_version\":7"));
     assert!(
         json.contains("\"kind\":\"return\",\"category\":\"call\""),
         "{json}"
@@ -2239,7 +2244,7 @@ fn printf_stops_on_undefined_conversions_and_arguments() {
     assert_eq!((state.status, text.as_str()), ("finished", "x"));
     // Valid C the machine does not model stops without blaming the program.
     for body in [
-        "printf(\"%f\", 1);",
+        "printf(\"%o\", 1);",
         "printf(\"%*d\", 2, 1);",
         "printf(\"%jd\", 1);",
         "printf(\"%+d\", 1);",
@@ -2686,7 +2691,7 @@ fn casts_between_int_and_char_narrate_the_conversion() {
     assert_eq!(casts[2].event.title, "Cast 65 to char: the value fits");
     assert_eq!(casts[0].event.kind.category(), "convert");
     for (source, message) in [
-        ("int main(void) { return (float)1; }", "float"),
+        ("int main(void) { return (void)1; }", "void"),
         (
             "int main(void) { int x = 0; int *p = (int *)x; return 0; }",
             "integers and pointers",
@@ -3632,4 +3637,553 @@ fn objects_and_events_carry_sizes_and_types_in_json() {
     assert!(json.contains("\"type\":\"long\",\"size\":8"));
     assert!(json.contains("\"from_type\":\"int\",\"result_type\":\"unsigned int\""));
     assert!(json.contains("\"kind\":\"arithmetic_conversion\""));
+}
+
+/// Floating values of every type, printed with each floating conversion;
+/// `FLOATING_PRINTED` is what the same program prints built with GCC 13.3
+/// and with bcc's native back end (`--gcc-mode`), byte for byte.
+const FLOATING_PRINTF: &str = "#include <stdio.h>
+
+int main(void) {
+    double tenth = 0.1;
+    double big = 1e21;
+    double tiny = 4.9e-324;
+    double negative = -2.5;
+    float single = 0.1f;
+    long double third = 1.0L / 3.0L;
+    double zero = 0.0;
+    printf(\"[%f] [%.3f] [%10.2f] [%-10.1f] [%010.3f] [%.0f] [%.0f]\\n\", tenth, tenth, negative, \
+                               negative, negative, 0.5, 1.5);
+    printf(\"[%e] [%.2e] [%E] [%12.4e] [%.0e]\\n\", tenth, big, negative, tiny, 12345.0);
+    printf(\"[%g] [%g] [%g] [%.3g] [%G] [%.17g] [%g]\\n\", tenth, big, tiny, 1234.5, 1e-10, tenth, \
+                               100000.0);
+    printf(\"[%a] [%A] [%.2a] [%a] [%15a]\\n\", tenth, negative, tenth, tiny, 1.0);
+    printf(\"[%f] [%.17g] [%a]\\n\", single, single, single);
+    printf(\"[%Lf] [%.25Lf] [%Le] [%Lg] [%La]\\n\", third, third, third, third, third);
+    printf(\"[%f] [%f] [%5.1f] [%-6f] [%e] [%g]\\n\", 1.0 / zero, -1.0 / zero, zero / zero, -(zero \
+                               / zero), 1.0 / zero, -0.0);
+    printf(\"[%lf] [%.1f] [%.2f] [%.2f]\\n\", tenth, 0.25, 0.125, 0.375);
+    int printed = printf(\"%.20f\\n\", tenth);
+    printf(\"%d\\n\", printed);
+    return 0;
+}
+";
+
+const FLOATING_PRINTED: &str = "[0.100000] [0.100] [     -2.50] [-2.5      ] [-00002.500] [0] [2]
+[1.000000e-01] [1.00e+21] [-2.500000E+00] [ 4.9407e-324] [1e+04]
+[0.1] [1e+21] [4.94066e-324] [1.23e+03] [1E-10] [0.10000000000000001] [100000]
+[0x1.999999999999ap-4] [-0X1.4P+1] [0x1.9ap-4] [0x0.0000000000001p-1022] [         0x1p+0]
+[0.100000] [0.10000000149011612] [0x1.99999ap-4]
+[0.333333] [0.3333333333333333333423684] [3.333333e-01] [0.333333] [0xa.aaaaaaaaaaaaaabp-5]
+[inf] [-inf] [ -nan] [nan   ] [inf] [-0]
+[0.100000] [0.2] [0.12] [0.38]
+0.10000000000000000555
+23
+";
+
+#[test]
+fn printf_writes_floating_values_as_glibc_does() {
+    let (state, text) = output(FLOATING_PRINTF);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    assert_eq!(text, FLOATING_PRINTED);
+    let steps = states(FLOATING_PRINTF);
+    // A float passed through `...` arrives as a double.
+    assert!(steps.iter().any(|state| {
+        state.event.title == "Promote float 0.1 to double for `...`"
+            && state.event.result_type.as_deref() == Some("double")
+    }));
+    let call = steps
+        .iter()
+        .find(|state| state.event.title.starts_with("printf writes \"[0.333333]"))
+        .expect("the long double line");
+    assert!(cited(call).contains(&"7.19.6.1p7"), "the L modifier");
+    assert!(cited(call).contains(&"7.19.6.1p8"));
+}
+
+/// Conversions on initialization, assignment, argument passing and return,
+/// in structures and arrays and through pointers; `FLOATING_CONVERTED` is
+/// the output of GCC 13.3 and of bcc's native back end.
+const FLOATING_CONVERSIONS: &str = "#include <stdio.h>
+
+struct sample {
+    float f;
+    double d;
+    long double l;
+};
+
+double half(double x) {
+    return x / 2;
+}
+
+int truncated(double x) {
+    return x;
+}
+
+int main(void) {
+    long long big = 9007199254740993;
+    double d = big;
+    float f = 16777217;
+    double back = f;
+    int i = 2.99;
+    int j = -2.99;
+    unsigned int u = 3e9;
+    char c = 65.7;
+    double mixed = 'A' + 0.5f;
+    double values[3] = {1.5, 2.5};
+    double *p = &values[1];
+    *p += 1;
+    struct sample s = {0.1f, 0.1, 0.1L};
+    double dd = 0.1;
+    dd++;
+    i += 2.5;
+    printf(\"%.17g %.9g %.17g %d %d %u %d %.17g\\n\", d, f, back, i, j, u, c, mixed);
+    printf(\"%g %g %g %g\\n\", values[0], values[1], values[2], *p);
+    printf(\"%.20g %.20g %.25Lg\\n\", s.f, s.d, s.l);
+    double halved = half(3);
+    int cut = truncated(-7.9);
+    printf(\"%.17g %d %d\\n\", halved, cut, (int)(0.1 * 3 * 10));
+    printf(\"%.17g\\n\", dd);
+    float narrowed = 1e40;
+    printf(\"%f\\n\", narrowed);
+    static double limit = -1.5e300;
+    printf(\"%g %d\\n\", limit, 1.0 / 3 > 0.33);
+    return 0;
+}
+";
+
+const FLOATING_CONVERTED: &str = "9007199254740992 16777216 16777216 4 -2 3000000000 65 65.5
+1.5 3.5 0 3.5
+0.10000000149011611938 0.10000000000000000555 0.1000000000000000000013553
+1.5 -7 3
+1.1000000000000001
+inf
+-1.5e+300 1
+";
+
+#[test]
+fn floating_conversions_round_truncate_and_widen() {
+    let (state, text) = output(FLOATING_CONVERSIONS);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    assert_eq!(text, FLOATING_CONVERTED);
+    let steps = states(FLOATING_CONVERSIONS);
+    let titled = |title: &str| {
+        steps
+            .iter()
+            .find(|state| state.event.title == title)
+            .unwrap_or_else(|| panic!("no step titled {title}"))
+    };
+    // 2^53 + 1 has no exact double (C99 §6.3.1.4p2).
+    let rounded = titled("Initialize `d` = 9007199254740992.0");
+    assert!(
+        rounded.event.summary.contains("no exact double"),
+        "{}",
+        rounded.event.summary
+    );
+    assert!(cited(rounded).contains(&"6.3.1.4p2"));
+    // A store into an int truncates toward zero (§6.3.1.4p1).
+    let truncated = titled("Initialize `j` = -2");
+    assert!(truncated.event.summary.contains("truncating toward zero"));
+    assert!(cited(truncated).contains(&"6.3.1.4p1"));
+    assert_eq!(truncated.event.from_type.as_deref(), Some("double"));
+    assert_eq!(truncated.event.result_type.as_deref(), Some("int"));
+    // A character constant is an int, which converts to the float.
+    assert_eq!(
+        titled("Convert 65 to float → 65.0")
+            .event
+            .from_type
+            .as_deref(),
+        Some("int")
+    );
+    // With a floating operand a char converts without being promoted.
+    let steps = states("int main(void) { char c = 'A'; float f = c + 0.5f; return 0; }");
+    let mixed = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::ArithmeticConversion)
+        .expect("the char converts");
+    assert_eq!(mixed.event.title, "Convert 65 to float → 65.0");
+    assert_eq!(mixed.event.from_type.as_deref(), Some("char"));
+    assert!(
+        mixed
+            .event
+            .explanation
+            .contains("integer promotions do not happen")
+    );
+    assert!(
+        !steps
+            .iter()
+            .any(|state| state.event.kind == EventKind::IntegerPromotion)
+    );
+    // Widening keeps the value; narrowing beyond the range is an infinity
+    // under Annex F.
+    assert!(cited(titled("Initialize `back` = 16777216.0")).contains(&"6.3.1.5p1"));
+    let narrowed = titled("Initialize `narrowed` = inf");
+    assert!(narrowed.event.explanation.contains("Annex F"));
+    // Sizes on x86-64.
+    let sizes: Vec<(&str, usize)> = state
+        .objects
+        .iter()
+        .filter(|object| ["d", "f", "s", "values"].contains(&object.name.as_str()))
+        .map(|object| (object.r#type.as_str(), object.size))
+        .collect();
+    assert_eq!(
+        sizes,
+        [
+            ("double", 8),
+            ("float", 4),
+            ("double[3]", 24),
+            ("struct sample", 32)
+        ]
+    );
+}
+
+#[test]
+fn floating_constants_show_their_exact_stored_value() {
+    let steps = states(
+        "int main(void) { double a = 0.1; double b = 0.5; float c = 0x1.8p1f; long double d = \
+         1e-3L; return 0; }",
+    );
+    let constant = |spelling: &str| {
+        steps
+            .iter()
+            .find(|state| {
+                state.event.kind == EventKind::Constant
+                    && state
+                        .event
+                        .title
+                        .starts_with(&format!("Evaluate the constant {spelling} "))
+            })
+            .unwrap_or_else(|| panic!("no constant {spelling}"))
+    };
+    let tenth = constant("0.1");
+    assert_eq!(tenth.event.title, "Evaluate the constant 0.1 → 0.1");
+    assert!(
+        tenth
+            .event
+            .summary
+            .contains("0.1000000000000000055511151231257827"),
+        "{}",
+        tenth.event.summary
+    );
+    assert!(
+        tenth
+            .event
+            .explanation
+            .contains("0.1000000000000000055511151231257827021181583404541015625")
+    );
+    assert!(cited(tenth).contains(&"6.4.4.2p3"));
+    assert_eq!(tenth.event.result_type.as_deref(), Some("double"));
+    assert!(!tenth.event.note.is_empty(), "values are not exact");
+    let half = constant("0.5");
+    assert!(
+        half.event.summary.contains("exactly"),
+        "{}",
+        half.event.summary
+    );
+    assert_eq!(
+        constant("0x1.8p1f").event.result_type.as_deref(),
+        Some("float")
+    );
+    assert_eq!(
+        constant("1e-3L").event.result_type.as_deref(),
+        Some("long double")
+    );
+    // A constant beyond its type's range breaks a constraint (C99 §6.4.4p2).
+    let error = compile("int main(void) { double x = 1e309; return 0; }")
+        .map(|_| ())
+        .expect_err("1e309");
+    assert_eq!(error.kind, "constraint");
+    assert!(
+        error.message.contains("largest double"),
+        "{}",
+        error.message
+    );
+    let _program = compile("int main(void) { long double x = 1e309L; return 0; }")
+        .expect("a long double holds 1e309");
+}
+
+#[test]
+fn floating_arithmetic_rounds_and_comparisons_see_exact_values() {
+    let source = "int main(void) { double sum = 0.1 + 0.2; int equal = sum == 0.3; return equal; }";
+    returned(source, 0);
+    let steps = states(source);
+    let addition = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::Arithmetic)
+        .expect("the addition");
+    assert_eq!(
+        addition.event.title,
+        "Compute 0.1 + 0.2 = 0.30000000000000004"
+    );
+    assert!(
+        addition
+            .event
+            .explanation
+            .contains("0.3000000000000000166533453693773481063544750213623046875"),
+        "the exact sum: {}",
+        addition.event.explanation
+    );
+    assert!(cited(addition).contains(&"F.3p1"));
+    let comparison = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::Comparison)
+        .expect("the comparison");
+    assert_eq!(
+        comparison.event.title,
+        "Compare 0.30000000000000004 == 0.3 → 0"
+    );
+    for exact in [
+        "0.3000000000000000444089209850062616169452667236328125",
+        "0.299999999999999988897769753748434595763683319091796875",
+    ] {
+        assert!(
+            comparison.event.summary.contains(exact),
+            "{}",
+            comparison.event.summary
+        );
+    }
+    // Float arithmetic happens in float on x86-64.
+    let steps = states("int main(void) { float a = 0.1f; float b = a * 3; return 0; }");
+    let product = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::Arithmetic)
+        .expect("the product");
+    assert_eq!(product.event.result_type.as_deref(), Some("float"));
+    assert!(cited(product).contains(&"5.2.4.2.2p8"));
+}
+
+#[test]
+fn division_by_zero_and_nan_follow_annex_f() {
+    let source = "#include <stdio.h>
+int main(void) {
+    double zero = 0.0;
+    double infinity = 1.0 / zero;
+    double nan = zero / zero;
+    printf(\"%f %f %d %d %d\\n\", infinity, nan, nan == nan, nan != nan, nan < 1.0);
+    if (nan) {
+        return 1;
+    }
+    return 0;
+}
+";
+    let (state, text) = output(source);
+    assert_eq!(text, "inf -nan 0 1 0\n");
+    assert_eq!(state.return_value, Some(Value::Integer(1)), "a NaN is true");
+    let steps = states(source);
+    let division = steps
+        .iter()
+        .find(|state| state.event.title == "Compute 1.0 / 0.0 = inf")
+        .expect("1.0 / zero");
+    assert!(division.event.summary.contains("Annex F"));
+    assert!(division.event.explanation.contains("__STDC_IEC_559__"));
+    assert!(cited(division).contains(&"6.5.5p5"));
+    assert!(cited(division).contains(&"6.10.8p2"));
+    let unordered = steps
+        .iter()
+        .find(|state| state.event.title == "Compare -nan == -nan → 0")
+        .expect("nan == nan");
+    assert!(unordered.event.summary.contains("unordered"));
+    // Integer division by zero is still undefined.
+    let (cause, _) = undefined("int main(void) { int zero = 0; return 1 / zero; }");
+    assert_eq!(cause, Some(super::Undefined::DivisionByZero));
+}
+
+#[test]
+fn a_floating_value_that_does_not_fit_an_integer_is_undefined() {
+    for (source, message) in [
+        (
+            "int main(void) { double big = 3e9; int x = big; return x; }",
+            "3000000000",
+        ),
+        (
+            "int main(void) { double big = 3e9; return (int)big; }",
+            "3000000000",
+        ),
+        (
+            "int main(void) { double minus = -1.5; unsigned int u = minus; return 0; }",
+            "-1",
+        ),
+        (
+            "int main(void) { double zero = 0.0; int x = zero / zero; return x; }",
+            "integral part",
+        ),
+    ] {
+        let session = run(source);
+        let state = session.state();
+        assert_eq!(state.status, "undefined_behavior", "{source}");
+        let diagnostic = &state.diagnostics[0];
+        assert_eq!(
+            diagnostic.undefined,
+            Some(super::Undefined::FloatingConversion)
+        );
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+        assert_eq!(diagnostic.clause.map(|clause| clause.id), Some("6.3.1.4p1"));
+        assert_eq!(
+            state.event.title,
+            "Undefined behavior: a floating value that does not fit"
+        );
+    }
+    // -0.5 truncates to 0, which an unsigned int holds.
+    returned(
+        "int main(void) { double minus = -0.5; unsigned int u = minus; return u; }",
+        0,
+    );
+}
+
+#[test]
+fn printf_checks_floating_arguments_and_modifiers() {
+    for (source, cause) in [
+        (
+            "#include <stdio.h>\nint main(void) { printf(\"%d\", 1.5); return 0; }",
+            super::Undefined::WrongArgument,
+        ),
+        (
+            "#include <stdio.h>\nint main(void) { printf(\"%f\", 1); return 0; }",
+            super::Undefined::WrongArgument,
+        ),
+        (
+            "#include <stdio.h>\nint main(void) { printf(\"%f\", 1.0L); return 0; }",
+            super::Undefined::WrongArgument,
+        ),
+        (
+            "#include <stdio.h>\nint main(void) { printf(\"%Lf\", 1.0); return 0; }",
+            super::Undefined::WrongArgument,
+        ),
+        (
+            "#include <stdio.h>\nint main(void) { printf(\"%hf\", 1.0); return 0; }",
+            super::Undefined::InvalidConversion,
+        ),
+        (
+            "#include <stdio.h>\nint main(void) { printf(\"%Ld\", 1); return 0; }",
+            super::Undefined::InvalidConversion,
+        ),
+    ] {
+        assert_eq!(undefined(source).0, Some(cause), "{source}");
+    }
+    let session = run("#include <stdio.h>\nint main(void) { printf(\"%+f\", 1.0); return 0; }");
+    assert_eq!(session.state().diagnostics[0].kind, "unsupported");
+}
+
+#[test]
+fn floating_objects_take_part_in_every_construct() {
+    let source = "struct point { double x; float y; };
+double scale(double value, float factor) { return value * factor; }
+int main(void) {
+    struct point p = {1.5, 2.0f};
+    double values[2] = {0.25, 0.5};
+    double *q = &values[0];
+    q[1] += p.x;
+    p.y -= 1;
+    values[0]++;
+    double total = scale(values[1], p.y);
+    total = total + values[0];
+    long double wide = total;
+    float narrow = -total;
+    if (narrow < 0) {
+        if (wide > 3.2L) {
+            return (int)(total * 10);
+        }
+    }
+    return 0;
+}
+";
+    returned(source, 32);
+    let (state, _) = output(source);
+    let object = |name: &str| {
+        state
+            .objects
+            .iter()
+            .find(|object| object.name == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+    };
+    assert_eq!(object("p").r#type, "struct point");
+    assert_eq!(object("p").size, 16);
+    assert_eq!(object("wide").size, 16);
+    assert_eq!(object("wide").r#type, "long double");
+    let Value::Floating(total) = object("total").value else {
+        panic!("total is a double");
+    };
+    assert_eq!(total.short(), "3.25");
+    assert_eq!(total.bytes(), 3.25_f64.to_le_bytes());
+    let fields = total.fields();
+    assert_eq!(
+        (fields.biased, fields.scale, fields.class),
+        (1024, 1, "normal")
+    );
+    assert_eq!(fields.significand, "1.625");
+    for kind in ["compound_assign", "increment", "call", "return", "cast"] {
+        assert!(kinds(&states(source)).contains(&kind), "{kind}");
+    }
+}
+
+#[test]
+fn floating_values_and_types_reach_the_json() {
+    let session = run("int main(void) { double d = 0.1; float f = d; return 0; }");
+    let json = session.trace_json();
+    assert!(json.starts_with("{\"schema_version\":7,"), "{json}");
+    assert!(json.contains(
+        "{\"kind\":\"floating\",\"type\":\"double\",\"value\":\"0.1\",\"exact\":\"0.\
+         1000000000000000055511151231257827021181583404541015625\",\"bytes\":[154,153,153,153,153,\
+         153,185,63]}"
+    ));
+    assert!(json.contains("\"type\":\"float\",\"size\":4"));
+    assert!(json.contains("\"from_type\":\"double\",\"result_type\":\"float\""));
+}
+
+#[test]
+fn static_floating_objects_start_with_their_constant_value() {
+    let source = "#include <stdio.h>
+#define RATE 0.25
+double rate = RATE;
+static float scaled = -2;
+int main(void) {
+    static long double zero;
+    printf(\"%g %g %Lg\\n\", rate, scaled, zero);
+    return 0;
+}
+";
+    let (state, text) = output(source);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    assert_eq!(text, "0.25 -2 0\n");
+    assert!(rejected("int x = 1e10; int main(void) { return x; }").contains("does not fit"));
+}
+
+const FLOATING: &str = include_str!("../../web/demos/floating.c");
+
+#[test]
+fn the_floating_lesson_is_close_but_not_exact() {
+    let (state, text) = output(FLOATING);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    // GCC's and bcc's output for the same program.
+    assert_eq!(
+        text,
+        "total / count is 3.000000\n(double)total / count is 3.500000\n0.1 + 0.2 == 0.3 is 0\n0.1 \
+         + 0.2 is 0.30000000000000004\nten 0.1s make 0.99999999999999989\n(int)2.99 is 2\n"
+    );
+    let steps = states(FLOATING);
+    for title in [
+        "Initialize `average` = 3.0",
+        "Cast 7 to double → 7.0",
+        "Convert 2 to double → 2.0",
+        "Compute 7.0 / 2.0 = 3.5",
+        "Compute 0.1 + 0.2 = 0.30000000000000004",
+        "Compare 0.30000000000000004 == 0.3 → 0",
+        "Update `tenth`: 0.8999999999999999 → 0.9999999999999999",
+        "Cast 2.99 to int → 2",
+    ] {
+        assert!(
+            steps.iter().any(|state| state.event.title == title),
+            "{title}: {:?}",
+            steps
+                .iter()
+                .map(|state| &state.event.title)
+                .collect::<Vec<_>>()
+        );
+    }
+    for state in &steps {
+        assert!(!state.event.title.is_empty() && !state.event.summary.is_empty());
+    }
 }

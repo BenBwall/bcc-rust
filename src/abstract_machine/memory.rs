@@ -14,8 +14,14 @@
 //! C99: §6.2.6.1 paragraph 6, p. 38; PDF p. 50 (structure values).
 //! C99: §6.2.4 paragraph 3, p. 32; PDF p. 44 (static storage duration).
 
+use std::cmp::Ordering;
+
 use super::{
     clauses,
+    floating::{
+        Real,
+        Unrepresentable,
+    },
     integers::Integer,
     layout,
     machine::{
@@ -23,6 +29,7 @@ use super::{
         ObjectMetadata,
     },
     model::{
+        Arithmetic,
         Diagnostic,
         MAX_CELLS,
         MAX_OBJECTS,
@@ -52,9 +59,9 @@ impl Machine {
                 ty.indeterminate(&self.structures),
             | (pointer, Value::Integer(0)) if pointer.is_pointer() => Value::null(),
             // A parameter receives its argument converted as if by
-            // assignment (C99 §6.5.2.2p7, §6.3.1.3).
-            | (Type::Integer(integer), Value::Integer(value)) =>
-                Value::Integer(integer.convert(value)),
+            // assignment (C99 §6.5.2.2p7, §6.3.1.3, §6.3.1.4, §6.3.1.5).
+            | (ty, value) if ty.arithmetic().is_some() =>
+                self.converted(&value, ty.arithmetic().unwrap_or(Arithmetic::INT))?,
             | (_, value) => value,
         };
         let top = self.activations.len() - 1;
@@ -258,8 +265,9 @@ impl Machine {
     /// Stores `value`, converted to the object's type, and returns the stored
     /// value. An unsigned type reduces it modulo 2^N; a signed type that
     /// cannot hold it keeps the low N bits as two's complement, the
-    /// implementation-defined result x86-64 compilers give. A structure is
-    /// stored member by member.
+    /// implementation-defined result x86-64 compilers give; a floating
+    /// value or type converts as `converted` says. A structure is stored
+    /// member by member.
     /// C99: §6.3.1.3 paragraphs 1-3, p. 43; PDF p. 55.
     pub fn store(
         &mut self,
@@ -297,13 +305,13 @@ impl Machine {
         if ty.is_some_and(Type::is_pointer) && value == Value::Integer(0) {
             value = Value::null();
         }
-        if let (Some(Type::Integer(integer)), Value::Integer(number)) = (ty, &value) {
-            value = Value::Integer(integer.convert(*number));
+        if let Some(arithmetic) = ty.and_then(Type::arithmetic) {
+            value = self.converted(&value, arithmetic)?;
         }
-        let valid = if ty.is_some_and(Type::is_pointer) {
-            matches!(value, Value::Pointer { .. })
-        } else {
-            matches!(value, Value::Integer(_))
+        let valid = match ty {
+            | Some(ty) if ty.is_pointer() => matches!(value, Value::Pointer { .. }),
+            | Some(Type::Floating(_)) => matches!(value, Value::Floating(_)),
+            | _ => matches!(value, Value::Integer(_)),
         };
         if !valid {
             return Err(self.error("store type mismatch"));
@@ -448,27 +456,36 @@ impl Machine {
         self.check_pointer_lifetime(value)?;
         match value {
             | Value::Integer(integer) => Ok(*integer != 0),
+            // A NaN compares unequal to 0, so it counts as true (C99
+            // §6.8.4.1p2, §F.3).
+            | Value::Floating(real) => Ok(!real.is_zero()),
             | Value::Pointer { target, .. } => Ok(target.is_some()),
             | _ => Err(self.error("condition requires a determinate scalar")),
         }
     }
 
-    /// `left operator right`, computed in `ty` when both are integers:
+    /// `left operator right`, computed in `ty` when both are arithmetic:
     /// the common type the usual arithmetic conversions chose, or for a
     /// shift the promoted left operand's type. `ty` is `None` for pointer
     /// arithmetic and pointer comparisons.
     pub fn binary_value(
         &self,
         operator: &str,
-        ty: Option<Integer>,
+        ty: Option<Arithmetic>,
         left: Value,
         right: Value,
     ) -> Result<Value, Diagnostic> {
         self.check_pointer_lifetime(&left)?;
         self.check_pointer_lifetime(&right)?;
         match (left, right) {
-            | (Value::Integer(left), Value::Integer(right)) =>
-                self.integer_binary(operator, ty.unwrap_or(Integer::Int), left, right),
+            | (Value::Integer(left), Value::Integer(right)) => self.integer_binary(
+                operator,
+                ty.and_then(Arithmetic::integer).unwrap_or(Integer::Int),
+                left,
+                right,
+            ),
+            | (Value::Floating(left), Value::Floating(right)) =>
+                self.floating_binary(operator, left, right),
             | (pointer @ Value::Pointer { .. }, Value::Integer(delta))
                 if matches!(operator, "+" | "-") =>
             {
@@ -626,6 +643,71 @@ impl Machine {
             .filter(|&exact| ty.fits(exact))
             .map(Value::Integer)
             .ok_or_else(|| self.overflow(ty, Some(left), operator, right))
+    }
+
+    /// `left operator right` for two values of one floating type: the
+    /// arithmetic operators round the exact result to the type, and a
+    /// division by zero gives an infinity or a NaN, as IEC 60559 does
+    /// (C99 §F.3); without Annex F it would be undefined (§6.5.5p5). A
+    /// comparison with a NaN is false, except `!=`, which is true.
+    ///
+    /// C99: §6.5.8 paragraph 6, p. 86; PDF p. 98.
+    /// C99: §6.5.9 paragraph 3, p. 86; PDF p. 98.
+    fn floating_binary(
+        &self,
+        operator: &str,
+        left: Real,
+        right: Real,
+    ) -> Result<Value, Diagnostic> {
+        let order = left.compare(right);
+        let truth = |holds: bool| Ok(Value::Integer(i128::from(holds)));
+        match operator {
+            | "==" => truth(order == Some(Ordering::Equal)),
+            | "!=" => truth(order != Some(Ordering::Equal)),
+            | "<" => truth(order == Some(Ordering::Less)),
+            | "<=" => truth(matches!(order, Some(Ordering::Less | Ordering::Equal))),
+            | ">" => truth(order == Some(Ordering::Greater)),
+            | ">=" => truth(matches!(order, Some(Ordering::Greater | Ordering::Equal))),
+            | "+" | "-" | "*" | "/" => Ok(Value::Floating(left.arithmetic(operator, right).value)),
+            | _ => Err(self.error("unsupported floating operator")),
+        }
+    }
+
+    /// `value` converted to the arithmetic type `to`; a floating value
+    /// whose integral part an integer type cannot represent (or an
+    /// infinity or a NaN) is undefined.
+    ///
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+    pub fn converted(&self, value: &Value, to: Arithmetic) -> Result<Value, Diagnostic> {
+        to.convert(value).map_err(|error| {
+            let shown = match value {
+                | Value::Floating(real) => real.short(),
+                | _ => String::new(),
+            };
+            let name = to.spelling();
+            let message = match error {
+                | Unrepresentable::NotFinite => format!(
+                    "{shown} has no integral part to keep, so converting it to {} is undefined",
+                    article(name)
+                ),
+                | Unrepresentable::OutOfRange(whole) => {
+                    let (low, high) = to
+                        .integer()
+                        .map_or((0, 0), |integer| (integer.min(), integer.max()));
+                    format!(
+                        "converting {shown} to {} keeps its integral part, {whole}, which is \
+                         outside {name}'s range of {low} to {high}: the behavior is undefined",
+                        article(name)
+                    )
+                },
+            };
+            Diagnostic::ub(
+                self.state.source_range,
+                &message,
+                &clauses::FLOATING_TO_INTEGER,
+                Undefined::FloatingConversion,
+            )
+        })
     }
 
     /// `left << right` or `left >> right` in `ty`, the promoted left

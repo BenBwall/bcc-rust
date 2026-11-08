@@ -68,6 +68,36 @@ clauses! {
     AUTOMATIC_LIFETIME = "6.2.4p5", "p. 32; PDF p. 44", "Storage durations of objects",
         "A local variable lives from entry into its block until the block finishes; each new \
          entry, including a recursive call, creates a fresh object.";
+    /// C99: §6.2.5 paragraph 10, p. 34; PDF p. 46.
+    FLOATING_TYPES = "6.2.5p10", "p. 34; PDF p. 46", "Types",
+        "C has three real floating types, float, double and long double, each holding every \
+         value of the one before it.";
+    /// C99: §5.2.4.2.2 paragraph 8, pp. 24-25; PDF pp. 36-37.
+    EVALUATION_FORMAT = "5.2.4.2.2p8", "pp. 24-25; PDF pp. 36-37",
+        "Characteristics of floating types <float.h>",
+        "FLT_EVAL_METHOD says in which format floating operations are computed; on x86-64 it is \
+         0: each in its own type, so float arithmetic rounds to float.";
+    /// C99: §F.1 paragraph 1, p. 444; PDF p. 456.
+    ANNEX_F = "F.1p1", "p. 444; PDF p. 456", "Introduction (Annex F)",
+        "An implementation that defines __STDC_IEC_559__, as bcc does, follows Annex F: its \
+         floating types and operations are those of IEC 60559, better known as IEEE 754.";
+    /// C99: §F.2 paragraph 1, p. 444; PDF p. 456.
+    FLOATING_FORMATS = "F.2p1", "p. 444; PDF p. 456", "Types (Annex F)",
+        "Under Annex F, float is IEEE 754 single precision and double is double precision; long \
+         double is an extended format, on x86-64 the x87 80-bit one.";
+    /// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
+    FLOATING_OPERATIONS = "F.3p1", "pp. 445-447; PDF pp. 457-459", "Operators and functions",
+        "Under Annex F, +, -, * and / are IEEE 754's operations: each gives its exact result \
+         rounded to the type, x / 0 is an infinity, 0 / 0 a NaN, and comparisons with a NaN are \
+         false.";
+    /// C99: §F.7.3 paragraph 1, p. 449; PDF p. 461.
+    ROUND_TO_NEAREST = "F.7.3p1", "p. 449; PDF p. 461", "Execution (Annex F)",
+        "A program starts in IEEE 754's round-to-nearest mode: a result between two values of \
+         its type becomes the nearer one, and an exact tie the one whose last bit is 0.";
+    /// C99: §6.10.8 paragraph 2, p. 161; PDF p. 173.
+    IEC_559_MACRO = "6.10.8p2", "p. 161; PDF p. 173", "Predefined macro names",
+        "An implementation defines __STDC_IEC_559__ as 1 when it follows Annex F, IEEE 754 \
+         floating-point arithmetic.";
     /// C99: §6.2.5 paragraph 15, p. 35; PDF p. 47.
     CHAR_SIGNEDNESS = "6.2.5p15", "p. 35; PDF p. 47", "Types",
         "Whether plain char is signed or unsigned is up to the implementation; on x86-64 Linux \
@@ -112,6 +142,27 @@ clauses! {
     SIGNED_CONVERSION = "6.3.1.3p3", "p. 43; PDF p. 55", "Signed and unsigned integers",
         "Converting a value that does not fit into a signed type gives an implementation-defined \
          result; x86-64 compilers keep the low bits (wrap around).";
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+    FLOATING_TO_INTEGER = "6.3.1.4p1", "p. 43; PDF p. 55", "Real floating and integer",
+        "Converting a floating value to an integer type discards its fraction, truncating toward \
+         zero; if the integral part does not fit in the type, the behavior is undefined.";
+    /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
+    INTEGER_TO_FLOATING = "6.3.1.4p2", "pp. 43-44; PDF pp. 55-56", "Real floating and integer",
+        "An integer converted to a floating type keeps its value if the type holds it exactly, \
+         and otherwise becomes one of the two nearest values the type has.";
+    /// C99: §F.4 paragraph 1, p. 447; PDF p. 459.
+    FLOATING_TO_INTEGER_ANNEX = "F.4p1", "p. 447; PDF p. 459", "Floating to integer conversion",
+        "Annex F says only that an out-of-range conversion to an integer raises the invalid \
+         exception and gives an unspecified value; C's own rule, 6.3.1.4, leaves it undefined.";
+    /// C99: §6.3.1.5 paragraph 1, p. 44; PDF p. 56.
+    FLOATING_PROMOTION = "6.3.1.5p1", "p. 44; PDF p. 56", "Real floating types",
+        "A float converted to double or long double, or a double to long double, keeps its value \
+         exactly.";
+    /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56.
+    FLOATING_DEMOTION = "6.3.1.5p2", "p. 44; PDF p. 56", "Real floating types",
+        "A value converted to a narrower floating type keeps it when it fits exactly and \
+         otherwise rounds to a neighbour; a value beyond the type's range is undefined, which \
+         Annex F defines as an infinity.";
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
     USUAL_ARITHMETIC = "6.3.1.8p1", "pp. 44-45; PDF pp. 56-57", "Usual arithmetic conversions",
         "Binary arithmetic first converts both operands to a common type: the higher-ranked one, \
@@ -131,6 +182,17 @@ clauses! {
     NULL_POINTER = "6.3.2.3p3", "p. 47; PDF p. 59", "Pointers",
         "The integer constant 0 converted to a pointer type becomes a null pointer, which points \
          to no object at all.";
+    /// C99: §6.4.4 paragraph 2, p. 54; PDF p. 66.
+    CONSTANT_RANGE = "6.4.4p2", "p. 54; PDF p. 66", "Constants",
+        "Every constant has a type, and its value must be in the range that type can represent.";
+    /// C99: §6.4.4.2 paragraph 3, p. 58; PDF p. 70.
+    FLOATING_CONSTANT = "6.4.4.2p3", "p. 58; PDF p. 70", "Floating constants",
+        "A decimal floating constant becomes the nearest value its type can represent (or a \
+         neighbour of it); a hexadecimal one is rounded correctly.";
+    /// C99: §6.4.4.2 paragraph 4, p. 58; PDF p. 70.
+    FLOATING_SUFFIX = "6.4.4.2p4", "p. 58; PDF p. 70", "Floating constants",
+        "A floating constant without a suffix is a double; with f or F it is a float, and with l \
+         or L a long double.";
     /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
     INTEGER_CONSTANT = "6.4.4.1p5", "pp. 55-56; PDF pp. 67-68", "Integer constants",
         "A decimal constant's type is the first of int, long and long long that holds its value; \
@@ -202,6 +264,9 @@ clauses! {
     /// C99: §6.5.3.3 paragraph 5, p. 79; PDF p. 91.
     LOGICAL_NOT = "6.5.3.3p5", "p. 79; PDF p. 91", "Unary arithmetic operators",
         "!E is 1 when E compares equal to 0, and 0 otherwise; the result has type int.";
+    /// C99: §6.5.5 paragraph 2, p. 82; PDF p. 94.
+    MULTIPLICATIVE_CONSTRAINT = "6.5.5p2", "p. 82; PDF p. 94", "Multiplicative operators",
+        "The operands of * and / must be arithmetic, and those of % integers.";
     /// C99: §6.5.5 paragraph 5, p. 82; PDF p. 94.
     DIVISION = "6.5.5p5", "p. 82; PDF p. 94", "Multiplicative operators",
         "/ gives the quotient (truncated toward zero) and % the remainder; dividing by zero is \
@@ -468,6 +533,15 @@ clauses! {
     CONVERSIONS = "7.19.6.1p8", "pp. 277-280; PDF pp. 289-292", "The fprintf function",
         "%d and %i write an int in decimal, %u and %x an unsigned int in decimal and hexadecimal, \
          %c one character, %s a string up to its null, and %% a percent sign.";
+    /// C99: §7.19.6.1 paragraph 8, pp. 277-280; PDF pp. 289-292.
+    FLOATING_CONVERSIONS = "7.19.6.1p8", "pp. 277-280; PDF pp. 289-292", "The fprintf function",
+        "%f writes a double as [-]ddd.ddd, %e as d.ddde±dd, %g in whichever of the two suits it \
+         with trailing zeros removed, and %a in hexadecimal; the precision (6 by default) counts \
+         digits, and the value is rounded.";
+    /// C99: §7.19.6.1 paragraph 7, pp. 276-277; PDF pp. 288-289.
+    LONG_DOUBLE_MODIFIER = "7.19.6.1p7", "pp. 276-277; PDF pp. 288-289", "The fprintf function",
+        "The L modifier makes %f, %e, %g and %a take a long double; l before them has no effect, \
+         and any other modifier there is undefined.";
     /// C99: §7.19.6.1 paragraph 9, p. 280; PDF p. 292.
     PRINTF_UNDEFINED = "7.19.6.1p9", "p. 280; PDF p. 292", "The fprintf function",
         "An invalid conversion specification, or an argument of the wrong type for its \

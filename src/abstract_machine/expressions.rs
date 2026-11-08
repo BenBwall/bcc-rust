@@ -3,6 +3,12 @@
 //! expressions. C99: bounded subset of §6.5, pp. 67-94; PDF pp. 79-106.
 
 use super::{
+    floating::{
+        ConstantError,
+        Floating,
+        Real,
+        Rounded,
+    },
     integers::{
         Integer,
         Suffix,
@@ -12,6 +18,7 @@ use super::{
         Token,
     },
     model::{
+        Arithmetic,
         Diagnostic,
         Library,
         MAX_ARGUMENTS,
@@ -72,10 +79,24 @@ impl Parser<'_> {
                         "each operand of a shift must have an integer type (C99 §6.5.7p2)",
                         &super::clauses::SHIFT_CONSTRAINT,
                     )),
-                | ("==" | "!=" | "<" | "<=" | ">" | ">=", Type::Integer(_), Type::Integer(_)) =>
+                | ("%", left, right)
+                    if left.floating().is_some() && right.arithmetic().is_some()
+                        || right.floating().is_some() && left.arithmetic().is_some() =>
+                    return Err(Diagnostic::constraint(
+                        combined(lhs.range, rhs.range),
+                        "each operand of % must have an integer type: a floating division has no \
+                         remainder to give (C99 §6.5.5p2)",
+                        &super::clauses::MULTIPLICATIVE_CONSTRAINT,
+                    )),
+                | ("==" | "!=" | "<" | "<=" | ">" | ">=", left, right)
+                    if left.arithmetic().is_some() && right.arithmetic().is_some() =>
                     Type::INT,
-                | (_, Type::Integer(left), Type::Integer(right)) =>
-                    Type::Integer(left.promoted().common(right.promoted()).0),
+                | (_, left, right) if left.arithmetic().is_some() && right.arithmetic().is_some() =>
+                    left.arithmetic()
+                        .zip(right.arithmetic())
+                        .map_or(Type::INT, |(left, right)| {
+                            left.promoted().common(right.promoted()).ty()
+                        }),
                 | ("==" | "!=", Type::Pointer(a, _), Type::Pointer(b, _)) if a == b => Type::INT,
                 | ("==" | "!=", Type::StructPointer(a), Type::StructPointer(b)) if a == b =>
                     Type::INT,
@@ -137,12 +158,19 @@ impl Parser<'_> {
             let readonly = expression.readonly;
             let ty = match (operator, expression.ty) {
                 | ("+" | "-", Type::Integer(integer)) => Type::Integer(integer.promoted()),
-                | ("!", Type::Integer(_) | Type::Pointer(..) | Type::StructPointer(_)) => Type::INT,
-                | ("*", Type::Pointer(element, _)) => Type::Integer(element),
+                | ("+" | "-", floating @ Type::Floating(_)) => floating,
+                | (
+                    "!",
+                    Type::Integer(_)
+                    | Type::Floating(_)
+                    | Type::Pointer(..)
+                    | Type::StructPointer(_),
+                ) => Type::INT,
+                | ("*", Type::Pointer(element, _)) => element.ty(),
                 | ("*", Type::StructPointer(id)) => self.complete_type(id)?,
-                | ("&", Type::Integer(integer)) => {
+                | ("&", ty @ (Type::Integer(_) | Type::Floating(_))) => {
                     self.check_lvalue(child)?;
-                    Type::Pointer(integer, readonly)
+                    Type::Pointer(ty.arithmetic().unwrap_or(Arithmetic::INT), readonly)
                 },
                 | ("&", Type::Struct(id)) => {
                     self.check_lvalue(child)?;
@@ -150,7 +178,7 @@ impl Parser<'_> {
                 },
                 | _ =>
                     return Err(self.error(
-                        "unsupported unary operand type; pointers to integers and to structures \
+                        "unsupported unary operand type; pointers to numbers and to structures \
                          are modeled",
                     )),
             };
@@ -196,16 +224,23 @@ impl Parser<'_> {
             let node = self.node(ExprKind::Character(value, text), Type::INT, false, range, 1)?;
             self.expressions[node].macro_use = token.macro_use;
             node
-        } else if text.as_bytes().first().is_some_and(u8::is_ascii_digit) {
-            let (value, integer) = Self::integer_constant(token)?;
+        } else if text
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'.')
+        {
+            let (kind, ty) = match Self::number_constant(token)? {
+                | Number::Integer(value, integer) => (
+                    ExprKind::Number(value, integer, text),
+                    Type::Integer(integer),
+                ),
+                | Number::Real(rounded) => (
+                    ExprKind::Real(rounded, text),
+                    Type::Floating(rounded.value.format()),
+                ),
+            };
             self.position += 1;
-            let node = self.node(
-                ExprKind::Number(value, integer, text),
-                Type::Integer(integer),
-                false,
-                range,
-                1,
-            )?;
+            let node = self.node(kind, ty, false, range, 1)?;
             self.expressions[node].macro_use = token.macro_use;
             node
         } else if is_identifier(&text) {
@@ -312,14 +347,14 @@ impl Parser<'_> {
             let base = &self.expressions[value];
             let subscript = &self.expressions[index];
             let element = match base.ty {
-                | Type::Pointer(element, _) => Some(Type::Integer(element)),
+                | Type::Pointer(element, _) => Some(element.ty()),
                 | _ => None,
             };
             let Some(element) = element.filter(|_| {
                 matches!(subscript.ty, Type::Integer(_)) && !base.call && !subscript.call
             }) else {
                 return Err(self.error(
-                    "subscript requires a pointer to an integer type and a side-effect-free \
+                    "subscript requires a pointer to an arithmetic type and a side-effect-free \
                      integer index",
                 ));
             };
@@ -350,10 +385,11 @@ impl Parser<'_> {
         prefix: bool,
     ) -> Result<usize, Diagnostic> {
         let expression = &self.expressions[operand];
-        if !matches!(expression.ty, Type::Integer(_) | Type::Pointer(..)) {
-            return Err(
-                self.error("++ and -- update an integer or a pointer to one in this subset")
-            );
+        if !matches!(
+            expression.ty,
+            Type::Integer(_) | Type::Floating(_) | Type::Pointer(..)
+        ) {
+            return Err(self.error("++ and -- update a number or a pointer to one in this subset"));
         }
         if expression.readonly {
             return Err(self.readonly_error(operand, true));
@@ -451,7 +487,10 @@ impl Parser<'_> {
                 self.walk(*base, names, updated, indirect);
             },
             | ExprKind::Call(..) | ExprKind::Library(..) => *indirect = true,
-            | ExprKind::Number(..) | ExprKind::Character(..) | ExprKind::Sizeof(..) => {},
+            | ExprKind::Number(..)
+            | ExprKind::Real(..)
+            | ExprKind::Character(..)
+            | ExprKind::Sizeof(..) => {},
         }
     }
 
@@ -511,13 +550,66 @@ impl Parser<'_> {
         let pointer = self.pointer()?;
         if !self.at(")") {
             return Err(self.error(
-                "a type name in this subset is an integer type or a structure, or a pointer to \
-                 one (such as `unsigned int *`); pointers to pointers and other declarators are \
-                 outside it",
+                "a type name in this subset is an arithmetic type or a structure, or a pointer to \
+                 one (such as `unsigned int *` or `double`); pointers to pointers and other \
+                 declarators are outside it",
             ));
         }
         let range = combined(start.range, self.tokens[self.position - 1].range);
         self.declared_type(base, pointer, None, range)
+    }
+
+    /// The constant `token`, a preprocessing number: a floating constant
+    /// when it has a period, or an exponent (`e`, or `p` after `0x`), and
+    /// otherwise an integer constant.
+    ///
+    /// C99: §6.4.4.2 paragraph 2, p. 58; PDF p. 70.
+    pub(super) fn number_constant(token: Token<'_>) -> Result<Number, Diagnostic> {
+        let text = token.text;
+        let hexadecimal = text.starts_with("0x") || text.starts_with("0X");
+        let floating = text.contains('.')
+            || (hexadecimal && text.contains(['p', 'P']))
+            || (!hexadecimal && text.contains(['e', 'E']));
+        if floating {
+            Self::floating_constant(token).map(Number::Real)
+        } else {
+            Self::integer_constant(token).map(|(value, integer)| Number::Integer(value, integer))
+        }
+    }
+
+    /// The value of the floating constant `token`, the nearest value of its
+    /// type, and whether that is exact. A value beyond the type's range
+    /// breaks a constraint.
+    ///
+    /// C99: §6.4.4.2 paragraphs 3-4, p. 58; PDF p. 70.
+    /// C99: §6.4.4 paragraph 2, p. 54; PDF p. 66.
+    pub(super) fn floating_constant(token: Token<'_>) -> Result<Rounded, Diagnostic> {
+        let text = token.text;
+        Real::parse_constant(text).map_err(|error| match error {
+            | ConstantError::Malformed => Diagnostic::new(
+                "syntax",
+                token.range,
+                &format!(
+                    "`{text}` is not a floating constant: it has digits with a period, an \
+                     exponent such as e-3, or both, then an optional f or l suffix; a hexadecimal \
+                     one needs a p exponent (C99 §6.4.4.2p1)"
+                ),
+            ),
+            | ConstantError::TooLong => Diagnostic::limit(
+                token.range,
+                "a floating constant may have at most 256 characters here",
+            ),
+            | ConstantError::OutOfRange(format) => Diagnostic::constraint(
+                token.range,
+                &format!(
+                    "`{text}` is beyond the largest {}, about {}: a constant's value must be in \
+                     its type's range (C99 §6.4.4p2)",
+                    format.spelling(),
+                    format.maximum_text()
+                ),
+                &super::clauses::CONSTANT_RANGE,
+            ),
+        })
     }
 
     /// The value and type of the integer constant `token`: decimal digits
@@ -533,8 +625,8 @@ impl Parser<'_> {
         if (number.len() > 1 && number.starts_with('0')) || suffix.starts_with(['x', 'X']) {
             return error(
                 "unsupported",
-                "octal and hexadecimal constants are outside this subset; write the value in \
-                 decimal",
+                "octal and hexadecimal integer constants are outside this subset; write the value \
+                 in decimal",
             );
         }
         let Some(suffix) = Suffix::parse(suffix) else {
@@ -563,7 +655,7 @@ impl Parser<'_> {
         Ok((i128::from(integer.0), integer.1))
     }
 
-    /// `(type-name) operand`: a cast between integer types, or between
+    /// `(type-name) operand`: a cast between arithmetic types, or between
     /// pointers to the same type that differ only in `const`. Its operand
     /// binds as a unary operator's does, so `(char)300 + 1` adds 1 to the
     /// cast.
@@ -593,7 +685,7 @@ impl Parser<'_> {
         }
         let from = operand.ty;
         let allowed = match (from, to) {
-            | (Type::Integer(_), Type::Integer(_)) => true,
+            | (from, to) if from.arithmetic().is_some() && to.arithmetic().is_some() => true,
             | (Type::Pointer(a, _), Type::Pointer(b, _)) => a == b,
             | (Type::Struct(_) | Type::Array(..), _) | (_, Type::Struct(_)) =>
                 return Err(Diagnostic::constraint(
@@ -608,9 +700,9 @@ impl Parser<'_> {
             return Err(Diagnostic::new(
                 "unsupported",
                 combined(start.range, closing.range),
-                "this subset casts between integer types, and between pointers to the same type \
-                 that differ only in const; casts between integers and pointers or between \
-                 different pointer types are outside it",
+                "this subset casts between arithmetic types (integer and floating), and between \
+                 pointers to the same type that differ only in const; casts between integers and \
+                 pointers, floating values and pointers, or different pointer types are outside it",
             ));
         }
         let effect = operand.effect;
@@ -795,7 +887,7 @@ impl Parser<'_> {
             let ty = expression.ty;
             let acceptable = match (library, index) {
                 | (Library::Printf | Library::Puts, 0) =>
-                    matches!(ty, Type::Pointer(Integer::Char, _)),
+                    matches!(ty, Type::Pointer(Arithmetic::CHAR, _)),
                 | (Library::Putchar, _) => matches!(ty, Type::Integer(_)),
                 | _ => !matches!(ty, Type::Struct(_)),
             };
@@ -843,6 +935,19 @@ impl Parser<'_> {
             | ExprKind::Number(value, integer, spelling) => {
                 let tree = self.tree(&spelling, range, Vec::new())?;
                 self.emit_node(Op::Push(value, integer), range, tree)?;
+                self.mark_macro(node.macro_use);
+                tree
+            },
+            | ExprKind::Real(rounded, spelling) => {
+                let tree = self.tree(&spelling, range, Vec::new())?;
+                self.emit_node(
+                    Op::PushReal {
+                        value: rounded.value,
+                        exact: rounded.exact,
+                    },
+                    range,
+                    tree,
+                )?;
                 self.mark_macro(node.macro_use);
                 tree
             },
@@ -972,7 +1077,7 @@ impl Parser<'_> {
                 }
                 let integer = match (operator, node.ty) {
                     | ("!", _) => None,
-                    | (_, ty) => ty.integer(),
+                    | (_, ty) => ty.arithmetic(),
                 };
                 let tree = self.tree(operator, range, vec![operand])?;
                 self.emit_node(Op::Unary(operator, integer), range, tree)?;
@@ -981,26 +1086,36 @@ impl Parser<'_> {
             | ExprKind::Binary(operator, lhs, rhs) => {
                 // The usual arithmetic conversions apply only when both
                 // operands are arithmetic; pointer arithmetic promotes nothing.
+                // With a floating operand the other converts straight to its
+                // type, without the integer promotions (C99 §6.3.1.8p1).
                 let types = (self.expressions[lhs].ty, self.expressions[rhs].ty);
-                let integers = match types {
-                    | (Type::Integer(left), Type::Integer(right)) =>
-                        Some((left.promoted(), right.promoted())),
-                    | _ => None,
-                };
+                let integers = matches!(types, (Type::Integer(_), Type::Integer(_)));
+                let arithmetic =
+                    types
+                        .0
+                        .arithmetic()
+                        .zip(types.1.arithmetic())
+                        .map(|(left, right)| {
+                            if integers {
+                                (left.promoted(), right.promoted())
+                            } else {
+                                (left, right)
+                            }
+                        });
                 let left = self.emit_expression(lhs, false)?;
-                if integers.is_some() {
+                if integers {
                     self.promoted(lhs, left)?;
                 }
                 let right = self.emit_expression(rhs, false)?;
-                if integers.is_some() {
+                if integers {
                     self.promoted(rhs, right)?;
                 }
-                let computation = match integers {
+                let computation = match arithmetic {
                     // A shift promotes each operand on its own; nothing
                     // brings them to a common type (C99 §6.5.7p3).
                     | Some((left, _)) if matches!(operator, "<<" | ">>") => Some(left),
                     | Some((promoted_left, promoted_right)) => {
-                        let (common, _) = promoted_left.common(promoted_right);
+                        let common = promoted_left.common(promoted_right);
                         if promoted_left != common {
                             let range = self.expressions[lhs].range;
                             self.emit_node(
@@ -1071,12 +1186,27 @@ impl Parser<'_> {
                             if integer.promoted() != integer =>
                         {
                             let range = self.expressions[argument].range;
-                            self.emit_node(Op::DefaultPromote(integer), range, child)?;
+                            self.emit_node(
+                                Op::DefaultPromote(Arithmetic::Integer(integer)),
+                                range,
+                                child,
+                            )?;
                             Type::Integer(integer.promoted())
+                        },
+                        // A float passed through `...` arrives as a double
+                        // (C99 §6.5.2.2p6).
+                        | (Library::Printf, 1.., Type::Floating(Floating::Float)) => {
+                            let range = self.expressions[argument].range;
+                            self.emit_node(
+                                Op::DefaultPromote(Arithmetic::Floating(Floating::Float)),
+                                range,
+                                child,
+                            )?;
+                            Type::Floating(Floating::Double)
                         },
                         | (Library::Printf, 1.., _) => ty,
                         | (Library::Putchar, ..) => Type::INT,
-                        | _ => Type::Pointer(Integer::Char, true),
+                        | _ => Type::Pointer(Arithmetic::CHAR, true),
                     };
                     children.push(child);
                     types.push(passed);
@@ -1157,6 +1287,8 @@ pub(super) struct Expr {
 pub(super) enum ExprKind {
     /// An integer constant's value, type and spelling.
     Number(i128, Integer, String),
+    /// A floating constant's value (with whether it is exact) and spelling.
+    Real(Rounded, String),
     /// A character constant's value and its spelling, `'a'`.
     Character(i128, String),
     /// `sizeof`: the size in bytes of the operand's type, and the type.
@@ -1215,6 +1347,14 @@ fn unary(text: &str) -> Option<&'static str> {
         | "&" => Some("&"),
         | _ => None,
     }
+}
+
+/// A numeric constant's value: an integer constant's value and type, or a
+/// floating constant's rounded value.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Number {
+    Integer(i128, Integer),
+    Real(Rounded),
 }
 
 pub(super) fn combined(left: SourceRange, right: SourceRange) -> SourceRange {

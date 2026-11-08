@@ -8,8 +8,10 @@ use super::{
     expressions::{
         Expr,
         ExprKind,
+        Number,
         combined,
     },
+    floating::Floating,
     integers::Integer,
     layout,
     lexer::{
@@ -17,6 +19,7 @@ use super::{
         Token,
     },
     model::{
+        Arithmetic,
         Diagnostic,
         Directive,
         DirectiveKind,
@@ -96,13 +99,13 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             ));
         }
         let returns = match (base, pointer) {
-            | (Base::Integer(integer, false), false) => Type::Integer(integer),
+            | (Base::Arithmetic(arithmetic, false), false) => arithmetic.ty(),
             | (Base::Struct(id), false) => parser.complete_structure(id, name.range)?,
             | _ =>
                 return Err(Diagnostic::new(
                     "unsupported",
                     name.range,
-                    "functions return an integer type or a structure in this subset",
+                    "functions return an arithmetic type or a structure in this subset",
                 )),
         };
         if parser.symbols.iter().any(|symbol| symbol.name == name.text) {
@@ -361,9 +364,9 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 Ok(())
             },
-            | "int" | "char" | "short" | "long" | "signed" | "unsigned" | "struct" | "static"
-            | "const" | "else" | "break" | "continue" | "goto" | "do" | "switch" =>
-                Err(self.error("unsupported statement in this subset")),
+            | "int" | "char" | "short" | "long" | "signed" | "unsigned" | "float" | "double"
+            | "struct" | "static" | "const" | "else" | "break" | "continue" | "goto" | "do"
+            | "switch" => Err(self.error("unsupported statement in this subset")),
             | _ => {
                 self.expression_statement()?;
                 self.expect(";")
@@ -516,10 +519,11 @@ impl<'a> Parser<'a> {
                 .any(|keyword| self.at(keyword))
     }
 
-    /// Whether an integer type's specifiers start here: a keyword such as
-    /// `unsigned`, or `size_t` once `<stdio.h>` has declared it.
+    /// Whether an arithmetic type's specifiers start here: a keyword such
+    /// as `unsigned` or `double`, or `size_t` once `<stdio.h>` has declared
+    /// it.
     pub fn at_type(&self) -> bool {
-        is_integer_specifier(self.current().text) || (self.at("size_t") && self.includes_stdio())
+        is_type_specifier(self.current().text) || (self.at("size_t") && self.includes_stdio())
     }
 
     /// A declarator's optional `[N]`, or `[]` when a string literal
@@ -606,7 +610,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(), Diagnostic> {
         self.declare(name, ty, constant)?;
         if self.take("=") {
-            if let Type::Array(Integer::Char, length) = ty
+            if let Type::Array(Arithmetic::CHAR, length) = ty
                 && self.current().text.starts_with('"')
             {
                 let element = self.tree(name.text, name.range, Vec::new())?;
@@ -701,7 +705,7 @@ impl<'a> Parser<'a> {
                     if index >= length {
                         return Err(self.error("too many array initializer elements"));
                     }
-                    (Type::Integer(element), offset + index)
+                    (element.ty(), offset + index)
                 },
                 | Type::Struct(id) => {
                     if self.take(".") {
@@ -722,7 +726,7 @@ impl<'a> Parser<'a> {
             };
             let at = i32::try_from(leaf).map_err(|_| self.error("object too large"))?;
             match member_type {
-                | Type::Array(Integer::Char, length) if self.current().text.starts_with('"') => {
+                | Type::Array(Arithmetic::CHAR, length) if self.current().text.starts_with('"') => {
                     let label = self.label(name.text, shape, at, None);
                     let element = self.element(name, &label, at, None)?;
                     self.string_initializer(element, name.range, length, false)?;
@@ -989,11 +993,14 @@ impl<'a> Parser<'a> {
         };
         if let Some(delta) = prefix.or(postfix) {
             let operand = &self.expressions[expression];
-            if !matches!(operand.ty, Type::Integer(_) | Type::Pointer(..)) {
+            if !matches!(
+                operand.ty,
+                Type::Integer(_) | Type::Floating(_) | Type::Pointer(..)
+            ) {
                 return Err(Diagnostic::new(
                     "unsupported",
                     range,
-                    "++ and -- update an integer or a pointer to one in this subset",
+                    "++ and -- update a number or a pointer to one in this subset",
                 ));
             }
             if prefix.is_none()
@@ -1085,13 +1092,31 @@ impl<'a> Parser<'a> {
         );
         let shift = matches!(operator, "<<" | ">>");
         let common = match (left, right) {
-            | (Type::Integer(left), Type::Integer(_)) if shift => Some(left.promoted()),
-            | (Type::Integer(left), Type::Integer(right)) =>
-                Some(left.promoted().common(right.promoted()).0),
-            | _ => None,
+            | (Type::Integer(left), Type::Integer(_)) if shift =>
+                Some(Arithmetic::Integer(left.promoted())),
+            | (Type::Integer(_), Type::Integer(_)) if operator == "%" => left
+                .arithmetic()
+                .zip(right.arithmetic())
+                .map(|(left, right)| left.promoted().common(right.promoted())),
+            | _ if shift || operator == "%" => None,
+            | _ => left
+                .arithmetic()
+                .zip(right.arithmetic())
+                .map(|(left, right)| left.promoted().common(right.promoted())),
         };
         match (left, operator) {
             | _ if common.is_some() => {},
+            | (Type::Integer(_) | Type::Floating(_), "%" | "<<" | ">>")
+                if right.arithmetic().is_some() =>
+                return Err(Diagnostic::constraint(
+                    range,
+                    &format!(
+                        "`{}` needs integer operands; a floating operand has no remainder or bits \
+                         to shift (C99 §6.5.16.2p2, §6.5.5p2, §6.5.7p2)",
+                        token.text
+                    ),
+                    &super::clauses::COMPOUND_CONSTRAINT,
+                )),
             | (Type::Pointer(..), "+" | "-") if matches!(right, Type::Integer(_)) => {},
             | (Type::StructPointer(_), "+" | "-") if matches!(right, Type::Integer(_)) =>
                 return Err(Diagnostic::new(
@@ -1138,12 +1163,20 @@ impl<'a> Parser<'a> {
         let operand = self.emit_expression(value, false)?;
         if let Type::Integer(from) = right
             && from.promoted() != from
+            && matches!(left, Type::Integer(_))
         {
             let value_range = self.expressions[value].range;
             self.emit_node(Op::Promote(from), value_range, operand)?;
         }
         let root = self.tree(token.text, range, vec![target, operand])?;
-        self.emit_node(Op::Compound(operator, common), range, root)
+        let right_type = right.arithmetic().map(|right_type| {
+            if matches!(left, Type::Integer(_)) {
+                right_type.promoted()
+            } else {
+                right_type
+            }
+        });
+        self.emit_node(Op::Compound(operator, common, right_type), range, root)
     }
 
     pub fn emit(&mut self, op: Op, range: SourceRange) -> Result<(), Diagnostic> {
@@ -1285,7 +1318,7 @@ impl<'a> Parser<'a> {
 
     pub fn require_scalar(&self, expression: usize) -> Result<(), Diagnostic> {
         let ty = self.expressions[expression].ty;
-        if matches!(ty, Type::Integer(_)) || ty.is_pointer() {
+        if ty.arithmetic().is_some() || ty.is_pointer() {
             Ok(())
         } else {
             Err(self.error("expected a scalar expression"))
@@ -1413,8 +1446,9 @@ impl<'a> Parser<'a> {
         let kind = self.replacement_kind(literal).ok_or_else(|| {
             unsupported(
                 "the machine runs #define only when the replacement is one integer constant, \
-                 character constant or string literal, such as `#define N 10`; other macros are \
-                 expanded by the preprocessor, which the compiler pipeline view shows",
+                 floating constant, character constant or string literal, such as `#define N 10`; \
+                 other macros are expanded by the preprocessor, which the compiler pipeline view \
+                 shows",
             )
         })??;
         if let Some(index) = self.macros.iter().position(|defined| defined.name == name) {
@@ -1468,10 +1502,13 @@ impl<'a> Parser<'a> {
         let text = literal.text;
         let bytes = text.as_bytes();
         let first = *bytes.first()?;
-        if first.is_ascii_digit() {
-            return Self::integer_constant(literal)
-                .is_ok()
-                .then_some(Ok("integer constant"));
+        if first.is_ascii_digit() || first == b'.' {
+            if Self::integer_constant(literal).is_ok() {
+                return Some(Ok("integer constant"));
+            }
+            return Self::floating_constant(literal)
+                .ok()
+                .map(|_| Ok("floating constant"));
         }
         if first != b'"' && first != b'\'' {
             return None;
@@ -1563,11 +1600,12 @@ impl<'a> Parser<'a> {
                 };
                 let range = parameter.map_or(self.current().range, |token| token.range);
                 let ty = match (base, pointer) {
-                    | (Base::Integer(integer, false), false) => Type::Integer(integer),
-                    | (Base::Integer(integer, constant), true) => Type::Pointer(integer, constant),
+                    | (Base::Arithmetic(arithmetic, false), false) => arithmetic.ty(),
+                    | (Base::Arithmetic(arithmetic, constant), true) =>
+                        Type::Pointer(arithmetic, constant),
                     | (Base::Struct(id), false) => self.complete_structure(id, range)?,
                     | (Base::Struct(id), true) => Type::StructPointer(id),
-                    | (Base::Integer(_, true), false) =>
+                    | (Base::Arithmetic(_, true), false) =>
                         return Err(Diagnostic::new(
                             "unsupported",
                             range,
@@ -1707,7 +1745,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// A type specifier: an integer type, optionally `const`, or `struct
+    /// A type specifier: an arithmetic type, optionally `const`, or `struct
     /// tag`. A tag not seen before declares an incomplete structure type,
     /// which only a pointer may use until its definition.
     ///
@@ -1715,25 +1753,26 @@ impl<'a> Parser<'a> {
     /// the type; the object is then not modifiable).
     pub fn base_type(&mut self) -> Result<Base, Diagnostic> {
         let constant = self.take("const");
-        if let Some(integer) = self.integer_type()? {
+        if let Some(arithmetic) = self.arithmetic_type()? {
             if self.at("const") {
                 return Err(self.error(
                     "write const first, as in `const int`; other placements of const are outside \
                      this subset",
                 ));
             }
-            return Ok(Base::Integer(integer, constant));
+            return Ok(Base::Arithmetic(arithmetic, constant));
         }
         if constant {
             return Err(self.error(
-                "const is supported before an integer type in this subset (`const int limit = \
-                 3;`, `const char *s`)",
+                "const is supported before an arithmetic type in this subset (`const int limit = \
+                 3;`, `const char *s`, `const double rate = 0.5;`)",
             ));
         }
         if !self.take("struct") {
             return Err(self.error(
-                "expected an integer type (char, short, int, long, long long, signed or unsigned) \
-                 or struct; other types (float, double, void, ...) are outside this subset",
+                "expected an arithmetic type (char, short, int, long, long long, signed or \
+                 unsigned, float, double or long double) or struct; other types (void, _Bool, \
+                 ...) are outside this subset",
             ));
         }
         let tag = self.identifier()?;
@@ -1745,40 +1784,57 @@ impl<'a> Parser<'a> {
         Ok(Base::Struct(self.tag(tag)?))
     }
 
-    /// The integer type the type specifiers here name, if they start here:
-    /// `char`, `signed char`, `unsigned char`, `short`, `int`, `long`, `long
-    /// long`, each with `signed` or `unsigned`, the words in any order and
-    /// `int` optional after `short` and `long`; or `size_t`, which
-    /// `<stdio.h>` defines as `unsigned long` on x86-64.
+    /// The arithmetic type the type specifiers here name, if they start
+    /// here: `char`, `signed char`, `unsigned char`, `short`, `int`, `long`,
+    /// `long long`, each with `signed` or `unsigned`, the words in any order
+    /// and `int` optional after `short` and `long`; `float`, `double` or
+    /// `long double`; or `size_t`, which `<stdio.h>` defines as `unsigned
+    /// long` on x86-64.
     ///
     /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112.
     /// C99: §7.19.1 paragraph 2, p. 262; PDF p. 274 (`size_t`).
-    pub fn integer_type(&mut self) -> Result<Option<Integer>, Diagnostic> {
+    pub fn arithmetic_type(&mut self) -> Result<Option<Arithmetic>, Diagnostic> {
         if self.at("size_t") && self.includes_stdio() {
             self.position += 1;
-            return Ok(Some(Integer::UnsignedLong));
+            return Ok(Some(Arithmetic::Integer(Integer::UnsignedLong)));
         }
         let first = self.current();
-        let mut counts = [0_u8; 6];
-        let words = ["signed", "unsigned", "char", "short", "int", "long"];
+        let mut counts = [0_u8; 8];
+        let words = [
+            "signed", "unsigned", "char", "short", "int", "long", "float", "double",
+        ];
         while let Some(word) = words.iter().position(|word| self.at(word)) {
             counts[word] += 1;
             self.position += 1;
         }
-        if counts == [0; 6] {
+        if counts == [0; 8] {
             return Ok(None);
         }
         let range = combined(first.range, self.tokens[self.position - 1].range);
-        if matches!(
-            self.current().text,
-            "float" | "double" | "_Bool" | "_Complex"
-        ) {
+        if matches!(self.current().text, "_Bool" | "_Complex" | "_Imaginary") {
             return Err(self.error(
-                "floating and boolean types are outside this subset, which models the integer \
-                 types",
+                "_Bool and the complex types are outside this subset, which models the integer \
+                 and real floating types",
             ));
         }
-        let [signed, unsigned, char, short, int, long] = counts;
+        let [signed, unsigned, char, short, int, long, float, double] = counts;
+        let invalid = || {
+            Diagnostic::constraint(
+                range,
+                "these type specifiers name no type: C allows each arithmetic type only as one of \
+                 its listed spellings, such as `unsigned long int` or `long double` (C99 §6.7.2p2)",
+                &super::clauses::TYPE_SPECIFIERS,
+            )
+        };
+        if float + double > 0 {
+            let others = signed + unsigned + char + short + int;
+            return match (float, double, long, others) {
+                | (1, 0, 0, 0) => Ok(Some(Arithmetic::Floating(Floating::Float))),
+                | (0, 1, 0, 0) => Ok(Some(Arithmetic::Floating(Floating::Double))),
+                | (0, 1, 1, 0) => Ok(Some(Arithmetic::Floating(Floating::LongDouble))),
+                | _ => Err(invalid()),
+            };
+        }
         let valid = signed + unsigned <= 1
             && char <= 1
             && short <= 1
@@ -1787,15 +1843,10 @@ impl<'a> Parser<'a> {
             && (char == 0 || short + int + long == 0)
             && (short == 0 || long == 0);
         if !valid {
-            return Err(Diagnostic::constraint(
-                range,
-                "these type specifiers name no type: C allows each integer type only as one of \
-                 its listed spellings, such as `unsigned long int` (C99 §6.7.2p2)",
-                &super::clauses::TYPE_SPECIFIERS,
-            ));
+            return Err(invalid());
         }
         let unsigned = unsigned == 1;
-        Ok(Some(match (char, short, long) {
+        Ok(Some(Arithmetic::Integer(match (char, short, long) {
             | (1, ..) if unsigned => Integer::UnsignedChar,
             | (1, ..) if signed == 1 => Integer::SignedChar,
             | (1, ..) => Integer::Char,
@@ -1807,7 +1858,7 @@ impl<'a> Parser<'a> {
             | (.., 2) => Integer::LongLong,
             | _ if unsigned => Integer::UnsignedInt,
             | _ => Integer::Int,
-        }))
+        })))
     }
 
     /// The structure type tagged `tag`, declared incomplete if new.
@@ -1862,7 +1913,7 @@ impl<'a> Parser<'a> {
         Ok(Some(length))
     }
 
-    /// The type a declarator gives its base type: an integer type `T`,
+    /// The type a declarator gives its base type: an arithmetic type `T`,
     /// `T *`, `const T *`, `T[N]`, `struct S` or `struct S *`.
     pub fn declared_type(
         &self,
@@ -1873,10 +1924,11 @@ impl<'a> Parser<'a> {
     ) -> Result<Type, Diagnostic> {
         let unsupported = |message| Err(Diagnostic::new("unsupported", range, message));
         match (base, pointer, array) {
-            | (Base::Integer(integer, _), false, None) => Ok(Type::Integer(integer)),
-            | (Base::Integer(integer, constant), true, None) =>
-                Ok(Type::Pointer(integer, constant)),
-            | (Base::Integer(integer, _), false, Some(length)) => Ok(Type::Array(integer, length)),
+            | (Base::Arithmetic(arithmetic, _), false, None) => Ok(arithmetic.ty()),
+            | (Base::Arithmetic(arithmetic, constant), true, None) =>
+                Ok(Type::Pointer(arithmetic, constant)),
+            | (Base::Arithmetic(arithmetic, _), false, Some(length)) =>
+                Ok(Type::Array(arithmetic, length)),
             | (_, true, Some(_)) => unsupported("arrays of pointers are outside this subset"),
             | (Base::Struct(id), false, None) => self.complete_structure(id, range),
             | (Base::Struct(id), true, None) => Ok(Type::StructPointer(id)),
@@ -2068,7 +2120,7 @@ impl<'a> Parser<'a> {
         }
         let mut bytes = literal.bytes;
         bytes.push(0);
-        let ty = Type::Array(Integer::Char, bytes.len());
+        let ty = Type::Array(Arithmetic::CHAR, bytes.len());
         self.statics.push(Static {
             name: literal.spelling,
             ty,
@@ -2106,7 +2158,7 @@ impl<'a> Parser<'a> {
         leaves: &mut [Value],
     ) -> Result<(), Diagnostic> {
         match ty {
-            | Type::Array(Integer::Char, length) if self.current().text.starts_with('"') => {
+            | Type::Array(Arithmetic::CHAR, length) if self.current().text.starts_with('"') => {
                 let literal = self.joined_literal(self.position)?;
                 if literal.bytes.len() > length {
                     return Err(self.error(
@@ -2133,7 +2185,7 @@ impl<'a> Parser<'a> {
                             if index >= length {
                                 return Err(self.error("too many array initializer elements"));
                             }
-                            (Type::Integer(element), offset + index)
+                            (element.ty(), offset + index)
                         },
                         | Type::Struct(id) => {
                             if self.take(".") {
@@ -2155,7 +2207,7 @@ impl<'a> Parser<'a> {
                         | _ =>
                             return Err(self.error("braces initialize only arrays and structures")),
                     };
-                    let string = matches!(member, Type::Array(Integer::Char, _))
+                    let string = matches!(member, Type::Array(Arithmetic::CHAR, _))
                         && self.current().text.starts_with('"');
                     if matches!(member, Type::Array(..) | Type::Struct(_))
                         && !self.at("{")
@@ -2179,48 +2231,57 @@ impl<'a> Parser<'a> {
                 }
                 self.expect("}")
             },
-            | Type::Integer(integer) if self.current().text.starts_with('\'') => {
+            | Type::Integer(_) | Type::Floating(_) if self.current().text.starts_with('\'') => {
                 let token = self.current();
                 self.declaration_macros.extend(token.macro_use);
                 let value = self.character_constant(token)?;
                 self.position += 1;
-                leaves[offset] = Value::Integer(integer.convert(value));
+                leaves[offset] = Self::static_conversion(Value::Integer(value), ty, token)?;
                 Ok(())
             },
-            | Type::Integer(integer) => {
+            | Type::Integer(_) | Type::Floating(_) => {
                 let negative = self.take("-");
                 let token = self.current();
                 self.declaration_macros.extend(token.macro_use);
                 let not_constant = |parser: &Self| {
                     parser.error(
                         "a static object's initializer must be a constant; this subset takes a \
-                         decimal integer constant, optionally negated",
+                         decimal integer constant or a floating constant, optionally negated",
                     )
                 };
                 if !token
                     .text
                     .as_bytes()
                     .first()
-                    .is_some_and(u8::is_ascii_digit)
+                    .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'.')
                 {
                     return Err(not_constant(self));
                 }
-                let (value, _) = Self::integer_constant(token)?;
+                let value = match Self::number_constant(token)? {
+                    | Number::Integer(value, _) => Value::Integer(value),
+                    | Number::Real(rounded) => Value::Floating(rounded.value),
+                };
                 self.position += 1;
                 if !(self.at(",") || self.at(";") || self.at("}")) {
                     return Err(self.error(
                         "a static object's initializer must be a constant; this subset takes a \
-                         decimal integer constant, optionally negated, and no arithmetic on it",
+                         decimal integer constant or a floating constant, optionally negated, and \
+                         no arithmetic on it",
                     ));
                 }
                 // The initializer converts as by assignment: modulo 2^N
-                // into an unsigned type, wrapped into a signed one (C99
-                // §6.7.8p11, §6.3.1.3).
-                let value = if negative { -value } else { value };
-                leaves[offset] = Value::Integer(integer.convert(value));
+                // into an unsigned type, wrapped into a signed one, rounded
+                // into a floating type, truncated into an integer one (C99
+                // §6.7.8p11, §6.3.1.3, §6.3.1.4).
+                let value = match value {
+                    | Value::Integer(value) if negative => Value::Integer(-value),
+                    | Value::Floating(real) if negative => Value::Floating(real.negate()),
+                    | value => value,
+                };
+                leaves[offset] = Self::static_conversion(value, ty, token)?;
                 Ok(())
             },
-            | Type::Pointer(Integer::Char, _) if self.current().text.starts_with('"') => {
+            | Type::Pointer(Arithmetic::CHAR, _) if self.current().text.starts_with('"') => {
                 // The literal's array exists before main, so its address
                 // is a constant (C99 §6.6p9).
                 let literal = self.take_literal()?;
@@ -2246,6 +2307,28 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// A static initializer's constant `value` converted to the arithmetic
+    /// type `ty` as assignment converts it. A floating constant whose
+    /// integral part an integer type cannot hold has no value there (C99
+    /// §6.3.1.4p1), so the program is rejected before it starts.
+    fn static_conversion(value: Value, ty: Type, token: Token<'_>) -> Result<Value, Diagnostic> {
+        let Some(arithmetic) = ty.arithmetic() else {
+            return Ok(value);
+        };
+        arithmetic.convert(&value).map_err(|_| {
+            Diagnostic::new(
+                "unsupported",
+                token.range,
+                &format!(
+                    "the integral part of `{}` does not fit in {}, so converting it is undefined \
+                     (C99 §6.3.1.4p1); the machine stops before the program starts",
+                    token.text,
+                    super::memory::article(arithmetic.spelling())
+                ),
+            )
+        })
+    }
+
     /// How the source spells the scalar (or the whole structure
     /// `structure`) at leaf `offset` of the object `name` with value `shape`.
     fn label(&self, name: &str, shape: &Value, offset: i32, structure: Option<usize>) -> String {
@@ -2262,15 +2345,15 @@ impl<'a> Parser<'a> {
     reason = "A short-lived parser value; a structure's index is the larger variant."
 )]
 pub(super) enum Base {
-    /// An integer type, `const`-qualified when set.
-    Integer(Integer, bool),
+    /// An arithmetic type, `const`-qualified when set.
+    Arithmetic(Arithmetic, bool),
     Struct(usize),
 }
 
 impl Base {
     /// Whether the specifier is `const`-qualified.
     pub(super) const fn is_const(self) -> bool {
-        matches!(self, Self::Integer(_, true))
+        matches!(self, Self::Arithmetic(_, true))
     }
 }
 
@@ -2280,11 +2363,11 @@ pub(super) fn char_value(byte: u8) -> Value {
     Value::Integer(i128::from(i8::from_ne_bytes([byte])))
 }
 
-/// Whether `word` is one of the keywords that specify an integer type.
-pub(super) fn is_integer_specifier(word: &str) -> bool {
+/// Whether `word` is one of the keywords that specify an arithmetic type.
+pub(super) fn is_type_specifier(word: &str) -> bool {
     matches!(
         word,
-        "signed" | "unsigned" | "char" | "short" | "int" | "long"
+        "signed" | "unsigned" | "char" | "short" | "int" | "long" | "float" | "double"
     )
 }
 
@@ -2355,11 +2438,11 @@ pub(super) fn is_identifier(text: &str) -> bool {
 
 /// Whether a value of type `actual` may be stored in an object of type
 /// `expected` (as assignment converts it), `null` when it is the constant 0:
-/// any integer converts to any integer type, and a `T *` to a `const T *`,
-/// never the reverse (C99 §6.5.16.1p1).
+/// any arithmetic value converts to any arithmetic type, and a `T *` to a
+/// `const T *`, never the reverse (C99 §6.5.16.1p1).
 pub(super) fn compatible(expected: Type, actual: Type, null: bool) -> bool {
     expected == actual
-        || matches!((expected, actual), (Type::Integer(_), Type::Integer(_)))
+        || (expected.arithmetic().is_some() && actual.arithmetic().is_some())
         || matches!(
             (expected, actual),
             (Type::Pointer(element, true), Type::Pointer(other, false)) if element == other

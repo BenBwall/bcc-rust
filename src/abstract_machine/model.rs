@@ -4,6 +4,11 @@ use std::sync::Arc;
 
 use super::{
     clauses::Clause,
+    floating::{
+        Floating,
+        Real,
+        Unrepresentable,
+    },
     integers::Integer,
 };
 
@@ -479,6 +484,8 @@ pub enum Value {
     /// knows. `i128` holds every value of every type, `unsigned long long`
     /// included.
     Integer(i128),
+    /// The value of a real floating type, as its type encodes it.
+    Floating(Real),
     /// An `int *` or a pointer to a structure; a `None` target means null.
     Pointer {
         /// Target object ID.
@@ -579,6 +586,9 @@ pub enum Undefined {
     QuotientOverflow,
     /// `/` or `%` by zero (C99 §6.5.5p5).
     DivisionByZero,
+    /// A floating value whose integral part the integer type it converts
+    /// to cannot represent, or an infinity or a NaN (C99 §6.3.1.4p1).
+    FloatingConversion,
     /// `*` applied to a null pointer (C99 §6.5.3.2p4).
     NullIndirection,
     /// Pointer arithmetic on a null pointer, which points into no array.
@@ -701,6 +711,12 @@ pub(super) enum Op {
     StaticLocal(usize),
     /// An integer constant of the given type.
     Push(i128, Integer),
+    /// A floating constant: its value, and whether its type holds the
+    /// constant's decimal (or hexadecimal) value exactly.
+    PushReal {
+        value: Real,
+        exact: bool,
+    },
     /// `sizeof`: the size in bytes of its operand's type, given, as a
     /// `size_t`.
     Sizeof(usize, Type),
@@ -738,9 +754,9 @@ pub(super) enum Op {
     /// 1 for the left), from `from` to the common type `to`; `other` is the
     /// other operand's promoted type.
     Convert {
-        from:  Integer,
-        to:    Integer,
-        other: Integer,
+        from:  Arithmetic,
+        to:    Arithmetic,
+        other: Arithmetic,
         depth: usize,
     },
     /// `(type) value`: convert the value of type `from` to `to` (C99
@@ -750,20 +766,20 @@ pub(super) enum Op {
         to:   Type,
     },
     /// The default argument promotion of a value of the given type,
-    /// narrower than `int`, passed through a variadic function's `...`
-    /// (C99 §6.5.2.2p6-7).
-    DefaultPromote(Integer),
+    /// narrower than `int`, or a `float`, passed through a variadic
+    /// function's `...` (C99 §6.5.2.2p6-7).
+    DefaultPromote(Arithmetic),
     Decay(Place),
     AddressOf,
     Dereference,
     Index,
-    /// A unary operator; the promoted integer type it computes in, `None`
-    /// for `!` and pointers.
-    Unary(&'static str, Option<Integer>),
-    /// A binary operator; the integer type it computes in (the common type,
-    /// or for a shift the promoted left operand's), `None` when an operand
-    /// is a pointer.
-    Binary(&'static str, Option<Integer>),
+    /// A unary operator; the promoted arithmetic type it computes in,
+    /// `None` for `!` and pointers.
+    Unary(&'static str, Option<Arithmetic>),
+    /// A binary operator; the arithmetic type it computes in (the common
+    /// type, or for a shift the promoted left operand's), `None` when an
+    /// operand is a pointer.
+    Binary(&'static str, Option<Arithmetic>),
     /// `&E1[E2]`: `E1 + E2` without the indirection (C99 §6.5.3.2p3).
     ElementAddress,
     Store {
@@ -788,8 +804,8 @@ pub(super) enum Op {
     /// `E1 op= E2` as a statement: read the object the address below the
     /// value on the stack designates, apply `op` in `common` (the type the
     /// operator computes in; `None` for pointer arithmetic), store the
-    /// result.
-    Compound(&'static str, Option<Integer>),
+    /// result. The last type is `E2`'s, promoted when both are integers.
+    Compound(&'static str, Option<Arithmetic>, Option<Arithmetic>),
     Pop,
     Jump(usize),
     /// Skip to the target when the condition of the named statement is zero.
@@ -886,10 +902,12 @@ pub(super) struct Static {
 pub(super) enum Type {
     /// An integer type.
     Integer(Integer),
-    /// A pointer to an integer type, to a `const` one when set.
-    Pointer(Integer, bool),
-    /// An array of `n` elements of an integer type.
-    Array(Integer, usize),
+    /// A real floating type.
+    Floating(Floating),
+    /// A pointer to an arithmetic type, to a `const` one when set.
+    Pointer(Arithmetic, bool),
+    /// An array of `n` elements of an arithmetic type.
+    Array(Arithmetic, usize),
     /// A structure, by index into [`Program::structures`].
     Struct(usize),
     /// A pointer to a structure.
@@ -920,6 +938,24 @@ impl Type {
         }
     }
 
+    /// The arithmetic type, when this is one: an integer or a real
+    /// floating type.
+    pub(super) const fn arithmetic(self) -> Option<Arithmetic> {
+        match self {
+            | Self::Integer(integer) => Some(Arithmetic::Integer(integer)),
+            | Self::Floating(floating) => Some(Arithmetic::Floating(floating)),
+            | _ => None,
+        }
+    }
+
+    /// The real floating type, when this is one.
+    pub(super) const fn floating(self) -> Option<Floating> {
+        match self {
+            | Self::Floating(floating) => Some(floating),
+            | _ => None,
+        }
+    }
+
     /// The pointer an array of this type decays to.
     pub(super) const fn decayed(self) -> Self {
         self.decayed_qualified(false)
@@ -937,6 +973,105 @@ impl Type {
     /// Whether this is a pointer to `const`-qualified elements.
     pub(super) const fn points_to_const(self) -> bool {
         matches!(self, Self::Pointer(_, true))
+    }
+}
+
+/// An arithmetic type: an integer type or a real floating type, the
+/// element type of the subset's pointers and arrays.
+///
+/// C99: §6.2.5 paragraph 18, p. 35; PDF p. 47.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Arithmetic {
+    Integer(Integer),
+    Floating(Floating),
+}
+
+impl Arithmetic {
+    /// Plain `char`.
+    pub(super) const CHAR: Self = Self::Integer(Integer::Char);
+    /// `int`.
+    pub(super) const INT: Self = Self::Integer(Integer::Int);
+
+    /// The type itself.
+    pub(super) const fn ty(self) -> Type {
+        match self {
+            | Self::Integer(integer) => Type::Integer(integer),
+            | Self::Floating(floating) => Type::Floating(floating),
+        }
+    }
+
+    /// The integer type, when this is one.
+    pub(super) const fn integer(self) -> Option<Integer> {
+        match self {
+            | Self::Integer(integer) => Some(integer),
+            | Self::Floating(_) => None,
+        }
+    }
+
+    /// The real floating type, when this is one.
+    pub(super) const fn floating(self) -> Option<Floating> {
+        match self {
+            | Self::Floating(floating) => Some(floating),
+            | Self::Integer(_) => None,
+        }
+    }
+
+    /// Size in bytes on x86-64; each type is aligned to its size.
+    pub(super) const fn bytes(self) -> usize {
+        match self {
+            | Self::Integer(integer) => integer.bytes(),
+            | Self::Floating(floating) => floating.bytes(),
+        }
+    }
+
+    /// The type as C spells it.
+    pub(super) const fn spelling(self) -> &'static str {
+        match self {
+            | Self::Integer(integer) => integer.spelling(),
+            | Self::Floating(floating) => floating.spelling(),
+        }
+    }
+
+    /// The type the integer promotions give it; a floating type stays.
+    pub(super) const fn promoted(self) -> Self {
+        match self {
+            | Self::Integer(integer) => Self::Integer(integer.promoted()),
+            | floating @ Self::Floating(_) => floating,
+        }
+    }
+
+    /// `value` converted to this type, as assignment, a cast, an argument
+    /// or a return converts it: an integer as `integers.rs` converts it
+    /// (C99 §6.3.1.3), to a floating type rounded to the nearest (§6.3.1.4p2),
+    /// a floating value to another floating type (§6.3.1.5), or to an
+    /// integer type truncated toward zero, when its integral part fits
+    /// (§6.3.1.4p1). Other values are returned as they are.
+    pub(super) fn convert(self, value: &Value) -> Result<Value, Unrepresentable> {
+        Ok(match (self, value) {
+            | (Self::Integer(integer), &Value::Integer(number)) =>
+                Value::Integer(integer.convert(number)),
+            | (Self::Floating(floating), &Value::Integer(number)) =>
+                Value::Floating(Real::from_integer(number, floating).value),
+            | (Self::Floating(floating), &Value::Floating(real)) =>
+                Value::Floating(real.convert(floating).value),
+            | (Self::Integer(integer), &Value::Floating(real)) =>
+                Value::Integer(real.to_integer(integer)?),
+            | (_, value) => value.clone(),
+        })
+    }
+
+    /// The common real type of operands of these (promoted) types, by the
+    /// usual arithmetic conversions: the wider floating type when either
+    /// is floating, and otherwise the integers' common type.
+    ///
+    /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
+    pub(super) fn common(self, other: Self) -> Self {
+        match (self, other) {
+            | (Self::Integer(left), Self::Integer(right)) => Self::Integer(left.common(right).0),
+            | (Self::Floating(left), Self::Floating(right)) => Self::Floating(left.common(right)),
+            | (Self::Floating(floating), Self::Integer(_))
+            | (Self::Integer(_), Self::Floating(floating)) => Self::Floating(floating),
+        }
     }
 }
 
