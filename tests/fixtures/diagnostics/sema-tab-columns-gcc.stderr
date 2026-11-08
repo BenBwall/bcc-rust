@@ -1,0 +1,9 @@
+sema-tab-columns-gcc.c:2:17: error: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+    2 |         int x = "s"; return x; }
+      |                 ^~~
+sema-tab-columns-gcc.c:4:19: error: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+    4 |           int y = "t"; return y; }
+      |                   ^~~
+sema-tab-columns-gcc.c:6:25: error: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+    6 |                 int z = "u";    return z; }
+      |                         ^~~
