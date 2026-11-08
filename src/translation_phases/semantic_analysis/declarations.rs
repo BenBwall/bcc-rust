@@ -1433,7 +1433,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let gcc_ms = ms
             && gcc_rules
             && self.context.configuration.target() != crate::target::Target::WindowsMsvc;
+        // TCC's own Microsoft layout (`struct_layout` in `tccgen.c`), which
+        // `#pragma pack` treats differently from GCC's.
+        let tcc_ms = ms && self.context.configuration.compiler_identity() == CompilerIdentity::Tcc;
         let mut ms_unit: Option<(u64, u64, u64)> = None; // size, byte start, used bits
+        // TCC's Microsoft run: the last bit-field's class and width, and the
+        // run's byte start and used bits.
+        let mut tcc_run: Option<(TccClass, u64, u64, u64)> = None;
         let mut required = u64::from(tag.alignment.get());
         let named = members.iter().filter(|m| m.initializable()).count();
         let mut too_large = false;
@@ -1613,11 +1619,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     layout.align = layout.align.max(member_required);
                 }
             }
+            // TCC's Microsoft layout ignores `packed`: the pack caps the
+            // declared alignment, and under it an `aligned` request replaces
+            // it, as TCC lets one lower it (without a pack bcc keeps the
+            // declared alignment as the floor).
+            let explicit = u64::from(member.explicit_alignment);
+            let tcc_class = TccClass {
+                boolean: matches!(
+                    self.types.nodes[member.ty.index],
+                    TypeKind::Scalar(Scalar::Bool)
+                ),
+                size:    layout.size,
+            };
+            if tcc_ms {
+                layout.align = if pack == 0 {
+                    declared_align.max(explicit)
+                } else if explicit != 0 {
+                    explicit
+                } else {
+                    declared_align.min(u64::from(pack))
+                };
+            }
             // The System V ABI ignores unnamed bit-fields when aligning a
             // structure or union; in a union one still occupies its bytes.
+            // TCC's Microsoft layout aligns the record by every member but a
+            // zero-width bit-field whose class differs from the last's.
             let unnamed_bit_field = member.name.is_none() && member.width.is_some();
             let aligns = match member.width {
                 | None => true,
+                | Some(width) if tcc_ms =>
+                    tag.kind == TagKind::Union
+                        || width != 0
+                        || tcc_run.is_some_and(|run| run.0 == tcc_class),
                 | Some(width) if ms && tag.kind == TagKind::Union => gcc_ms && width != 0,
                 | Some(_) => !unnamed_bit_field,
             };
@@ -1640,6 +1673,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => None,
                 };
                 bytes = bytes.max(match member.width {
+                    // TCC's Microsoft layout: every member, a zero-width
+                    // bit-field too, reserves its type's bytes.
+                    | _ if tcc_ms => layout.size,
                     // MSVC: a zero-width bit-field after a nonzero one still
                     // reserves its declared type's bytes (`cl.exe`, Clang's
                     // Microsoft layout); C99 §6.7.2.1p11 is about structures.
@@ -1662,7 +1698,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | None => layout.size,
                 });
             } else if let Some(width) = member.width {
-                if ms {
+                if tcc_ms {
+                    let width = u64::from(width);
+                    let (start, used) =
+                        Self::tcc_ms_bit_field(tcc_run, tcc_class, width, layout, &mut bytes);
+                    resolved.offset = start + used / 8;
+                    resolved.bit_offset = u32::try_from(used % 8).unwrap_or(0);
+                    tcc_run = Some((tcc_class, width, start, used + width));
+                } else if ms {
                     // Microsoft ABI: a bit-field shares its predecessor's
                     // allocation unit only when the declared types have the
                     // same size and the unit has room.
@@ -1753,6 +1796,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             } else {
                 ms_unit = None;
+                tcc_run = None;
                 let placed = align_up(bytes, layout.align).and_then(|offset| {
                     offset
                         .checked_add(layout.size)
@@ -1837,6 +1881,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         tag.complete.set(true);
         tag.required_alignment
             .set(u32::try_from(required).unwrap_or(u32::MAX));
+        // TCC's Microsoft layout rounds the size of a record whose members
+        // an `aligned` request raises past `#pragma pack` only to the pack,
+        // or to the record's own `aligned`, though the record keeps their
+        // alignment. An array of it then has elements its alignment does
+        // not hold, as in TCC.
+        let pack = u64::from(tag.max_member_alignment.get());
+        let size_alignment = if tcc_ms && pack != 0 && pack < alignment {
+            pack.max(u64::from(tag.alignment.get()))
+        } else {
+            alignment.max(u64::from(tag.alignment.get()))
+        };
         alignment = alignment.max(u64::from(tag.alignment.get()));
         if let Some(variable) = variable
             && !tag.tainted.get()
@@ -1850,7 +1905,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             })));
         } else if !tag.tainted.get() {
             tag.layout
-                .set(align_up(bytes, alignment).map(|size| Layout {
+                .set(align_up(bytes, size_alignment).map(|size| Layout {
                     size,
                     align: alignment,
                 }));
@@ -2030,6 +2085,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         *bit_end = (*bytes).saturating_mul(8);
         resolved
+    }
+
+    /// Places a bit-field of `width` bits and class `class` in TCC's
+    /// Microsoft layout after `run`, the last bit-field's (`None` after
+    /// another member), and returns its run's byte start and the bits used
+    /// before it there. A bit-field starts a run when it would overflow its
+    /// type's bits, or when it is nonzero exactly when its class differs
+    /// from the last bit-field's: a nonzero one of another class, or a
+    /// zero-width one of the same. A run starts at the cursor `bytes`
+    /// aligned to the field's, and reserves the field type's bytes unless
+    /// both it and the last bit-field are zero-width, so that a zero-width
+    /// field after a nonzero one of its class reserves a unit of its own.
+    /// TCC: `struct_layout` in `tccgen.c`.
+    /// C99: implementation-defined allocation, §6.7.2.1 paragraphs 10-11,
+    /// p. 102; PDF p. 114.
+    fn tcc_ms_bit_field(
+        run: Option<(TccClass, u64, u64, u64)>,
+        class: TccClass,
+        width: u64,
+        layout: Layout,
+        bytes: &mut u64,
+    ) -> (u64, u64) {
+        let changed = run.is_none_or(|run| run.0 != class);
+        let used = run.map_or(0, |run| run.3);
+        if used + width <= layout.size.saturating_mul(8) && (width > 0) != changed {
+            return (run.map_or(*bytes, |run| run.2), used);
+        }
+        let start = align_up(*bytes, layout.align).unwrap_or(*bytes);
+        *bytes = if width != 0 || run.is_some_and(|run| run.1 != 0) {
+            start.saturating_add(layout.size)
+        } else {
+            start
+        };
+        (start, 0)
     }
 
     /// Records the bit-field layout `ms_struct` or `gcc_struct` asks of a
@@ -2775,4 +2864,13 @@ impl<'tu> VariableLayout<'tu> {
         self.known = known;
         self.current
     }
+}
+
+/// What TCC's Microsoft layout compares to let two bit-fields share a run,
+/// its basic type: `_Bool`, or else an integer type's size, as an
+/// enumeration has its integer type's. TCC: `VT_BTYPE` in `tcc.h`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct TccClass {
+    boolean: bool,
+    size:    u64,
 }
