@@ -309,7 +309,12 @@ int main(void) { struct big b = { 1, 2, 3 }; return hot(1) + (int)by_value(b) + 
             text.contains("\"odd \\042name\\134.h\""),
             "the file name is escaped\n{text}"
         );
-        equivalent(&text).unwrap();
+        // On a Windows host LLVM's assembler splits `odd "name\.h` at the
+        // backslash into a directory and a file, as host paths go; the ELF
+        // target's name is one file name, as the direct writer keeps it.
+        if !cfg!(windows) {
+            equivalent(&text).unwrap();
+        }
         verify(&directory, "unusual", &text);
     }
 }
