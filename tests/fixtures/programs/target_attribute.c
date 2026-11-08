@@ -1,8 +1,16 @@
 /* Functions whose x86 `target` attribute lets their code use AVX2 or BMI2,
  * called only when the processor has those features, as zstd and other
- * libraries choose a fast path at run time. Either path prints the same. */
+ * libraries choose a fast path at run time. Either path prints the same.
+ * ALWAYS_FAST takes the fast paths unasked, for an interpreter, which
+ * computes any function's code whatever its features. */
 #include <immintrin.h>
 #include <stdio.h>
+
+#ifdef ALWAYS_FAST
+#define SUPPORTS(feature) 1
+#else
+#define SUPPORTS(feature) __builtin_cpu_supports(feature)
+#endif
 
 static int values[67];
 
@@ -55,9 +63,8 @@ int population(unsigned x) { return __builtin_popcount(x); }
 int main(void) {
   for (int i = 0; i < 67; i++)
     values[i] = i * 37 - 1000;
-  __builtin_cpu_init();
-  int avx2 = __builtin_cpu_supports("avx2");
-  int bmi2 = __builtin_cpu_supports("bmi2") && __builtin_cpu_supports("lzcnt");
+  int avx2 = SUPPORTS("avx2");
+  int bmi2 = SUPPORTS("bmi2") && SUPPORTS("lzcnt");
   int sum = avx2 ? sum_avx2(values, 67) : sum_plain(values, 67);
   printf("sum %d\n", sum);
   unsigned x = 1;

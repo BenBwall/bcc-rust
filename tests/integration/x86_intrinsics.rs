@@ -3,7 +3,9 @@
 //! compile to the instructions. `x86_intrinsics_sse2.c` covers MMX, SSE and
 //! SSE2; `x86_intrinsics_sse4.c` SSE3 through SSE4.2 and needs a processor
 //! with SSE4.2 to run GCC's build; `x86_intrinsics_programs.c` is typical
-//! SSE2 code. Each is built under both identities,
+//! SSE2 code; `target_attribute.c` calls functions whose `target` attribute
+//! turns on AVX2 and BMI2 where the processor has them. Each is built under
+//! both identities,
 //! interpreted and compiled through LLVM and the native back end, and must
 //! print GCC's output.
 
@@ -34,17 +36,27 @@ mod tests {
 
     #[test]
     fn sse2_intrinsics_match_gcc() {
-        check("x86_intrinsics_sse2.c", &[]);
+        check("x86_intrinsics_sse2.c", &[], &[]);
     }
 
     #[test]
     fn sse2_programs_match_gcc() {
-        check("x86_intrinsics_programs.c", &[]);
+        check("x86_intrinsics_programs.c", &[], &[]);
     }
 
     #[test]
     fn sse4_intrinsics_match_gcc() {
-        check("x86_intrinsics_sse4.c", &["-msse4.2"]);
+        check("x86_intrinsics_sse4.c", &["-msse4.2"], &[]);
+    }
+
+    /// Functions whose `target` attribute turns on AVX2 or BMI2, called when
+    /// `__builtin_cpu_supports` finds the feature, at -O0 and -O2 and through
+    /// the native back end, which writes baseline code for them. The
+    /// interpreter, which has no `__builtin_cpu_supports`, takes the fast
+    /// paths unasked.
+    #[test]
+    fn target_attribute_paths_match_gcc() {
+        check("target_attribute.c", &[], &["-DALWAYS_FAST"]);
     }
 
     /// An out-of-range immediate is Clang's default-error
@@ -128,8 +140,9 @@ mod tests {
     }
 
     /// Builds `name` with the host GCC (`gcc_flags` enable its instruction
-    /// sets) and compares every bcc arm's output with that build's.
-    fn check(name: &str, gcc_flags: &[&str]) {
+    /// sets) and compares every bcc arm's output with that build's; the
+    /// interpreter's arms add `interpreted`.
+    fn check(name: &str, gcc_flags: &[&str], interpreted: &[&str]) {
         if !cfg!(all(
             target_arch = "x86_64",
             target_os = "linux",
@@ -147,7 +160,7 @@ mod tests {
                 &["--interpret", "--opt=none"][..],
                 &["--interpret", "--opt=bcc"],
             ] {
-                let output = bcc(&[&[identity, &source][..], flags].concat());
+                let output = bcc(&[&[identity, &source][..], flags, interpreted].concat());
                 assert_eq!(
                     output.status.code(),
                     Some(0),
