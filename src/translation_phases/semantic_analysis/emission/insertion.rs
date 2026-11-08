@@ -262,12 +262,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 let index = usize::from(taken);
                 self.skip_references(marks[index].0..marks[index + 1].0);
-                drop(
-                    self.functions
-                        .emission
-                        .context_joins
-                        .drain(marks[index].2..marks[index + 1].2),
-                );
+                // An expression statement that a statement expression in an
+                // arm ends clears the joins once no statement stays open
+                // (`return 0 ? (f ? ({ if (f); 1; }) : 1) : ...`), so the
+                // marks can lie past the joins that remain.
+                let joins = &mut self.functions.emission.context_joins;
+                let end = marks[index + 1].2.min(joins.len());
+                let start = marks[index].2.min(end);
+                drop(joins.drain(start..end));
             }
             self.functions.emission.orphan = marks[if taken { 1 } else { 2 }].1;
         }
