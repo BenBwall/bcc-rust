@@ -380,15 +380,12 @@ reimplements none):
   the editor counts them; where `#line` says otherwise, the card shows that
   too. In the source, invocations are underlined with their expansion on
   hover, skipped lines are hatched, and conditionals carry a kept or
-  skipped mark. The browser build has no host headers: `#include` finds only
-  bcc's embedded freestanding headers (`<limits.h>`, `<stdint.h>`,
-  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found,
-  and the card and the stop explanation point to the WebAssembly view, whose
-  target has bcc's own C library. The pipeline does not borrow that
-  library's headers: they describe bcc's WASI runtime, not an x86-64 C
-  library, and the pipeline's stages are what the native `bcc-rust` prints
-  (`tests/integration/explorer.rs` compares them, and the lessons' LLVM IR
-  comes from the native compiler).
+  skipped mark. The browser has no host headers: `#include` finds the
+  headers bcc brings, its freestanding ones (`<limits.h>`, `<stdint.h>`,
+  `<stddef.h>`, `<stdbool.h>`, …) and those of its own small C library
+  (`<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<ctype.h>`, `<math.h>`), on
+  x86-64 as on wasm32. A header outside that set is reported as not found,
+  and the stop explanation sends it to the command-line bcc.
 - **Tokens (phases 5-7)** is the `--tokens` listing of a second, ordinary
   preprocessing run.
 - **Syntax tree** and **Semantic types** (phase 7) are `--syntax-tree` and
@@ -420,11 +417,11 @@ The lesson "Hello, world: printf and strings" (`demos/hello.c`), second in
 the list, is the first program most programmers write: `#include
 <stdio.h>`, `puts`, a `char name[] = "Ada";` and `printf("%s has %d
 letters\n", name, len)`, with a loop that counts letters through a
-prototype declared before `main`. In the pipeline view it stops at the
-`#include`, as any program that includes `<stdio.h>` does there (see the
-Preprocessor stage above); its LLVM IR is precomputed by the native compiler,
-which finds the host's headers. Its Clang module is a WASI command linked
-with wasi-libc (see the WebAssembly view).
+prototype declared before `main`. In the pipeline view it compiles like any
+other lesson, `<stdio.h>` coming from bcc's own C library; its LLVM IR is
+precomputed by the native compiler, which finds the host's headers. Its
+Clang module is a WASI command linked with wasi-libc (see the WebAssembly
+view).
 
 The lesson "Names for values: #define, const and casts"
 (`demos/constants.c`), third in the list, follows it with what a first week
