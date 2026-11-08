@@ -85,7 +85,7 @@ pub fn Datasheet(
                                     let place = place(object);
                                     let row = view! {
                                         <tr class:is-used=used class:is-ended=!object.alive>
-                                            <th scope="row" class=palette::class(&object.name)>
+                                            <th scope="row" class=palette::class(&object.name) title=object.literal.then(|| object.name.clone())>
                                                 <span class="sheet-swatch" aria-hidden="true"></span>{reel.with(|reel| reel.label_of(object.id)).unwrap_or_else(|| object.name.clone())}
                                             </th>
                                             <td>{object.ty.clone()}</td>

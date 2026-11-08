@@ -831,6 +831,21 @@
   .schematic-gate.is-active text { fill: var(--on-accent); }
   .schematic-empty { color: var(--ink-3); font-size: 12px; line-height: 1.6; }
 
+  /* Figure 3: standard output, a terminal's black screen. The bytes the
+     step wrote are lit in vermilion, the colour of "now". */
+  .output { min-width: 0; }
+  .output .module-caption { margin-bottom: 10px; }
+  .output-screen {
+    margin: 0; padding: 10px 12px; min-height: 44px; max-height: 220px; overflow: auto;
+    background: var(--screen); color: var(--screen-ink); border: 1px solid var(--screen-faint);
+    font: 13px/20px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 8;
+  }
+  .output-new { background: var(--accent); color: var(--on-accent); padding: 1px 0; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .output-empty { color: var(--screen-dim); font-size: 12px; white-space: normal; }
+  .output-byte { color: var(--screen-dim); border: 1px solid var(--screen-faint); padding: 0 2px; margin: 0 1px; font-size: 11px; }
+  .output-new .output-byte { color: var(--on-accent); border-color: currentColor; }
+  .narration-stage { margin: 12px 0 0; }
+
   /* Table 1: the datasheet. */
   .sheet-scroll { overflow-x: auto; }
   .datasheet table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }

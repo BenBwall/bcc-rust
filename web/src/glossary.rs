@@ -30,7 +30,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 26] = [
+pub static TERMS: [Term; 31] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -40,6 +40,26 @@ pub static TERMS: [Term; 26] = [
                      happens. A compiler may produce any code that behaves the same way.",
         clause:     "5.1.2.3",
         page:       25,
+    },
+    Term {
+        id:         "translation-phase",
+        name:       "Translation phase",
+        phrases:    &["translation phases", "translation phase"],
+        definition: "One of the eight steps that turn a source file into a program, before it \
+                     runs: phase 4 executes directives and expands macros, phase 6 joins adjacent \
+                     string literals, phase 7 compiles.",
+        clause:     "5.1.1.2",
+        page:       21,
+    },
+    Term {
+        id:         "macro",
+        name:       "Macro",
+        phrases:    &["macros", "macro"],
+        definition: "A name #define gives to a replacement list. The preprocessor replaces each \
+                     later use of the name before the program is compiled, so a macro has no type \
+                     and no storage.",
+        clause:     "6.10.3p9",
+        page:       164,
     },
     Term {
         id:         "object",
@@ -57,6 +77,15 @@ pub static TERMS: [Term; 26] = [
         definition: "Reading the value stored in the object an lvalue designates. It happens \
                      whenever an lvalue is used for its value rather than as a place.",
         clause:     "6.3.2.1p2",
+        page:       58,
+    },
+    Term {
+        id:         "modifiable-lvalue",
+        name:       "Modifiable lvalue",
+        phrases:    &["modifiable lvalue"],
+        definition: "An lvalue the program may store into: not an array and not const-qualified. \
+                     The left side of = and the operand of ++ must be one.",
+        clause:     "6.3.2.1p1",
         page:       58,
     },
     Term {
@@ -259,6 +288,24 @@ pub static TERMS: [Term; 26] = [
                      pointer type gives one.",
         clause:     "6.3.2.3p3",
         page:       59,
+    },
+    Term {
+        id:         "cast",
+        name:       "Cast",
+        phrases:    &["casts", "cast"],
+        definition: "A parenthesized type name before an expression, such as (char)300, which \
+                     converts the expression's value to that type.",
+        clause:     "6.5.4p4",
+        page:       93,
+    },
+    Term {
+        id:         "constraint",
+        name:       "Constraint",
+        phrases:    &["constraints", "constraint"],
+        definition: "A rule the compiler must check: a program that breaks one, such as assigning \
+                     to a const object, gets a diagnostic and does not compile.",
+        clause:     "3.8",
+        page:       17,
     },
     Term {
         id:         "undefined-behavior",

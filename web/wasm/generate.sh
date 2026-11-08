@@ -10,9 +10,12 @@
 # built for x86-64 only, so use wasi-sdk's (https://github.com/WebAssembly/
 # wasi-sdk; these were generated with wasi-sdk 34, clang 23). The modules
 # are built at -O0 with DWARF line tables (-g), which the stepper reads to
-# map each instruction to its C line, without the C library (the lessons
-# call no library functions), and with every function exported so the
-# stepper finds `main`. `-ffile-prefix-map` keeps the build directory out of
+# map each instruction to its C line, without the C library, and with every
+# function exported so the stepper finds `main`. A lesson that includes
+# <stdio.h> calls the C library, so it is built as a WASI command instead,
+# linked with a copy of wasi-sdk's wasi-libc whose debug information is
+# stripped: the stepper would otherwise read the library's own line tables as
+# lines of the lesson. `-ffile-prefix-map` keeps the build directory out of
 # the debug information, so the output does not depend on the checkout.
 #
 # Each module ends with a `bcc.lesson` custom section holding FLAGS, a
@@ -21,8 +24,9 @@
 # wasm32 clang.
 set -eu
 : "${CLANG:?set CLANG to a clang that targets wasm32 (for example wasi-sdk's)}"
-# Keep in step with LESSON_FLAGS in web/src/wasm/lessons.rs.
-FLAGS='--target=wasm32-unknown-unknown -nostdlib -O0 -g -Wl,--no-entry -Wl,--export-all'
+# Keep in step with LESSON_FLAGS and COMMAND_FLAGS in web/src/wasm/lessons.rs.
+BARE_FLAGS='--target=wasm32-unknown-unknown -nostdlib -O0 -g -Wl,--no-entry -Wl,--export-all'
+COMMAND_FLAGS='--target=wasm32-wasip1 -O0 -g'
 check=false
 [ "${1:-}" = --check ] && check=true
 cd "$(dirname "$0")"
@@ -41,12 +45,30 @@ leb() {
 
 status=0
 scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+# wasi-sdk's sysroot for wasm32-wasip1, its libraries copied with their debug
+# information stripped.
+bin=$(dirname "$CLANG")
+sysroot=$scratch/wasi-sysroot
+mkdir -p "$sysroot/include" "$sysroot/lib"
+cp -R "$bin/../share/wasi-sysroot/include/wasm32-wasip1" "$sysroot/include/"
+cp -R "$bin/../share/wasi-sysroot/lib/wasm32-wasip1" "$sysroot/lib/"
+for library in "$sysroot"/lib/wasm32-wasip1/*.a "$sysroot"/lib/wasm32-wasip1/*.o; do
+    "$bin/llvm-strip" --strip-debug "$library"
+done
 for source in ../demos/*.c; do
     name=$(basename "$source" .c)
+    if grep -qx '#include <stdio.h>' "$source"; then
+        FLAGS=$COMMAND_FLAGS
+        LIBRARY="--sysroot=$sysroot -ffile-prefix-map=$sysroot=/wasi-sysroot"
+    else
+        FLAGS=$BARE_FLAGS
+        LIBRARY=
+    fi
     (
         cd ../demos
-        # shellcheck disable=SC2086 # FLAGS holds several arguments.
-        "$CLANG" $FLAGS -ffile-prefix-map="$PWD"=. "$name.c" -o "$scratch/$name.wasm"
+        # shellcheck disable=SC2086 # FLAGS and LIBRARY hold several arguments.
+        "$CLANG" $FLAGS $LIBRARY -ffile-prefix-map="$PWD"=. "$name.c" -o "$scratch/$name.wasm"
     )
     { printf '%s\n' "$FLAGS"; cat "$source"; } > "$scratch/$name.lesson"
     size=$(wc -c < "$scratch/$name.lesson")

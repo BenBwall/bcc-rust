@@ -380,7 +380,7 @@ fn every_step_of_a_topic_carries_its_note() {
 #[test]
 fn unsupported_constructs_are_rejected_even_in_dead_code() {
     for source in [
-        "#define X 1\nint main(void) { return X; }",
+        "#define X(a) a\nint main(void) { return X(1); }",
         "int global = global; int main(void) { return 0; }",
         "struct s { int x; }; int main(void) { struct s a[2]; return 0; }",
         "struct s { int x; } v; int main(void) { return 0; }",
@@ -446,7 +446,7 @@ fn snapshots_use_schema_ranges_pointer_ids_and_escaped_source() {
                   a; return *p; }";
     let session = run(source);
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":3"), "versioned schema");
+    assert!(json.contains("\"schema_version\":5"), "versioned schema");
     assert!(
         json.contains(
             "\"kind\":\"pointer\",\"target\":1,\"offset\":0,\"first\":0,\"length\":1,\"structure\"\
@@ -1015,10 +1015,11 @@ fn subscripts_span_their_bracket_and_narration_agrees_in_number() {
             .collect::<Vec<_>>()
     };
     let text = |event: &super::Event| {
-        source
-            .get(event.range.start..event.range.end)
-            .expect("event range")
-            .to_owned()
+        String::from(
+            source
+                .get(event.range.start..event.range.end)
+                .expect("event range"),
+        )
     };
     // C99 §6.5.3.2p3: &a[2] is a + 2; its range and title include the `]`.
     let address = event(EventKind::PointerArithmetic)[0];
@@ -1078,12 +1079,12 @@ fn pointer_steps(initializer: &str) -> Vec<(String, bool, String)> {
     let source = format!(
         "int main(void) {{ int a[3] = {{1, 2, 3}}; int x = 0; int *q = {initializer}; return x; }}"
     );
-    self::states(&source)
+    states(&source)
         .into_iter()
         .filter(|state| state.event.kind == EventKind::PointerArithmetic)
         .map(|state| {
             let event = state.event;
-            let text = source[event.range.start..event.range.end].to_owned();
+            let text = String::from(&source[event.range.start..event.range.end]);
             let element = event.clauses.iter().any(|clause| clause.id == "6.5.3.2p3");
             assert_eq!(
                 element,
@@ -1124,12 +1125,11 @@ fn only_an_element_address_is_narrated_as_one() {
     assert_eq!(steps.len(), 1);
     assert!(steps[0].1, "{}", steps[0].2);
     // A negative index moves back.
-    let back =
-        self::states("int main(void) { int a[3] = {1, 2, 3}; int *p = a + 2; return p[-1]; }")
-            .into_iter()
-            .find(|state| state.event.kind == EventKind::Subscript)
-            .expect("p[-1] is a subscript")
-            .event;
+    let back = states("int main(void) { int a[3] = {1, 2, 3}; int *p = a + 2; return p[-1]; }")
+        .into_iter()
+        .find(|state| state.event.kind == EventKind::Subscript)
+        .expect("p[-1] is a subscript")
+        .event;
     assert!(
         back.explanation
             .contains("moves 1 element back and designates a[1]"),
@@ -1181,10 +1181,10 @@ fn char_values_are_promoted_and_out_of_range_stores_wrap() {
     returned("int main(void) { char c = 127; c++; return c; }", -128);
     for rejected in [
         "int main(void) { char c = 1; int *p = &c; return 0; }",
-        "int main(void) { char s[2]; return 0; }",
+        "int main(void) { char *s[2]; return 0; }",
     ] {
-        let _diagnostic =
-            compile(rejected).expect_err("char pointers and arrays are outside the subset");
+        let _diagnostic = compile(rejected)
+            .expect_err("a char's address is no int pointer, and arrays of pointers are outside");
     }
 }
 
@@ -1264,7 +1264,7 @@ fn storing_zero_into_a_pointer_explains_the_null_pointer() {
 fn schema_three_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":3"));
+    assert!(json.contains("\"schema_version\":5"));
     assert!(
         json.contains("\"kind\":\"return\",\"category\":\"call\""),
         "{json}"
@@ -1823,4 +1823,994 @@ fn a_member_of_a_first_member_names_the_structure_it_is_in() {
         "{}",
         selected.event.summary
     );
+}
+
+/// The bytes a terminated run wrote to standard output.
+fn output(source: &str) -> (State, String) {
+    let session = run(source);
+    let state = session.state().clone();
+    let text = String::from_utf8_lossy(&state.output).into_owned();
+    (state, text)
+}
+
+/// The undefined behavior a run stops with, and its title.
+fn undefined(source: &str) -> (Option<super::Undefined>, String) {
+    let session = run(source);
+    let state = session.state();
+    assert_eq!(
+        state.status, "undefined_behavior",
+        "{source}: {:?}",
+        state.diagnostics
+    );
+    (
+        state
+            .diagnostics
+            .first()
+            .and_then(|diagnostic| diagnostic.undefined),
+        state.event.title.clone(),
+    )
+}
+
+fn rejected(source: &str) -> String {
+    compile(source).map(|_| ()).expect_err(source).message
+}
+
+const HELLO: &str = include_str!("../../web/demos/hello.c");
+
+#[test]
+fn the_first_program_prints_through_printf_and_puts() {
+    let states = states(HELLO);
+    let last = states.last().expect("a final state");
+    assert_eq!(last.status, "finished", "{:?}", last.diagnostics);
+    assert_eq!(last.return_value, Some(Value::Integer(0)));
+    assert_eq!(last.output, b"Hello, world!\nAda has 3 letters\n");
+    // Translation phase 4 first, then the string literals' arrays, before
+    // main; nothing has a frame yet.
+    assert_eq!(states[1].event.kind, EventKind::Directive);
+    assert_eq!(states[1].frames.len(), 0, "no call before main");
+    assert!(states[1].event.summary.contains("printf, puts and putchar"));
+    assert!(cited(&states[1]).contains(&"6.10.2p2"));
+    let literals: Vec<&str> = states
+        .iter()
+        .take_while(|state| state.frames.is_empty() && state.step > 1)
+        .chain(states.iter().skip(2).take(2))
+        .filter(|state| state.event.kind == EventKind::StaticStorage)
+        .map(|state| state.objects.last().expect("an object").name.as_str())
+        .collect();
+    assert_eq!(
+        literals[..2],
+        ["\"Hello, world!\"", "\"%s has %d letters\\n\""]
+    );
+    let format = &states[3].objects[1];
+    assert_eq!(
+        (
+            format.r#type.as_str(),
+            format.storage_duration,
+            format.literal
+        ),
+        ("char[19]", "static", true)
+    );
+    // `char name[] = "Ada";` makes an array of its own, sized by the literal.
+    let name = last
+        .objects
+        .iter()
+        .find(|object| object.name == "name")
+        .expect("name");
+    assert_eq!(name.r#type, "char[4]");
+    assert_eq!(
+        name.value,
+        Value::Array(vec![
+            Value::Integer(65),
+            Value::Integer(100),
+            Value::Integer(97),
+            Value::Integer(0)
+        ])
+    );
+    // Each call writes in one step, and that step's bytes are the last
+    // ones of the output so far.
+    let writes: Vec<(&str, String)> = states
+        .iter()
+        .filter(|state| state.written > 0)
+        .map(|state| {
+            let tail = &state.output[state.output.len() - state.written..];
+            (
+                state.event.title.as_str(),
+                String::from_utf8_lossy(tail).into_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        writes,
+        [
+            (
+                "puts writes \"Hello, world!\\n\"",
+                String::from("Hello, world!\n")
+            ),
+            (
+                "printf writes \"Ada has 3 letters\\n\"",
+                String::from("Ada has 3 letters\n")
+            ),
+        ]
+    );
+    let printf = states
+        .iter()
+        .find(|state| state.event.title.starts_with("printf"))
+        .expect("printf");
+    assert_eq!(printf.event.kind, EventKind::LibraryCall);
+    let text = &printf.event.explanation;
+    assert!(
+        text.contains("`%s` takes argument 1 after the format, `name`")
+            && text.contains("writes \"Ada\"")
+            && text.contains("`%d` takes argument 2 after the format, `len`, the int 3")
+            && text.contains("default argument promotions"),
+        "{text}"
+    );
+    assert!(cited(printf).contains(&"7.19.6.1p8") && cited(printf).contains(&"6.5.2.2p7"));
+    assert_eq!(
+        printf.event.result,
+        Some(Operand::Value(Value::Integer(18)))
+    );
+    // The prototype lets main call length before its definition.
+    assert!(states.iter().any(|state| state.frames.len() == 2));
+    for state in &states {
+        assert!(
+            !state.event.title.is_empty() && state.event.summary.ends_with('.'),
+            "step {}: {:?}",
+            state.step,
+            state.event
+        );
+    }
+    // Back restores the output with the rest of the state.
+    let program = compile(HELLO).expect("compiles");
+    let mut session = program.session();
+    while session.state().output.is_empty() {
+        let _ = session.step();
+    }
+    let _ = session.back();
+    assert_eq!(session.state().output, b"");
+    assert!(session.state_json().contains("\"output\":\"\""));
+    let _ = session.step();
+    assert!(
+        session
+            .state_json()
+            .contains("\"output\":\"Hello, world!\\n\",\"written\":14")
+    );
+}
+
+#[test]
+fn string_literals_are_static_char_arrays_with_a_null() {
+    let states = states(
+        "const char *greeting = \"hi\";\nint main(void) {\n    const char *p = \"abc\";\n    int \
+         n = 0;\n    while (*p != '\\0') {\n        n++;\n        p++;\n    }\n    return n + \
+         greeting[1];\n}\n",
+    );
+    let last = states.last().expect("final");
+    assert_eq!(
+        last.return_value,
+        Some(Value::Integer(3 + 105)),
+        "{:?}",
+        last.diagnostics
+    );
+    // Both literals exist before main, in source order; the file-scope
+    // pointer points at the first.
+    assert_eq!(last.objects[0].name, "\"hi\"");
+    assert_eq!(last.objects[1].name, "greeting");
+    assert_eq!(last.objects[2].name, "\"abc\"");
+    assert!(matches!(
+        last.objects[1].value,
+        Value::Pointer {
+            target: Some(1),
+            offset: 0,
+            ..
+        }
+    ));
+    let literal = states
+        .iter()
+        .find(|state| {
+            state
+                .event
+                .title
+                .starts_with("Before main: the string literal \"abc\"")
+        })
+        .expect("the literal's array is created");
+    assert!(
+        literal.event.summary.contains("{'a', 'b', 'c', '\\0'}"),
+        "{}",
+        literal.event.summary
+    );
+    assert!(cited(literal).contains(&"6.4.5p5"));
+    let decay = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::ArrayDecay)
+        .expect("the literal decays");
+    assert!(
+        decay.event.title.contains("first char"),
+        "{}",
+        decay.event.title
+    );
+    // A char read says which character it is, and a character constant
+    // its code.
+    assert!(
+        states
+            .iter()
+            .any(|state| state.event.title == "Read `p`'s target → 97 ('a')"
+                || state.event.summary.contains("97 ('a')"))
+    );
+    let constant = states
+        .iter()
+        .find(|state| state.event.title == "Evaluate the character constant '\\0'")
+        .expect("'\\0' evaluates");
+    assert!(cited(constant).contains(&"6.4.4.4p10"));
+    // Pointer arithmetic counts chars.
+    let moved = self::states("int main(void) { char s[] = \"ab\"; char *p = s + 1; return *p; }");
+    assert_eq!(
+        moved.last().and_then(|state| state.return_value.clone()),
+        Some(Value::Integer(98))
+    );
+    assert!(
+        moved
+            .iter()
+            .any(|state| state.event.explanation.contains("moves 1 char forward"))
+    );
+}
+
+#[test]
+fn char_arrays_take_string_and_brace_initializers() {
+    returned(
+        "int main(void) { char s[8] = \"hi\"; return s[0] + s[1] + s[2] + s[7]; }",
+        104 + 105,
+    );
+    returned("int main(void) { char s[2] = \"hi\"; return s[1]; }", 105);
+    returned(
+        "int main(void) { char s[3] = {'a', 98}; return s[1] + s[2]; }",
+        98,
+    );
+    returned(
+        "struct entry { char tag[4]; int count; };\nint main(void) {\n    struct entry e = \
+         {\"ab\", 3};\n    return e.tag[1] + e.count + e.tag[3];\n}\n",
+        98 + 3,
+    );
+    returned(
+        "char name[] = \"Ada\";\nint main(void) { return name[3] + name[2]; }",
+        97,
+    );
+    returned(
+        "int main(void) { char e[] = \"\\x41\\101\\t\\\\\"; return e[0] + e[1] + e[2] + e[3] + \
+         e[4]; }",
+        65 + 65 + 9 + 92,
+    );
+    returned("int main(void) { return '\\xff' + 'A'; }", -1 + 65);
+    let states = states("int main(void) { char s[8] = \"hi\"; return 0; }");
+    let initialized = states
+        .iter()
+        .find(|state| state.event.title == "Initialize `s` from \"hi\"")
+        .expect("one step initializes the array");
+    assert!(initialized.event.sequence_point);
+    assert!(
+        initialized
+            .event
+            .summary
+            .contains("the 5 elements after them are zero"),
+        "{}",
+        initialized.event.summary
+    );
+    assert!(cited(initialized).contains(&"6.7.8p14"));
+    for (source, message) in [
+        (
+            "int main(void) { char s[1] = \"hi\"; return 0; }",
+            "more than the 1 elements",
+        ),
+        ("int main(void) { char s[]; return 0; }", "unknown size"),
+        (
+            "int main(void) { char c = 'ab'; return 0; }",
+            "implementation-defined",
+        ),
+        ("int main(void) { char c = L'a'; return 0; }", "wide"),
+        (
+            "int main(void) { char s[] = \"\\q\"; return 0; }",
+            "unknown escape",
+        ),
+        (
+            "int main(void) { char s[] = \"open; return 0; }",
+            "unterminated string",
+        ),
+        (
+            "struct s { const int x; }; int main(void) { return 0; }",
+            "const members",
+        ),
+    ] {
+        let found = rejected(source);
+        assert!(found.contains(message), "{source}: {found}");
+    }
+}
+
+#[test]
+fn modifying_a_string_literal_is_undefined_and_const_is_enforced() {
+    let (cause, title) = undefined("int main(void) { char *p = \"hi\"; p[0] = 'H'; return 0; }");
+    assert_eq!(cause, Some(super::Undefined::StringLiteralWrite));
+    assert_eq!(title, "Undefined behavior: modifying a string literal");
+    let (cause, _) = undefined("int main(void) { char *p = \"hi\"; (*p)++; return 0; }");
+    assert_eq!(cause, Some(super::Undefined::StringLiteralWrite));
+    // A copy in an array of one's own may change.
+    returned(
+        "int main(void) { char s[] = \"hi\"; s[0] = 'H'; return s[0]; }",
+        72,
+    );
+    for source in [
+        "int main(void) { const char *p = \"hi\"; *p = 'H'; return 0; }",
+        "int main(void) { const char *p = \"hi\"; p[1]++; return 0; }",
+    ] {
+        assert!(
+            rejected(source).contains("not a modifiable lvalue"),
+            "{source}"
+        );
+    }
+    assert!(
+        rejected("int main(void) { const char *p = \"hi\"; char *q = p; return 0; }")
+            .contains("does not convert to a char *")
+    );
+}
+
+#[test]
+fn printf_converts_each_argument_with_flags_and_widths() {
+    let (state, text) = output(
+        "#include <stdio.h>\nint main(void) {\n    char c = 'A';\n    int n = \
+         printf(\"%d|%i|%u|%x|%c|%c|%s|%%|%5d|%-5d|%05d|%3s|%-3c|\\n\", -42, 7, 42, 255, c, 66, \
+         \"ab\", 42, 42, -42, \"x\", 'y');\n    return n;\n}\n",
+    );
+    let expected = "-42|7|42|ff|A|B|ab|%|   42|42   |-0042|  x|y  |\n";
+    assert_eq!(text, expected);
+    assert_eq!(
+        state.return_value,
+        Some(Value::Integer(
+            i32::try_from(expected.len()).expect("short")
+        ))
+    );
+    let trace = states(
+        "#include <stdio.h>\nint main(void) {\n    char c = 'A';\n    printf(\"%c\", c);\n    \
+         return 0;\n}\n",
+    );
+    let promoted = trace
+        .iter()
+        .find(|state| state.event.title == "Promote char 65 to int for `...`")
+        .expect("a char argument is promoted");
+    assert!(cited(promoted).contains(&"6.5.2.2p6"));
+    assert!(promoted.event.summary.contains("('A')"));
+    // putchar and puts return what C says.
+    let (state, text) = output(
+        "#include <stdio.h>\nint main(void) {\n    int a = putchar('o');\n    int b = \
+         putchar('k');\n    int c = puts(\"\");\n    return a + b + c;\n}\n",
+    );
+    assert_eq!(text, "ok\n");
+    assert_eq!(state.return_value, Some(Value::Integer(111 + 107 + 1)));
+    let (state, _) = output("#include <stdio.h>\nint main(void) { return putchar(-56); }\n");
+    assert_eq!(state.output, [200]);
+    assert_eq!(state.return_value, Some(Value::Integer(200)));
+    // A second #include of the header is a step that changes nothing.
+    let twice = states("#include <stdio.h>\n#include <stdio.h>\nint main(void) { return 0; }\n");
+    assert_eq!(kinds(&twice)[1..3], ["directive", "directive"]);
+    assert!(cited(&twice[2]).contains(&"7.1.2p4"));
+}
+
+#[test]
+fn printf_stops_on_undefined_conversions_and_arguments() {
+    use super::Undefined::{
+        InvalidConversion,
+        MissingArgument,
+        NullString,
+        Unterminated,
+        WrongArgument,
+    };
+    for (body, expected) in [
+        ("int x = 1; printf(\"%d\", &x);", WrongArgument),
+        ("printf(\"%s\", 5);", WrongArgument),
+        ("printf(\"%u\", -1);", WrongArgument),
+        ("printf(\"%d %d\", 1);", MissingArgument),
+        ("printf(\"%y\", 1);", InvalidConversion),
+        ("printf(\"%05s\", \"a\");", InvalidConversion),
+        ("printf(\"100%\");", InvalidConversion),
+        ("printf(\"%5%\");", InvalidConversion),
+        ("char s[2] = \"hi\"; printf(\"%s\", s);", Unterminated),
+        ("char *p = 0; puts(p);", NullString),
+        ("char *p = 0; printf(p);", NullString),
+    ] {
+        let source = format!("#include <stdio.h>\nint main(void) {{ {body} return 0; }}\n");
+        let (cause, _) = undefined(&source);
+        assert_eq!(cause, Some(expected), "{body}");
+    }
+    let (_, title) =
+        undefined("#include <stdio.h>\nint main(void) { printf(\"%d\\n\"); return 0; }\n");
+    assert_eq!(title, "Undefined behavior: printf has too few arguments");
+    // Extra arguments are evaluated and ignored.
+    let (state, text) =
+        output("#include <stdio.h>\nint main(void) { printf(\"x\", 1); return 0; }\n");
+    assert_eq!((state.status, text.as_str()), ("finished", "x"));
+    // Valid C the machine does not model stops without blaming the program.
+    for body in [
+        "printf(\"%f\", 1);",
+        "printf(\"%*d\", 2, 1);",
+        "printf(\"%ld\", 1);",
+        "printf(\"%+d\", 1);",
+    ] {
+        let source = format!("#include <stdio.h>\nint main(void) {{ {body} return 0; }}\n");
+        let session = run(&source);
+        assert_eq!(session.state().status, "error", "{body}");
+        assert_eq!(session.state().diagnostics[0].kind, "unsupported", "{body}");
+    }
+    // Output is bounded.
+    let session = run(
+        "#include <stdio.h>\nint main(void) {\n    for (int i = 0; i < 400; i++) {\n        \
+         puts(\"0123456789abcdef\");\n    }\n    return 0;\n}\n",
+    );
+    assert_eq!(session.state().status, "limit");
+    assert!(session.state().output.len() <= 4096);
+}
+
+#[test]
+fn the_machine_runs_only_the_stdio_include() {
+    for (source, message) in [
+        (
+            "int main(void) { printf(\"hi\"); return 0; }",
+            "#include <stdio.h>",
+        ),
+        (
+            "#undef X\nint main(void) { return 0; }",
+            "only #include <stdio.h> and object-like #define",
+        ),
+        (
+            "#include <stdlib.h>\nint main(void) { return 0; }",
+            "only <stdio.h>",
+        ),
+        (
+            "int main(void) {\n#include <stdio.h>\nreturn 0; }",
+            "directive inside a function",
+        ),
+        (
+            "#include <stdio.h>\nint puts(int x) { return x; }\nint main(void) { return 0; }",
+            "already declared by <stdio.h>",
+        ),
+        (
+            "int puts(int x) { return x; }\n#include <stdio.h>\nint main(void) { return 0; }",
+            "already declares",
+        ),
+        (
+            "#include <stdio.h>\nint main(void) { puts(1); return 0; }",
+            "puts's argument is a string",
+        ),
+        (
+            "#include <stdio.h>\nint main(void) { printf(); return 0; }",
+            "at least its format",
+        ),
+        (
+            "int x; #include <stdio.h>\nint main(void) { return 0; }",
+            "unsupported character",
+        ),
+    ] {
+        let found = rejected(source);
+        assert!(found.contains(message), "{source}: {found}");
+    }
+    // A comment may follow the header name.
+    returned(
+        "#include <stdio.h> // output\nint main(void) { return 0; }\n",
+        0,
+    );
+}
+
+#[test]
+fn a_prototype_lets_a_call_come_before_the_definition() {
+    returned(
+        "int f(int);\nint main(void) { return f(1); }\nint f(int x) { return x + 41; }\n",
+        42,
+    );
+    returned(
+        "int twice(int value);\nint twice(int);\nint main(void) { return twice(4); }\nint \
+         twice(int n) { return n * 2; }\n",
+        8,
+    );
+    returned(
+        "int first(const char *s);\nint main(void) { return first(\"z\"); }\nint first(const char \
+         *s) { return s[0]; }\n",
+        122,
+    );
+    for (source, message) in [
+        (
+            "int main(void) { return f(1); }\nint f(int x) { return x; }\n",
+            "declare it first with a prototype",
+        ),
+        (
+            "int f(int);\nint main(void) { return f(1); }\n",
+            "declared but never defined",
+        ),
+        (
+            "int f(int);\nint main(void) { return 0; }\nint f(int *x) { return 0; }\n",
+            "differs from the function's prototype",
+        ),
+        (
+            "int f();\nint main(void) { return 0; }\n",
+            "without a prototype",
+        ),
+        (
+            "int f(int);\nint main(void) { return 0; }\nint f(int) { return 0; }\n",
+            "names each of its parameters",
+        ),
+    ] {
+        let found = rejected(source);
+        assert!(found.contains(message), "{source}: {found}");
+    }
+    // Arguments are checked against the prototype when the call is compiled.
+    assert!(
+        rejected("int f(int *p);\nint main(void) { return f(3); }\nint f(int *p) { return 0; }\n")
+            .contains("argument type")
+    );
+}
+
+const CONSTANTS: &str = include_str!("../../web/demos/constants.c");
+
+#[test]
+fn the_constants_lesson_narrates_define_const_cast_and_compound_assignment() {
+    let states = states(CONSTANTS);
+    let last = states.last().expect("a final state");
+    assert_eq!(last.status, "finished", "{:?}", last.diagnostics);
+    assert_eq!(last.output, b"total is 056\n");
+    // Phase 4 runs the include and both definitions, one step each.
+    let directives: Vec<&str> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Directive)
+        .map(|state| state.event.title.as_str())
+        .collect();
+    assert_eq!(
+        directives,
+        [
+            "#include <stdio.h>: declare printf, puts and putchar",
+            "#define LIMIT: LIMIT stands for 4",
+            "#define LABEL: LABEL stands for \"total\"",
+        ]
+    );
+    // Every use of LIMIT is narrated as its replacement.
+    let limit = states
+        .iter()
+        .find(|state| state.event.title.starts_with("Macro LIMIT"))
+        .expect("the loop condition evaluates LIMIT");
+    assert_eq!(limit.event.title, "Macro LIMIT: evaluate the constant 4");
+    assert!(
+        limit.event.summary.starts_with(
+            "`LIMIT` is a macro the preprocessor replaced with `4` before the program ran: the \
+             constant 4"
+        ),
+        "{}",
+        limit.event.summary
+    );
+    assert_eq!(cited(limit)[0], "6.10.3p9");
+    assert!(limit.event.explanation.contains("the #define on line 5"));
+    // LABEL " is %.3d\n" is one literal after phase 6.
+    let joined = states
+        .iter()
+        .find(|state| {
+            state
+                .event
+                .title
+                .starts_with("Before main: 2 literals joined")
+        })
+        .expect("the joined literal is created before main");
+    assert!(
+        joined.event.title.ends_with("from the macro LABEL"),
+        "{}",
+        joined.event.title
+    );
+    assert!(cited(joined).contains(&"6.4.5p4"));
+    assert!(
+        last.objects
+            .iter()
+            .any(|object| object.literal && object.name == "\"total\" \" is %.3d\\n\"")
+    );
+    // const is shown in the type and explained at the declaration.
+    let step = last
+        .objects
+        .iter()
+        .find(|object| object.name == "step")
+        .expect("step");
+    assert_eq!(step.r#type, "const int");
+    let declared = states
+        .iter()
+        .find(|state| state.event.title == "Create `step` (const int)")
+        .expect("step is declared");
+    assert!(declared.event.explanation.contains("defined const"));
+    // The cast wraps, and says the result is implementation-defined.
+    let cast = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Cast)
+        .expect("the cast");
+    assert_eq!(cast.event.title, "Cast 300 to char → 44");
+    assert_eq!(
+        cast.event.summary,
+        "300 does not fit in a char, so the result is implementation-defined; bcc and GCC wrap it \
+         to 44."
+    );
+    assert!(cited(cast).contains(&"6.3.1.3p3"));
+    // += is E1 = E1 + (E2), with E1 evaluated once.
+    let updates: Vec<&State> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::CompoundAssign)
+        .collect();
+    assert_eq!(updates.len(), 5);
+    assert_eq!(updates[0].event.title, "Update `total`: 0 → 3");
+    assert!(
+        updates[0]
+            .event
+            .summary
+            .contains("`total += step` is `total = total + (step)` with total evaluated once"),
+        "{}",
+        updates[0].event.summary
+    );
+    assert!(updates[0].event.sequence_point);
+    assert_eq!(cited(updates[0])[0], "6.5.16.2p3");
+    // The precision pads 56 to three digits.
+    let printed = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::LibraryCall)
+        .expect("printf");
+    assert!(
+        printed
+            .event
+            .explanation
+            .contains("the precision .3 asks for at least 3 digits, so 1 leading zero is added"),
+        "{}",
+        printed.event.explanation
+    );
+    assert!(cited(printed).contains(&"7.19.6.1p4"));
+}
+
+#[test]
+fn object_like_macros_replace_every_later_use() {
+    let source = "#define N 3\n#define FIRST 'A'\n#define N 3\nint table[N];\nint main(void) { \
+                  int a[N] = {N}; char c = FIRST; return a[0] + table[2] + c - N; }";
+    let states = states(source);
+    let last = states.last().expect("a final state");
+    assert_eq!(last.return_value, Some(Value::Integer(65)));
+    // An identical redefinition is allowed and changes nothing.
+    assert!(
+        states
+            .iter()
+            .any(|state| state.event.title == "#define N again: nothing changes")
+    );
+    // The array sizes say where their macro went.
+    let table = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::StaticStorage)
+        .expect("table");
+    assert!(
+        table
+            .event
+            .explanation
+            .contains("In the declaration, `N` is not a variable"),
+        "{}",
+        table.event.explanation
+    );
+    let character = states
+        .iter()
+        .find(|state| state.event.title.starts_with("Macro FIRST"))
+        .expect("FIRST");
+    assert_eq!(
+        character.event.title,
+        "Macro FIRST: evaluate the character constant 'A'"
+    );
+    // A use before the definition is not replaced: the name is undeclared.
+    assert!(rejected("int main(void) { return N; }\n#define N 1\n").contains("undeclared"));
+    // A different redefinition breaks a constraint.
+    let diagnostic = compile("#define N 1\n#define N 2\nint main(void) { return N; }")
+        .map(|_| ())
+        .expect_err("redefinition");
+    assert_eq!(diagnostic.kind, "constraint");
+    assert_eq!(diagnostic.clause.map(|clause| clause.id), Some("6.10.3p2"));
+    // Only constants and literals; function-like macros stay the
+    // preprocessor's.
+    for (source, message) in [
+        (
+            "#define SQ(x) ((x) * (x))\nint main(void) { return 0; }",
+            "function-like",
+        ),
+        (
+            "#define N (1 + 2)\nint main(void) { return 0; }",
+            "one integer constant",
+        ),
+        (
+            "#define N -1\nint main(void) { return 0; }",
+            "one integer constant",
+        ),
+        (
+            "#define N 010\nint main(void) { return 0; }",
+            "one integer constant",
+        ),
+        (
+            "#define int long\nint main(void) { return 0; }",
+            "macro name",
+        ),
+        (
+            "#define N\nint main(void) { return 0; }",
+            "one integer constant",
+        ),
+        (
+            "#define C 'ab'\nint main(void) { return 0; }",
+            "implementation-defined",
+        ),
+    ] {
+        let found = rejected(source);
+        assert!(found.contains(message), "{source}: {found}");
+    }
+}
+
+#[test]
+fn adjacent_string_literals_are_one_array() {
+    let source = "#include <stdio.h>\nint main(void) {\n    char s[] = \"ab\" \"cd\";\n    \
+                  printf(\"%s\" \"!\" \"\\n\", s);\n    puts(\"\\x4\" \"1\");\n    return 0;\n}\n";
+    let (state, text) = output(source);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    // Phase 6 joins after escapes are replaced: "\x4" "1" is two characters.
+    assert_eq!(text, "abcd!\n\u{4}1\n");
+    let s = state
+        .objects
+        .iter()
+        .find(|object| object.name == "s")
+        .expect("s");
+    assert_eq!(s.r#type, "char[5]");
+    let format = state
+        .objects
+        .iter()
+        .find(|object| object.literal && object.name.starts_with("\"%s\""))
+        .expect("the joined format");
+    assert_eq!(format.r#type, "char[5]");
+    let states = states(source);
+    let initialized = states
+        .iter()
+        .find(|state| state.event.title.starts_with("Initialize `s`"))
+        .expect("s is initialized");
+    assert!(
+        initialized
+            .event
+            .explanation
+            .contains("2 adjacent string literals")
+    );
+    assert!(cited(initialized).contains(&"6.4.5p4"));
+}
+
+#[test]
+fn const_objects_reject_assignment_and_stop_a_store_through_a_cast() {
+    for (source, message, clause) in [
+        (
+            "int main(void) { const int limit = 3; limit = 4; return 0; }",
+            "`limit` is defined const",
+            "6.5.16p2",
+        ),
+        (
+            "int main(void) { const int limit = 3; limit += 1; return 0; }",
+            "assignment's left operand",
+            "6.5.16p2",
+        ),
+        (
+            "int main(void) { const char c = 'a'; c++; return 0; }",
+            "++ and -- need a modifiable lvalue",
+            "6.5.2.4p1",
+        ),
+        (
+            "const int table[2] = {1, 2};\nint main(void) { table[0] = 5; return 0; }",
+            "pointer to const",
+            "6.5.16p2",
+        ),
+        (
+            "int main(void) { const int limit = 3; int *p = &limit; return 0; }",
+            "a const int * does not convert to a int *",
+            "6.5.16.1p1",
+        ),
+    ] {
+        let diagnostic = compile(source).map(|_| ()).expect_err(source);
+        assert_eq!(diagnostic.kind, "constraint", "{source}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{source}: {}",
+            diagnostic.message
+        );
+        assert_eq!(
+            diagnostic.clause.map(|clause| clause.id),
+            Some(clause),
+            "{source}"
+        );
+    }
+    // Reading through a pointer that lost its const is fine; storing is not.
+    returned(
+        "int main(void) { const int limit = 3; const int *p = &limit; int *q = (int *)p; return \
+         *q; }",
+        3,
+    );
+    let (undefined_kind, title) = undefined(
+        "const int limit = 3;\nint main(void) { int *p = (int *)&limit; *p = 4; return limit; }",
+    );
+    assert_eq!(undefined_kind, Some(super::Undefined::ConstWrite));
+    assert_eq!(title, "Undefined behavior: modifying a const object");
+    let session = run("int main(void) { const int n = 1; int *p = (int *)&n; (*p)++; return n; }");
+    assert_eq!(
+        session.state().diagnostics[0]
+            .clause
+            .map(|clause| clause.id),
+        Some("6.7.3p5")
+    );
+    // The cast that removes const says what it allows and what it does not.
+    let states = states(
+        "int main(void) { int x = 1; const int *p = &x; int *q = (int *)p; *q = 2; return x; }",
+    );
+    let cast = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Cast)
+        .expect("the cast");
+    assert_eq!(cast.event.title, "Cast to int *: remove const");
+    assert!(cited(cast).contains(&"6.7.3p5"));
+    // x itself is not const, so the store is fine.
+    assert_eq!(states.last().unwrap().return_value, Some(Value::Integer(2)));
+}
+
+#[test]
+fn casts_between_int_and_char_narrate_the_conversion() {
+    returned("int main(void) { char c = (char)300; return c; }", 44);
+    returned(
+        "int main(void) { return (char)-129 + (char)200; }",
+        127 - 56,
+    );
+    returned(
+        "int main(void) { char c = 'A'; return (int)c + (char)1; }",
+        66,
+    );
+    let states = states(
+        "int main(void) { char c = 'A'; int a = (int)c; int b = (int)a; char d = (char)65; return \
+         a + b + d; }",
+    );
+    let casts: Vec<&State> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Cast)
+        .collect();
+    assert_eq!(casts.len(), 3);
+    assert_eq!(casts[0].event.title, "Cast 65 to int: the value fits");
+    assert!(cited(casts[0]).contains(&"6.3.1.3p1"));
+    assert_eq!(casts[1].event.title, "Cast to int: no conversion, 65");
+    assert_eq!(cited(casts[1]), ["6.5.4p4"]);
+    assert_eq!(casts[2].event.title, "Cast 65 to char: the value fits");
+    assert_eq!(casts[0].event.kind.category(), "convert");
+    for (source, message) in [
+        ("int main(void) { return (unsigned)-1; }", "modulo 2^N"),
+        ("int main(void) { return (long)1; }", "names int, char"),
+        (
+            "int main(void) { int x = 0; int *p = (int *)x; return 0; }",
+            "integers and pointers",
+        ),
+        (
+            "int main(void) { int x = 0; char *p = (char *)&x; return 0; }",
+            "different pointer types",
+        ),
+        (
+            "int main(void) { int x = 0; (int)x = 1; return 0; }",
+            "modifiable scalar lvalue",
+        ),
+        (
+            "int main(void) { int x = 0; return (void)x, 0; }",
+            "cast to void",
+        ),
+    ] {
+        let found = rejected(source);
+        assert!(found.contains(message), "{source}: {found}");
+    }
+}
+
+#[test]
+fn compound_assignments_update_once_and_stop_where_the_operator_would() {
+    returned(
+        "int main(void) { int x = 10; x += 5; x -= 3; x *= 4; x /= 5; x %= 7; return x; }",
+        2,
+    );
+    returned(
+        "int main(void) { int a[3] = {1, 2, 3}; int *p = a; p += 2; p -= 1; return *p; }",
+        2,
+    );
+    // A char is promoted for the arithmetic and converted back to char.
+    let states = states("int main(void) { char c = 100; c += 100; return c; }");
+    let update = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::CompoundAssign)
+        .expect("c += 100");
+    assert_eq!(update.event.title, "Update `c`: 100 → -56");
+    assert!(update.event.explanation.contains("implementation-defined"));
+    // The left operand is designated once, as an update.
+    let designated = states
+        .iter()
+        .find(|state| state.event.title == "`c` is the object to update")
+        .expect("c is designated as the object to update");
+    assert!(cited(designated).contains(&"6.5.16.2p3"));
+    // The same undefined behavior as the plain operators.
+    assert_eq!(
+        undefined("int main(void) { int x = 2147483647; x += 1; return 0; }").0,
+        Some(super::Undefined::SignedOverflow)
+    );
+    assert_eq!(
+        undefined("int main(void) { int x = 1; int z = 0; x /= z; return 0; }").0,
+        Some(super::Undefined::DivisionByZero)
+    );
+    assert_eq!(
+        undefined("int main(void) { int x = 1; x %= 0; return 0; }").0,
+        Some(super::Undefined::DivisionByZero)
+    );
+    assert_eq!(
+        undefined("int main(void) { int a[2] = {1, 2}; int *p = a; p += 3; return 0; }").0,
+        Some(super::Undefined::PointerOutside)
+    );
+    // A call may be the whole right operand.
+    returned(
+        "int two(void) { return 2; } int main(void) { int x = 1; x += two(); return x; }",
+        3,
+    );
+    for source in [
+        "int main(void) { int a[2] = {1, 2}; int *p = a; p *= 2; return 0; }",
+        "int main(void) { int x = 1; int *p = &x; x += p; return 0; }",
+    ] {
+        let diagnostic = compile(source).map(|_| ()).expect_err(source);
+        assert_eq!(diagnostic.kind, "constraint", "{source}");
+        assert_eq!(
+            diagnostic.clause.map(|clause| clause.id),
+            Some("6.5.16.2p1")
+        );
+    }
+    assert!(
+        rejected("int main(void) { int x = 1; int y = x += 1; return y; }").contains("expected")
+    );
+}
+
+#[test]
+fn printf_precision_sets_minimum_digits_and_maximum_characters() {
+    for (body, expected) in [
+        (
+            "printf(\"%.3d|%5.2d|%-6.3i|\", 7, -4, 12);",
+            "007|  -04|012   |",
+        ),
+        ("printf(\"%.0d|%.d|%.1d|\", 0, 0, 0);", "||0|"),
+        (
+            "printf(\"%.4x|%.2u|%05.2d|\", 255, 3, 9);",
+            "00ff|03|   09|",
+        ),
+        (
+            "printf(\"%.2s|%5.1s|%-4.9s|\", \"Ada\", \"Bo\", \"Cy\");",
+            "Ad|    B|Cy  |",
+        ),
+    ] {
+        let source = format!("#include <stdio.h>\nint main(void) {{ {body} return 0; }}\n");
+        let (state, text) = output(&source);
+        assert_eq!(state.status, "finished", "{body}: {:?}", state.diagnostics);
+        assert_eq!(text, expected, "{body}");
+    }
+    // A precision lets %s print part of an array that has no null.
+    let (state, text) = output(
+        "#include <stdio.h>\nint main(void) { char s[3] = {'a', 'b', 'c'}; printf(\"%.2s\", s); \
+         return 0; }\n",
+    );
+    assert_eq!((state.status, text.as_str()), ("finished", "ab"));
+    let states = states(
+        "#include <stdio.h>\nint main(void) { printf(\"%.2s %05.3d\", \"Ada\", 7); return 0; }\n",
+    );
+    let printed = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::LibraryCall)
+        .expect("printf");
+    for phrase in [
+        "the precision .2 writes at most 2 characters of the string",
+        "the precision .3 asks for at least 3 digits, so 2 leading zeros are added; with a \
+         precision the 0 flag is ignored",
+    ] {
+        assert!(
+            printed.event.explanation.contains(phrase),
+            "{}",
+            printed.event.explanation
+        );
+    }
+    // A precision with %c is undefined; a precision beyond the bound is a
+    // limit.
+    let (kind, _) =
+        undefined("#include <stdio.h>\nint main(void) { printf(\"%.2c\", 'a'); return 0; }\n");
+    assert_eq!(kind, Some(super::Undefined::InvalidConversion));
+    let session = run("#include <stdio.h>\nint main(void) { printf(\"%.300d\", 1); return 0; }\n");
+    assert_eq!(session.state().status, "limit");
 }

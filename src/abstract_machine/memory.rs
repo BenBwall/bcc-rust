@@ -30,6 +30,7 @@ use super::{
         Undefined,
         Value,
     },
+    parser,
 };
 
 impl Machine {
@@ -45,14 +46,17 @@ impl Machine {
         parameter: bool,
     ) -> Result<usize, Diagnostic> {
         let value = match (ty, value) {
-            | (Type::Array(_) | Type::Struct(_), Value::Indeterminate) =>
+            | (Type::Array(_) | Type::Struct(_) | Type::CharArray(_), Value::Indeterminate) =>
                 ty.indeterminate(&self.structures),
-            | (Type::Pointer | Type::StructPointer(_), Value::Integer(0)) => Value::null(),
+            | (pointer, Value::Integer(0)) if pointer.is_pointer() => Value::null(),
+            // A char parameter receives its argument converted as if by
+            // assignment (C99 §6.5.2.2p7, §6.3.1.3p3).
+            | (Type::Char, Value::Integer(integer)) => parser::char_value(integer.to_le_bytes()[0]),
             | (_, value) => value,
         };
         let top = self.activations.len() - 1;
         let frame = self.activations[top].id;
-        self.create(name, ty, frame, scope, value, parameter, None)
+        self.create(name, ty, frame, scope, value, parameter, None, false)
     }
 
     /// Create static object `index` of the program with its initial value.
@@ -62,7 +66,7 @@ impl Machine {
         index: usize,
     ) -> Result<usize, Diagnostic> {
         let object = &program.statics[index];
-        self.create(
+        let id = self.create(
             &object.name,
             object.ty,
             0,
@@ -70,7 +74,50 @@ impl Machine {
             object.value.clone(),
             false,
             object.function.clone(),
-        )
+            object.literal,
+        )?;
+        if object.constant {
+            self.make_const(id);
+        }
+        Ok(id)
+    }
+
+    /// Mark object `id` as defined `const`: its type is spelled with the
+    /// qualifier, and a store into it after its initialization stops.
+    pub fn make_const(&mut self, id: usize) {
+        self.metadata[id - 1].constant = true;
+        let object = &mut self.state.objects[id - 1];
+        object.r#type.insert_str(0, "const ");
+    }
+
+    /// Whether the program may store into the object `target`: modifying
+    /// an object defined `const` through an lvalue without the qualifier,
+    /// which only a cast that removed the `const` can form here, is
+    /// undefined. Direct assignments to a `const` object were rejected at
+    /// compilation, as the constraints require.
+    /// C99: §6.7.3 paragraph 5, p. 109; PDF p. 121.
+    pub fn check_writable(&self, target: usize, offset: i32) -> Result<(), Diagnostic> {
+        if !self
+            .metadata
+            .get(target.wrapping_sub(1))
+            .is_some_and(|metadata| metadata.constant)
+        {
+            return Ok(());
+        }
+        let object = &self.state.objects[target - 1];
+        Err(Diagnostic::ub(
+            self.state.source_range,
+            &format!(
+                "{} belongs to `{}`, an object defined {}, and this store reaches it through an \
+                 lvalue that is not const: the cast that formed the pointer removed the const, \
+                 but not the promise",
+                self.location(target, offset),
+                object.name,
+                object.r#type
+            ),
+            &clauses::CONST_WRITE,
+            Undefined::ConstWrite,
+        ))
     }
 
     #[expect(
@@ -86,6 +133,7 @@ impl Machine {
         value: Value,
         parameter: bool,
         function: Option<String>,
+        literal: bool,
     ) -> Result<usize, Diagnostic> {
         let cells = ty.leaves(&self.structures);
         if self.state.objects.len() >= MAX_OBJECTS || self.cells + cells > MAX_CELLS {
@@ -109,9 +157,14 @@ impl Machine {
             function,
             lifetime: "alive",
             parameter,
+            literal,
             value,
         });
-        self.metadata.push(ObjectMetadata { scope, ty });
+        self.metadata.push(ObjectMetadata {
+            scope,
+            ty,
+            constant: false,
+        });
         self.cells += cells;
         Ok(id)
     }
@@ -210,6 +263,20 @@ impl Machine {
         mut value: Value,
     ) -> Result<Value, Diagnostic> {
         let index = self.checked_location(target, offset)?;
+        let object = &self.state.objects[target - 1];
+        if object.literal {
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &format!(
+                    "{} is an element of the string literal {}, whose array the program must not \
+                     modify",
+                    self.location(target, offset),
+                    object.name
+                ),
+                &clauses::STRING_LITERAL_WRITE,
+                Undefined::StringLiteralWrite,
+            ));
+        }
         if let Value::Struct { .. } = value {
             let mut leaves = Vec::new();
             layout::flatten(&value, &mut leaves);
@@ -222,8 +289,7 @@ impl Machine {
             return Ok(value);
         }
         let ty = self.leaf_type(target, offset);
-        if matches!(ty, Some(Type::Pointer | Type::StructPointer(_))) && value == Value::Integer(0)
-        {
+        if ty.is_some_and(Type::is_pointer) && value == Value::Integer(0) {
             value = Value::null();
         }
         if ty == Some(Type::Char)
@@ -236,10 +302,10 @@ impl Machine {
             let low = integer as i8;
             value = Value::Integer(i32::from(low));
         }
-        let valid = match ty {
-            | Some(Type::Pointer | Type::StructPointer(_)) =>
-                matches!(value, Value::Pointer { .. }),
-            | _ => matches!(value, Value::Integer(_)),
+        let valid = if ty.is_some_and(Type::is_pointer) {
+            matches!(value, Value::Pointer { .. })
+        } else {
+            matches!(value, Value::Integer(_))
         };
         if !valid {
             return Err(self.error("store type mismatch"));
@@ -291,7 +357,7 @@ impl Machine {
         } else {
             Undefined::PointerOutside
         };
-        let array = matches!(self.object_type(object.id), Some(Type::Array(_))) || length > 1;
+        let array = self.object_type(object.id).is_some_and(Type::is_array) || length > 1;
         let message = if array && index == length {
             format!(
                 "{name} has {length} elements, [0] to [{}], and this access is at [{index}], one \
