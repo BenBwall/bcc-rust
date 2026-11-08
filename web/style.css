@@ -295,7 +295,7 @@
   .reading-map { padding: 22px 24px 20px; display: flex; flex-direction: column; gap: 10px; }
   .map-caption, .module-caption, .deck-caption {
     font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
-    padding-bottom: 5px; border-bottom: 1px solid var(--ink);
+    padding-bottom: 5px; border-bottom: 1px solid var(--ink); text-wrap: balance;
   }
   .map-caption b, .module-caption b, .deck-caption b { color: var(--ink); font-weight: 700; }
   .map-screen { position: relative; background: var(--screen); color: var(--screen-ink); padding: 0; overflow-x: auto; }
@@ -871,6 +871,9 @@
   .output-byte { color: var(--screen-dim); border: 1px solid var(--screen-faint); padding: 0 2px; margin: 0 1px; font-size: 11px; }
   .output-new .output-byte { color: var(--on-accent); border-color: currentColor; }
   .narration-stage { margin: 12px 0 0; }
+  /* Its label is a sentence: on a phone it wraps rather than run off the
+     card. */
+  .narration-stage .button { height: auto; min-height: 36px; max-width: 100%; padding-block: 8px; white-space: normal; text-align: left; line-height: 1.4; }
 
   /* Table 1: the datasheet. */
   .sheet-scroll { overflow-x: auto; }
