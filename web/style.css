@@ -782,16 +782,20 @@
   .narration-terms-label { font-weight: 700; }
 
   /* Why it matters: a marginal note set off by a rule. */
+  /* A floating value's bits, drawn as the value flow's chips are: a
+     caption like the note's other headings, then one chip per field, the
+     sign in vermilion and the exponent in blue. */
   .bits { margin: 14px 0 0; }
-  .bits figcaption { color: var(--ink-2); font-size: 13px; }
-  .bits-row { display: flex; flex-wrap: wrap; gap: 2px; margin: 6px 0 0; }
-  .bits-field { display: flex; flex-direction: column; min-width: 0; }
-  .bits-field code { font-size: 12px; letter-spacing: .5px; padding: 2px 4px; overflow-wrap: anywhere; word-break: break-all; border: 1px solid var(--ink-3); }
-  .bits-field.is-fraction { flex: 1 1 14ch; }
-  .bits-name { color: var(--ink-2); font-size: 11px; }
-  .bits-field.is-sign code { border-color: var(--accent); }
-  .bits-field.is-exponent code { border-color: var(--flow-ink); }
-  .bits-meaning { margin: 6px 0 0; font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+  .bits figcaption { color: var(--ink-3); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; }
+  .bits figcaption code { color: var(--ink); font-weight: 700; letter-spacing: 0; text-transform: none; }
+  .bits-row { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 6px 0 0; }
+  .bits-field { display: flex; flex: none; flex-direction: column; gap: 2px; }
+  .bits-field code { font: 700 12.5px/1.35 var(--font-mono); letter-spacing: .5px; padding: 3px 7px; overflow-wrap: anywhere; word-break: break-all; border: 1.5px solid var(--ink); background: var(--cell); color: var(--ink); }
+  .bits-field.is-fraction { flex: 1 1 14ch; min-width: 0; }
+  .bits-name { color: var(--ink-3); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+  .bits-field.is-sign code { box-shadow: inset 0 -3px 0 var(--accent); }
+  .bits-field.is-exponent code { box-shadow: inset 0 -3px 0 var(--flow-ink); }
+  .bits-meaning { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
   .cell-raw { font-size: 10px; letter-spacing: .3px; color: var(--ink-2); white-space: nowrap; font-family: var(--font-mono); }
   .narration-note { margin-top: 14px; padding: 2px 0 2px 14px; border-left: 3px solid var(--ink); }
   .narration-note h3 { margin-bottom: 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink); }
