@@ -6451,6 +6451,45 @@ mod tests {
         }
     }
 
+    /// A header `#include` cannot find ends the compilation in each
+    /// compiler's own words, before the error after it; bcc's own format
+    /// lists the directories it searched instead. GCC 13, Clang 23 and TCC
+    /// 0.9.27 were measured; `cl`'s is its documented fatal error C1083.
+    #[test]
+    fn a_missing_header_stops_in_each_compilers_words() {
+        let directory = Directory::new();
+        directory.write("m.c", "#include \"nosuch.h\"\nint x = ;\n");
+        for (mode, args, expected) in [
+            (
+                "--gcc-mode",
+                &["-c", "m.c"][..],
+                "m.c:1:10: fatal error: nosuch.h: No such file or directory\n    1 | #include \
+                 \"nosuch.h\"\n      |          ^~~~~~~~~~\ncompilation terminated.\n",
+            ),
+            (
+                "--clang-mode",
+                &["-c", "m.c"][..],
+                "m.c:1:10: fatal error: 'nosuch.h' file not found\n    1 | #include \
+                 \"nosuch.h\"\n      |          ^~~~~~~~~~\n1 error generated.\n",
+            ),
+            (
+                "--tcc-mode",
+                &["-c", "m.c"][..],
+                "m.c:1: error: include file 'nosuch.h' not found\n",
+            ),
+            (
+                "--msvc-mode",
+                &["/nologo", "/c", "m.c"][..],
+                "m.c(1): fatal error C1083: Cannot open include file: 'nosuch.h': No such file or \
+                 directory\n",
+            ),
+        ] {
+            let output = directory.bcc(mode, args);
+            assert!(!output.status.success(), "{mode}");
+            assert_eq!(stderr(&output), expected, "{mode}");
+        }
+    }
+
     /// `-H` leaves out the `-include` files and the headers they include,
     /// as GCC and Clang do, while `/showIncludes` lists the `/FI` ones, as
     /// clang-cl does.
@@ -8003,6 +8042,169 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         );
         let args = ["-Wno-return-stack-address", "-Wno-constant-conversion"];
         assert_eq!(text("--clang-mode", &args), "");
+    }
+
+    /// A file that includes itself through a macro can name itself the same
+    /// way again: the macro's replacement ends with the directive's line, as
+    /// GCC, Clang and TCC (its own `95_bitfields` test) read it.
+    #[test]
+    fn a_header_named_by_a_macro_can_name_itself_again() {
+        let directory = Directory::new();
+        directory.write(
+            "s.c",
+            "#ifdef L2\nint level_two;\n#elif defined L1\n#define L2\n#include \
+             SELF\n#else\n#define SELF \"s.c\"\n#define L1\n#include SELF\n#endif\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "s.c"]);
+            succeeds(&output);
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(text.contains("int level_two;"), "{mode}: {text}");
+        }
+    }
+
+    /// A call to a static function defined nowhere is a warning in GCC and
+    /// Clang, and the link is what fails.
+    #[test]
+    fn gnu_undefined_static_functions_warn() {
+        let directory = Directory::new();
+        directory.write("u.c", "static void f(void);\nvoid g(void) { f(); }\n");
+        directory.write(
+            "l.c",
+            "static void f(void);\nvoid g(void) { f(); }\nint main(void) { g(); return 0; }\n",
+        );
+        for (mode, message) in [
+            ("--gcc-mode", "warning: 'f' used but never defined"),
+            (
+                "--clang-mode",
+                "warning: function 'f' has internal linkage but is not defined",
+            ),
+        ] {
+            let output = directory.bcc(mode, &["-c", "u.c", "-o", "u.o"]);
+            succeeds(&output);
+            assert!(stderr(&output).contains(message), "{}", stderr(&output));
+            let args = ["-Werror", "-c", "u.c", "-o", "u.o"];
+            assert!(!directory.bcc(mode, &args).status.success(), "{mode}");
+            let output = directory.bcc(mode, &["l.c", "-o", "l"]);
+            assert!(!output.status.success(), "{mode}");
+            assert!(stderr(&output).contains("undefined"), "{}", stderr(&output));
+        }
+        let args = ["-Wno-undefined-internal", "-c", "u.c", "-o", "u.o"];
+        let output = directory.bcc("--clang-mode", &args);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+    }
+
+    /// Where each compiler reports an undefined static function and what
+    /// controls it (PR #318's review): both at the declaration, Clang under
+    /// the settings there, with a note at the first use and its own option,
+    /// and GCC under no option, even in a system header. Each row was
+    /// measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_undefined_static_functions_follow_each_compilers_controls() {
+        let directory = Directory::new();
+        directory.write("u.c", "static int f(void);\nint g(void){return f();}\n");
+        directory.write(
+            "pragma.c",
+            "#pragma GCC diagnostic push\n#pragma GCC diagnostic ignored \
+             \"-Wundefined-internal\"\nstatic int f(void);\n#pragma GCC diagnostic pop\nint \
+             g(void) { return f(); }\n",
+        );
+        directory.write(
+            "system.c",
+            "# 1 \"h.h\" 1 3\nstatic int f(void);\nstatic int g(void) { return f(); }\n# 1 \
+             \"system.c\" 2\nint h(void) { return g(); }\n",
+        );
+        let run = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            (output.status.success(), stderr(&output))
+        };
+        let (ok, text) = run(
+            "--clang-mode",
+            &[
+                "-Werror",
+                "-Wno-error=undefined-internal",
+                "-fsyntax-only",
+                "u.c",
+            ],
+        );
+        assert!(ok, "{text}");
+        assert!(
+            text.starts_with(
+                "u.c:1:12: warning: function 'f' has internal linkage but is not defined \
+                 [-Wundefined-internal]\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("u.c:2:20: note: used here\n"), "{text}");
+        let (ok, text) = run("--clang-mode", &["-Werror", "-fsyntax-only", "u.c"]);
+        assert!(!ok);
+        assert!(
+            text.contains("is not defined [-Werror,-Wundefined-internal]"),
+            "{text}"
+        );
+        assert_eq!(
+            run("--clang-mode", &["-Werror", "-fsyntax-only", "pragma.c"]),
+            (true, String::new())
+        );
+        // The first declaration's settings decide, whatever a later
+        // redeclaration is under.
+        directory.write(
+            "later.c",
+            "static int f(void);\n#pragma clang diagnostic ignored \
+             \"-Wundefined-internal\"\nstatic int f(void);\nint g(void){return f();}\n",
+        );
+        let (ok, text) = run("--clang-mode", &["-Werror", "-fsyntax-only", "later.c"]);
+        assert!(!ok);
+        assert!(
+            text.starts_with("later.c:1:12: error: function 'f' has internal linkage"),
+            "{text}"
+        );
+        directory.write(
+            "first.c",
+            "#pragma clang diagnostic push\n#pragma clang diagnostic ignored \
+             \"-Wundefined-internal\"\nstatic int f(void);\n#pragma clang diagnostic pop\nstatic \
+             int f(void);\nint g(void){return f();}\n",
+        );
+        assert_eq!(
+            run("--clang-mode", &["-Werror", "-fsyntax-only", "first.c"]),
+            (true, String::new())
+        );
+        assert_eq!(
+            run("--clang-mode", &["-Werror", "-fsyntax-only", "system.c"]),
+            (true, String::new())
+        );
+        let (ok, text) = run("--gcc-mode", &["-Werror", "-fsyntax-only", "u.c"]);
+        assert!(!ok);
+        assert!(
+            text.starts_with("u.c:1:12: error: 'f' used but never defined [-Werror]\n"),
+            "{text}"
+        );
+        assert!(!text.contains("note:"), "{text}");
+        let (ok, text) = run(
+            "--gcc-mode",
+            &["-Wno-undefined-internal", "-fsyntax-only", "u.c"],
+        );
+        assert!(ok);
+        assert!(
+            text.contains("warning: 'f' used but never defined\n"),
+            "{text}"
+        );
+        let (ok, text) = run(
+            "--gcc-mode",
+            &["-Wundefined-internal", "-fsyntax-only", "u.c"],
+        );
+        assert!(!ok);
+        assert!(
+            text.contains("unrecognized command-line option '-Wundefined-internal'"),
+            "{text}"
+        );
+        let (ok, text) = run("--gcc-mode", &["-Werror", "-fsyntax-only", "system.c"]);
+        assert!(!ok);
+        assert!(
+            text.contains("h.h:1:12: error: 'f' used but never defined [-Werror]"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -10129,6 +10331,35 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         let output = directory.bcc("--gcc-mode", &["-c", "a.c", "-lm", "-L/tmp", "-Wl,-x"]);
         succeeds(&output);
         assert_eq!(stderr(&output), "");
+    }
+
+    /// TCC's binary floating constants, from its own
+    /// `70_floating_point_literals` test, are the hexadecimal ones with the
+    /// same bits. As in TCC, a mantissa without digits is zero, and leading
+    /// or trailing zeroes may run far longer than the value they spell. GCC
+    /// and Clang refuse them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tcc_reads_binary_floating_constants() {
+        let directory = Directory::new();
+        let zeroes = "0".repeat(1000);
+        directory.write(
+            "a.c",
+            &format!(
+                "int main(void) {{\n    long double a = 0B.110101100P12L;\n    double b = \
+                 0b110101100.10111101p-12;\n    double c = 0b1p3;\n    double d = 0b.p0, e = \
+                 0bp0;\n    long double f = 0b{zeroes}1p0L, g = 0b0.{zeroes}{zeroes}1p2001;\n    \
+                 return a == 3424.0L && b == 0x1ac.bdp-12 && c == 8.0 && d == 0.0 && e == 0.0 && \
+                 f == 1.0L && g == 1.0L ? 0 : 1;\n}}\n"
+            ),
+        );
+        succeeds(&directory.bcc("--tcc-mode", &["a.c", "-o", "a"]));
+        let run = Command::new(directory.path("a")).status().unwrap();
+        assert_eq!(run.code(), Some(0));
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-fsyntax-only", "a.c"]);
+            assert!(!output.status.success(), "{mode}");
+        }
     }
 
     /// TCC skips a `#!` line that starts a file, so a script such as

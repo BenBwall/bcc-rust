@@ -663,11 +663,14 @@ impl CompilerConfiguration {
         group: DiagnosticGroup,
         severity: ErrorSeverity,
     ) -> bool {
-        severity == ErrorSeverity::Error
-            && self.identity == super::CompilerIdentity::Gcc
-            && group.default() == GroupDefault::Permerror
-            && (self.permerror_default(group) == Some(ErrorSeverity::Error)
-                || self.pedantic_error(group))
+        // GCC asks about an undefined internal function at the unit's end,
+        // where no system header is, though it names the declaration.
+        group == DiagnosticGroup::GccUndefinedInternal
+            || severity == ErrorSeverity::Error
+                && self.identity == super::CompilerIdentity::Gcc
+                && group.default() == GroupDefault::Permerror
+                && (self.permerror_default(group) == Some(ErrorSeverity::Error)
+                    || self.pedantic_error(group))
     }
 
     /// Whether `-pedantic-errors` makes `group` an error: Clang's
@@ -921,6 +924,10 @@ diagnostic_groups! {
     DllAttributeOnRedeclaration => Some("dll-attribute-on-redeclaration"), Warning, false;
     /// A redeclaration of an imported entity without `dllimport`.
     InconsistentDllimport => Some("inconsistent-dllimport"), Warning, false;
+    /// A static function used but defined nowhere in the unit, Clang's.
+    UndefinedInternal => Some("undefined-internal"), Warning, false;
+    /// GCC's warning about the same function, which no option controls.
+    GccUndefinedInternal => None, Warning, false;
     /// A static function declared but neither defined nor used.
     UnusedFunction => Some("unused-function"), Ignored, false;
     /// An initializer that replaces an earlier one for the same subobject

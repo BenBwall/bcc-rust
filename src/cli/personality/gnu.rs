@@ -1696,6 +1696,8 @@ impl State<'_> {
                     | "-Wno-main-return-type"
                     | "-Wreturn-stack-address"
                     | "-Wno-return-stack-address"
+                    | "-Wundefined-internal"
+                    | "-Wno-undefined-internal"
                     | "-Wformat-invalid-specifier"
                     | "-Wno-format-invalid-specifier"
                     | "-Wformat-insufficient-args"
