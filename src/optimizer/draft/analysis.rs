@@ -55,12 +55,15 @@ impl<'s> Draft<'_, 's> {
         reachable
     }
 
-    /// How many edges lead to each block from the reachable blocks. A
-    /// `switch` with two cases to one block counts two.
+    /// How many edges lead to each block from the live blocks, reachable or
+    /// not. A `switch` with two cases to one block counts two. A pass that
+    /// removes a block whose count is one may rely on the edge it follows
+    /// being the only one: a block nothing reaches still names its targets
+    /// until `simplify-cfg` removes it, and lowering it needs them alive.
     pub(in crate::optimizer) fn incoming_edge_counts(&self) -> ArenaVec<'s, u32> {
         let mut counts = ArenaVec::with_capacity_in(self.blocks.len(), self.scratch);
         counts.resize(self.blocks.len(), 0_u32);
-        for block in self.reverse_post_order() {
+        for block in self.alive_blocks() {
             for edge in self.block(block).term.edges() {
                 counts[edge.target.index()] += 1;
             }

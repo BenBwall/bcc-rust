@@ -1427,6 +1427,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnusedButSetGlobal
                     | crate::configuration::DiagnosticGroup::UnusedButSetParameter
                     | crate::configuration::DiagnosticGroup::UnusedLabel
+                    | crate::configuration::DiagnosticGroup::UnusedLocalTypedefs
+                    | crate::configuration::DiagnosticGroup::UnusedLocalTypedef
                     | crate::configuration::DiagnosticGroup::UnusedValue
                     | crate::configuration::DiagnosticGroup::UnusedComparison
                     | crate::configuration::DiagnosticGroup::Main
