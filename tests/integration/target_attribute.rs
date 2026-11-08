@@ -199,9 +199,79 @@ mod tests {
         );
     }
 
+    /// What both compilers accept: a later part that turns a baseline
+    /// feature back on (and GCC's `arch=`, which forgets earlier parts),
+    /// an encoding-prefixed string, read as its characters, and in GCC an
+    /// argument of any kind on what is not a function, which it ignores.
+    #[test]
+    fn accepted_attributes_compile_as_both_compilers_read_them() {
+        let function = |text: &str| {
+            format!("__attribute__((target({text}))) int f(int x) {{ return x + 1; }}\n")
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for text in [
+                "\"no-sse2,sse2\"",
+                "\"no-sse,sse2\"",
+                "L\"avx2\"",
+                "u8\"avx2\"",
+            ] {
+                let output = bcc(&[mode, "-c", "-o", "/dev/null"], &function(text));
+                assert!(
+                    output.status.success(),
+                    "{mode} {text}: {}",
+                    stderr(&output)
+                );
+            }
+            let output = bcc(
+                &[mode, "-c", "-o", "/dev/null"],
+                &function("\"no-sse2,sse\""),
+            );
+            assert!(!output.status.success(), "{mode}: SSE2 stays off");
+        }
+        let output = bcc(
+            &["--gcc-mode", "-c", "-o", "/dev/null"],
+            &function("\"no-sse2,arch=haswell\""),
+        );
+        assert!(output.status.success(), "{}", stderr(&output));
+        let output = bcc(
+            &["--clang-mode", "-c", "-o", "/dev/null"],
+            &function("L\"avx2\""),
+        );
+        assert!(
+            stderr(&output)
+                .contains("encoding prefix on an unevaluated string literal has no effect"),
+            "{}",
+            stderr(&output)
+        );
+        for program in [
+            "int v __attribute__((target(42)));\n",
+            "typedef int T __attribute__((target(1)));\n",
+            "int v __attribute__((target(\"bogus\")));\n",
+        ] {
+            let output = bcc(&["--gcc-mode", "-fsyntax-only"], program);
+            assert!(output.status.success(), "{program}: {}", stderr(&output));
+            assert!(
+                stderr(&output).contains("ignored"),
+                "{program}: {}",
+                stderr(&output)
+            );
+        }
+        let output = bcc(
+            &["--gcc-mode", "-fsyntax-only"],
+            "int v __attribute__((target()));\n",
+        );
+        assert!(
+            stderr(&output).contains("wrong number of arguments specified for 'target' attribute"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// An `always_inline` function or builtin that needs a feature the
     /// calling function lacks, as measured: both compilers refuse it in
     /// emitted code at every level, whichever of the two has the attribute.
+    /// Freestanding, `<immintrin.h>` needs no C library headers, which
+    /// Windows hosts lack.
     #[test]
     fn calls_across_features_are_refused_in_emitted_code() {
         let program = "#include <immintrin.h>\n#define AI static inline \
@@ -216,7 +286,15 @@ mod tests {
                        { return __builtin_ia32_aesenc128(*a, *a); }\n";
         for level in ["-O0", "-O2"] {
             let clang = bcc(
-                &["--clang-mode", "-mavx", level, "-c", "-o", "/dev/null"],
+                &[
+                    "--clang-mode",
+                    "-ffreestanding",
+                    "-mavx",
+                    level,
+                    "-c",
+                    "-o",
+                    "/dev/null",
+                ],
                 program,
             );
             let text = stderr(&clang);
@@ -232,7 +310,15 @@ mod tests {
             }
             assert_eq!(text.matches("error:").count(), 4, "{level}: {text}");
             let gcc = bcc(
-                &["--gcc-mode", "-mavx", level, "-c", "-o", "/dev/null"],
+                &[
+                    "--gcc-mode",
+                    "-ffreestanding",
+                    "-mavx",
+                    level,
+                    "-c",
+                    "-o",
+                    "/dev/null",
+                ],
                 program,
             );
             let text = stderr(&gcc);
