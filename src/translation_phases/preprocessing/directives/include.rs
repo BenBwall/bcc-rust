@@ -891,9 +891,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     ///
     /// C99: §6.10.2 paragraph 4, p. 150; PDF p. 162, leaves the combination
     /// implementation-defined. A string literal is taken whole; after `<`,
-    /// the spellings of the following tokens, whitespace included, are
-    /// joined up to the first `>`. Adjacent string literals are not
-    /// concatenated here (footnote 148), so a second one is an extra token.
+    /// the spellings of the following tokens are joined up to the first `>`.
+    /// Clang keeps every white space between them. GCC (libcpp
+    /// `glue_header_name`) and TCC keep only white space written next to the
+    /// token after it, its `PREV_WHITE`: none before `>`, and none before
+    /// a macro's name, whose replacement takes its place. Adjacent string
+    /// literals are not concatenated here (footnote 148), so a second one is
+    /// an extra token.
     fn read_expanded_header(&mut self, directive: PreprocessorToken) -> Option<HeaderName<'x>> {
         let include_string =
             self.expect_token_without_rewind::<true>(
@@ -952,11 +956,35 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             include_string.source_vectors,
         );
         let mut closed = false;
+        let gnu_spacing = matches!(
+            self.context.configuration.compiler_identity(),
+            CompilerIdentity::Gcc | CompilerIdentity::Tcc
+        );
+        // The white space read since the last token, under GCC's rule.
+        let mut white: Option<SourceVectors> = None;
         loop {
             match self.next_preprocessor_token::<false>() {
                 | Some(token) => {
                     if token.kind == PreprocessorTokenType::Newline {
                         break;
+                    }
+                    if gnu_spacing {
+                        if token.kind == PreprocessorTokenType::Whitespace {
+                            white = Some(token.source_vectors);
+                            continue;
+                        }
+                        let before = white.take();
+                        let written = before.is_some_and(|white| {
+                            self.context.adjacent_spellings(white, token.source_vectors)
+                        });
+                        let closing = self
+                            .context
+                            .string_cache
+                            .at(token.contents)
+                            .starts_with('>');
+                        if written && !closing {
+                            contents.push(' ');
+                        }
                     }
                     // A pp-number's spelling carries a trailing NUL, which
                     // is no part of the name.
