@@ -657,7 +657,10 @@
     writing-mode: vertical-rl; transform: rotate(180deg);
   }
   .cell-run { display: flex; flex: none; gap: 1px; }
-  .cell { display: flex; flex: none; flex-direction: column; justify-content: space-between; min-width: 68px; height: 62px; padding: 4px 7px; background: var(--cell); color: var(--ink-3); font-size: 10px; }
+  /* A cell's width follows its size in bytes: 44px for a char, 68px for an
+     int, 100px for a long or a pointer. */
+  .cell { display: flex; flex: none; flex-direction: column; justify-content: space-between; min-width: calc(36px + var(--bytes, 4) * 8px); height: 62px; padding: 4px 7px; background: var(--cell); color: var(--ink-3); font-size: 10px; }
+  .cell-bytes { margin-left: 5px; opacity: .8; }
   .cell-value { color: var(--ink); font-size: 20px; line-height: 1; font-weight: 700; white-space: nowrap; }
   .cell.is-long .cell-value { font-size: 13px; line-height: 20px; }
   .cell-name, .cell-type { white-space: nowrap; }
@@ -865,6 +868,7 @@
   .datasheet tr.is-ended td, .datasheet tr.is-ended th { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
   .datasheet tr.is-folded td, .datasheet tr.is-folded th { text-decoration: none; white-space: normal; }
   .sheet-value { white-space: normal; overflow-wrap: anywhere; }
+  .sheet-bytes { margin-left: 6px; color: var(--ink-3); white-space: nowrap; }
 
   /* The compiler pipeline: each stage a channel of the device. */
   .pipeline { display: flex; flex-direction: column; gap: 0; }

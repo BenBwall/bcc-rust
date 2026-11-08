@@ -454,6 +454,7 @@ fn object(
         scope:     object.function.clone(),
         parameter: object.parameter,
         literal:   object.literal,
+        size:      object.size,
         value:     value(&object.value, holds_chars(&object.r#type), objects, program),
     }
 }
@@ -602,16 +603,21 @@ fn diagnostic(fault: &abstract_machine::Diagnostic) -> Diagnostic {
     }
 }
 
-/// Whether an object or member of the type spelled `ty` holds chars: a
-/// `char` or a `char` array, not a pointer to them.
+/// Whether an object or member of the type spelled `ty` holds chars: one
+/// of the character types (`char`, `signed char`, `unsigned char`) or an
+/// array of one, not a pointer to them.
 fn holds_chars(ty: &str) -> bool {
     let ty = ty.strip_prefix("const ").unwrap_or(ty);
+    let ty = ty
+        .strip_prefix("signed ")
+        .or_else(|| ty.strip_prefix("unsigned "))
+        .unwrap_or(ty);
     ty == "char" || (ty.starts_with("char[") && !ty.contains('*'))
 }
 
 /// A char's value as a character constant spells it: `'A'`, `'\n'`,
 /// `'\0'`, or an escape for a byte that is not printable ASCII.
-fn character(value: i32) -> String {
+fn character(value: i128) -> String {
     let byte = value.to_le_bytes()[0];
     let text = match byte {
         | b'\n' => "\\n".to_owned(),
@@ -939,6 +945,7 @@ mod tests {
             ("recursion", "finished", Some("24")),
             ("structs", "finished", Some("31")),
             ("promotion", "finished", Some("255")),
+            ("unsigned", "finished", Some("0")),
             ("overflow", "undefined_behavior", None),
             ("bounds", "undefined_behavior", None),
             ("indeterminate", "error", None),

@@ -88,7 +88,7 @@ pub fn Datasheet(
                                             <th scope="row" class=palette::class(&object.name) title=object.literal.then(|| object.name.clone())>
                                                 <span class="sheet-swatch" aria-hidden="true"></span>{reel.with(|reel| reel.label_of(object.id)).unwrap_or_else(|| object.name.clone())}
                                             </th>
-                                            <td>{object.ty.clone()}</td>
+                                            <td>{object.ty.clone()}<span class="sheet-bytes" title="its size in bytes on x86-64">{format!("{} B", object.size)}</span></td>
                                             <td>{place}</td>
                                             <td>{born.get(&object.id).map(ToString::to_string).unwrap_or_default()}</td>
                                             <td class="sheet-value">{value}</td>
