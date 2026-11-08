@@ -602,11 +602,12 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             "Outside the supported subset",
             sentence(&diagnostic.message),
             String::from(
-                "The abstract machine runs a small subset of C: int and char objects, pointers to \
-                 them, int and char arrays, string literals, structures, file-scope and static \
-                 objects, functions and prototypes, if, while and for, and printf, puts and \
-                 putchar from <stdio.h>. The compiler pipeline and WebAssembly views compile the \
-                 whole language.",
+                "The abstract machine runs a small subset of C: int and char objects, const ones \
+                 among them, pointers to them, int and char arrays, string literals, structures, \
+                 file-scope and static objects, functions and prototypes, if, while and for, \
+                 casts between int and char, compound assignments such as +=, #define for \
+                 constants, and printf, puts and putchar from <stdio.h>. The compiler pipeline \
+                 and WebAssembly views compile the whole language.",
             ),
             None,
         ),

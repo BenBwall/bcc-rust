@@ -313,14 +313,14 @@ impl Chips<'_, '_> {
     /// An array and the pointer to its first element it decays to.
     fn decay(&self, event: &Event) -> Vec<Option<FlowPart>> {
         let array = event.objects.first().map(|&id| self.whole(id));
-        let pointer = if array
-            .as_ref()
-            .and_then(|chip| chip.ty.as_deref())
-            .is_some_and(|ty| ty.starts_with("char"))
-        {
-            "char *"
-        } else {
-            "int *"
+        // A const array decays to a pointer to const elements.
+        let ty = array.as_ref().and_then(|chip| chip.ty.as_deref()).unwrap_or("int");
+        let constant = ty.starts_with("const ");
+        let pointer = match (ty.trim_start_matches("const ").starts_with("char"), constant) {
+            | (true, false) => "char *",
+            | (true, true) => "const char *",
+            | (false, false) => "int *",
+            | (false, true) => "const int *",
         };
         vec![
             array,
