@@ -176,16 +176,20 @@ fn is_executable(program: &Path) -> bool {
     metadata.is_file()
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    #[cfg(unix)]
     use super::find;
 
     #[test]
+    #[cfg(unix)]
     #[expect(
         clippy::disallowed_types,
         clippy::disallowed_methods,
+        clippy::disallowed_macros,
         reason = "The test builds a scratch directory of programs."
     )]
     fn searches_the_prefixes_then_compiler_path_then_path() {

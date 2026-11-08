@@ -69,7 +69,7 @@ pub(in crate::cli) struct DriverOptions {
     )]
     pub(in crate::cli) assembler:              Assembler,
     /// Look for the system assembler as PREFIX followed by `as` before
-    /// COMPILER_PATH and PATH, as GCC's -B PREFIX does (GCC manual,
+    /// `COMPILER_PATH` and `PATH`, as GCC's -B PREFIX does (GCC manual,
     /// "Directory Options").
     #[arg(short = 'B', value_name = "PREFIX")]
     pub(in crate::cli) program_prefix:         Vec<PathBuf>,
