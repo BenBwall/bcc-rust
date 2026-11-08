@@ -6,7 +6,7 @@ target triple = "x86_64-unknown-linux-gnu"
 @counter = global [4 x i8] zeroinitializer, align 4
 @.str = internal constant [10 x i8] c"SQUARE(3)\00", align 1
 
-define i32 @main() {
+define i32 @main() #0 {
 block0:
   %v3 = icmp sgt i32 9, 1073741823
   br i1 %v3, label %block1, label %block5
@@ -37,6 +37,8 @@ block5:                                           ; preds = %block4, %block0
   %v21 = add nsw i32 %v14, %v20
   ret i32 %v21
 }
+
+attributes #0 = { "frame-pointer"="all" }
 
 !llvm.module.flags = !{!0, !1}
 

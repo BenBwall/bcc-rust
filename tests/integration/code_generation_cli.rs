@@ -2195,6 +2195,93 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// The `builtin_frame_address_test` of `TinyCC`'s `tcctest.c` and a
+    /// return address check: with `-fno-omit-frame-pointer`,
+    /// `__builtin_frame_address` and `__builtin_return_address` above level 0
+    /// walk the frame-pointer chain through LLVM and the native back end, and
+    /// print what `gcc -O0 -fno-omit-frame-pointer` prints. As in GCC, an
+    /// unoptimized compilation keeps frame pointers unasked, and
+    /// `-fomit-frame-pointer` or `-O1` drops them. The interpreter's frames
+    /// link no machine frames, so it stops at the first walk. GNU extension:
+    /// GCC manual, "Return Address" and "Optimize Options".
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn outer_frame_addresses_walk_kept_frame_pointers() {
+        const SOURCE: &str = r#"extern int printf(const char *, ...);
+typedef long ptrdiff_t;
+__attribute__((noinline)) void bfa3(ptrdiff_t o) { printf("bfa3: %s\n", (char *)__builtin_frame_address(3) + o); }
+__attribute__((noinline)) void bfa2(ptrdiff_t o) { printf("bfa2: %s\n", (char *)__builtin_frame_address(2) + o); bfa3(o); }
+__attribute__((noinline)) void bfa1(ptrdiff_t o) { printf("bfa1: %s\n", (char *)__builtin_frame_address(1) + o); bfa2(o); }
+__attribute__((noinline)) void *ra1(void) { return __builtin_return_address(1); }
+__attribute__((noinline)) void *caller(void) { void *mine = __builtin_return_address(0); return ra1() == mine ? "ra ok" : "ra bad"; }
+int main(void) { char str[] = "__builtin_frame_address"; char *fp0 = __builtin_frame_address(0);
+  printf("str: %s\n", str); bfa1(str - fp0); printf("%s\n", (char *)caller()); return 0; }
+"#;
+        const TRANSCRIPT: &str = "str: __builtin_frame_address\nbfa1: \
+                                  __builtin_frame_address\nbfa2: __builtin_frame_address\nbfa3: \
+                                  __builtin_frame_address\nra ok\n";
+        let target = "--target=x86_64-unknown-linux-gnu";
+        let interpreted = bcc(SOURCE, &[target, "-fno-omit-frame-pointer", "--interpret"]);
+        assert_eq!(interpreted.status.code(), Some(70));
+        assert_eq!(text(&interpreted.stdout), "str: __builtin_frame_address\n");
+        assert!(
+            text(&interpreted.stderr).contains(
+                "unsupported by the interpreter: a frame or return address of an outer frame \
+                 (__builtin_frame_address or __builtin_return_address above level 0); compile it \
+                 with -o instead (in @bfa1"
+            ),
+            "{}",
+            text(&interpreted.stderr)
+        );
+        let executable = temporary("frame-chain.exe");
+        let mut failures = Vec::new();
+        for flags in [
+            &["-fno-omit-frame-pointer", "--backend=llvm", "--opt=none"][..],
+            &["-fno-omit-frame-pointer", "--backend=llvm", "--opt=bcc"][..],
+            &["-fno-omit-frame-pointer", "--backend=native", "--opt=none"][..],
+            &["-fno-omit-frame-pointer", "--backend=native", "--opt=bcc"][..],
+            &[
+                "-fno-omit-frame-pointer",
+                "--backend=native",
+                "--native-object",
+            ][..],
+            &["-O0", "--backend=llvm"][..],
+            &["-O0", "--backend=native"][..],
+            &["--backend=native"][..],
+        ] {
+            let built = bcc(
+                SOURCE,
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            if run.status.code() != Some(0) || text(&run.stdout) != TRANSCRIPT {
+                failures.push(format!(
+                    "{flags:?}: {:?}\n{}",
+                    run.status.code(),
+                    text(&run.stdout)
+                ));
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        for backend in ["--backend=llvm", "--backend=native"] {
+            let framed = |flags: &[&str]| {
+                let output = bcc(
+                    "int f(int x) { return x + 1; }",
+                    &[&[target, backend, "-S", "-o", "-"][..], flags].concat(),
+                );
+                assert!(output.status.success(), "{}", text(&output.stderr));
+                text(&output.stdout).contains("movq\t%rsp, %rbp")
+            };
+            assert!(framed(&[]), "{backend}");
+            assert!(framed(&["-O0"]), "{backend}");
+            assert!(framed(&["-O2", "-fno-omit-frame-pointer"]), "{backend}");
+            assert!(!framed(&["-O0", "-fomit-frame-pointer"]), "{backend}");
+            assert!(!framed(&["-O1"]), "{backend}");
+        }
+    }
+
     /// C11 atomics under contention
     /// (`tests/fixtures/programs/atomic_threads.c`): counters that only atomic
     /// read-modify-writes keep exact, a compare-exchange loop, an `atomic_flag`
@@ -2490,9 +2577,13 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         // Every configuration runs before the test fails, so a report names
         // each one that differs.
         let mut failures = Vec::new();
+        // Unoptimized Linux builds keep frame pointers, through which LLVM
+        // would address a buffer in the frame `__builtin_longjmp` restores
+        // the frame pointer from.
         for opt in [
             &["--llvm-opt=O0"][..],
             &["--opt=bcc", "--llvm-opt=O2"][..],
+            &["--opt=bcc", "--llvm-opt=O2", "-fno-omit-frame-pointer"][..],
             &["--backend=native", "--opt=none"][..],
             &["--backend=native", "--opt=bcc"][..],
         ] {

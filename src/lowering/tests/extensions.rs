@@ -514,6 +514,72 @@ block2:
     );
 }
 
+/// GCC's outer frame and return addresses walk the frame-pointer chain:
+/// one load per level from the frame address, and the return address in
+/// the word above the frame reached. Windows, whose frames keep no chain,
+/// and a level beyond the bound stay refused, and the interpreter, whose
+/// frames link no machine frames, stops with its own reason. GNU extension:
+/// GCC manual, "Return Address".
+#[test]
+fn outer_frame_addresses_walk_the_frame_chain() {
+    let source = "void *frame(void) { return __builtin_frame_address(2); }\nvoid *ret(void) { \
+                  return __builtin_return_address(1); }";
+    let text = lowered(source);
+    pretty_assertions::assert_eq!(
+        functions(&text),
+        "\
+function @frame() -> ptr external {
+block0:
+    v0 = iconst.i32 2
+    v1 = frame_address
+    v2 = load.ptr v1, align 8
+    v3 = load.ptr v2, align 8
+    return v3
+}
+
+function @ret() -> ptr external {
+block0:
+    v0 = iconst.i32 1
+    v1 = frame_address
+    v2 = load.ptr v1, align 8
+    v3 = iconst.i64 8
+    v4 = ptr_add inbounds v2, v3
+    v5 = load.ptr v4, align 8
+    return v5
+}
+"
+    );
+    for entry in ["frame", "ret"] {
+        match run_text(&text, entry).result {
+            | Err(crate::backend::interpreter::Trap::Unsupported(what, _)) => assert!(
+                what.to_string()
+                    .starts_with("a frame or return address of an outer frame"),
+                "{what}"
+            ),
+            | other => panic!("{entry}: {other:?}"),
+        }
+    }
+    let deepest = "void *f(void) { return __builtin_frame_address(64); }";
+    let text = lower_for(deepest, Target::LinuxGnu).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(text.matches("load.ptr").count(), 64, "{text}");
+    for (target, source) in [
+        (
+            Target::LinuxGnu,
+            "void *f(void) { return __builtin_frame_address(65); }",
+        ),
+        (Target::WindowsGnu, source),
+        (Target::WindowsMsvc, source),
+    ] {
+        let errors = lower_for(source, target).expect_err(source);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("not yet supported by lowering: this builtin")),
+            "{target:?}: {errors:?}"
+        );
+    }
+}
+
 /// A binary128 comparison builtin tests `uno` first and compares zeros
 /// instead of a NaN, so libgcc's signaling `__lttf2` never sees one and no
 /// "invalid" is raised for a quiet NaN (C99 §7.12.14p1), as GCC compares.

@@ -367,6 +367,12 @@ there is an undefined symbol.
 file, so a run writes `gmon.out` for `gprof`, and `no_instrument_function` keeps a
 function out. `-p` still warns.
 
+`-fno-omit-frame-pointer` on Linux keeps a frame pointer in every function on
+both back ends, and `-fomit-frame-pointer` drops it. As in GCC, which turns
+`-fomit-frame-pointer` on from `-O1`, an unoptimized compilation (one without
+`__OPTIMIZE__`) keeps them by default; see
+[middle-end.md](../../middle-end.md#outer-frame-addresses-2026-11-08).
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
@@ -380,7 +386,7 @@ to the options TCC itself implements; see [TCC](#tcc).
   itself is [implemented](#debug-information)), reports and dumps, build mechanics (`-pipe`,
   `-save-temps`, `-flto`, `-fuse-ld=`), optimizations
   the compiler is permitted but not required to make (`-funroll-loops`,
-  `-fomit-frame-pointer`, `-fstrict-aliasing`), code generation tuning (`-mtune=`, `-falign-*`,
+  `-fstrict-aliasing`), code generation tuning (`-mtune=`, `-falign-*`,
   `-mtls-dialect=`), what bcc always does (`-fno-strict-aliasing`: bcc
   emits no type-based alias information;
   `-ffp-contract=off`: bcc forms no fused operations; `-fexcess-precision=`:

@@ -2213,7 +2213,10 @@ Real and complex binary128 lowering remain explicitly unsupported. The
 interpreter supports complex component extraction functions; full complex libm
 coverage is not implied.
 `__builtin_frame_address` and `__builtin_return_address` take a constant level
-and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address);
+and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address), and
+levels 1 to 64 outside Windows by walking the frame-pointer chain as GCC does,
+which unoptimized Linux code and `-fno-omit-frame-pointer` keep (see
+[middle-end.md](middle-end.md#outer-frame-addresses-2026-11-08));
 `__builtin_extract_return_addr` is the identity.
 GCC's `__builtin_setjmp (void *)` and `__builtin_longjmp (void *, 1)`
 ([Nonlocal Gotos](https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html))

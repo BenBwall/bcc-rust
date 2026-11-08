@@ -37,6 +37,7 @@ use crate::{
             assemble,
             driver::libraries,
             emit_assembly,
+            emit_assembly_with,
         },
     },
     configuration::CompilerConfiguration,
@@ -201,15 +202,17 @@ fn run_assembly(
 }
 
 /// One compilation to check: a program, a target, whether the bcc
-/// pipeline runs first, and whether every value is spilled (see
-/// `spill_everything`).
+/// pipeline runs first, whether every value is spilled (see
+/// `spill_everything`), and whether every function keeps a frame pointer
+/// (`-fno-omit-frame-pointer`).
 struct Job<'a> {
-    name:     &'a str,
-    source:   &'a str,
-    target:   Target,
-    runner:   Runner,
-    optimize: bool,
-    spill:    bool,
+    name:          &'a str,
+    source:        &'a str,
+    target:        Target,
+    runner:        Runner,
+    optimize:      bool,
+    spill:         bool,
+    frame_pointer: bool,
 }
 
 /// What one job found.
@@ -229,8 +232,10 @@ fn check(job: &Job<'_>, directory: &Path) -> Verdict {
         let assembly = if job.spill {
             spilled_assembly(module, job.target)
         } else {
+            let mut code = crate::target::CodeOptions::default();
+            code.hardening.keep_frame_pointer = job.frame_pointer;
             let mut text = String::new();
-            emit_assembly(module, job.target, &mut text)
+            emit_assembly_with(module, job.target, code, &mut text)
                 .map(|()| text)
                 .map_err(|error| error.to_string())
         };
@@ -242,11 +247,12 @@ fn check(job: &Job<'_>, directory: &Path) -> Verdict {
         | (Ok(expected), Ok(text)) => (expected, text),
     };
     let name = format!(
-        "{}-{:?}-{}{}",
+        "{}-{:?}-{}{}{}",
         job.name,
         job.target,
         if job.optimize { "bcc" } else { "none" },
-        if job.spill { "-spilled" } else { "" }
+        if job.spill { "-spilled" } else { "" },
+        if job.frame_pointer { "-fp" } else { "" }
     );
     match run_assembly(&text, job.target, job.runner, directory, &name) {
         | Ok(actual) => {
@@ -318,6 +324,7 @@ fn native_programs_match_the_interpreter() {
                     runner,
                     optimize,
                     spill: false,
+                    frame_pointer: false,
                 });
             }
         }
@@ -361,6 +368,50 @@ fn programs_with_every_value_spilled_match_the_interpreter() {
                     runner,
                     optimize,
                     spill: true,
+                    frame_pointer: false,
+                });
+            }
+        }
+    }
+    let mut failures = Vec::new();
+    for (job, verdict) in jobs.iter().zip(check_all(&jobs, directory.path())) {
+        match verdict {
+            | Verdict::Passed => {},
+            | Verdict::Refused(refusal) =>
+                failures.push(format!("{} {:?}: refused: {refusal}", job.name, job.target)),
+            | Verdict::NoOracle => failures.push(format!(
+                "{} {:?}: the interpreter traps",
+                job.name, job.target
+            )),
+            | Verdict::Failed(failure) => failures.push(failure),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// Every program again with a frame pointer in every function, as
+/// `-fno-omit-frame-pointer` keeps one: `%rbp` leaves the allocator's
+/// registers, and on System V each prologue links the frame to its
+/// caller's.
+#[test]
+fn programs_keeping_frame_pointers_match_the_interpreter() {
+    if crate::backend::llvm::Toolchain::bundled(Target::WindowsGnu).is_err() && cfg!(windows) {
+        eprintln!("skipping: no bundled toolchain");
+        return;
+    }
+    let directory = TempDir::new("native-frame-pointers");
+    let mut jobs = Vec::new();
+    for (target, runner) in targets() {
+        for program in PROGRAMS {
+            for optimize in [false, true] {
+                jobs.push(Job {
+                    name: program.name,
+                    source: program.source,
+                    target,
+                    runner,
+                    optimize,
+                    spill: false,
+                    frame_pointer: true,
                 });
             }
         }
@@ -451,6 +502,7 @@ fn accepted_lowering_programs_match_the_interpreter() {
                     runner,
                     optimize,
                     spill: false,
+                    frame_pointer: false,
                 });
             }
         }
