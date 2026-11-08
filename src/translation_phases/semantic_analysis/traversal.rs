@@ -17,6 +17,7 @@ use crate::translation_phases::parsing::syntax::{
     ForInitializer,
     Statement,
     StatementType,
+    UnaryOperator,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -747,6 +748,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.silences_evaluation_warnings(e) {
             self.inhibited_evaluations += 1;
         }
+        if is_extension(e) {
+            self.extension_operands += 1;
+        }
     }
 
     /// Undoes [`Self::enter_expression`], and checks a finished full
@@ -754,6 +758,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn leave_expression(&mut self, e: &'tu Expression<'tu>) {
         if self.silences_evaluation_warnings(e) {
             self.inhibited_evaluations -= 1;
+        }
+        if is_extension(e) {
+            self.extension_operands -= 1;
         }
         self.expression_depth -= 1;
         if self.expression_depth == 0 {
@@ -822,4 +829,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ));
         self.expression_depth = 0;
     }
+}
+
+/// Whether `e` is `__extension__ operand`.
+fn is_extension(e: &Expression<'_>) -> bool {
+    matches!(
+        e.kind,
+        ExpressionType::Unary {
+            operator: UnaryOperator::Extension,
+            ..
+        }
+    )
 }

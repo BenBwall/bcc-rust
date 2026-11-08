@@ -786,6 +786,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Reports `text` as `-pedantic` reports an extension.
     pub(super) fn report_pedantic_constant(&mut self, text: &str, source: SourceVectors) {
+        if self.extension_operands != 0 {
+            return;
+        }
         let text = self.context.string_cache.intern(text);
         self.extension_error(
             crate::configuration::Feature::ConstantFolding,

@@ -2247,6 +2247,10 @@ struct Analyzer<'a, 'tu, 's> {
     /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92; §6.5.13-§6.5.15,
     /// pp. 89-91; PDF pp. 101-103.
     inhibited_evaluations:   u32,
+    /// How many enclosing `__extension__` operators silence `-pedantic`, as
+    /// GCC's `disable_extension_diagnostics` does for the operand.
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    extension_operands:      u32,
     /// How many enclosing contexts require a constant expression: Clang's
     /// `ConstantEvaluated`, which silences its warnings about code.
     constant_contexts:       u32,
