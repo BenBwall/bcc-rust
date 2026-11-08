@@ -928,7 +928,7 @@
   .stage-path-note strong { color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
   .stage-path-note code { background: color-mix(in srgb, var(--device) 18%, var(--ink)); color: var(--device); }
   .stage-path-note[hidden] { display: none; }
-  .stage-explanation { color: var(--ink-2); font-size: 13px; line-height: 1.75; max-width: 76ch; }
+  .stage-explanation { margin-top: 20px; color: var(--ink-2); font-size: 13px; line-height: 1.75; max-width: 76ch; }
   .stage-note { margin-top: 10px; font-size: 11.5px; color: var(--ink-3); }
   .stage-note.is-link::before { content: "↔ "; color: var(--flow-ink); }
   .stage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
