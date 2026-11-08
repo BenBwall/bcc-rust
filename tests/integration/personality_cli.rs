@@ -5623,6 +5623,28 @@ mod tests {
             assert!(!text.contains("unexpected argument"), "{option}: {text}");
             assert!(!text.contains("Usage:"), "{option}: {text}");
         }
+        // clang-cl's `/W1` to `/W3` are `-Wall`, `/W4` adds `-Wextra`, and
+        // without a level it reports neither (clang-cl 23).
+        directory.write(
+            "w.c",
+            "int f(int a) { int unused; unsigned u = 1; return a < u; }\n",
+        );
+        for (level, unused, sign) in [
+            (None, false, false),
+            (Some("/W0"), false, false),
+            (Some("/W1"), true, false),
+            (Some("/W3"), true, false),
+            (Some("/W4"), true, true),
+        ] {
+            let args: Vec<&str> = level.into_iter().chain(["/c", "w.c"]).collect();
+            let text = stderr(&directory.bcc("--clang-cl-mode", &args));
+            assert_eq!(
+                text.contains("[-Wunused-variable]"),
+                unused,
+                "{level:?}: {text}"
+            );
+            assert_eq!(text.contains("[-Wsign-compare]"), sign, "{level:?}: {text}");
+        }
     }
 
     /// The options around GCC 14's permerrors and Clang's default errors,
