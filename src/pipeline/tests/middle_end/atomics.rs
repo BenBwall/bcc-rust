@@ -105,6 +105,28 @@ int main(void) {
 }",
     ),
     (
+        // GCC and Clang expand these inline for aligned objects of 1, 2, 4
+        // and 8 bytes; OpenSSL's CRYPTO_atomic_load uses the first.
+        "generic_scalars",
+        r"
+struct Pair { int a, b; };
+int main(void) {
+    unsigned long long v=41, r=0, n=7;
+    __atomic_load(&v,&r,2); if(r!=41) return 1;
+    __atomic_store(&v,&n,3); if(v!=7) return 2;
+    _Alignas(8) struct Pair p={1,2}, q={3,4}, o={0,0};
+    __atomic_exchange(&p,&q,&o,5); if(p.a!=3 || p.b!=4 || o.a!=1 || o.b!=2) return 3;
+    long x=5, e=6, d=9;
+    if(__atomic_compare_exchange(&x,&e,&d,0,5,5) || e!=5) return 4;
+    if(!__atomic_compare_exchange(&x,&e,&d,0,5,5) || x!=9) return 5;
+    char c='a', c2='z', c3=0; __atomic_exchange(&c,&c2,&c3,0); if(c!='z' || c3!='a') return 6;
+    double f=1.5, g=0; __atomic_load(&f,&g,5); if(g!=1.5) return 7;
+    void *pointer=&v, *other=&r, *seen=0; __atomic_store(&pointer,&other,5);
+    __atomic_load(&pointer,&seen,5); if(seen!=&r) return 8;
+    return 0;
+}",
+    ),
+    (
         "generic_buffers",
         r"
 struct Small { char a[3]; };
@@ -402,6 +424,24 @@ fn native_backend_compiles_atomic_execution() {
             crate::backend::native::emit_assembly(module, Target::LinuxGnu, &mut assembly)
                 .unwrap_or_else(|error| panic!("{error}\n{module}"));
             assert!(assembly.contains("\tlock cmpxchgl\t"), "{assembly}");
+        },
+    );
+}
+
+#[test]
+fn aligned_generic_atomics_need_no_library_calls() {
+    with_atomic_module(
+        "unsigned long long v; int load(unsigned long long *r) { __atomic_load(&v, r, 2); return \
+         1; }
+void store(void **p, void **value) { __atomic_store(p, value, 3); }",
+        Target::LinuxGnu,
+        true,
+        Profile::PostAbi,
+        |module, _| {
+            let mut assembly = String::new();
+            crate::backend::native::emit_assembly(module, Target::LinuxGnu, &mut assembly)
+                .unwrap_or_else(|error| panic!("{error}\n{module}"));
+            assert!(!assembly.contains("__atomic_"), "{assembly}");
         },
     );
 }

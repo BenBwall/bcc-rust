@@ -154,8 +154,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             types::layout(&self.unit.sema.types, object)
                 .map_err(|kind| super::super::module_items::at(kind, source))?
         };
-        if builtin.generic
-            || matches!(self.repr(value_type, source)?, types::Repr::Aggregate)
+        // GCC and Clang expand the generic `__atomic_load`, `__atomic_store`,
+        // `__atomic_exchange` and `__atomic_compare_exchange` inline for an
+        // aligned object of 1, 2, 4 or 8 bytes, whatever its type, and call
+        // libatomic for other sizes (GCC manual, "__atomic Builtins"). An
+        // under-aligned object keeps the library call, as Clang's does.
+        let inline_generic = builtin.generic
+            && matches!(layout.size, 1 | 2 | 4 | 8)
+            && self.repr(value_type, source)?.value_type() != Some(Type::F80)
+            && self.place_alignment(address, types::align(layout)).bytes() >= layout.size;
+        if builtin.generic && !inline_generic
+            || !builtin.generic && matches!(self.repr(value_type, source)?, types::Repr::Aggregate)
             || !matches!(layout.size, 1 | 2 | 4 | 8 | 16)
         {
             return self.finish_atomic_buffer(e, instance, builtin, items, object, order);
