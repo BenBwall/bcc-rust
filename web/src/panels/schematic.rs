@@ -26,17 +26,6 @@ const GAP: f64 = 30.0;
 /// readers keeps it whole.
 const SHOWN: usize = 16;
 
-/// `text` cut to [`SHOWN`] characters, ending in `…` when it was longer.
-fn shown(text: &str) -> String {
-    if text.chars().count() <= SHOWN {
-        text.to_owned()
-    } else {
-        let mut cut: String = text.chars().take(SHOWN - 1).collect();
-        cut.push('…');
-        cut
-    }
-}
-
 #[component]
 pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     let tree = Memo::new(move |_| {
@@ -108,42 +97,9 @@ fn walk(tree: &Tree, index: usize, row: &mut [f64], leaves: &mut usize) -> f64 {
 fn drawing(tree: &Tree) -> impl IntoView {
     let (level, row, leaves) = place(tree);
     let root = tree.nodes.len() - 1;
-    let width_of = |index: usize| {
-        let label = px(shown(&tree.nodes[index].label).chars().count());
-        if tree.nodes[index].children.is_empty() {
-            label * CHAR + 16.0
-        } else {
-            (label * CHAR + 14.0).max(30.0)
-        }
-    };
-    let shown_value = |index: usize| {
-        let node = &tree.nodes[index];
-        node.value
-            .as_ref()
-            .filter(|value| !(node.children.is_empty() && **value == node.label))
-            .map(|value| {
-                if node.lvalue {
-                    "object".to_owned()
-                } else {
-                    shown(value)
-                }
-            })
-    };
-    // Each level is as wide as its widest node and the value on its wire,
-    // so a long operand (a string literal) never runs into its operator.
-    let columns = level[root] + 1;
-    let mut start = vec![10.0; columns + 1];
-    for column in 0..columns {
-        let widest = (0..tree.nodes.len())
-            .filter(|&index| level[index] == column)
-            .map(|index| {
-                let value = shown_value(index)
-                    .map_or(0.0, |value| px(value.chars().count()) * VALUE_CHAR + 8.0);
-                width_of(index) + value.max(GAP)
-            })
-            .fold(0.0, f64::max);
-        start[column + 1] = start[column] + widest.max(COLUMN);
-    }
+    let width_of = |index: usize| width_of(tree, index);
+    let shown_value = |index: usize| shown_value(tree, index);
+    let start = columns(tree, &level);
     let x = |index: usize| start[level[index]];
     let y = |index: usize| row[index] * ROW + ROW / 2.0 + 6.0;
     let result = tree.nodes[root]
@@ -212,6 +168,64 @@ fn drawing(tree: &Tree) -> impl IntoView {
             {wires}
             {nodes}
         </svg>
+    }
+}
+
+/// The left edge of each logic level. Each level is as wide as its widest
+/// node and the value on its wire, so a long operand (a string literal)
+/// never runs into its operator.
+fn columns(tree: &Tree, level: &[usize]) -> Vec<f64> {
+    let count = level.iter().max().map_or(1, |&deepest| deepest + 1);
+    let mut start = vec![10.0; count + 1];
+    for column in 0..count {
+        let widest = (0..tree.nodes.len())
+            .filter(|&index| level[index] == column)
+            .map(|index| {
+                let value = shown_value(tree, index)
+                    .map_or(0.0, |value| px(value.chars().count()) * VALUE_CHAR + 8.0);
+                width_of(tree, index) + value.max(GAP)
+            })
+            .fold(0.0, f64::max);
+        start[column + 1] = start[column] + widest.max(COLUMN);
+    }
+    start
+}
+
+/// The width of node `index`'s label: an operand's name, or an operator's
+/// box.
+fn width_of(tree: &Tree, index: usize) -> f64 {
+    let label = px(shown(&tree.nodes[index].label).chars().count());
+    if tree.nodes[index].children.is_empty() {
+        label * CHAR + 16.0
+    } else {
+        (label * CHAR + 14.0).max(30.0)
+    }
+}
+
+/// The value written on node `index`'s wire, if it has one to show: not an
+/// operand's own spelling, and "object" for an lvalue.
+fn shown_value(tree: &Tree, index: usize) -> Option<String> {
+    let node = &tree.nodes[index];
+    node.value
+        .as_ref()
+        .filter(|value| !(node.children.is_empty() && **value == node.label))
+        .map(|value| {
+            if node.lvalue {
+                "object".to_owned()
+            } else {
+                shown(value)
+            }
+        })
+}
+
+/// `text` cut to [`SHOWN`] characters, ending in `…` when it was longer.
+fn shown(text: &str) -> String {
+    if text.chars().count() <= SHOWN {
+        text.to_owned()
+    } else {
+        let mut cut: String = text.chars().take(SHOWN - 1).collect();
+        cut.push('…');
+        cut
     }
 }
 
