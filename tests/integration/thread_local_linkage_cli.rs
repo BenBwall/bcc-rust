@@ -147,8 +147,15 @@ int main(int argc, char **argv) {
     const DLOPEN_OUTPUT: &str =
         "thread 0: 10411\nthread 1: 20412\nthread 2: 30413\nthread 3: 40414\nmain: 100 1\n";
 
-    /// The bcc pipelines a library is built with.
-    const ARMS: [&[&str]; 2] = [&["--llvm-opt=O0"], &["--opt=bcc", "--llvm-opt=O2"]];
+    /// The bcc pipelines a library is built with: the LLVM back end
+    /// unoptimized and after both optimizers, and the native back end, whose
+    /// listing the bundled Clang assembles or bcc encodes itself.
+    const ARMS: [&[&str]; 4] = [
+        &["--llvm-opt=O0"],
+        &["--opt=bcc", "--llvm-opt=O2"],
+        &["--backend=native"],
+        &["--backend=native", "--opt=bcc", "--native-object"],
+    ];
 
     /// The position-independent models a shared library can be built with,
     /// and whether it may share thread-local objects with the executable:
@@ -182,8 +189,15 @@ int main(int argc, char **argv) {
         let clang_main = directory.join("main-clang.o");
         clang(&linked_main, &["-c", "-O2"], &directory, &clang_main);
         mains.push(("clang", clang_main));
-        let dlopen_host = directory.join("dlopen-host");
-        build(&dlopen_main, &["--llvm-opt=O0"], &dlopen_host);
+        let mut dlopen_hosts = Vec::new();
+        for (name, flags) in [
+            ("llvm", &["--llvm-opt=O0"][..]),
+            ("native", &["--backend=native", "--opt=bcc"][..]),
+        ] {
+            let dlopen_host = directory.join(format!("dlopen-host-{name}"));
+            build(&dlopen_main, flags, &dlopen_host);
+            dlopen_hosts.push((name, dlopen_host));
+        }
         let mut libraries = Vec::new();
         for (index, arm) in ARMS.iter().enumerate() {
             for (model_index, (model, shared)) in LIBRARY_MODELS.iter().enumerate() {
@@ -231,12 +245,13 @@ int main(int argc, char **argv) {
                     text(&ran.stderr)
                 );
             }
-            if let Some(loaded) = loaded {
-                let ran = run_native(Command::new(&dlopen_host).arg(loaded)).unwrap();
+            for (host_name, dlopen_host) in loaded.iter().flat_map(|_| &dlopen_hosts) {
+                let loaded = loaded.as_ref().unwrap();
+                let ran = run_native(Command::new(dlopen_host).arg(loaded)).unwrap();
                 assert_eq!(
                     (ran.status.code(), text(&ran.stdout).as_str()),
                     (Some(0), DLOPEN_OUTPUT),
-                    "dlopen {library_name}: {}",
+                    "{host_name} dlopen {library_name}: {}",
                     text(&ran.stderr)
                 );
             }
@@ -294,74 +309,87 @@ int main(void) {
         drop(std::fs::remove_dir_all(&directory));
     }
 
-    /// The native back end generates executable code only: it refuses
-    /// `-fPIC` and `-shared`, reaches declarations through the GOT's
-    /// thread-pointer offset (initial-exec), and honours
-    /// `-ftls-model=local-exec` for them as LLVM does.
+    /// The native back end's thread-local accesses follow the relocation
+    /// model as GCC's and Clang's do: executables reach a declaration
+    /// through the GOT's thread-pointer offset (initial-exec) and honour
+    /// `-ftls-model=local-exec` for it; shared-library code calls
+    /// `__tls_get_addr`, general-dynamic for a preemptible symbol and
+    /// local-dynamic for an internal or hidden one, unless `-ftls-model`
+    /// names a static model.
     #[test]
-    fn native_back_end_refuses_pic_and_honours_local_exec() {
-        let source = "extern __thread int other; int main(void) { return other; }";
-        for flags in [&["-fPIC"][..], &["-fpic"], &["-fPIE", "-fPIC"]] {
-            let output = bcc(
-                source,
-                &[&["--backend=native", "--emit=asm"][..], flags].concat(),
-            );
-            assert_eq!(output.status.code(), Some(1), "{flags:?}");
-            assert!(
-                text(&output.stderr).contains(
-                    "the native back end generates code for executables only; -fpic, -fPIC and \
-                     -shared need --backend=llvm"
-                ),
-                "{flags:?}: {}",
-                text(&output.stderr)
-            );
-        }
-        // `-shared` is refused with the default relocation model too, before
-        // anything is written.
-        let library = temporary("native-shared.so");
-        for flags in [&[][..], &["-fPIE"], &["-fno-pic"]] {
-            let output = bcc(
-                "__thread int counter; int get(void) { return counter; }",
+    fn native_back_end_tls_models_follow_the_relocation_model() {
+        let source = "extern __thread int other; static __thread int mine; \
+                      __attribute__((visibility(\"hidden\"))) __thread int hidden; int get(void) \
+                      { return other + mine + hidden; }";
+        for (flags, accesses) in [
+            (
+                &[][..],
+                &["other@GOTTPOFF(%rip)", "mine@TPOFF(", "hidden@TPOFF("][..],
+            ),
+            (&["-fno-pic"], &["other@GOTTPOFF(%rip)", "mine@TPOFF("]),
+            (
+                &["-fPIC", "-fPIE"],
+                &["other@GOTTPOFF(%rip)", "mine@TPOFF("],
+            ),
+            (&["-ftls-model=initial-exec"], &["other@GOTTPOFF(%rip)"]),
+            (&["-ftls-model=local-exec"], &["other@TPOFF("]),
+            (
+                &["-fPIC"],
                 &[
-                    &[
-                        "--backend=native",
-                        "-shared",
-                        "-o",
-                        library.to_str().unwrap(),
-                    ][..],
-                    flags,
-                ]
-                .concat(),
-            );
-            assert_eq!(output.status.code(), Some(1), "{flags:?}");
-            assert!(
-                text(&output.stderr).contains(
-                    "the native back end generates code for executables only; -fpic, -fPIC and \
-                     -shared need --backend=llvm"
-                ),
-                "{flags:?}: {}",
-                text(&output.stderr)
-            );
-            assert!(!library.exists(), "{flags:?}");
-        }
-        for (flags, access) in [
-            (&[][..], "other@GOTTPOFF(%rip)"),
-            (&["-fno-pic"], "other@GOTTPOFF(%rip)"),
-            (&["-fPIC", "-fPIE"], "other@GOTTPOFF(%rip)"),
-            (&["-ftls-model=initial-exec"], "other@GOTTPOFF(%rip)"),
-            (&["-ftls-model=local-exec"], "other@TPOFF("),
+                    "data16\n\tleaq\tother@TLSGD(%rip), %rdi\n\tdata16\n",
+                    "\tdata16\n\trex64\n\tcallq\t__tls_get_addr@PLT",
+                    "leaq\tmine@TLSLD(%rip), %rdi\n\tcallq\t__tls_get_addr@PLT",
+                    "mine@DTPOFF(%rax)",
+                    "leaq\thidden@TLSLD(%rip), %rdi",
+                ],
+            ),
+            (
+                &["-fpic", "-ftls-model=local-dynamic"],
+                &["other@TLSGD(%rip)", "mine@TLSLD(%rip)"],
+            ),
+            (
+                &["-fPIC", "-ftls-model=initial-exec"],
+                &["other@GOTTPOFF(%rip)", "mine@GOTTPOFF(%rip)"],
+            ),
+            (
+                &["-fPIC", "-ftls-model=local-exec"],
+                &["other@TPOFF(", "mine@TPOFF("],
+            ),
         ] {
             let output = bcc(
                 source,
                 &[&["--backend=native", "--emit=asm"][..], flags].concat(),
             );
             assert!(output.status.success(), "{}", text(&output.stderr));
-            assert!(
-                text(&output.stdout).contains(access),
-                "{flags:?}: {}",
-                text(&output.stdout)
-            );
+            for access in accesses {
+                assert!(
+                    text(&output.stdout).contains(access),
+                    "{flags:?}: {access}\n{}",
+                    text(&output.stdout)
+                );
+            }
         }
+        // As with GCC and Clang, `-shared` does not make executable code
+        // position-independent: its local-exec access to a definition
+        // another module may preempt does not link into a library.
+        let Some(_) = linux_host() else { return };
+        let library = temporary("native-executable-code.so");
+        let output = bcc(
+            "__thread int counter; int get(void) { return counter; }",
+            &[
+                "--backend=native",
+                "-shared",
+                "-o",
+                library.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+        assert!(
+            text(&output.stderr).contains("cannot be used with -shared"),
+            "{}",
+            text(&output.stderr)
+        );
+        assert!(!library.exists());
     }
 
     /// `__PIC__`, `__pic__`, `__PIE__` and `__pie__` follow the last of the

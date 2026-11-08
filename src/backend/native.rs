@@ -187,6 +187,30 @@ pub(crate) fn defines(module: &Module<'_>, symbol: Symbol) -> bool {
     }
 }
 
+/// Whether ELF code may reach `symbol` at a link-time offset from itself,
+/// PC-relative, rather than through its GOT entry or PLT stub. The module
+/// must define it. In an executable that suffices, since the executable's
+/// definitions come first in symbol lookup. In a shared library (`pic`) a
+/// default-visibility symbol stays preemptible: the executable or a library
+/// loaded before this one may define the same name, and every reference
+/// must then bind to that definition. Internal symbols and hidden or
+/// protected ones cannot be preempted. GCC and Clang decide the same way
+/// (Clang's `shouldAssumeDSOLocal`); there a weak definition is preemptible
+/// too.
+/// System V gABI, "Symbol Table", symbol visibility; psABI §3.5.4 "Data
+/// Objects" and §3.5.5 "Function Calls".
+pub(crate) fn binds_locally(module: &Module<'_>, symbol: Symbol, pic: bool) -> bool {
+    if !defines(module, symbol) {
+        return false;
+    }
+    let linkage = match symbol {
+        | Symbol::Function(func) => module.function(func).linkage,
+        | Symbol::Global(global) => module.global(global).linkage,
+    };
+    !pic || linkage == Linkage::Internal
+        || module.symbol_attributes(symbol).visibility != Visibility::Default
+}
+
 /// Whether code on `target` reaches `symbol` through a pointer-sized
 /// constant holding its address, as Clang does on COFF: the import address
 /// table entry `__imp_name` of a `dllimport` declaration, which the loader
@@ -248,9 +272,10 @@ pub(crate) fn emit_assembly<'m>(
 }
 
 /// Writes the module's assembly for `target` with the relocation and TLS
-/// models of `code`, or refuses it. The back end generates code for
-/// executables only, which also serves `-fno-pic`; it refuses `-fpic` and
-/// `-fPIC`, whose code a shared library must be able to contain.
+/// models of `code`, or refuses it. Code for an executable (`-fpie`, the
+/// default, or `-fno-pic`) reaches the module's own definitions
+/// PC-relative; `-fpic` and `-fPIC` code, which a shared library can
+/// contain, reaches only the symbols that [`binds_locally`] so.
 pub(crate) fn emit_assembly_with<'m>(
     module: &'m Module<'_>,
     target: Target,
@@ -296,11 +321,8 @@ fn emit<'m>(
     if target.is_wasm() {
         return Err(NativeError::WasmTarget);
     }
-    if matches!(target, Target::LinuxGnu | Target::LinuxMusl)
-        && matches!(code.relocation(target), Relocation::Pic(_))
-    {
-        return Err(NativeError::SharedLibraryCode);
-    }
+    let pic = matches!(target, Target::LinuxGnu | Target::LinuxMusl)
+        && matches!(code.relocation(target), Relocation::Pic(_));
     let stubs = Bump::new();
     let references = support::GlobalReferences::collect(module, &stubs);
     support::check_module(module, target, &references)?;
@@ -314,7 +336,7 @@ fn emit<'m>(
     } else {
         out
     };
-    let mut emitter = Emitter::new(module, target, out, &stubs);
+    let mut emitter = Emitter::new(module, target, pic, out, &stubs);
     if let Some(listing) = listing {
         emitter.record_listing(ListingRecorder {
             lines: &lines,
@@ -334,6 +356,7 @@ fn emit<'m>(
                 body,
                 target,
                 isel::SelectOptions {
+                    pic,
                     tls_model: code.tls_model,
                     indirect_returns_twice,
                     track_sources,
@@ -393,13 +416,6 @@ pub(crate) enum NativeError<'m> {
         module:    &'m str,
         requested: &'static str,
     },
-    /// `-fpic`, `-fPIC` or `-shared` asks for code a shared library can
-    /// contain.
-    #[error(
-        "the native back end generates code for executables only; -fpic, -fPIC and -shared need \
-         --backend=llvm"
-    )]
-    SharedLibraryCode,
     /// The native back end generates x86-64 code; WebAssembly targets need
     /// the WebAssembly back end.
     #[error(
