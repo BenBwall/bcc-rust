@@ -6451,6 +6451,45 @@ mod tests {
         }
     }
 
+    /// A header `#include` cannot find ends the compilation in each
+    /// compiler's own words, before the error after it; bcc's own format
+    /// lists the directories it searched instead. GCC 13, Clang 23 and TCC
+    /// 0.9.27 were measured; `cl`'s is its documented fatal error C1083.
+    #[test]
+    fn a_missing_header_stops_in_each_compilers_words() {
+        let directory = Directory::new();
+        directory.write("m.c", "#include \"nosuch.h\"\nint x = ;\n");
+        for (mode, args, expected) in [
+            (
+                "--gcc-mode",
+                &["-c", "m.c"][..],
+                "m.c:1:10: fatal error: nosuch.h: No such file or directory\n    1 | #include \
+                 \"nosuch.h\"\n      |          ^~~~~~~~~~\ncompilation terminated.\n",
+            ),
+            (
+                "--clang-mode",
+                &["-c", "m.c"][..],
+                "m.c:1:10: fatal error: 'nosuch.h' file not found\n    1 | #include \
+                 \"nosuch.h\"\n      |          ^~~~~~~~~~\n1 error generated.\n",
+            ),
+            (
+                "--tcc-mode",
+                &["-c", "m.c"][..],
+                "m.c:1: error: include file 'nosuch.h' not found\n",
+            ),
+            (
+                "--msvc-mode",
+                &["/nologo", "/c", "m.c"][..],
+                "m.c(1): fatal error C1083: Cannot open include file: 'nosuch.h': No such file or \
+                 directory\n",
+            ),
+        ] {
+            let output = directory.bcc(mode, args);
+            assert!(!output.status.success(), "{mode}");
+            assert_eq!(stderr(&output), expected, "{mode}");
+        }
+    }
+
     /// `-H` leaves out the `-include` files and the headers they include,
     /// as GCC and Clang do, while `/showIncludes` lists the `/FI` ones, as
     /// clang-cl does.
