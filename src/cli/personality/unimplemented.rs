@@ -22,6 +22,11 @@
 
 use crate::target::Target;
 
+/// Why a sanitizer, or a check, the compiler has is refused.
+pub(super) const SANITIZERS: &str = "bcc has AddressSanitizer, ThreadSanitizer and \
+                                     UndefinedBehaviorSanitizer's checks of C, on glibc Linux \
+                                     targets";
+
 /// How a personality treats a known option bcc does not implement.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Treatment {
@@ -137,9 +142,14 @@ const REFUSED: &[(&str, &str)] = &[
         "-fno-unit-at-a-time",
         "bcc may reorder top-level definitions",
     ),
+    ("-fsanitize=", SANITIZERS),
     (
-        "-fsanitize=",
-        "bcc has only AddressSanitizer and ThreadSanitizer, on Linux, one at a time",
+        "-fsanitize-minimal-runtime",
+        "bcc links the full UndefinedBehaviorSanitizer run-time library",
+    ),
+    (
+        "-fsanitize-undefined-strip-path-components=",
+        "bcc's UndefinedBehaviorSanitizer reports name each file in full",
     ),
     (
         "-fsanitize-coverage=",

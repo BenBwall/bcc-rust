@@ -1776,7 +1776,7 @@ mod tests {
                     .status
                     .success()
             };
-            assert!(refused(&["-fsanitize=undefined"]), "{mode}");
+            assert!(refused(&["-fsanitize=leak"]), "{mode}");
             assert!(
                 refused(&["--target=x86_64-w64-mingw32", "-fsanitize=address"]),
                 "{mode}"
@@ -8095,6 +8095,132 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert_eq!(stderr(&output), "");
     }
 
+    /// The warnings about how operators group, and the options that hold them
+    /// in each compiler.
+    #[test]
+    fn gnu_parentheses_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int f(int a, int b, int c) {\n    int r = a + b << c;\n    if (a = b)\n        r = \
+             1;\n    if ((a == b))\n        r = 2;\n    if (a)\n        if (b)\n            r = \
+             3;\n        else\n            r = 4;\n    r += !a == b;\n    r += a && b || c;\n    \
+             return r + (a | b & c) + (a & b == c);\n}\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            let text = stderr(&output);
+            let mut flags: Vec<String> = text
+                .lines()
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.dedup();
+            flags.join(" ")
+        };
+        // Each row was measured against GCC 14.2 and Clang 23.1.
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], ""),
+            (
+                "--gcc-mode",
+                &["-Wall"][..],
+                "dangling-else logical-not-parentheses parentheses",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wparentheses"][..],
+                "dangling-else parentheses",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Wno-parentheses"][..],
+                "logical-not-parentheses",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wno-parentheses", "-Wall"][..],
+                "logical-not-parentheses",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wparentheses", "-Wno-dangling-else"][..],
+                "parentheses",
+            ),
+            ("--gcc-mode", &["-Wdangling-else"][..], "dangling-else"),
+            (
+                "--clang-mode",
+                &[][..],
+                "dangling-else logical-not-parentheses parentheses parentheses-equality \
+                 shift-op-parentheses",
+            ),
+            ("--clang-mode", &["-Wno-parentheses"][..], ""),
+            (
+                "--clang-mode",
+                &["-Wall"][..],
+                "bitwise-op-parentheses dangling-else logical-not-parentheses \
+                 logical-op-parentheses parentheses parentheses-equality shift-op-parentheses",
+            ),
+            ("--clang-mode", &["-Wall", "-Wno-parentheses"][..], ""),
+            (
+                "--clang-mode",
+                &["-Wno-shift-op-parentheses"][..],
+                "dangling-else logical-not-parentheses parentheses parentheses-equality",
+            ),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
+        // Clang's own options are unknown to GCC.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wshift-op-parentheses", "-fsyntax-only", "a.c"],
+        );
+        assert!(!output.status.success(), "{}", stderr(&output));
+    }
+
+    /// `a < b < c` is valid C with a meaning nobody writes on purpose: Clang
+    /// refuses it unless told not to, GCC warns under `-Wall`, and plain bcc,
+    /// which has to accept every valid program, warns.
+    #[test]
+    fn chained_comparisons_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write("a.c", "int f(int a, int b, int c) { return a < b < c; }\n");
+        for args in [&[][..], &["-w"][..], &["-Wno-error"][..]] {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc("--clang-mode", &args);
+            assert!(!output.status.success(), "{args:?}");
+            assert!(
+                stderr(&output).contains("[-Wparentheses]"),
+                "{}",
+                stderr(&output)
+            );
+        }
+        let args = ["-Wno-parentheses", "-fsyntax-only", "a.c"];
+        let output = directory.bcc("--clang-mode", &args);
+        succeeds(&output);
+        assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+        let args = ["-Wno-error=parentheses", "-fsyntax-only", "a.c"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        let args = ["-Wall", "-fsyntax-only", "a.c"];
+        let output = directory.bcc("--gcc-mode", &args);
+        succeeds(&output);
+        assert!(
+            stderr(&output).contains("comparisons like"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// Where each compiler reports an undefined static function and what
     /// controls it (PR #318's review): both at the declaration, Clang under
     /// the settings there, with a note at the first use and its own option,
@@ -8205,6 +8331,89 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             text.contains("h.h:1:12: error: 'f' used but never defined [-Werror]"),
             "{text}"
         );
+    }
+
+    /// GCC's `-Wunknown-pragmas`, which `-Wall` holds: each pragma GCC does not
+    /// know, named by its first one or two names. Measured against GCC 14.2.
+    #[test]
+    fn gcc_ignores_unknown_pragmas_with_a_warning() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "#pragma foo bar baz\n#pragma omp parallel\n#pragma GCC foo\n#pragma clang \
+             fp\n#pragma STDC FP_CONTRACT ON\n#pragma comment(lib, \"x\")\n#pragma once\n#pragma \
+             GCC diagnostic push\n#pragma GCC diagnostic pop\n#pragma pack(1)\nint x;\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "a.c"]);
+        succeeds(&output);
+        let text = stderr(&output);
+        let ignored: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once("ignoring '").map(|(_, rest)| rest))
+            .filter_map(|rest| rest.split_once('\'').map(|(name, _)| name))
+            .collect();
+        assert_eq!(
+            ignored,
+            [
+                "#pragma foo bar",
+                "#pragma omp parallel",
+                "#pragma GCC foo",
+                "#pragma clang fp",
+                "#pragma STDC FP_CONTRACT",
+                "#pragma comment ",
+            ],
+            "{text}"
+        );
+        assert!(text.contains("[-Wunknown-pragmas]"), "{text}");
+        let quiet = directory.bcc("--gcc-mode", &["-fsyntax-only", "a.c"]);
+        assert!(!stderr(&quiet).contains("ignoring"), "{}", stderr(&quiet));
+        let quiet = directory.bcc(
+            "--gcc-mode",
+            &["-Wall", "-Wno-unknown-pragmas", "-fsyntax-only", "a.c"],
+        );
+        assert!(!stderr(&quiet).contains("ignoring"), "{}", stderr(&quiet));
+    }
+
+    /// A `_Pragma` operator's unknown pragma is reported at the line that
+    /// invokes it, and withheld where that is in a system header: a system
+    /// macro invoked in user code warns, and a user macro a system header
+    /// invokes does not. Each line was measured against GCC 14.2.
+    #[test]
+    fn gcc_reports_an_unknown_pragma_operator_where_it_is_invoked() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sys")).unwrap();
+        directory.write(
+            "sys/psys.h",
+            "_Pragma(\"mystery foo\")\n#define DO_PRAGMA _Pragma(\"mystery \
+             bar\")\nDO_PRAGMA\n#define SYS_P(x) _Pragma(#x)\nUSER_P(mystery user)\n",
+        );
+        directory.write(
+            "p.c",
+            "#define USER_P(x) _Pragma(#x)\n#include <psys.h>\nDO_PRAGMA\nSYS_P(mystery \
+             sysp)\nUSER_P(nosuch bar)\nint x;\n  _Pragma(\"mystery direct\") int y;\n",
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wall", "-isystem", "sys", "-fsyntax-only", "p.c"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        let warned: Vec<(&str, &str)> = text
+            .lines()
+            .filter_map(|line| line.split_once(": warning: ignoring '"))
+            .filter_map(|(at, rest)| Some((at.rsplit_once(':')?.0, rest.split_once('\'')?.0)))
+            .collect();
+        assert_eq!(
+            warned,
+            [
+                ("p.c:3", "#pragma mystery bar"),
+                ("p.c:4", "#pragma mystery sysp"),
+                ("p.c:5", "#pragma nosuch bar"),
+                ("p.c:7", "#pragma mystery direct"),
+            ],
+            "{text}"
+        );
+        assert!(!text.contains("<pragma string>"), "{text}");
     }
 
     #[test]

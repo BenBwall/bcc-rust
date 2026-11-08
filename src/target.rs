@@ -37,6 +37,8 @@ mod predefined;
 
 // Code generation options
 mod code_options;
+pub(crate) mod sanitizers;
+
 mod x86_features;
 
 // What `__builtin_cpu_supports` and `__builtin_cpu_is` read

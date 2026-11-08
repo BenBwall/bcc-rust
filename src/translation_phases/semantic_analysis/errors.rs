@@ -121,6 +121,8 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
     ValueWarning(crate::configuration::DiagnosticGroup),
+    /// C99: §6.5p3, p. 67; PDF p. 79.
+    Parentheses(crate::configuration::DiagnosticGroup),
     /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
     KnrPromotedParameter,
     /// C99: §6.8.4.2p5, p. 134; PDF p. 146.
@@ -1149,6 +1151,7 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::ValueWarning(_) => "this value is not what it seems",
+            | Self::Parentheses(_) => "this may not group as written",
             | Self::KnrPromotedParameter => "the prototype gives it another type",
             | Self::SwitchCases(_) => "this switch may not handle every value",
             | Self::ReturnFlow(_) => "control can reach this point",
@@ -1381,6 +1384,16 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::SignCompare
                     | crate::configuration::DiagnosticGroup::ReturnLocalAddr
                     | crate::configuration::DiagnosticGroup::ReturnStackAddress
+                    | crate::configuration::DiagnosticGroup::Parentheses
+                    | crate::configuration::DiagnosticGroup::ChainedComparison
+                    | crate::configuration::DiagnosticGroup::LogicalOpParentheses
+                    | crate::configuration::DiagnosticGroup::BitwiseOpParentheses
+                    | crate::configuration::DiagnosticGroup::ShiftOpParentheses
+                    | crate::configuration::DiagnosticGroup::ParenthesesEquality
+                    | crate::configuration::DiagnosticGroup::BitwiseConditionalParentheses
+                    | crate::configuration::DiagnosticGroup::LogicalNotParentheses
+                    | crate::configuration::DiagnosticGroup::DanglingElse
+                    | crate::configuration::DiagnosticGroup::SwitchBool
                     | crate::configuration::DiagnosticGroup::KnrPromotedParameter
                     | crate::configuration::DiagnosticGroup::Switch
                     | crate::configuration::DiagnosticGroup::SwitchEnum
@@ -1828,6 +1841,11 @@ impl SemanticErrorKind {
                 "constant changed by conversion",
                 "C99 §6.3.1.3p3: converting a value the new type cannot represent gives an \
                  implementation-defined result",
+            ),
+            | Self::Parentheses(_) => (
+                "suspicious grouping",
+                "C99 §6.5p3: the grammar groups these operators as written, whatever the \
+                 spacing suggests",
             ),
             | Self::KnrPromotedParameter => (
                 "K&R parameter type",
@@ -2720,6 +2738,7 @@ impl SemanticErrorKind {
         match self {
             | Self::PointerConstraint(group)
             | Self::ValueWarning(group)
+            | Self::Parentheses(group)
             | Self::Format(group, _)
             | Self::SwitchCases(group)
             | Self::ReturnFlow(group) => Some(group),
@@ -2785,6 +2804,13 @@ impl SemanticError {
                 };
                 return Some((arena.alloc_str(name), option));
             },
+            // An error by default, which `-Wno-parentheses` controls.
+            | (
+                F::Clang,
+                SemanticErrorKind::Parentheses(
+                    crate::configuration::DiagnosticGroup::ChainedComparison,
+                ),
+            ) => return Some((arena.alloc_str(name), Some("parentheses"))),
             | (F::Gcc, SemanticErrorKind::ImplicitLibraryFunction(_)) if !c99 => {
                 let message = format_in!(
                     arena,
@@ -3074,6 +3100,7 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ValueWarning(_)
+                | SemanticErrorKind::Parentheses(_)
                 | SemanticErrorKind::Format(..)
                 | SemanticErrorKind::FormatAttribute
                 | SemanticErrorKind::FormatAttributeCount(_)

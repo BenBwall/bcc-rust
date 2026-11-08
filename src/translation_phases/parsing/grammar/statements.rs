@@ -677,6 +677,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         s: &mut StatementParts,
         kind: HeaderKind,
     ) -> Option<Built<'tu>> {
+        let opening = self.cursor.current().map(|token| token.source_vectors);
         if is_operator(self.cursor.current(), OperatorTokenType::OpeningParenthesis) {
             self.own_statement_token(s);
         } else {
@@ -718,15 +719,30 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 let else_statement = if self.cursor.current().is_some_and(|token| {
                     matches!(token.kind, TokenType::Keyword(KeywordTokenType::Else))
                 }) {
+                    let keyword = self.cursor.current().map(|token| token.source_vectors);
                     self.own_statement_token(s);
                     let otherwise = self.parse_statement(
                         Some(ScopeKind::ImplicitSelection),
                         false,
                         s.leave_else,
                     )?;
+                    // Semantic analysis reports this `else`, if an enclosing
+                    // `if` has none of its own.
+                    if s.leave_else
+                        && let Some(keyword) = keyword
+                    {
+                        self.context.note_dangling_else_site(otherwise, keyword);
+                    }
                     self.merge_child_statement(s, otherwise);
                     Some(otherwise)
                 } else {
+                    // Semantic analysis reports this `(`, if the body ends in
+                    // an `if` with an `else`.
+                    if !matches!(body.kind, StatementType::Compound { .. })
+                        && let Some(opening) = opening
+                    {
+                        self.context.note_dangling_else_site(body, opening);
+                    }
                     None
                 };
                 StatementType::If {

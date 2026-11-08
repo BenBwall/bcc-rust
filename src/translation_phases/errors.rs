@@ -109,7 +109,7 @@ impl TranslationError<'_> {
             | Self::InitialProcessing(_) => Some(G::NewlineEof),
             | Self::Preprocessing(error) => match error.error_type {
                 | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
-                | P::UnknownPragmaDirective => Some(G::UnknownPragmas),
+                | P::UnknownPragmaDirective | P::IgnoredPragma(_) => Some(G::UnknownPragmas),
                 | P::WarningDirective(_) => Some(G::Cpp),
                 | P::PragmaMessage { error: false, .. } => Some(G::PragmaMessages),
                 | P::StorageOrderPragmaOperand { .. } => Some(G::Pragmas),
@@ -143,6 +143,7 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::Main(_)
                 | semantic_analysis::SemanticErrorKind::SignCompare
                 | semantic_analysis::SemanticErrorKind::ValueWarning(_)
+                | semantic_analysis::SemanticErrorKind::Parentheses(_)
                 | semantic_analysis::SemanticErrorKind::KnrPromotedParameter
                 | semantic_analysis::SemanticErrorKind::SwitchCases(_)
                 | semantic_analysis::SemanticErrorKind::ReturnFlow(_)

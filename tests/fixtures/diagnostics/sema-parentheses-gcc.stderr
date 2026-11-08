@@ -1,0 +1,51 @@
+sema-parentheses-gcc.c:2:15: warning: suggest parentheses around '&&' within '||' [-Wparentheses]
+    2 |     int r = a && b || c;
+      |               ^~
+sema-parentheses-gcc.c:3:12: warning: suggest parentheses around '+' inside '<<' [-Wparentheses]
+    3 |     r += a + b << c;
+      |            ^
+sema-parentheses-gcc.c:4:12: warning: suggest parentheses around '-' inside '>>' [-Wparentheses]
+    4 |     r += a - b >> c;
+      |            ^
+sema-parentheses-gcc.c:5:16: warning: suggest parentheses around comparison in operand of '&' [-Wparentheses]
+    5 |     r += a & b == c;
+      |                ^~
+sema-parentheses-gcc.c:6:12: warning: suggest parentheses around '+' in operand of '&' [-Wparentheses]
+    6 |     r += a + b & c;
+      |            ^
+sema-parentheses-gcc.c:7:12: warning: suggest parentheses around arithmetic in operand of '|' [-Wparentheses]
+    7 |     r += a & b | c;
+      |            ^
+sema-parentheses-gcc.c:8:12: warning: suggest parentheses around arithmetic in operand of '|' [-Wparentheses]
+    8 |     r += a ^ b | c == 1;
+      |            ^
+sema-parentheses-gcc.c:9:12: warning: suggest parentheses around arithmetic in operand of '^' [-Wparentheses]
+    9 |     r += a + b ^ c;
+      |            ^
+sema-parentheses-gcc.c:10:12: warning: comparisons like 'X<=Y<=Z' do not have their mathematical meaning [-Wparentheses]
+   10 |     r += a < b < c;
+      |            ^
+sema-parentheses-gcc.c:11:12: warning: suggest parentheses around comparison in operand of '==' [-Wparentheses]
+   11 |     r += a < b == c;
+      |            ^
+sema-parentheses-gcc.c:12:13: warning: logical not is only applied to the left hand side of comparison [-Wlogical-not-parentheses]
+   12 |     r += !a == b;
+      |             ^~
+sema-parentheses-gcc.c:15:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   15 |     r += !a & b;
+      |          ^~
+sema-parentheses-gcc.c:16:10: warning: suggest parentheses around operand of '!' or change '|' to '||' or '!' to '~' [-Wparentheses]
+   16 |     r += !a | b;
+      |          ^~
+sema-parentheses-gcc.c:17:9: warning: suggest parentheses around assignment used as truth value [-Wparentheses]
+   17 |     if (a = b)
+      |         ^~~~~
+sema-parentheses-gcc.c:19:12: warning: suggest parentheses around assignment used as truth value [-Wparentheses]
+   19 |     while (a = b)
+      |            ^~~~~
+sema-parentheses-gcc.c:23:8: warning: suggest explicit braces to avoid ambiguous 'else' [-Wdangling-else]
+   23 |     if (a)
+      |        ^
+sema-parentheses-gcc.c:28:8: warning: suggest explicit braces to avoid ambiguous 'else' [-Wdangling-else]
+   28 |     if (a)
+      |        ^

@@ -816,7 +816,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 );
                 None
             },
-            | _ => Some(self.value(item, source)?),
+            | _ => {
+                let value = self.value(item, source)?;
+                self.check_nonnull_return(statement, value);
+                Some(value)
+            },
         };
         _ = self.cleanup_jump(statement)?;
         self.draft
@@ -1031,6 +1035,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | InitializerType::AssignmentExpression(expression)
                 if self.repr(data.ty, source)?.is_scalar() =>
             {
+                // GCC reports a check of the initializer's operation at the
+                // declared name, when the object is one of its registers.
+                if self.gcc_reports() {
+                    let root = if self.gcc_register(binding) {
+                        super::sanitizer::Root::Register
+                    } else {
+                        super::sanitizer::Root::Memory
+                    };
+                    self.note_statement_site(expression, data.name.source_vectors, root);
+                }
                 self.tasks.push(Task::Initialize {
                     object,
                     offset: 0,
@@ -1039,11 +1053,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 });
                 self.tasks.push(Task::Evaluate(expression));
             },
-            | _ => self.tasks.push(Task::InitializeAggregate {
-                object,
-                ty: data.ty,
-                initializer,
-            }),
+            | _ => {
+                if let InitializerType::AssignmentExpression(expression) = initializer.kind {
+                    // GCC copies a record in one statement.
+                    self.note_statement_site(
+                        expression,
+                        data.name.source_vectors,
+                        super::sanitizer::Root::Register,
+                    );
+                }
+                self.tasks.push(Task::InitializeAggregate {
+                    object,
+                    ty: data.ty,
+                    initializer,
+                });
+            },
         }
         Ok(())
     }
@@ -1126,7 +1150,15 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             chain_record: None,
             trampolines: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             receiver: None,
+            ub: super::sanitizer::FunctionSanitizer::new(scratch),
         };
+        lowerer.ub.disabled = lowerer
+            .unit
+            .sema
+            .entity_attributes(binding)
+            .map_or_else(Default::default, |attributes| {
+                attributes.no_sanitize_undefined
+            });
         lowerer.begin_subprogram(record, func);
         if let Some(index) = signature.chain_param() {
             lowerer.chain_in = lowerer
