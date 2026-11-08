@@ -991,6 +991,36 @@ impl UnaryOp {
 pub(crate) enum Callee {
     Symbol(SymbolRef),
     Reg(Reg),
+    /// `__tls_get_addr`, its argument in `%rdi` computed in the same
+    /// sequence: the address of the GOT entries that name a thread-local
+    /// symbol's module and offset (`sym@TLSGD`) or its module alone
+    /// (`sym@TLSLD`). The sequence's bytes are fixed, so that the linker can
+    /// rewrite it for a symbol it finds in the executable (Drepper, "ELF
+    /// Handling For Thread-Local Storage", §4.1 and §4.2, x86-64).
+    TlsGetAddr {
+        symbol: SymbolRef,
+        model:  DynamicTls,
+    },
+}
+
+/// The ELF TLS model of a [`Callee::TlsGetAddr`] call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DynamicTls {
+    /// The call returns the symbol's address.
+    General,
+    /// The call returns the address of the module's TLS block, at which
+    /// the symbol lies at a link-time offset (`sym@DTPOFF`).
+    Local,
+}
+
+/// What a [`MInst::TlsLea`] offset is relative to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TlsOffset {
+    /// The thread pointer on ELF (`sym@TPOFF`, local-exec), or the image's
+    /// TLS block on Windows (`sym@SECREL32`).
+    Thread,
+    /// The module's TLS block of a local-dynamic access (`sym@DTPOFF`).
+    Module,
 }
 
 /// How an instruction accesses a register.
@@ -1147,13 +1177,15 @@ pub(crate) enum MInst {
     ThreadPointer {
         dst: Reg,
     },
-    /// `leaq sym@TPOFF(base), dst` on ELF (local-exec) or
+    /// `leaq sym@TPOFF(base), dst` on ELF (local-exec),
+    /// `leaq sym@DTPOFF(base), dst` (local-dynamic) or
     /// `leaq sym@SECREL32(base), dst` on Windows: a thread-local symbol's
-    /// address from its thread's block.
+    /// address from its thread's or module's block.
     TlsLea {
         dst:    Reg,
         base:   Reg,
         symbol: SymbolRef,
+        offset: TlsOffset,
     },
     /// An SSE move: a register copy (`movaps`, deleted between equal
     /// registers when `width` is `B64`) or a load (`movss`/`movsd`).
@@ -1429,6 +1461,10 @@ impl MInst {
                 }
                 for register in uses.iter() {
                     phys(register, Role::Use, &mut visit);
+                }
+                // The TLS sequence sets the argument register itself.
+                if matches!(callee, Callee::TlsGetAddr { .. }) && !clobbers.contains(PReg::Rdi) {
+                    phys(PReg::Rdi, Role::Def, &mut visit);
                 }
                 for register in clobbers.iter() {
                     phys(register, Role::Def, &mut visit);

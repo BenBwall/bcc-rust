@@ -27,6 +27,8 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
         | "retq" | "callq" | "jmpq" | "iretq" | "uiret" => code.control_transfer(name, args, a)?,
         | "ud2" => code.raw(&[0x0F, 0x0B])?,
         | "cld" => code.byte(0xFC)?,
+        // The operand-size and REX.W padding of a general-dynamic TLS call.
+        | "data16" | "rex64" => code.byte(if name == "data16" { 0x66 } else { 0x48 })?,
         | "mfence" => code.raw(&[0x0F, 0xAE, 0xF0])?,
         | "int3" => code.byte(0xCC)?,
         | "cltd" => code.byte(0x99)?,
@@ -509,7 +511,7 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
         },
     }
     if let Some(fixup) = &mut code.fixup
-        && matches!(fixup.kind, 2 | 4 | 9 | 22 | 41 | 42)
+        && matches!(fixup.kind, 2 | 4 | 9 | 19 | 20 | 22 | 41 | 42)
     {
         fixup.bias = i64::from(fixup.at) - i64::from(code.len);
     }
@@ -619,7 +621,8 @@ fn validate(name: &str, args: &str, operands: &[Operand<'_>]) -> Result<()> {
                     .map_err(|_| Error("return adjustment exceeds 16 bits"))?;
                 Ok(())
             },
-        | "ud2" | "cld" | "iretq" | "uiret" | "int3" | "cltd" | "cqto" | "mfence" => form(&[]),
+        | "ud2" | "cld" | "iretq" | "uiret" | "int3" | "cltd" | "cqto" | "mfence" | "data16"
+        | "rex64" => form(&[]),
         | "callq" | "jmpq" =>
             if args.starts_with('*') {
                 form(&[Rm(64)])
@@ -903,6 +906,17 @@ impl<'a> Code<'a> {
                 return Err(Error("GOTTPOFF requires RIP-relative addressing"));
             }
             (expr, 22)
+        } else if let Some(expr) = disp.strip_suffix("@DTPOFF") {
+            (expr, 21)
+        } else if let Some((expr, kind)) = disp
+            .strip_suffix("@TLSGD")
+            .map(|expr| (expr, 19))
+            .or_else(|| disp.strip_suffix("@TLSLD").map(|expr| (expr, 20)))
+        {
+            if !rip {
+                return Err(Error("TLSGD and TLSLD require RIP-relative addressing"));
+            }
+            (expr, kind)
         } else if let Some(expr) = disp.strip_suffix("@GOTPCREL") {
             if !rip {
                 return Err(Error("GOTPCREL requires RIP-relative addressing"));

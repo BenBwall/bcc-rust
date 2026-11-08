@@ -123,6 +123,7 @@ pub(crate) fn select<'a>(
     let cfg = ControlFlowGraph::compute(body, arena);
     let tree = DominatorTree::compute(body, &cfg, arena);
     let mut selector = Selector::new(module, function, body, target, options.tls_model, arena);
+    selector.pic = options.pic;
     selector.indirect_returns_twice = options.indirect_returns_twice;
     selector.func.tracks_sources = options.track_sources;
     for (_, slot) in body.stack_slots() {
@@ -257,6 +258,9 @@ fn lay_out_added_blocks<'a>(
 /// What selection needs to know beyond the function and the target.
 #[derive(Clone, Copy)]
 pub(crate) struct SelectOptions {
+    /// Whether the code is for a shared library (ELF `-fpic` or `-fPIC`),
+    /// which reaches preemptible symbols through the GOT and PLT.
+    pub(crate) pic:                    bool,
     /// The `-ftls-model`.
     pub(crate) tls_model:              TlsModel,
     /// Whether an indirect call may reach a function that returns twice.
@@ -302,6 +306,8 @@ pub(super) struct Selector<'a, 'm, 'ir> {
     /// The `-ftls-model`: local-exec also reaches declared thread-locals
     /// at a link-time offset.
     pub(super) tls_model:              TlsModel,
+    /// Whether the code is for a shared library ([`SelectOptions::pic`]).
+    pub(super) pic:                    bool,
     /// Whether an indirect call may reach a function that returns twice.
     pub(super) indirect_returns_twice: bool,
     pub(super) arena:                  &'a Bump,
@@ -358,6 +364,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             conv: CallConv::of(target),
             target,
             tls_model,
+            pic: false,
             indirect_returns_twice: false,
             arena,
             func: MFunction::new_in(arena),

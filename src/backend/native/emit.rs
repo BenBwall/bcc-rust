@@ -47,7 +47,6 @@ use std::{
 };
 
 use super::{
-    defines,
     frame::Frame,
     imported,
     mir::{
@@ -55,6 +54,7 @@ use super::{
         AsmMachine,
         Base,
         Callee,
+        DynamicTls,
         FrameObject,
         InstSource,
         MBlock,
@@ -66,6 +66,7 @@ use super::{
         Reg,
         ShiftAmount,
         SymbolRef,
+        TlsOffset,
         Width,
     },
     through_stub,
@@ -115,6 +116,9 @@ pub(crate) struct Emitter<'o, 'm, 'ir> {
     pub(crate) module: &'m Module<'ir>,
     pub(crate) out:    &'o mut dyn Write,
     elf:               bool,
+    /// Whether the code is for a shared library, whose calls reach a
+    /// preemptible function through its PLT stub.
+    pic:               bool,
     target:            Target,
     /// The symbols code reaches through a `.refptr` stub on COFF, whose
     /// stubs follow the data.
@@ -164,6 +168,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     pub(crate) fn new(
         module: &'m Module<'ir>,
         target: Target,
+        pic: bool,
         out: &'o mut dyn Write,
         arena: &'o Bump,
     ) -> Self {
@@ -171,6 +176,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             module,
             out,
             elf: matches!(target, Target::LinuxGnu | Target::LinuxMusl),
+            pic,
             target,
             stubs: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             asm_uid: 0,
@@ -871,10 +877,33 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     writeln!(out, "\tcallq\t*{}(%rip)", Stub::of(self.module, symbol)),
                 | Callee::Symbol(symbol) => {
                     let name = symbol_name(self.module, symbol);
-                    let plt = self.elf && !defined(self.module, symbol);
+                    let plt = self.elf && !binds_locally(self.module, symbol, self.pic);
                     writeln!(out, "\tcallq\t{name}{}", if plt { "@PLT" } else { "" })
                 },
                 | Callee::Reg(target) => writeln!(out, "\tcallq\t*{}", reg(target, Width::B64)),
+                // The prefixes pad the sequence to the 16 bytes the linker
+                // rewrites for an executable's symbol (Drepper, "ELF Handling
+                // For Thread-Local Storage", §4.1, x86-64), as Clang writes
+                // them.
+                | Callee::TlsGetAddr {
+                    symbol,
+                    model: DynamicTls::General,
+                } => {
+                    let name = symbol_name(self.module, symbol);
+                    writeln!(out, "\tdata16\n\tleaq\t{name}@TLSGD(%rip), %rdi")?;
+                    writeln!(
+                        out,
+                        "\tdata16\n\tdata16\n\trex64\n\tcallq\t__tls_get_addr@PLT"
+                    )
+                },
+                | Callee::TlsGetAddr {
+                    symbol,
+                    model: DynamicTls::Local,
+                } => writeln!(
+                    out,
+                    "\tleaq\t{}@TLSLD(%rip), %rdi\n\tcallq\t__tls_get_addr@PLT",
+                    symbol_name(self.module, symbol)
+                ),
             },
             | MInst::XMov { width, dst, src } => match src {
                 | Operand::Reg(src) =>
@@ -1079,8 +1108,17 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 let pointer = if self.elf { "%fs:0" } else { "%gs:88" };
                 writeln!(out, "\tmovq\t{pointer}, {}", reg(dst, Width::B64))
             },
-            | MInst::TlsLea { dst, base, symbol } => {
-                let offset = if self.elf { "TPOFF" } else { "SECREL32" };
+            | MInst::TlsLea {
+                dst,
+                base,
+                symbol,
+                offset,
+            } => {
+                let offset = match offset {
+                    | TlsOffset::Module => "DTPOFF",
+                    | TlsOffset::Thread if self.elf => "TPOFF",
+                    | TlsOffset::Thread => "SECREL32",
+                };
                 writeln!(
                     out,
                     "\tleaq\t{}@{offset}({}), {}",
@@ -1579,10 +1617,11 @@ fn aligned_blocks<'a>(func: &MFunction<'_>, arena: &'a Bump) -> ArenaVec<'a, boo
     aligned
 }
 
-/// Whether the module defines `symbol`; runtime symbols never are.
-fn defined(module: &Module<'_>, symbol: SymbolRef) -> bool {
+/// Whether ELF code may reach `symbol` PC-relative ([`super::binds_locally`]);
+/// the back end's runtime routines are another module's.
+fn binds_locally(module: &Module<'_>, symbol: SymbolRef, pic: bool) -> bool {
     match symbol {
-        | SymbolRef::Ir(symbol) => defines(module, symbol),
+        | SymbolRef::Ir(symbol) => super::binds_locally(module, symbol, pic),
         | SymbolRef::Runtime(_) => false,
     }
 }

@@ -1039,8 +1039,8 @@ fn oversized_immediates_and_displacements_are_refused() {
 #[test]
 fn unknown_relocation_suffixes_are_refused() {
     for text in [
-        "leaq x@TLSGD(%rip),%rdi",
-        "movq x@DTPOFF(%rax),%rax",
+        "leaq x@TLSGD(%rax),%rdi",
+        "leaq x@TLSLD,%rdi",
         ".quad y@DTPOFF",
         ".long f@PLT",
         "callq f@TLSGD",
@@ -1051,6 +1051,22 @@ fn unknown_relocation_suffixes_are_refused() {
     equivalent(
         "sf:\nretq\ncallq sf@PLT\ncallq external@PLT\nmovl x@GOTPCREL(%rip),%r8d\nleaq \
          x@GOTPCREL(%rip),%rax\naddq x@GOTPCREL(%rip),%rax\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn dynamic_tls_sequences_match_the_assembler() {
+    // General-dynamic and local-dynamic accesses as shared-library code
+    // writes them (Drepper, "ELF Handling For Thread-Local Storage", §4.1
+    // and §4.2, x86-64): the padding prefixes on lines of their own, as
+    // Clang prints them, `TLSGD`, `TLSLD` and `DTPOFF32` relocations, and
+    // thread-local symbol types for a defined and an undefined symbol.
+    equivalent(
+        "f:\ndata16\nleaq x@TLSGD(%rip),%rdi\ndata16\ndata16\nrex64\ncallq \
+         __tls_get_addr@PLT\nleaq y@TLSLD(%rip),%rdi\ncallq __tls_get_addr@PLT\nleaq \
+         y@DTPOFF(%rax),%rcx\nmovl y@DTPOFF(%rax),%edx\nretq\n.section \
+         .tbss,\"awT\",@nobits\ny:\n.zero 8\n",
     )
     .unwrap();
 }

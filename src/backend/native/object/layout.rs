@@ -319,7 +319,7 @@ impl<'a> Object<'a> {
             if symbol.binding == 0 && symbol.section.is_some() && matches!(kind, 9 | 41 | 42) {
                 return Err(Error("unsupported GOT reference to local symbol"));
             }
-            if matches!(kind, 22 | 23) {
+            if matches!(kind, 19..=23) {
                 self.symbols[id].kind = 6;
             }
             if let Some(base) = expression.subtract {
