@@ -475,7 +475,8 @@ mod tests {
             let output = gcc(source);
             succeeds(&output);
             assert!(
-                stderr(&output).contains("warning: attribute ignored: `scalar_storage_order`"),
+                stderr(&output)
+                    .contains("warning: 'scalar_storage_order' attribute ignored [-Wattributes]"),
                 "{source}{}",
                 stderr(&output)
             );
@@ -1563,6 +1564,39 @@ mod tests {
                 directory.write("u.i", &output);
                 succeeds(&directory.bcc(mode, &["-fsyntax-only", "u.i"]));
             }
+        }
+    }
+
+    /// An attribute GCC drops is worded by its name under GCC's one
+    /// `-Wattributes`, which in both compilers holds the attributes they
+    /// ignore, known or not (GCC 14, Clang 23).
+    #[test]
+    fn dropped_attributes_follow_wattributes() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int v __attribute__((target(\"avx\")));\nvoid f(void) __attribute__((bogus_attr));\n",
+        );
+        let text = |mode: &str, options: &[&str]| {
+            stderr(&directory.bcc(mode, &[options, &["-fsyntax-only", "a.c"]].concat()))
+        };
+        let gcc = text("--gcc-mode", &[]);
+        assert!(
+            gcc.contains("warning: 'target' attribute ignored [-Wattributes]\n"),
+            "{gcc}"
+        );
+        assert!(
+            gcc.contains("warning: 'bogus_attr' attribute directive ignored [-Wattributes]\n"),
+            "{gcc}"
+        );
+        let promoted = text("--gcc-mode", &["-Werror=attributes"]);
+        assert!(
+            promoted.contains("error: 'target' attribute ignored [-Werror=attributes]\n"),
+            "{promoted}"
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let silenced = text(mode, &["-Wno-attributes"]);
+            assert!(!silenced.contains("warning"), "{mode}: {silenced}");
         }
     }
 
