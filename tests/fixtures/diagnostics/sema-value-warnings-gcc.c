@@ -49,3 +49,6 @@ int *f8(void) { int x; return __builtin_choose_expr(1, &x, 0); }
 int *f9(void) { int x; return (1 ? &x : 0) + 1; }
 int *f10(void) { int x; return (x = 1, &x); }
 long f11(int a) { int x; return a ? (long)(a ? &x : 0) : 0; }
+int *f12(int a) { int x; return (0 ? a++ : 0, &x); }
+int *f13(int a) { int x; return (0 && a++, (void)(1 ? 0 : a++), &x); }
+int *f14(int a) { int x; return (a++, &x); }

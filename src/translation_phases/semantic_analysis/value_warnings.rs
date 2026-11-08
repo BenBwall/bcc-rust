@@ -117,6 +117,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         matches!(self.types.nodes[ty.index], TypeKind::Array(..))
     }
 
+    /// Whether `e` has side effects that GCC's folding keeps: an operand a
+    /// constant condition or a deciding `&&` or `||` operand leaves
+    /// unevaluated has none, as it has none in a cast or a comma's operands
+    /// without them.
+    /// C99: §6.5.15p4, p. 90; PDF p. 102; §6.5.13p4, §6.5.14p4, p. 89; PDF
+    /// p. 101.
+    fn live_side_effects(&mut self, e: &'tu Expression<'tu>) -> bool {
+        let e = self.selected_operand(e);
+        match e.kind {
+            | E::Conditional(c) => match self.constant_truth_of(c.condition_expression, 0) {
+                | Some(true) => self.live_side_effects(c.then_expression),
+                | Some(false) => self.live_side_effects(c.else_expression),
+                | None => self.has_side_effects(e),
+            },
+            | E::Binary {
+                operator: operator @ (B::LogicalAnd | B::LogicalOr),
+                left_expression,
+                right_expression,
+            } => match self.constant_truth_of(left_expression, 0) {
+                // `0 && x` and `1 || x` leave `x` unevaluated.
+                | Some(truth) if truth == (operator == B::LogicalOr) => false,
+                | Some(_) => self.live_side_effects(right_expression),
+                | None => self.has_side_effects(e),
+            },
+            | E::Binary {
+                operator: B::Comma,
+                left_expression,
+                right_expression,
+            } =>
+                self.live_side_effects(left_expression) || self.live_side_effects(right_expression),
+            | E::Cast {
+                operand_expression, ..
+            } => self.live_side_effects(operand_expression),
+            | _ => self.has_side_effects(e),
+        }
+    }
+
     /// GCC's walk: through conversions and pointer arithmetic to an address
     /// whose object is one of this function's.
     fn gcc_local_address(&mut self, mut e: &'tu Expression<'tu>) -> bool {
@@ -132,7 +169,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     operator: B::Comma,
                     left_expression,
                     right_expression,
-                } if !self.has_side_effects(left_expression) => right_expression,
+                } if !self.live_side_effects(left_expression) => right_expression,
                 | E::Conditional(c) | E::OmittedConditional(c) =>
                     match self.constant_truth_of(c.condition_expression, 0) {
                         | Some(true) => c.then_expression,
