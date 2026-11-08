@@ -8044,6 +8044,132 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert_eq!(stderr(&output), "");
     }
 
+    /// The warnings about how operators group, and the options that hold them
+    /// in each compiler.
+    #[test]
+    fn gnu_parentheses_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int f(int a, int b, int c) {\n    int r = a + b << c;\n    if (a = b)\n        r = \
+             1;\n    if ((a == b))\n        r = 2;\n    if (a)\n        if (b)\n            r = \
+             3;\n        else\n            r = 4;\n    r += !a == b;\n    r += a && b || c;\n    \
+             return r + (a | b & c) + (a & b == c);\n}\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            let text = stderr(&output);
+            let mut flags: Vec<String> = text
+                .lines()
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.dedup();
+            flags.join(" ")
+        };
+        // Each row was measured against GCC 14.2 and Clang 23.1.
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], ""),
+            (
+                "--gcc-mode",
+                &["-Wall"][..],
+                "dangling-else logical-not-parentheses parentheses",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wparentheses"][..],
+                "dangling-else parentheses",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wall", "-Wno-parentheses"][..],
+                "logical-not-parentheses",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wno-parentheses", "-Wall"][..],
+                "logical-not-parentheses",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wparentheses", "-Wno-dangling-else"][..],
+                "parentheses",
+            ),
+            ("--gcc-mode", &["-Wdangling-else"][..], "dangling-else"),
+            (
+                "--clang-mode",
+                &[][..],
+                "dangling-else logical-not-parentheses parentheses parentheses-equality \
+                 shift-op-parentheses",
+            ),
+            ("--clang-mode", &["-Wno-parentheses"][..], ""),
+            (
+                "--clang-mode",
+                &["-Wall"][..],
+                "bitwise-op-parentheses dangling-else logical-not-parentheses \
+                 logical-op-parentheses parentheses parentheses-equality shift-op-parentheses",
+            ),
+            ("--clang-mode", &["-Wall", "-Wno-parentheses"][..], ""),
+            (
+                "--clang-mode",
+                &["-Wno-shift-op-parentheses"][..],
+                "dangling-else logical-not-parentheses parentheses parentheses-equality",
+            ),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
+        // Clang's own options are unknown to GCC.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wshift-op-parentheses", "-fsyntax-only", "a.c"],
+        );
+        assert!(!output.status.success(), "{}", stderr(&output));
+    }
+
+    /// `a < b < c` is valid C with a meaning nobody writes on purpose: Clang
+    /// refuses it unless told not to, GCC warns under `-Wall`, and plain bcc,
+    /// which has to accept every valid program, warns.
+    #[test]
+    fn chained_comparisons_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write("a.c", "int f(int a, int b, int c) { return a < b < c; }\n");
+        for args in [&[][..], &["-w"][..], &["-Wno-error"][..]] {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc("--clang-mode", &args);
+            assert!(!output.status.success(), "{args:?}");
+            assert!(
+                stderr(&output).contains("[-Wparentheses]"),
+                "{}",
+                stderr(&output)
+            );
+        }
+        let args = ["-Wno-parentheses", "-fsyntax-only", "a.c"];
+        let output = directory.bcc("--clang-mode", &args);
+        succeeds(&output);
+        assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+        let args = ["-Wno-error=parentheses", "-fsyntax-only", "a.c"];
+        succeeds(&directory.bcc("--clang-mode", &args));
+        let args = ["-Wall", "-fsyntax-only", "a.c"];
+        let output = directory.bcc("--gcc-mode", &args);
+        succeeds(&output);
+        assert!(
+            stderr(&output).contains("comparisons like"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// Where each compiler reports an undefined static function and what
     /// controls it (PR #318's review): both at the declaration, Clang under
     /// the settings there, with a note at the first use and its own option,

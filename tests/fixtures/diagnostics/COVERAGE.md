@@ -729,6 +729,7 @@ pinned by the `.args` sidecars.
 | `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c), [cleanup use](sema3-internal-cleanup.c) |
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
+| `Parentheses` | [GCC](sema-parentheses-gcc.c), [Clang](sema-parentheses-clang.c) |
 | `SwitchCases` | [GCC](sema-switch-gcc.c), [Clang](sema-switch-clang.c); constant and converted conditions: [GCC](sema-switch-constant-gcc.c), [Clang](sema-switch-constant-clang.c) |
 | `ReturnFlow` | [GCC](sema-return-type-gcc.c), [Clang](sema-return-type-clang.c) |
 | `MissingFieldInitializer` | [GCC](sema-missing-fields-gcc.c), [Clang](sema-missing-fields-clang.c), [GCC with a system macro](sema-missing-fields-system-gcc.c) |
