@@ -1,0 +1,117 @@
+sema-format-mingw.c:10:17: warning: format '%I64x' expects argument of type 'long long unsigned int', but argument 2 has type 'int' [-Wformat=]
+   10 |     printf("%I64x %I32x %Iu\n", i, lp, i);
+      |                 ^
+sema-format-mingw.c:10:23: warning: format '%I32x' expects argument of type 'long unsigned int', but argument 3 has type 'long int *' [-Wformat=]
+   10 |     printf("%I64x %I32x %Iu\n", i, lp, i);
+      |                       ^
+sema-format-mingw.c:10:27: warning: format '%Iu' expects argument of type 'size_t', but argument 4 has type 'int' [-Wformat=]
+   10 |     printf("%I64x %I32x %Iu\n", i, lp, i);
+      |                           ^
+sema-format-mingw.c:11:12: warning: too many arguments for format [-Wformat-extra-args]
+   11 |     printf("%lld %zu %td %jd\n", ll, z, z, ll);
+      |            ^~~~~~~~~~~~~~~~~~~~
+sema-format-mingw.c:11:19: warning: unknown conversion type character 'z' in format [-Wformat=]
+   11 |     printf("%lld %zu %td %jd\n", ll, z, z, ll);
+      |                   ^
+sema-format-mingw.c:11:23: warning: unknown conversion type character 't' in format [-Wformat=]
+   11 |     printf("%lld %zu %td %jd\n", ll, z, z, ll);
+      |                       ^
+sema-format-mingw.c:11:27: warning: unknown conversion type character 'j' in format [-Wformat=]
+   11 |     printf("%lld %zu %td %jd\n", ll, z, z, ll);
+      |                           ^
+sema-format-mingw.c:12:12: warning: too many arguments for format [-Wformat-extra-args]
+   12 |     printf("%hhd %ld %d\n", i, l, l);
+      |            ^~~~~~~~~~~~~~~
+sema-format-mingw.c:12:15: warning: unknown conversion type character 'h' in format [-Wformat=]
+   12 |     printf("%hhd %ld %d\n", i, l, l);
+      |               ^
+sema-format-mingw.c:12:20: warning: format '%ld' expects argument of type 'long int', but argument 2 has type 'int' [-Wformat=]
+   12 |     printf("%hhd %ld %d\n", i, l, l);
+      |                    ^
+sema-format-mingw.c:12:23: warning: format '%d' expects argument of type 'int', but argument 3 has type 'long int' [-Wformat=]
+   12 |     printf("%hhd %ld %d\n", i, l, l);
+      |                       ^
+sema-format-mingw.c:13:12: warning: too many arguments for format [-Wformat-extra-args]
+   13 |     printf("%ls %S %hs %ws\n", ws, ws, s, ws);
+      |            ^~~~~~~~~~~~~~~~~~
+sema-format-mingw.c:13:22: warning: format '%hs' expects argument of type 'short int *', but argument 4 has type 'char *' [-Wformat=]
+   13 |     printf("%ls %S %hs %ws\n", ws, ws, s, ws);
+      |                      ^
+sema-format-mingw.c:13:25: warning: unknown conversion type character 'w' in format [-Wformat=]
+   13 |     printf("%ls %S %hs %ws\n", ws, ws, s, ws);
+      |                         ^
+sema-format-mingw.c:15:14: warning: unknown conversion type character 'm' in format [-Wformat=]
+   15 |     printf("%m %Lf %Lg %Ld\n", ld, ld, ll);
+      |              ^
+sema-format-mingw.c:15:18: warning: format '%Lf' expects argument of type 'double', but argument 2 has type 'long double' [-Wformat=]
+   15 |     printf("%m %Lf %Lg %Ld\n", ld, ld, ll);
+      |                  ^
+sema-format-mingw.c:15:22: warning: format '%Lg' expects argument of type 'double', but argument 3 has type 'long double' [-Wformat=]
+   15 |     printf("%m %Lf %Lg %Ld\n", ld, ld, ll);
+      |                      ^
+sema-format-mingw.c:15:26: warning: use of 'L' length modifier with 'd' type character has either no effect or undefined behavior [-Wformat=]
+   15 |     printf("%m %Lf %Lg %Ld\n", ld, ld, ll);
+      |                          ^
+sema-format-mingw.c:16:12: warning: too many arguments for format [-Wformat-extra-args]
+   16 |     printf("%Z %F %'d\n", s, d, i);
+      |            ^~~~~~~~~~~~~
+sema-format-mingw.c:16:14: warning: unknown conversion type character 'Z' in format [-Wformat=]
+   16 |     printf("%Z %F %'d\n", s, d, i);
+      |              ^
+sema-format-mingw.c:16:17: warning: unknown conversion type character 'F' in format [-Wformat=]
+   16 |     printf("%Z %F %'d\n", s, d, i);
+      |                 ^
+sema-format-mingw.c:16:21: warning: format '%d' expects argument of type 'int', but argument 2 has type 'char *' [-Wformat=]
+   16 |     printf("%Z %F %'d\n", s, d, i);
+      |                     ^
+sema-format-mingw.c:17:5: warning: reading through null pointer (argument 2) [-Wformat=]
+   17 |     printf("%s\n", (char *)0);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-mingw.c:18:18: warning: format '%d' expects argument of type 'int', but argument 3 has type 'long long int' [-Wformat=]
+   18 |     gnu("%zu %I64d\n", u, ll);
+      |                  ^
+sema-format-mingw.c:19:11: warning: too many arguments for format [-Wformat-extra-args]
+   19 |     plain("%zu\n", u);
+      |           ^~~~~~~
+sema-format-mingw.c:19:13: warning: unknown conversion type character 'z' in format [-Wformat=]
+   19 |     plain("%zu\n", u);
+      |             ^
+sema-format-mingw.c:20:11: warning: zero width in ms_scanf format [-Wformat=]
+   20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
+      |           ^~~~~~~~~~~~~~~~~~~~~
+sema-format-mingw.c:20:11: warning: too many arguments for format [-Wformat-extra-args]
+   20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
+      |           ^~~~~~~~~~~~~~~~~~~~~
+sema-format-mingw.c:20:23: warning: unknown conversion type character 'm' in format [-Wformat=]
+   20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
+      |                       ^
+sema-format-mingw.c:20:28: warning: use of 'L' length modifier with 'd' type character has either no effect or undefined behavior [-Wformat=]
+   20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
+      |                            ^
+sema-format-mingw.c:21:11: warning: use of assignment suppression and length modifier together in ms_scanf format [-Wformat=]
+   21 |     scanf("%*Ld %hs %hc %S %C\n", s, s, s, s);
+      |           ^~~~~~~~~~~~~~~~~~~~~~
+sema-format-mingw.c:21:15: warning: use of 'L' length modifier with 'd' type character has either no effect or undefined behavior [-Wformat=]
+   21 |     scanf("%*Ld %hs %hc %S %C\n", s, s, s, s);
+      |               ^
+sema-format-mingw.c:21:19: warning: format '%hs' expects argument of type 'short int *', but argument 3 has type 'char *' [-Wformat=]
+   21 |     scanf("%*Ld %hs %hc %S %C\n", s, s, s, s);
+      |                   ^
+sema-format-mingw.c:21:23: warning: format '%hc' expects argument of type 'short int *', but argument 4 has type 'char *' [-Wformat=]
+   21 |     scanf("%*Ld %hs %hc %S %C\n", s, s, s, s);
+      |                       ^
+sema-format-mingw.c:21:26: warning: format '%S' expects argument of type 'wchar_t *', but argument 5 has type 'char *' [-Wformat=]
+   21 |     scanf("%*Ld %hs %hc %S %C\n", s, s, s, s);
+      |                          ^
+sema-format-mingw.c:21:29: warning: format '%C' expects a matching 'wchar_t *' argument [-Wformat=]
+   21 |     scanf("%*Ld %hs %hc %S %C\n", s, s, s, s);
+      |                             ^
+sema-format-mingw.c:22:11: warning: too many arguments for format [-Wformat-extra-args]
+   22 |     scanf("%I64d %lld %hhd %zu\n", llp, llp, ip, ip);
+      |           ^~~~~~~~~~~~~~~~~~~~~~~
+sema-format-mingw.c:22:25: warning: unknown conversion type character 'h' in format [-Wformat=]
+   22 |     scanf("%I64d %lld %hhd %zu\n", llp, llp, ip, ip);
+      |                         ^
+sema-format-mingw.c:22:29: warning: unknown conversion type character 'z' in format [-Wformat=]
+   22 |     scanf("%I64d %lld %hhd %zu\n", llp, llp, ip, ip);
+      |                             ^

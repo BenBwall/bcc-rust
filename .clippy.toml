@@ -1,4 +1,8 @@
 too-many-lines-threshold = 500
+# `CompilerConfiguration` is a `Copy` value read throughout the pipeline. It
+# holds one byte per warning group, so each new group grows it past a fixed
+# limit sooner or later; 512 bytes leaves it passed by value as designed.
+pass-by-value-size-limit = 512
 
 # Compilation allocates only from arenas (`util::bump`), which the
 # `allocation_count` test checks at run time. These lists are the static

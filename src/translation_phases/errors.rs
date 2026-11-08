@@ -155,7 +155,8 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::ReturnMismatch
                 | semantic_analysis::SemanticErrorKind::VoidReturnMismatch
                 | semantic_analysis::SemanticErrorKind::DeclarationMissingParameterType
-                | semantic_analysis::SemanticErrorKind::UndefinedInternal(_) => error.kind.group(),
+                | semantic_analysis::SemanticErrorKind::UndefinedInternal(_)
+                | semantic_analysis::SemanticErrorKind::Format(..) => error.kind.group(),
                 | semantic_analysis::SemanticErrorKind::CallAttributeWarning =>
                     Some(G::AttributeWarning),
                 | semantic_analysis::SemanticErrorKind::PredefinedOutsideFunction =>

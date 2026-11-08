@@ -1038,6 +1038,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let function = self.select_extension_call(e, function, arguments);
         self.x86_immediates(function, arguments);
         self.check_nonnull_arguments(function.binding, arguments);
+        self.check_format_call(e, function, arguments);
         let ty = self.converted(function);
         if self.types.unanalyzed(ty) {
             let ty = self.types.recovery_type(&[ty]);

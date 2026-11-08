@@ -1,0 +1,66 @@
+sema-format-review-gcc.c:8:5: warning: operand number out of range in format [-Wformat=]
+    8 |     printf("%999999999999999999999999999999$d", 1);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-review-gcc.c:9:5: warning: operand number out of range in format [-Wformat=]
+    9 |     printf("%1$*999999999999999999999999999999$d", 1, 2);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-review-gcc.c:11:5: warning: operand number out of range in format [-Wformat=]
+   11 |     printf("%4294967297$d", 1);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-review-gcc.c:12:5: warning: operand number out of range in format [-Wformat=]
+   12 |     printf("%2147483648$d", 1);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-review-gcc.c:16:16: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   16 |     printf(u8"%d\n", l);
+      |                ^
+sema-format-review-gcc.c:17:16: warning: unknown conversion type character 'y' in format [-Wformat=]
+   17 |     printf(u8"%y");
+      |                ^
+sema-format-review-gcc.c:21:12: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   21 |     printf(__builtin_choose_expr(0, s, "%d\n"), l);
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-review-gcc.c:22:41: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   22 |     printf(_Generic(1L, int: s, long: "%d\n"), l);
+      |                                         ^
+sema-format-review-gcc.c:23:5: warning: format not a string literal and no format arguments [-Wformat-security]
+   23 |     printf(__builtin_choose_expr(1, s, "x"));
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-review-gcc.c:27:16: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   27 |     printf("ab%d" - 0, l);
+      |                ^
+sema-format-review-gcc.c:28:26: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   28 |     printf(("abc%d" + 3) - 1, l);
+      |                          ^
+sema-format-review-gcc.c:29:22: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   29 |     printf(&"x%d"[1] - 1, l);
+      |                      ^
+sema-format-review-gcc.c:30:12: warning: too many arguments for format [-Wformat-extra-args]
+   30 |     printf("ab" - 0, l);
+      |            ^~~~
+sema-format-review-gcc.c:37:14: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   37 |     logger("%d", 1L);
+      |              ^
+sema-format-review-gcc.c:38:15: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   38 |     ops.say("%d", 1L);
+      |               ^
+sema-format-review-gcc.c:39:10: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   39 |     lp("%d", 1L);
+      |          ^
+sema-format-review-gcc.c:40:17: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   40 |     (*logger)("%d", 1L);
+      |                 ^
+sema-format-review-gcc.c:48:11: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   48 |     sum("%d", 1L);
+      |           ^
+sema-format-review-gcc.c:49:13: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   49 |     named("%d", 1L);
+      |             ^
+sema-format-review-gcc.c:50:17: warning: format '%d' expects argument of type 'int', but argument 3 has type 'long int' [-Wformat=]
+   50 |     chosen(0, "%d", 1L);
+      |                 ^
+sema-format-review-gcc.c:56:12: warning: unterminated format string [-Wformat=]
+   56 |     printf(cut, 1);
+      |            ^~~
+sema-format-review-gcc.c:57:12: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
+   57 |     printf(kept, 1L);
+      |            ^~~~
