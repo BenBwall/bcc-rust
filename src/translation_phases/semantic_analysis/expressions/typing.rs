@@ -1062,21 +1062,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
         };
-        if prototype
-            && (arguments.len() < parameters.len()
-                || (!variadic && arguments.len() != parameters.len()))
-        {
-            self.error(
-                SemanticErrorKind::InvalidArgumentCount,
-                e.source_vectors,
-                None,
-                None,
-            );
-        }
-        let mut failed = prototype
-            && (arguments.len() < parameters.len()
-                || (!variadic && arguments.len() != parameters.len()));
-        let mut unmodeled = self.types.unmodeled_type(result);
         // GCC names the called function in its words.
         let callee_name = function
             .binding
@@ -1087,6 +1072,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )
             })
             .map(|binding| self.bindings[binding].name.name);
+        // C99 §6.5.2.2p2: a prototype fixes the number of arguments; GCC and
+        // TCC say which way a call misses it.
+        if prototype && arguments.len() < parameters.len() {
+            self.error(
+                SemanticErrorKind::TooFewArguments,
+                e.source_vectors,
+                callee_name,
+                None,
+            );
+        } else if prototype && !variadic && arguments.len() > parameters.len() {
+            self.error(
+                SemanticErrorKind::TooManyArguments,
+                e.source_vectors,
+                callee_name,
+                None,
+            );
+        }
+        let mut failed = prototype
+            && (arguments.len() < parameters.len()
+                || (!variadic && arguments.len() != parameters.len()));
+        let mut unmodeled = self.types.unmodeled_type(result);
         for (index, &argument) in arguments.iter().enumerate() {
             let info = self.expression_info(argument);
             unmodeled = unmodeled.or(self.types.unmodeled_type(info.ty));

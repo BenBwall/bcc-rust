@@ -399,6 +399,10 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentCount,
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
+    TooFewArguments,
+    /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
+    TooManyArguments,
+    /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentType,
     /// Clang: Microsoft's `selectany` applies to data with external linkage.
     /// MSVC extension: Microsoft Learn, "selectany".
@@ -1074,6 +1078,8 @@ impl SemanticErrorKind {
             | Self::InvalidMemberAccess => "no such member",
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
+            | Self::TooFewArguments => "too few arguments",
+            | Self::TooManyArguments => "too many arguments",
             | Self::AnnotationArgument => "not a wide string literal",
             | Self::CpuBuiltinNotLiteral => "not a string literal",
             | Self::CpuBuiltinParameter | Self::CpuNameUnknown | Self::CpuFeatureUnknown =>
@@ -2196,6 +2202,15 @@ impl SemanticErrorKind {
                 "C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis \
                  permits additional arguments",
             ),
+            | Self::TooFewArguments => (
+                "function call has too few arguments",
+                "C99 §6.5.2.2p2: a call passes an argument for every parameter of the prototype",
+            ),
+            | Self::TooManyArguments => (
+                "function call has too many arguments",
+                "C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis \
+                 permits additional arguments",
+            ),
             | Self::InvalidArgumentType => (
                 "function argument cannot be converted to its parameter type",
                 "C99 §6.5.2.2p2: each argument has a type assignable to its corresponding \
@@ -2982,6 +2997,10 @@ impl SemanticError {
             )),
             | (Format::Gcc, SemanticErrorKind::UndefinedInternal(_)) =>
                 Some(format_in!(arena, "'{name}' used but never defined")),
+            | (Format::Gcc, SemanticErrorKind::TooFewArguments) =>
+                Some(format_in!(arena, "too few arguments to function '{name}'")),
+            | (Format::Gcc, SemanticErrorKind::TooManyArguments) =>
+                Some(format_in!(arena, "too many arguments to function '{name}'")),
             | (Format::Clang, SemanticErrorKind::UndefinedInternal(_)) => Some(format_in!(
                 arena,
                 "function '{name}' has internal linkage but is not defined"
@@ -3024,6 +3043,10 @@ impl SemanticError {
                 format_in!(arena, "redefinition of '{name}'"),
             | (SemanticErrorKind::UndefinedLabel, Some(name)) =>
                 format_in!(arena, "label '{name}' used but not defined"),
+            | (SemanticErrorKind::IncompleteTentativeDefinition, _) =>
+                "initialization of incomplete type",
+            | (SemanticErrorKind::TooFewArguments, _) => "too few arguments to function",
+            | (SemanticErrorKind::TooManyArguments, _) => "too many arguments to function",
             | (SemanticErrorKind::BreakOutsideLoopOrSwitch, _) => "cannot break",
             | (SemanticErrorKind::ContinueOutsideLoop, _) => "cannot continue",
             | (SemanticErrorKind::ExpectedModifiableLvalue, _) => "lvalue expected",
@@ -3033,6 +3056,14 @@ impl SemanticError {
                 ),
                 _,
             ) => "assignment from incompatible pointer type",
+            // Worded with the conversion's direction by
+            // `Analyzer::conversion_wording`.
+            | (
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+                Some(words),
+            ) => arena.alloc_str(words),
             | _ => return None,
         })
     }
