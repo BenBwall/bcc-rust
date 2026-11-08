@@ -30,6 +30,7 @@ use crate::{
     translation_phases::{
         SourceVectors,
         preprocessing::{
+            LiteralEncoding,
             StringTokenType,
             Token,
             TokenType,
@@ -54,18 +55,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Applies `target` to `subject`.
     pub(super) fn target_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
         let gcc = self.gcc_identity();
+        // GCC checks only the number of arguments of an attribute it ignores
+        // on what is not a function.
+        if gcc && !matches!(subject, Subject::Function { .. }) {
+            if attribute
+                .arguments
+                .is_some_and(|arguments| !arguments.is_empty())
+            {
+                self.ignored(attribute);
+            } else {
+                self.target_refusal(
+                    "wrong number of arguments specified for 'target' attribute",
+                    attribute.source,
+                );
+            }
+            return;
+        }
         let Some((text, literal)) = self.target_text(attribute, gcc) else {
             return;
         };
         let Subject::Function { binding, .. } = subject else {
-            if gcc {
-                self.ignored(attribute);
-            } else {
-                self.target_refusal(
-                    "'target' attribute only applies to functions",
-                    attribute.source,
-                );
-            }
+            self.target_refusal(
+                "'target' attribute only applies to functions",
+                attribute.source,
+            );
             return;
         };
         // The default version of a multiversioned function: bcc has no
@@ -149,12 +162,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         }
         let mut text = None::<&str>;
+        let mut prefixed = None;
         for argument in tokens.split(|token| self.is_comma(token)) {
             let mut part = None::<&str>;
             for token in argument {
+                // Both compilers read an encoding-prefixed string as its
+                // characters; Clang warns that the prefix has no effect.
                 let decoded = match token.kind {
                     | TokenType::String(StringTokenType::String(id)) =>
                         self.context.literal_text_in(self.scratch, id, false),
+                    | TokenType::String(kind) => {
+                        let (id, wide) = match kind {
+                            | StringTokenType::WideString(id) => (id, true),
+                            | StringTokenType::EncodedString(id, encoding) =>
+                                (id, encoding != LiteralEncoding::Utf8),
+                            | StringTokenType::String(id) => (id, false),
+                        };
+                        _ = prefixed.get_or_insert(token.source_vectors);
+                        self.context.literal_text_in(self.scratch, id, wide)
+                    },
                     | _ => None,
                 };
                 let Some(decoded) = decoded else {
@@ -177,6 +203,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             let part = part.unwrap_or_default();
             text = Some(text.map_or(part, |text| format_in!(self.scratch, "{text},{part}")));
+        }
+        if let Some(source) = prefixed {
+            self.error(
+                SemanticErrorKind::UnevaluatedStringPrefix,
+                source,
+                None,
+                None,
+            );
         }
         let literal = tokens
             .first()
