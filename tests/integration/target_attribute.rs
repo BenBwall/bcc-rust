@@ -205,36 +205,35 @@ mod tests {
     /// argument of any kind on what is not a function, which it ignores.
     #[test]
     fn accepted_attributes_compile_as_both_compilers_read_them() {
+        // LLVM IR on standard output lowers each function, where bcc
+        // refuses a baseline left off, without an output file.
         let function = |text: &str| {
             format!("__attribute__((target({text}))) int f(int x) {{ return x + 1; }}\n")
         };
-        for mode in ["--gcc-mode", "--clang-mode"] {
+        for mode in ["--compiler-identity=gcc", "--compiler-identity=clang"] {
             for text in [
                 "\"no-sse2,sse2\"",
                 "\"no-sse,sse2\"",
                 "L\"avx2\"",
                 "u8\"avx2\"",
             ] {
-                let output = bcc(&[mode, "-c", "-o", "/dev/null"], &function(text));
+                let output = bcc(&[mode, "--emit=llvm"], &function(text));
                 assert!(
                     output.status.success(),
                     "{mode} {text}: {}",
                     stderr(&output)
                 );
             }
-            let output = bcc(
-                &[mode, "-c", "-o", "/dev/null"],
-                &function("\"no-sse2,sse\""),
-            );
+            let output = bcc(&[mode, "--emit=llvm"], &function("\"no-sse2,sse\""));
             assert!(!output.status.success(), "{mode}: SSE2 stays off");
         }
         let output = bcc(
-            &["--gcc-mode", "-c", "-o", "/dev/null"],
+            &["--compiler-identity=gcc", "--emit=llvm"],
             &function("\"no-sse2,arch=haswell\""),
         );
         assert!(output.status.success(), "{}", stderr(&output));
         let output = bcc(
-            &["--clang-mode", "-c", "-o", "/dev/null"],
+            &["--compiler-identity=clang", "--emit=llvm"],
             &function("L\"avx2\""),
         );
         assert!(
