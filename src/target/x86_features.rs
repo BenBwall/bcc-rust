@@ -231,10 +231,11 @@ impl X86Features {
     /// Reference, "target".
     pub(crate) fn target_attribute(self, text: &str) -> FunctionTarget {
         let mut target = FunctionTarget {
-            features: self,
-            named:    0,
-            tune:     None,
-            refused:  false,
+            features:          self,
+            named:             0,
+            tune:              None,
+            baseline_off:      0,
+            general_regs_only: false,
         };
         target.read(text);
         target
@@ -385,14 +386,17 @@ impl X86Features {
 /// over them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FunctionTarget {
-    features: X86Features,
+    features:          X86Features,
     /// The features the attribute itself turned on.
-    named:    u128,
+    named:             u128,
     /// The processor of `tune=`, by its row in the processor table.
-    tune:     Option<u8>,
-    /// The attribute turns off a baseline feature or asks for general
-    /// registers only, which bcc does not compile.
-    refused:  bool,
+    tune:              Option<u8>,
+    /// The baseline features the attribute leaves off, by their bit in
+    /// [`BASELINE`]'s order, which bcc does not compile.
+    baseline_off:      u8,
+    /// The attribute asks for general registers only, which bcc does not
+    /// compile either.
+    general_regs_only: bool,
 }
 
 impl FunctionTarget {
@@ -413,8 +417,10 @@ impl FunctionTarget {
                 if let Some(row) = processor(processor_name(name, clang), clang, true) {
                     self.tune = Some(row);
                 }
-            } else if BASELINE.contains(&name) || name == "general-regs-only" {
-                self.refused |= negated != (name == "general-regs-only");
+            } else if name == "general-regs-only" {
+                self.general_regs_only = !negated;
+            } else if let Some(at) = BASELINE.iter().position(|&baseline| baseline == name) {
+                self.baseline(at, negated);
             } else {
                 match self.features.machine(part, ALL_FEATURES) {
                     | Some((bit, true)) => self.named |= bit,
@@ -422,6 +428,25 @@ impl FunctionTarget {
                     | None => {},
                 }
             }
+        }
+    }
+
+    /// A baseline feature, by its index in [`BASELINE`], turned off or back
+    /// on; a later part may restore what an earlier one turned off. SSE2
+    /// needs SSE, so turning SSE off turns SSE2 off and turning SSE2 on
+    /// turns SSE on.
+    fn baseline(&mut self, at: usize, off: bool) {
+        let sse = 3;
+        let mut bits = 1u8 << at;
+        if off && at == sse {
+            bits |= 1 << (sse + 1);
+        } else if !off && at == sse + 1 {
+            bits |= 1 << sse;
+        }
+        if off {
+            self.baseline_off |= bits;
+        } else {
+            self.baseline_off &= !bits;
         }
     }
 
@@ -439,6 +464,7 @@ impl FunctionTarget {
             features.decided = 0;
             features.unknown_avx = false;
             self.named = 0;
+            self.baseline_off = 0;
         }
     }
 
@@ -454,7 +480,7 @@ impl FunctionTarget {
     /// x87, MMX, FXSR, SSE or SSE2, which every x86-64 function bcc compiles
     /// may use, or asks for general registers only.
     pub(crate) const fn refused(&self) -> bool {
-        self.refused
+        self.baseline_off != 0 || self.general_regs_only
     }
 
     /// What the back ends read.
