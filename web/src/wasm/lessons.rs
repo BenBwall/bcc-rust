@@ -80,7 +80,7 @@ pub const UNAVAILABLE: &str =
     "Only the bundled lessons have a module that clang compiled ahead of time.";
 
 /// Each lesson's module, by its file name in `web/demos/`.
-const MODULES: [(&str, &[u8]); 12] = [
+const MODULES: [(&str, &[u8]); 13] = [
     ("objects.c", include_bytes!("../../wasm/objects.wasm")),
     ("hello.c", include_bytes!("../../wasm/hello.wasm")),
     ("constants.c", include_bytes!("../../wasm/constants.wasm")),
@@ -88,6 +88,7 @@ const MODULES: [(&str, &[u8]); 12] = [
     ("recursion.c", include_bytes!("../../wasm/recursion.wasm")),
     ("structs.c", include_bytes!("../../wasm/structs.wasm")),
     ("promotion.c", include_bytes!("../../wasm/promotion.wasm")),
+    ("unsigned.c", include_bytes!("../../wasm/unsigned.wasm")),
     ("overflow.c", include_bytes!("../../wasm/overflow.wasm")),
     ("bounds.c", include_bytes!("../../wasm/bounds.wasm")),
     (
