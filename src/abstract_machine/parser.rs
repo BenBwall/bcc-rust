@@ -10,6 +10,7 @@ use super::{
         ExprKind,
         combined,
     },
+    integers::Integer,
     layout,
     lexer::{
         self,
@@ -63,7 +64,8 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         directives: Vec::new(),
         macros: Vec::new(),
         declaration_macros: Vec::new(),
-        returns: Type::Int,
+        returns: Type::INT,
+        updates: false,
     };
     let mut functions: Vec<Function> = Vec::new();
     let mut total_code = 0;
@@ -94,13 +96,13 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             ));
         }
         let returns = match (base, pointer) {
-            | (Base::Int, false) => Type::Int,
+            | (Base::Integer(integer, false), false) => Type::Integer(integer),
             | (Base::Struct(id), false) => parser.complete_structure(id, name.range)?,
             | _ =>
                 return Err(Diagnostic::new(
                     "unsupported",
                     name.range,
-                    "functions return int or a structure in this subset",
+                    "functions return an integer type or a structure in this subset",
                 )),
         };
         if parser.symbols.iter().any(|symbol| symbol.name == name.text) {
@@ -169,7 +171,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
     else {
         return Err(parser.error("an int main(void) definition is required"));
     };
-    if !functions[entry].parameters.is_empty() || functions[entry].returns != Type::Int {
+    if !functions[entry].parameters.is_empty() || functions[entry].returns != Type::INT {
         return Err(parser.error("main must be int main(void) in this subset"));
     }
     for CallSite {
@@ -268,6 +270,9 @@ pub(super) struct Parser<'a> {
     pub declaration_macros: Vec<usize>,
     /// The return type of the function being compiled.
     pub returns:            Type,
+    /// Whether the expression being parsed is a condition, which may
+    /// contain one `++` or `--` (see `check_update`).
+    pub updates:            bool,
 }
 
 impl<'a> Parser<'a> {
@@ -319,7 +324,8 @@ impl<'a> Parser<'a> {
                 let range = combined(token.range, self.expressions[expression].range);
                 self.expect(";")?;
                 let node = self.tree("return", range, vec![value])?;
-                self.emit_node(Op::Return, range, node)?;
+                let from = self.expressions[expression].ty;
+                self.emit_node(Op::Return(from), range, node)?;
                 Ok(())
             },
             | "if" => {
@@ -355,8 +361,9 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 Ok(())
             },
-            | "int" | "char" | "struct" | "static" | "const" | "else" | "break" | "continue"
-            | "goto" | "do" | "switch" => Err(self.error("unsupported statement in this subset")),
+            | "int" | "char" | "short" | "long" | "signed" | "unsigned" | "struct" | "static"
+            | "const" | "else" | "break" | "continue" | "goto" | "do" | "switch" =>
+                Err(self.error("unsupported statement in this subset")),
             | _ => {
                 self.expression_statement()?;
                 self.expect(";")
@@ -387,7 +394,7 @@ impl<'a> Parser<'a> {
         self.expect("(")?;
         self.scope += 1;
         self.emit(Op::Enter, token.range)?;
-        if self.at("int") || self.at("char") || self.at("const") {
+        if self.at_type() || self.at("const") {
             self.declaration()?;
         } else {
             if !self.at(";") {
@@ -397,13 +404,12 @@ impl<'a> Parser<'a> {
         }
         let head = self.code.len();
         let branch = if self.at(";") {
-            self.emit(Op::Push(1), token.range)?;
+            self.emit(Op::Push(1, Integer::Int), token.range)?;
             let branch = self.code.len();
             self.emit(Op::Branch(0, "for"), token.range)?;
             branch
         } else {
-            let condition = self.expression(0)?;
-            self.require_scalar(condition)?;
+            let condition = self.controlling_expression()?;
             let value = self.emit_expression(condition, false)?;
             let range = self.expressions[condition].range;
             let node = self.tree("for", range, vec![value])?;
@@ -432,12 +438,23 @@ impl<'a> Parser<'a> {
     /// statement's tree root.
     fn condition(&mut self, statement: &'static str) -> Result<(SourceRange, usize), Diagnostic> {
         self.expect("(")?;
-        let expression = self.expression(0)?;
-        self.require_scalar(expression)?;
+        let expression = self.controlling_expression()?;
         let value = self.emit_expression(expression, false)?;
         self.expect(")")?;
         let range = self.expressions[expression].range;
         Ok((range, self.tree(statement, range, vec![value])?))
+    }
+
+    /// The controlling expression of an `if`, `while` or `for`: a scalar,
+    /// which may update one variable with `++` or `--` (`i-- > 0`).
+    fn controlling_expression(&mut self) -> Result<usize, Diagnostic> {
+        self.updates = true;
+        let expression = self.expression(0);
+        self.updates = false;
+        let expression = expression?;
+        self.require_scalar(expression)?;
+        self.check_update(expression)?;
+        Ok(expression)
     }
 
     /// A block-scope declaration: one declarator, with an optional
@@ -455,15 +472,14 @@ impl<'a> Parser<'a> {
             return self.static_local(name, ty, constant);
         }
         match ty {
-            | Type::Array(_) | Type::Struct(_) | Type::CharArray(_) =>
-                self.aggregate_declaration(name, ty, constant),
+            | Type::Array(..) | Type::Struct(_) => self.aggregate_declaration(name, ty, constant),
             | _ => self.scalar_declaration(name, ty, constant),
         }
     }
 
     /// A declarator's optional `*`. A `const` after it would make the
     /// pointer itself `const`, which this subset leaves out.
-    fn pointer(&mut self) -> Result<bool, Diagnostic> {
+    pub fn pointer(&mut self) -> Result<bool, Diagnostic> {
         if !self.take("*") {
             return Ok(false);
         }
@@ -494,9 +510,16 @@ impl<'a> Parser<'a> {
 
     /// Whether a block-scope declaration starts here.
     fn at_declaration(&self) -> bool {
-        ["int", "char", "struct", "static", "const"]
-            .iter()
-            .any(|keyword| self.at(keyword))
+        self.at_type()
+            || ["struct", "static", "const"]
+                .iter()
+                .any(|keyword| self.at(keyword))
+    }
+
+    /// Whether an integer type's specifiers start here: a keyword such as
+    /// `unsigned`, or `size_t` once `<stdio.h>` has declared it.
+    pub fn at_type(&self) -> bool {
+        is_integer_specifier(self.current().text) || (self.at("size_t") && self.includes_stdio())
     }
 
     /// A declarator's optional `[N]`, or `[]` when a string literal
@@ -559,12 +582,12 @@ impl<'a> Parser<'a> {
         let value = self.emit_expression(expression, false)?;
         let range = combined(name.range, self.expressions[expression].range);
         let node = self.tree("=", range, vec![target, value])?;
-        let char_value = self.expressions[expression].ty == Type::Char;
+        let from = self.expressions[expression].ty;
         self.emit_node(
             Op::Store {
                 initializer: true,
                 full_expression: true,
-                char_value,
+                from,
                 structure: structure_of(ty),
             },
             range,
@@ -583,7 +606,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(), Diagnostic> {
         self.declare(name, ty, constant)?;
         if self.take("=") {
-            if let Type::CharArray(length) = ty
+            if let Type::Array(Integer::Char, length) = ty
                 && self.current().text.starts_with('"')
             {
                 let element = self.tree(name.text, name.range, Vec::new())?;
@@ -620,7 +643,8 @@ impl<'a> Parser<'a> {
                 let element = self.element(name, &label, offset, None)?;
                 let zero = self.tree("0", name.range, Vec::new())?;
                 self.emit_node(Op::Zero, name.range, zero)?;
-                self.initialize(element, zero, name.range, None)?;
+                let from = ty.leaf_type(&self.structures, leaf).unwrap_or(Type::INT);
+                self.initialize(element, zero, name.range, from, None)?;
             }
             // The initializer list is one full expression: its last store
             // ends it (C99 §6.8p4).
@@ -670,19 +694,14 @@ impl<'a> Parser<'a> {
         let mut index = 0;
         while !self.at("}") {
             let (member_type, leaf) = match ty {
-                | Type::Array(length) | Type::CharArray(length) => {
+                | Type::Array(element, length) => {
                     if self.at("[") {
                         return Err(self.error("array designators are outside this subset"));
                     }
                     if index >= length {
                         return Err(self.error("too many array initializer elements"));
                     }
-                    let element = if matches!(ty, Type::CharArray(_)) {
-                        Type::Char
-                    } else {
-                        Type::Int
-                    };
-                    (element, offset + index)
+                    (Type::Integer(element), offset + index)
                 },
                 | Type::Struct(id) => {
                     if self.take(".") {
@@ -703,13 +722,13 @@ impl<'a> Parser<'a> {
             };
             let at = i32::try_from(leaf).map_err(|_| self.error("object too large"))?;
             match member_type {
-                | Type::CharArray(length) if self.current().text.starts_with('"') => {
+                | Type::Array(Integer::Char, length) if self.current().text.starts_with('"') => {
                     let label = self.label(name.text, shape, at, None);
                     let element = self.element(name, &label, at, None)?;
                     self.string_initializer(element, name.range, length, false)?;
                     mentioned[leaf..leaf + length].fill(true);
                 },
-                | Type::Array(_) | Type::Struct(_) | Type::CharArray(_) if self.at("{") => {
+                | Type::Array(..) | Type::Struct(_) if self.at("{") => {
                     // A later initializer of the same subobject replaces it
                     // whole, so a scalar the new list leaves out is zero
                     // again, not what an earlier list stored (C99 §6.7.8p19,
@@ -717,7 +736,7 @@ impl<'a> Parser<'a> {
                     mentioned[leaf..leaf + member_type.leaves(&self.structures)].fill(false);
                     self.initializer_list(name, shape, member_type, leaf, mentioned)?;
                 },
-                | Type::Array(_) | Type::CharArray(_) =>
+                | Type::Array(..) =>
                     return Err(self.error(
                         "brace the initializer of each nested array; brace elision is outside \
                          this subset",
@@ -742,7 +761,8 @@ impl<'a> Parser<'a> {
                     }
                     let value = self.emit_expression(expression, false)?;
                     let range = self.expressions[expression].range;
-                    self.initialize(element, value, range, structure_of(member_type))?;
+                    let from = self.expressions[expression].ty;
+                    self.initialize(element, value, range, from, structure_of(member_type))?;
                     for done in mentioned
                         .iter_mut()
                         .skip(leaf)
@@ -889,6 +909,7 @@ impl<'a> Parser<'a> {
         element: usize,
         value: usize,
         range: SourceRange,
+        from: Type,
         structure: Option<usize>,
     ) -> Result<(), Diagnostic> {
         let node = self.tree("=", range, vec![element, value])?;
@@ -896,7 +917,7 @@ impl<'a> Parser<'a> {
             Op::Store {
                 initializer: true,
                 full_expression: false,
-                char_value: false,
+                from,
                 structure,
             },
             range,
@@ -943,12 +964,12 @@ impl<'a> Parser<'a> {
             let node = self.emit_expression(value, false)?;
             let range = combined(range, self.expressions[value].range);
             let root = self.tree("=", range, vec![target, node])?;
-            let char_value = self.expressions[value].ty == Type::Char;
+            let from = self.expressions[value].ty;
             self.emit_node(
                 Op::Store {
                     initializer: false,
                     full_expression: true,
-                    char_value,
+                    from,
                     structure: structure_of(self.expressions[expression].ty),
                 },
                 range,
@@ -968,14 +989,11 @@ impl<'a> Parser<'a> {
         };
         if let Some(delta) = prefix.or(postfix) {
             let operand = &self.expressions[expression];
-            if !matches!(
-                operand.ty,
-                Type::Int | Type::Char | Type::Pointer(_) | Type::CharPointer(_)
-            ) {
+            if !matches!(operand.ty, Type::Integer(_) | Type::Pointer(..)) {
                 return Err(Diagnostic::new(
                     "unsupported",
                     range,
-                    "++ and -- update an int, a char or a pointer to int or char in this subset",
+                    "++ and -- update an integer or a pointer to one in this subset",
                 ));
             }
             if prefix.is_none()
@@ -1000,6 +1018,7 @@ impl<'a> Parser<'a> {
                 Op::Increment {
                     delta,
                     prefix: prefix.is_some(),
+                    nested: false,
                 },
                 range,
                 root,
@@ -1019,7 +1038,7 @@ impl<'a> Parser<'a> {
     /// C99: §6.5.16 paragraph 2, p. 91; PDF p. 103.
     /// C99: §6.5.2.4 paragraph 1, p. 75; PDF p. 87.
     /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58 (modifiable lvalue).
-    fn readonly_error(&self, expression: usize, increment: bool) -> Diagnostic {
+    pub fn readonly_error(&self, expression: usize, increment: bool) -> Diagnostic {
         let operand = &self.expressions[expression];
         let what = match &operand.kind {
             | ExprKind::Name(name, ..) => format!(
@@ -1064,11 +1083,17 @@ impl<'a> Parser<'a> {
             self.expressions[expression].range,
             self.expressions[value].range,
         );
-        let arithmetic = |ty: Type| matches!(ty, Type::Int | Type::Char);
+        let shift = matches!(operator, "<<" | ">>");
+        let common = match (left, right) {
+            | (Type::Integer(left), Type::Integer(_)) if shift => Some(left.promoted()),
+            | (Type::Integer(left), Type::Integer(right)) =>
+                Some(left.promoted().common(right.promoted()).0),
+            | _ => None,
+        };
         match (left, operator) {
-            | _ if arithmetic(left) && arithmetic(right) => {},
-            | (Type::Pointer(_) | Type::CharPointer(_), "+" | "-") if arithmetic(right) => {},
-            | (Type::StructPointer(_), "+" | "-") if arithmetic(right) =>
+            | _ if common.is_some() => {},
+            | (Type::Pointer(..), "+" | "-") if matches!(right, Type::Integer(_)) => {},
+            | (Type::StructPointer(_), "+" | "-") if matches!(right, Type::Integer(_)) =>
                 return Err(Diagnostic::new(
                     "unsupported",
                     range,
@@ -1090,9 +1115,9 @@ impl<'a> Parser<'a> {
                 return Err(Diagnostic::constraint(
                     range,
                     &format!(
-                        "`{}` takes an arithmetic left operand and an arithmetic right one, or \
-                         for += and -= a pointer on the left and an integer on the right (C99 \
-                         §6.5.16.2p1, p2)",
+                        "`{}` takes an arithmetic left operand and an arithmetic right one \
+                         (integer ones for <<= and >>=), or for += and -= a pointer on the left \
+                         and an integer on the right (C99 §6.5.16.2p1, p2)",
                         token.text
                     ),
                     &super::clauses::COMPOUND_CONSTRAINT,
@@ -1111,12 +1136,14 @@ impl<'a> Parser<'a> {
         }
         let target = self.emit_expression(expression, true)?;
         let operand = self.emit_expression(value, false)?;
-        if right == Type::Char && arithmetic(left) {
+        if let Type::Integer(from) = right
+            && from.promoted() != from
+        {
             let value_range = self.expressions[value].range;
-            self.emit_node(Op::Promote, value_range, operand)?;
+            self.emit_node(Op::Promote(from), value_range, operand)?;
         }
         let root = self.tree(token.text, range, vec![target, operand])?;
-        self.emit_node(Op::Compound(operator), range, root)
+        self.emit_node(Op::Compound(operator, common), range, root)
     }
 
     pub fn emit(&mut self, op: Op, range: SourceRange) -> Result<(), Diagnostic> {
@@ -1231,12 +1258,12 @@ impl<'a> Parser<'a> {
         if compatible(
             expected,
             expression.ty,
-            matches!(expression.kind, ExprKind::Number(0)),
+            matches!(expression.kind, ExprKind::Number(0, ..)),
         ) {
             Ok(())
         } else if let Some(name) = match (expected, expression.ty) {
-            | (Type::CharPointer(false), Type::CharPointer(true)) => Some("char"),
-            | (Type::Pointer(false), Type::Pointer(true)) => Some("int"),
+            | (Type::Pointer(element, false), Type::Pointer(other, true)) if element == other =>
+                Some(element.spelling()),
             | _ => None,
         } {
             Err(Diagnostic::constraint(
@@ -1258,7 +1285,7 @@ impl<'a> Parser<'a> {
 
     pub fn require_scalar(&self, expression: usize) -> Result<(), Diagnostic> {
         let ty = self.expressions[expression].ty;
-        if matches!(ty, Type::Int | Type::Char) || ty.is_pointer() {
+        if matches!(ty, Type::Integer(_)) || ty.is_pointer() {
             Ok(())
         } else {
             Err(self.error("expected a scalar expression"))
@@ -1442,10 +1469,9 @@ impl<'a> Parser<'a> {
         let bytes = text.as_bytes();
         let first = *bytes.first()?;
         if first.is_ascii_digit() {
-            let decimal = bytes.iter().all(u8::is_ascii_digit)
-                && (text.len() == 1 || first != b'0')
-                && text.parse::<i32>().is_ok();
-            return decimal.then_some(Ok("integer constant"));
+            return Self::integer_constant(literal)
+                .is_ok()
+                .then_some(Ok("integer constant"));
         }
         if first != b'"' && first != b'\'' {
             return None;
@@ -1537,15 +1563,11 @@ impl<'a> Parser<'a> {
                 };
                 let range = parameter.map_or(self.current().range, |token| token.range);
                 let ty = match (base, pointer) {
-                    | (Base::Int, false) => Type::Int,
-                    | (Base::Int, true) => Type::Pointer(false),
-                    | (Base::ConstInt, true) => Type::Pointer(true),
-                    | (Base::Char, false) => Type::Char,
-                    | (Base::Char, true) => Type::CharPointer(false),
-                    | (Base::ConstChar, true) => Type::CharPointer(true),
+                    | (Base::Integer(integer, false), false) => Type::Integer(integer),
+                    | (Base::Integer(integer, constant), true) => Type::Pointer(integer, constant),
                     | (Base::Struct(id), false) => self.complete_structure(id, range)?,
                     | (Base::Struct(id), true) => Type::StructPointer(id),
-                    | (Base::ConstInt | Base::ConstChar, false) =>
+                    | (Base::Integer(_, true), false) =>
                         return Err(Diagnostic::new(
                             "unsupported",
                             range,
@@ -1685,43 +1707,33 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// A type specifier: `int`, `char` or `struct tag`, the first two
-    /// optionally `const`. A tag not seen before declares an incomplete
-    /// structure type, which only a pointer may use until its definition.
+    /// A type specifier: an integer type, optionally `const`, or `struct
+    /// tag`. A tag not seen before declares an incomplete structure type,
+    /// which only a pointer may use until its definition.
     ///
     /// C99: §6.7.3 paragraph 3, p. 108; PDF p. 120 (`const` qualifies
     /// the type; the object is then not modifiable).
-    fn base_type(&mut self) -> Result<Base, Diagnostic> {
-        if self.take("const") {
-            if self.take("int") {
-                return Ok(Base::ConstInt);
-            }
-            if self.take("char") {
-                return Ok(Base::ConstChar);
-            }
-            return Err(self.error(
-                "const is supported before int and char in this subset (`const int limit = 3;`, \
-                 `const char *s`)",
-            ));
-        }
-        if self.take("int") || self.take("char") {
-            let base = if self.tokens[self.position - 1].text == "int" {
-                Base::Int
-            } else {
-                Base::Char
-            };
+    pub fn base_type(&mut self) -> Result<Base, Diagnostic> {
+        let constant = self.take("const");
+        if let Some(integer) = self.integer_type()? {
             if self.at("const") {
                 return Err(self.error(
                     "write const first, as in `const int`; other placements of const are outside \
                      this subset",
                 ));
             }
-            return Ok(base);
+            return Ok(Base::Integer(integer, constant));
+        }
+        if constant {
+            return Err(self.error(
+                "const is supported before an integer type in this subset (`const int limit = \
+                 3;`, `const char *s`)",
+            ));
         }
         if !self.take("struct") {
             return Err(self.error(
-                "expected int, char or struct; other types (unsigned, long, float, void, ...) are \
-                 outside this subset",
+                "expected an integer type (char, short, int, long, long long, signed or unsigned) \
+                 or struct; other types (float, double, void, ...) are outside this subset",
             ));
         }
         let tag = self.identifier()?;
@@ -1731,6 +1743,71 @@ impl<'a> Parser<'a> {
             );
         }
         Ok(Base::Struct(self.tag(tag)?))
+    }
+
+    /// The integer type the type specifiers here name, if they start here:
+    /// `char`, `signed char`, `unsigned char`, `short`, `int`, `long`, `long
+    /// long`, each with `signed` or `unsigned`, the words in any order and
+    /// `int` optional after `short` and `long`; or `size_t`, which
+    /// `<stdio.h>` defines as `unsigned long` on x86-64.
+    ///
+    /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112.
+    /// C99: §7.19.1 paragraph 2, p. 262; PDF p. 274 (`size_t`).
+    pub fn integer_type(&mut self) -> Result<Option<Integer>, Diagnostic> {
+        if self.at("size_t") && self.includes_stdio() {
+            self.position += 1;
+            return Ok(Some(Integer::UnsignedLong));
+        }
+        let first = self.current();
+        let mut counts = [0_u8; 6];
+        let words = ["signed", "unsigned", "char", "short", "int", "long"];
+        while let Some(word) = words.iter().position(|word| self.at(word)) {
+            counts[word] += 1;
+            self.position += 1;
+        }
+        if counts == [0; 6] {
+            return Ok(None);
+        }
+        let range = combined(first.range, self.tokens[self.position - 1].range);
+        if matches!(
+            self.current().text,
+            "float" | "double" | "_Bool" | "_Complex"
+        ) {
+            return Err(self.error(
+                "floating and boolean types are outside this subset, which models the integer \
+                 types",
+            ));
+        }
+        let [signed, unsigned, char, short, int, long] = counts;
+        let valid = signed + unsigned <= 1
+            && char <= 1
+            && short <= 1
+            && int <= 1
+            && long <= 2
+            && (char == 0 || short + int + long == 0)
+            && (short == 0 || long == 0);
+        if !valid {
+            return Err(Diagnostic::constraint(
+                range,
+                "these type specifiers name no type: C allows each integer type only as one of \
+                 its listed spellings, such as `unsigned long int` (C99 §6.7.2p2)",
+                &super::clauses::TYPE_SPECIFIERS,
+            ));
+        }
+        let unsigned = unsigned == 1;
+        Ok(Some(match (char, short, long) {
+            | (1, ..) if unsigned => Integer::UnsignedChar,
+            | (1, ..) if signed == 1 => Integer::SignedChar,
+            | (1, ..) => Integer::Char,
+            | (_, 1, _) if unsigned => Integer::UnsignedShort,
+            | (_, 1, _) => Integer::Short,
+            | (.., 1) if unsigned => Integer::UnsignedLong,
+            | (.., 1) => Integer::Long,
+            | (.., 2) if unsigned => Integer::UnsignedLongLong,
+            | (.., 2) => Integer::LongLong,
+            | _ if unsigned => Integer::UnsignedInt,
+            | _ => Integer::Int,
+        }))
     }
 
     /// The structure type tagged `tag`, declared incomplete if new.
@@ -1785,10 +1862,9 @@ impl<'a> Parser<'a> {
         Ok(Some(length))
     }
 
-    /// The type a declarator gives its base type: `int`, `int *`,
-    /// `int[N]`, `char`, `char *`, `const char *`, `char[N]`, `struct T`
-    /// or `struct T *`.
-    fn declared_type(
+    /// The type a declarator gives its base type: an integer type `T`,
+    /// `T *`, `const T *`, `T[N]`, `struct S` or `struct S *`.
+    pub fn declared_type(
         &self,
         base: Base,
         pointer: bool,
@@ -1797,15 +1873,11 @@ impl<'a> Parser<'a> {
     ) -> Result<Type, Diagnostic> {
         let unsupported = |message| Err(Diagnostic::new("unsupported", range, message));
         match (base, pointer, array) {
-            | (Base::Int | Base::ConstInt, false, None) => Ok(Type::Int),
-            | (Base::Int, true, None) => Ok(Type::Pointer(false)),
-            | (Base::ConstInt, true, None) => Ok(Type::Pointer(true)),
-            | (Base::Int | Base::ConstInt, false, Some(length)) => Ok(Type::Array(length)),
+            | (Base::Integer(integer, _), false, None) => Ok(Type::Integer(integer)),
+            | (Base::Integer(integer, constant), true, None) =>
+                Ok(Type::Pointer(integer, constant)),
+            | (Base::Integer(integer, _), false, Some(length)) => Ok(Type::Array(integer, length)),
             | (_, true, Some(_)) => unsupported("arrays of pointers are outside this subset"),
-            | (Base::Char | Base::ConstChar, false, None) => Ok(Type::Char),
-            | (Base::Char, true, None) => Ok(Type::CharPointer(false)),
-            | (Base::Char | Base::ConstChar, false, Some(length)) => Ok(Type::CharArray(length)),
-            | (Base::ConstChar, true, None) => Ok(Type::CharPointer(true)),
             | (Base::Struct(id), false, None) => self.complete_structure(id, range),
             | (Base::Struct(id), true, None) => Ok(Type::StructPointer(id)),
             | (Base::Struct(_), false, Some(_)) =>
@@ -1813,8 +1885,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `struct tag { members };` at file scope. Members are int, char,
-    /// pointers to int or char, int and char arrays, complete structures
+    /// `struct tag { members };` at file scope. Members are integers,
+    /// pointers to them, arrays of them, complete structures
     /// and pointers to structures (including this one); several may share
     /// a line (`int x, y;`).
     fn structure_definition(&mut self) -> Result<(), Diagnostic> {
@@ -1996,7 +2068,7 @@ impl<'a> Parser<'a> {
         }
         let mut bytes = literal.bytes;
         bytes.push(0);
-        let ty = Type::CharArray(bytes.len());
+        let ty = Type::Array(Integer::Char, bytes.len());
         self.statics.push(Static {
             name: literal.spelling,
             ty,
@@ -2034,7 +2106,7 @@ impl<'a> Parser<'a> {
         leaves: &mut [Value],
     ) -> Result<(), Diagnostic> {
         match ty {
-            | Type::CharArray(length) if self.current().text.starts_with('"') => {
+            | Type::Array(Integer::Char, length) if self.current().text.starts_with('"') => {
                 let literal = self.joined_literal(self.position)?;
                 if literal.bytes.len() > length {
                     return Err(self.error(
@@ -2049,7 +2121,7 @@ impl<'a> Parser<'a> {
                 self.position += literal.parts;
                 Ok(())
             },
-            | Type::Array(_) | Type::Struct(_) | Type::CharArray(_) => {
+            | Type::Array(..) | Type::Struct(_) => {
                 self.expect("{")?;
                 if self.at("}") {
                     return Err(self.error("empty initializer lists are outside the C99 subset"));
@@ -2057,16 +2129,11 @@ impl<'a> Parser<'a> {
                 let mut index = 0;
                 while !self.at("}") {
                     let (member, leaf) = match ty {
-                        | Type::Array(length) | Type::CharArray(length) => {
+                        | Type::Array(element, length) => {
                             if index >= length {
                                 return Err(self.error("too many array initializer elements"));
                             }
-                            let element = if matches!(ty, Type::CharArray(_)) {
-                                Type::Char
-                            } else {
-                                Type::Int
-                            };
-                            (element, offset + index)
+                            (Type::Integer(element), offset + index)
                         },
                         | Type::Struct(id) => {
                             if self.take(".") {
@@ -2088,12 +2155,10 @@ impl<'a> Parser<'a> {
                         | _ =>
                             return Err(self.error("braces initialize only arrays and structures")),
                     };
-                    let string = matches!(member, Type::CharArray(_))
+                    let string = matches!(member, Type::Array(Integer::Char, _))
                         && self.current().text.starts_with('"');
-                    if matches!(
-                        member,
-                        Type::Array(_) | Type::Struct(_) | Type::CharArray(_)
-                    ) && !self.at("{")
+                    if matches!(member, Type::Array(..) | Type::Struct(_))
+                        && !self.at("{")
                         && !string
                     {
                         return Err(self.error(
@@ -2114,73 +2179,61 @@ impl<'a> Parser<'a> {
                 }
                 self.expect("}")
             },
-            | Type::Int | Type::Char if self.current().text.starts_with('\'') => {
+            | Type::Integer(integer) if self.current().text.starts_with('\'') => {
                 let token = self.current();
                 self.declaration_macros.extend(token.macro_use);
                 let value = self.character_constant(token)?;
                 self.position += 1;
-                leaves[offset] = Value::Integer(value);
-                if ty == Type::Char {
-                    leaves[offset] = char_value(value.to_le_bytes()[0]);
-                }
+                leaves[offset] = Value::Integer(integer.convert(value));
                 Ok(())
             },
-            | Type::Int | Type::Char => {
+            | Type::Integer(integer) => {
                 let negative = self.take("-");
                 let token = self.current();
                 self.declaration_macros.extend(token.macro_use);
-                let digits = token
+                let not_constant = |parser: &Self| {
+                    parser.error(
+                        "a static object's initializer must be a constant; this subset takes a \
+                         decimal integer constant, optionally negated",
+                    )
+                };
+                if !token
                     .text
                     .as_bytes()
                     .first()
                     .is_some_and(u8::is_ascii_digit)
-                    && (token.text.len() == 1 || !token.text.starts_with('0'));
-                let parsed = if negative {
-                    format!("-{}", token.text).parse::<i32>()
-                } else {
-                    token.text.parse::<i32>()
-                };
-                let Ok(mut integer) = parsed
-                    .map_err(|_| ())
-                    .and_then(|value| if digits { Ok(value) } else { Err(()) })
-                else {
-                    return Err(self.error(
-                        "a static object's initializer must be a constant; this subset takes a \
-                         decimal int constant, optionally negated",
-                    ));
-                };
+                {
+                    return Err(not_constant(self));
+                }
+                let (value, _) = Self::integer_constant(token)?;
                 self.position += 1;
                 if !(self.at(",") || self.at(";") || self.at("}")) {
                     return Err(self.error(
                         "a static object's initializer must be a constant; this subset takes a \
-                         decimal int constant, optionally negated, and no arithmetic on it",
+                         decimal integer constant, optionally negated, and no arithmetic on it",
                     ));
                 }
-                if ty == Type::Char {
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        reason = "Keeping the low 8 bits is the modeled conversion."
-                    )]
-                    let low = integer as i8;
-                    integer = i32::from(low);
-                }
-                leaves[offset] = Value::Integer(integer);
+                // The initializer converts as by assignment: modulo 2^N
+                // into an unsigned type, wrapped into a signed one (C99
+                // §6.7.8p11, §6.3.1.3).
+                let value = if negative { -value } else { value };
+                leaves[offset] = Value::Integer(integer.convert(value));
                 Ok(())
             },
-            | Type::CharPointer(_) if self.current().text.starts_with('"') => {
+            | Type::Pointer(Integer::Char, _) if self.current().text.starts_with('"') => {
                 // The literal's array exists before main, so its address
                 // is a constant (C99 §6.6p9).
                 let literal = self.take_literal()?;
                 self.declaration_macros.extend(literal.macro_use);
                 let index = self.string_literal(literal)?;
                 let length = match self.statics[index].ty {
-                    | Type::CharArray(length) => i32::try_from(length).unwrap_or(i32::MAX),
+                    | Type::Array(_, length) => i32::try_from(length).unwrap_or(i32::MAX),
                     | _ => 1,
                 };
                 leaves[offset] = Value::pointer(index + 1, 0, 0, length);
                 Ok(())
             },
-            | Type::Pointer(_) | Type::StructPointer(_) | Type::CharPointer(_) => {
+            | Type::Pointer(..) | Type::StructPointer(_) => {
                 if !self.take("0") {
                     return Err(self.error(
                         "a static pointer's initializer must be a constant; this subset takes 0, \
@@ -2204,27 +2257,35 @@ impl<'a> Parser<'a> {
 
 /// A declaration's type specifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    variant_size_differences,
+    reason = "A short-lived parser value; a structure's index is the larger variant."
+)]
 pub(super) enum Base {
-    Int,
-    Char,
-    /// `const int`.
-    ConstInt,
-    /// `const char`.
-    ConstChar,
+    /// An integer type, `const`-qualified when set.
+    Integer(Integer, bool),
     Struct(usize),
 }
 
 impl Base {
     /// Whether the specifier is `const`-qualified.
     pub(super) const fn is_const(self) -> bool {
-        matches!(self, Self::ConstInt | Self::ConstChar)
+        matches!(self, Self::Integer(_, true))
     }
 }
 
 /// The char value a byte holds: plain char is signed with 8 bits on x86-64
 /// (C99 §6.2.5p15).
 pub(super) fn char_value(byte: u8) -> Value {
-    Value::Integer(i32::from(i8::from_ne_bytes([byte])))
+    Value::Integer(i128::from(i8::from_ne_bytes([byte])))
+}
+
+/// Whether `word` is one of the keywords that specify an integer type.
+pub(super) fn is_integer_specifier(word: &str) -> bool {
+    matches!(
+        word,
+        "signed" | "unsigned" | "char" | "short" | "int" | "long"
+    )
 }
 
 /// The structure type `ty` is, if it is one.
@@ -2293,19 +2354,17 @@ pub(super) fn is_identifier(text: &str) -> bool {
 }
 
 /// Whether a value of type `actual` may be stored in an object of type
-/// `expected` (as assignment converts it), `null` when it is the constant 0.
-/// A `char *` converts to a `const char *`, never the reverse (C99
-/// §6.5.16.1p1).
+/// `expected` (as assignment converts it), `null` when it is the constant 0:
+/// any integer converts to any integer type, and a `T *` to a `const T *`,
+/// never the reverse (C99 §6.5.16.1p1).
 pub(super) fn compatible(expected: Type, actual: Type, null: bool) -> bool {
     expected == actual
+        || matches!((expected, actual), (Type::Integer(_), Type::Integer(_)))
         || matches!(
             (expected, actual),
-            (Type::Char, Type::Int)
-                | (Type::Int, Type::Char)
-                | (Type::CharPointer(true), Type::CharPointer(false))
-                | (Type::Pointer(true), Type::Pointer(false))
+            (Type::Pointer(element, true), Type::Pointer(other, false)) if element == other
         )
-        || (expected.is_pointer() && actual == Type::Int && null)
+        || (expected.is_pointer() && matches!(actual, Type::Integer(_)) && null)
 }
 
 /// Set each node's full-expression root. A parent follows its children, so a
@@ -2366,6 +2425,8 @@ fn compound_operator(text: &str) -> Option<&'static str> {
         | "*=" => Some("*"),
         | "/=" => Some("/"),
         | "%=" => Some("%"),
+        | "<<=" => Some("<<"),
+        | ">>=" => Some(">>"),
         | _ => None,
     }
 }

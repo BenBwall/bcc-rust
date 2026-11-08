@@ -105,7 +105,7 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
                 return Err(Diagnostic::new(
                     "unsupported",
                     range(source, start, offset + 1),
-                    "floating point is outside this subset; the machine models int and char",
+                    "floating point is outside this subset; the machine models the integer types",
                 ));
             }
         } else if b"{}()[];,+-*/%<>=!&.".contains(&byte) {
@@ -126,9 +126,17 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
                         | b"%="
                         | b"&&"
                         | b"->"
+                        | b"<<"
+                        | b">>"
                 )
             {
                 offset += 1;
+                // `<<=` and `>>=` are one punctuator each (C99 §6.4.6p1).
+                if matches!(&bytes[start..offset], b"<<" | b">>")
+                    && bytes.get(offset) == Some(&b'=')
+                {
+                    offset += 1;
+                }
             }
         } else {
             let end = start + source[start..].chars().next().map_or(1, char::len_utf8);

@@ -7,13 +7,14 @@
 //! one conversion specification at a time.
 //!
 //! The subset of `printf` is the conversions `%d %i %u %x %c %s %%`, with
-//! the `-` and `0` flags, a field width and a precision. Other valid
-//! specifications (`*`, length modifiers, other conversions and flags) stop
-//! with an explicit diagnostic; invalid ones (a precision with `%c`
+//! the `-` and `0` flags, a field width, a precision and the length
+//! modifiers `hh h l ll z` for the integer conversions. Other valid
+//! specifications (`*`, the `j t L` modifiers, other conversions and flags)
+//! stop with an explicit diagnostic; invalid ones (a precision with `%c`
 //! among them), a missing argument and an argument of the wrong type are
 //! undefined behavior.
 //!
-//! C99: §7.19.6.1 paragraphs 2, 4, 6, 8 and 9, pp. 274-280; PDF pp.
+//! C99: §7.19.6.1 paragraphs 2, 4, 6, 7, 8 and 9, pp. 274-280; PDF pp.
 //! 286-292 (fprintf).
 //! C99: §7.19.6.3 paragraphs 2-3, p. 290; PDF p. 302 (printf).
 //! C99: §7.19.7.3 paragraphs 2-3, p. 297; PDF p. 309 (fputc).
@@ -30,7 +31,9 @@ use super::{
         self,
         Clause,
     },
+    integers::Integer,
     machine::Machine,
+    memory::article,
     model::{
         Diagnostic,
         Event,
@@ -77,6 +80,8 @@ struct Specification {
     precision:    Option<usize>,
     /// Whether a precision made the 0 flag be ignored (C99 §7.19.6.1p6).
     zero_ignored: bool,
+    /// The length modifier: `""`, `hh`, `h`, `l`, `ll` or `z`.
+    length:       &'static str,
     conversion:   u8,
     text:         String,
 }
@@ -101,13 +106,15 @@ impl Machine {
         let range = instruction.range;
         match library {
             | Library::Putchar => {
-                let Some(&Value::Integer(character)) = arguments.first() else {
+                let Some(&Value::Integer(argument)) = arguments.first() else {
                     return Err(self.error("putchar needs an int"));
                 };
-                // fputc converts its int to unsigned char (C99 §7.19.7.3p2).
+                // The prototype converts the argument to int, and fputc
+                // converts that int to unsigned char (C99 §7.19.7.3p2).
+                let character = Integer::Int.convert(argument);
                 let byte = character.to_le_bytes()[0];
                 self.write(&[byte])?;
-                let returned = i32::from(byte);
+                let returned = i128::from(byte);
                 self.push(Operand::Value(Value::Integer(returned)))?;
                 Ok(Self::putchar_event(range, text(0), character, byte))
             },
@@ -118,7 +125,7 @@ impl Machine {
                 self.write(&string)?;
                 // C promises only a nonnegative value; glibc returns the
                 // number of characters written.
-                let returned = i32::try_from(string.len()).unwrap_or(i32::MAX);
+                let returned = i128::try_from(string.len()).unwrap_or(i128::MAX);
                 self.push(Operand::Value(Value::Integer(returned)))?;
                 Ok(self.puts_event(range, text(0), &pointer, &string, returned))
             },
@@ -127,7 +134,7 @@ impl Machine {
                 let format = self.read_string(&pointer, "printf", text(0), None)?;
                 let (pieces, written) = self.format(&format, &arguments, types, &texts)?;
                 self.write(&written)?;
-                let returned = i32::try_from(written.len()).unwrap_or(i32::MAX);
+                let returned = i128::try_from(written.len()).unwrap_or(i128::MAX);
                 self.push(Operand::Value(Value::Integer(returned)))?;
                 Ok(Self::printf_event(
                     range, &format, &pointer, &arguments, &pieces, &written,
@@ -280,10 +287,10 @@ impl Machine {
                     Undefined::MissingArgument,
                 ));
             };
-            let ty = types.get(next).copied().unwrap_or(Type::Int);
+            let ty = types.get(next).copied().unwrap_or(Type::INT);
             let text = texts.get(next).map_or("", String::as_str);
-            let converted = self.convert(&specification, argument, ty, next, text)?;
-            let precision = precision_note(&specification, argument, &converted);
+            let (converted, printed) = self.convert(&specification, argument, ty, next, text)?;
+            let precision = precision_note(&specification, printed, &converted);
             let padded = pad(&specification, converted);
             written.extend_from_slice(&padded);
             pieces.push(Piece::Converted {
@@ -291,9 +298,9 @@ impl Machine {
                 argument: Some(next),
                 source: String::from(text),
                 took: if text.is_empty() {
-                    self.argument_text(argument)
+                    self.argument_text(argument, Some(ty))
                 } else {
-                    format!("`{text}`, {}", self.argument_text(argument))
+                    format!("`{text}`, {}", self.argument_text(argument, Some(ty)))
                 },
                 wrote: padded,
                 precision,
@@ -363,6 +370,13 @@ impl Machine {
         } else {
             None
         };
+        // A length modifier: hh, h, l, ll or z (C99 §7.19.6.1p7).
+        let rest = &format[*at..];
+        let length = ["hh", "ll", "h", "l", "z"]
+            .into_iter()
+            .find(|modifier| rest.starts_with(modifier.as_bytes()))
+            .unwrap_or("");
+        *at += length.len();
         let Some(&conversion) = format.get(*at) else {
             return Err(Diagnostic::ub(
                 self.state.source_range,
@@ -409,11 +423,24 @@ impl Machine {
                      conversions and %s"
                 )));
             },
+            | b'c' | b's' if length == "l" => {
+                return Err(self.error(&format!(
+                    "`{text}` takes a wide character or string, which is outside this subset"
+                )));
+            },
+            | b'c' | b's' | b'%' if !length.is_empty() => {
+                return Err(invalid(format!(
+                    "`{text}` puts the length modifier {length} before %{}, which C defines it \
+                     for only with the integer conversions d, i, o, u, x and X",
+                    char::from(conversion)
+                )));
+            },
             | b'%' | b'd' | b'i' | b'u' | b'x' | b'c' | b's' => {},
             | b'.' | b'*' | b'h' | b'l' | b'L' | b'j' | b'z' | b't' => {
                 return Err(self.error(&format!(
-                    "`{text}…` uses `*` or a length modifier, which are outside this subset; the \
-                     machine takes flags, a width, a precision and a conversion"
+                    "`{text}…` uses `*` or the length modifier j, t or L, which are outside this \
+                     subset; the machine takes flags, a width, a precision, hh, h, l, ll or z, \
+                     and a conversion"
                 )));
             },
             | b'o' | b'X' | b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' | b'p' | b'n' => {
@@ -438,13 +465,17 @@ impl Machine {
             width,
             precision,
             zero_ignored,
+            length,
             conversion,
             text,
         })
     }
 
     /// The text `specification` makes of argument `index`, `argument` of
-    /// type `ty`, spelled `text` in the call.
+    /// type `ty`, spelled `text` in the call, and the integer it printed.
+    /// An integer argument must have the type its conversion and length
+    /// modifier name, or that type's signed or unsigned counterpart with a
+    /// value both can hold (C99 §6.2.5p9, §7.19.6.1p9).
     fn convert(
         &self,
         specification: &Specification,
@@ -452,7 +483,7 @@ impl Machine {
         ty: Type,
         index: usize,
         text: &str,
-    ) -> Result<Vec<u8>, Diagnostic> {
+    ) -> Result<(Vec<u8>, Option<i128>), Diagnostic> {
         let conversion = specification.conversion;
         let wrong = |expected: &str, detail: &str| {
             Diagnostic::ub(
@@ -483,36 +514,73 @@ impl Machine {
             }
             written
         };
-        match (conversion, argument) {
-            | (b'd' | b'i' | b'c' | b'u' | b'x', Value::Integer(value)) if ty == Type::Int =>
-                Ok(match conversion {
-                    | b'd' | b'i' => digits(format!("{value}")),
-                    | b'c' => Vec::from([value.to_le_bytes()[0]]),
-                    | _ if *value < 0 => {
-                        return Err(wrong(
-                            "an unsigned int",
-                            &format!(
-                                " with the value {value}, which an unsigned int cannot hold: an \
-                                 int may stand for an unsigned int only when its value fits in \
-                                 both"
-                            ),
-                        ));
-                    },
-                    | b'u' => digits(format!("{value}")),
-                    | _ => digits(format!("{value:x}")),
-                }),
-            | (b'd' | b'i' | b'c', _) => Err(wrong("an int", "")),
-            | (b'u' | b'x', _) => Err(wrong("an unsigned int", "")),
-            | (_, pointer @ Value::Pointer { .. }) if matches!(ty, Type::CharPointer(_)) =>
-                self.read_string(pointer, "printf's %s", text, specification.precision),
-            | _ => Err(wrong("a pointer to a string (a char *)", "")),
+        if conversion == b's' {
+            return match argument {
+                | pointer @ Value::Pointer { .. }
+                    if matches!(ty, Type::Pointer(Integer::Char, _)) =>
+                    self.read_string(pointer, "printf's %s", text, specification.precision)
+                        .map(|bytes| (bytes, None)),
+                | _ => Err(wrong("a pointer to a string (a char *)", "")),
+            };
         }
+        let signed = matches!(conversion, b'd' | b'i' | b'c');
+        // The type the argument must have after the default argument
+        // promotions, and the type whose value is printed.
+        let (expected, printed) = match (specification.length, signed) {
+            | ("hh", true) => (Integer::Int, Integer::SignedChar),
+            | ("hh", false) => (Integer::Int, Integer::UnsignedChar),
+            | ("h", true) => (Integer::Int, Integer::Short),
+            | ("h", false) => (Integer::Int, Integer::UnsignedShort),
+            | ("l" | "z", true) => (Integer::Long, Integer::Long),
+            | ("l" | "z", false) => (Integer::UnsignedLong, Integer::UnsignedLong),
+            | ("ll", true) => (Integer::LongLong, Integer::LongLong),
+            | ("ll", false) => (Integer::UnsignedLongLong, Integer::UnsignedLongLong),
+            | (_, true) => (Integer::Int, Integer::Int),
+            | (_, false) => (Integer::UnsignedInt, Integer::UnsignedInt),
+        };
+        let wanted = article(expected.spelling());
+        let (Type::Integer(given), &Value::Integer(value)) = (ty, argument) else {
+            return Err(wrong(&wanted, ""));
+        };
+        let counterpart = if expected.signed() {
+            expected.to_unsigned()
+        } else {
+            expected.to_signed()
+        };
+        if given != expected {
+            if given != counterpart {
+                return Err(wrong(&wanted, ""));
+            }
+            if !(expected.fits(value) && counterpart.fits(value)) {
+                return Err(wrong(
+                    &wanted,
+                    &format!(
+                        " with the value {value}, which {wanted} cannot hold: {} may stand for {} \
+                         only when its value fits in both",
+                        article(given.spelling()),
+                        expected.spelling()
+                    ),
+                ));
+            }
+        }
+        // hh and h convert the promoted value back before printing it (C99
+        // §7.19.6.1p7).
+        let shown = printed.convert(value);
+        let written = match conversion {
+            | b'c' => Vec::from([value.to_le_bytes()[0]]),
+            | b'x' => digits(format!("{shown:x}")),
+            | _ => digits(format!("{shown}")),
+        };
+        Ok((written, Some(shown)))
     }
 
-    /// An argument's value in words.
-    fn argument_text(&self, value: &Value) -> String {
+    /// An argument's value in words, of type `ty` when known.
+    fn argument_text(&self, value: &Value, ty: Option<Type>) -> String {
         match value {
-            | Value::Integer(integer) => format!("the int {integer}"),
+            | Value::Integer(integer) => {
+                let name = ty.and_then(Type::integer).unwrap_or(Integer::Int);
+                format!("the {} {integer}", name.spelling())
+            },
             | Value::Pointer { target: None, .. } => String::from("a null pointer"),
             | &Value::Pointer {
                 target: Some(target),
@@ -523,9 +591,9 @@ impl Machine {
         }
     }
 
-    fn putchar_event(range: super::SourceRange, text: &str, value: i32, byte: u8) -> Event {
+    fn putchar_event(range: super::SourceRange, text: &str, value: i128, byte: u8) -> Event {
         let shown = quoted(&[byte]);
-        let converted = if value == i32::from(byte) {
+        let converted = if value == i128::from(byte) {
             String::new()
         } else {
             format!(
@@ -556,7 +624,7 @@ impl Machine {
             ],
         );
         event.operands.push(Operand::Value(Value::Integer(value)));
-        event.result = Some(Operand::Value(Value::Integer(i32::from(byte))));
+        event.result = Some(Operand::Value(Value::Integer(i128::from(byte))));
         event
     }
 
@@ -566,7 +634,7 @@ impl Machine {
         text: &str,
         pointer: &Value,
         written: &[u8],
-        returned: i32,
+        returned: i128,
     ) -> Event {
         let string = &written[..written.len() - 1];
         let explanation = format!(
@@ -575,7 +643,7 @@ impl Machine {
              new-line: {}. The null itself is not written. C promises only a nonnegative result \
              when puts succeeds; this machine returns the number of characters written, \
              {returned}, as glibc does.",
-            self.argument_text(pointer),
+            self.argument_text(pointer, None),
             string.len(),
             quoted(written)
         );
@@ -670,8 +738,8 @@ impl Machine {
         if variadic {
             explanation.push_str(
                 " Every argument after the format went through printf's `...`, where C applies \
-                 the default argument promotions: a char arrives as an int, which is why %c and \
-                 %d both take an int.",
+                 the default argument promotions: a char or a short arrives as an int, which is \
+                 why %c and %d both take an int, and why hh and h say only how to print it.",
             );
         }
         let extra = arguments.len()
@@ -751,7 +819,7 @@ impl Machine {
             }
         }
         event.result = Some(Operand::Value(Value::Integer(
-            i32::try_from(count).unwrap_or(i32::MAX),
+            i128::try_from(count).unwrap_or(i128::MAX),
         )));
         event
     }
@@ -762,7 +830,11 @@ impl Machine {
 /// a precision.
 ///
 /// C99: §7.19.6.1 paragraph 4, p. 275; PDF p. 287.
-fn precision_note(specification: &Specification, argument: &Value, converted: &[u8]) -> String {
+fn precision_note(
+    specification: &Specification,
+    printed: Option<i128>,
+    converted: &[u8],
+) -> String {
     let Some(precision) = specification.precision else {
         return String::new();
     };
@@ -790,15 +862,15 @@ fn precision_note(specification: &Specification, argument: &Value, converted: &[
         .iter()
         .filter(|byte| byte.is_ascii_hexdigit())
         .count();
-    let zero = matches!(argument, Value::Integer(0));
+    let zero = printed == Some(0);
     let plural = if precision == 1 { "" } else { "s" };
     if precision == 0 && zero {
         return format!("the precision .0 with the value 0 writes no digits at all{ignored}");
     }
-    let natural = match argument {
-        | Value::Integer(value) if specification.conversion == b'x' => format!("{value:x}").len(),
-        | Value::Integer(value) => format!("{}", value.unsigned_abs()).len(),
-        | _ => written,
+    let natural = match printed {
+        | Some(value) if specification.conversion == b'x' => format!("{value:x}").len(),
+        | Some(value) => format!("{}", value.unsigned_abs()).len(),
+        | None => written,
     };
     let leading = written.saturating_sub(natural);
     if leading == 0 {
@@ -853,13 +925,12 @@ const fn pointer_target(value: &Value) -> Option<usize> {
 }
 
 /// How C spells a type, for a mismatched argument.
-fn type_text(ty: Type) -> &'static str {
+fn type_text(ty: Type) -> String {
     match ty {
-        | Type::Int | Type::Char => "an int",
-        | Type::Pointer(_) => "a pointer to int",
-        | Type::CharPointer(_) => "a pointer to char",
-        | Type::StructPointer(_) => "a pointer to a structure",
-        | _ => "an aggregate",
+        | Type::Integer(integer) => article(integer.spelling()),
+        | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
+        | Type::StructPointer(_) => String::from("a pointer to a structure"),
+        | _ => String::from("an aggregate"),
     }
 }
 

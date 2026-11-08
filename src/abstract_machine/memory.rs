@@ -4,6 +4,8 @@
 //! C99: §6.2.4 paragraph 2, p. 32; PDF p. 44 (expired objects).
 //! C99: §6.7.8 paragraph 10, p. 126; PDF p. 138 (indeterminate locals).
 //! C99: §6.5 paragraph 5, p. 67; PDF p. 79 (signed overflow).
+//! C99: §6.2.5 paragraph 9, p. 34; PDF p. 46 (unsigned arithmetic wraps).
+//! C99: §6.5.7 paragraphs 3-5, pp. 84-85; PDF pp. 96-97 (shifts).
 //! C99: §6.5.5 paragraph 5, p. 82; PDF p. 94 (division by zero).
 //! C99: §6.5.6 paragraph 8, p. 83; PDF p. 95 (pointer arithmetic).
 //! C99: §6.5.6 paragraph 7, p. 83; PDF p. 95 (scalar pointer arithmetic).
@@ -14,6 +16,7 @@
 
 use super::{
     clauses,
+    integers::Integer,
     layout,
     machine::{
         Machine,
@@ -30,7 +33,6 @@ use super::{
         Undefined,
         Value,
     },
-    parser,
 };
 
 impl Machine {
@@ -46,12 +48,13 @@ impl Machine {
         parameter: bool,
     ) -> Result<usize, Diagnostic> {
         let value = match (ty, value) {
-            | (Type::Array(_) | Type::Struct(_) | Type::CharArray(_), Value::Indeterminate) =>
+            | (Type::Array(..) | Type::Struct(_), Value::Indeterminate) =>
                 ty.indeterminate(&self.structures),
             | (pointer, Value::Integer(0)) if pointer.is_pointer() => Value::null(),
-            // A char parameter receives its argument converted as if by
-            // assignment (C99 §6.5.2.2p7, §6.3.1.3p3).
-            | (Type::Char, Value::Integer(integer)) => parser::char_value(integer.to_le_bytes()[0]),
+            // A parameter receives its argument converted as if by
+            // assignment (C99 §6.5.2.2p7, §6.3.1.3).
+            | (Type::Integer(integer), Value::Integer(value)) =>
+                Value::Integer(integer.convert(value)),
             | (_, value) => value,
         };
         let top = self.activations.len() - 1;
@@ -148,6 +151,7 @@ impl Machine {
             id,
             name: String::from(name),
             r#type: ty.spelling(&self.structures),
+            size: ty.size_align(&self.structures).0,
             frame_id,
             storage_duration: if static_storage {
                 "static"
@@ -252,10 +256,11 @@ impl Machine {
     }
 
     /// Stores `value`, converted to the object's type, and returns the stored
-    /// value. A `char` keeps the low 8 bits of an int as two's complement, the
+    /// value. An unsigned type reduces it modulo 2^N; a signed type that
+    /// cannot hold it keeps the low N bits as two's complement, the
     /// implementation-defined result x86-64 compilers give. A structure is
     /// stored member by member.
-    /// C99: §6.3.1.3 paragraph 3, p. 43; PDF p. 55.
+    /// C99: §6.3.1.3 paragraphs 1-3, p. 43; PDF p. 55.
     pub fn store(
         &mut self,
         target: usize,
@@ -292,15 +297,8 @@ impl Machine {
         if ty.is_some_and(Type::is_pointer) && value == Value::Integer(0) {
             value = Value::null();
         }
-        if ty == Some(Type::Char)
-            && let Value::Integer(integer) = value
-        {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "Keeping the low 8 bits is the modeled conversion."
-            )]
-            let low = integer as i8;
-            value = Value::Integer(i32::from(low));
+        if let (Some(Type::Integer(integer)), Value::Integer(number)) = (ty, &value) {
+            value = Value::Integer(integer.convert(*number));
         }
         let valid = if ty.is_some_and(Type::is_pointer) {
             matches!(value, Value::Pointer { .. })
@@ -455,9 +453,14 @@ impl Machine {
         }
     }
 
+    /// `left operator right`, computed in `ty` when both are integers:
+    /// the common type the usual arithmetic conversions chose, or for a
+    /// shift the promoted left operand's type. `ty` is `None` for pointer
+    /// arithmetic and pointer comparisons.
     pub fn binary_value(
         &self,
         operator: &str,
+        ty: Option<Integer>,
         left: Value,
         right: Value,
     ) -> Result<Value, Diagnostic> {
@@ -465,19 +468,15 @@ impl Machine {
         self.check_pointer_lifetime(&right)?;
         match (left, right) {
             | (Value::Integer(left), Value::Integer(right)) =>
-                self.integer_binary(operator, left, right),
+                self.integer_binary(operator, ty.unwrap_or(Integer::Int), left, right),
             | (pointer @ Value::Pointer { .. }, Value::Integer(delta))
                 if matches!(operator, "+" | "-") =>
             {
-                let delta = if operator == "-" {
-                    -i64::from(delta)
-                } else {
-                    i64::from(delta)
-                };
+                let delta = if operator == "-" { -delta } else { delta };
                 self.offset(&pointer, delta)
             },
             | (Value::Integer(delta), pointer @ Value::Pointer { .. }) if operator == "+" =>
-                self.offset(&pointer, i64::from(delta)),
+                self.offset(&pointer, delta),
             | (left @ Value::Pointer { .. }, right @ Value::Pointer { .. })
                 if matches!(operator, "==" | "!=") =>
             {
@@ -501,7 +500,7 @@ impl Machine {
                     return Err(self
                         .error("comparison of offsets in distinct objects is outside the subset"));
                 }
-                Ok(Value::Integer(i32::from(
+                Ok(Value::Integer(i128::from(
                     left.same_address(&right) == (operator == "=="),
                 )))
             },
@@ -510,42 +509,52 @@ impl Machine {
                 if matches!(operator, "==" | "!=") =>
             {
                 let null = matches!(pointer, Value::Pointer { target: None, .. });
-                Ok(Value::Integer(i32::from(null == (operator == "=="))))
+                Ok(Value::Integer(i128::from(null == (operator == "=="))))
             },
             | _ => Err(self.error("unsupported binary operand types")),
         }
     }
 
-    /// Signed overflow of `left operator right` (or of `operator right` when
-    /// `left` is `None`), with the mathematical result that did not fit.
+    /// Signed overflow of `left operator right` in `ty` (or of `operator
+    /// right` when `left` is `None`), with the mathematical result that did
+    /// not fit.
     /// C99: §6.5 paragraph 5, p. 67; PDF p. 79.
-    pub fn overflow(&self, left: Option<i32>, operator: &str, right: i32) -> Diagnostic {
-        let (a, b) = (i64::from(left.unwrap_or(0)), i64::from(right));
+    pub fn overflow(
+        &self,
+        ty: Integer,
+        left: Option<i128>,
+        operator: &str,
+        right: i128,
+    ) -> Diagnostic {
+        let (a, b) = (left.unwrap_or(0), right);
         let exact = match operator {
             | "+" => a + b,
             | "-" => a - b,
             | "*" => a * b,
-            // Only i32::MIN / -1 and i32::MIN % -1 overflow; both are
-            // undefined because the quotient does not fit.
+            // Only MIN / -1 and MIN % -1 overflow; both are undefined
+            // because the quotient does not fit.
             | _ => -a,
         };
         let expression = left.map_or_else(
             || format!("{operator}({right})"),
             |left| format!("{left} {operator} {right}"),
         );
+        let name = ty.spelling();
         let message = if operator == "%" {
             format!(
-                "{expression} is undefined: the quotient {exact} does not fit in an int, whose \
-                 range is {} to {}",
-                i32::MIN,
-                i32::MAX
+                "{expression} is undefined: the quotient {exact} does not fit in {}, whose range \
+                 is {} to {}",
+                article(name),
+                ty.min(),
+                ty.max()
             )
         } else {
             format!(
-                "{expression} = {exact}, which does not fit in an int (range {} to {}): signed \
+                "{expression} = {exact}, which does not fit in {} (range {} to {}): signed \
                  overflow",
-                i32::MIN,
-                i32::MAX
+                article(name),
+                ty.min(),
+                ty.max()
             )
         };
         let cause = if matches!(operator, "/" | "%") {
@@ -561,7 +570,16 @@ impl Machine {
         )
     }
 
-    fn integer_binary(&self, operator: &str, left: i32, right: i32) -> Result<Value, Diagnostic> {
+    /// `left operator right` in the integer type `ty`. A signed result
+    /// that does not fit is undefined; an unsigned one is reduced modulo
+    /// 2^N (C99 §6.2.5p9).
+    fn integer_binary(
+        &self,
+        operator: &str,
+        ty: Integer,
+        left: i128,
+        right: i128,
+    ) -> Result<Value, Diagnostic> {
         if matches!(operator, "/" | "%") && right == 0 {
             return Err(Diagnostic::ub(
                 self.state.source_range,
@@ -570,26 +588,108 @@ impl Machine {
                 Undefined::DivisionByZero,
             ));
         }
-        let result = match operator {
+        // MIN / -1 and MIN % -1: the quotient does not fit, and C11 makes
+        // both undefined (C99 §6.5.5p6 leaves the remainder unsettled).
+        if matches!(operator, "/" | "%") && ty.signed() && !ty.fits(left / right) {
+            return Err(self.overflow(ty, Some(left), operator, right));
+        }
+        let truth =
+            |holds: bool| -> Result<Value, Diagnostic> { Ok(Value::Integer(i128::from(holds))) };
+        let exact = match operator {
+            | "==" => return truth(left == right),
+            | "!=" => return truth(left != right),
+            | "<" => return truth(left < right),
+            | "<=" => return truth(left <= right),
+            | ">" => return truth(left > right),
+            | ">=" => return truth(left >= right),
+            | "<<" | ">>" => return self.shift_value(operator, ty, left, right),
             | "+" => left.checked_add(right),
             | "-" => left.checked_sub(right),
             | "*" => left.checked_mul(right),
             | "/" => left.checked_div(right),
             | "%" => left.checked_rem(right),
-            | "==" => Some(i32::from(left == right)),
-            | "!=" => Some(i32::from(left != right)),
-            | "<" => Some(i32::from(left < right)),
-            | "<=" => Some(i32::from(left <= right)),
-            | ">" => Some(i32::from(left > right)),
-            | ">=" => Some(i32::from(left >= right)),
             | _ => return Err(self.error("unsupported integer operator")),
         };
-        result
+        if !ty.signed() {
+            // Both operands are below 2^64, so only a product of two
+            // unsigned long long values can leave i128; reduce it in u128.
+            let reduced = exact.map_or_else(
+                || {
+                    let product = left.unsigned_abs().wrapping_mul(right.unsigned_abs());
+                    i128::try_from(product % (1_u128 << ty.bits())).unwrap_or_default()
+                },
+                |exact| ty.convert(exact),
+            );
+            return Ok(Value::Integer(reduced));
+        }
+        exact
+            .filter(|&exact| ty.fits(exact))
             .map(Value::Integer)
-            .ok_or_else(|| self.overflow(Some(left), operator, right))
+            .ok_or_else(|| self.overflow(ty, Some(left), operator, right))
     }
 
-    fn offset(&self, pointer: &Value, delta: i64) -> Result<Value, Diagnostic> {
+    /// `left << right` or `left >> right` in `ty`, the promoted left
+    /// operand's type.
+    ///
+    /// C99: §6.5.7 paragraphs 3-5, pp. 84-85; PDF pp. 96-97.
+    fn shift_value(
+        &self,
+        operator: &str,
+        ty: Integer,
+        left: i128,
+        right: i128,
+    ) -> Result<Value, Diagnostic> {
+        let bits = ty.bits();
+        let Some(count) = u32::try_from(right).ok().filter(|&count| count < bits) else {
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &format!(
+                    "`{left} {operator} {right}` shifts {}, which has {bits} bits, by {right}: a \
+                     shift count must be 0 to {}",
+                    article(ty.spelling()),
+                    bits - 1
+                ),
+                &clauses::SHIFT_COUNT,
+                Undefined::ShiftCount,
+            ));
+        };
+        if operator == ">>" {
+            // A negative signed value shifts arithmetically, copying its
+            // sign bit, as bcc and GCC define it (C99 §6.5.7p5).
+            return Ok(Value::Integer(left >> count));
+        }
+        let exact = left << count;
+        if !ty.signed() {
+            return Ok(Value::Integer(ty.convert(exact)));
+        }
+        if left < 0 {
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &format!(
+                    "`{left} << {right}` shifts a negative {} left, which C leaves undefined",
+                    ty.spelling()
+                ),
+                &clauses::LEFT_SHIFT,
+                Undefined::ShiftNegative,
+            ));
+        }
+        if !ty.fits(exact) {
+            return Err(Diagnostic::ub(
+                self.state.source_range,
+                &format!(
+                    "`{left} << {right}` is {left} × 2^{right} = {exact}, which does not fit in \
+                     {} (largest {}): undefined for a signed type",
+                    article(ty.spelling()),
+                    ty.max()
+                ),
+                &clauses::LEFT_SHIFT,
+                Undefined::ShiftOverflow,
+            ));
+        }
+        Ok(Value::Integer(exact))
+    }
+
+    fn offset(&self, pointer: &Value, delta: i128) -> Result<Value, Diagnostic> {
         let Value::Pointer {
             target: Some(target),
             offset,
@@ -608,8 +708,8 @@ impl Machine {
         let _object = self.live_object(target)?;
         // C99 §6.5.6p7 treats an object outside any array as an array of
         // one element here.
-        let result = i64::from(offset).checked_add(delta).filter(|&value| {
-            value >= i64::from(first) && value <= i64::from(first) + i64::from(length)
+        let result = i128::from(offset).checked_add(delta).filter(|&value| {
+            value >= i128::from(first) && value <= i128::from(first) + i128::from(length)
         });
         let Some(offset) = result else {
             return Err(Diagnostic::ub(
@@ -628,5 +728,14 @@ impl Machine {
             length,
             structure,
         })
+    }
+}
+
+/// A type with its article: "an int", "a char", "an unsigned int".
+pub(super) fn article(spelling: &str) -> String {
+    if spelling.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        format!("an {spelling}")
+    } else {
+        format!("a {spelling}")
     }
 }

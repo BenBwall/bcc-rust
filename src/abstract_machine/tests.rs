@@ -22,7 +22,7 @@ fn run(source: &str) -> Session {
     panic!("session did not terminate at its resource bound");
 }
 
-fn returned(source: &str, expected: i32) {
+fn returned(source: &str, expected: i128) {
     let session = run(source);
     assert_eq!(
         session.state().status,
@@ -403,7 +403,19 @@ fn unsupported_constructs_are_rejected_even_in_dead_code() {
         "int f(int x) { int x; return 0; } int main(void) { return f(1); }",
         "int main(void) { return 010; }",
         "int main(void) { return 0 && 1 / 0; }",
-        "int main(void) { return sizeof(int); }",
+        "int main(void) { return 1 & 2; }",
+        "int main(void) { return ~1; }",
+        "int main(void) { float x; return 0; }",
+        "int main(void) { long double x; return 0; }",
+        "int main(void) { return 0x10; }",
+        "int main(void) { return 99999999999999999999; }",
+        "int main(void) { return 1lul; }",
+        "int main(void) { int i = 0; i++ > 0; return 0; }",
+        "int main(void) { int i = 0; while (i++ < i) {} return 0; }",
+        "int main(void) { int i = 0; int *p = &i; while (i++ < *p) {} return 0; }",
+        "int main(void) { int i = 0; int j = 0; while (i++ < j++) {} return 0; }",
+        "int main(void) { unsigned short long x; return 0; }",
+        "int main(void) { signed unsigned x; return 0; }",
         "// comment ending in a splice\\\nint main(void) { return 0; }",
         "// trigraph ??/\nint main(void) { return 0; }",
     ] {
@@ -446,7 +458,7 @@ fn snapshots_use_schema_ranges_pointer_ids_and_escaped_source() {
                   a; return *p; }";
     let session = run(source);
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":5"), "versioned schema");
+    assert!(json.contains("\"schema_version\":6"), "versioned schema");
     assert!(
         json.contains(
             "\"kind\":\"pointer\",\"target\":1,\"offset\":0,\"first\":0,\"length\":1,\"structure\"\
@@ -1264,7 +1276,7 @@ fn storing_zero_into_a_pointer_explains_the_null_pointer() {
 fn schema_three_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":5"));
+    assert!(json.contains("\"schema_version\":6"));
     assert!(
         json.contains("\"kind\":\"return\",\"category\":\"call\""),
         "{json}"
@@ -2163,7 +2175,7 @@ fn printf_converts_each_argument_with_flags_and_widths() {
     assert_eq!(
         state.return_value,
         Some(Value::Integer(
-            i32::try_from(expected.len()).expect("short")
+            i128::try_from(expected.len()).expect("short")
         ))
     );
     let trace = states(
@@ -2229,7 +2241,7 @@ fn printf_stops_on_undefined_conversions_and_arguments() {
     for body in [
         "printf(\"%f\", 1);",
         "printf(\"%*d\", 2, 1);",
-        "printf(\"%ld\", 1);",
+        "printf(\"%jd\", 1);",
         "printf(\"%+d\", 1);",
     ] {
         let source = format!("#include <stdio.h>\nint main(void) {{ {body} return 0; }}\n");
@@ -2674,8 +2686,7 @@ fn casts_between_int_and_char_narrate_the_conversion() {
     assert_eq!(casts[2].event.title, "Cast 65 to char: the value fits");
     assert_eq!(casts[0].event.kind.category(), "convert");
     for (source, message) in [
-        ("int main(void) { return (unsigned)-1; }", "modulo 2^N"),
-        ("int main(void) { return (long)1; }", "names int, char"),
+        ("int main(void) { return (float)1; }", "float"),
         (
             "int main(void) { int x = 0; int *p = (int *)x; return 0; }",
             "integers and pointers",
@@ -2813,4 +2824,812 @@ fn printf_precision_sets_minimum_digits_and_maximum_characters() {
     assert_eq!(kind, Some(super::Undefined::InvalidConversion));
     let session = run("#include <stdio.h>\nint main(void) { printf(\"%.300d\", 1); return 0; }\n");
     assert_eq!(session.state().status, "limit");
+}
+
+#[test]
+fn integer_types_have_their_x86_64_sizes_and_say_what_c_promises() {
+    let source = "struct mixed { char c; long l; unsigned short s; };\nint main(void) {\n    \
+                  signed char a = -1;\n    unsigned char b = 255;\n    short c = -32768;\n    \
+                  unsigned short d = 65535;\n    unsigned int e = 4294967295u;\n    long f = \
+                  -1;\n    unsigned long g = 1;\n    long long h = -1;\n    unsigned long long i \
+                  = 1;\n    long int j = 0;\n    int unsigned k = 0;\n    unsigned long l[2] = \
+                  {1, 2};\n    struct mixed m = {1, 2, 3};\n    return 0;\n}\n";
+    let states = states(source);
+    let last = states.last().expect("a final state");
+    assert_eq!(last.status, "finished", "{:?}", last.diagnostics);
+    let objects: Vec<(&str, &str, usize)> = last
+        .objects
+        .iter()
+        .map(|object| (object.name.as_str(), object.r#type.as_str(), object.size))
+        .collect();
+    assert_eq!(
+        objects,
+        [
+            ("a", "signed char", 1),
+            ("b", "unsigned char", 1),
+            ("c", "short", 2),
+            ("d", "unsigned short", 2),
+            ("e", "unsigned int", 4),
+            ("f", "long", 8),
+            ("g", "unsigned long", 8),
+            ("h", "long long", 8),
+            ("i", "unsigned long long", 8),
+            ("j", "long", 8),
+            ("k", "unsigned int", 4),
+            ("l", "unsigned long[2]", 16),
+            ("m", "struct mixed", 24),
+        ]
+    );
+    let declared = states
+        .iter()
+        .find(|state| state.event.title == "Create `e` (unsigned int)")
+        .expect("e is declared");
+    assert!(
+        declared
+            .event
+            .explanation
+            .contains("4 bytes on x86-64, 0 to 4294967295; C promises only 0 to 65535"),
+        "{}",
+        declared.event.explanation
+    );
+    assert!(cited(declared).contains(&"5.2.4.2.1p1"));
+    assert!(declared.event.note.contains("minimum ranges"));
+    // `int` and `char` keep their notes on indeterminate values.
+    returned("int main(void) { int x = 3; char y = 4; return x + y; }", 7);
+}
+
+#[test]
+fn unsigned_arithmetic_wraps_where_signed_arithmetic_stops() {
+    let source = "int main(void) {\n    unsigned int u = 2;\n    u = u - 3;\n    return u == \
+                  4294967295u;\n}\n";
+    returned(source, 1);
+    let states = states(source);
+    let wrapped = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Arithmetic)
+        .expect("the subtraction");
+    assert_eq!(wrapped.event.title, "Compute 2 - 3 = 4294967295 (wrapped)");
+    assert!(
+        wrapped
+            .event
+            .summary
+            .contains("is -1, outside unsigned int, so the result is reduced modulo 2^32"),
+        "{}",
+        wrapped.event.summary
+    );
+    assert!(
+        wrapped.event.explanation.contains("-1 + 2^32 = 4294967295"),
+        "{}",
+        wrapped.event.explanation
+    );
+    assert!(cited(wrapped).contains(&"6.2.5p9"));
+    assert!(wrapped.event.note.contains("never overflows"));
+    assert_eq!(wrapped.event.result_type.as_deref(), Some("unsigned int"));
+    // The widest unsigned type wraps too, products included.
+    returned(
+        "int main(void) { unsigned long long m = 18446744073709551615ull; m = m + 1; return m == \
+         0; }",
+        1,
+    );
+    returned(
+        "int main(void) { unsigned long long m = 18446744073709551615ull; return m * m == 1; }",
+        1,
+    );
+    returned("int main(void) { unsigned int u = 0; return -u == 0; }", 1);
+    returned(
+        "int main(void) { unsigned int u = 1; return -u == 4294967295u; }",
+        1,
+    );
+    // Signed types of every width still stop.
+    let (cause, title) =
+        undefined("int main(void) { long big = 9223372036854775807; big = big + 1; return 0; }");
+    assert_eq!(cause, Some(super::Undefined::SignedOverflow));
+    assert_eq!(title, "Undefined behavior: signed overflow");
+    let session =
+        run("int main(void) { long big = 9223372036854775807; big = big + 1; return 0; }");
+    let message = &session.state().diagnostics[0].message;
+    assert!(
+        message.contains("9223372036854775808, which does not fit in a long"),
+        "{message}"
+    );
+    assert!(
+        session
+            .state()
+            .event
+            .summary
+            .contains("an unsigned type would have wrapped"),
+        "{}",
+        session.state().event.summary
+    );
+    let (cause, _) =
+        undefined("int main(void) { long long m = -9223372036854775807ll - 1; return -m == 0; }");
+    assert_eq!(cause, Some(super::Undefined::SignedOverflow));
+}
+
+#[test]
+fn the_usual_arithmetic_conversions_say_which_operand_converts_and_why() {
+    let source = "int main(void) { return -1 < 1u; }";
+    returned(source, 0);
+    let steps = states(source);
+    let conversions: Vec<&State> = steps
+        .iter()
+        .filter(|state| state.event.kind == EventKind::ArithmeticConversion)
+        .collect();
+    assert_eq!(conversions.len(), 1);
+    let event = &conversions[0].event;
+    assert_eq!(event.title, "Convert -1 to unsigned int → 4294967295");
+    assert_eq!(
+        event.summary,
+        "`-1 < 1u` mixes an int and an unsigned int, so the left operand converts to unsigned \
+         int: -1 + 2^32 = 4294967295."
+    );
+    assert!(
+        event
+            .explanation
+            .contains("int and unsigned int have the same rank"),
+        "{}",
+        event.explanation
+    );
+    assert_eq!(
+        cited(conversions[0]),
+        ["6.3.1.8p1", "6.3.1.1p1", "6.3.1.3p2"]
+    );
+    assert_eq!(event.kind.category(), "convert");
+    assert_eq!(event.from_type.as_deref(), Some("int"));
+    assert_eq!(event.result_type.as_deref(), Some("unsigned int"));
+    assert!(event.note.contains("-Wsign-compare"));
+    let comparison = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::Comparison)
+        .expect("the comparison");
+    assert_eq!(comparison.event.title, "Compare 4294967295 < 1 → 0");
+    assert!(
+        comparison
+            .event
+            .explanation
+            .contains("common type unsigned int"),
+        "{}",
+        comparison.event.explanation
+    );
+    // A long holds every unsigned int, so the unsigned operand converts.
+    let source = "int main(void) { long l = -1; unsigned int u = 1; return l < u; }";
+    returned(source, 1);
+    let steps = states(source);
+    let conversion = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::ArithmeticConversion)
+        .expect("a conversion");
+    assert_eq!(conversion.event.title, "Convert 1 to long");
+    assert!(
+        conversion
+            .event
+            .explanation
+            .contains("is wider (64 bits against 32)"),
+        "{}",
+        conversion.event.explanation
+    );
+    // A long long is no wider than an unsigned long: both convert.
+    let source = "int main(void) { long long a = -1; unsigned long b = 1; return a < b; }";
+    returned(source, 0);
+    let titles: Vec<String> = states(source)
+        .iter()
+        .filter(|state| state.event.kind == EventKind::ArithmeticConversion)
+        .map(|state| state.event.title.clone())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Convert -1 to unsigned long long → 18446744073709551615",
+            "Convert 1 to unsigned long long"
+        ]
+    );
+    // Two ints, or a char and an int, need no conversion step.
+    for source in [
+        "int main(void) { int a = 1; return a + 2; }",
+        "int main(void) { char c = 1; return c + 2; }",
+    ] {
+        assert!(
+            !kinds(&states(source)).contains(&"arithmetic_conversion"),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn every_type_narrower_than_int_is_promoted() {
+    let source = "int main(void) { unsigned char c = 255; short s = -2; unsigned short u = 65535; \
+                  return c + s + u; }";
+    returned(source, 65788);
+    let titles: Vec<String> = states(source)
+        .iter()
+        .filter(|state| state.event.kind == EventKind::IntegerPromotion)
+        .map(|state| state.event.title.clone())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Promote unsigned char 255 to int",
+            "Promote short -2 to int",
+            "Promote unsigned short 65535 to int"
+        ]
+    );
+    let steps = states(source);
+    let promotion = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::IntegerPromotion)
+        .expect("a promotion");
+    assert!(
+        promotion
+            .event
+            .explanation
+            .contains("promotes to int, not to unsigned int"),
+        "{}",
+        promotion.event.explanation
+    );
+    assert_eq!(cited(promotion), ["6.3.1.1p2", "6.3.1.1p1"]);
+}
+
+#[test]
+fn conversions_to_unsigned_wrap_and_to_signed_are_the_implementations() {
+    let source = "int main(void) {\n    unsigned int u = -1;\n    unsigned char b = 300;\n    \
+                  short s = 40000;\n    int back = (int)4294967295u;\n    return (unsigned)-1 == \
+                  u;\n}\n";
+    returned(source, 1);
+    let states = states(source);
+    let last = states.last().expect("a final state");
+    let values: Vec<&Value> = last.objects.iter().map(|object| &object.value).collect();
+    assert_eq!(
+        values,
+        [
+            &Value::Integer(4_294_967_295),
+            &Value::Integer(44),
+            &Value::Integer(-25_536),
+            &Value::Integer(-1)
+        ]
+    );
+    let stored = |title: &str| {
+        states
+            .iter()
+            .find(|state| state.event.title == title)
+            .unwrap_or_else(|| panic!("{title}"))
+            .event
+            .clone()
+    };
+    let unsigned = stored("Initialize `u` = 4294967295");
+    assert!(
+        unsigned.summary.starts_with(
+            "-1 does not fit in an unsigned int, so storing it reduces it modulo 2^32: -1 + 2^32 \
+             = 4294967295."
+        ),
+        "{}",
+        unsigned.summary
+    );
+    assert!(
+        unsigned
+            .clauses
+            .iter()
+            .any(|clause| clause.id == "6.3.1.3p2")
+    );
+    assert_eq!(unsigned.from_type.as_deref(), Some("int"));
+    assert_eq!(unsigned.result_type.as_deref(), Some("unsigned int"));
+    let narrow = stored("Initialize `b` = 44");
+    assert!(
+        narrow.explanation.contains("300 - 256 = 44"),
+        "{}",
+        narrow.explanation
+    );
+    let short = stored("Initialize `s` = -25536");
+    assert!(
+        short
+            .summary
+            .contains("C leaves that result to the implementation"),
+        "{}",
+        short.summary
+    );
+    assert!(short.clauses.iter().any(|clause| clause.id == "6.3.1.3p3"));
+    let casts: Vec<&State> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Cast)
+        .collect();
+    assert_eq!(casts[0].event.title, "Cast 4294967295 to int → -1");
+    assert!(
+        casts[0].event.summary.contains("bcc and GCC wrap it to -1"),
+        "{}",
+        casts[0].event.summary
+    );
+    assert_eq!(casts[1].event.title, "Cast -1 to unsigned int → 4294967295");
+    assert!(
+        casts[1].event.summary.contains("-1 + 2^32 = 4294967295"),
+        "{}",
+        casts[1].event.summary
+    );
+    // Static objects convert their constant initializers the same way.
+    returned(
+        "unsigned int max = -1;\nunsigned char low = 257;\nint main(void) { return low + (max == \
+         4294967295u); }",
+        2,
+    );
+}
+
+#[test]
+fn shifts_promote_each_operand_and_stop_outside_their_width() {
+    returned("int main(void) { return (1u << 31) == 2147483648u; }", 1);
+    returned(
+        "int main(void) { unsigned char c = 1; return c << 8; }",
+        256,
+    );
+    returned("int main(void) { return -8 >> 1; }", -4);
+    returned(
+        "int main(void) { long one = 1; return (one << 40) >> 38; }",
+        4,
+    );
+    let source = "int main(void) { unsigned int top = 1u << 31; return (top << 1) == 0; }";
+    returned(source, 1);
+    let steps = states(source);
+    let shifts: Vec<&State> = steps
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Arithmetic)
+        .collect();
+    assert_eq!(shifts[0].event.title, "Compute 1 << 31 = 2147483648");
+    assert_eq!(shifts[1].event.title, "Compute 2147483648 << 1 = 0");
+    assert!(
+        shifts[1].event.summary.contains("reduced modulo 2^32: 0"),
+        "{}",
+        shifts[1].event.summary
+    );
+    assert!(cited(shifts[1]).contains(&"6.5.7p4"));
+    assert!(shifts[1].event.note.contains("unsigned types"));
+    // A shift promotes each operand alone: no common type, no conversion.
+    assert!(
+        !kinds(&states(
+            "int main(void) { unsigned int u = 1; return 1 << u; }"
+        ))
+        .contains(&"arithmetic_conversion")
+    );
+    let negative = states("int main(void) { return -8 >> 1; }");
+    let right = negative
+        .iter()
+        .find(|state| state.event.kind == EventKind::Arithmetic)
+        .expect("the shift");
+    assert!(
+        right
+            .event
+            .summary
+            .contains("implementation-defined; bcc and GCC"),
+        "{}",
+        right.event.summary
+    );
+    for (source, expected, message) in [
+        (
+            "int main(void) { int n = 32; return 1 << n; }",
+            super::Undefined::ShiftCount,
+            "a shift count must be 0 to 31",
+        ),
+        (
+            "int main(void) { int n = -1; return 1u >> n; }",
+            super::Undefined::ShiftCount,
+            "by -1",
+        ),
+        (
+            "int main(void) { long n = 64; long one = 1; return one << n; }",
+            super::Undefined::ShiftCount,
+            "0 to 63",
+        ),
+        (
+            "int main(void) { int m = -1; return m << 1; }",
+            super::Undefined::ShiftNegative,
+            "shifts a negative int left",
+        ),
+        (
+            "int main(void) { return 1 << 31; }",
+            super::Undefined::ShiftOverflow,
+            "1 × 2^31 = 2147483648",
+        ),
+    ] {
+        let session = run(source);
+        let diagnostic = &session.state().diagnostics[0];
+        assert_eq!(diagnostic.undefined, Some(expected), "{source}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{source}: {}",
+            diagnostic.message
+        );
+        assert!(
+            diagnostic
+                .citation
+                .is_some_and(|citation| citation.contains("6.5.7")),
+            "{source}"
+        );
+    }
+    let (_, title) = undefined("int main(void) { int n = 40; return 1 << n; }");
+    assert_eq!(title, "Undefined behavior: shift count out of range");
+    let found = compile("int main(void) { int *p = 0; return p << 1; }")
+        .map(|_| ())
+        .expect_err("a pointer is no shift operand");
+    assert_eq!(found.kind, "constraint");
+}
+
+#[test]
+fn sizeof_gives_a_size_t_without_evaluating_its_operand() {
+    let source = "struct pair { char c; int i; };\nint main(void) {\n    int values[3] = {1, 2, \
+                  3};\n    struct pair p = {1, 2};\n    unsigned long size = sizeof values;\n    \
+                  return size + sizeof(long) + sizeof p + sizeof(char) + sizeof values[0];\n}\n";
+    returned(source, 12 + 8 + 8 + 1 + 4);
+    let steps = states(source);
+    let sizes: Vec<(&str, &Option<Operand>)> = steps
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Sizeof)
+        .map(|state| (state.event.title.as_str(), &state.event.result))
+        .collect();
+    assert_eq!(sizes.len(), 5);
+    assert_eq!(sizes[0].0, "`sizeof values` is 12");
+    assert_eq!(sizes[0].1, &Some(Operand::Value(Value::Integer(12))));
+    let first = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::Sizeof)
+        .expect("a sizeof");
+    assert!(
+        first
+            .event
+            .explanation
+            .contains("does not decay to a pointer"),
+        "{}",
+        first.event.explanation
+    );
+    assert!(first.event.explanation.contains("unsigned long on x86-64"));
+    assert_eq!(
+        cited(first),
+        ["6.5.3.4p2", "6.5.3.4p4", "7.17p2", "6.3.2.1p3"]
+    );
+    assert_eq!(first.event.kind.category(), "evaluate");
+    assert_eq!(first.event.result_type.as_deref(), Some("unsigned long"));
+    // The operand is never evaluated: nothing is read, nothing can stop.
+    assert!(
+        !steps
+            .iter()
+            .any(|state| state.event.title.starts_with("Read values")),
+        "sizeof reads nothing"
+    );
+    returned("int main(void) { int x; return sizeof x; }", 4);
+    // size_t comes from <stdio.h>.
+    returned(
+        "#include <stdio.h>\nint main(void) { size_t n = sizeof(size_t); return n; }",
+        8,
+    );
+    assert!(compile("int main(void) { size_t n = 1; return 0; }").is_err());
+}
+
+#[test]
+fn integer_constants_take_their_type_from_their_value_and_suffix() {
+    let source = "int main(void) {\n    long big = 2147483648;\n    unsigned long a = 10ul;\n    \
+                  long long b = 5LL;\n    unsigned int c = 7u;\n    return big > 0;\n}\n";
+    returned(source, 1);
+    let steps = states(source);
+    let constants: Vec<(&str, Option<&str>)> = steps
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Constant)
+        .map(|state| {
+            (
+                state.event.summary.as_str(),
+                state.event.result_type.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        constants,
+        [
+            (
+                "The constant 2147483648 is the long value 2147483648.",
+                Some("long")
+            ),
+            (
+                "The constant 10ul is the unsigned long value 10.",
+                Some("unsigned long")
+            ),
+            (
+                "The constant 5LL is the long long value 5.",
+                Some("long long")
+            ),
+            (
+                "The constant 7u is the unsigned int value 7.",
+                Some("unsigned int")
+            ),
+            ("The constant 0 is simply the int value 0.", Some("int")),
+        ]
+    );
+    let big = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::Constant)
+        .expect("a constant");
+    assert!(
+        big.event.explanation.contains("too large for an int"),
+        "{}",
+        big.event.explanation
+    );
+    assert!(rejected("int main(void) { return 0x10; }").contains("hexadecimal"));
+    assert!(rejected("int main(void) { return 1lul; }").contains("suffix"));
+    assert!(rejected("int main(void) { return 99999999999999999999; }").contains("no type"));
+    returned(
+        "int main(void) { return 18446744073709551615u == -1ull; }",
+        1,
+    );
+}
+
+#[test]
+fn printf_takes_length_modifiers_and_checks_each_argument_s_type() {
+    let source = "#include <stdio.h>\nint main(void) {\n    unsigned long long m = \
+                  18446744073709551615ull;\n    printf(\"%u %lu %llu %ld %lld %x %hhu %hd \
+                  %zu\\n\", 4294967295u, 18446744073709551615ul, m + 1, -1l, \
+                  -9223372036854775807ll - 1, 255u, 300, 40000, sizeof(long));\n    unsigned char \
+                  b = 300;\n    short s = 40000;\n    printf(\"%d %d %hhd %hu %llx\\n\", b, s, \
+                  200, 70000, m);\n    return 0;\n}\n";
+    // GCC's and bcc's output for the same program.
+    let (state, text) = output(source);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    assert_eq!(
+        text,
+        "4294967295 18446744073709551615 0 -1 -9223372036854775808 ff 44 -25536 8\n44 -25536 -56 \
+         4464 ffffffffffffffff\n"
+    );
+    let steps = states(source);
+    let promotions: Vec<&str> = steps
+        .iter()
+        .filter(|state| state.event.title.ends_with("for `...`"))
+        .map(|state| state.event.title.as_str())
+        .collect();
+    assert_eq!(
+        promotions,
+        [
+            "Promote unsigned char 44 to int for `...`",
+            "Promote short -25536 to int for `...`"
+        ]
+    );
+    for (body, message) in [
+        (
+            "printf(\"%lu\", 1);",
+            "`%lu` needs an unsigned long, but argument 1",
+        ),
+        (
+            "printf(\"%d\", 4294967295u);",
+            "with the value 4294967295, which an int cannot hold",
+        ),
+        ("printf(\"%u\", 1l);", "is a long"),
+        ("printf(\"%hhs\", \"x\");", "length modifier hh"),
+    ] {
+        let source = format!("#include <stdio.h>\nint main(void) {{ {body} return 0; }}\n");
+        let session = run(&source);
+        assert_eq!(session.state().status, "undefined_behavior", "{body}");
+        let found = &session.state().diagnostics[0].message;
+        assert!(found.contains(message), "{body}: {found}");
+    }
+    // A value both types hold may stand for either.
+    let (_, text) = output(
+        "#include <stdio.h>\nint main(void) { printf(\"%u %d %lu\", 5, 6u, sizeof(int)); return \
+         0; }\n",
+    );
+    assert_eq!(text, "5 6 4");
+}
+
+#[test]
+fn a_condition_may_count_down_with_a_postfix_decrement() {
+    let source =
+        "int main(void) {\n    int values[3] = {4, 5, 6};\n    unsigned int sum = 0;\n    for \
+         (unsigned int k = 3; k-- > 0;) {\n        sum += values[k];\n    }\n    return sum;\n}\n";
+    returned(source, 15);
+    let steps = states(source);
+    let updates: Vec<&State> = steps
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Increment)
+        .collect();
+    assert_eq!(
+        updates.len(),
+        4,
+        "3 passes, then the test that ends the loop"
+    );
+    let first = &updates[0].event;
+    assert_eq!(first.title, "Update `k`: 3 → 2");
+    assert_eq!(
+        first.summary,
+        "`k--` yields `k`'s old value, 3, to the condition, and changes `k` from 3 to 2."
+    );
+    assert!(
+        !first.sequence_point,
+        "the condition's end is the sequence point"
+    );
+    assert_eq!(first.result, Some(Operand::Value(Value::Integer(3))));
+    assert!(cited(updates[0]).contains(&"6.5p2"));
+    let last = &updates[3].event;
+    assert_eq!(last.title, "Update `k`: 0 → 4294967295");
+    assert!(
+        last.explanation
+            .contains("reduced modulo 2^32 (4294967296)"),
+        "{}",
+        last.explanation
+    );
+    // The constant 0 converts to unsigned int for the comparison.
+    assert!(
+        steps
+            .iter()
+            .any(|state| state.event.title == "Convert 0 to unsigned int"),
+        "{:?}",
+        kinds(&steps)
+    );
+    returned(
+        "int main(void) { int n = 0; int i = 3; while (--i) { n = n + 1; } return n; }",
+        2,
+    );
+    returned(
+        "int main(void) { int a[3] = {1, 2, 3}; int *p = a; int *end = a + 3; int n = 0; while \
+         (p++ != end - 1) { n = n + 1; } return n; }",
+        2,
+    );
+    // The last p++ moves p past one-past-the-end, which is undefined.
+    let (cause, _) = undefined(
+        "int main(void) { int a[3] = {1, 2, 3}; int *p = a; int *end = a + 3; while (p++ != end) \
+         {} return 0; }",
+    );
+    assert_eq!(cause, Some(super::Undefined::PointerOutside));
+    for source in [
+        "int main(void) { int i = 0; i++ > 0; return 0; }",
+        "int main(void) { int i = 0; while (i++ < i) {} return 0; }",
+        "int main(void) { int i = 0; int j = 0; while (i++ < j++) {} return 0; }",
+        "int main(void) { int a[2] = {0, 0}; int i = 0; while (a[i]++ < 1) {} return 0; }",
+        "int main(void) { const int i = 1; while (i--) {} return 0; }",
+    ] {
+        assert!(compile(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn increments_and_compound_assignments_wrap_in_unsigned_types() {
+    returned(
+        "int main(void) { unsigned int u = 0; u--; return u == 4294967295u; }",
+        1,
+    );
+    let steps = states("int main(void) { unsigned char c = 255; c++; return c; }");
+    let increment = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::Increment)
+        .expect("c++");
+    assert_eq!(increment.event.title, "Update `c`: 255 → 0");
+    assert!(
+        increment
+            .event
+            .explanation
+            .contains("converting that back to unsigned char reduces it modulo 256"),
+        "{}",
+        increment.event.explanation
+    );
+    let source = "int main(void) { unsigned int u = 1; u += -2; unsigned int w = 1; w <<= 31; \
+                  return (u == 4294967295u) + (w == 2147483648u); }";
+    returned(source, 2);
+    let steps = states(source);
+    let compound: Vec<&State> = steps
+        .iter()
+        .filter(|state| state.event.kind == EventKind::CompoundAssign)
+        .collect();
+    assert_eq!(compound[0].event.title, "Update `u`: 1 → 4294967295");
+    assert!(
+        compound[0].event.explanation.contains(
+            "the right operand, -2, is converted to unsigned int: -2 + 2^32 = 4294967294"
+        ),
+        "{}",
+        compound[0].event.explanation
+    );
+    assert_eq!(compound[1].event.title, "Update `w`: 1 → 2147483648");
+    let (cause, _) = undefined("int main(void) { int i = 1; i <<= 31; return 0; }");
+    assert_eq!(cause, Some(super::Undefined::ShiftOverflow));
+}
+
+#[test]
+fn parameters_returns_members_and_pointers_take_every_integer_type() {
+    let source = "struct wide { char tag; unsigned long count; };\nunsigned int down(unsigned int \
+                  x) {\n    return x - 1;\n}\nlong widen(int x) {\n    return x;\n}\nint \
+                  main(void) {\n    unsigned int a[2] = {7, 8};\n    unsigned int *p = a;\n    \
+                  p++;\n    struct wide w = {1, 4294967296};\n    unsigned long *q = &w.count;\n    \
+                  *q = *q + 1;\n    return (down(0) == 4294967295u) + (down(-1) == 4294967294u) + \
+                  *p + (widen(-1) == -1) + (w.count == 4294967297);\n}\n";
+    assert!(
+        compile(source).is_err(),
+        "nested calls are outside the subset"
+    );
+    let source = "struct wide { char tag; unsigned long count; };\nunsigned int down(unsigned int \
+                  x) {\n    return x - 1;\n}\nlong widen(int x) {\n    return x;\n}\nint \
+                  main(void) {\n    unsigned int a[2] = {7, 8};\n    unsigned int *p = a;\n    \
+                  p++;\n    struct wide w = {1, 4294967296};\n    unsigned long *q = &w.count;\n    \
+                  *q = *q + 1;\n    unsigned int d = down(-1);\n    long l = widen(-1);\n    \
+                  return (d == 4294967294u) + *p + (l == -1) + (w.count == 4294967297);\n}\n";
+    returned(source, 1 + 8 + 1 + 1);
+    let steps = states(source);
+    let call = steps
+        .iter()
+        .find(|state| state.event.kind == EventKind::Call)
+        .expect("down(-1)");
+    assert!(
+        call.event
+            .explanation
+            .contains("The argument for `x` converts to the parameter's type, unsigned int"),
+        "{}",
+        call.event.explanation
+    );
+    let widened = steps
+        .iter()
+        .find(|state| state.event.title == "Return -1 from widen")
+        .expect("widen returns");
+    assert!(
+        widened
+            .event
+            .explanation
+            .contains("converts to widen's return type, long"),
+        "{}",
+        widened.event.explanation
+    );
+    let last = steps.last().expect("a final state");
+    let wide = last
+        .objects
+        .iter()
+        .find(|object| object.name == "w")
+        .expect("w");
+    assert_eq!(wide.size, 16);
+    let program = compile(source).expect("compiles");
+    let layout = &program.structures()[0];
+    assert_eq!(
+        layout
+            .members
+            .iter()
+            .map(|member| (member.r#type.as_str(), member.offset, member.size))
+            .collect::<Vec<_>>(),
+        [("char", 0, 1), ("unsigned long", 8, 8)]
+    );
+    // Incompatible pointer types are still outside the subset.
+    assert!(compile("int main(void) { int x = 0; unsigned int *p = &x; return 0; }").is_err());
+}
+
+const UNSIGNED: &str = include_str!("../../web/demos/unsigned.c");
+
+#[test]
+fn the_unsigned_lesson_wraps_converts_and_counts_down() {
+    let (state, text) = output(UNSIGNED);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    // GCC's and bcc's output for the same program.
+    assert_eq!(
+        text,
+        "2u - 3 is 4294967295\nthe countdown ended at 4294967295\n12 bytes, sum 15, -1 < 1u is 0, \
+         2147483648, 0\n"
+    );
+    assert_eq!(state.return_value, Some(Value::Integer(0)));
+    let steps = states(UNSIGNED);
+    for kind in [
+        "arithmetic_conversion",
+        "sizeof",
+        "increment",
+        "compound_assign",
+        "library_call",
+    ] {
+        assert!(kinds(&steps).contains(&kind), "{kind}");
+    }
+    assert!(
+        steps
+            .iter()
+            .any(|state| state.event.title == "Update `i`: 0 → 4294967295"),
+        "the countdown wraps"
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|state| state.event.title == "Convert -1 to unsigned int → 4294967295")
+    );
+}
+
+#[test]
+fn objects_and_events_carry_sizes_and_types_in_json() {
+    let session = run("int main(void) { unsigned char c = 1; long l = c; return -1 < 1u; }");
+    let json = session.trace_json();
+    assert!(
+        json.contains("\"type\":\"unsigned char\",\"size\":1"),
+        "{json}"
+    );
+    assert!(json.contains("\"type\":\"long\",\"size\":8"));
+    assert!(json.contains("\"from_type\":\"int\",\"result_type\":\"unsigned int\""));
+    assert!(json.contains("\"kind\":\"arithmetic_conversion\""));
 }

@@ -119,7 +119,7 @@ impl Machine {
                 if let (Some(node), Some(result)) = (instruction.node, &event.result)
                     && !matches!(
                         instruction.op,
-                        Op::Call(..) | Op::Return | Op::Fallthrough | Op::StaticLocal(_)
+                        Op::Call(..) | Op::Return(_) | Op::Fallthrough | Op::StaticLocal(_)
                     )
                 {
                     self.record(node, result.clone());
@@ -186,8 +186,8 @@ impl Machine {
                 self.declare(range, id, ty)
             },
             | &Op::StaticLocal(index) => self.static_local(range, index + 1),
-            | Op::Push(integer) => {
-                let value = Operand::Value(Value::Integer(*integer));
+            | &Op::Push(integer, ty) => {
+                let value = Operand::Value(Value::Integer(integer));
                 self.push(value.clone())?;
                 // A macro name stands for its replacement's spelling.
                 let spelling = instruction.macro_use.map_or_else(
@@ -195,10 +195,15 @@ impl Machine {
                     |used| program.macros[used].replacement.as_str(),
                 );
                 if spelling.starts_with('\'') {
-                    narration::character(range, *integer, spelling, value)
+                    narration::character(range, integer, spelling, value)
                 } else {
-                    narration::constant(range, *integer, value)
+                    narration::constant(range, integer, ty, spelling, value)
                 }
+            },
+            | &Op::Sizeof(size, ty) => {
+                let value = Value::Integer(i128::try_from(size).unwrap_or(i128::MAX));
+                self.push(Operand::Value(value.clone()))?;
+                self.size_of(range, source, size, ty, value)
             },
             | Op::Zero => {
                 let value = Operand::Value(Value::Integer(0));
@@ -237,8 +242,7 @@ impl Machine {
             | Op::Decay(place) => {
                 let id = self.named(place)?;
                 let length = match self.object_type(id) {
-                    | Some(Type::Array(length) | Type::CharArray(length)) =>
-                        i32::try_from(length).unwrap_or(i32::MAX),
+                    | Some(Type::Array(_, length)) => i32::try_from(length).unwrap_or(i32::MAX),
                     | _ => 1,
                 };
                 let value = Value::pointer(id, 0, 0, length);
@@ -303,25 +307,46 @@ impl Machine {
                 self.push(result.clone())?;
                 self.member(range, source, target, base, whole, pointer, result)
             },
-            | Op::Promote => {
+            | &Op::Promote(from) => {
                 let value = self.pop_value()?;
                 self.push(Operand::Value(value.clone()))?;
-                self.promote(range, value)
+                self.promote(range, from, value)
+            },
+            | &Op::Convert {
+                from,
+                to,
+                other,
+                depth,
+            } => {
+                let operands = &self.activations[top].operands;
+                let slot = operands
+                    .len()
+                    .checked_sub(depth + 1)
+                    .ok_or_else(|| self.error("empty operand stack"))?;
+                let Operand::Value(Value::Integer(integer)) = operands[slot] else {
+                    return Err(self.error("expected an integer operand"));
+                };
+                let converted = to.convert(integer);
+                self.activations[top].operands[slot] = Operand::Value(Value::Integer(converted));
+                let whole = self.operator_text(program, instruction);
+                Self::arithmetic_conversion(
+                    range, &whole, from, to, other, depth, integer, converted,
+                )
             },
             | &Op::Cast { from, to } => {
                 let value = self.pop_value()?;
                 let converted = match (to, &value) {
-                    | (Type::Char, &Value::Integer(integer)) =>
-                        parser::char_value(integer.to_le_bytes()[0]),
+                    | (Type::Integer(integer), &Value::Integer(number)) =>
+                        Value::Integer(integer.convert(number)),
                     | _ => value.clone(),
                 };
                 self.push(Operand::Value(converted.clone()))?;
                 self.cast(range, source, from, to, value, converted)
             },
-            | Op::DefaultPromote => {
+            | &Op::DefaultPromote(from) => {
                 let value = self.pop_value()?;
                 self.push(Operand::Value(value.clone()))?;
-                self.default_promotion(range, value)
+                self.default_promotion(range, from, value)
             },
             | Op::InitializeString {
                 bytes,
@@ -392,7 +417,7 @@ impl Machine {
                         Undefined::NullSubscript,
                     ));
                 }
-                let pointer = self.binary_value("+", base.clone(), index.clone())?;
+                let pointer = self.binary_value("+", None, base.clone(), index.clone())?;
                 let (target, offset, _) = self.dereference(&pointer)?;
                 self.push(Operand::Address {
                     target,
@@ -401,39 +426,45 @@ impl Machine {
                 })?;
                 self.subscript(range, base, index, target, offset)
             },
-            | Op::Unary(operator) => {
+            | &Op::Unary(operator, ty) => {
                 let value = self.pop_value()?;
-                let result = match (operator, &value) {
-                    | (&"+", Value::Integer(integer)) => Value::Integer(*integer),
-                    | (&"-", Value::Integer(integer)) => Value::Integer(
-                        integer
-                            .checked_neg()
-                            .ok_or_else(|| self.overflow(None, "-", *integer))?,
-                    ),
-                    | (&"!", value) => Value::Integer(i32::from(!self.truth(value)?)),
+                let result = match (operator, ty, &value) {
+                    | ("+", _, Value::Integer(integer)) => Value::Integer(*integer),
+                    // An unsigned negation is reduced modulo 2^N, so it is
+                    // always defined (C99 §6.2.5p9).
+                    | ("-", Some(ty), &Value::Integer(integer)) if !ty.signed() =>
+                        Value::Integer(ty.convert(-integer)),
+                    | ("-", ty, &Value::Integer(integer)) => {
+                        let ty = ty.unwrap_or(super::integers::Integer::Int);
+                        if !ty.fits(-integer) {
+                            return Err(self.overflow(ty, None, "-", integer));
+                        }
+                        Value::Integer(-integer)
+                    },
+                    | ("!", _, value) => Value::Integer(i128::from(!self.truth(value)?)),
                     | _ => return Err(self.error("unsupported unary operand")),
                 };
                 self.push(Operand::Value(result.clone()))?;
-                self.unary(range, operator, value, result)
+                self.unary(range, operator, ty, value, result)
             },
-            | Op::Binary(operator) => {
+            | &Op::Binary(operator, ty) => {
                 let right = self.pop_value()?;
                 let left = self.pop_value()?;
-                let result = self.binary_value(operator, left.clone(), right.clone())?;
+                let result = self.binary_value(operator, ty, left.clone(), right.clone())?;
                 self.push(Operand::Value(result.clone()))?;
-                self.binary(range, source, operator, left, right, result)
+                self.binary(range, source, operator, ty, left, right, result)
             },
             | Op::ElementAddress => {
                 let right = self.pop_value()?;
                 let left = self.pop_value()?;
-                let result = self.binary_value("+", left.clone(), right.clone())?;
+                let result = self.binary_value("+", None, left.clone(), right.clone())?;
                 self.push(Operand::Value(result.clone()))?;
-                self.binary(range, source, "&[]", left, right, result)
+                self.binary(range, source, "&[]", None, left, right, result)
             },
             | &Op::Store {
                 initializer,
                 full_expression,
-                char_value,
+                from,
                 structure,
             } => {
                 let value = self.pop_value()?;
@@ -461,7 +492,7 @@ impl Machine {
                         range,
                         initializer,
                         full_expression,
-                        char_value,
+                        from,
                         target,
                         offset,
                         previous.as_ref(),
@@ -470,27 +501,60 @@ impl Machine {
                     )
                 }
             },
-            | &Op::Increment { delta, prefix } => {
+            | &Op::Increment {
+                delta,
+                prefix,
+                nested,
+            } => {
                 let (target, offset) = self.pop_address()?;
                 self.check_writable(target, offset)?;
                 let current = self.read(target, offset)?;
                 // `--` subtracts 1, so an overflow reads as a subtraction.
+                // An integer narrower than int is promoted first, and the
+                // sum converted back when it is stored (C99 §6.5.2.4p2).
                 let operator = if delta > 0 { "+" } else { "-" };
-                let sum = self.binary_value(operator, current.clone(), Value::Integer(1))?;
+                let ty = self
+                    .leaf_type(target, offset)
+                    .and_then(Type::integer)
+                    .map(super::integers::Integer::promoted);
+                let sum = self.binary_value(operator, ty, current.clone(), Value::Integer(1))?;
                 let stored = self.store(target, offset, sum.clone())?;
+                if nested {
+                    let value = if prefix { &stored } else { &current };
+                    self.push(Operand::Value(value.clone()))?;
+                }
                 self.increment(
-                    range, source, delta, prefix, target, offset, current, &sum, stored,
+                    range, source, delta, prefix, nested, target, offset, current, &sum, stored,
                 )
             },
-            | &Op::Compound(operator) => {
+            | &Op::Compound(operator, common) => {
                 let right = self.pop_value()?;
                 let (target, offset) = self.pop_address()?;
                 self.check_writable(target, offset)?;
                 let current = self.read(target, offset)?;
-                let result = self.binary_value(operator, current.clone(), right.clone())?;
+                // Both operands convert to the type the operator computes
+                // in, as in `E1 = E1 op (E2)` (C99 §6.5.16.2p3).
+                let shift = matches!(operator, "<<" | ">>");
+                let (left, right_converted) = match (common, &current, &right) {
+                    | (Some(common), &Value::Integer(left), &Value::Integer(value)) => (
+                        Value::Integer(common.convert(left)),
+                        Value::Integer(if shift { value } else { common.convert(value) }),
+                    ),
+                    | _ => (current.clone(), right.clone()),
+                };
+                let result =
+                    self.binary_value(operator, common, left.clone(), right_converted.clone())?;
                 let stored = self.store(target, offset, result.clone())?;
                 self.compound(
-                    range, source, operator, target, offset, current, right, &result, stored,
+                    range,
+                    source,
+                    operator,
+                    common,
+                    target,
+                    offset,
+                    [current, right, left, right_converted],
+                    &result,
+                    stored,
                 )
             },
             | Op::Pop => {
@@ -518,14 +582,14 @@ impl Machine {
                         .is_some_and(|last| matches!(last.op, Op::Jump(over) if over >= target));
                 self.branch(range, source, statement, value, truth, has_else)
             },
-            | Op::Call(name, count) => self.call(program, instruction, name, *count)?,
-            | Op::Return => {
+            | Op::Call(name, types) => self.call(program, instruction, name, types)?,
+            | &Op::Return(from) => {
                 let value = self.pop_value()?;
-                self.return_from(program, range, value, false)?
+                self.return_from(program, range, from, value, false)?
             },
             | Op::Fallthrough =>
                 if self.activations[top].function == program.entry {
-                    self.return_from(program, range, Value::Integer(0), true)?
+                    self.return_from(program, range, Type::INT, Value::Integer(0), true)?
                 } else {
                     return Err(self.error(
                         "reaching the end of a non-main function is outside the subset; write an \
@@ -533,6 +597,22 @@ impl Machine {
                     ));
                 },
         })
+    }
+
+    /// The source of the operator whose operand `instruction` evaluates:
+    /// the parent of its node in the expression tree.
+    fn operator_text(&self, program: &Program, instruction: &Instruction) -> String {
+        let function = &program.functions[self.activations[self.activations.len() - 1].function];
+        instruction
+            .node
+            .and_then(|node| {
+                function
+                    .nodes
+                    .iter()
+                    .find(|candidate| candidate.children.contains(&node))
+            })
+            .and_then(|parent| program.source.get(parent.range.start..parent.range.end))
+            .map_or_else(String::new, String::from)
     }
 
     /// The base and index of the subscript `instruction` evaluates, as
@@ -584,7 +664,7 @@ impl Machine {
             | _ if initializes => Designation::Initialized,
             | Some("&") => Designation::Address,
             | Some("++" | "--") => Designation::Updated,
-            | Some("+=" | "-=" | "*=" | "/=" | "%=") => Designation::Compound,
+            | Some("+=" | "-=" | "*=" | "/=" | "%=" | "<<=" | ">>=") => Designation::Compound,
             | Some(label) if label.starts_with('.') => Designation::Member,
             | _ => Designation::Assigned,
         }
@@ -595,7 +675,7 @@ impl Machine {
         program: &Program,
         instruction: &Instruction,
         name: &str,
-        count: usize,
+        types: &[Type],
     ) -> Result<Event, Diagnostic> {
         if self.activations.len() >= MAX_FRAMES {
             return Err(Diagnostic::limit(
@@ -611,7 +691,7 @@ impl Machine {
             return Err(self.error("unknown function"));
         };
         let mut arguments = Vec::new();
-        for _ in 0..count {
+        for _ in types {
             arguments.push(self.pop_value()?);
         }
         arguments.reverse();
@@ -647,6 +727,7 @@ impl Machine {
             id,
             recursive,
             &arguments,
+            types,
             parameters,
         ))
     }
@@ -655,6 +736,7 @@ impl Machine {
         &mut self,
         program: &Program,
         range: super::SourceRange,
+        from: Type,
         value: Value,
         fallthrough: bool,
     ) -> Result<Event, Diagnostic> {
@@ -663,9 +745,17 @@ impl Machine {
         }
         let top = self.activations.len() - 1;
         let id = self.activations[top].id;
-        let function = program.functions[self.activations[top].function]
-            .name
-            .clone();
+        let defined = &program.functions[self.activations[top].function];
+        let function = defined.name.clone();
+        // The value converts to the return type as if by assignment (C99
+        // §6.8.6.4p3).
+        let returns = defined.returns;
+        let original = value.clone();
+        let value = match (returns, value) {
+            | (Type::Integer(integer), Value::Integer(number)) =>
+                Value::Integer(integer.convert(number)),
+            | (_, value) => value,
+        };
         let mut ended = Vec::new();
         for object in &mut self.state.objects {
             if object.frame_id == id && object.lifetime == "alive" {
@@ -694,7 +784,16 @@ impl Machine {
                 &program.source[range.start..range.end]
             })
         };
-        Ok(self.returned(range, &function, id, value, ended, fallthrough, call))
+        Ok(self.returned(
+            range,
+            &function,
+            id,
+            (from, returns, original),
+            value,
+            ended,
+            fallthrough,
+            call,
+        ))
     }
 
     /// Start tracking the full expression `instruction` belongs to in the
