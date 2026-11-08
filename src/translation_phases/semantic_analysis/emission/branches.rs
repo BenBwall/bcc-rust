@@ -322,6 +322,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 (left_expression, right_expression)
             } else if self.folded_condition(right_expression) == Some(live) {
                 (right_expression, left_expression)
+            } else if self.gcc_decided_condition(left_expression) == Some(!live)
+                && !self.expression_contains_label(right_expression)
+            {
+                // Under GCC's rules `d() && 0 && X` omits `X`, and the left
+                // operand, which still runs, decides the branch.
+                (right_expression, left_expression)
             } else {
                 return;
             };
