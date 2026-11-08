@@ -622,7 +622,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         [a, b]: [Value; 2],
         result: Value,
     ) {
-        if !self.unit.context.configuration.trapv() || representation.narrow().is_some() {
+        if !self.unit.context.configuration.trapv()
+            || representation.narrow().is_some()
+            || self.checks_replace_trapv()
+        {
             return;
         }
         if let Some(overflow) = self.overflow_condition(opcode, [a, b], result) {
@@ -773,12 +776,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 source,
             );
         }
-        if trapv {
+        if trapv && !self.checks_replace_trapv() {
             let minimum = self.iconst(ty, i128::MIN >> (128 - ty.bits()));
             let overflow = self.icmp(IntCC::Eq, value, minimum);
             self.trap_if(overflow);
         }
         Ok(())
+    }
+
+    /// Whether Clang's signed-overflow check takes the place of `-ftrapv`'s
+    /// trap, as Clang emits only the check, which can recover; GCC keeps both.
+    fn checks_replace_trapv(&self) -> bool {
+        !self.gcc_reports()
+            && self.checks(crate::target::sanitizers::UbChecks::SIGNED_INTEGER_OVERFLOW)
     }
 
     /// Traps when `condition` holds, in a block of its own for each check:

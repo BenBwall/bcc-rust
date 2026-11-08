@@ -205,6 +205,17 @@ int main(int argc, char **argv) {
                 None,
             ),
             (
+                "deep",
+                "struct S { int x; };\nstruct A { char c; struct S s; };\nstruct \
+                 __attribute__((packed)) B { char c; struct A a[2]; char d; };\nstruct \
+                 __attribute__((packed)) C { char c; struct B b; };\nstatic struct C c \
+                 __attribute__((aligned(16))) = { .b.a[1].s.x = 42 };\n__attribute__((noinline)) \
+                 int f(struct C *p) { return p->b.a[1].s.x; }\nint main(void) { return f(&c) - \
+                 42; }\n",
+                None,
+                None,
+            ),
+            (
                 "shift",
                 "extern int printf(const char *, ...);\nint main(void) { volatile unsigned long n \
                  = 4294967296UL; volatile unsigned x = 1; printf(\"%u\\n\", x << n); }\n",
@@ -249,6 +260,35 @@ int main(int argc, char **argv) {
                     }
                 }
             }
+        }
+    }
+
+    /// Clang's signed-overflow check takes the place of `-ftrapv`'s trap, so
+    /// the program recovers after the report; GCC keeps the trap as well.
+    #[test]
+    fn signed_overflow_checks_replace_trapv_in_clang() {
+        let directory = Directory::new();
+        directory.write(
+            "t.c",
+            "extern int abs(int);\nint main(void) { volatile int x = 2147483647; volatile int y = \
+             x + 1; volatile int m = -2147483647 - 1; volatile int z = abs(m); return (y == 1) + \
+             (z == 1); }\n",
+        );
+        for back_end in [&[][..], &["-Xbcc", "--backend=native"]] {
+            let mut args = vec!["-fsanitize=undefined", "-ftrapv", "-w", "t.c", "-o", "t"];
+            args.extend_from_slice(back_end);
+            let build = directory.bcc("--clang-mode", &args);
+            if !build.status.success() && stderr(&build).contains("ubsan") {
+                continue;
+            }
+            succeeds(&build);
+            let run = Command::new(directory.path("t")).output().unwrap();
+            assert!(run.status.success(), "{back_end:?}: {}", stderr(&run));
+            assert_eq!(
+                stderr(&run).matches("runtime error").count(),
+                2,
+                "{back_end:?}"
+            );
         }
     }
 

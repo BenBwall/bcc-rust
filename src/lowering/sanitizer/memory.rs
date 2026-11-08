@@ -183,7 +183,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return;
         }
         // An access of the member needs the member's alignment, which a
-        // packed record lowers.
+        // packed record lowers, and no more than its record's place has.
+        let align = match self.ub.required.get(&base) {
+            | Some(&place) if place.bytes() < align.bytes() => place,
+            | _ => align,
+        };
         _ = self.ub.required.insert(member, align);
         let (ExpressionType::DirectMember {
             base_expression, ..
@@ -228,6 +232,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(in crate::lowering) fn inherit_member(&mut self, from: Value, to: Value) {
         if let Some(&pointer) = self.ub.members.get(&from) {
             _ = self.ub.members.insert(to, pointer);
+        }
+        // An element of an array at an underaligned place, such as a member
+        // of a packed record, is no better aligned than the array.
+        if let Some(&align) = self.ub.required.get(&from) {
+            _ = self.ub.required.insert(to, align);
         }
     }
 
