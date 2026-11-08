@@ -141,7 +141,7 @@ impl<'a> Object<'a> {
                         2
                     }
                 },
-                | Kind::Cfi(..) => 0,
+                | Kind::Cfi(..) | Kind::Loc(_) => 0,
             };
             section.size = section
                 .size
@@ -171,7 +171,7 @@ impl<'a> Object<'a> {
                     }
                     let start = usize::try_from(offset).map_err(|_| Error("section too large"))?;
                     self.sections[section].data[start..start + bytes.len()]
-                        .copy_from_slice(bytes.as_bytes());
+                        .copy_from_slice(bytes);
                 },
                 | Kind::Code(code) => {
                     if self.sections[section].kind == 8 {

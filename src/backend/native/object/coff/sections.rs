@@ -29,6 +29,7 @@ impl<'a> Coff<'a> {
                 symbols: ArenaVec::new_in(arena),
                 names: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
                 items: ArenaVec::new_in(arena),
+                files: ArenaVec::new_in(arena),
             },
             gnu,
             sections: ArenaVec::new_in(arena),

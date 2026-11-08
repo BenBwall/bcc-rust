@@ -4,9 +4,15 @@ use super::{
     Error,
     Item,
     Kind,
+    LineFile,
+    Loc,
     Object,
     Result,
     encoder,
+    line_table::{
+        sleb128,
+        uleb128,
+    },
 };
 use crate::util::bump::{
     ArenaMap,
@@ -22,8 +28,11 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
         symbols: ArenaVec::new_in(arena),
         names: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
         items: ArenaVec::new_in(arena),
+        files: ArenaVec::new_in(arena),
     };
     let mut section = object.section(".text", 1, 6, None)?;
+    // MC keeps `is_stmt` from one `.loc` to the next.
+    let mut is_stmt = true;
     for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let kind = if let Some(name) = line.strip_suffix(':') {
             symbol_name(name)?;
@@ -217,6 +226,27 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                     }
                     continue;
                 },
+                | ".file" => {
+                    line_file(&mut object.files, args, arena)?;
+                    continue;
+                },
+                | ".loc" => Kind::Loc(loc(args, &object.files, &mut is_stmt)?),
+                | ".uleb128" | ".sleb128" => {
+                    let mut bytes = ArenaVec::new_in(arena);
+                    if name == ".uleb128" {
+                        uleb128(&mut bytes, unsigned(args)?);
+                    } else {
+                        sleb128(&mut bytes, number(args)?);
+                    }
+                    Kind::Bytes(bytes.leak())
+                },
+                | ".ascii" | ".asciz" => {
+                    let (bytes, rest) = quoted(args, name == ".asciz", arena)?;
+                    if !rest.trim().is_empty() {
+                        return Err(Error("unsupported string operands"));
+                    }
+                    Kind::Bytes(bytes)
+                },
                 | name if name.starts_with(".cfi_") => Kind::Cfi(name, args),
                 | name if name.starts_with('.') => return Err(Error("unknown object directive")),
                 | "jmp" => {
@@ -245,6 +275,146 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
         });
     }
     Ok(object)
+}
+
+/// `.file number ["directory"] "name"`: the line table's file `number`,
+/// which `.loc` names, 0 for the root file. The MD5 checksum and source text
+/// DWARF 5 also allows are refused, as is a number given another file or one
+/// that skips a number.
+/// DWARF 5 §6.2.4, items 19-22.
+fn line_file<'a>(
+    files: &mut ArenaVec<'a, Option<LineFile<'a>>>,
+    args: &'a str,
+    arena: &'a Bump,
+) -> Result<()> {
+    let (number, rest) = args
+        .split_once(char::is_whitespace)
+        .ok_or(Error("unsupported .file operands"))?;
+    let number = usize::try_from(unsigned(number)?).map_err(|_| Error("file number too large"))?;
+    let (first, rest) = quoted(rest.trim_start(), false, arena)?;
+    let file = if rest.trim().is_empty() {
+        LineFile {
+            directory: &[],
+            name:      first,
+        }
+    } else {
+        let (name, rest) = quoted(rest.trim_start(), false, arena)?;
+        if !rest.trim().is_empty() {
+            return Err(Error("unsupported .file operands"));
+        }
+        LineFile {
+            directory: first,
+            name,
+        }
+    };
+    // The emitter numbers files in the order it names them, from the root
+    // file, which MC's directory table then follows.
+    match files.get(number) {
+        | Some(&existing) if existing != Some(file) => Err(Error("file number already allocated")),
+        | Some(_) => Ok(()),
+        | None if number == files.len() => {
+            files.push(Some(file));
+            Ok(())
+        },
+        | None => Err(Error("file numbers out of order")),
+    }
+}
+
+/// `.loc file line [column] [prologue_end] [epilogue_begin] [is_stmt 0|1]`
+/// for a `file` that `.file` named. `is_stmt` holds until a `.loc` changes
+/// it, as in MC. DWARF 5 §6.2.2, Table 6.3.
+fn loc(args: &str, files: &[Option<LineFile<'_>>], is_stmt: &mut bool) -> Result<Loc> {
+    let mut words = args.split_whitespace().peekable();
+    let mut field = || -> Result<u32> {
+        u32::try_from(unsigned(words.next().ok_or(Error("missing .loc operand"))?)?)
+            .map_err(|_| Error(".loc operand too large"))
+    };
+    let file = field()?;
+    let line = field()?;
+    if files
+        .get(usize::try_from(file).map_err(|_| Error("file number too large"))?)
+        .is_none_or(Option::is_none)
+    {
+        return Err(Error("unassigned file number in .loc"));
+    }
+    let column = match words.peek() {
+        | Some(word) if word.bytes().all(|b| b.is_ascii_digit()) => u32::try_from(unsigned(
+            words.next().ok_or(Error("missing .loc operand"))?,
+        )?)
+        .map_err(|_| Error(".loc operand too large"))?,
+        | _ => 0,
+    };
+    let mut flags = 0;
+    while let Some(word) = words.next() {
+        match word {
+            | "prologue_end" => flags |= Loc::PROLOGUE_END,
+            | "epilogue_begin" => flags |= Loc::EPILOGUE_BEGIN,
+            | "is_stmt" =>
+                *is_stmt = match words.next() {
+                    | Some("0") => false,
+                    | Some("1") => true,
+                    | _ => return Err(Error("invalid is_stmt value")),
+                },
+            | _ => return Err(Error("unsupported .loc operand")),
+        }
+    }
+    if *is_stmt {
+        flags |= Loc::IS_STMT;
+    }
+    Ok(Loc {
+        file,
+        line,
+        column,
+        flags,
+    })
+}
+
+/// The bytes of the quoted string that starts `text`, with a NUL after them
+/// if `terminate`, and the text after the closing quote. A byte may be
+/// written as an octal escape `\NNN`, a backslash as `\\` and a quote as
+/// `\"`.
+fn quoted<'a>(text: &'a str, terminate: bool, arena: &'a Bump) -> Result<(&'a [u8], &'a str)> {
+    let body = text
+        .strip_prefix('"')
+        .ok_or(Error("expected a quoted string"))?;
+    let mut bytes = ArenaVec::new_in(arena);
+    let mut rest = body.bytes().enumerate();
+    while let Some((at, byte)) = rest.next() {
+        match byte {
+            | b'"' => {
+                if terminate {
+                    bytes.push(0);
+                }
+                return Ok((bytes.leak(), &body[at + 1..]));
+            },
+            | b'\\' => {
+                let mut value = 0_u32;
+                let mut digits = 0;
+                while digits < 3
+                    && let Some(digit) = body
+                        .as_bytes()
+                        .get(at + 1 + digits)
+                        .filter(|digit| (b'0'..=b'7').contains(digit))
+                {
+                    value = value * 8 + u32::from(digit - b'0');
+                    digits += 1;
+                }
+                if digits > 0 {
+                    bytes.push(u8::try_from(value).map_err(|_| Error("octal escape exceeds a byte"))?);
+                    for _ in 0..digits {
+                        _ = rest.next();
+                    }
+                } else {
+                    match rest.next() {
+                        | Some((_, escaped @ (b'"' | b'\\'))) => bytes.push(escaped),
+                        | _ => return Err(Error("unsupported string escape")),
+                    }
+                }
+            },
+            | byte => bytes.push(byte),
+        }
+    }
+    Err(Error("unterminated string"))
 }
 
 /// The operands of `.p2align align[, [fill][, max]]`, after the power of
