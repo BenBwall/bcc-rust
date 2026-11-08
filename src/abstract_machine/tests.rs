@@ -3339,6 +3339,59 @@ fn sizeof_gives_a_size_t_without_evaluating_its_operand() {
 }
 
 #[test]
+fn an_object_declared_size_t_keeps_the_typedef_name() {
+    let source = "#include <stdio.h>\nconst size_t limit = 4;\nint main(void) {\n    int \
+                  values[3] = {1, 2, 3};\n    size_t size = sizeof values;\n    size_t *at = \
+                  &size;\n    static size_t calls;\n    unsigned long plain = 2;\n    \
+                  printf(\"%zu %zu\\n\", size, plain);\n    return *at + limit + calls;\n}\n";
+    returned(source, 16);
+    let steps = states(source);
+    let last = steps.last().expect("a step");
+    let ty = |name: &str| {
+        last.objects
+            .iter()
+            .find(|object| object.name == name)
+            .map(|object| object.r#type.as_str())
+    };
+    // C99 §6.7.7p3: the typedef name is a synonym for unsigned long, and
+    // the machine spells each object's type as its declaration did.
+    assert_eq!(ty("size"), Some("size_t"));
+    assert_eq!(ty("at"), Some("size_t *"));
+    assert_eq!(ty("limit"), Some("const size_t"));
+    assert_eq!(ty("calls"), Some("size_t"));
+    assert_eq!(ty("plain"), Some("unsigned long"));
+    let declared = steps
+        .iter()
+        .find(|state| state.event.title == "Create `size` (size_t)")
+        .expect("size is declared");
+    assert!(
+        declared.event.summary.contains("a size_t object"),
+        "{}",
+        declared.event.summary
+    );
+    // The disclosure names the type it stands for.
+    assert!(
+        declared
+            .event
+            .explanation
+            .contains("<stdio.h> defines here as unsigned long (8 bytes"),
+        "{}",
+        declared.event.explanation
+    );
+    assert!(cited(declared).contains(&"7.17p2"));
+    // %zu names the size_t it takes; an unsigned long given to it is one.
+    let printed = steps
+        .iter()
+        .find(|state| state.event.title.starts_with("printf writes"))
+        .expect("printf runs");
+    assert!(
+        printed.event.explanation.contains("`size`, the size_t 12"),
+        "{}",
+        printed.event.explanation
+    );
+}
+
+#[test]
 fn integer_constants_take_their_type_from_their_value_and_suffix() {
     let source = "int main(void) {\n    long big = 2147483648;\n    unsigned long a = 10ul;\n    \
                   long long b = 5LL;\n    unsigned int c = 7u;\n    return big > 0;\n}\n";

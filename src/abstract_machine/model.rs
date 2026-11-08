@@ -701,11 +701,13 @@ pub(super) struct Instruction {
 pub(super) enum Op {
     Enter,
     Leave,
-    /// Create an automatic object; `constant` when it is defined `const`.
+    /// Create an automatic object; `constant` when it is defined `const`,
+    /// `typedef` the typedef name its type was spelled with.
     Declare {
         name:     String,
         ty:       Type,
         constant: bool,
+        typedef:  Option<&'static str>,
     },
     /// Reaching the declaration of block-scope static `index`: nothing to do.
     StaticLocal(usize),
@@ -889,6 +891,8 @@ pub(super) struct Static {
     pub literal:  bool,
     /// Whether the object is defined `const`.
     pub constant: bool,
+    /// The typedef name its type was spelled with (`size_t`), if any.
+    pub typedef:  Option<&'static str>,
     /// For a string literal, how many adjacent literals translation phase
     /// 6 joined into it.
     pub parts:    usize,

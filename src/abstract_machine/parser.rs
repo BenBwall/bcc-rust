@@ -84,11 +84,12 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         let storage = parser.current();
         parser.declaration_macros.clear();
         let is_static = parser.take("static");
+        let typedef = parser.typedef_name();
         let base = parser.base_type()?;
         let pointer = parser.pointer()?;
         let name = parser.identifier()?;
         if !parser.at("(") {
-            parser.file_scope_object(base, pointer, name)?;
+            parser.file_scope_object(base, typedef, pointer, name)?;
             continue;
         }
         if is_static {
@@ -465,19 +466,35 @@ impl<'a> Parser<'a> {
     fn declaration(&mut self) -> Result<(), Diagnostic> {
         self.declaration_macros.clear();
         let is_static = self.take("static");
+        let typedef = self.typedef_name();
         let base = self.base_type()?;
         let pointer = self.pointer()?;
         let name = self.identifier()?;
         let array = self.declarator_array()?;
         let ty = self.declared_type(base, pointer, array, name.range)?;
-        let constant = base.is_const() && !pointer;
+        let specified = Specified {
+            constant: base.is_const() && !pointer,
+            typedef,
+        };
         if is_static {
-            return self.static_local(name, ty, constant);
+            return self.static_local(name, ty, specified);
         }
         match ty {
-            | Type::Array(..) | Type::Struct(_) => self.aggregate_declaration(name, ty, constant),
-            | _ => self.scalar_declaration(name, ty, constant),
+            | Type::Array(..) | Type::Struct(_) => self.aggregate_declaration(name, ty, specified),
+            | _ => self.scalar_declaration(name, ty, specified),
         }
+    }
+
+    /// The typedef name the declaration specifiers starting here spell their
+    /// type with, after an optional `const`: `size_t`, the one typedef name
+    /// this subset knows, once `<stdio.h>` has declared it. The machine
+    /// keeps it to name the object's type as the program wrote it.
+    ///
+    /// C99: §6.7.7 paragraph 3, p. 123; PDF p. 135 (a typedef name is a
+    /// synonym for the type it names).
+    pub fn typedef_name(&self) -> Option<&'static str> {
+        let at = usize::from(self.at("const"));
+        (self.peek(at) == "size_t" && self.includes_stdio()).then_some("size_t")
     }
 
     /// A declarator's optional `*`. A `const` after it would make the
@@ -497,13 +514,19 @@ impl<'a> Parser<'a> {
 
     /// Emit the creation of the automatic object `name`, noting a macro
     /// in its array size.
-    fn declare(&mut self, name: Token<'a>, ty: Type, constant: bool) -> Result<(), Diagnostic> {
-        self.add_symbol(name, ty, self.scope, None, constant)?;
+    fn declare(
+        &mut self,
+        name: Token<'a>,
+        ty: Type,
+        specified: Specified,
+    ) -> Result<(), Diagnostic> {
+        self.add_symbol(name, ty, self.scope, None, specified.constant)?;
         self.emit(
             Op::Declare {
                 name: String::from(name.text),
                 ty,
-                constant,
+                constant: specified.constant,
+                typedef: specified.typedef,
             },
             name.range,
         )?;
@@ -563,9 +586,9 @@ impl<'a> Parser<'a> {
         &mut self,
         name: Token<'a>,
         ty: Type,
-        constant: bool,
+        specified: Specified,
     ) -> Result<(), Diagnostic> {
-        self.declare(name, ty, constant)?;
+        self.declare(name, ty, specified)?;
         if self.take("=") {
             self.whole_initializer(name, ty)?;
         }
@@ -606,9 +629,9 @@ impl<'a> Parser<'a> {
         &mut self,
         name: Token<'a>,
         ty: Type,
-        constant: bool,
+        specified: Specified,
     ) -> Result<(), Diagnostic> {
-        self.declare(name, ty, constant)?;
+        self.declare(name, ty, specified)?;
         if self.take("=") {
             if let Type::Array(Arithmetic::CHAR, length) = ty
                 && self.current().text.starts_with('"')
@@ -2036,6 +2059,7 @@ impl<'a> Parser<'a> {
     fn file_scope_object(
         &mut self,
         base: Base,
+        typedef: Option<&'static str>,
         pointer: bool,
         name: Token<'a>,
     ) -> Result<(), Diagnostic> {
@@ -2053,9 +2077,12 @@ impl<'a> Parser<'a> {
                 "a function and a file-scope object share this name",
             ));
         }
-        let constant = base.is_const() && !pointer;
-        let index = self.static_object(name, ty, None, constant)?;
-        self.add_symbol(name, ty, 0, Some(index), constant)?;
+        let specified = Specified {
+            constant: base.is_const() && !pointer,
+            typedef,
+        };
+        let index = self.static_object(name, ty, None, specified)?;
+        self.add_symbol(name, ty, 0, Some(index), specified.constant)?;
         self.expect(";")
     }
 
@@ -2066,11 +2093,11 @@ impl<'a> Parser<'a> {
         &mut self,
         name: Token<'a>,
         ty: Type,
-        constant: bool,
+        specified: Specified,
     ) -> Result<(), Diagnostic> {
         let function = self.function_name.clone();
-        let index = self.static_object(name, ty, function, constant)?;
-        self.add_symbol(name, ty, self.scope, Some(index), constant)?;
+        let index = self.static_object(name, ty, function, specified)?;
+        self.add_symbol(name, ty, self.scope, Some(index), specified.constant)?;
         self.emit(Op::StaticLocal(index), name.range)?;
         self.expect(";")
     }
@@ -2082,7 +2109,7 @@ impl<'a> Parser<'a> {
         name: Token<'a>,
         ty: Type,
         function: Option<String>,
-        constant: bool,
+        specified: Specified,
     ) -> Result<usize, Diagnostic> {
         if self.statics.len() >= MAX_OBJECTS {
             return Err(Diagnostic::limit(name.range, "object limit reached"));
@@ -2102,7 +2129,8 @@ impl<'a> Parser<'a> {
             value: ty.shaped(&self.structures, &leaves),
             explicit,
             literal: false,
-            constant,
+            constant: specified.constant,
+            typedef: specified.typedef,
             parts: 0,
             macros: std::mem::take(&mut self.declaration_macros),
             range,
@@ -2129,6 +2157,7 @@ impl<'a> Parser<'a> {
             explicit: true,
             literal: true,
             constant: false,
+            typedef: None,
             parts: literal.parts,
             macros: literal.macro_use.into_iter().collect(),
             range: literal.range,
@@ -2348,6 +2377,14 @@ pub(super) enum Base {
     /// An arithmetic type, `const`-qualified when set.
     Arithmetic(Arithmetic, bool),
     Struct(usize),
+}
+
+/// What a declaration says of its object beyond its type: whether it is
+/// defined `const`, and the typedef name its type was spelled with.
+#[derive(Debug, Clone, Copy)]
+struct Specified {
+    constant: bool,
+    typedef:  Option<&'static str>,
 }
 
 impl Base {
