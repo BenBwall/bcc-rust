@@ -142,6 +142,7 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::Unused(_)
                 | semantic_analysis::SemanticErrorKind::Main(_)
                 | semantic_analysis::SemanticErrorKind::SignCompare
+                | semantic_analysis::SemanticErrorKind::TypeLimits(_)
                 | semantic_analysis::SemanticErrorKind::ShadowOrBody(_)
                 | semantic_analysis::SemanticErrorKind::Parentheses(_)
                 | semantic_analysis::SemanticErrorKind::KnrPromotedParameter

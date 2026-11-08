@@ -48,6 +48,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         left: &'tu Expression<'tu>,
         right: &'tu Expression<'tu>,
     ) {
+        self.check_type_limits(e, operator, left, right);
         if self.unused.sign_compare
             && matches!(
                 operator,

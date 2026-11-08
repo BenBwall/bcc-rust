@@ -138,6 +138,8 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about a comparison the types decide may be on.
+    pub(super) type_limits: bool,
     /// Whether a warning about a hidden declaration may be on.
     pub(super) shadow: bool,
     /// Whether `-Wempty-body` may be on.
@@ -205,6 +207,13 @@ impl<'s> UnusedState<'s> {
         Self {
             tracking,
             values,
+            type_limits: on(&[
+                G::TypeLimits,
+                G::TautologicalConstantCompare,
+                G::TautologicalConstantOutOfRangeCompare,
+                G::TautologicalUnsignedZeroCompare,
+                G::TautologicalTypeLimitCompare,
+            ]),
             shadow: on(&[G::Shadow, G::ShadowLocal, G::ShadowCompatibleLocal]),
             empty_body: on(&[G::EmptyBody]),
             parentheses: on(&[
