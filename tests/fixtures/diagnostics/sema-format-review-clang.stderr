@@ -1,0 +1,82 @@
+sema-format-review-clang.c:8:45: warning: data argument position '1073741823' exceeds the number of data arguments (1) [-Wformat]
+    8 |     printf("%999999999999999999999999999999$d", 1);
+      |                                             ^
+sema-format-review-clang.c:9:16: warning: '*' specified field width is missing a matching 'int' argument [-Wformat]
+    9 |     printf("%1$*999999999999999999999999999999$d", 1, 2);
+      |                ^
+sema-format-review-clang.c:12:25: warning: data argument position '2147483648' exceeds the number of data arguments (1) [-Wformat]
+   12 |     printf("%2147483648$d", 1);
+      |                         ^
+sema-format-review-clang.c:16:22: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   16 |     printf(u8"%d\n", l);
+      |                      ^
+sema-format-review-clang.c:17:16: warning: invalid conversion specifier 'y' [-Wformat-invalid-specifier]
+   17 |     printf(u8"%y");
+      |                ^
+sema-format-review-clang.c:21:49: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   21 |     printf(__builtin_choose_expr(0, s, "%d\n"), l);
+      |                                                 ^
+sema-format-review-clang.c:22:48: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   22 |     printf(_Generic(1L, int: s, long: "%d\n"), l);
+      |                                                ^
+sema-format-review-clang.c:23:12: warning: format string is not a string literal (potentially insecure) [-Wformat-security]
+   23 |     printf(__builtin_choose_expr(1, s, "x"));
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-review-clang.c:23:12: note: treat the string as an argument to avoid this
+   23 |     printf(__builtin_choose_expr(1, s, "x"));
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-format-review-clang.c:27:24: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   27 |     printf("ab%d" - 0, l);
+      |                        ^
+sema-format-review-clang.c:28:31: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   28 |     printf(("abc%d" + 3) - 1, l);
+      |                               ^
+sema-format-review-clang.c:29:27: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   29 |     printf(&"x%d"[1] - 1, l);
+      |                           ^
+sema-format-review-clang.c:30:22: warning: data argument not used by format string [-Wformat-extra-args]
+   30 |     printf("ab" - 0, l);
+      |                      ^
+sema-format-review-clang.c:37:18: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   37 |     logger("%d", 1L);
+      |                  ^~
+sema-format-review-clang.c:38:19: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   38 |     ops.say("%d", 1L);
+      |                   ^~
+sema-format-review-clang.c:39:14: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   39 |     lp("%d", 1L);
+      |              ^~
+sema-format-review-clang.c:48:15: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   48 |     sum("%d", 1L);
+      |               ^~
+sema-format-review-clang.c:49:17: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   49 |     named("%d", 1L);
+      |                 ^~
+sema-format-review-clang.c:50:21: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   50 |     chosen(0, "%d", 1L);
+      |                     ^~
+sema-format-review-clang.c:56:12: warning: format string is not null-terminated [-Wformat]
+   56 |     printf(cut, 1);
+      |            ^~~
+sema-format-review-clang.c:53:21: note: format string is defined here
+   53 | const char cut[2] = "%d";
+      |                     ^~~~
+sema-format-review-clang.c:57:18: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   57 |     printf(kept, 1L);
+      |                  ^~
+sema-format-review-clang.c:54:23: note: format string is defined here
+   54 | const char kept[3] = "%d";
+      |                       ^
+sema-format-review-clang.c:60:6: warning: GCC requires a function with the 'format' attribute to be variadic [-Wgcc-compat]
+   60 | void log_long(const char *, long) __attribute__((format(printf, 1, 2)));
+      |      ^~~~~~~~
+sema-format-review-clang.c:61:6: warning: GCC requires a function with the 'format' attribute to be variadic [-Wgcc-compat]
+   61 | void log_char(const char *, char) __attribute__((format(printf, 1, 2)));
+      |      ^~~~~~~~
+sema-format-review-clang.c:64:20: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   64 |     log_long("%d", 1);
+      |                    ^
+sema-format-review-clang.c:66:20: warning: format specifies type 'char *' but the argument has type 'char' [-Wformat]
+   66 |     log_char("%s", 1);
+      |                    ^
+24 warnings generated.

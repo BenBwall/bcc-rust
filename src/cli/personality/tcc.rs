@@ -1285,7 +1285,8 @@ const fn machine(target: Target) -> &'static str {
 /// `-print-search-dirs`, in TCC's form: where bcc is installed, the
 /// header directories it searches after its own embedded headers, the
 /// libraries' directories and the start files' that the bundled clang
-/// links with, and the dynamic linker. bcc has no `libtcc1.a`.
+/// links with, and the dynamic linker. bcc has no `libtcc1.a`: each unit
+/// carries the functions of it that it references (`lowering/tcc_runtime.rs`).
 fn search_directories(target: Target) -> String {
     let mut text = String::new();
     let install = std::env::current_exe()

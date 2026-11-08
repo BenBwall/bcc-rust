@@ -151,10 +151,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                     source_vectors: token.source_vectors,
                                 });
                             }
-                            _ = self
-                                .state
-                                .once_set
-                                .insert(self.physical_source_file_index());
+                            let identity = self
+                                .context
+                                .file_identity(self.physical_source_file_index());
+                            _ = self.state.once_set.insert(identity);
                             match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;
