@@ -4,6 +4,7 @@ use super::*;
 use crate::configuration::{
     CStandard,
     ExtensionPolicy,
+    LibraryBuiltins,
 };
 
 const ALLOCA: &str = "int alloca(int x){return x+1;} int main(void){return alloca(1)!=2;}";
@@ -12,29 +13,54 @@ const ASSEMBLER_ALLOCA: &str = r#"int calls; void *alloca(__SIZE_TYPE__) __asm__
 // Disable that substitution for the ordinary-call contract requested here.
 const DEFINED_ALLOCA: &str = "int calls; void *alloca(__SIZE_TYPE__ n){++calls;return &calls;} \
                               int main(void){void *p=alloca(7);return p!=&calls||calls!=1;}";
+// Without `-fno-builtin-alloca`, GCC and Clang expand the call of a
+// compatible definition in GNU modes, and the definition is never called.
+const SUBSTITUTED_ALLOCA: &str = "int calls; void *alloca(__SIZE_TYPE__ n){++calls;return \
+                                  &calls;} int main(void){void *p=alloca(7);return \
+                                  p==&calls||calls!=0;}";
 const FREESTANDING: &str =
     "int f(void){return strlen(7);} int strlen(int x){return x+1;} int main(void){return f()!=8;}";
 
-fn cases(
-    target: Target,
-    shadows: &str,
-) -> [(&str, CompilerConfiguration, &'static [&'static str]); 8] {
+/// Each source, with bcc's configuration and library builtins and Clang's
+/// matching options.
+type Case<'a> = (
+    &'a str,
+    CompilerConfiguration,
+    LibraryBuiltins<'static>,
+    &'static [&'static str],
+);
+
+fn cases(target: Target, shadows: &str) -> [Case<'_>; 9] {
     let strict =
         CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow).with_target(target);
     let gnu = strict.with_gnu_extensions(true);
+    let all = LibraryBuiltins::All;
+    let no_alloca = LibraryBuiltins::Except(&["alloca"]);
     [
-        (shadows, gnu, &["-std=gnu99"]),
-        (ALLOCA, strict, &["-std=c99"]),
-        (ALLOCA, gnu, &["-std=gnu99"]),
-        (ASSEMBLER_ALLOCA, strict, &["-std=c99"]),
-        (ASSEMBLER_ALLOCA, gnu, &["-std=gnu99"]),
-        (DEFINED_ALLOCA, strict, &["-std=c99", "-fno-builtin-alloca"]),
-        (DEFINED_ALLOCA, gnu, &["-std=gnu99", "-fno-builtin-alloca"]),
+        (shadows, gnu, all, &["-std=gnu99"]),
+        (ALLOCA, strict, all, &["-std=c99"]),
+        (ALLOCA, gnu, all, &["-std=gnu99"]),
+        (ASSEMBLER_ALLOCA, strict, all, &["-std=c99"]),
+        (ASSEMBLER_ALLOCA, gnu, all, &["-std=gnu99"]),
+        (
+            DEFINED_ALLOCA,
+            strict,
+            no_alloca,
+            &["-std=c99", "-fno-builtin-alloca"],
+        ),
+        (
+            DEFINED_ALLOCA,
+            gnu,
+            no_alloca,
+            &["-std=gnu99", "-fno-builtin-alloca"],
+        ),
+        (SUBSTITUTED_ALLOCA, gnu, all, &["-std=gnu99"]),
         (
             FREESTANDING,
             CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Allow)
                 .with_target(target)
                 .with_hosted(false),
+            all,
             &[
                 "-std=c89",
                 "-ffreestanding",
@@ -119,18 +145,24 @@ fn undeclared_alloca_obeys_strict_and_gnu_modes() {
 fn builtin_bindings_and_language_modes_interpret_correctly() {
     let shadows = crate::test_support::builtin_binding_program();
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
-        for (source, configuration, _) in cases(target, &shadows) {
+        for (source, configuration, library, _) in cases(target, &shadows) {
             for (optimize, profile) in STAGES {
-                with_configured_module(
+                with_library_builtins(
                     source,
                     target,
                     optimize,
                     profile,
                     configuration,
+                    HeaderSearch::default(),
+                    library,
                     |module, target| {
                         assert_eq!(interpret(module, target).0, 0, "{source}");
                         if source != shadows {
-                            assert!(!module.to_string().contains("dyn_alloca"));
+                            assert_eq!(
+                                module.to_string().contains("dyn_alloca"),
+                                source == SUBSTITUTED_ALLOCA,
+                                "{source}"
+                            );
                         }
                     },
                 );
@@ -141,8 +173,8 @@ fn builtin_bindings_and_language_modes_interpret_correctly() {
 
 #[test]
 fn builtin_spelling_function_declarations_remain_runtime_symbols() {
-    let source = "int __builtin_trap(int); int __builtin_abs(int); void *alloca(__SIZE_TYPE__); \
-                  int f(void){alloca(7);return __builtin_trap(7)+__builtin_abs(7);}";
+    let source = "int __builtin_trap(int); int __builtin_abs(int); int f(void){return \
+                  __builtin_trap(7)+__builtin_abs(7);}";
     for gnu in [false, true] {
         let target = Target::LinuxGnu;
         with_configured_module(
@@ -155,12 +187,81 @@ fn builtin_spelling_function_declarations_remain_runtime_symbols() {
                 .with_gnu_extensions(gnu),
             |module, _| {
                 let text = module.to_string();
-                for name in ["__builtin_trap", "__builtin_abs", "alloca"] {
+                for name in ["__builtin_trap", "__builtin_abs"] {
                     assert!(text.contains(&format!("call @{name}")), "{text}");
                 }
-                assert!(!text.contains("dyn_alloca"));
             },
         );
+    }
+}
+
+/// `<alloca.h>` and TinyCC's `tcclib.h` declare `void *alloca(size_t)`:
+/// GCC 13 (`-std=gnu99 -S`) and Clang 23 (`-std=gnu17 -emit-llvm`: `alloca
+/// i8, i64 7`) expand a direct call through a compatible declaration in GNU
+/// modes, and call the function in strict ISO modes, through its address,
+/// for an incompatible or internal declaration, and, under Clang's rules
+/// only, for one with an assembler label.
+#[test]
+fn declared_alloca_expands_in_gnu_modes() {
+    use crate::configuration::CompilerIdentity;
+    let target = Target::LinuxGnu;
+    let size = "__SIZE_TYPE__";
+    let prototype = format!("void *alloca({size}); void g(void *); void f(void){{g(alloca(7));}}");
+    let unprototyped = "void *alloca(); void g(void *); void f(void){g(alloca(7));}".to_owned();
+    let address = format!(
+        "void *alloca({size}); void g(void *); void f(void){{void *(*p)({size}) = alloca; \
+         g(p(7));}}"
+    );
+    let incompatible = "int alloca(int); int f(void){return alloca(7);}".to_owned();
+    let internal = format!(
+        "static void *alloca({size} n){{return 0;}} void g(void *); void f(void){{g(alloca(7));}}"
+    );
+    let labeled = format!(
+        "void *alloca({size}) __asm__(\"my_alloca\"); void g(void *); void \
+         f(void){{g(alloca(7));}}"
+    );
+    // The source, then whether Clang's and GCC's rules expand the call in
+    // GNU mode.
+    let cases = [
+        (&prototype, true, true),
+        (&unprototyped, true, true),
+        (&address, false, false),
+        (&incompatible, false, false),
+        (&internal, false, false),
+        (&labeled, false, true),
+    ];
+    for (source, clang, gcc) in cases {
+        for (identity, expands) in [
+            (CompilerIdentity::Clang, clang),
+            (CompilerIdentity::Gcc, gcc),
+        ] {
+            for gnu in [false, true] {
+                with_configured_module(
+                    source,
+                    target,
+                    false,
+                    Profile::PreAbi,
+                    CompilerConfiguration::default()
+                        .with_target(target)
+                        .with_compiler_identity(identity)
+                        .with_gnu_extensions(gnu),
+                    |module, _| {
+                        let text = module.to_string();
+                        let expanded = gnu && expands;
+                        assert_eq!(
+                            text.contains("dyn_alloca"),
+                            expanded,
+                            "{identity:?} gnu={gnu}: {source}\n{text}"
+                        );
+                        assert_eq!(
+                            text.contains("call @alloca") || text.contains("call @my_alloca"),
+                            !expanded && source != &address,
+                            "{identity:?} gnu={gnu}: {source}\n{text}"
+                        );
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -172,7 +273,9 @@ fn builtin_bindings_and_language_modes_match_native_clang() {
     };
     let directory = TempDir::new("builtin-bindings");
     let toolchain = Toolchain::bundled(target).unwrap();
-    for (index, (source, configuration, flags)) in cases(target, &shadows).into_iter().enumerate() {
+    for (index, (source, configuration, library, flags)) in
+        cases(target, &shadows).into_iter().enumerate()
+    {
         let input = directory.join(format!("case-{index}.c"));
         std::fs::write(&input, source).unwrap();
         for opt in [OptLevel::O0, OptLevel::O2] {
@@ -205,12 +308,14 @@ fn builtin_bindings_and_language_modes_match_native_clang() {
             }
             for optimize in [false, true] {
                 let executable = directory.join(format!("bcc-{index}-{opt:?}-{optimize}.exe"));
-                with_configured_module(
+                with_library_builtins(
                     source,
                     target,
                     optimize,
                     Profile::PostAbi,
                     configuration,
+                    HeaderSearch::default(),
+                    library,
                     |module, _| compile_module(module, &executable, options).unwrap(),
                 );
                 if let Some(expected) = &expected {

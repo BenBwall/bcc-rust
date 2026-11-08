@@ -308,6 +308,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .filter(|descriptor| descriptor.operation.retains_instance())
                     .map(|descriptor| self.checked_named_builtin(info, descriptor, arguments)),
             },
+            | Some(binding) if direct && self.declared_alloca(binding) => Callee::Builtin {
+                binding:  Some(binding),
+                direct:   Some(self.correspondence.entity(binding, self.bindings[binding])),
+                instance: Some(self.checked_named_builtin(
+                    info,
+                    crate::builtins::BuiltinId::PlainAlloca.descriptor(),
+                    arguments,
+                )),
+            },
             | Some(binding) if direct => Callee::Direct {
                 entity: self.correspondence.entity(binding, self.bindings[binding]),
                 binding,
@@ -372,6 +381,46 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 arguments,
             },
         );
+    }
+
+    /// Whether a direct call through `binding` is GNU `alloca`, which GCC
+    /// and Clang expand in place, as `__builtin_alloca`, when the C library
+    /// declares the function (`<alloca.h>`, or TinyCC's `tcclib.h`) with a
+    /// type compatible with `void *(size_t)`, even where the program defines
+    /// it. A strict ISO mode, freestanding translation, `-fno-builtin` or
+    /// `-fno-builtin-alloca`, internal linkage or an incompatible declaration
+    /// calls the function, as does a call through its address; under Clang's
+    /// rules so does an assembler label, which GCC ignores here.
+    /// GNU extension: GCC manual, "Other Built-in Functions Provided by GCC"
+    /// (`alloca`), and "Stack Allocation".
+    /// C99: §6.2.7 paragraph 2, p. 40; PDF p. 52 (compatible types).
+    fn declared_alloca(&mut self, binding: usize) -> bool {
+        let data = self.bindings[binding];
+        let configuration = self.context.configuration;
+        if data.origin != super::super::BindingOrigin::User
+            || data.linkage != super::super::Linkage::External
+            || !configuration.gnu_extensions()
+            || !configuration.hosted()
+            || self.context.string_cache.at(data.name.name) != "alloca"
+        {
+            return false;
+        }
+        match self.context.library_builtins {
+            | crate::configuration::LibraryBuiltins::None => return false,
+            | crate::configuration::LibraryBuiltins::Except(names) if names.contains(&"alloca") =>
+                return false,
+            | _ => {},
+        }
+        if configuration.compiler_identity().rules() == crate::configuration::RuleSet::Clang
+            && self
+                .symbol_requests
+                .iter()
+                .any(|request| request.names(data.name.name))
+        {
+            return false;
+        }
+        let builtin = self.descriptor_type(crate::builtins::BuiltinId::PlainAlloca.descriptor());
+        self.types.composite(builtin, data.ty).is_some()
     }
 
     /// Retains what a direct call's pointer argument says about the closest

@@ -138,9 +138,38 @@ fn with_configured_headers<R>(
     headers: HeaderSearch<'_>,
     then: impl FnOnce(&Module<'_>, Target) -> R,
 ) -> R {
+    with_library_builtins(
+        source,
+        target,
+        optimize,
+        profile,
+        configuration,
+        headers,
+        crate::configuration::LibraryBuiltins::All,
+        then,
+    )
+}
+
+/// [`with_configured_headers`] with the library functions that keep their
+/// builtin meaning (`-fno-builtin`, `-fno-builtin-NAME`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each argument is an independent setting of the test compilation."
+)]
+fn with_library_builtins<R>(
+    source: &str,
+    target: Target,
+    optimize: bool,
+    profile: Profile,
+    configuration: CompilerConfiguration,
+    headers: HeaderSearch<'_>,
+    library: crate::configuration::LibraryBuiltins<'static>,
+    then: impl FnOnce(&Module<'_>, Target) -> R,
+) -> R {
     let tu = Bump::new();
     let source = tu.alloc_str(source);
     let mut context = Context::with_configuration(&tu, configuration);
+    context.library_builtins = library;
     let unit = parse_translation_unit(&mut context, Path::new("<test>"), source, headers);
     let sema = analyze_translation_unit(&mut context, &unit);
     assert!(
