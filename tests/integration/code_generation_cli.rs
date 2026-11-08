@@ -2562,9 +2562,13 @@ int main(void) { char str[] = "__builtin_frame_address"; char *fp0 = __builtin_f
         // Every configuration runs before the test fails, so a report names
         // each one that differs.
         let mut failures = Vec::new();
+        // Unoptimized Linux builds keep frame pointers, through which LLVM
+        // would address a buffer in the frame `__builtin_longjmp` restores
+        // the frame pointer from.
         for opt in [
             &["--llvm-opt=O0"][..],
             &["--opt=bcc", "--llvm-opt=O2"][..],
+            &["--opt=bcc", "--llvm-opt=O2", "-fno-omit-frame-pointer"][..],
             &["--backend=native", "--opt=none"][..],
             &["--backend=native", "--opt=bcc"][..],
         ] {
