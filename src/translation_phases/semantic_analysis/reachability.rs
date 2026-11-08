@@ -119,11 +119,15 @@ impl<'s> ReachabilityState<'s> {
 #[derive(Clone, Copy, Default)]
 struct Exits {
     /// Any `return` statement, reached or not, for what GCC's front end asks.
-    any_return:  bool,
+    any_return:   bool,
     /// The first `return` statement the walk reached.
-    live_return: Option<SourceVectors>,
+    live_return:  Option<SourceVectors>,
     /// A call the walk reached does not return.
-    abnormal:    bool,
+    abnormal:     bool,
+    /// Any call, reached or not, to a function that does not return: GCC's
+    /// front end sets `current_function_returns_abnormally` as it builds
+    /// the call, so a statically dead one counts too.
+    any_abnormal: bool,
 }
 
 /// One walk's knowledge, which only grows from pass to pass.
@@ -916,6 +920,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let mut end = self.flow_expression(flow, function_expression, live);
                 for &argument in arguments {
                     end = self.flow_expression(flow, argument, end);
+                }
+                if !end && self.call_does_not_return(function_expression) {
+                    flow.exits.any_abnormal = true;
                 }
                 end && !self.cfg_call_does_not_return(
                     flow,

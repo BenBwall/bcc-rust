@@ -112,18 +112,17 @@ impl Analyzer<'_, '_, '_> {
         let data = self.bindings[binding];
         let main = self.context.string_cache.at(data.name.name) == "main";
         let internal = data.linkage == Linkage::Internal;
-        let start = self
-            .functions
-            .current
-            .map_or(end, |function| function.syntax.source_vectors);
         let implicit_int = self
             .functions
             .current
             .is_some_and(|function| function.syntax.declaration_specifiers.implicit_int);
-        if internal && !main && !implicit_int && !flow.exits.any_return && !flow.exits.abnormal {
+        let abnormal = flow.exits.abnormal || flow.exits.any_abnormal;
+        if internal && !main && !implicit_int && !flow.exits.any_return && !abnormal {
+            // GCC names the first token on the closing brace's line.
+            let site = self.context.first_token_on_line(end);
             self.return_flow_warning(
                 G::ReturnType,
-                start,
+                site,
                 "no return statement in function returning non-void",
             );
             return;
