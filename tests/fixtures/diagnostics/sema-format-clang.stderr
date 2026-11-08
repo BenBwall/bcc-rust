@@ -1,0 +1,64 @@
+sema-format-clang.c:4:53: error: 'format' attribute parameter 2 is out of bounds
+    4 | void bad_index(const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+      |                                                     ^~~~~~
+sema-format-clang.c:5:46: error: format argument not a string type
+    5 | void bad_string(int fmt, ...) __attribute__((format(printf, 1, 2)));
+      |                                              ^~~~~~
+sema-format-clang.c:7:20: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+    7 |     printf("%d\n", l);
+      |                    ^
+sema-format-clang.c:8:17: warning: more '%' conversions than data arguments [-Wformat-insufficient-args]
+    8 |     printf("%d %s\n", i);
+      |                 ^
+sema-format-clang.c:9:23: warning: data argument not used by format string [-Wformat-extra-args]
+    9 |     printf("%d\n", i, i);
+      |                       ^
+sema-format-clang.c:10:14: warning: invalid conversion specifier 'y' [-Wformat-invalid-specifier]
+   10 |     printf("%y\n", i);
+      |              ^
+sema-format-clang.c:11:15: warning: field width should have type 'int', but argument has type 'long' [-Wformat]
+   11 |     printf("%*d\n", l, i);
+      |               ^
+sema-format-clang.c:12:29: warning: format specifies type 'char' but the argument has type 'long' [-Wformat]
+   12 |     printf("%hhd %ls %p\n", l, s, i);
+      |                             ^
+sema-format-clang.c:12:32: warning: format specifies type 'wchar_t *' (aka 'int *') but the argument has type 'char *' [-Wformat]
+   12 |     printf("%hhd %ls %p\n", l, s, i);
+      |                                ^
+sema-format-clang.c:12:35: warning: format specifies type 'void *' but the argument has type 'int' [-Wformat]
+   12 |     printf("%hhd %ls %p\n", l, s, i);
+      |                                   ^
+sema-format-clang.c:13:12: warning: format string is not a string literal (potentially insecure) [-Wformat-security]
+   13 |     printf(s);
+      |            ^
+sema-format-clang.c:13:12: note: treat the string as an argument to avoid this
+   13 |     printf(s);
+      |            ^
+sema-format-clang.c:16:14: warning: format string contains '\0' within the string body [-Wformat]
+   16 |     printf("a\0b");
+      |              ^
+sema-format-clang.c:17:24: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   17 |     printf("a" "%d\n", l);
+      |                        ^
+sema-format-clang.c:18:33: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   18 |     printf(c ? "%d\n" : "%s\n", l);
+      |                                 ^
+sema-format-clang.c:18:33: warning: format specifies type 'char *' but the argument has type 'long' [-Wformat]
+   18 |     printf(c ? "%d\n" : "%s\n", l);
+      |                                 ^
+sema-format-clang.c:19:15: warning: flag '0' is ignored when flag '-' is present [-Wformat]
+   19 |     printf("%-05d\n", i);
+      |               ^
+sema-format-clang.c:20:20: warning: format specifies type 'int *' but the argument has type 'long' [-Wformat]
+   20 |     scanf("%d %s", l, ip);
+      |                    ^
+sema-format-clang.c:20:23: warning: format specifies type 'char *' but the argument has type 'int *' [-Wformat]
+   20 |     scanf("%d %s", l, ip);
+      |                       ^~
+sema-format-clang.c:21:17: warning: format specifies type 'int *' but the argument has type 'const int *' [-Wformat]
+   21 |     scanf("%d", cip);
+      |                 ^~~
+sema-format-clang.c:22:25: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   22 |     log_line(1, "%s\n", i);
+      |                         ^
+2 errors and 18 warnings generated.

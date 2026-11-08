@@ -124,7 +124,9 @@ pub(super) struct PreprocessorState<'pp> {
     /// returned from, so that the frames beneath them make no line markers.
     pub(super) text_includes:       u32,
     pub(super) arena:               &'pp Bump,
-    pub(super) once_set:            ArenaSet<'pp, u32>,
+    /// The files `#pragma once` marked, by
+    /// [`Context::file_identity`](crate::translation_phases::Context::file_identity).
+    pub(super) once_set:            ArenaSet<'pp, (u64, u64)>,
     pub(super) macro_definitions:   ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
     /// Implementation-defined pragma markers (C99 §6.10.6p1).
     pub(super) deprecated_macros:   ArenaMap<'pp, StringCacheId, MacroDeprecation<'pp>>,
