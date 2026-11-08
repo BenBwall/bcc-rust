@@ -23,6 +23,7 @@ use crate::{
     },
     palette,
     snapshot::{
+        Encoding,
         FlowPart,
         Snapshot,
         StepEvent,
@@ -35,6 +36,9 @@ pub fn Narration(
     /// Recent steps before the current one: history index, title, category.
     recent: Memo<Vec<(usize, String, String)>>,
     on_jump: Callback<usize>,
+    /// Open the compiler pipeline at its Preprocessor stage, from the step
+    /// that ran `#include <stdio.h>`.
+    on_preprocessor: Callback<()>,
     /// The lesson's summary, shown before the engine has loaded.
     placeholder: Memo<&'static str>,
     /// Whether Run is stepping: the steps it passes through flash by, so
@@ -56,7 +60,7 @@ pub fn Narration(
     let returned = Memo::new(move |_| {
         snapshot.with(|state| {
             state.as_ref().and_then(|state| match &state.return_value {
-                | Some(crate::snapshot::Value::Integer { text }) => Some(text.clone()),
+                | Some(crate::snapshot::Value::Integer { text, .. }) => Some(text.clone()),
                 | _ => None,
             })
         })
@@ -121,7 +125,7 @@ pub fn Narration(
             <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
                 {move || event.with(|event| event.as_ref().map(|event| flow_groups(&event.flow)))}
             </p>
-            <aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
+            <Bits event /><aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
                 <h3>"Why it matters"</h3>
                 <p>
                     {move || note.get().and_then(|note| event.with(|event| event.as_ref().map(|event| {
@@ -132,6 +136,7 @@ pub fn Narration(
                     })))}
                 </p>
             </aside>
+            <StageLink event on_preprocessor />
             <p class="return-callout" hidden=move || returned.with(Option::is_none)>
                 "Program finished: main returned "<strong>{move || returned.get().unwrap_or_default()}</strong>
             </p>
@@ -147,6 +152,99 @@ pub fn Narration(
             <Recent recent on_jump />
             <TermTip tip />
         </article>
+    }
+}
+
+/// After a step of translation phase 4 (a directive the machine ran, or a
+/// use of a macro, which cites the preprocessing clauses of §6.10), a way
+/// to the compiler's Preprocessor stage, which shows what the real
+/// preprocessor does.
+/// How the floating value the step produced is stored: its sign bit,
+/// exponent field and fraction drawn as bits, and what they make. The
+/// engine takes the value apart; the page only lays the fields out.
+#[component]
+fn Bits(event: Memo<Option<StepEvent>>) -> impl IntoView {
+    let encoding = Memo::new(move |_| {
+        event.with(|event| event.as_ref().and_then(|event| event.encoding.clone()))
+    });
+    move || {
+        encoding.get().map(|encoding| {
+            let width = 1
+                + encoding.exponent.len()
+                + usize::from(encoding.integer_bit.is_some())
+                + encoding.fraction.len();
+            let meaning = meaning(&encoding);
+            let label = format!(
+                "How the {} {} is stored, in {width} bits: sign {}, exponent {}, {}fraction {}. \
+                 {meaning}",
+                encoding.ty,
+                encoding.value,
+                u8::from(encoding.sign),
+                encoding.exponent,
+                encoding
+                    .integer_bit
+                    .map(|bit| format!("integer bit {}, ", u8::from(bit)))
+                    .unwrap_or_default(),
+                encoding.fraction,
+            );
+            view! {
+                <figure class="bits" aria-label=label>
+                    <figcaption>
+                        "How the "{encoding.ty.clone()}" "<code>{encoding.value.clone()}</code>" is stored, in "{width}" bits"
+                    </figcaption>
+                    <p class="bits-row" aria-hidden="true">
+                        <span class="bits-field is-sign"><span class="bits-name">"sign"</span><code>{u8::from(encoding.sign)}</code></span>
+                        <span class="bits-field is-exponent"><span class="bits-name">{format!("exponent {}", encoding.biased)}</span><code>{encoding.exponent.clone()}</code></span>
+                        {encoding.integer_bit.map(|bit| view! {
+                            <span class="bits-field is-integer"><span class="bits-name">"integer"</span><code>{u8::from(bit)}</code></span>
+                        })}
+                        <span class="bits-field is-fraction"><span class="bits-name">"fraction"</span><code>{encoding.fraction.clone()}</code></span>
+                    </p>
+                    <p class="bits-meaning" aria-hidden="true">{meaning}</p>
+                </figure>
+            }
+        })
+    }
+}
+
+/// What the fields make, in words: `+1.6000000000000000888… × 2^(1019 −
+/// 1023) = +1.6000000000000000888… × 2^-4 = 0.1`.
+fn meaning(encoding: &Encoding) -> String {
+    let sign = if encoding.sign { "−" } else { "+" };
+    let significand = shortened(&encoding.significand, 24);
+    match encoding.class.as_str() {
+        | "zero" => format!("Exponent and fraction all 0: {sign}0, a zero with a sign of its own."),
+        | "infinity" => format!("Exponent all ones, fraction 0: {sign}infinity."),
+        | "NaN" => "Exponent all ones, fraction not 0: a NaN, not a number.".to_owned(),
+        | "subnormal" => format!(
+            "Exponent field 0: a subnormal number without the leading 1, {sign}{significand} × \
+             2^{} = {}.",
+            encoding.scale, encoding.value
+        ),
+        | _ => format!(
+            "{sign}{significand} × 2^({} − {}) = {sign}{significand} × 2^{} = {}",
+            encoding.biased, encoding.bias, encoding.scale, encoding.value
+        ),
+    }
+}
+
+/// `text` cut to `count` characters, with an ellipsis when it goes on.
+fn shortened(text: &str, count: usize) -> String {
+    if text.chars().count() <= count {
+        text.to_owned()
+    } else {
+        format!("{}…", text.chars().take(count).collect::<String>())
+    }
+}
+
+#[component]
+fn StageLink(event: Memo<Option<StepEvent>>, on_preprocessor: Callback<()>) -> impl IntoView {
+    view! {
+        <p class="narration-stage" hidden=move || !event.with(|event| event.as_ref().is_some_and(StepEvent::preprocessed))>
+            <button type="button" class="button ghost" on:click=move |_| on_preprocessor.run(())>
+                "See the real preprocessor: open the Preprocessor stage"
+            </button>
+        </p>
     }
 }
 

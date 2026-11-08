@@ -1,7 +1,8 @@
 //! The workbench's insight panels. In abstract-machine mode: the run as a
 //! multitrack tape (`tape`), the cells under its playhead, the note on the
-//! step (`narration`), the expression being evaluated as a schematic, and
-//! the objects' datasheet.
+//! step (`narration`), the expression being evaluated as a schematic, what
+//! the program has written to standard output (`output`), and the objects'
+//! datasheet.
 //! In pipeline mode: the compiler's output stage by stage, with what each
 //! front-end stage did to the program. In WebAssembly mode: the module's
 //! listing and the stepper's state. Engine data is always rendered as text
@@ -12,6 +13,7 @@ mod datasheet;
 mod front_end;
 mod knob;
 mod narration;
+mod output;
 mod pipeline;
 mod schematic;
 mod tape;
@@ -23,6 +25,7 @@ pub use front_end::source_marks;
 pub use knob::Knob;
 use leptos::prelude::*;
 pub use narration::Narration;
+pub use output::Output;
 pub use pipeline::{
     LiveCompile,
     PipelineView,

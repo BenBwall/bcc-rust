@@ -35,5 +35,7 @@ pub use lessons::{
     LESSON_SECTION,
     Precompiled,
     WasmBackEnd,
+    is_command,
+    lesson_flags,
 };
 pub use snapshot::*;

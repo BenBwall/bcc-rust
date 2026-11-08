@@ -14,7 +14,9 @@
 //! register's line; a group with no live call folds to one row that still
 //! shows each call as a bar. Objects with static storage duration belong to
 //! no call: they share one group, `static storage`, whose rule runs from the
-//! first of them to the end of the run.
+//! first of them to the end of the run. When it holds nothing but the arrays
+//! of string literals, which the program only reads, it starts folded, so a
+//! program that prints keeps its own objects in view.
 
 use std::{
     collections::HashMap,
@@ -358,15 +360,37 @@ impl Reel {
     }
 }
 
+impl Group {
+    /// Whether every lane is a string literal's array: the static group of a
+    /// program whose only static objects are the literals it prints.
+    fn literals_only(&self) -> bool {
+        self.key == STATIC_GROUP && self.lanes.iter().all(|lane| lane.name.starts_with('"'))
+    }
+}
+
 impl Lane {
-    fn label(&self) -> String {
-        if self.ordinal > 1 {
-            format!("{} #{}", self.name, self.ordinal)
+    /// The lane's name as its label shows it. A string literal's array is
+    /// named by its spelling, which can be long: the label keeps the start.
+    fn shown_name(&self) -> String {
+        if self.name.starts_with('"') {
+            shorten(&self.name, LITERAL_LABEL)
         } else {
             self.name.clone()
         }
     }
+
+    fn label(&self) -> String {
+        let name = self.shown_name();
+        if self.ordinal > 1 {
+            format!("{name} #{}", self.ordinal)
+        } else {
+            name
+        }
+    }
 }
+
+/// The most characters of a string literal a lane's label shows.
+const LITERAL_LABEL: usize = 11;
 
 impl Group {
     /// The lane for a new `object`: the first of its name whose occupant is
@@ -483,7 +507,34 @@ fn arguments(
 pub fn value_text(value: &Value) -> Option<String> {
     match value {
         | Value::Indeterminate => None,
-        | Value::Integer { text } => Some(text.clone()),
+        | Value::Integer {
+            text,
+            character: Some(character),
+        } => Some(format!("{text} {character}")),
+        | Value::Integer { text, .. } | Value::Floating { text, .. } => Some(text.clone()),
+        // A char array reads as its characters.
+        | Value::Array { elements }
+            if !elements.is_empty()
+                && elements.iter().all(|element| {
+                    matches!(
+                        element,
+                        Value::Integer {
+                            character: Some(_),
+                            ..
+                        }
+                    )
+                }) =>
+            Some(format!(
+                "{{{}}}",
+                elements
+                    .iter()
+                    .filter_map(|element| match element {
+                        | Value::Integer { character, .. } => character.clone(),
+                        | _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )),
         | Value::Array { elements } => Some(format!(
             "{{{}}}",
             elements
@@ -568,7 +619,10 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
             .filter(|&at| reel.groups[at].name == name)
             .collect();
         groups.sort_by_key(|&at| reel.groups[at].depth);
-        let mut folded: Vec<bool> = groups.iter().map(|&at| !live(at)).collect();
+        let mut folded: Vec<bool> = groups
+            .iter()
+            .map(|&at| !live(at) || reel.groups[at].literals_only())
+            .collect();
         // A deep recursion keeps its outermost and innermost calls open.
         let open: Vec<usize> = (0..groups.len()).filter(|&place| !folded[place]).collect();
         if open.len() > OPEN_DEPTHS {
@@ -900,13 +954,26 @@ pub fn Deck(
                         // The depth tells a recursion's calls apart.
                         let recursive = reel.groups.iter().filter(|other| other.name == group.name).count() > 1;
                         let statics = group.key == STATIC_GROUP;
-                        let call = if statics { group.name.clone() } else { format!("{}()", group.name) };
+                        // Folded, the group of a program's string literals says how
+                        // many it holds.
+                        let call = match (statics, folded) {
+                            | (true, true) => {
+                                let literals = group.lanes.len();
+                                format!("{literals} string literal{}", if literals == 1 { "" } else { "s" })
+                            },
+                            | (true, false) => group.name.clone(),
+                            | (false, _) => format!("{}()", group.name),
+                        };
                         view! {
                             <div class="deck-label is-group" class:is-folded=folded class:is-live=live>
                                 <button
                                     type="button"
                                     aria-expanded=(!folded).to_string()
-                                    aria-label=format!("{call}{}: {} its objects on the tape", if recursive { format!(" at depth {}", group.depth) } else { String::new() }, if folded { "show" } else { "fold" })
+                                    aria-label=if statics && folded {
+                                        format!("static storage, {call}: show them on the tape")
+                                    } else {
+                                        format!("{call}{}: {} its objects on the tape", if recursive { format!(" at depth {}", group.depth) } else { String::new() }, if folded { "show" } else { "fold" })
+                                    }
                                     on:click=move |_| toggle(keys.clone())
                                 >
                                     <span class="deck-fold" aria-hidden="true">{if folded { "▸" } else { "▾" }}</span>
@@ -941,7 +1008,7 @@ pub fn Deck(
                         view! {
                             <div class=format!("deck-label is-lane {}", palette::class(&lane.name)) title=format!("{} {}", lane.ty, lane.name) aria-hidden="true">
                                 <span class="deck-swatch"></span>
-                                <span class="deck-name">{lane.name.clone()}</span>
+                                <span class="deck-name">{lane.shown_name()}</span>
                                 {(lane.ordinal > 1).then(|| view! { <span class="deck-ordinal">{format!("#{}", lane.ordinal)}</span> })}
                                 <span class="deck-type">{lane.ty.clone()}</span>
                             </div>
@@ -2388,6 +2455,44 @@ mod tests {
     }
 
     #[test]
+    fn string_literals_alone_start_folded_and_open_on_request() {
+        let history = run("floating");
+        let reel = Reel::record(&history);
+        let at = reel
+            .groups
+            .iter()
+            .position(|group| group.key == STATIC_GROUP)
+            .expect("the literals' group");
+        assert!(reel.groups[at].lanes.len() > 1);
+        let cursor = history.len() - 1;
+        let shut = rows(&reel, cursor, &[]);
+        assert!(shut.contains(&Row::Group {
+            at,
+            folded: true,
+            live: true,
+        }));
+        assert!(
+            !shut
+                .iter()
+                .any(|row| matches!(row, Row::Lane { group, .. } if *group == at))
+        );
+        let opened = rows(&reel, cursor, &[STATIC_GROUP.to_owned()]);
+        assert_eq!(
+            opened.len(),
+            shut.len() + reel.groups[at].lanes.len(),
+            "its label opens it"
+        );
+        // A program with named static objects keeps the group open.
+        let structs = run("structs");
+        let reel = Reel::record(&structs);
+        assert!(rows(&reel, structs.len() - 1, &[]).contains(&Row::Group {
+            at:     0,
+            folded: false,
+            live:   true,
+        }));
+    }
+
+    #[test]
     fn static_objects_share_one_group_that_spans_the_run() {
         let history = run("structs");
         let reel = Reel::record(&history);
@@ -2402,7 +2507,7 @@ mod tests {
             rows(&reel, history.len() - 1, &[])
                 .first()
                 .is_some_and(|row| matches!(row, &Row::Group { at: 0, folded: false, .. })),
-            "the static group is never folded"
+            "a static group with named objects stays open"
         );
         // A structure's lane writes its members.
         let origin = &statics.lanes[1];
