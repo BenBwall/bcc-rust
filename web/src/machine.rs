@@ -373,27 +373,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
         objects:      state
             .objects
             .iter()
-            .map(|object| Object {
-                id:        object.id,
-                name:      object.name.clone(),
-                ty:        object.r#type.clone(),
-                storage:   object.storage_duration.to_owned(),
-                alive:     object.lifetime == "alive",
-                frame_id:  object.frame_id,
-                function:  functions
-                    .get(&object.frame_id)
-                    .map(|name| (*name).to_owned())
-                    .unwrap_or_default(),
-                scope:     object.function.clone(),
-                parameter: object.parameter,
-                literal:   object.literal,
-                value:     value(
-                    &object.value,
-                    holds_chars(&object.r#type),
-                    &objects,
-                    program,
-                ),
-            })
+            .map(|object| self::object(object, &functions, &objects, program))
             .collect(),
         effects:      state.pending_effects.clone(),
         diagnostic:   fault.map(diagnostic),
@@ -404,6 +384,31 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
         stdout:       program.writes_output(),
         output:       state.output.clone(),
         written:      state.written,
+    }
+}
+
+/// The page's form of an object; `functions` names each live call.
+fn object(
+    object: &abstract_machine::Object,
+    functions: &HashMap<usize, &str>,
+    objects: &HashMap<usize, &abstract_machine::Object>,
+    program: &Program,
+) -> Object {
+    Object {
+        id:        object.id,
+        name:      object.name.clone(),
+        ty:        object.r#type.clone(),
+        storage:   object.storage_duration.to_owned(),
+        alive:     object.lifetime == "alive",
+        frame_id:  object.frame_id,
+        function:  functions
+            .get(&object.frame_id)
+            .map(|name| (*name).to_owned())
+            .unwrap_or_default(),
+        scope:     object.function.clone(),
+        parameter: object.parameter,
+        literal:   object.literal,
+        value:     value(&object.value, holds_chars(&object.r#type), objects, program),
     }
 }
 
@@ -1053,7 +1058,7 @@ mod tests {
         );
         // The directive step is the first, before any static object.
         assert_eq!(states[1].event.kind, "directive");
-        assert!(states[1].objects.is_empty());
+        assert_eq!(states[1].objects.len(), 0, "no object before the static ones");
     }
 
     #[test]

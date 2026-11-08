@@ -981,7 +981,7 @@ mod tests {
     }
 
     /// The exit status of a WASI command that ran to its end: what it
-    /// passed to proc_exit, or 0 when `_start` returned.
+    /// passed to `proc_exit`, or 0 when `_start` returned.
     fn command_status(snapshot: &WasmSnapshot) -> i32 {
         match snapshot.status.as_str() {
             | "exited" => snapshot.exit.unwrap(),

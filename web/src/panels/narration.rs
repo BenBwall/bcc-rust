@@ -135,11 +135,7 @@ pub fn Narration(
                     })))}
                 </p>
             </aside>
-            <p class="narration-stage" hidden=move || !event.with(|event| event.as_ref().is_some_and(|event| event.kind == "directive"))>
-                <button type="button" class="button ghost" on:click=move |_| on_preprocessor.run(())>
-                    "See the real preprocessor: open the Preprocessor stage"
-                </button>
-            </p>
+            <StageLink event on_preprocessor />
             <p class="return-callout" hidden=move || returned.with(Option::is_none)>
                 "Program finished: main returned "<strong>{move || returned.get().unwrap_or_default()}</strong>
             </p>
@@ -155,6 +151,19 @@ pub fn Narration(
             <Recent recent on_jump />
             <TermTip tip />
         </article>
+    }
+}
+
+/// After the step that ran `#include <stdio.h>`, a way to the compiler's
+/// Preprocessor stage, which shows what the real preprocessor does.
+#[component]
+fn StageLink(event: Memo<Option<StepEvent>>, on_preprocessor: Callback<()>) -> impl IntoView {
+    view! {
+        <p class="narration-stage" hidden=move || !event.with(|event| event.as_ref().is_some_and(|event| event.kind == "directive"))>
+            <button type="button" class="button ghost" on:click=move |_| on_preprocessor.run(())>
+                "See the real preprocessor: open the Preprocessor stage"
+            </button>
+        </p>
     }
 }
 

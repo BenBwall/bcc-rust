@@ -3,7 +3,10 @@
 //! produced, as chips joined by arrows) and its accesses (which objects it
 //! read, wrote, created, ended or only designated), for the memory diagram.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fmt::Write,
+};
 
 use bcc_rust::abstract_machine::{
     self,
@@ -43,23 +46,7 @@ pub(super) fn flow(
             Some(arrow("promote")),
             operand(result).map(|chip| typed(chip, "int")),
         ],
-        | EventKind::ArrayDecay => {
-            let array = event.objects.first().map(|&id| chips.whole(id));
-            let pointer = if array
-                .as_ref()
-                .and_then(|chip| chip.ty.as_deref())
-                .is_some_and(|ty| ty.starts_with("char"))
-            {
-                "char *"
-            } else {
-                "int *"
-            };
-            vec![
-                array,
-                Some(arrow("decays to")),
-                operand(result).map(|chip| typed(chip, pointer)),
-            ]
-        },
+        | EventKind::ArrayDecay => chips.decay(event),
         | EventKind::AddressOf => vec![
             result.and_then(|result| chips.pointee(result)),
             Some(arrow("address")),
@@ -110,21 +97,7 @@ pub(super) fn flow(
             if let Some(Operand::Value(abstract_machine::Value::Array(elements))) =
                 event.operands.get(1) =>
             vec![
-                Some(part(
-                    "value",
-                    &format!(
-                        "{{{}}}",
-                        elements
-                            .iter()
-                            .map(|element| match element {
-                                | abstract_machine::Value::Integer(value) =>
-                                    super::character(*value),
-                                | _ => "?".to_owned(),
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    ),
-                )),
+                Some(part("value", &characters(elements))),
                 Some(arrow("store")),
                 operand(first),
             ],
@@ -144,17 +117,7 @@ pub(super) fn flow(
         | EventKind::Constant => vec![operand(result).map(|chip| typed(chip, "int"))],
         | EventKind::Branch => chips.branch(first),
         | EventKind::Call => chips.call(event),
-        | EventKind::LibraryCall => {
-            let mut parts: Vec<Option<FlowPart>> = Vec::new();
-            for (index, argument) in event.operands.iter().enumerate() {
-                if index > 0 {
-                    parts.push(Some(part("separator", ",")));
-                }
-                parts.push(Some(chips.operand(argument)));
-            }
-            parts.extend([Some(arrow("writes")), Some(part("value", &quoted(written)))]);
-            parts
-        },
+        | EventKind::LibraryCall => chips.library_call(event, written),
         | EventKind::Directive => vec![
             Some(part("label", "#include <stdio.h>")),
             Some(arrow("declares")),
@@ -287,6 +250,44 @@ impl Chips<'_, '_> {
         ]
     }
 
+    /// An array and the pointer to its first element it decays to.
+    fn decay(&self, event: &Event) -> Vec<Option<FlowPart>> {
+        let array = event.objects.first().map(|&id| self.whole(id));
+        let pointer = if array
+            .as_ref()
+            .and_then(|chip| chip.ty.as_deref())
+            .is_some_and(|ty| ty.starts_with("char"))
+        {
+            "char *"
+        } else {
+            "int *"
+        };
+        vec![
+            array,
+            Some(arrow("decays to")),
+            event
+                .result
+                .as_ref()
+                .map(|result| typed(self.operand(result), pointer)),
+        ]
+    }
+
+    /// A library call's arguments and the text it wrote.
+    fn library_call(&self, event: &Event, written: &[u8]) -> Vec<Option<FlowPart>> {
+        let mut parts = Vec::new();
+        for (index, argument) in event.operands.iter().enumerate() {
+            if index > 0 {
+                parts.push(Some(part("separator", ",")));
+            }
+            parts.push(Some(self.operand(argument)));
+        }
+        parts.extend([
+            Some(arrow("writes")),
+            Some(part("value", &quoted(written))),
+        ]);
+        parts
+    }
+
     /// Each argument copied into its parameter.
     fn call(&self, event: &Event) -> Vec<Option<FlowPart>> {
         let mut parts = Vec::new();
@@ -371,6 +372,18 @@ fn operator_chip(operator: &str) -> FlowPart {
     part("operator", operator)
 }
 
+/// A char array's elements as character constants: `{'h','i','\\0'}`.
+fn characters(elements: &[abstract_machine::Value]) -> String {
+    let characters: Vec<String> = elements
+        .iter()
+        .map(|element| match element {
+            | abstract_machine::Value::Integer(value) => super::character(*value),
+            | _ => "?".to_owned(),
+        })
+        .collect();
+    format!("{{{}}}", characters.join(","))
+}
+
 /// Output as a C string literal spells it: `"Ada\n"`.
 fn quoted(bytes: &[u8]) -> String {
     let mut text = String::from("\"");
@@ -381,7 +394,9 @@ fn quoted(bytes: &[u8]) -> String {
             | b'"' => text.push_str("\\\""),
             | b'\\' => text.push_str("\\\\"),
             | 0x20..=0x7E => text.push(char::from(byte)),
-            | _ => text.push_str(&format!("\\x{byte:02x}")),
+            | _ => {
+                let _ = write!(text, "\\x{byte:02x}");
+            },
         }
     }
     text.push('"');
