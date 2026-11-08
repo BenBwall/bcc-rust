@@ -194,6 +194,17 @@ impl CompilerConfiguration {
                 &[DiagnosticGroup::UnusedButSetGlobal],
             | DiagnosticGroup::UnusedValue if clang => &[DiagnosticGroup::UnusedComparison],
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
+            | DiagnosticGroup::Parentheses if clang => DiagnosticGroup::CLANG_PARENTHESES,
+            | DiagnosticGroup::Parentheses => &[DiagnosticGroup::DanglingElse],
+            | DiagnosticGroup::Format if clang => DiagnosticGroup::CLANG_FORMAT,
+            | DiagnosticGroup::FormatPedantic => &[DiagnosticGroup::FormatTypeConfusion],
+            | DiagnosticGroup::Format2 if clang => &[
+                DiagnosticGroup::FormatSecurity,
+                DiagnosticGroup::FormatNonliteral,
+                DiagnosticGroup::MissingFormatAttribute,
+            ],
+            | DiagnosticGroup::FormatNonliteral if clang =>
+                &[DiagnosticGroup::MissingFormatAttribute],
             | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
             | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
             // Clang's `-Wconversion` holds these groups; GCC's holds none of
@@ -210,12 +221,43 @@ impl CompilerConfiguration {
             self.warning_options[DiagnosticGroup::PedanticOverflow as usize]
                 .apply_to_pedantic(option);
         }
+        if group == DiagnosticGroup::Format && !clang {
+            // GCC's `-Wformat` and `-Wno-format` are its levels 1 and 0, and
+            // its `-Werror=format` makes the first level's groups errors too,
+            // though `-Wno-error=format` leaves them.
+            match option {
+                | WarningOption::Enable(_) => self.warning_options
+                    [DiagnosticGroup::Format2 as usize]
+                    .apply(WarningOption::Enable(false), clang),
+                | WarningOption::Error(true) =>
+                    for &child in DiagnosticGroup::GCC_FORMAT {
+                        self.warning_options[child as usize].apply(option, clang);
+                    },
+                | WarningOption::Error(false) => {},
+            }
+        }
         if group == DiagnosticGroup::IncompatiblePointerTypes {
             self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option, clang);
             self.warning_options[DiagnosticGroup::IncompatibleFunctionPointerTypes as usize]
                 .apply(option, clang);
         }
         self
+    }
+
+    /// `-Wformat=LEVEL` at its argv position: GCC's level, where 0 is
+    /// `-Wno-format` and 1 is `-Wformat`, and Clang's `-Wformat=2` group,
+    /// which holds `-Wformat-security` and `-Wformat-nonliteral` alone.
+    pub(crate) fn with_format_level(self, level: u8) -> Self {
+        let clang = self.identity.rules() == super::RuleSet::Clang;
+        match level {
+            | 0 => self.with_warning_option(DiagnosticGroup::Format, WarningOption::Enable(false)),
+            | 1 => self.with_warning_option(DiagnosticGroup::Format, WarningOption::Enable(true)),
+            | _ if clang =>
+                self.with_warning_option(DiagnosticGroup::Format2, WarningOption::Enable(true)),
+            | _ => self
+                .with_warning_option(DiagnosticGroup::Format, WarningOption::Enable(true))
+                .with_warning_option(DiagnosticGroup::Format2, WarningOption::Enable(true)),
+        }
     }
 
     /// `-Wall` (true) or `-Wno-all` at its argv position, for the groups
@@ -234,6 +276,28 @@ impl CompilerConfiguration {
         ] {
             self.warning_options[group as usize].apply_all(enabled);
         }
+        self.warning_options[DiagnosticGroup::Parentheses as usize].apply_all(enabled);
+        if self.identity.rules() == super::RuleSet::Clang {
+            for &group in DiagnosticGroup::CLANG_PARENTHESES {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
+        } else {
+            for group in [
+                DiagnosticGroup::DanglingElse,
+                DiagnosticGroup::LogicalNotParentheses,
+            ] {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
+        }
+        // GCC's `-Wall` is its `-Wformat=1` unless an option of the
+        // group's own says otherwise; Clang's holds the whole group.
+        self.warning_options[DiagnosticGroup::Format as usize].apply_all(enabled);
+        if self.identity.rules() == super::RuleSet::Clang {
+            for &group in DiagnosticGroup::CLANG_FORMAT {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
+        }
+        self.warning_options[DiagnosticGroup::Switch as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::ReturnType as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
         // GCC's `-Wunused`, given or refused in either order, outranks
@@ -258,6 +322,7 @@ impl CompilerConfiguration {
         // Clang's `-Wmain` and `-Wpointer-bool-conversion` are on already, and
         // its `-Wall` does not hold them.
         if self.identity.rules() != super::RuleSet::Clang {
+            self.warning_options[DiagnosticGroup::UnknownPragmas as usize].apply_all(enabled);
             self.warning_options[DiagnosticGroup::Main as usize].apply_all(enabled);
             self.warning_options[DiagnosticGroup::PointerBoolConversion as usize]
                 .apply_all(enabled);
@@ -341,6 +406,27 @@ impl CompilerConfiguration {
         let mut configuration = self;
         if self.identity.rules() != super::RuleSet::Clang {
             match group {
+                // The groups `-Wformat` enables keep what the command line
+                // made of them: a pragma classifies `-Wformat=` alone.
+                | DiagnosticGroup::Format => {
+                    for &child in DiagnosticGroup::GCC_FORMAT.iter().chain(&[
+                        DiagnosticGroup::FormatSecurity,
+                        DiagnosticGroup::FormatNonliteral,
+                    ]) {
+                        let enabled = self.diagnostic_severity(child).is_some();
+                        let settings = &mut configuration.warning_options[child as usize];
+                        if settings.enabled().is_none() {
+                            settings.set(WarningSettings::ENABLED, Some(enabled));
+                        }
+                    }
+                    let mut pragma = configuration.with_pragma_own_group(group, class);
+                    // Nor does `error` reach them.
+                    for &child in DiagnosticGroup::GCC_FORMAT {
+                        pragma.warning_options[child as usize] =
+                            configuration.warning_options[child as usize];
+                    }
+                    return pragma;
+                },
                 // GCC enables the parameter groups only with `-Wextra` too,
                 // which a pragma naming `-Wunused` does not say, but it sets
                 // their class.
@@ -427,15 +513,9 @@ impl CompilerConfiguration {
             .unwrap_or(self.extension_policy == ExtensionPolicy::Deny)
     }
 
-    /// One bit per [`DiagnosticGroup`] that a pragma naming the warning
-    /// option `name` reaches, parents' children included.
-    pub(crate) fn pragma_group_mask(self, name: &str) -> u128 {
-        const {
-            assert!(
-                DiagnosticGroup::COUNT <= u128::BITS as usize,
-                "a mask holds one bit per group"
-            );
-        }
+    /// The groups a pragma naming the warning option `name` reaches,
+    /// parents' children included.
+    pub(crate) fn pragma_group_mask(self, name: &str) -> GroupMask {
         let mut cleared = self;
         cleared.warning_options = [WarningSettings::DEFAULT; DiagnosticGroup::COUNT];
         let set = cleared.with_pragma_class(name, PragmaClass::Error);
@@ -443,7 +523,7 @@ impl CompilerConfiguration {
             .iter()
             .enumerate()
             .filter(|(_, settings)| **settings != WarningSettings::DEFAULT)
-            .fold(0, |mask, (group, _)| mask | (1 << group))
+            .fold(GroupMask::EMPTY, |mask, (group, _)| mask.with(group))
     }
 
     /// Enables every group that is off by default, for tests that observe
@@ -496,6 +576,19 @@ impl CompilerConfiguration {
             (group.default() == GroupDefault::Permerror).then(|| self.permerror_default(group));
         let enabled = match permerror {
             | Some(default) => default.is_some(),
+            // GCC's format groups follow `-Wformat`'s level, and the
+            // checks run only while it is on at all.
+            | None if self.identity.rules() != super::RuleSet::Clang
+                && DiagnosticGroup::GCC_FORMAT.contains(&group) =>
+                self.warning_options[DiagnosticGroup::Format as usize]
+                    .enabled_with_all(DiagnosticGroup::Format, false)
+                    == Some(true),
+            | None if self.identity.rules() != super::RuleSet::Clang
+                && matches!(
+                    group,
+                    DiagnosticGroup::FormatSecurity | DiagnosticGroup::FormatNonliteral
+                ) =>
+                self.warning_options[DiagnosticGroup::Format2 as usize].enabled() == Some(true),
             | None if group.default() == GroupDefault::ClangWarning =>
                 self.identity.rules() == super::RuleSet::Clang,
             | None if matches!(
@@ -576,11 +669,14 @@ impl CompilerConfiguration {
         group: DiagnosticGroup,
         severity: ErrorSeverity,
     ) -> bool {
-        severity == ErrorSeverity::Error
-            && self.identity == super::CompilerIdentity::Gcc
-            && group.default() == GroupDefault::Permerror
-            && (self.permerror_default(group) == Some(ErrorSeverity::Error)
-                || self.pedantic_error(group))
+        // GCC asks about an undefined internal function at the unit's end,
+        // where no system header is, though it names the declaration.
+        group == DiagnosticGroup::GccUndefinedInternal
+            || severity == ErrorSeverity::Error
+                && self.identity == super::CompilerIdentity::Gcc
+                && group.default() == GroupDefault::Permerror
+                && (self.permerror_default(group) == Some(ErrorSeverity::Error)
+                    || self.pedantic_error(group))
     }
 
     /// Whether `-pedantic-errors` makes `group` an error: Clang's
@@ -834,6 +930,10 @@ diagnostic_groups! {
     DllAttributeOnRedeclaration => Some("dll-attribute-on-redeclaration"), Warning, false;
     /// A redeclaration of an imported entity without `dllimport`.
     InconsistentDllimport => Some("inconsistent-dllimport"), Warning, false;
+    /// A static function used but defined nowhere in the unit, Clang's.
+    UndefinedInternal => Some("undefined-internal"), Warning, false;
+    /// GCC's warning about the same function, which no option controls.
+    GccUndefinedInternal => None, Warning, false;
     /// A static function declared but neither defined nor used.
     UnusedFunction => Some("unused-function"), Ignored, false;
     /// An initializer that replaces an earlier one for the same subobject
@@ -920,6 +1020,82 @@ diagnostic_groups! {
     ReturnLocalAddr => Some("return-local-addr"), Warning, false;
     /// Clang's.
     ReturnStackAddress => Some("return-stack-address"), Warning, false;
+    /// `-Wparentheses`, which reports the rest of its family itself. `-Wall`
+    /// holds it in GCC, and Clang reports most of it by default.
+    Parentheses => Some("parentheses"), ClangWarning, false;
+    /// Clang's error for `a < b < c`, which `-Wparentheses` controls.
+    ChainedComparison => None, Error, false;
+    /// `a && b || c`.
+    LogicalOpParentheses => Some("logical-op-parentheses"), Ignored, false;
+    /// `a & b | c`.
+    BitwiseOpParentheses => Some("bitwise-op-parentheses"), Ignored, false;
+    /// `a + b << c`.
+    ShiftOpParentheses => Some("shift-op-parentheses"), ClangWarning, false;
+    /// `if ((a == b))`.
+    ParenthesesEquality => Some("parentheses-equality"), ClangWarning, false;
+    /// `a & (b < c) ? d : e`.
+    BitwiseConditionalParentheses => Some("bitwise-conditional-parentheses"), ClangWarning, false;
+    /// `!a == b`.
+    LogicalNotParentheses => Some("logical-not-parentheses"), ClangWarning, false;
+    /// `if (a) if (b) c; else d;`.
+    DanglingElse => Some("dangling-else"), ClangWarning, false;
+    /// `switch (a == b)`.
+    SwitchBool => Some("switch-bool"), ClangWarning, false;
+    /// `-Wformat`: a format string a call's arguments do not match. Clang
+    /// reports it by default and its group holds the other format groups
+    /// but `-Wformat-nonliteral`; GCC's `-Wall` holds it, and the other
+    /// format groups report only while it is on.
+    Format => Some("format"), ClangWarning, false;
+    /// `-Wformat=2`, which reports nothing itself and holds
+    /// `-Wformat-security` and `-Wformat-nonliteral`; in GCC it is
+    /// `-Wformat`'s second level, which a later `-Wformat` takes back.
+    Format2 => None, Ignored, false;
+    /// More data arguments than the format converts.
+    FormatExtraArgs => Some("format-extra-args"), ClangWarning, false;
+    /// An empty format string.
+    FormatZeroLength => Some("format-zero-length"), ClangWarning, false;
+    /// GCC: a null character within the format string.
+    FormatContainsNul => Some("format-contains-nul"), Ignored, false;
+    /// A format that is no string literal and has no data arguments.
+    FormatSecurity => Some("format-security"), ClangWarning, false;
+    /// A format that is no string literal.
+    FormatNonliteral => Some("format-nonliteral"), Ignored, false;
+    /// Clang: a conversion specifier that names no conversion.
+    FormatInvalidSpecifier => Some("format-invalid-specifier"), ClangWarning, false;
+    /// Clang: fewer data arguments than the format converts.
+    FormatInsufficientArgs => Some("format-insufficient-args"), ClangWarning, false;
+    /// Clang: an argument of another pointer type for `%p`, which
+    /// `-Wpedantic` reports.
+    FormatPedantic => Some("format-pedantic"), Extension, false;
+    /// Clang: a `char` for `%hd` or a `short` for `%hhd`, under
+    /// `-Wformat-pedantic`.
+    FormatTypeConfusion => Some("format-type-confusion"), Extension, false;
+    /// Clang: a format the caller passes on from its own parameters, which a
+    /// `format` attribute on the caller would let Clang check at its calls;
+    /// `-Wformat-nonliteral` holds it.
+    MissingFormatAttribute => Some("missing-format-attribute"), Ignored, false;
+    /// GCC's `-Wattributes`: an attribute it ignores, such as a `format`
+    /// whose operand names no parameter.
+    GccAttributes => Some("attributes"), Warning, false;
+    /// Clang: a construct it accepts and GCC refuses, such as `format` on a
+    /// function without `...`.
+    GccCompat => Some("gcc-compat"), ClangWarning, false;
+    /// Clang's K&R parameter whose promoted type a preceding prototype does
+    /// not give it.
+    KnrPromotedParameter => Some("knr-promoted-parameter"), ClangWarning, false;
+    /// A `switch` over an enumeration that leaves an enumerator out with no
+    /// `default`, or names a value outside it. `-Wall` holds it in GCC, and
+    /// Clang reports it by default.
+    Switch => Some("switch"), ClangWarning, false;
+    /// An enumerator a `switch` leaves to its `default`.
+    SwitchEnum => Some("switch-enum"), Ignored, false;
+    /// A `switch` with no `default`.
+    SwitchDefault => Some("switch-default"), Ignored, false;
+    /// GCC's `case` its controlling type cannot hold; Clang's is `-Wswitch`.
+    SwitchOutsideRange => Some("switch-outside-range"), Warning, false;
+    /// Clang's constant `switch` condition that no `case` matches, which no
+    /// option controls.
+    ConstantSwitchCondition => None, Warning, false;
     /// Control can reach the end of a non-void function. `-Wall` holds it in
     /// GCC, and Clang reports it by default.
     ReturnType => Some("return-type"), ClangWarning, false;
@@ -996,12 +1172,43 @@ impl DiagnosticGroup {
         Self::ImplicitConstIntFloatConversion,
         Self::ImplicitIntFloatConversion,
     ];
+    /// What Clang's `-Wformat` holds.
+    const CLANG_FORMAT: &[Self] = &[
+        Self::FormatExtraArgs,
+        Self::FormatZeroLength,
+        Self::Nonnull,
+        Self::FormatSecurity,
+        Self::FormatInvalidSpecifier,
+        Self::FormatInsufficientArgs,
+    ];
+    /// What Clang's `-Wparentheses` holds.
+    const CLANG_PARENTHESES: &[Self] = &[
+        Self::ChainedComparison,
+        Self::LogicalOpParentheses,
+        Self::BitwiseOpParentheses,
+        Self::ShiftOpParentheses,
+        Self::ParenthesesEquality,
+        Self::BitwiseConditionalParentheses,
+        Self::LogicalNotParentheses,
+        Self::DanglingElse,
+    ];
+    /// The groups GCC's `-Wformat` enables, unless their own options say
+    /// otherwise.
+    const GCC_FORMAT: &[Self] = &[
+        Self::FormatExtraArgs,
+        Self::FormatZeroLength,
+        Self::FormatContainsNul,
+    ];
     /// The groups GCC's `-Wunused` holds only with `-Wextra` too.
     const PARAMETERS: &[Self] = &[Self::UnusedParameter, Self::UnusedButSetParameter];
     /// The groups bcc models under `-Wall`, as a pragma naming it reaches
     /// them.
     const UNDER_ALL: &[Self] = &[
+        Self::Format,
         Self::Unused,
+        Self::Parentheses,
+        Self::LogicalNotParentheses,
+        Self::Switch,
         Self::ReturnType,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
@@ -1035,7 +1242,11 @@ impl DiagnosticGroup {
     pub(crate) const fn gcc_only(self) -> bool {
         matches!(
             self,
-            Self::Normalized | Self::PedanticNormalized | Self::ReturnLocalAddr
+            Self::Normalized
+                | Self::PedanticNormalized
+                | Self::ReturnLocalAddr
+                | Self::FormatContainsNul
+                | Self::SwitchOutsideRange
         )
     }
 
@@ -1158,6 +1369,11 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::Parentheses
+                | DiagnosticGroup::DanglingElse
+                | DiagnosticGroup::LogicalNotParentheses
+                | DiagnosticGroup::Format
+                | DiagnosticGroup::Switch
                 | DiagnosticGroup::ReturnType
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
@@ -1169,6 +1385,7 @@ impl WarningSettings {
                 | DiagnosticGroup::UnusedValue
                 | DiagnosticGroup::UnusedComparison
                 | DiagnosticGroup::Main
+                | DiagnosticGroup::UnknownPragmas
                 | DiagnosticGroup::PointerBoolConversion => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
                 | _ => None,
@@ -1221,5 +1438,39 @@ impl WarningSettings {
                 }
             },
         }
+    }
+}
+
+/// A set of [`DiagnosticGroup`]s, one bit each, as wide as the groups need.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GroupMask([u64; GroupMask::WORDS]);
+
+impl GroupMask {
+    pub(crate) const EMPTY: Self = Self([0; Self::WORDS]);
+    const WORDS: usize = DiagnosticGroup::COUNT.div_ceil(64);
+
+    /// The set with the group at index `group` added.
+    const fn with(mut self, group: usize) -> Self {
+        self.0[group / 64] |= 1 << (group % 64);
+        self
+    }
+
+    pub(crate) const fn contains(self, group: DiagnosticGroup) -> bool {
+        let index = group as usize;
+        self.0[index / 64] >> (index % 64) & 1 != 0
+    }
+
+    pub(crate) fn union(mut self, other: Self) -> Self {
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word |= other;
+        }
+        self
+    }
+
+    pub(crate) fn difference(mut self, other: Self) -> Self {
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word &= !other;
+        }
+        self
     }
 }

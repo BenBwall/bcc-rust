@@ -268,8 +268,9 @@ fn folded_switch_case_labels_keep_source_order_and_scope() {
         )
         .contains(&SemanticErrorKind::UndeclaredIdentifier)
     );
+    // The condition matches a case, which Clang asks of a constant one.
     clean(
-        "int main(void) { switch (1) { { case sizeof(enum { K = 1 }): break; } { case sizeof(enum \
+        "int main(void) { switch (4) { { case sizeof(enum { K = 1 }): break; } { case sizeof(enum \
          { K = 2 }) + 1: break; } } return 0; }",
     );
     clean(
@@ -285,7 +286,14 @@ fn switch_promotion_conversion_and_ranges() {
         kinds("void f(unsigned x) { switch(x) {case -1:; case 4294967295U:;} }"),
         [SemanticErrorKind::DuplicateCase]
     );
-    clean("void f(unsigned char x) {switch(x) {case -1:; case 255:;}} ");
+    // Clang's `-Wswitch` says the conversion changes `-1`, which promotion
+    // leaves an `int` that `unsigned char` cannot hold.
+    assert_eq!(
+        kinds("void f(unsigned char x) {switch(x) {case -1:; case 255:;}} "),
+        [SemanticErrorKind::SwitchCases(
+            crate::configuration::DiagnosticGroup::Switch
+        )]
+    );
     assert_eq!(
         kinds("void f(void) {case 1:; default:;}"),
         [
@@ -514,11 +522,14 @@ fn tentative_and_external_definitions() {
     clean("extern int a[];");
 }
 
+/// What bcc's own mode says of an internal function used but not defined.
+const UNDEFINED_INTERNAL: SemanticErrorKind = SemanticErrorKind::UndefinedInternal(None);
+
 #[test]
 fn internal_definitions_exclude_constant_sizeof_uses() {
     assert_eq!(
         kinds("static int f(void); int g(void) {return f();}"),
-        [SemanticErrorKind::UndefinedInternal]
+        [UNDEFINED_INTERNAL]
     );
     // An unused one is reported only under -Wunused-function, as in Clang.
     clean("static int f(void);");
@@ -526,7 +537,7 @@ fn internal_definitions_exclude_constant_sizeof_uses() {
     clean("static int f(void); int g(void) {return sizeof &f;}");
     assert_eq!(
         kinds("static int f(void); void g(int n) {sizeof(int[f()]);}"),
-        [SemanticErrorKind::UndefinedInternal]
+        [UNDEFINED_INTERNAL]
     );
     // A constant query's operand is used, even where only its value is
     // emitted.
@@ -534,11 +545,7 @@ fn internal_definitions_exclude_constant_sizeof_uses() {
         "static int f(void); int g(void) {return __builtin_constant_p(f());}",
         "static int f(void); int g(void) {static int s = __builtin_constant_p(f()); return s;}",
     ] {
-        assert_eq!(
-            kinds(source),
-            [SemanticErrorKind::UndefinedInternal],
-            "{source}"
-        );
+        assert_eq!(kinds(source), [UNDEFINED_INTERNAL], "{source}");
     }
 }
 

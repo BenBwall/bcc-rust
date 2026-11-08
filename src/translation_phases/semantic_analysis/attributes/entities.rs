@@ -26,6 +26,7 @@ use super::{
         PredicateKind,
         ScopeKind,
         SemanticErrorKind,
+        TypeId,
         facts::{
             AliasFacts,
             AttributeRefusal,
@@ -34,6 +35,7 @@ use super::{
             DllStorage,
             EntityAttributes,
             EntityId,
+            FormatAttribute,
             InitFunctionFacts,
             InitFunctionKind,
             Inlining,
@@ -92,7 +94,15 @@ pub(in crate::translation_phases::semantic_analysis) enum Subject {
     Typedef(Option<usize>),
     /// The binding of a declared parameter, for the same.
     Parameter(Option<usize>),
-    Member,
+    /// A structure or union member: its tag, its name and its type, when
+    /// it has a name.
+    Member(
+        Option<(
+            usize,
+            crate::translation_phases::parsing::syntax::Identifier,
+            TypeId,
+        )>,
+    ),
 }
 
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
@@ -187,6 +197,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::NoCallerSaved => self.no_caller_saved_attribute(subject, attribute),
                 | Rule::Naked => self.naked_attribute(subject, attribute),
                 | Rule::Nonnull => self.nonnull_attribute(subject, specifier, attribute),
+                | Rule::Format => self.format_attribute(subject, attribute),
+                | Rule::FormatArg => self.format_arg_attribute(subject, attribute),
                 // On a typedef it names the type, which type construction
                 // checks; anything else declared is not a union type.
                 | Rule::TransparentUnion if !matches!(subject, Subject::Typedef(_)) => self.error(
@@ -206,6 +218,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::NoStackProtector => self.no_stack_protector(subject, attribute),
                 | Rule::NoInstrument => self.no_instrument(subject, attribute),
                 | Rule::NoSanitize => self.no_sanitize(subject, attribute),
+                | Rule::ReturnsNonnull => self.returns_nonnull(subject, attribute),
                 | _ => {},
             }
         }
@@ -410,7 +423,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             },
             | Subject::Parameter(_) => {},
-            | Subject::Typedef(_) | Subject::Member => self.ignored(attribute),
+            | Subject::Typedef(_) | Subject::Member(_) => self.ignored(attribute),
         }
     }
 
@@ -573,6 +586,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// string, and Clang takes that as one unknown name.
     /// GNU extension: GCC manual, "Common Function Attributes".
     fn no_sanitize(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        use crate::target::sanitizers::{
+            Named,
+            UbChecks,
+        };
         let Subject::Function { binding, .. } = subject else {
             self.ignored(attribute);
             return;
@@ -580,6 +597,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let gcc = self.gcc_identity();
         let mut address = attribute.name == "no_sanitize_address";
         let mut thread = attribute.name == "no_sanitize_thread";
+        let mut undefined = if attribute.name == "no_sanitize_undefined" {
+            UbChecks::all()
+        } else {
+            UbChecks::empty()
+        };
         for token in attribute.arguments.unwrap_or_default() {
             let TokenType::String(StringTokenType::String(id)) = token.kind else {
                 continue;
@@ -587,10 +609,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             let Some(text) = self.context.literal_text_in(self.scratch, id, false) else {
                 continue;
             };
-            let mut note = |name: &str| match name {
-                | "address" => address = true,
-                | "thread" => thread = true,
-                | "all" => (address, thread) = (true, true),
+            let mut note = |name: &str| match Named::of(name, !gcc) {
+                | Some(Named::Address) => address = true,
+                | Some(Named::Thread) => thread = true,
+                | Some(Named::All) => {
+                    (address, thread) = (true, true);
+                    undefined = UbChecks::all();
+                },
+                | Some(Named::Checks(checks)) => undefined |= checks,
                 | _ => {},
             };
             if gcc {
@@ -603,6 +629,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let attributes = self.attributes.entity(entity);
         attributes.no_sanitize_address |= address;
         attributes.no_sanitize_thread |= thread;
+        attributes.no_sanitize_undefined |= undefined;
+    }
+
+    /// `returns_nonnull` on a function returning a pointer: the result is
+    /// never null. On another function GCC and Clang only warn, and the
+    /// attribute has no effect.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    fn returns_nonnull(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        let Subject::Function { binding, .. } = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        let TypeKind::Function { result, .. } = self.types.nodes[self.bindings[binding].ty.index]
+        else {
+            return;
+        };
+        if self.pointer_target(result).is_none() {
+            self.ignored(attribute);
+            return;
+        }
+        let entity = self.entity_of(binding);
+        let attributes = self.attributes.entity(entity);
+        attributes.returns_nonnull = attributes.returns_nonnull.or(Some(attribute.source));
     }
 
     /// Retains GNU `nonnull` parameter indices after checking each integer
@@ -632,6 +684,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return;
         };
         let entity = self.entity_of(binding);
+        let site = &mut self.attributes.entity(entity).nonnull_site;
+        *site = site.or(Some(attribute.source));
         if attribute.arguments.is_none_or(<[_]>::is_empty) {
             self.attributes.entity(entity).nonnull = Some(&[]);
             return;
@@ -1832,6 +1886,21 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     pub(super) pending_dll: ArenaVec<'s, (DllStorage, SourceVectors)>,
     /// Each entity's DLL storage so far.
     pub(super) dll: ArenaMap<'s, EntityId, DllState>,
+    /// Where the declaration whose attributes apply begins, which GCC
+    /// reports a `format` attribute's faults at.
+    pub(in crate::translation_phases::semantic_analysis) declaration_start: Option<SourceVectors>,
+    /// The `format` attributes of function pointers and members that
+    /// point to functions (`formats.rs`).
+    pub(super) pointer_formats: ArenaMap<'s, FormatHolder, FormatAttribute>,
+}
+
+/// What holds a function pointer's `format` attribute: a linked object's
+/// entity, an unlinked object or parameter, or a member of a tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(in crate::translation_phases::semantic_analysis) enum FormatHolder {
+    Entity(EntityId),
+    Binding(usize),
+    Member(usize, StringCacheId),
 }
 
 impl<'tu, 's> AttributeState<'tu, 's> {
@@ -1862,6 +1931,8 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             initializing_jumps: ArenaVec::new_in(scratch),
             pending_dll:        ArenaVec::new_in(scratch),
             dll:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            declaration_start:  None,
+            pointer_formats:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 

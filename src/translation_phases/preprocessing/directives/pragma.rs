@@ -25,6 +25,7 @@ use super::super::{
 use crate::{
     configuration::{
         CompilerIdentity,
+        DiagnosticGroup,
         RuleSet,
     },
     translation_phases::{
@@ -150,10 +151,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                     source_vectors: token.source_vectors,
                                 });
                             }
-                            _ = self
-                                .state
-                                .once_set
-                                .insert(self.physical_source_file_index());
+                            let identity = self
+                                .context
+                                .file_identity(self.physical_source_file_index());
+                            _ = self.state.once_set.insert(identity);
                             match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;
@@ -230,7 +231,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             consumed_newline = true;
                             break 'base;
                         },
-                        | "clang" if self.pragma_names()[0] == Some("diagnostic") => {
+                        | "clang"
+                            if self.pragma_names()[0] == Some("diagnostic")
+                                && self.context.configuration.compiler_identity()
+                                    != CompilerIdentity::Gcc =>
+                        {
                             self.pragma_diagnostic_namespace(token);
                             consumed_newline = true;
                             break 'base;
@@ -241,6 +246,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             // C99: §6.10.6p1, p. 159; PDF p. 171.
                             let clang = self.context.configuration.compiler_identity().rules()
                                 == RuleSet::Clang;
+                            if !clang {
+                                let second = self.pragma_names()[0]
+                                    .map(|name| self.context.diagnostic_text(name));
+                                self.gcc_ignored_pragma(token, second);
+                            }
                             if !clang || !self.pragma_deprecated_macro() {
                                 let line_state = (self.last_was_newline, self.current_is_newline);
                                 self.skip_until_newline();
@@ -274,10 +284,29 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                         consumed_newline = true;
                                         break 'base;
                                     },
-                                    | _ => {},
+                                    | known if gcc_knows_gcc_pragma(known) => {},
+                                    | other => {
+                                        let other = self.context.diagnostic_text(other);
+                                        self.gcc_ignored_pragma(token, Some(other));
+                                    },
                                 }
                             }
                             // Other GCC pragmas, and any operands, are ignored.
+                            let line_state = (self.last_was_newline, self.current_is_newline);
+                            self.skip_until_newline();
+                            (self.last_was_newline, self.current_is_newline) = line_state;
+                            consumed_newline = true;
+                            break 'base;
+                        },
+                        // GCC knows one `STDC` pragma, and ignores the rest.
+                        | "STDC"
+                            if self.context.configuration.compiler_identity()
+                                == CompilerIdentity::Gcc
+                                && self.pragma_names()[0] != Some("FLOAT_CONST_DECIMAL64") =>
+                        {
+                            let second = self.pragma_names()[0]
+                                .map(|name| self.context.diagnostic_text(name));
+                            self.gcc_ignored_pragma(token, second);
                             let line_state = (self.last_was_newline, self.current_is_newline);
                             self.skip_until_newline();
                             (self.last_was_newline, self.current_is_newline) = line_state;
@@ -303,10 +332,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                             "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE"
                                         )
                                     {
-                                        if self.context.group_severity(
-                                            crate::configuration::DiagnosticGroup::UnknownStdcPragma,
-                                            token.source_vectors,
-                                        ).is_some() {
+                                        if self
+                                            .context
+                                            .group_severity(
+                                                DiagnosticGroup::UnknownStdcPragma,
+                                                token.source_vectors,
+                                            )
+                                            .is_some()
+                                        {
                                             self.context.preprocessor_error(PreprocessorError {
                                                 error_type:
                                                     PreprocessorErrorType::UnknownPragmaSTDCArgument(
@@ -366,7 +399,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             }
                             completed_stdc = true;
                         },
-                        | _ => {
+                        | name => {
+                            if !completed_stdc && !gcc_knows_pragma(name) {
+                                let second = self.pragma_names()[0]
+                                    .map(|name| self.context.diagnostic_text(name));
+                                self.gcc_ignored_pragma(token, second);
+                            }
                             if !completed_stdc {
                                 // An unknown pragma is ignored as a whole.
                                 // Preserve the caller's line state for _Pragma,
@@ -383,10 +421,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 | _ => {
                     if self
                         .context
-                        .group_severity(
-                            crate::configuration::DiagnosticGroup::UnknownPragmas,
-                            token.source_vectors,
-                        )
+                        .group_severity(DiagnosticGroup::UnknownPragmas, token.source_vectors)
                         .is_some()
                     {
                         self.context.preprocessor_error(PreprocessorError {
@@ -399,6 +434,38 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             }
         }
         consumed_newline
+    }
+
+    /// GCC's `-Wunknown-pragmas`, under GCC's identity, for the pragma whose
+    /// first token is `first`: GCC names its first two names, or one and a
+    /// space. A `_Pragma` operator's is reported where the operator was
+    /// invoked, and withheld where that is in a system header.
+    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171; §6.10.9p1, p. 161;
+    /// PDF p. 173.
+    fn gcc_ignored_pragma(&mut self, first: PreprocessorToken, second: Option<&str>) {
+        let site = match &self.state.pragma_operator {
+            | Some(invocation) => self
+                .context
+                .push_source_vectors(std::slice::from_ref(invocation)),
+            | None => first.source_vectors,
+        };
+        if self.context.configuration.compiler_identity() != CompilerIdentity::Gcc
+            || self
+                .context
+                .group_severity(DiagnosticGroup::UnknownPragmas, site)
+                .is_none()
+        {
+            return;
+        }
+        let mut text = ArenaString::new_in(self.scratch);
+        text.push_str(self.context.string_cache.at(first.contents));
+        text.push(' ');
+        text.push_str(second.unwrap_or(""));
+        let text = self.context.diagnostic_text(&text);
+        self.context.preprocessor_error(PreprocessorError {
+            error_type:     PreprocessorErrorType::IgnoredPragma(text),
+            source_vectors: site,
+        });
     }
 
     /// The pragma's first two tokens, when identifiers, looked at and not
@@ -1062,4 +1129,49 @@ fn pragma_is_consumed(rules: RuleSet, names: [Option<&str>; 2]) -> bool {
         | [Some("region" | "endregion" | "mark"), _] => rules == RuleSet::Clang,
         | _ => false,
     }
+}
+
+/// Whether GCC knows a pragma whose first name is `name`, so that its
+/// `-Wunknown-pragmas` leaves it alone. The `GCC` and `STDC` namespaces have
+/// their own checks.
+const fn gcc_knows_pragma(name: &str) -> bool {
+    matches!(
+        name.as_bytes(),
+        b"once"
+            | b"weak"
+            | b"pack"
+            | b"redefine_extname"
+            | b"message"
+            | b"scalar_storage_order"
+            | b"push_macro"
+            | b"pop_macro"
+            | b"region"
+            | b"endregion"
+            | b"GCC"
+            | b"STDC"
+            | b"clang"
+    )
+}
+
+/// Whether GCC knows `#pragma GCC name`.
+const fn gcc_knows_gcc_pragma(name: &str) -> bool {
+    matches!(
+        name.as_bytes(),
+        b"visibility"
+            | b"diagnostic"
+            | b"push_options"
+            | b"pop_options"
+            | b"reset_options"
+            | b"optimize"
+            | b"target"
+            | b"ivdep"
+            | b"unroll"
+            | b"novector"
+            | b"poison"
+            | b"system_header"
+            | b"pch_preprocess"
+            | b"warning"
+            | b"error"
+            | b"dependency"
+    )
 }

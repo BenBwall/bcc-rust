@@ -578,6 +578,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         if let Some(align) = alignment {
             self.retain_alignment(value, align);
         }
+        if !self.unit.sanitizer.options.checks.is_empty() {
+            self.note_storage(inst, value);
+        }
         value
     }
 
@@ -590,11 +593,15 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
 
     /// The flags of signed integer `+`, `-`, `*` and `<<`: `nsw`, because
     /// signed overflow is undefined (C99 §6.5p5, p. 67; PDF p. 79), unless
-    /// `-fwrapv` makes it wrap or `-ftrapv` checks it
-    /// ([`Self::trap_on_overflow`]), extensions.
+    /// `-fwrapv` makes it wrap, or `-ftrapv` or `-fsanitize` checks it
+    /// ([`Self::trap_on_overflow`], [`Self::check_signed_overflow`]),
+    /// extensions.
     pub(super) fn signed_wrap(&self) -> InstFlags {
         let configuration = self.unit.context.configuration;
-        if configuration.wrapv() || configuration.trapv() {
+        if configuration.wrapv()
+            || configuration.trapv()
+            || self.checks(crate::target::sanitizers::UbChecks::SIGNED_INTEGER_OVERFLOW)
+        {
             InstFlags::empty()
         } else {
             InstFlags::NSW
@@ -615,9 +622,25 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         [a, b]: [Value; 2],
         result: Value,
     ) {
-        if !self.unit.context.configuration.trapv() || representation.narrow().is_some() {
+        if !self.unit.context.configuration.trapv()
+            || representation.narrow().is_some()
+            || self.checks_replace_trapv()
+        {
             return;
         }
+        if let Some(overflow) = self.overflow_condition(opcode, [a, b], result) {
+            self.trap_if(overflow);
+        }
+    }
+
+    /// Whether the signed `iadd`, `isub` or `imul` of `a` and `b`, whose
+    /// wrapped result is `result`, overflowed; `None` for another opcode.
+    pub(super) fn overflow_condition(
+        &mut self,
+        opcode: Opcode,
+        [a, b]: [Value; 2],
+        result: Value,
+    ) -> Option<Value> {
         let ty = self.draft.value_type(result);
         let plain = InstFlags::empty();
         let zero = self.iconst(ty, 0);
@@ -670,15 +693,17 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let negated = self.binary_inst(Opcode::And, plain, a_minus_one, b_minimum);
                 self.binary_inst(Opcode::Or, plain, wrapped, negated)
             },
-            | _ => return,
+            | _ => return None,
         };
-        self.trap_if(overflow);
+        Some(overflow)
     }
 
     /// Under `-ftrapv`, traps before a call of the library's `abs`, `labs`
     /// or `llabs` (or their `__builtin_` forms) whose argument is the most
     /// negative value, whose absolute value overflows, as GCC and Clang
-    /// check their expansions of these builtins; with the library builtins
+    /// check their expansions of these builtins, and under
+    /// `-fsanitize=signed-integer-overflow` reports it as their negation
+    /// overflow; with the library builtins
     /// off (`-fno-builtin-abs`), a call by the library's name is the
     /// library's alone, as in GCC, while `__builtin_abs` still traps.
     /// C99: §7.20.6.1 paragraph 2, p. 320; PDF p. 332.
@@ -696,7 +721,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 Linkage,
             },
         };
-        if !self.unit.context.configuration.trapv() {
+        let trapv = self.unit.context.configuration.trapv();
+        let checked = self.checks(crate::target::sanitizers::UbChecks::SIGNED_INTEGER_OVERFLOW);
+        if !trapv && !checked {
             return Ok(());
         }
         let data = self.unit.sema.bindings[binding];
@@ -735,10 +762,33 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         if !ty.is_int() {
             return Ok(());
         }
-        let minimum = self.iconst(ty, i128::MIN >> (128 - ty.bits()));
-        let overflow = self.icmp(IntCC::Eq, value, minimum);
-        self.trap_if(overflow);
+        if checked {
+            let representation = self.repr(argument.ty, source)?;
+            let zero = self.iconst(ty, 0);
+            let negated = self.binary_inst(Opcode::Isub, InstFlags::empty(), zero, value);
+            self.check_signed_overflow(
+                Opcode::Isub,
+                representation,
+                [zero, value],
+                negated,
+                argument.ty,
+                true,
+                source,
+            );
+        }
+        if trapv && !self.checks_replace_trapv() {
+            let minimum = self.iconst(ty, i128::MIN >> (128 - ty.bits()));
+            let overflow = self.icmp(IntCC::Eq, value, minimum);
+            self.trap_if(overflow);
+        }
         Ok(())
+    }
+
+    /// Whether Clang's signed-overflow check takes the place of `-ftrapv`'s
+    /// trap, as Clang emits only the check, which can recover; GCC keeps both.
+    fn checks_replace_trapv(&self) -> bool {
+        !self.gcc_reports()
+            && self.checks(crate::target::sanitizers::UbChecks::SIGNED_INTEGER_OVERFLOW)
     }
 
     /// Traps when `condition` holds, in a block of its own for each check:

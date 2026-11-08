@@ -302,34 +302,40 @@ impl<'ir> Signature<'ir> {
 }
 
 /// Ordinary direct calls can create a default attributes record while sema
-/// checks `nonnull`. Record presence alone does not imply an extension.
+/// checks `nonnull` and formats. Record presence alone does not imply an
+/// extension.
 fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
     matches!(
         attributes,
         EntityAttributes {
-            weak:                false,
-            weak_reference:      false,
-            section:             None,
-            used:                false,
-            code_alignment:      0,
-            visibility:          None,
-            returns_twice:       false,
-            nonnull:             None,
-            call_diagnostic:     None,
-            declared_alignment:  false,
-            inlining:            Inlining::Default,
-            target_vector_abi:   false,
-            no_instrument:       false,
-            no_stack_protector:  false,
-            no_sanitize_address: false,
-            no_sanitize_thread:  false,
-            interrupt:           false,
-            no_caller_saved:     false,
-            naked:               false,
-            select_any:          false,
-            common:              None,
-            dll:                 None,
-            inline_odr:          None,
+            weak:                  false,
+            weak_reference:        false,
+            section:               None,
+            used:                  false,
+            code_alignment:        0,
+            visibility:            None,
+            returns_twice:         false,
+            nonnull:               None,
+            nonnull_site:          None,
+            returns_nonnull:       None,
+            call_diagnostic:       None,
+            declared_alignment:    false,
+            inlining:              Inlining::Default,
+            target_vector_abi:     false,
+            no_instrument:         false,
+            no_stack_protector:    false,
+            no_sanitize_address:   false,
+            no_sanitize_thread:    false,
+            no_sanitize_undefined: _,
+            interrupt:             false,
+            no_caller_saved:       false,
+            naked:                 false,
+            select_any:            false,
+            common:                None,
+            dll:                   None,
+            inline_odr:            None,
+            format:                _,
+            format_arg:            _,
         }
     )
 }

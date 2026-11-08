@@ -569,7 +569,7 @@ fn implicit_function_declarations_follow_the_language_mode() {
 #[test]
 fn scalar_statement_sites_and_assertions() {
     accepts(
-        "_Static_assert(sizeof(int)==4,\"int\"); void f(void) {switch(1) {case 2+3:;} if(1){} \
+        "_Static_assert(sizeof(int)==4,\"int\"); void f(void) {switch(5) {case 2+3:;} if(1){} \
          while(0){} for(;1;)break;}",
     );
     rejects(

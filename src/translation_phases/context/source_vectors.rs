@@ -338,6 +338,16 @@ impl Context<'_> {
         source.length() != 0 && self.in_system_header(self.first_source_vector(source))
     }
 
+    /// The first vector of `source` as a range, which belongs to its first
+    /// token. An empty range stays empty.
+    pub(crate) fn first_token_vector(source: SourceVectors) -> SourceVectors {
+        if source.length() == 0 {
+            return source;
+        }
+        let (arena, start) = SourceArena::decode(source);
+        arena.encode(start, start + 1)
+    }
+
     /// The last vector of `source`, which belongs to its last token. An empty
     /// range stays empty.
     pub(crate) fn last_source_vector(source: SourceVectors) -> SourceVectors {
@@ -528,6 +538,16 @@ impl Context<'_> {
         self.retained_vectors
             .push(SourceVector::new(start_position, source_file_index, length));
         SourceArena::Retained.encode(start, end)
+    }
+
+    /// Retains a zero-width diagnostic anchor where the file location of
+    /// `source` starts: Clang's point location, which it marks with a caret
+    /// alone. `source` must not be empty.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    pub(crate) fn retain_source_start(&mut self, source: SourceVectors) -> SourceVectors {
+        let location = self.file_location(source);
+        let start = self.first_source_vector(location).clone();
+        self.create_retained_source_vectors(start.position(self), start.source_file_index, 0)
     }
 
     /// Retains a zero-width diagnostic anchor immediately after `vector`.

@@ -222,6 +222,20 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 (including_file, header.name, header.is_system_header),
             );
         }
+        // The macros that wrote the operand end with the directive's line:
+        // the header they named is not inside their replacement, so a header
+        // that names itself through one (`#include SELF`) can expand it again,
+        // as in GCC and Clang. C99: §6.10.3.4p2, p. 155; PDF p. 167.
+        for frame in self.tokenizer_stack.iter_mut().rev() {
+            match &mut frame.frame_type {
+                | TokenizerFrameType::SourceFile { .. } => break,
+                | TokenizerFrameType::ObjectLikeMacroInvocation { released, .. }
+                | TokenizerFrameType::FunctionLikeMacroInvocation { released, .. }
+                | TokenizerFrameType::FunctionLikeMacroArgument { released, .. } =>
+                    *released = true,
+                | _ => {},
+            }
+        }
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::SourceFile {
                 conditional_base: self.state.open_conditionals.len(),
@@ -544,7 +558,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             });
             return None;
         };
-        if self.state.once_set.contains(&source_file_index) {
+        if self
+            .state
+            .once_set
+            .contains(&self.context.file_identity(source_file_index))
+        {
             None
         } else {
             Some((source_file_index, search_index))

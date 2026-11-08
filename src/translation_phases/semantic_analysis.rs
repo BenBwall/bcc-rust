@@ -73,12 +73,14 @@ mod declarations;
 mod emission;
 mod expressions;
 mod facts;
+mod format;
 mod functions;
 mod implicit;
 mod inference;
 mod initializers;
 mod main_function;
 mod missing_fields;
+mod parentheses;
 mod predefined;
 mod reachability;
 mod sign_compare;
@@ -567,6 +569,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.record_bound_origins(bounds, BoundEvaluationSite::Declaration(id));
                 if let Some(binding) = binding {
                     let subject = self.declaration_subject(binding, d, s, initialized);
+                    self.attributes.declaration_start = Some(s.source_vectors);
                     self.declaration_attributes(subject, s.extensions, Some(d));
                     self.declaration_dll(subject, s, initialized);
                 }
@@ -747,8 +750,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
             | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
             | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
-            | Work::Condition(slot, integer, statement) =>
-                self.check_condition(slot, integer, statement),
+            | Work::Condition(slot, integer, statement) => {
+                self.check_condition(slot, integer, statement);
+                if integer {
+                    self.check_switch_condition(statement, slot);
+                } else {
+                    self.check_condition_parentheses(slot);
+                }
+            },
             | Work::RequireConstant(e, assertion, before) => {
                 let value = self.integers.pop().flatten();
                 if self.semantic_errors == before && !self.unanalyzed_constant(e) {
@@ -1497,8 +1506,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                     self.record_field_noreturn(tag, name.name, d, member, ty);
                 }
+                let named = d
+                    .declarator
+                    .and_then(Declarator::identifier)
+                    .map(|name| (tag, name, ty));
                 self.declaration_attributes(
-                    attributes::Subject::Member,
+                    attributes::Subject::Member(named),
                     d.attributes,
                     d.declarator,
                 );
@@ -1806,7 +1819,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     Duration::None,
                     retained,
                 );
-                self.note_enumerator(tag, item.name, retained);
+                let unused = self.attribute_chain_exempts(item.attributes);
+                self.note_enumerator(tag, item.name, retained, unused);
                 self.work.push(Work::EnumMembers(
                     tag,
                     list,

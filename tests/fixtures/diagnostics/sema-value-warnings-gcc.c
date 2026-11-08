@@ -38,3 +38,14 @@ char *e8(void) { char x; return (char *)((long)&x - (long)&x); }
 char *e9(void) { char x; return (char *)((long)&x + 1); }
 char *e10(void) { char x; return (char *)(1 + (long)&x); }
 char *e11(void) { char x; return (char *)(_Bool)&x; }
+int *f1(int a, int b) { int x; return a ? (b ? &x : 0) : 0; }
+int *f2(int a, int b, int c) { int x, y, z; return a ? (b ? &x : &y) : (c ? &z : 0); }
+int *f3(int a) { int x; return ((void)a, &x); }
+int *f4(void) { int x; return __extension__ &x; }
+int *f5(int *p) { int x; return p ?: &x; }
+int *f6(void) { int x; return &x ?: 0; }
+int *f7(void) { int x; return _Generic(0, int: &x); }
+int *f8(void) { int x; return __builtin_choose_expr(1, &x, 0); }
+int *f9(void) { int x; return (1 ? &x : 0) + 1; }
+int *f10(void) { int x; return (x = 1, &x); }
+long f11(int a) { int x; return a ? (long)(a ? &x : 0) : 0; }

@@ -499,6 +499,10 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
     UnknownPragmaDirective,
+    /// GCC's words for a pragma it does not know: the pragma's first one or
+    /// two names, as `ignoring '#pragma omp parallel'`.
+    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+    IgnoredPragma(&'tu str),
     /// C99: §6.10.6 paragraph 2, p. 159; PDF p. 171.
     UnknownPragmaSTDCArgument(&'tu str),
     // C99: `#pragma once` is an implementation-defined pragma, §6.10.6
@@ -1321,6 +1325,13 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("expected a string literal")
             .note("C99 §6.10.9: write `_Pragma(\"...\")`"),
+            | Self::IgnoredPragma(text) => new(format_in!(
+                arena,
+                "ignoring '#pragma {text}' [-Wunknown-pragmas]"
+            ))
+            .option_suffix()
+            .label("GCC knows no such pragma")
+            .note("C99 §6.10.6p1: a pragma the implementation does not recognize is ignored"),
             | Self::UnknownPragmaDirective => new("unknown pragma ignored")
                 .label("not recognized")
                 .note("bcc recognizes `#pragma once` and the `#pragma STDC` pragmas"),
@@ -1549,10 +1560,22 @@ impl ToDiagnostic for PreprocessorError<'_> {
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
-        let mut diagnostic = self
-            .error_type
-            .explain_in(arena, context.source_spelling(source))
+        let compiler = match &self.error_type {
+            | PreprocessorErrorType::HeaderNotFound { name, .. } =>
+                header_not_found(context, name, arena),
+            | _ => None,
+        };
+        // TCC writes it as a plain error, and stops at its first anyway.
+        let fatal = compiler.is_some()
+            && context.configuration.diagnostic_format()
+                != crate::configuration::DiagnosticFormat::Tcc;
+        let mut diagnostic = compiler
+            .unwrap_or_else(|| {
+                self.error_type
+                    .explain_in(arena, context.source_spelling(source))
+            })
             .at(self.severity(), source);
+        diagnostic.fatal |= fatal;
         if let PreprocessorErrorType::DeprecatedMacro(deprecation) = &self.error_type {
             for expansion in deprecation.expansions {
                 diagnostic = diagnostic.secondary_segments(
@@ -1570,6 +1593,40 @@ impl ToDiagnostic for PreprocessorError<'_> {
 }
 
 impl std::error::Error for PreprocessorError<'_> {}
+
+/// A header `#include` cannot find, in the words of the compiler whose
+/// diagnostic format is in use, each of which stops the compilation there:
+/// GCC's `cpp` ("No such file or directory"), Clang's ("file not found"),
+/// `cl`'s fatal error C1083 and TCC's ("include file ... not found").
+/// `None` for bcc's own format, which goes on and lists the directories it
+/// searched. Microsoft Learn: "Fatal Error C1083".
+/// C99: §6.10.2p2-3, p. 149; PDF p. 161.
+fn header_not_found<'d>(
+    context: &Context<'_>,
+    name: &str,
+    arena: &'d Bump,
+) -> Option<Explanation<'d>> {
+    use crate::configuration::DiagnosticFormat as F;
+    let message = match context.configuration.diagnostic_format() {
+        | F::Bcc => return None,
+        | F::Gcc => format_in!(arena, "{name}: No such file or directory"),
+        | F::Msvc { .. } if context.configuration.msvc_wording() =>
+            return Some(
+                Explanation::new(
+                    arena,
+                    format_in!(
+                        arena,
+                        "Cannot open include file: '{name}': No such file or directory"
+                    ),
+                )
+                .msvc_code("C1083"),
+            ),
+        // clang-cl writes Clang's words in `cl`'s format.
+        | F::Clang | F::Msvc { .. } => format_in!(arena, "'{name}' file not found"),
+        | F::Tcc => format_in!(arena, "include file '{name}' not found"),
+    };
+    Some(Explanation::new(arena, message))
+}
 
 impl GetPosition for PreprocessorError<'_> {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
@@ -1751,6 +1808,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
             | PreprocessorErrorType::PragmaDiagnostic(_)
             | PreprocessorErrorType::UnknownPragmaDirective
+            | PreprocessorErrorType::IgnoredPragma(_)
             | PreprocessorErrorType::UnknownEscapeSequence(_)
             | PreprocessorErrorType::IllegalCharacterEncoding { prefixed: false, .. }
             | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)

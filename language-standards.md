@@ -2401,7 +2401,7 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked` under Clang's identity, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage` |
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target` (refused where it would change how a vector of 32 bytes or more crosses objects; `docs/design/driver-modes.md`), `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
 | Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
-| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls (`no_sanitize` and its spellings keep a function out of the sanitizers bcc has), `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull` (which `-fsanitize=returns-nonnull-attribute` checks), `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
 | GCC identity only | `scalar_storage_order`: little-endian accepted, big-endian refused on records, ignored with a warning elsewhere (see above); unknown under the other identities |
 | Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver` and `persistent`, MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and target-specific names on other targets |
 
@@ -2974,6 +2974,31 @@ Neither TCC nor MSVC 19.33 has `_BitInt` or arrays initialized by compound
 literals. bcc's identities do not gate language features, which follow
 `-std`; so `_BitInt` is a reported C23 extension before C23, and an array
 compound literal keeps GCC's static-only rule with its pedantic report.
+
+### TCC's test suite rules (2026-11-07)
+
+Probed with host GCC 13.3, the bundled Clang 23.1.1 and TCC `mob` (the
+build TinyCC's `tests/tests2` runs against):
+
+| Rule | GCC | Clang | TCC |
+| --- | --- | --- | --- |
+| A function's result qualifiers (`const int f(void);` then `int f(void) {}`, `150_return_qualifiers`) | dropped from C11 on, as C17's §6.7.6.3p5 (DR 423) says; C89 and C99 keep them, refusing a `const` difference and warning about a `volatile` one | kept in every revision: "conflicting types" | dropped in every revision |
+| An `aligned(n)` bit-field under `#pragma pack(m)`, `n > m` (`95_bitfields`) | starts at an `m`-byte boundary | at the bit cursor | as GCC |
+| `&atomic_signal_fence` and the other `<stdatomic.h>` functions (`151_atomic_header`) | libatomic, with `-latomic` | libatomic, with `-latomic` | `libtcc1.a`, linked into every program |
+
+bcc follows each column, except that GCC's C99 `volatile` difference is an
+error too. Under `--tcc-mode`, a unit that references one of
+those functions without defining it gets a weak definition compiled from
+`src/lowering/tcc_runtime/libtcc1.c`, so a program's own definition still
+wins. The `--gcc-mode` and `--clang-mode` links still leave the functions to
+libatomic. `(const void *)0` is no null pointer constant in any identity:
+§6.3.2.3p3 allows only a cast to `void *` itself (`94_generic`).
+
+TCC differences bcc does not model: an `aligned(n)` member or bit-field
+takes `n` as its alignment even below its type's (TCC's `struct { char c;
+__attribute__((aligned(1))) int x; }` is 5 bytes), and TCC's
+`-mms-bitfields`, which `#pragma comment(option, "-mms-bitfields")` sets in
+`95_bitfields_ms`, has no `--tcc-mode` equivalent on Linux.
 
 ### `_BitInt` widths
 

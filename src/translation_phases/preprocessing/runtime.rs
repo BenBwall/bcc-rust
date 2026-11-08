@@ -116,6 +116,11 @@ pub(super) struct PreprocessorState<'pp> {
     pub(super) conditional_queries: bool,
     /// Directives end at their first new-line (C99 §6.10p2).
     pub(super) in_directive:        bool,
+    /// Where the `_Pragma` operator whose pragma is running was invoked, the
+    /// outermost macro invocation that wrote it included: a warning about
+    /// that pragma is reported and asks its settings there, as GCC's does,
+    /// since the tokens of its string belong to no file (C99 §6.10.9p1).
+    pub(super) pragma_operator:     Option<SourceVector>,
     pub(super) retain_placeholders: bool,
     /// Produce phase 4's tokens for a text of them, unconverted
     /// ([`Context::phase_four_text`](crate::translation_phases::Context::phase_four_text)).
@@ -124,7 +129,9 @@ pub(super) struct PreprocessorState<'pp> {
     /// returned from, so that the frames beneath them make no line markers.
     pub(super) text_includes:       u32,
     pub(super) arena:               &'pp Bump,
-    pub(super) once_set:            ArenaSet<'pp, u32>,
+    /// The files `#pragma once` marked, by
+    /// [`Context::file_identity`](crate::translation_phases::Context::file_identity).
+    pub(super) once_set:            ArenaSet<'pp, (u64, u64)>,
     pub(super) macro_definitions:   ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
     /// Implementation-defined pragma markers (C99 §6.10.6p1).
     pub(super) deprecated_macros:   ArenaMap<'pp, StringCacheId, MacroDeprecation<'pp>>,

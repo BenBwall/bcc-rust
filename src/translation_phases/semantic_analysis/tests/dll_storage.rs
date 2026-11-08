@@ -976,7 +976,7 @@ fn generated_loop_exits_leave_semantic_reference_constraints_unchanged() {
                 "{target:?}: semantic reference was filtered"
             );
             assert!(context.take_pending_errors().iter().any(|error| {
-                matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::UndefinedInternal)
+                matches!(error, TranslationError::Semantic(error) if matches!(error.kind, SemanticErrorKind::UndefinedInternal(_)))
             }), "{target:?}: semantic definition constraint was filtered");
         });
     }

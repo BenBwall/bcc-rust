@@ -58,6 +58,13 @@ use crate::{
         Target,
         UNKNOWN_VECTOR_ABI,
         X86Features,
+        sanitizers::{
+            ListKind,
+            Named,
+            SanitizerOption,
+            UbChecks,
+            UndefinedSanitizer,
+        },
     },
 };
 
@@ -1681,8 +1688,8 @@ impl State<'_> {
                 self.eval_method = true;
             }
         }
-        // Clang's own floating-point options, which bcc implements and GCC
-        // does not know.
+        // Clang's own floating-point and warning options, which bcc
+        // implements and GCC does not know.
         let clang_only = self.compiler == Compiler::Gcc
             && matches!(
                 text,
@@ -1700,6 +1707,28 @@ impl State<'_> {
                     | "-Wno-implicit-const-int-float-conversion"
                     | "-Wimplicit-int-float-conversion"
                     | "-Wno-implicit-int-float-conversion"
+                    | "-Wlogical-op-parentheses"
+                    | "-Wno-logical-op-parentheses"
+                    | "-Wbitwise-op-parentheses"
+                    | "-Wno-bitwise-op-parentheses"
+                    | "-Wshift-op-parentheses"
+                    | "-Wno-shift-op-parentheses"
+                    | "-Wparentheses-equality"
+                    | "-Wno-parentheses-equality"
+                    | "-Wbitwise-conditional-parentheses"
+                    | "-Wno-bitwise-conditional-parentheses"
+                    | "-Wundefined-internal"
+                    | "-Wno-undefined-internal"
+                    | "-Wformat-invalid-specifier"
+                    | "-Wno-format-invalid-specifier"
+                    | "-Wformat-insufficient-args"
+                    | "-Wno-format-insufficient-args"
+                    | "-Wformat-pedantic"
+                    | "-Wno-format-pedantic"
+                    | "-Wformat-type-confusion"
+                    | "-Wno-format-type-confusion"
+                    | "-Wgcc-compat"
+                    | "-Wno-gcc-compat"
                     | "-Winvalid-noreturn"
                     | "-Wno-invalid-noreturn"
             );
@@ -1722,6 +1751,9 @@ impl State<'_> {
         // `Plan::machine_options` warns about these off Linux, once it knows
         // the target.
         if is_hardening_option(text) && (text == "-pg" || knows(self.compiler, text)) {
+            if is_sanitizer_option(text) && !self.sanitizer_names(text) {
+                return;
+            }
             self.machine.push(text.into());
             self.out.push(text.into());
             return;
@@ -1876,18 +1908,76 @@ impl State<'_> {
         machine
     }
 
+    /// Whether bcc can do what each name in the sanitizer option `text` asks,
+    /// reporting the compiler's error for a name it does not take there and
+    /// bcc's for a sanitizer bcc does not have. Turning a sanitizer off, or
+    /// saying how one it lacks would report, changes nothing, so any name the
+    /// compiler knows is accepted there; a group whose checks bcc writes only
+    /// some of (Clang's `undefined` holds `function`) is accepted for those.
+    /// GCC manual, "Instrumentation Options"; Clang,
+    /// "`UndefinedBehaviorSanitizer`".
+    fn sanitizer_names(&mut self, text: &str) -> bool {
+        let Some(
+            option @ SanitizerOption {
+                kind,
+                enable,
+                names: Some(names),
+            },
+        ) = SanitizerOption::parse(text)
+        else {
+            return true;
+        };
+        let clang = self.compiler == Compiler::Clang;
+        let spelling = option.spelling();
+        for name in names.split(',') {
+            let named = Named::of(name, clang);
+            let not_taken = match named {
+                | None => true,
+                | Some(Named::All) => kind == ListKind::Sanitize && enable,
+                | Some(Named::Checks(_)) =>
+                    kind == ListKind::Recover && enable && matches!(name, "unreachable" | "return"),
+                | Some(Named::Address | Named::Thread | Named::Other) =>
+                    kind == ListKind::Trap && enable,
+            };
+            if not_taken {
+                match (self.compiler, named) {
+                    | (Compiler::Gcc, None) => self.error(format_args!(
+                        "unrecognized argument to '{spelling}' option: '{name}'"
+                    )),
+                    | (Compiler::Gcc, Some(Named::All)) =>
+                        self.error(format_args!("'-fsanitize=all' option is not valid")),
+                    | (Compiler::Gcc, _) =>
+                        self.error(format_args!("'{spelling}{name}' is not supported")),
+                    | (Compiler::Clang, _) => self.error(format_args!(
+                        "unsupported argument '{name}' to option '{spelling}'"
+                    )),
+                }
+                return false;
+            }
+            let missing = match named {
+                | Some(Named::Checks(checks)) =>
+                    kind == ListKind::Sanitize && !checks.intersects(UbChecks::IMPLEMENTED),
+                | Some(Named::Other) => kind == ListKind::Sanitize,
+                | Some(Named::Address) => kind == ListKind::Recover,
+                | _ => false,
+            };
+            if enable && missing {
+                self.unsupported(text, super::unimplemented::SANITIZERS);
+                return false;
+            }
+        }
+        true
+    }
+
     /// `AddressSanitizer` and `ThreadSanitizer` lay out memory differently, so
     /// each compiler refuses the two together, in its own words.
     fn incompatible_sanitizers(&mut self) {
+        let gcc = self.compiler == Compiler::Gcc;
+        let mut undefined = UndefinedSanitizer::initial(gcc);
         let (mut address, mut thread) = (false, false);
         for option in &self.machine {
-            match option.as_str() {
-                | "-fsanitize=address" => address = true,
-                | "-fsanitize=thread" => thread = true,
-                | "-fno-sanitize=address" => address = false,
-                | "-fno-sanitize=thread" => thread = false,
-                | "-fno-sanitize=all" => (address, thread) = (false, false),
-                | _ => {},
+            if let Some(option) = SanitizerOption::parse(option) {
+                undefined.apply(option, &mut address, &mut thread);
             }
         }
         let frameless = self

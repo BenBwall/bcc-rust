@@ -76,7 +76,7 @@ struct Change<'tu> {
 struct PragmaState {
     configuration:    CompilerConfiguration,
     /// One bit per group Clang's `fatal` made fatal.
-    fatal:            u128,
+    fatal:            crate::configuration::GroupMask,
     /// `warning "-Wpedantic"`: `-Werror` no longer promotes extension
     /// diagnostics.
     pedantic_warning: bool,
@@ -198,7 +198,7 @@ impl<'tu> Context<'tu> {
     ) -> Option<(&'tu Bump, ErrorSeverity, bool)> {
         let state = self.pragma_state_at(source)?;
         let severity = state.configuration.diagnostic_severity(group)?;
-        Some((self.tu, severity, state.fatal & (1 << group as u32) != 0))
+        Some((self.tu, severity, state.fatal.contains(group)))
     }
 
     /// Queues `error` as [`Self::pragma_classification`] classified it.
@@ -240,7 +240,7 @@ impl<'tu> Context<'tu> {
             let Some(severity) = state.configuration.diagnostic_severity(group) else {
                 return;
             };
-            (severity, state.fatal & (1 << group as u32) != 0)
+            (severity, state.fatal.contains(group))
         } else {
             self.pending_errors.push_back(error);
             return;
@@ -262,9 +262,9 @@ impl<'tu> Context<'tu> {
         state.configuration = state.configuration.with_pragma_class(name, class);
         let mask = self.configuration.pragma_group_mask(name);
         state.fatal = if fatal {
-            state.fatal | mask
+            state.fatal.union(mask)
         } else {
-            state.fatal & !mask
+            state.fatal.difference(mask)
         };
         // Clang's `-Weverything` holds `-Wpedantic`.
         let everything = name == "everything"
@@ -401,7 +401,7 @@ impl<'tu> Context<'tu> {
     const fn initial_pragma_state(configuration: CompilerConfiguration) -> PragmaState {
         PragmaState {
             configuration,
-            fatal: 0,
+            fatal: crate::configuration::GroupMask::EMPTY,
             pedantic_warning: false,
             everything: None,
         }

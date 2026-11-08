@@ -76,4 +76,40 @@ sema-value-warnings-clang.c:34:42: warning: address of stack memory associated w
 sema-value-warnings-clang.c:36:48: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
    36 | char *e7(void) { char x; return (char *)(long)&x; }
       |                                                ^
-26 warnings generated.
+sema-value-warnings-clang.c:41:49: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   41 | int *f1(int a, int b) { int x; return a ? (b ? &x : 0) : 0; }
+      |                                                 ^
+sema-value-warnings-clang.c:42:62: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   42 | int *f2(int a, int b, int c) { int x, y, z; return a ? (b ? &x : &y) : (c ? &z : 0); }
+      |                                                              ^
+sema-value-warnings-clang.c:42:67: warning: address of stack memory associated with local variable 'y' returned [-Wreturn-stack-address]
+   42 | int *f2(int a, int b, int c) { int x, y, z; return a ? (b ? &x : &y) : (c ? &z : 0); }
+      |                                                                   ^
+sema-value-warnings-clang.c:42:78: warning: address of stack memory associated with local variable 'z' returned [-Wreturn-stack-address]
+   42 | int *f2(int a, int b, int c) { int x, y, z; return a ? (b ? &x : &y) : (c ? &z : 0); }
+      |                                                                              ^
+sema-value-warnings-clang.c:43:43: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   43 | int *f3(int a) { int x; return ((void)a, &x); }
+      |                                           ^
+sema-value-warnings-clang.c:44:46: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   44 | int *f4(void) { int x; return __extension__ &x; }
+      |                                              ^
+sema-value-warnings-clang.c:45:39: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   45 | int *f5(int *p) { int x; return p ?: &x; }
+      |                                       ^
+sema-value-warnings-clang.c:47:49: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   47 | int *f7(void) { int x; return _Generic(0, int: &x); }
+      |                                                 ^
+sema-value-warnings-clang.c:48:57: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   48 | int *f8(void) { int x; return __builtin_choose_expr(1, &x, 0); }
+      |                                                         ^
+sema-value-warnings-clang.c:49:37: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   49 | int *f9(void) { int x; return (1 ? &x : 0) + 1; }
+      |                                     ^
+sema-value-warnings-clang.c:50:41: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   50 | int *f10(void) { int x; return (x = 1, &x); }
+      |                                         ^
+sema-value-warnings-clang.c:51:49: warning: address of stack memory associated with local variable 'x' returned [-Wreturn-stack-address]
+   51 | long f11(int a) { int x; return a ? (long)(a ? &x : 0) : 0; }
+      |                                                 ^
+38 warnings generated.

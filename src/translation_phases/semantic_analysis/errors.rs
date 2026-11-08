@@ -121,11 +121,33 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
     ValueWarning(crate::configuration::DiagnosticGroup),
+    /// C99: §6.5p3, p. 67; PDF p. 79.
+    Parentheses(crate::configuration::DiagnosticGroup),
+    /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
+    KnrPromotedParameter,
+    /// C99: §6.8.4.2p5, p. 134; PDF p. 146.
+    SwitchCases(crate::configuration::DiagnosticGroup),
     /// C99: §6.9.1p12, p. 142; PDF p. 154.
     ReturnFlow(crate::configuration::DiagnosticGroup),
     /// The words are the diagnostic's name.
     /// C99: §6.7.8p21, p. 127; PDF p. 139.
     MissingFieldInitializer,
+    /// A format string that does not match its call, in the group's words,
+    /// which are the diagnostic's name; the earlier place, when there is
+    /// one, is the one `note` names.
+    /// C99: §7.19.6.1p2,p9, pp. 274, 280; PDF pp. 286, 292;
+    /// §7.19.6.2p2,p13, pp. 282, 287; PDF pp. 294, 299.
+    Format(
+        crate::configuration::DiagnosticGroup,
+        super::format::FormatNote,
+    ),
+    /// A GNU `format` attribute whose operands do not fit its function, in
+    /// the compiler's words, which are the diagnostic's name.
+    /// GNU extension: GCC manual, "Common Function Attributes", `format`.
+    FormatAttribute,
+    /// GCC: a GNU `format` attribute without three operands, the count it
+    /// has; the words are the diagnostic's name.
+    FormatAttributeCount(u8),
     /// C99: §6.9.2p3, p. 143; PDF p. 155.
     IncompleteInternalTentative,
     /// C99: §6.9p3,p5, p. 140; PDF p. 152.
@@ -134,8 +156,10 @@ pub(crate) enum SemanticErrorKind {
     TentativeArrayAssumedOne,
     /// C99: §6.9.2p2, p. 143; PDF p. 155.
     IncompleteTentativeDefinition,
+    /// A function with internal linkage used but not defined: the
+    /// constraint's error, or the warning of a group, at the declaration.
     /// C99: §6.9p3, p. 140; PDF p. 152.
-    UndefinedInternal,
+    UndefinedInternal(Option<crate::configuration::DiagnosticGroup>),
     /// C99: §6.9p3, p. 140; PDF p. 152.
     UnusedStaticFunction,
     /// C99: §6.7.4p3, p. 112; PDF p. 124.
@@ -1127,13 +1151,32 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::ValueWarning(_) => "this value is not what it seems",
+            | Self::Parentheses(_) => "this may not group as written",
+            | Self::KnrPromotedParameter => "the prototype gives it another type",
+            | Self::SwitchCases(_) => "this switch may not handle every value",
             | Self::ReturnFlow(_) => "control can reach this point",
             | Self::MissingFieldInitializer => "later members are left zero",
+            | Self::Format(group, _) => {
+                use crate::configuration::DiagnosticGroup as G;
+                match group {
+                    | G::FormatExtraArgs => "no conversion uses this argument",
+                    | G::FormatInsufficientArgs => "no argument for this conversion",
+                    | G::FormatZeroLength => "empty format string",
+                    | G::FormatSecurity | G::FormatNonliteral => "not a string literal",
+                    | G::FormatInvalidSpecifier => "no such conversion",
+                    | G::FormatContainsNul => "null character in the format",
+                    | G::MissingFormatAttribute => "format passed on",
+                    | G::GccAttributes | G::IgnoredAttributes | G::GccCompat => "this attribute",
+                    | _ => "does not match the format",
+                }
+            },
+            | Self::FormatAttribute | Self::FormatAttributeCount(_) => "this attribute",
             | Self::IncompleteInternalTentative => "declared with an incomplete type",
             | Self::IncompleteTentativeDefinition =>
                 "still incomplete at the end of the translation unit",
             | Self::TentativeArrayAssumedOne => "array assumed to have one element",
-            | Self::UndefinedInternal => "used here but never defined",
+            | Self::UndefinedInternal(None) => "used here but never defined",
+            | Self::UndefinedInternal(Some(_)) => "declared here but never defined",
             | Self::UnusedStaticFunction => "never defined",
             | Self::InlineInternalReference => "internal identifier in an inline definition",
             | Self::InlineStaticObject => "modifiable static object in an inline definition",
@@ -1315,6 +1358,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::InvalidSourceEncoding
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
+                    | crate::configuration::DiagnosticGroup::UndefinedInternal
+                    | crate::configuration::DiagnosticGroup::GccUndefinedInternal
                     | crate::configuration::DiagnosticGroup::InitializerOverrides
                     | crate::configuration::DiagnosticGroup::GnuFoldingConstant
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
@@ -1341,10 +1386,40 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::SignCompare
                     | crate::configuration::DiagnosticGroup::ReturnLocalAddr
                     | crate::configuration::DiagnosticGroup::ReturnStackAddress
+                    | crate::configuration::DiagnosticGroup::Parentheses
+                    | crate::configuration::DiagnosticGroup::ChainedComparison
+                    | crate::configuration::DiagnosticGroup::LogicalOpParentheses
+                    | crate::configuration::DiagnosticGroup::BitwiseOpParentheses
+                    | crate::configuration::DiagnosticGroup::ShiftOpParentheses
+                    | crate::configuration::DiagnosticGroup::ParenthesesEquality
+                    | crate::configuration::DiagnosticGroup::BitwiseConditionalParentheses
+                    | crate::configuration::DiagnosticGroup::LogicalNotParentheses
+                    | crate::configuration::DiagnosticGroup::DanglingElse
+                    | crate::configuration::DiagnosticGroup::SwitchBool
+                    | crate::configuration::DiagnosticGroup::KnrPromotedParameter
+                    | crate::configuration::DiagnosticGroup::Switch
+                    | crate::configuration::DiagnosticGroup::SwitchEnum
+                    | crate::configuration::DiagnosticGroup::SwitchDefault
+                    | crate::configuration::DiagnosticGroup::SwitchOutsideRange
+                    | crate::configuration::DiagnosticGroup::ConstantSwitchCondition
                     | crate::configuration::DiagnosticGroup::ReturnType
                     | crate::configuration::DiagnosticGroup::InvalidNoreturn
                     | crate::configuration::DiagnosticGroup::GccNoreturn
                     | crate::configuration::DiagnosticGroup::MissingFieldInitializers
+                    | crate::configuration::DiagnosticGroup::Format
+                    | crate::configuration::DiagnosticGroup::Format2
+                    | crate::configuration::DiagnosticGroup::FormatExtraArgs
+                    | crate::configuration::DiagnosticGroup::FormatZeroLength
+                    | crate::configuration::DiagnosticGroup::FormatContainsNul
+                    | crate::configuration::DiagnosticGroup::FormatSecurity
+                    | crate::configuration::DiagnosticGroup::FormatNonliteral
+                    | crate::configuration::DiagnosticGroup::FormatInvalidSpecifier
+                    | crate::configuration::DiagnosticGroup::FormatInsufficientArgs
+                    | crate::configuration::DiagnosticGroup::GccAttributes
+                    | crate::configuration::DiagnosticGroup::MissingFormatAttribute
+                    | crate::configuration::DiagnosticGroup::FormatPedantic
+                    | crate::configuration::DiagnosticGroup::FormatTypeConfusion
+                    | crate::configuration::DiagnosticGroup::GccCompat
                     | crate::configuration::DiagnosticGroup::Unused
                     | crate::configuration::DiagnosticGroup::Extra
                     | crate::configuration::DiagnosticGroup::UnusedVariable
@@ -1776,6 +1851,20 @@ impl SemanticErrorKind {
                 "C99 §6.3.1.3p3: converting a value the new type cannot represent gives an \
                  implementation-defined result",
             ),
+            | Self::Parentheses(_) => (
+                "suspicious grouping",
+                "C99 §6.5p3: the grammar groups these operators as written, whatever the \
+                 spacing suggests",
+            ),
+            | Self::KnrPromotedParameter => (
+                "K&R parameter type",
+                "C99 §6.7.5.3p15: a parameter an identifier list declares is compatible with a \
+                 prototype's only after the default argument promotions",
+            ),
+            | Self::SwitchCases(_) => (
+                "switch cases",
+                "C99 §6.8.4.2p5: a value no case matches goes to default, or past the switch",
+            ),
             | Self::ReturnFlow(_) => (
                 "control reaches the end of the function",
                 "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
@@ -1785,6 +1874,16 @@ impl SemanticErrorKind {
                 "comparison of integers of different signs",
                 "C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand \
                  unsigned, so a negative value compares as a large one",
+            ),
+            | Self::FormatAttribute | Self::FormatAttributeCount(_) => (
+                "invalid format attribute",
+                "GNU format attribute: the format operand must name a character pointer \
+                 parameter, and the first data operand `...` or zero",
+            ),
+            | Self::Format(..) => (
+                "format string does not match its arguments",
+                "C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, \
+                 or whose argument does not have the correct type, has undefined behavior",
             ),
             | Self::MissingFieldInitializer => (
                 "missing field initializer",
@@ -1821,7 +1920,7 @@ impl SemanticErrorKind {
                 "C99 §6.9.2p2: a tentative definition without an external definition behaves as a \
                  zero-initialized file-scope definition",
             ),
-            | Self::UndefinedInternal => (
+            | Self::UndefinedInternal(_) => (
                 "used internal identifier has no definition",
                 "C99 §6.9p3: an internal-linkage identifier used outside a constant sizeof \
                  operand has exactly one definition in the translation unit",
@@ -2648,9 +2747,14 @@ impl SemanticErrorKind {
         match self {
             | Self::PointerConstraint(group)
             | Self::ValueWarning(group)
+            | Self::Parentheses(group)
+            | Self::Format(group, _)
+            | Self::SwitchCases(group)
             | Self::ReturnFlow(group) => Some(group),
+            | Self::UndefinedInternal(group) => group,
             | Self::Unused(rule) => Some(rule.group()),
             | Self::SignCompare => Some(G::SignCompare),
+            | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),
             | Self::Main(rule) => rule.group(),
@@ -2709,6 +2813,13 @@ impl SemanticError {
                 };
                 return Some((arena.alloc_str(name), option));
             },
+            // An error by default, which `-Wno-parentheses` controls.
+            | (
+                F::Clang,
+                SemanticErrorKind::Parentheses(
+                    crate::configuration::DiagnosticGroup::ChainedComparison,
+                ),
+            ) => return Some((arena.alloc_str(name), Some("parentheses"))),
             | (F::Gcc, SemanticErrorKind::ImplicitLibraryFunction(_)) if !c99 => {
                 let message = format_in!(
                     arena,
@@ -2716,6 +2827,20 @@ impl SemanticError {
                 );
                 return Some((message, Some("builtin-declaration-mismatch")));
             },
+            // GCC's warning has no option, so `-Werror` names only itself.
+            | (F::Gcc, SemanticErrorKind::UndefinedInternal(Some(_))) => {
+                let message = format_in!(arena, "'{name}' used but never defined");
+                let message = if self.severity() == ErrorSeverity::Error {
+                    format_in!(arena, "{message} [-Werror]")
+                } else {
+                    message
+                };
+                return Some((message, None));
+            },
+            | (F::Clang, SemanticErrorKind::UndefinedInternal(Some(_))) => format_in!(
+                arena,
+                "function '{name}' has internal linkage but is not defined"
+            ),
             | (F::Clang, SemanticErrorKind::ImplicitFunctionDeclaration) if c99 => format_in!(
                 arena,
                 "call to undeclared function '{name}'; ISO C99 and later do not support implicit \
@@ -2867,6 +2992,12 @@ impl SemanticError {
                 arena,
                 "'{name}' undeclared (first use in this function)"
             )),
+            | (Format::Gcc, SemanticErrorKind::UndefinedInternal(_)) =>
+                Some(format_in!(arena, "'{name}' used but never defined")),
+            | (Format::Clang, SemanticErrorKind::UndefinedInternal(_)) => Some(format_in!(
+                arena,
+                "function '{name}' has internal linkage but is not defined"
+            )),
             | (Format::Gcc, SemanticErrorKind::UndeclaredOutsideFunction) => Some(format_in!(
                 arena,
                 "'{name}' undeclared here (not in a function)"
@@ -2978,6 +3109,12 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ValueWarning(_)
+                | SemanticErrorKind::Parentheses(_)
+                | SemanticErrorKind::Format(..)
+                | SemanticErrorKind::FormatAttribute
+                | SemanticErrorKind::FormatAttributeCount(_)
+                | SemanticErrorKind::KnrPromotedParameter
+                | SemanticErrorKind::SwitchCases(_)
                 | SemanticErrorKind::ReturnFlow(_)
         ) {
             self.name.map_or(message, |name| {
@@ -3033,7 +3170,11 @@ impl ToDiagnostic for SemanticError {
             if let Some(group) = group.and_then(crate::configuration::DiagnosticGroup::name) {
                 suffixed = true;
                 // GCC's option takes a level, and it says so.
-                let level = if self.kind == SemanticErrorKind::Unused(UnusedRule::GccFileConstant) {
+                let level = if self.kind == SemanticErrorKind::Unused(UnusedRule::GccFileConstant)
+                    || (self.kind.group() == Some(crate::configuration::DiagnosticGroup::Format)
+                        && context.configuration.diagnostic_format()
+                            == crate::configuration::DiagnosticFormat::Gcc)
+                {
                     "="
                 } else {
                     ""
@@ -3109,6 +3250,10 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FlexibleArrayDesignator =>
                     "initialized flexible array member is here",
                 | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
+                | SemanticErrorKind::UndefinedInternal(Some(_)) => "used here",
+                | SemanticErrorKind::Format(_, note) => note.words(context, arena),
+                | SemanticErrorKind::FormatAttributeCount(count) =>
+                    format_in!(arena, "expected 3, found {count}"),
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
