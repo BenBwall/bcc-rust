@@ -1615,7 +1615,8 @@ mod tests {
         directory.write(
             "f.c",
             "struct T; struct S { int y; };\nvoid v(void);\nint f(struct T *t, struct S *s) { \
-             return t->x + s->x; }\nvoid g(void) { int x = v(); x = v(); (long)v(); }\n",
+             return t->x + s->x; }\nvoid g(void) { int x = v(); x = v(); (long)v(); }\nvoid \
+             h(void) { struct S s = v(); }\n",
         );
         for (mode, expected) in [
             (
@@ -1625,6 +1626,7 @@ mod tests {
                     "error: 'struct S' has no member named 'x'\n",
                     "error: void value not ignored as it ought to be\n",
                     "error: invalid use of void expression\n",
+                    "error: invalid initializer\n",
                 ],
             ),
             (
@@ -1634,6 +1636,8 @@ mod tests {
                     "error: no member named 'x' in 'struct S'\n",
                     "error: initializing 'int' with an expression of incompatible type 'void'\n",
                     "error: assigning to 'int' from incompatible type 'void'\n",
+                    "error: initializing 'struct S' with an expression of incompatible type \
+                     'void'\n",
                 ],
             ),
         ] {
@@ -4743,6 +4747,24 @@ mod tests {
             (
                 "int main(void){ return 1 + ); }",
                 "e.c:1: error: expression expected before ')'\n",
+            ),
+            // TCC names a constant by its value and a floating one by its
+            // type, and escapes a character's values.
+            (
+                "void f(void){ int x = 1 0x10UL }",
+                "e.c:1: error: ';' expected (got '16')\n",
+            ),
+            (
+                "void f(void){ int x = 1 1.5f }",
+                "e.c:1: error: ';' expected (got '<float>')\n",
+            ),
+            (
+                "void f(void){ int x = 1 '\\t' }",
+                "e.c:1: error: ';' expected (got ''\\011'')\n",
+            ),
+            (
+                "void f(void){ int x = 1 \"a\\tb\" }",
+                "e.c:1: error: ';' expected (got '\"a\\011b\"')\n",
             ),
             (
                 "int main(void){ struct T *t; return t->x; }",

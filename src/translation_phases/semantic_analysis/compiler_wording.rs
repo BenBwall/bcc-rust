@@ -84,6 +84,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let format = self.context.configuration.diagnostic_format();
         let text = match (format, use_) {
             | (DiagnosticFormat::Gcc, VoidUse::Cast) => "invalid use of void expression",
+            // GCC reads an aggregate's initializer as one that cannot
+            // initialize it before it looks at the value.
+            | (DiagnosticFormat::Gcc, VoidUse::Initialization) if !self.scalar_type(target) =>
+                "invalid initializer",
             | (DiagnosticFormat::Gcc, _) => "void value not ignored as it ought to be",
             | (DiagnosticFormat::Clang, VoidUse::Cast) =>
                 "operand of type 'void' where arithmetic or pointer type is required",
