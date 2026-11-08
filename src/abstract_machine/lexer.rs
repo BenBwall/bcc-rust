@@ -123,6 +123,7 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
                         | b"-="
                         | b"*="
                         | b"/="
+                        | b"%="
                         | b"&&"
                         | b"->"
                 )
@@ -139,13 +140,15 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
             ));
         }
         tokens.push(Token {
-            text:  &source[start..offset],
-            range: range(source, start, offset),
+            text:      &source[start..offset],
+            range:     range(source, start, offset),
+            macro_use: None,
         });
     }
     tokens.push(Token {
-        text:  "",
-        range: range(source, source.len(), source.len()),
+        text:      "",
+        range:     range(source, source.len(), source.len()),
+        macro_use: None,
     });
     Ok(tokens)
 }
@@ -173,7 +176,7 @@ fn directive_end(source: &str, start: usize) -> Result<usize, Diagnostic> {
 }
 
 /// The end of the character constant or string literal opening at `start`.
-fn literal_end(source: &str, start: usize) -> Result<usize, Diagnostic> {
+pub(super) fn literal_end(source: &str, start: usize) -> Result<usize, Diagnostic> {
     let bytes = source.as_bytes();
     let quote = bytes[start];
     let mut at = start + 1;
@@ -216,11 +219,14 @@ pub(super) fn literal_bytes(source: &str, token: Token<'_>) -> Result<Vec<u8>, D
     let body = &text[1..text.len() - 1];
     let base = token.range.start + 1;
     let error = |at: usize, length: usize, message: &str| {
-        Diagnostic::new(
-            "syntax",
-            range(source, base + at, (base + at + length).min(source.len())),
-            message,
-        )
+        // A replaced macro name's text is not at its range: place the
+        // error on the whole use.
+        let place = if token.macro_use.is_some() {
+            token.range
+        } else {
+            range(source, base + at, (base + at + length).min(source.len()))
+        };
+        Diagnostic::new("syntax", place, message)
     };
     let mut bytes = Vec::new();
     let mut at = 0;
@@ -291,8 +297,13 @@ pub(super) fn literal_bytes(source: &str, token: Token<'_>) -> Result<Vec<u8>, D
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Token<'a> {
-    pub text:  &'a str,
-    pub range: SourceRange,
+    /// The token as written; for a macro name that translation phase 4
+    /// replaced, the macro's replacement.
+    pub text:      &'a str,
+    /// Where the token is written: a replaced macro name's own range.
+    pub range:     SourceRange,
+    /// The macro whose name this token replaced (C99 §6.10.3p9).
+    pub macro_use: Option<usize>,
 }
 
 pub(super) fn range(source: &str, start: usize, end: usize) -> SourceRange {

@@ -84,6 +84,10 @@ clauses! {
     /// C99: §6.3.1.1 paragraph 2, pp. 42-43; PDF pp. 54-55.
     INTEGER_PROMOTIONS = "6.3.1.1p2", "pp. 42-43; PDF pp. 54-55", "Boolean, characters, and integers",
         "Before arithmetic, values of types narrower than int (like char) are converted to int.";
+    /// C99: §6.3.1.3 paragraph 1, p. 43; PDF p. 55.
+    INTEGER_UNCHANGED = "6.3.1.3p1", "p. 43; PDF p. 55", "Signed and unsigned integers",
+        "Converting an integer to another integer type keeps its value whenever the new type can \
+         represent it.";
     /// C99: §6.3.1.3 paragraph 3, p. 43; PDF p. 55.
     SIGNED_CONVERSION = "6.3.1.3p3", "p. 43; PDF p. 55", "Signed and unsigned integers",
         "Converting a value that does not fit into a signed type gives an implementation-defined \
@@ -194,6 +198,43 @@ clauses! {
     SIMPLE_ASSIGNMENT = "6.5.16.1p2", "p. 92; PDF p. 104", "Simple assignment",
         "x = v converts v to x's type and replaces the value stored in x.";
     /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
+    POINTER_ASSIGNMENT = "6.5.16.1p1", "p. 92; PDF p. 104", "Simple assignment",
+        "A pointer may be assigned to one whose pointed-to type has all its qualifiers: a \
+         pointer to const never converts to a pointer to non-const without a cast.";
+    /// C99: §6.5.16 paragraph 2, p. 91; PDF p. 103.
+    ASSIGNMENT_CONSTRAINT = "6.5.16p2", "p. 91; PDF p. 103", "Assignment operators",
+        "The left operand of =, += and the other assignment operators must be a modifiable \
+         lvalue: an object that is not const, not an array.";
+    /// C99: §6.5.2.4 paragraph 1, p. 75; PDF p. 87.
+    INCREMENT_CONSTRAINT = "6.5.2.4p1", "p. 75; PDF p. 87", "Postfix increment and decrement operators",
+        "The operand of ++ or -- must be a modifiable lvalue of arithmetic or pointer type: not \
+         a const object.";
+    /// C99: §6.5.16.2 paragraph 1, p. 93; PDF p. 105.
+    COMPOUND_CONSTRAINT = "6.5.16.2p1", "p. 93; PDF p. 105", "Compound assignment",
+        "+= and -= take an arithmetic left operand, or a pointer with an integer on the right; \
+         the other compound assignments take arithmetic operands.";
+    /// C99: §6.5.16.2 paragraph 3, p. 93; PDF p. 105.
+    COMPOUND_ASSIGNMENT = "6.5.16.2p3", "p. 93; PDF p. 105", "Compound assignment",
+        "E1 op= E2 is E1 = E1 op (E2), except that E1 is evaluated only once.";
+    /// C99: §6.5.4 paragraph 2, p. 81; PDF p. 93.
+    CAST_CONSTRAINT = "6.5.4p2", "p. 81; PDF p. 93", "Cast operators",
+        "A cast names a scalar type and converts a scalar operand: a number or a pointer.";
+    /// C99: §6.5.4 paragraph 4, p. 81; PDF p. 93.
+    CAST = "6.5.4p4", "p. 81; PDF p. 93", "Cast operators",
+        "(type) expression converts the expression's value to the named type; a cast to the type \
+         the value already has changes nothing.";
+    /// C99: §6.3.2.3 paragraph 2, p. 47; PDF p. 59.
+    QUALIFIED_POINTER = "6.3.2.3p2", "p. 47; PDF p. 59", "Pointers",
+        "A pointer to T converts to a pointer to const T and still points to the same object.";
+    /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
+    MODIFIABLE_LVALUE = "6.3.2.1p1", "p. 46; PDF p. 58", "Lvalues, arrays, and function designators",
+        "A modifiable lvalue designates an object the program may store into: not an array and \
+         not const-qualified.";
+    /// C99: §6.7.3 paragraph 5, p. 109; PDF p. 121.
+    CONST_WRITE = "6.7.3p5", "p. 109; PDF p. 121", "Type qualifiers",
+        "Modifying an object defined const through an lvalue that is not const, such as a \
+         pointer whose const a cast removed, is undefined.";
+    /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     STRUCTURE_ASSIGNMENT = "6.5.16.1p1", "p. 92; PDF p. 104", "Simple assignment",
         "Assignment works on whole structures of the same type: unlike arrays, a structure can \
          be copied with =.";
@@ -277,6 +318,14 @@ clauses! {
     TRANSLATION_PHASES = "5.1.1.2p1", "pp. 9-10; PDF pp. 21-22", "Translation phases",
         "A source file is translated in phases; in phase 4 the preprocessor executes directives \
          such as #include, long before the program runs.";
+    /// C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+    LITERAL_CONCATENATION_PHASE = "5.1.1.2p1", "pp. 9-10; PDF pp. 21-22", "Translation phases",
+        "In translation phase 6, after escape sequences are converted, adjacent string literals \
+         are joined into one.";
+    /// C99: §6.4.5 paragraph 4, p. 62; PDF p. 74.
+    STRING_CONCATENATION = "6.4.5p4", "p. 62; PDF p. 74", "String literals",
+        "Adjacent string literals, such as \"a\" \"b\", are concatenated into a single \
+         literal, \"ab\", with one null at its end.";
     /// C99: §6.4.4.4 paragraph 10, p. 61; PDF p. 73.
     CHARACTER_CONSTANT = "6.4.4.4p10", "p. 61; PDF p. 73", "Character constants",
         "A character constant such as 'a' is an int whose value is the character's code: 'a' is \
@@ -309,6 +358,13 @@ clauses! {
     SOURCE_INCLUSION = "6.10.2p2", "p. 149; PDF p. 161", "Source file inclusion",
         "#include <name> is replaced by the entire contents of the header that name \
          identifies.";
+    /// C99: §6.10.3 paragraph 9, p. 152; PDF p. 164.
+    OBJECT_LIKE_MACRO = "6.10.3p9", "p. 152; PDF p. 164", "Macro replacement",
+        "#define NAME replacement makes each later NAME stand for the replacement: the \
+         preprocessor substitutes it before the program is compiled.";
+    /// C99: §6.10.3 paragraph 2, p. 151; PDF p. 163.
+    MACRO_REDEFINITION = "6.10.3p2", "p. 151; PDF p. 163", "Macro replacement",
+        "A macro may be defined again only with an identical replacement list.";
     /// C99: §7.1.1 paragraph 1, p. 164; PDF p. 176.
     STRING = "7.1.1p1", "p. 164; PDF p. 176", "Definitions of terms",
         "A string is a sequence of characters ending with the first null character; a pointer to \
@@ -341,6 +397,11 @@ clauses! {
         "A conversion specification starts with % and has flags, a minimum field width, a \
          precision, a length modifier and a conversion specifier, in that order; a shorter \
          result is padded with spaces to the width.";
+    /// C99: §7.19.6.1 paragraph 4, p. 275; PDF p. 287.
+    PRECISION = "7.19.6.1p4", "p. 275; PDF p. 287", "The fprintf function",
+        "A precision, a period and a number, is the minimum number of digits for %d, %i, %u and \
+         %x, and the maximum number of characters for %s; with any other conversion it is \
+         undefined.";
     /// C99: §7.19.6.1 paragraph 6, pp. 275-276; PDF pp. 287-288.
     PRINTF_FLAGS = "7.19.6.1p6", "pp. 275-276; PDF pp. 287-288", "The fprintf function",
         "The - flag pads on the right instead of the left; the 0 flag pads a number with zeros, \

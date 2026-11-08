@@ -26,7 +26,7 @@ impl Type {
         match self {
             | Self::Int => (4, 4),
             | Self::Char => (1, 1),
-            | Self::Pointer | Self::StructPointer(_) | Self::CharPointer(_) => (8, 8),
+            | Self::Pointer(_) | Self::StructPointer(_) | Self::CharPointer(_) => (8, 8),
             | Self::Array(count) => (count.saturating_mul(4), 4),
             | Self::CharArray(count) => (count, 1),
             | Self::Struct(id) => structures
@@ -56,7 +56,8 @@ impl Type {
         match self {
             | Self::Int => String::from("int"),
             | Self::Char => String::from("char"),
-            | Self::Pointer => String::from("int *"),
+            | Self::Pointer(false) => String::from("int *"),
+            | Self::Pointer(true) => String::from("const int *"),
             | Self::Array(count) => format!("int[{count}]"),
             | Self::CharArray(count) => format!("char[{count}]"),
             | Self::CharPointer(false) => String::from("char *"),

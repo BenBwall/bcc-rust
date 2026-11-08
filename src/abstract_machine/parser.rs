@@ -17,6 +17,8 @@ use super::{
     },
     model::{
         Diagnostic,
+        Directive,
+        DirectiveKind,
         ExpressionNode,
         Function,
         Instruction,
@@ -27,6 +29,7 @@ use super::{
         MAX_MEMBERS,
         MAX_OBJECTS,
         MAX_STRUCTURES,
+        Macro,
         Op,
         Place,
         Program,
@@ -58,6 +61,8 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         signatures: Vec::new(),
         prototypes: Vec::new(),
         directives: Vec::new(),
+        macros: Vec::new(),
+        declaration_macros: Vec::new(),
         returns: Type::Int,
     };
     let mut functions: Vec<Function> = Vec::new();
@@ -72,9 +77,10 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             continue;
         }
         let storage = parser.current();
+        parser.declaration_macros.clear();
         let is_static = parser.take("static");
         let base = parser.base_type()?;
-        let pointer = parser.take("*");
+        let pointer = parser.pointer()?;
         let name = parser.identifier()?;
         if !parser.at("(") {
             parser.file_scope_object(base, pointer, name)?;
@@ -224,38 +230,44 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         structures: parser.structures.into(),
         statics: parser.statics,
         directives: parser.directives,
+        macros: parser.macros,
     })
 }
 
 pub(super) struct Parser<'a> {
-    pub tokens:         Vec<Token<'a>>,
-    pub source:         &'a str,
-    pub position:       usize,
-    pub code:           Vec<Instruction>,
-    pub expressions:    Vec<Expr>,
-    pub symbols:        Vec<Symbol<'a>>,
-    pub scope:          usize,
-    pub nesting:        usize,
-    pub calls:          Vec<CallSite>,
-    pub function_index: usize,
+    pub tokens:             Vec<Token<'a>>,
+    pub source:             &'a str,
+    pub position:           usize,
+    pub code:               Vec<Instruction>,
+    pub expressions:        Vec<Expr>,
+    pub symbols:            Vec<Symbol<'a>>,
+    pub scope:              usize,
+    pub nesting:            usize,
+    pub calls:              Vec<CallSite>,
+    pub function_index:     usize,
     /// The function whose body is being compiled.
-    pub function_name:  Option<String>,
+    pub function_name:      Option<String>,
     /// The current function's expression-tree nodes.
-    pub nodes:          Vec<ExpressionNode>,
+    pub nodes:              Vec<ExpressionNode>,
     /// Structure types by index; an incomplete one (declared by `struct T *`
     /// or still being defined) has no members yet.
-    pub structures:     Vec<Structure>,
-    pub complete:       Vec<bool>,
+    pub structures:         Vec<Structure>,
+    pub complete:           Vec<bool>,
     /// Objects with static storage duration, in declaration order.
-    pub statics:        Vec<Static>,
+    pub statics:            Vec<Static>,
     /// Each function defined so far, or being defined, and its return type.
-    pub signatures:     Vec<(String, Type)>,
+    pub signatures:         Vec<(String, Type)>,
     /// Each function declared by a prototype so far.
-    pub prototypes:     Vec<Prototype>,
-    /// Each `#include <stdio.h>` so far.
-    pub directives:     Vec<SourceRange>,
+    pub prototypes:         Vec<Prototype>,
+    /// Each `#include <stdio.h>` and object-like `#define` so far.
+    pub directives:         Vec<Directive>,
+    /// The object-like macros defined so far.
+    pub macros:             Vec<Macro>,
+    /// The macros whose replacements the declaration being parsed uses
+    /// outside expressions: in an array size or a static initializer.
+    pub declaration_macros: Vec<usize>,
     /// The return type of the function being compiled.
-    pub returns:        Type,
+    pub returns:            Type,
 }
 
 impl<'a> Parser<'a> {
@@ -431,20 +443,53 @@ impl<'a> Parser<'a> {
     /// A block-scope declaration: one declarator, with an optional
     /// initializer. A `static` one names an object that already exists.
     fn declaration(&mut self) -> Result<(), Diagnostic> {
+        self.declaration_macros.clear();
         let is_static = self.take("static");
         let base = self.base_type()?;
-        let pointer = self.take("*");
+        let pointer = self.pointer()?;
         let name = self.identifier()?;
         let array = self.declarator_array()?;
         let ty = self.declared_type(base, pointer, array, name.range)?;
+        let constant = base.is_const() && !pointer;
         if is_static {
-            return self.static_local(name, ty);
+            return self.static_local(name, ty, constant);
         }
         match ty {
             | Type::Array(_) | Type::Struct(_) | Type::CharArray(_) =>
-                self.aggregate_declaration(name, ty),
-            | _ => self.scalar_declaration(name, ty),
+                self.aggregate_declaration(name, ty, constant),
+            | _ => self.scalar_declaration(name, ty, constant),
         }
+    }
+
+    /// A declarator's optional `*`. A `const` after it would make the
+    /// pointer itself `const`, which this subset leaves out.
+    fn pointer(&mut self) -> Result<bool, Diagnostic> {
+        if !self.take("*") {
+            return Ok(false);
+        }
+        if self.at("const") {
+            return Err(self.error(
+                "a const pointer (`* const`) is outside this subset; `const int *p` and `const \
+                 char *p`, pointers to const, are in it",
+            ));
+        }
+        Ok(true)
+    }
+
+    /// Emit the creation of the automatic object `name`, noting a macro
+    /// in its array size.
+    fn declare(&mut self, name: Token<'a>, ty: Type, constant: bool) -> Result<(), Diagnostic> {
+        self.add_symbol(name, ty, self.scope, None, constant)?;
+        self.emit(
+            Op::Declare {
+                name: String::from(name.text),
+                ty,
+                constant,
+            },
+            name.range,
+        )?;
+        self.mark_macro(self.declaration_macros.first().copied());
+        Ok(())
     }
 
     /// Whether a block-scope declaration starts here.
@@ -466,10 +511,11 @@ impl<'a> Parser<'a> {
         let literal = self.tokens.get(self.position + 1).copied();
         match literal {
             | Some(literal) if self.at("=") && literal.text.starts_with('"') => {
-                let length = lexer::literal_bytes(self.source, literal)?.len() + 1;
+                let joined = self.joined_literal(self.position + 1)?;
+                let length = joined.bytes.len() + 1;
                 if length > MAX_CELLS {
                     return Err(Diagnostic::limit(
-                        literal.range,
+                        joined.range,
                         "array size must be between 1 and 512",
                     ));
                 }
@@ -486,9 +532,13 @@ impl<'a> Parser<'a> {
 
     /// `int x`, `int *p`, `char c` or `struct point *p`, with an optional
     /// initializer.
-    fn scalar_declaration(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
-        self.add_symbol(name, ty, self.scope, None)?;
-        self.emit(Op::Declare(String::from(name.text), ty), name.range)?;
+    fn scalar_declaration(
+        &mut self,
+        name: Token<'a>,
+        ty: Type,
+        constant: bool,
+    ) -> Result<(), Diagnostic> {
+        self.declare(name, ty, constant)?;
         if self.take("=") {
             self.whole_initializer(name, ty)?;
         }
@@ -525,9 +575,13 @@ impl<'a> Parser<'a> {
     /// An automatic array or structure, with an optional initializer: a
     /// brace-enclosed list, or for a structure also a whole structure
     /// (C99 §6.7.8p13).
-    fn aggregate_declaration(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
-        self.add_symbol(name, ty, self.scope, None)?;
-        self.emit(Op::Declare(String::from(name.text), ty), name.range)?;
+    fn aggregate_declaration(
+        &mut self,
+        name: Token<'a>,
+        ty: Type,
+        constant: bool,
+    ) -> Result<(), Diagnostic> {
+        self.declare(name, ty, constant)?;
         if self.take("=") {
             if let Type::CharArray(length) = ty
                 && self.current().text.starts_with('"')
@@ -742,45 +796,90 @@ impl<'a> Parser<'a> {
         length: usize,
         full_expression: bool,
     ) -> Result<(), Diagnostic> {
-        let literal = self.current();
-        let bytes = lexer::literal_bytes(self.source, literal)?;
-        if bytes.len() > length {
+        let literal = self.take_literal()?;
+        if literal.bytes.len() > length {
             return Err(Diagnostic::new(
                 "unsupported",
                 literal.range,
                 &format!(
                     "the string literal has {} characters, more than the {length} elements of the \
                      array it initializes (C99 §6.7.8p2)",
-                    bytes.len()
+                    literal.bytes.len()
                 ),
             ));
         }
-        self.position += 1;
-        self.adjacent_literal()?;
-        let value = self.tree(literal.text, literal.range, Vec::new())?;
+        let value = self.tree(&literal.spelling, literal.range, Vec::new())?;
         let range = combined(target, literal.range);
         let root = self.tree("=", range, vec![element, value])?;
         self.emit_node(
             Op::InitializeString {
-                bytes,
+                bytes: literal.bytes,
                 length,
                 full_expression,
+                parts: literal.parts,
             },
             range,
             root,
-        )
+        )?;
+        self.mark_macro(literal.macro_use);
+        Ok(())
     }
 
-    /// Reject a string literal right after another one: translation phase
-    /// 6 would join them.
-    pub fn adjacent_literal(&self) -> Result<(), Diagnostic> {
-        if self.current().text.starts_with('"') {
-            return Err(self.error(
-                "adjacent string literals are joined in translation phase 6, which is outside \
-                 this subset; write them as one literal",
-            ));
+    /// The string literal whose first token is token `at`, joined with
+    /// the literals right after it: translation phase 6 concatenates
+    /// adjacent string literals into one, after phase 5 has replaced their
+    /// escape sequences, so `"\x4" "1"` is two characters, not `"A"`.
+    ///
+    /// C99: §5.1.1.2 paragraph 1 item 6, p. 10; PDF p. 22.
+    /// C99: §6.4.5 paragraph 4, p. 62; PDF p. 74.
+    pub fn joined_literal(&self, at: usize) -> Result<Joined, Diagnostic> {
+        let first = self.tokens[at];
+        let mut joined = Joined {
+            bytes:     Vec::new(),
+            range:     first.range,
+            spelling:  String::new(),
+            parts:     0,
+            macro_use: None,
+        };
+        while let Some(&part) = self
+            .tokens
+            .get(at + joined.parts)
+            .filter(|token| token.text.starts_with('"'))
+        {
+            joined
+                .bytes
+                .extend(lexer::literal_bytes(self.source, part)?);
+            if !joined.spelling.is_empty() {
+                joined.spelling.push(' ');
+            }
+            joined.spelling.push_str(part.text);
+            joined.range = combined(first.range, part.range);
+            joined.macro_use = joined.macro_use.or(part.macro_use);
+            joined.parts += 1;
+            if joined.bytes.len() >= MAX_CELLS {
+                return Err(Diagnostic::limit(
+                    joined.range,
+                    "a string literal may hold at most 511 characters here",
+                ));
+            }
         }
-        Ok(())
+        Ok(joined)
+    }
+
+    /// The string literal at the current token, joined with any adjacent
+    /// ones, moving past them all.
+    pub fn take_literal(&mut self) -> Result<Joined, Diagnostic> {
+        let joined = self.joined_literal(self.position)?;
+        self.position += joined.parts;
+        Ok(joined)
+    }
+
+    /// Note on the operation just emitted that it evaluates the
+    /// replacement of macro `index`.
+    pub fn mark_macro(&mut self, index: Option<usize>) {
+        if let (Some(index), Some(last)) = (index, self.code.last_mut()) {
+            last.macro_use = Some(index);
+        }
     }
 
     /// Store an initializer element. Only the list's last store ends the
@@ -816,15 +915,23 @@ impl<'a> Parser<'a> {
         };
         let expression = self.expression(0)?;
         let range = self.expressions[expression].range;
-        let modifies = self.at("=") || prefix.is_some() || self.at("++") || self.at("--");
+        let compound = compound_operator(self.current().text);
+        let modifies = self.at("=")
+            || compound.is_some()
+            || prefix.is_some()
+            || self.at("++")
+            || self.at("--");
         if modifies && self.expressions[expression].readonly {
-            return Err(Diagnostic::new(
-                "unsupported",
-                range,
-                "this char is reached through a const char *, so it is not a modifiable lvalue: \
-                 the program promised not to change it through this pointer (C99 §6.5.16p2, \
-                 §6.3.2.1p1)",
+            return Err(self.readonly_error(
+                expression,
+                prefix.is_some() || compound.is_none() && !self.at("="),
             ));
+        }
+        if let Some(operator) = compound {
+            if prefix.is_some() {
+                return Err(self.error("nested increments are outside this subset"));
+            }
+            return self.compound_assignment(expression, operator);
         }
         if self.take("=") {
             if prefix.is_some() {
@@ -863,7 +970,7 @@ impl<'a> Parser<'a> {
             let operand = &self.expressions[expression];
             if !matches!(
                 operand.ty,
-                Type::Int | Type::Char | Type::Pointer | Type::CharPointer(_)
+                Type::Int | Type::Char | Type::Pointer(_) | Type::CharPointer(_)
             ) {
                 return Err(Diagnostic::new(
                     "unsupported",
@@ -904,6 +1011,114 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// The constraint an assignment, compound assignment, `++` or `--`
+    /// breaks when its operand `expression` is `const`: an object defined
+    /// `const`, or one reached through a pointer to `const`. `increment`
+    /// for `++` and `--`.
+    ///
+    /// C99: §6.5.16 paragraph 2, p. 91; PDF p. 103.
+    /// C99: §6.5.2.4 paragraph 1, p. 75; PDF p. 87.
+    /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58 (modifiable lvalue).
+    fn readonly_error(&self, expression: usize, increment: bool) -> Diagnostic {
+        let operand = &self.expressions[expression];
+        let what = match &operand.kind {
+            | ExprKind::Name(name, ..) => format!(
+                "`{name}` is defined const, so it is not a modifiable lvalue: the program \
+                 promised never to change it after its initialization"
+            ),
+            | _ => String::from(
+                "this object is reached through a pointer to const, so it is not a modifiable \
+                 lvalue here: the program promised not to change it through this pointer",
+            ),
+        };
+        let (operation, clause) = if increment {
+            (
+                "++ and -- need a modifiable lvalue (C99 §6.5.2.4p1, §6.5.3.1p1)",
+                &super::clauses::INCREMENT_CONSTRAINT,
+            )
+        } else {
+            (
+                "an assignment's left operand must be a modifiable lvalue (C99 §6.5.16p2)",
+                &super::clauses::ASSIGNMENT_CONSTRAINT,
+            )
+        };
+        Diagnostic::constraint(operand.range, &format!("{what}; {operation}"), clause)
+    }
+
+    /// `E1 op= E2` as a statement, after `E1`: one step designates `E1`
+    /// (it is evaluated once), `E2` is evaluated, and one step reads `E1`,
+    /// applies `op` and stores the result, as `E1 = E1 op (E2)` would.
+    ///
+    /// C99: §6.5.16.2 paragraphs 1-3, p. 93; PDF p. 105.
+    fn compound_assignment(
+        &mut self,
+        expression: usize,
+        operator: &'static str,
+    ) -> Result<(), Diagnostic> {
+        let token = self.current();
+        self.position += 1;
+        let value = self.expression(0)?;
+        let left = self.expressions[expression].ty;
+        let right = self.expressions[value].ty;
+        let range = combined(
+            self.expressions[expression].range,
+            self.expressions[value].range,
+        );
+        let arithmetic = |ty: Type| matches!(ty, Type::Int | Type::Char);
+        match (left, operator) {
+            | _ if arithmetic(left) && arithmetic(right) => {},
+            | (Type::Pointer(_) | Type::CharPointer(_), "+" | "-") if arithmetic(right) => {},
+            | (Type::StructPointer(_), "+" | "-") if arithmetic(right) =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    range,
+                    "arithmetic on structure pointers needs an array of structures, which is \
+                     outside this subset",
+                )),
+            | (Type::Struct(_), _) => {
+                return Err(Diagnostic::constraint(
+                    range,
+                    &format!(
+                        "`{}` needs an arithmetic left operand, or a pointer for += and -=; a \
+                         structure is neither (C99 §6.5.16.2p1, p2)",
+                        token.text
+                    ),
+                    &super::clauses::COMPOUND_CONSTRAINT,
+                ));
+            },
+            | _ => {
+                return Err(Diagnostic::constraint(
+                    range,
+                    &format!(
+                        "`{}` takes an arithmetic left operand and an arithmetic right one, or \
+                         for += and -= a pointer on the left and an integer on the right (C99 \
+                         §6.5.16.2p1, p2)",
+                        token.text
+                    ),
+                    &super::clauses::COMPOUND_CONSTRAINT,
+                ));
+            },
+        }
+        if self.expressions[value].call
+            && !matches!(
+                self.expressions[value].kind,
+                ExprKind::Call(..) | ExprKind::Library(..)
+            )
+        {
+            return Err(self.error(
+                "calls must be whole expressions; operand sequencing is outside this subset",
+            ));
+        }
+        let target = self.emit_expression(expression, true)?;
+        let operand = self.emit_expression(value, false)?;
+        if right == Type::Char && arithmetic(left) {
+            let value_range = self.expressions[value].range;
+            self.emit_node(Op::Promote, value_range, operand)?;
+        }
+        let root = self.tree(token.text, range, vec![target, operand])?;
+        self.emit_node(Op::Compound(operator), range, root)
+    }
+
     pub fn emit(&mut self, op: Op, range: SourceRange) -> Result<(), Diagnostic> {
         self.push_instruction(op, range, None)
     }
@@ -922,7 +1137,12 @@ impl<'a> Parser<'a> {
         if self.code.len() >= MAX_CODE {
             return Err(Diagnostic::limit(range, "compiled operation limit reached"));
         }
-        self.code.push(Instruction { op, range, node });
+        self.code.push(Instruction {
+            op,
+            range,
+            node,
+            macro_use: None,
+        });
         Ok(())
     }
 
@@ -1014,12 +1234,18 @@ impl<'a> Parser<'a> {
             matches!(expression.kind, ExprKind::Number(0)),
         ) {
             Ok(())
-        } else if (expected, expression.ty) == (Type::CharPointer(false), Type::CharPointer(true)) {
-            Err(Diagnostic::new(
-                "unsupported",
+        } else if let Some(name) = match (expected, expression.ty) {
+            | (Type::CharPointer(false), Type::CharPointer(true)) => Some("char"),
+            | (Type::Pointer(false), Type::Pointer(true)) => Some("int"),
+            | _ => None,
+        } {
+            Err(Diagnostic::constraint(
                 expression.range,
-                "a const char * does not convert to a char *: that would let a store change chars \
-                 the program promised not to change (C99 §6.5.16.1p1)",
+                &format!(
+                    "a const {name} * does not convert to a {name} *: that would let a store \
+                     change what the program promised not to change (C99 §6.5.16.1p1)"
+                ),
+                &super::clauses::POINTER_ASSIGNMENT,
             ))
         } else {
             Err(Diagnostic::new(
@@ -1044,7 +1270,8 @@ impl<'a> Parser<'a> {
     /// A preprocessing directive at file scope. The machine runs
     /// `#include <stdio.h>` itself, as translation phase 4 would: it
     /// declares `printf`, `puts` and `putchar` for the rest of the file.
-    /// Every other directive is outside the subset.
+    /// It runs an object-like `#define` too (see `define`). Every other
+    /// directive is outside the subset.
     ///
     /// C99: §6.10.2 paragraph 2, p. 149; PDF p. 161.
     /// C99: §7.1.2 paragraph 1, p. 165; PDF p. 177.
@@ -1054,6 +1281,9 @@ impl<'a> Parser<'a> {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
+        if words == "define" || words.starts_with("define ") {
+            return self.define(token);
+        }
         let header = words
             .strip_prefix("include")
             .map(str::trim_start)
@@ -1074,8 +1304,9 @@ impl<'a> Parser<'a> {
                 return Err(Diagnostic::new(
                     "unsupported",
                     token.range,
-                    "the machine runs only #include <stdio.h> itself; other directives are \
-                     executed by the preprocessor, which the compiler pipeline view shows",
+                    "the machine runs only #include <stdio.h> and object-like #define lines \
+                     itself; other directives are executed by the preprocessor, which the \
+                     compiler pipeline view shows",
                 )),
         }
         for name in ["printf", "puts", "putchar"] {
@@ -1097,15 +1328,162 @@ impl<'a> Parser<'a> {
                 ));
             }
         }
-        self.directives.push(token.range);
+        self.directives.push(Directive {
+            range: token.range,
+            kind:  DirectiveKind::Include,
+        });
         self.position += 1;
         Ok(())
+    }
+
+    /// `#define NAME replacement`, an object-like macro whose replacement
+    /// list is one integer constant, character constant or string literal.
+    /// Translation phase 4 replaces each later use of the name with the
+    /// replacement (C99 §6.10.3p9); the machine does it here, before the
+    /// program is compiled, so every later token stands for what the
+    /// preprocessor leaves. A function-like macro, and any other
+    /// replacement, is the preprocessor's own.
+    ///
+    /// C99: §6.10.3 paragraph 9, p. 152; PDF p. 164.
+    /// C99: §6.10.3 paragraph 2, p. 151; PDF p. 163 (redefinition).
+    fn define(&mut self, token: Token<'a>) -> Result<(), Diagnostic> {
+        let unsupported = |message: &str| Diagnostic::new("unsupported", token.range, message);
+        let text = token.text;
+        // `#`, optional white space, `define`, then the name.
+        let after_hash = text[1..].trim_start();
+        let rest = &after_hash["define".len()..];
+        if !rest.starts_with([' ', '\t']) {
+            return Err(unsupported("#define needs a macro name"));
+        }
+        let rest = rest.trim_start();
+        let name_length = rest
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        let name = &rest[..name_length];
+        if !is_identifier(name) {
+            return Err(unsupported(
+                "#define needs a macro name, an identifier that is not a keyword, in this subset",
+            ));
+        }
+        let after_name = &rest[name_length..];
+        if after_name.starts_with('(') {
+            return Err(unsupported(
+                "function-like macros are expanded by the preprocessor, which the compiler \
+                 pipeline view shows; the machine runs #define only for a name that stands for \
+                 one constant or string literal",
+            ));
+        }
+        let replacement = after_name.trim();
+        let start = token.range.start
+            + (text.len() - after_name.len())
+            + after_name.find(replacement).unwrap_or(0);
+        let literal = Token {
+            text:      &self.source[start..start + replacement.len()],
+            range:     lexer::range(self.source, start, start + replacement.len()),
+            macro_use: None,
+        };
+        let kind = self.replacement_kind(literal).ok_or_else(|| {
+            unsupported(
+                "the machine runs #define only when the replacement is one integer constant, \
+                 character constant or string literal, such as `#define N 10`; other macros are \
+                 expanded by the preprocessor, which the compiler pipeline view shows",
+            )
+        })??;
+        if let Some(index) = self.macros.iter().position(|defined| defined.name == name) {
+            if self.macros[index].replacement != replacement {
+                return Err(Diagnostic::constraint(
+                    token.range,
+                    &format!(
+                        "`{name}` is already defined as `{}`; a macro may be defined again only \
+                         with the same replacement list (C99 §6.10.3p2)",
+                        self.macros[index].replacement
+                    ),
+                    &super::clauses::MACRO_REDEFINITION,
+                ));
+            }
+            self.directives.push(Directive {
+                range: token.range,
+                kind:  DirectiveKind::Define { index, again: true },
+            });
+            self.position += 1;
+            return Ok(());
+        }
+        let index = self.macros.len();
+        self.macros.push(Macro {
+            name: String::from(name),
+            replacement: String::from(replacement),
+            kind,
+            range: token.range,
+        });
+        self.directives.push(Directive {
+            range: token.range,
+            kind:  DirectiveKind::Define {
+                index,
+                again: false,
+            },
+        });
+        // Each later instance of the name is replaced (C99 §6.10.3p9);
+        // directives are lines of their own and keep their text.
+        for later in &mut self.tokens[self.position + 1..] {
+            if later.text == name {
+                later.text = literal.text;
+                later.macro_use = Some(index);
+            }
+        }
+        self.position += 1;
+        Ok(())
+    }
+
+    /// What a macro's replacement `literal` is, when the machine runs it:
+    /// `Some(Err)` for a constant or literal that is itself malformed.
+    fn replacement_kind(&self, literal: Token<'_>) -> Option<Result<&'static str, Diagnostic>> {
+        let text = literal.text;
+        let bytes = text.as_bytes();
+        let first = *bytes.first()?;
+        if first.is_ascii_digit() {
+            let decimal = bytes.iter().all(u8::is_ascii_digit)
+                && (text.len() == 1 || first != b'0')
+                && text.parse::<i32>().is_ok();
+            return decimal.then_some(Ok("integer constant"));
+        }
+        if first != b'"' && first != b'\'' {
+            return None;
+        }
+        let end = match lexer::literal_end(self.source, literal.range.start) {
+            | Ok(end) => end,
+            | Err(diagnostic) => return Some(Err(diagnostic)),
+        };
+        if end != literal.range.end {
+            return None;
+        }
+        if first == b'\'' {
+            return Some(
+                self.character_constant(literal)
+                    .map(|_| "character constant"),
+            );
+        }
+        Some(match lexer::literal_bytes(self.source, literal) {
+            | Ok(bytes) if bytes.len() >= MAX_CELLS => Err(Diagnostic::limit(
+                literal.range,
+                "a string literal may hold at most 511 characters here",
+            )),
+            | Ok(_) => Ok("string literal"),
+            | Err(diagnostic) => Err(diagnostic),
+        })
+    }
+
+    /// Whether the program has included `<stdio.h>` so far.
+    pub fn includes_stdio(&self) -> bool {
+        self.directives
+            .iter()
+            .any(|directive| directive.kind == DirectiveKind::Include)
     }
 
     /// The library function `name` names, when `<stdio.h>` has been
     /// included.
     pub fn library(&self, name: &str) -> Option<Library> {
-        Library::named(name).filter(|_| !self.directives.is_empty())
+        Library::named(name).filter(|_| self.includes_stdio())
     }
 
     /// Reject a declaration of `name` at file scope that `<stdio.h>` already
@@ -1151,7 +1529,7 @@ impl<'a> Parser<'a> {
         } else {
             loop {
                 let base = self.base_type()?;
-                let pointer = self.take("*");
+                let pointer = self.pointer()?;
                 let parameter = if self.at(",") || self.at(")") {
                     None
                 } else {
@@ -1160,17 +1538,19 @@ impl<'a> Parser<'a> {
                 let range = parameter.map_or(self.current().range, |token| token.range);
                 let ty = match (base, pointer) {
                     | (Base::Int, false) => Type::Int,
-                    | (Base::Int, true) => Type::Pointer,
+                    | (Base::Int, true) => Type::Pointer(false),
+                    | (Base::ConstInt, true) => Type::Pointer(true),
                     | (Base::Char, false) => Type::Char,
                     | (Base::Char, true) => Type::CharPointer(false),
                     | (Base::ConstChar, true) => Type::CharPointer(true),
                     | (Base::Struct(id), false) => self.complete_structure(id, range)?,
                     | (Base::Struct(id), true) => Type::StructPointer(id),
-                    | (Base::ConstChar, false) =>
+                    | (Base::ConstInt | Base::ConstChar, false) =>
                         return Err(Diagnostic::new(
                             "unsupported",
                             range,
-                            "const is supported only in `const char *` in this subset",
+                            "const parameters are outside this subset; `const int *` and `const \
+                             char *` parameters are in it",
                         )),
                 };
                 if self.at("[") {
@@ -1180,7 +1560,7 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 if let Some(parameter) = parameter {
-                    self.add_symbol(parameter, ty, 1, None)?;
+                    self.add_symbol(parameter, ty, 1, None, false)?;
                 }
                 parameters.push((parameter, ty));
                 if self.take(")") {
@@ -1266,7 +1646,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The text of the token `ahead` places past the current one.
-    fn peek(&self, ahead: usize) -> &'a str {
+    pub fn peek(&self, ahead: usize) -> &'a str {
         self.tokens
             .get(self.position + ahead)
             .map_or("", |token| token.text)
@@ -1278,6 +1658,7 @@ impl<'a> Parser<'a> {
         ty: Type,
         scope: usize,
         place: Option<usize>,
+        constant: bool,
     ) -> Result<(), Diagnostic> {
         if self
             .symbols
@@ -1299,30 +1680,43 @@ impl<'a> Parser<'a> {
             ty,
             scope,
             place,
+            constant,
         });
         Ok(())
     }
 
-    /// A type specifier: `int`, `char` or `struct tag`. A tag not seen
-    /// before declares an incomplete structure type, which only a pointer
-    /// may use until its definition.
+    /// A type specifier: `int`, `char` or `struct tag`, the first two
+    /// optionally `const`. A tag not seen before declares an incomplete
+    /// structure type, which only a pointer may use until its definition.
+    ///
+    /// C99: §6.7.3 paragraph 3, p. 108; PDF p. 120 (`const` qualifies
+    /// the type; the object is then not modifiable).
     fn base_type(&mut self) -> Result<Base, Diagnostic> {
         if self.take("const") {
-            if self.take("char") && self.at("*") {
+            if self.take("int") {
+                return Ok(Base::ConstInt);
+            }
+            if self.take("char") {
                 return Ok(Base::ConstChar);
             }
-            return Err(self.error("const is supported only in `const char *` in this subset"));
+            return Err(self.error(
+                "const is supported before int and char in this subset (`const int limit = 3;`, \
+                 `const char *s`)",
+            ));
         }
-        if self.take("int") {
-            return Ok(Base::Int);
-        }
-        if self.take("char") {
+        if self.take("int") || self.take("char") {
+            let base = if self.tokens[self.position - 1].text == "int" {
+                Base::Int
+            } else {
+                Base::Char
+            };
             if self.at("const") {
                 return Err(self.error(
-                    "write `const char *`; other placements of const are outside this subset",
+                    "write const first, as in `const int`; other placements of const are outside \
+                     this subset",
                 ));
             }
-            return Ok(Base::Char);
+            return Ok(base);
         }
         if !self.take("struct") {
             return Err(self.error(
@@ -1376,6 +1770,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         let count = self.current();
+        self.declaration_macros.extend(count.macro_use);
         let Ok(length) = count.text.parse::<usize>() else {
             return Err(self.error("array size must be a positive decimal literal"));
         };
@@ -1402,16 +1797,15 @@ impl<'a> Parser<'a> {
     ) -> Result<Type, Diagnostic> {
         let unsupported = |message| Err(Diagnostic::new("unsupported", range, message));
         match (base, pointer, array) {
-            | (Base::Int, false, None) => Ok(Type::Int),
-            | (Base::Int, true, None) => Ok(Type::Pointer),
-            | (Base::Int, false, Some(length)) => Ok(Type::Array(length)),
+            | (Base::Int | Base::ConstInt, false, None) => Ok(Type::Int),
+            | (Base::Int, true, None) => Ok(Type::Pointer(false)),
+            | (Base::ConstInt, true, None) => Ok(Type::Pointer(true)),
+            | (Base::Int | Base::ConstInt, false, Some(length)) => Ok(Type::Array(length)),
             | (_, true, Some(_)) => unsupported("arrays of pointers are outside this subset"),
-            | (Base::Char, false, None) => Ok(Type::Char),
+            | (Base::Char | Base::ConstChar, false, None) => Ok(Type::Char),
             | (Base::Char, true, None) => Ok(Type::CharPointer(false)),
-            | (Base::Char, false, Some(length)) => Ok(Type::CharArray(length)),
+            | (Base::Char | Base::ConstChar, false, Some(length)) => Ok(Type::CharArray(length)),
             | (Base::ConstChar, true, None) => Ok(Type::CharPointer(true)),
-            | (Base::ConstChar, ..) =>
-                unsupported("const is supported only in `const char *` in this subset"),
             | (Base::Struct(id), false, None) => self.complete_structure(id, range),
             | (Base::Struct(id), true, None) => Ok(Type::StructPointer(id)),
             | (Base::Struct(_), false, Some(_)) =>
@@ -1442,7 +1836,7 @@ impl<'a> Parser<'a> {
             }
             let base = self.base_type()?;
             loop {
-                let pointer = self.take("*");
+                let pointer = self.pointer()?;
                 let name = self.identifier()?;
                 let array = self.array_suffix()?;
                 if base == Base::Struct(id) && !pointer {
@@ -1450,6 +1844,13 @@ impl<'a> Parser<'a> {
                         "unsupported",
                         name.range,
                         "a structure cannot contain itself; a pointer to it is fine",
+                    ));
+                }
+                if base.is_const() && !pointer {
+                    return Err(Diagnostic::new(
+                        "unsupported",
+                        name.range,
+                        "const members are outside this subset",
                     ));
                 }
                 let ty = self.declared_type(base, pointer, array, name.range)?;
@@ -1528,18 +1929,24 @@ impl<'a> Parser<'a> {
                 "a function and a file-scope object share this name",
             ));
         }
-        let index = self.static_object(name, ty, None)?;
-        self.add_symbol(name, ty, 0, Some(index))?;
+        let constant = base.is_const() && !pointer;
+        let index = self.static_object(name, ty, None, constant)?;
+        self.add_symbol(name, ty, 0, Some(index), constant)?;
         self.expect(";")
     }
 
     /// `static T name [= constant];` in a block: the object exists before
     /// `main` and keeps its value between calls; the declaration names it
     /// and does nothing when execution reaches it.
-    fn static_local(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
+    fn static_local(
+        &mut self,
+        name: Token<'a>,
+        ty: Type,
+        constant: bool,
+    ) -> Result<(), Diagnostic> {
         let function = self.function_name.clone();
-        let index = self.static_object(name, ty, function)?;
-        self.add_symbol(name, ty, self.scope, Some(index))?;
+        let index = self.static_object(name, ty, function, constant)?;
+        self.add_symbol(name, ty, self.scope, Some(index), constant)?;
         self.emit(Op::StaticLocal(index), name.range)?;
         self.expect(";")
     }
@@ -1551,6 +1958,7 @@ impl<'a> Parser<'a> {
         name: Token<'a>,
         ty: Type,
         function: Option<String>,
+        constant: bool,
     ) -> Result<usize, Diagnostic> {
         if self.statics.len() >= MAX_OBJECTS {
             return Err(Diagnostic::limit(name.range, "object limit reached"));
@@ -1570,6 +1978,9 @@ impl<'a> Parser<'a> {
             value: ty.shaped(&self.structures, &leaves),
             explicit,
             literal: false,
+            constant,
+            parts: 0,
+            macros: std::mem::take(&mut self.declaration_macros),
             range,
         });
         Ok(self.statics.len() - 1)
@@ -1579,27 +1990,24 @@ impl<'a> Parser<'a> {
     /// denotes: its characters and a terminating null (C99 §6.4.5p5).
     /// Each literal in the source is its own array; it exists before
     /// `main` like every static object.
-    pub fn string_literal(&mut self, token: Token<'a>) -> Result<usize, Diagnostic> {
+    pub fn string_literal(&mut self, literal: Joined) -> Result<usize, Diagnostic> {
         if self.statics.len() >= MAX_OBJECTS {
-            return Err(Diagnostic::limit(token.range, "object limit reached"));
+            return Err(Diagnostic::limit(literal.range, "object limit reached"));
         }
-        let mut bytes = lexer::literal_bytes(self.source, token)?;
+        let mut bytes = literal.bytes;
         bytes.push(0);
-        if bytes.len() > MAX_CELLS {
-            return Err(Diagnostic::limit(
-                token.range,
-                "a string literal may hold at most 511 characters here",
-            ));
-        }
         let ty = Type::CharArray(bytes.len());
         self.statics.push(Static {
-            name: String::from(token.text),
+            name: literal.spelling,
             ty,
             function: None,
             value: Value::Array(bytes.into_iter().map(char_value).collect()),
             explicit: true,
             literal: true,
-            range: token.range,
+            constant: false,
+            parts: literal.parts,
+            macros: literal.macro_use.into_iter().collect(),
+            range: literal.range,
         });
         Ok(self.statics.len() - 1)
     }
@@ -1627,19 +2035,19 @@ impl<'a> Parser<'a> {
     ) -> Result<(), Diagnostic> {
         match ty {
             | Type::CharArray(length) if self.current().text.starts_with('"') => {
-                let literal = self.current();
-                let bytes = lexer::literal_bytes(self.source, literal)?;
-                if bytes.len() > length {
+                let literal = self.joined_literal(self.position)?;
+                if literal.bytes.len() > length {
                     return Err(self.error(
                         "the string literal has more characters than the array has elements (C99 \
                          §6.7.8p2)",
                     ));
                 }
-                for (at, byte) in bytes.into_iter().enumerate() {
+                for (at, &byte) in literal.bytes.iter().enumerate() {
                     leaves[offset + at] = char_value(byte);
                 }
-                self.position += 1;
-                self.adjacent_literal()
+                self.declaration_macros.extend(literal.macro_use);
+                self.position += literal.parts;
+                Ok(())
             },
             | Type::Array(_) | Type::Struct(_) | Type::CharArray(_) => {
                 self.expect("{")?;
@@ -1708,6 +2116,7 @@ impl<'a> Parser<'a> {
             },
             | Type::Int | Type::Char if self.current().text.starts_with('\'') => {
                 let token = self.current();
+                self.declaration_macros.extend(token.macro_use);
                 let value = self.character_constant(token)?;
                 self.position += 1;
                 leaves[offset] = Value::Integer(value);
@@ -1719,6 +2128,7 @@ impl<'a> Parser<'a> {
             | Type::Int | Type::Char => {
                 let negative = self.take("-");
                 let token = self.current();
+                self.declaration_macros.extend(token.macro_use);
                 let digits = token
                     .text
                     .as_bytes()
@@ -1760,10 +2170,9 @@ impl<'a> Parser<'a> {
             | Type::CharPointer(_) if self.current().text.starts_with('"') => {
                 // The literal's array exists before main, so its address
                 // is a constant (C99 §6.6p9).
-                let literal = self.current();
+                let literal = self.take_literal()?;
+                self.declaration_macros.extend(literal.macro_use);
                 let index = self.string_literal(literal)?;
-                self.position += 1;
-                self.adjacent_literal()?;
                 let length = match self.statics[index].ty {
                     | Type::CharArray(length) => i32::try_from(length).unwrap_or(i32::MAX),
                     | _ => 1,
@@ -1771,7 +2180,7 @@ impl<'a> Parser<'a> {
                 leaves[offset] = Value::pointer(index + 1, 0, 0, length);
                 Ok(())
             },
-            | Type::Pointer | Type::StructPointer(_) | Type::CharPointer(_) => {
+            | Type::Pointer(_) | Type::StructPointer(_) | Type::CharPointer(_) => {
                 if !self.take("0") {
                     return Err(self.error(
                         "a static pointer's initializer must be a constant; this subset takes 0, \
@@ -1798,9 +2207,18 @@ impl<'a> Parser<'a> {
 pub(super) enum Base {
     Int,
     Char,
-    /// `const char`, which this subset takes only before `*`.
+    /// `const int`.
+    ConstInt,
+    /// `const char`.
     ConstChar,
     Struct(usize),
+}
+
+impl Base {
+    /// Whether the specifier is `const`-qualified.
+    pub(super) const fn is_const(self) -> bool {
+        matches!(self, Self::ConstInt | Self::ConstChar)
+    }
 }
 
 /// The char value a byte holds: plain char is signed with 8 bits on x86-64
@@ -1818,12 +2236,14 @@ pub(super) const fn structure_of(ty: Type) -> Option<usize> {
 }
 
 pub(super) struct Symbol<'a> {
-    pub name:  &'a str,
-    pub ty:    Type,
-    pub scope: usize,
+    pub name:     &'a str,
+    pub ty:       Type,
+    pub scope:    usize,
     /// The static object it names: a file-scope object or a block-scope
     /// `static` one.
-    pub place: Option<usize>,
+    pub place:    Option<usize>,
+    /// Whether the object is defined `const`.
+    pub constant: bool,
 }
 
 pub(super) fn is_identifier(text: &str) -> bool {
@@ -1883,6 +2303,7 @@ pub(super) fn compatible(expected: Type, actual: Type, null: bool) -> bool {
             (Type::Char, Type::Int)
                 | (Type::Int, Type::Char)
                 | (Type::CharPointer(true), Type::CharPointer(false))
+                | (Type::Pointer(true), Type::Pointer(false))
         )
         || (expected.is_pointer() && actual == Type::Int && null)
 }
@@ -1920,4 +2341,31 @@ pub(super) struct Prototype {
     pub name:       String,
     pub returns:    Type,
     pub parameters: Vec<Type>,
+}
+
+/// One string literal after translation phase 6: one or more adjacent
+/// literal tokens joined.
+pub(super) struct Joined {
+    /// The characters, without the null phase 7 appends.
+    pub bytes:     Vec<u8>,
+    /// From the first token to the last.
+    pub range:     SourceRange,
+    /// The literals as written (after phase 4), separated by one space.
+    pub spelling:  String,
+    /// How many literal tokens were joined.
+    pub parts:     usize,
+    /// The first macro among them whose replacement is a literal.
+    pub macro_use: Option<usize>,
+}
+
+/// The binary operator of a compound assignment operator: `+` for `+=`.
+fn compound_operator(text: &str) -> Option<&'static str> {
+    match text {
+        | "+=" => Some("+"),
+        | "-=" => Some("-"),
+        | "*=" => Some("*"),
+        | "/=" => Some("/"),
+        | "%=" => Some("%"),
+        | _ => None,
+    }
 }
