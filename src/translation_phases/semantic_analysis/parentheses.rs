@@ -155,7 +155,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .unwrap_or(operand.source_vectors)
             };
             self.parentheses_warning(G::Parentheses, at, text);
-        } else if logical_not(left).is_some() && matches!(operator, B::BitwiseAnd | B::BitwiseOr) {
+        } else if logical_not(left).is_some()
+            && matches!(operator, B::BitwiseAnd | B::BitwiseOr)
+            && !self.gcc_truth_operand(right)
+        {
             let text = format_in!(
                 self.scratch,
                 "suggest parentheses around operand of '!' or change '{name}' to '{name}{name}' \
@@ -623,6 +626,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.types.nodes[self.types.non_atomic(info.ty).unqualified().index],
             TypeKind::Scalar(Scalar::Bool)
         )
+    }
+
+    /// Whether GCC takes `e`, the right operand of `!x & e` or `!x | e`, for
+    /// a truth value and so leaves the `!` unquestioned (GCC manual, "Warning
+    /// Options", `-Wparentheses`): a comparison, `&&`, `||` or `!` (with or
+    /// without parentheses around it), an operand of type `_Bool`, or the
+    /// constant 0 or 1. Measured against GCC 13 and 14: `!a & (b != 0)`,
+    /// `!a | !b`, `!a & (_Bool)b` and `!a & 1` pass; `!a & b`, `!a & 2` and
+    /// `!a & (b ? 1 : 0)` are reported.
+    fn gcc_truth_operand(&self, e: &'tu Expression<'tu>) -> bool {
+        let bare = strip_parentheses(e);
+        logical_not(bare).is_some()
+            || binary_operator(bare)
+                .is_some_and(|op| is_comparison(op) || matches!(op, B::LogicalAnd | B::LogicalOr))
+            || self.is_bool(self.expression_info(e))
+            || self
+                .expression_info(e)
+                .integer
+                .is_some_and(|value| value.value == 0 || value.value == 1)
     }
 
     fn is_integer_zero(&self, e: &'tu Expression<'tu>) -> bool {

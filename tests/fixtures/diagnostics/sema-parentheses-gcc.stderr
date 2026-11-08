@@ -49,3 +49,18 @@ sema-parentheses-gcc.c:23:8: warning: suggest explicit braces to avoid ambiguous
 sema-parentheses-gcc.c:28:8: warning: suggest explicit braces to avoid ambiguous 'else' [-Wdangling-else]
    28 |     if (a)
       |        ^
+sema-parentheses-gcc.c:51:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   51 |     r += !(a != 0) & b;
+      |          ^~~~~~~~~
+sema-parentheses-gcc.c:52:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   52 |     r += !a & 2;
+      |          ^~
+sema-parentheses-gcc.c:53:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   53 |     r += !a & -1;
+      |          ^~
+sema-parentheses-gcc.c:54:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   54 |     r += !a & (b ? 1 : 0);
+      |          ^~
+sema-parentheses-gcc.c:55:10: warning: suggest parentheses around operand of '!' or change '|' to '||' or '!' to '~' [-Wparentheses]
+   55 |     r += !a | (t + 0);
+      |          ^~
