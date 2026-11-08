@@ -1,3 +1,4 @@
+sema-shadow-kinds-gcc.c: In function 'f':
 sema-shadow-kinds-gcc.c:7:12: warning: declaration of 'p' shadows a parameter [-Wshadow=compatible-local]
     7 |   { enum { p = 3 }; }
       |            ^

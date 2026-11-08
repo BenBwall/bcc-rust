@@ -1,3 +1,4 @@
+sema-unused-label-gcc.c: In function 'g':
 sema-unused-label-gcc.c:2:5: warning: label 'unused' defined but not used [-Wunused-label]
     2 |     unused:
       |     ^~~~~~

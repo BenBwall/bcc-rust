@@ -1,63 +1,74 @@
+sema-shadow-gcc.c: In function 'f1':
 sema-shadow-gcc.c:6:12: warning: declaration of 'g' shadows a global declaration [-Wshadow]
     6 | int f1(int g) { return g; }
       |            ^
 sema-shadow-gcc.c:1:5: note: shadowed declaration is here
     1 | int g;
       |     ^
+sema-shadow-gcc.c: In function 'f2':
 sema-shadow-gcc.c:7:20: warning: declaration of 'g' shadows a global declaration [-Wshadow]
     7 | int f2(void) { int g = 1; return g; }
       |                    ^
 sema-shadow-gcc.c:1:5: note: shadowed declaration is here
     1 | int g;
       |     ^
+sema-shadow-gcc.c: In function 'f3':
 sema-shadow-gcc.c:8:23: warning: declaration of 'a' shadows a parameter [-Wshadow]
     8 | int f3(int a) { { int a = 2; return a; } }
       |                       ^
 sema-shadow-gcc.c:8:12: note: shadowed declaration is here
     8 | int f3(int a) { { int a = 2; return a; } }
       |            ^
+sema-shadow-gcc.c: In function 'f4':
 sema-shadow-gcc.c:9:34: warning: declaration of 'b' shadows a previous local [-Wshadow]
     9 | int f4(int a) { int b = a; { int b = 3; (void)b; } return b; }
       |                                  ^
 sema-shadow-gcc.c:9:21: note: shadowed declaration is here
     9 | int f4(int a) { int b = a; { int b = 3; (void)b; } return b; }
       |                     ^
+sema-shadow-gcc.c: In function 'f6':
 sema-shadow-gcc.c:11:20: warning: declaration of 'T' shadows a global declaration [-Wshadow]
    11 | int f6(void) { int T = 1; return T; }
       |                    ^
 sema-shadow-gcc.c:3:13: note: shadowed declaration is here
     3 | typedef int T;
       |             ^
+sema-shadow-gcc.c: In function 'f7':
 sema-shadow-gcc.c:12:20: warning: declaration of 'EA' shadows a previous local [-Wshadow]
    12 | int f7(void) { int EA = 1; return EA; }
       |                    ^~
 sema-shadow-gcc.c:5:10: note: shadowed declaration is here
     5 | enum E { EA, EB };
       |          ^~
+sema-shadow-gcc.c: In function 'f8':
 sema-shadow-gcc.c:13:26: warning: declaration of 'x' shadows a parameter [-Wshadow]
    13 | int f8(int x) { for (int x = 0; x < 3; x++) ; return x; }
       |                          ^
 sema-shadow-gcc.c:13:12: note: shadowed declaration is here
    13 | int f8(int x) { for (int x = 0; x < 3; x++) ; return x; }
       |            ^
+sema-shadow-gcc.c: In function 'f9':
 sema-shadow-gcc.c:14:36: warning: declaration of 'i' shadows a previous local [-Wshadow]
    14 | int f9(void) { int i = 0; for (int i = 0; i < 3; i++) ; return i; }
       |                                    ^
 sema-shadow-gcc.c:14:20: note: shadowed declaration is here
    14 | int f9(void) { int i = 0; for (int i = 0; i < 3; i++) ; return i; }
       |                    ^
+sema-shadow-gcc.c: In function 'f11':
 sema-shadow-gcc.c:16:28: warning: declaration of 'g' shadows a global declaration [-Wshadow]
    16 | int f11(void) { static int g = 1; return g; }
       |                            ^
 sema-shadow-gcc.c:1:5: note: shadowed declaration is here
     1 | int g;
       |     ^
+sema-shadow-gcc.c: In function 'f12':
 sema-shadow-gcc.c:17:35: warning: declaration of 'n' shadows a parameter [-Wshadow]
    17 | void f12(int n) { int a[n]; { int n = 2; (void)n; } (void)a; }
       |                                   ^
 sema-shadow-gcc.c:17:14: note: shadowed declaration is here
    17 | void f12(int n) { int a[n]; { int n = 2; (void)n; } (void)a; }
       |              ^
+sema-shadow-gcc.c: In function 'f14':
 sema-shadow-gcc.c:19:31: warning: declaration of 'x' shadows a previous local [-Wshadow]
    19 | void f14(void) { int x; { int x; (void)x; } (void)x; { void x(void); } }
       |                               ^
@@ -70,6 +81,7 @@ sema-shadow-gcc.c:19:61: warning: declaration of 'x' shadows a previous local [-
 sema-shadow-gcc.c:19:22: note: shadowed declaration is here
    19 | void f14(void) { int x; { int x; (void)x; } (void)x; { void x(void); } }
       |                      ^
+sema-shadow-gcc.c: In function 'f15':
 sema-shadow-gcc.c:20:33: warning: declaration of 'p' shadows a parameter [-Wshadow]
    20 | int f15(int p) { int q = ({ int p = 1; p; }); return q; }
       |                                 ^

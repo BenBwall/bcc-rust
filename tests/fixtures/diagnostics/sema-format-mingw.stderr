@@ -1,3 +1,4 @@
+sema-format-mingw.c: In function 'f':
 sema-format-mingw.c:10:17: warning: format '%I64x' expects argument of type 'long long unsigned int', but argument 2 has type 'int' [-Wformat=]
    10 |     printf("%I64x %I32x %Iu\n", i, lp, i);
       |                 ^

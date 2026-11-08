@@ -4,21 +4,26 @@ sema-permerrors-permissive.c:2:8: warning: type defaults to 'int' in declaration
 sema-permerrors-permissive.c:3:1: warning: return type defaults to 'int' [-Wimplicit-int]
     3 | g(void) { return x; }
       | ^
+sema-permerrors-permissive.c: In function 'h':
 sema-permerrors-permissive.c:4:16: warning: type defaults to 'int' in declaration of 'q' [-Wimplicit-int]
     4 | int h(register q) { return q; }
       |                ^
+sema-permerrors-permissive.c: At top level:
 sema-permerrors-permissive.c:5:5: warning: type of 'b' defaults to 'int' [-Wimplicit-int]
     5 | int old(a, b) int a; { return a + b; }
       |     ^~~
 sema-permerrors-permissive.c:6:1: warning: parameter names (without types) in function declaration [-Wdeclaration-missing-parameter-type]
     6 | void listed(n);
       | ^~~~~~~~~~~~~~~
+sema-permerrors-permissive.c: In function 'nothing':
 sema-permerrors-permissive.c:7:21: warning: 'return' with no value, in function returning non-void [-Wreturn-mismatch]
     7 | int nothing(void) { return; }
       |                     ^~~~~~~
+sema-permerrors-permissive.c: In function 'value':
 sema-permerrors-permissive.c:8:27: warning: 'return' with a value, in function returning void [-Wreturn-mismatch]
     8 | void value(void) { return 1; }
       |                           ^
+sema-permerrors-permissive.c: In function 'convert':
 sema-permerrors-permissive.c:11:11: warning: initialization of 'int' from 'int *' makes integer from pointer without a cast [-Wint-conversion]
    11 |   int j = p;
       |           ^
@@ -46,9 +51,11 @@ sema-permerrors-permissive.c:18:3: warning: implicit declaration of function 'pr
 sema-permerrors-permissive.c:19:10: warning: returning 'int' from a function with return type 'int *' makes pointer from integer without a cast [-Wint-conversion]
    19 |   return i;
       |          ^
+sema-permerrors-permissive.c: At top level:
 sema-permerrors-permissive.c:21:13: warning: type defaults to 'int' in type name [-Wimplicit-int]
    21 | int unnamed(const);
       |             ^~~~~
+sema-permerrors-permissive.c: In function 'choose':
 sema-permerrors-permissive.c:22:49: warning: pointer type mismatch in conditional expression [-Wincompatible-pointer-types]
    22 | void *choose(int c, int *p, long *q) { return c ? p : q; }
       |                                                 ^~~~~

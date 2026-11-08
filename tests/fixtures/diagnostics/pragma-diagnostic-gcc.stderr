@@ -28,6 +28,7 @@ pragma-diagnostic-gcc.c:24:1: warning: initialization of 'char *' from 'int' mak
 pragma-diagnostic-gcc.c:32:23: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
    32 | char *after_wrapped = 4;
       |                       ^
+In file included from pragma-diagnostic-gcc.c:53:
 pragma-diagnostic-twice.h:1:15: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
     1 | char *twice = 1;
       |               ^

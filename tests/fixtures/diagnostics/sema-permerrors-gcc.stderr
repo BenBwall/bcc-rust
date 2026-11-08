@@ -4,21 +4,26 @@ sema-permerrors-gcc.c:2:8: error: type defaults to 'int' in declaration of 'x' [
 sema-permerrors-gcc.c:3:1: error: return type defaults to 'int' [-Wimplicit-int]
     3 | g(void) { return x; }
       | ^
+sema-permerrors-gcc.c: In function 'h':
 sema-permerrors-gcc.c:4:16: error: type defaults to 'int' in declaration of 'q' [-Wimplicit-int]
     4 | int h(register q) { return q; }
       |                ^
+sema-permerrors-gcc.c: At top level:
 sema-permerrors-gcc.c:5:5: error: type of 'b' defaults to 'int' [-Wimplicit-int]
     5 | int old(a, b) int a; { return a + b; }
       |     ^~~
 sema-permerrors-gcc.c:6:1: error: parameter names (without types) in function declaration [-Wdeclaration-missing-parameter-type]
     6 | void listed(n);
       | ^~~~~~~~~~~~~~~
+sema-permerrors-gcc.c: In function 'nothing':
 sema-permerrors-gcc.c:7:21: error: 'return' with no value, in function returning non-void [-Wreturn-mismatch]
     7 | int nothing(void) { return; }
       |                     ^~~~~~~
+sema-permerrors-gcc.c: In function 'value':
 sema-permerrors-gcc.c:8:27: error: 'return' with a value, in function returning void [-Wreturn-mismatch]
     8 | void value(void) { return 1; }
       |                           ^
+sema-permerrors-gcc.c: In function 'convert':
 sema-permerrors-gcc.c:11:11: error: initialization of 'int' from 'int *' makes integer from pointer without a cast [-Wint-conversion]
    11 |   int j = p;
       |           ^
@@ -46,9 +51,11 @@ sema-permerrors-gcc.c:18:3: error: implicit declaration of function 'printf' [-W
 sema-permerrors-gcc.c:19:10: error: returning 'int' from a function with return type 'int *' makes pointer from integer without a cast [-Wint-conversion]
    19 |   return i;
       |          ^
+sema-permerrors-gcc.c: At top level:
 sema-permerrors-gcc.c:21:13: error: type defaults to 'int' in type name [-Wimplicit-int]
    21 | int unnamed(const);
       |             ^~~~~
+sema-permerrors-gcc.c: In function 'choose':
 sema-permerrors-gcc.c:22:49: error: pointer type mismatch in conditional expression [-Wincompatible-pointer-types]
    22 | void *choose(int c, int *p, long *q) { return c ? p : q; }
       |                                                 ^~~~~

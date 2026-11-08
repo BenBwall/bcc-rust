@@ -1,0 +1,10 @@
+context-functions-clang.c:4:8: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    4 |   int *p = 1;
+      |        ^
+context-functions-clang.c:8:8: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    8 |   int *q = 2;
+      |        ^
+context-functions-clang.c:11:6: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+   11 | int *file_scope = 3;
+      |      ^~~~~~~~~~
+3 errors generated.

@@ -61,16 +61,27 @@ impl Renderer {
             DiagnosticPresentation::default()
         };
         // GCC, Clang and MSVC lead with the primary location.
-        let location = diagnostic
+        let located = diagnostic
             .labels
             .iter()
             .filter(|label| label.primary)
             .chain(&diagnostic.labels)
-            .find_map(|label| label.source.vectors(context).first());
+            .find_map(|label| Some((label.source.vectors(context).first()?, label.source)));
+        let location = located.map(|(vector, _)| vector);
+        let segment = located
+            .filter(|_| compiler_snippet)
+            .and_then(|(vector, source)| {
+                self.segment_of(context, vector, [diagnostic.reading, source.range()])
+            });
+        if let Some(vector) = location
+            && compiler_snippet
+        {
+            self.write_context_lines(&mut out, context, vector, segment, false);
+        }
         if let Some(vector) = location
             && format != DiagnosticFormat::Bcc
         {
-            let file = context.get_source_file(vector.source_file_index).display();
+            let file = Self::file_name(context, vector, segment);
             let _ = match format {
                 | DiagnosticFormat::Msvc { column: true, .. } =>
                     write!(out, "{file}({},{}): ", vector.line, vector.column),
@@ -280,11 +291,12 @@ impl Renderer {
         };
         let format = context.configuration.diagnostic_format();
         let presentation = context.configuration.diagnostic_presentation();
-        let file = vector.source_file_index;
+        let segment = self.segment_of(context, vector, [label.source.range(), None]);
+        self.write_context_lines(out, context, vector, segment, true);
         let _ = write!(
             out,
             "{}:{}:",
-            context.get_source_file(file).display(),
+            Self::file_name(context, vector, segment),
             vector.line
         );
         if presentation.column {
@@ -653,6 +665,8 @@ impl Renderer {
         Self {
             color,
             scratch: Bump::new(),
+            context_lines: std::cell::Cell::default(),
+            included_seen: std::cell::RefCell::new(crate::util::region_bit_set::RegionBitSet::new()),
         }
     }
 }

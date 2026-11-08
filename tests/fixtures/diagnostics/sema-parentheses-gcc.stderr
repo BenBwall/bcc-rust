@@ -1,3 +1,4 @@
+sema-parentheses-gcc.c: In function 'f':
 sema-parentheses-gcc.c:2:15: warning: suggest parentheses around '&&' within '||' [-Wparentheses]
     2 |     int r = a && b || c;
       |               ^~

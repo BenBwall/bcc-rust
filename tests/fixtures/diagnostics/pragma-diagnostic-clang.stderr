@@ -19,7 +19,8 @@ pragma-diagnostic-clang.c:24:1: warning: incompatible integer to pointer convers
 pragma-diagnostic-clang.c:32:7: warning: incompatible integer to pointer conversion initializing 'char *' with an expression of type 'int' [-Wint-conversion]
    32 | char *after_wrapped = 4;
       |       ^~~~~~~~~~~~~
-pragma-diagnostic-twice.h:1:7: warning: incompatible integer to pointer conversion initializing 'char *' with an expression of type 'int' [-Wint-conversion]
+In file included from pragma-diagnostic-clang.c:49:
+./pragma-diagnostic-twice.h:1:7: warning: incompatible integer to pointer conversion initializing 'char *' with an expression of type 'int' [-Wint-conversion]
     1 | char *twice = 1;
       |       ^~~~~
 2 errors and 6 warnings generated.

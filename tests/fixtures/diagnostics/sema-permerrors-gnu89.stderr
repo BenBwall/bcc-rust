@@ -1,9 +1,11 @@
 sema-permerrors-gnu89.c:6:1: warning: parameter names (without types) in function declaration [-Wdeclaration-missing-parameter-type]
     6 | void listed(n);
       | ^~~~~~~~~~~~~~~
+sema-permerrors-gnu89.c: In function 'value':
 sema-permerrors-gnu89.c:8:27: warning: 'return' with a value, in function returning void [-Wreturn-mismatch]
     8 | void value(void) { return 1; }
       |                           ^
+sema-permerrors-gnu89.c: In function 'convert':
 sema-permerrors-gnu89.c:11:11: warning: initialization of 'int' from 'int *' makes integer from pointer without a cast [-Wint-conversion]
    11 |   int j = p;
       |           ^
@@ -28,6 +30,7 @@ sema-permerrors-gnu89.c:18:3: warning: incompatible implicit declaration of buil
 sema-permerrors-gnu89.c:19:10: warning: returning 'int' from a function with return type 'int *' makes pointer from integer without a cast [-Wint-conversion]
    19 |   return i;
       |          ^
+sema-permerrors-gnu89.c: In function 'choose':
 sema-permerrors-gnu89.c:22:49: warning: pointer type mismatch in conditional expression [-Wincompatible-pointer-types]
    22 | void *choose(int c, int *p, long *q) { return c ? p : q; }
       |                                                 ^~~~~

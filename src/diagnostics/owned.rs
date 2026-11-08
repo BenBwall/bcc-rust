@@ -122,6 +122,7 @@ impl OwnedDiagnostic {
             labels,
             notes,
             help,
+            reading: None,
         }
     }
 }

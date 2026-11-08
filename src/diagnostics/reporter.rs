@@ -90,6 +90,13 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         let target =
             if diagnostic.severity == ErrorSeverity::Error && foldable && !location.is_empty() {
                 self.fold_target(parser.then_some(consumed), empty_translation_unit, location)
+                    // A file read twice puts two mistakes at one place.
+                    .filter(|&index| {
+                        self.pending[index]
+                            .diagnostic
+                            .reading
+                            .is_none_or(|reading| context.same_reading(reading, source))
+                    })
             } else {
                 None
             };
@@ -109,6 +116,8 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             } else {
                 diagnostic
             };
+            let mut diagnostic = diagnostic;
+            diagnostic.reading = Some(source);
             if !parser && diagnostic.severity == ErrorSeverity::Error && !location.is_empty() {
                 _ = self.other_errors.insert(location, self.pending.len());
             }

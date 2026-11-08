@@ -1,3 +1,4 @@
+sema-unused-variables-gcc.c: In function 'g':
 sema-unused-variables-gcc.c:1:11: warning: unused parameter 'unused_parameter' [-Wunused-parameter]
     1 | int g(int unused_parameter, int set_parameter) {
       |           ^~~~~~~~~~~~~~~~

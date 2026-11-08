@@ -36,6 +36,10 @@ pub(crate) struct Diagnostic<'d> {
     pub(super) labels:        ArenaVec<'d, Label<'d>>,
     pub(super) notes:         ArenaVec<'d, &'d str>,
     pub(super) help:          ArenaVec<'d, &'d str>,
+    /// The range of the token or syntax that the diagnostic was reported
+    /// about, before it was moved to a place in a file, whose order says
+    /// which reading of a file read twice it is in.
+    pub(crate) reading:       Option<SourceVectors>,
 }
 
 impl<'d> Diagnostic<'d> {
@@ -158,6 +162,7 @@ impl<'d> Explanation<'d> {
             labels: ArenaVec::new_in(self.arena),
             notes: self.notes,
             help: self.help,
+            reading: None,
         }
         .primary(source, self.label)
     }
@@ -229,6 +234,14 @@ pub(super) enum LabelSource<'d> {
 }
 
 impl<'d> LabelSource<'d> {
+    /// The provenance range, unless the label gives explicit segments.
+    pub(super) const fn range(self) -> Option<SourceVectors> {
+        match self {
+            | Self::Range(source) => Some(source),
+            | Self::Segments(_) => None,
+        }
+    }
+
     pub(super) fn vectors<'a>(self, context: &'a Context<'_>) -> &'a [SourceVector]
     where
         'd: 'a,
