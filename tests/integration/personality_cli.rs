@@ -1598,6 +1598,54 @@ mod tests {
             text("--gcc-mode", "c.c")
                 .starts_with("c.c:1:25: error: expected expression before ';' token\n")
         );
+        // GCC says which way a call misses its prototype, naming the callee.
+        directory.write(
+            "e.c",
+            "int f(int);\nint (*p)(int);\nvoid g(void) { f(1, 2); p(1, 2); f(); }\n",
+        );
+        let calls = text("--gcc-mode", "e.c");
+        for expected in [
+            "e.c:3:16: error: too many arguments to function 'f'\n",
+            "e.c:3:25: error: too many arguments to function 'p'\n",
+            "e.c:3:34: error: too few arguments to function 'f'\n",
+        ] {
+            assert!(calls.contains(expected), "{calls}");
+        }
+        // Member access and void values, in each compiler's words.
+        directory.write(
+            "f.c",
+            "struct T; struct S { int y; };\nvoid v(void);\nint f(struct T *t, struct S *s) { \
+             return t->x + s->x; }\nvoid g(void) { int x = v(); x = v(); (long)v(); }\nvoid \
+             h(void) { struct S s = v(); }\n",
+        );
+        for (mode, expected) in [
+            (
+                "--gcc-mode",
+                [
+                    "error: invalid use of undefined type 'struct T'\n",
+                    "error: 'struct S' has no member named 'x'\n",
+                    "error: void value not ignored as it ought to be\n",
+                    "error: invalid use of void expression\n",
+                    "error: invalid initializer\n",
+                ],
+            ),
+            (
+                "--clang-mode",
+                [
+                    "error: incomplete definition of type 'struct T'\n",
+                    "error: no member named 'x' in 'struct S'\n",
+                    "error: initializing 'int' with an expression of incompatible type 'void'\n",
+                    "error: assigning to 'int' from incompatible type 'void'\n",
+                    "error: initializing 'struct S' with an expression of incompatible type \
+                     'void'\n",
+                ],
+            ),
+        ] {
+            let output = text(mode, "f.c");
+            for expected in expected {
+                assert!(output.contains(expected), "{mode}: {output}");
+            }
+        }
         assert!(text("--clang-mode", "c.c").starts_with("c.c:1:25: error: expected expression\n"));
         let related = text("--clang-mode", "d.c");
         assert!(
@@ -4663,6 +4711,80 @@ mod tests {
             (
                 "int x = 1; int x = 2;",
                 "e.c:1: error: redefinition of 'x'\n",
+            ),
+            (
+                "int main(void){ int i; long l = &i; return 0; }",
+                "e.c:1: warning: assignment makes integer from pointer without a cast\n",
+            ),
+            (
+                "int main(void){ int *p = 5; return 0; }",
+                "e.c:1: warning: assignment makes pointer from integer without a cast\n",
+            ),
+            (
+                "int f(int); int main(void){ return f(1, 2); }",
+                "e.c:1: error: too many arguments to function\n",
+            ),
+            (
+                "int f(int, int); int main(void){ return f(1); }",
+                "e.c:1: error: too few arguments to function\n",
+            ),
+            (
+                "struct S s;",
+                "e.c:1: error: initialization of incomplete type\n",
+            ),
+            (
+                "int main(void){ int a = 1 }",
+                "e.c:1: error: ';' expected (got '}')\n",
+            ),
+            (
+                "int main(void){ return 1 return }",
+                "e.c:1: error: ';' expected (got 'return')\n",
+            ),
+            (
+                "int main(void){ return 1 +; }",
+                "e.c:1: error: expression expected before ';'\n",
+            ),
+            (
+                "int main(void){ return 1 + ); }",
+                "e.c:1: error: expression expected before ')'\n",
+            ),
+            // TCC names a constant by its value and a floating one by its
+            // type, and escapes a character's values.
+            (
+                "void f(void){ int x = 1 0x10UL }",
+                "e.c:1: error: ';' expected (got '16')\n",
+            ),
+            (
+                "void f(void){ int x = 1 1.5f }",
+                "e.c:1: error: ';' expected (got '<float>')\n",
+            ),
+            (
+                "void f(void){ int x = 1 '\\t' }",
+                "e.c:1: error: ';' expected (got ''\\011'')\n",
+            ),
+            (
+                "void f(void){ int x = 1 \"a\\tb\" }",
+                "e.c:1: error: ';' expected (got '\"a\\011b\"')\n",
+            ),
+            (
+                "int main(void){ struct T *t; return t->x; }",
+                "e.c:1: error: dereferencing incomplete type 'T'\n",
+            ),
+            (
+                "struct S { int y; }; int main(void){ struct S s; return s.x; }",
+                "e.c:1: error: field not found: x\n",
+            ),
+            (
+                "void f(void); int main(void){ int x = f(); return x; }",
+                "e.c:1: error: cannot convert 'void' to 'int'\n",
+            ),
+            (
+                "void f(void); int main(void){ char *p; p = f(); return 0; }",
+                "e.c:1: error: cannot convert 'void' to 'char *'\n",
+            ),
+            (
+                "void f(void); int main(void){ return (long)f(); }",
+                "e.c:1: error: cannot convert 'void' to 'long'\n",
             ),
             // A user's text keeps what only looks like an option.
             (
@@ -11212,14 +11334,14 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         succeeds(&output);
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: warning: incompatible integer and pointer conversion\nptr.c:1: warning: \
-             assignment from incompatible pointer type\n"
+            "ptr.c:1: warning: assignment makes pointer from integer without a cast\nptr.c:1: \
+             warning: assignment from incompatible pointer type\n"
         );
         let output = directory.bcc("--tcc-mode", &["-Werror", "-c", "ptr.c"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: error: incompatible integer and pointer conversion\n"
+            "ptr.c:1: error: assignment makes pointer from integer without a cast\n"
         );
         // `$` follows `-f[no-]dollars-in-identifiers`, in every personality.
         directory.write("dollar.c", "int a$b = 3;\n");

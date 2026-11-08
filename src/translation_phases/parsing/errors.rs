@@ -1793,6 +1793,102 @@ impl ParserError<'_> {
     }
 }
 
+impl ParserError<'_> {
+    /// TCC's words for a missing `;` or expression, in TCC's diagnostic
+    /// format: `skip` in TCC's `tccpp.c` and `unary` in its `tccgen.c` name
+    /// the token found as TCC spells it, `<eof>` at the end of input.
+    fn tcc_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
+        if context.configuration.diagnostic_format() != crate::configuration::DiagnosticFormat::Tcc
+        {
+            return None;
+        }
+        let found = match (self.found, self.found_spelling) {
+            | (None, _) | (_, None) => "<eof>",
+            | (Some(token @ TokenType::Operator(_)), spelling) => {
+                let found = format_in!(arena, "{}", token.found(spelling));
+                found.trim_matches('`')
+            },
+            | (Some(token), Some(spelling)) =>
+                tcc_constant(token, context, arena).unwrap_or(spelling),
+        };
+        match self.error_type {
+            | ParserErrorType::ExpectedStatementExpression("expression operand", _) =>
+                Some(format_in!(arena, "expression expected before '{found}'")),
+            | ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
+            | ParserErrorType::ExpectedSemicolonInStatement(..) =>
+                Some(format_in!(arena, "';' expected (got '{found}')")),
+            | _ if self.error_type.expects_terminating_semicolon() =>
+                Some(format_in!(arena, "';' expected (got '{found}')")),
+            | _ => None,
+        }
+    }
+}
+
+/// A constant token as TCC's `get_tok_str` in `tccpp.c` spells it: an
+/// integer by its value in decimal, a floating constant by its type, and a
+/// character or string by its values, each escaped as TCC's `add_char`
+/// does; `None` keeps the source spelling.
+fn tcc_constant<'d>(token: TokenType, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
+    use crate::translation_phases::preprocessing::{
+        CharacterTokenType as C,
+        FloatTokenType as F,
+        IntegerTokenType as I,
+    };
+    let quoted = |prefix: &str, quote: char, values: &mut dyn Iterator<Item = u32>| {
+        let mut text = crate::util::bump::ArenaString::new_in(arena);
+        text.push_str(prefix);
+        text.push(quote);
+        for value in values {
+            if matches!(value, 0x27 | 0x22 | 0x5C) {
+                text.push('\\');
+            }
+            match char::from_u32(value).filter(|_| (32..=126).contains(&value)) {
+                | Some(printable) => text.push(printable),
+                | None if value == 0x0A => text.push_str("\\n"),
+                | None => text.push_str(format_in!(
+                    arena,
+                    "\\{}{}{}",
+                    (value >> 6) & 7,
+                    (value >> 3) & 7,
+                    value & 7
+                )),
+            }
+        }
+        text.push(quote);
+        text.into_str()
+    };
+    Some(match token {
+        | TokenType::Integer(integer) => {
+            let value = match integer {
+                | I::Int(value) => u64::from(value.cast_unsigned()),
+                | I::Long(value) | I::LongLong(value) => value.get().cast_unsigned(),
+                | I::UnsignedInt(value) => u64::from(value),
+                | I::UnsignedLong(value) | I::UnsignedLongLong(value) => value.get(),
+                | _ => return None,
+            };
+            format_in!(arena, "{value}")
+        },
+        | TokenType::Float(F::Float(_) | F::Float32(_)) => "<float>",
+        | TokenType::Float(F::Double(_) | F::Float64(_) | F::Float32x(_)) => "<double>",
+        | TokenType::Float(F::LongDouble(_) | F::LongDouble128(_) | F::Float64x(_)) =>
+            "<long double>",
+        | TokenType::Character(C::Char(value)) =>
+            quoted("", '\'', &mut [u32::from(value)].into_iter()),
+        | TokenType::Character(C::MultiChar(value)) =>
+            quoted("", '\'', &mut [value.cast_unsigned()].into_iter()),
+        | TokenType::Character(C::WideChar(value)) => quoted("L", '\'', &mut [value].into_iter()),
+        | TokenType::String(StringTokenType::String(id)) => {
+            let text = context.literal_text_in(arena, id, false)?;
+            quoted("", '"', &mut text.bytes().map(u32::from))
+        },
+        | TokenType::String(StringTokenType::WideString(id)) => {
+            let text = context.literal_text_in(arena, id, true)?;
+            quoted("L", '"', &mut text.chars().map(u32::from))
+        },
+        | _ => return None,
+    })
+}
+
 impl ToDiagnostic for ParserError<'_> {
     fn diagnostic_in<'d>(
         &self,
@@ -1815,6 +1911,7 @@ impl ToDiagnostic for ParserError<'_> {
         if let Some(words) = self.gnu_message(context, arena) {
             explanation.message = words;
         }
+        let tcc = self.tcc_message(context, arena);
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
                 // The likely fix is known, so lead with it.
@@ -1832,6 +1929,9 @@ impl ToDiagnostic for ParserError<'_> {
                 }
             }
             explanation.help.clear();
+        }
+        if let Some(words) = tcc {
+            explanation.message = words;
         }
         if self.warning_group == Some(ParserWarningGroup::RepeatedSpecifiers) {
             explanation = explanation.note(

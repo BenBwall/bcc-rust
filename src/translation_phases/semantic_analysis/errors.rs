@@ -394,10 +394,18 @@ pub(crate) enum SemanticErrorKind {
     IncompleteValue,
     /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
     InvalidMemberAccess,
+    /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
+    IncompleteMemberAccess,
+    /// C99: §6.3.2.2p1, p. 46; PDF p. 58.
+    VoidValueUsed,
     /// C99: §6.5.2.2p1, p. 71; PDF p. 83.
     InvalidCall,
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentCount,
+    /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
+    TooFewArguments,
+    /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
+    TooManyArguments,
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentType,
     /// Clang: Microsoft's `selectany` applies to data with external linkage.
@@ -1072,8 +1080,12 @@ impl SemanticErrorKind {
             | Self::InvalidSizeof => "operand has no size",
             | Self::IncompleteValue => "value of incomplete type",
             | Self::InvalidMemberAccess => "no such member",
+            | Self::IncompleteMemberAccess => "incomplete record",
+            | Self::VoidValueUsed => "void value",
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
+            | Self::TooFewArguments => "too few arguments",
+            | Self::TooManyArguments => "too many arguments",
             | Self::AnnotationArgument => "not a wide string literal",
             | Self::CpuBuiltinNotLiteral => "not a string literal",
             | Self::CpuBuiltinParameter | Self::CpuNameUnknown | Self::CpuFeatureUnknown =>
@@ -2150,6 +2162,16 @@ impl SemanticErrorKind {
                 "value of an object requires a complete type",
                 "C99 §6.3.2.1p2: an lvalue of incomplete non-array type has no value to convert to",
             ),
+            | Self::VoidValueUsed => (
+                "a void expression has no value to use",
+                "C99 §6.3.2.2p1: the nonexistent value of a void expression shall not be used in \
+                 any way, and no conversion other than to void applies to it",
+            ),
+            | Self::IncompleteMemberAccess => (
+                "member access requires a complete structure or union",
+                "C99 §6.5.2.3p1-2: member access names a member of a structure or union, which an \
+                 incomplete type does not yet declare",
+            ),
             | Self::InvalidMemberAccess => (
                 "member access requires a declared record member",
                 "C99 §6.5.2.3p1-2: member access names a member of the designated structure or \
@@ -2193,6 +2215,15 @@ impl SemanticErrorKind {
             ),
             | Self::InvalidArgumentCount => (
                 "function call has the wrong number of arguments",
+                "C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis \
+                 permits additional arguments",
+            ),
+            | Self::TooFewArguments => (
+                "function call has too few arguments",
+                "C99 §6.5.2.2p2: a call passes an argument for every parameter of the prototype",
+            ),
+            | Self::TooManyArguments => (
+                "function call has too many arguments",
                 "C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis \
                  permits additional arguments",
             ),
@@ -2982,6 +3013,17 @@ impl SemanticError {
             )),
             | (Format::Gcc, SemanticErrorKind::UndefinedInternal(_)) =>
                 Some(format_in!(arena, "'{name}' used but never defined")),
+            // Worded by `Analyzer::member_wording`.
+            | (
+                Format::Gcc | Format::Clang,
+                SemanticErrorKind::InvalidMemberAccess
+                | SemanticErrorKind::IncompleteMemberAccess
+                | SemanticErrorKind::VoidValueUsed,
+            ) => Some(arena.alloc_str(name)),
+            | (Format::Gcc, SemanticErrorKind::TooFewArguments) =>
+                Some(format_in!(arena, "too few arguments to function '{name}'")),
+            | (Format::Gcc, SemanticErrorKind::TooManyArguments) =>
+                Some(format_in!(arena, "too many arguments to function '{name}'")),
             | (Format::Clang, SemanticErrorKind::UndefinedInternal(_)) => Some(format_in!(
                 arena,
                 "function '{name}' has internal linkage but is not defined"
@@ -3024,6 +3066,10 @@ impl SemanticError {
                 format_in!(arena, "redefinition of '{name}'"),
             | (SemanticErrorKind::UndefinedLabel, Some(name)) =>
                 format_in!(arena, "label '{name}' used but not defined"),
+            | (SemanticErrorKind::IncompleteTentativeDefinition, _) =>
+                "initialization of incomplete type",
+            | (SemanticErrorKind::TooFewArguments, _) => "too few arguments to function",
+            | (SemanticErrorKind::TooManyArguments, _) => "too many arguments to function",
             | (SemanticErrorKind::BreakOutsideLoopOrSwitch, _) => "cannot break",
             | (SemanticErrorKind::ContinueOutsideLoop, _) => "cannot continue",
             | (SemanticErrorKind::ExpectedModifiableLvalue, _) => "lvalue expected",
@@ -3033,6 +3079,17 @@ impl SemanticError {
                 ),
                 _,
             ) => "assignment from incompatible pointer type",
+            // Worded by `Analyzer::member_wording`, `void_value_wording`
+            // and, with the conversion's direction, `conversion_wording`.
+            | (
+                SemanticErrorKind::InvalidMemberAccess
+                | SemanticErrorKind::IncompleteMemberAccess
+                | SemanticErrorKind::VoidValueUsed
+                | SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+                Some(words),
+            ) => arena.alloc_str(words),
             | _ => return None,
         })
     }
