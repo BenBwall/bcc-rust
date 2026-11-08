@@ -483,10 +483,6 @@ fn explicit_no_permissive_makes_gcc_c89_permerrors_errors() {
 /// wins (probed with Clang 23).
 #[test]
 fn clang_conversion_options_apply_in_order_to_their_children() {
-    use crate::translation_phases::ErrorSeverity::{
-        Error,
-        Warning,
-    };
     use DiagnosticGroup::{
         ConstantConversion,
         Conversion,
@@ -496,6 +492,11 @@ fn clang_conversion_options_apply_in_order_to_their_children() {
     use WarningOption::{
         Enable,
         Error as Werror,
+    };
+
+    use crate::translation_phases::ErrorSeverity::{
+        Error,
+        Warning,
     };
     let severity = |group, options: &[(DiagnosticGroup, WarningOption)]| {
         options
@@ -509,12 +510,27 @@ fn clang_conversion_options_apply_in_order_to_their_children() {
     };
     for (case, (options, expected)) in [
         (&[][..], Some(Warning)),
-        (&[(Child, Enable(false)), (Parent, Werror(true))][..], Some(Error)),
+        (
+            &[(Child, Enable(false)), (Parent, Werror(true))][..],
+            Some(Error),
+        ),
         (&[(Parent, Werror(true)), (Child, Enable(false))][..], None),
-        (&[(Child, Enable(false)), (Parent, Enable(true))][..], Some(Warning)),
-        (&[(Child, Enable(false)), (Conversion, Werror(true))][..], Some(Error)),
-        (&[(Conversion, Enable(true)), (Parent, Enable(false))][..], None),
-        (&[(Conversion, Enable(false)), (Child, Enable(true))][..], Some(Warning)),
+        (
+            &[(Child, Enable(false)), (Parent, Enable(true))][..],
+            Some(Warning),
+        ),
+        (
+            &[(Child, Enable(false)), (Conversion, Werror(true))][..],
+            Some(Error),
+        ),
+        (
+            &[(Conversion, Enable(true)), (Parent, Enable(false))][..],
+            None,
+        ),
+        (
+            &[(Conversion, Enable(false)), (Child, Enable(true))][..],
+            Some(Warning),
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -522,10 +538,13 @@ fn clang_conversion_options_apply_in_order_to_their_children() {
         assert_eq!(severity(Child, options), expected, "case {case}");
     }
     assert_eq!(
-        severity(ConstantConversion, &[
-            (ConstantConversion, Enable(false)),
-            (Conversion, Enable(true))
-        ]),
+        severity(
+            ConstantConversion,
+            &[
+                (ConstantConversion, Enable(false)),
+                (Conversion, Enable(true))
+            ]
+        ),
         Some(Warning)
     );
 }

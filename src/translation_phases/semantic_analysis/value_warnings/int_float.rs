@@ -55,6 +55,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         target: TypeId,
         source: ExpressionInfo<'tu>,
     ) {
+        if self.target_format(target).is_none() {
+            return;
+        }
         let mut pending = crate::util::bump::ArenaVec::new_in(self.scratch);
         pending.push(source);
         while let Some(source) = pending.pop() {
@@ -95,6 +98,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return;
         }
+        if self.integer_type(source.ty).is_none() {
+            return;
+        }
+        let target = self.types.non_atomic(target).unqualified();
+        let Some(format) = self.target_format(target) else {
+            return;
+        };
         let integer = match source.integer {
             | Some(value) => Some(value),
             | None if self.constant_with_builtin_calls(source.expression) =>
@@ -102,16 +112,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | None => None,
         };
         let Some(value) = integer.filter(|value| value.wide.is_none()) else {
-            return;
-        };
-        if self.integer_type(source.ty).is_none() {
-            return;
-        }
-        let target = self.types.non_atomic(target).unqualified();
-        let TypeKind::Scalar(scalar) = self.types.nodes[target.index] else {
-            return;
-        };
-        let Some(format) = self.significand_format(scalar) else {
             return;
         };
         let (negative, magnitude) = if value.signed && value.value < 0 {
@@ -238,6 +238,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         call
     }
 
+    /// The format of `target`, when it is a real floating type.
+    fn target_format(&self, target: TypeId) -> Option<Format> {
+        let target = self.types.non_atomic(target).unqualified();
+        match self.types.nodes[target.index] {
+            | TypeKind::Scalar(scalar) => self.significand_format(scalar),
+            | _ => None,
+        }
+    }
+
     /// The significand bits and largest binary exponent of a real floating
     /// scalar; `None` for any other type.
     /// C99: §5.2.4.2.2p2, p. 22; PDF p. 34.
@@ -333,7 +342,7 @@ pub(in crate::translation_phases::semantic_analysis) fn rounded_text(
     // without rounding (`AdjustToPrecision` of an `APInt`), and so may
     // keep too few to round below.
     let bits = significand.bit_width() + shift;
-    let required = (format.precision * 196 + 58) / 59;
+    let required = (format.precision * 196).div_ceil(59);
     let mut low = if bits > required {
         ((bits - required) * 59 / 196) as usize
     } else {

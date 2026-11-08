@@ -984,6 +984,18 @@ enum GroupDefault {
 }
 
 impl DiagnosticGroup {
+    /// The groups Clang's `-Wconversion` holds, which each of its options
+    /// sets in turn, so that a later option outranks an earlier one whether
+    /// it names the parent or the child.
+    const CLANG_CONVERSION: &[Self] = &[
+        Self::NullConversion,
+        Self::NonLiteralNullConversion,
+        Self::PointerBoolConversion,
+        Self::ConstantConversion,
+        Self::LiteralConversion,
+        Self::ImplicitConstIntFloatConversion,
+        Self::ImplicitIntFloatConversion,
+    ];
     /// The groups GCC's `-Wunused` holds only with `-Wextra` too.
     const PARAMETERS: &[Self] = &[Self::UnusedParameter, Self::UnusedButSetParameter];
     /// The groups bcc models under `-Wall`, as a pragma naming it reaches
@@ -1016,19 +1028,6 @@ impl DiagnosticGroup {
         Self::UnusedLabel,
         Self::UnusedValue,
         Self::UnusedComparison,
-    ];
-
-    /// The groups Clang's `-Wconversion` holds, which each of its options
-    /// sets in turn, so that a later option outranks an earlier one whether
-    /// it names the parent or the child.
-    const CLANG_CONVERSION: &[Self] = &[
-        Self::NullConversion,
-        Self::NonLiteralNullConversion,
-        Self::PointerBoolConversion,
-        Self::ConstantConversion,
-        Self::LiteralConversion,
-        Self::ImplicitConstIntFloatConversion,
-        Self::ImplicitIntFloatConversion,
     ];
 
     /// Whether only GCC has the group, so that Clang reports its option as

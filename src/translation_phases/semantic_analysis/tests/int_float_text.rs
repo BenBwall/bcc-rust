@@ -81,12 +81,17 @@ fn exact_conversions_and_overflow() {
     says(false, 1 << 127, X87, None);
 }
 
-/// APFloat truncates the exact value to the decimal digits its precision
+/// `APFloat` truncates the exact value to the decimal digits its precision
 /// needs before it rounds, so a digit that would round up can be gone: the
 /// float 973504673319912113749395654049792 keeps 24 digits, which Clang 23
 /// prints unrounded.
 #[test]
 fn clang_truncates_before_it_rounds() {
-    let magnitude = (52_773_793_117_994_u128 << 64) | 5_216_560_818_296_212_498;
-    says(false, magnitude, FLOAT, Some("9.73504673319912113749395E+32"));
+    let magnitude = (0x2FFF_5B31_372A_u128 << 64) | 0x4864_F26C_FBC4_4C12;
+    says(
+        false,
+        magnitude,
+        FLOAT,
+        Some("9.73504673319912113749395E+32"),
+    );
 }
