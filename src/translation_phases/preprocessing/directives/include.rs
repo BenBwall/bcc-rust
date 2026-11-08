@@ -958,7 +958,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     if token.kind == PreprocessorTokenType::Newline {
                         break;
                     }
-                    let token_contents = self.context.string_cache.at(token.contents);
+                    // A pp-number's spelling carries a trailing NUL, which
+                    // is no part of the name.
+                    let token_contents = self
+                        .context
+                        .string_cache
+                        .at(token.contents)
+                        .trim_end_matches('\0');
                     _ = Context::duplicate_source_vectors(
                         &mut self.context.source_vectors.0,
                         token.source_vectors,
@@ -971,7 +977,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         break;
                     }
                     let start = contents.len();
-                    contents.push_str(self.context.string_cache.at(token.contents));
+                    contents.push_str(token_contents);
                     token_spans.push((start..contents.len(), token.source_vectors, 0));
                 },
                 | None => {
