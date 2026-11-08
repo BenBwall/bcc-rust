@@ -15,6 +15,11 @@
 //! option is refused, so that nothing TCC would change from there on
 //! silently stays as it was.
 //!
+//! bcc adds no library to a link from a pragma. `lib` naming `m` asks for
+//! what every link but a WebAssembly one already has, the C99 §7.12
+//! functions (`-lm` on Linux, the C run-time library on Windows); any other
+//! library draws a warning that the link must name it.
+//!
 //! TCC: `pragma_parse` in `tccpp.c`; `tcc_set_options` and `set_flag` in
 //! `libtcc.c`.
 //! C99: implementation-defined pragma behavior, §6.10.6 paragraph 1, p. 159;
@@ -87,12 +92,27 @@ impl Expander<'_, '_, '_, '_> {
         let kind = kind
             .kind
             .is_identifier()
-            .then(|| self.context.string_cache.at(kind.contents));
-        if kind != Some("option") {
-            return;
-        }
+            .then(|| match self.context.string_cache.at(kind.contents) {
+                | "lib" => Some(Kind::Library),
+                | "option" => Some(Kind::Options),
+                | _ => None,
+            })
+            .flatten();
         let mut options = ArenaString::new_in(self.scratch);
         self.append_deprecation_message(text, &mut options);
+        if kind == Some(Kind::Library) {
+            if options.as_str() != "m" || self.context.configuration.target().is_wasm() {
+                let library = self.context.diagnostic_text(&options);
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::TccPragmaLibrary(library),
+                    source_vectors: pragma.source_vectors,
+                });
+            }
+            return;
+        }
+        if kind != Some(Kind::Options) {
+            return;
+        }
         // `tcc_set_options` splits the string at white space.
         for option in options.split_ascii_whitespace() {
             self.comment_option(pragma, option);
@@ -130,4 +150,13 @@ impl Expander<'_, '_, '_, '_> {
             source_vectors: pragma.source_vectors,
         });
     }
+}
+
+/// The kinds of `#pragma comment` TCC carries out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// `lib`: a library for the link.
+    Library,
+    /// `option`: options for `tcc_set_options`.
+    Options,
 }
