@@ -1,8 +1,8 @@
 //! GNU assembly statements inside functions, compiled and run on the host
 //! through LLVM and the native back end: `rdtsc`, `cpuid`, register,
-//! memory, immediate, matching and flag operands, clobbers, a memory barrier
-//! and `asm goto`. Direct native objects and the interpreter refuse
-//! assembly.
+//! memory, immediate, matching and flag operands, aggregates in registers,
+//! clobbers, a memory barrier and `asm goto`. Direct native objects and the
+//! interpreter refuse assembly.
 
 #[cfg(test)]
 #[expect(
@@ -429,6 +429,181 @@ int main(void) {
             let run = run_native(&mut Command::new(&executable)).unwrap();
             assert_eq!(run.status.code(), Some(0), "{flags:?}");
             std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    /// An array, structure or union of a register's size moves through it
+    /// as the integer of that size, as GCC and Clang move it: the outputs
+    /// store the register's bytes into the object, the inputs and `+`
+    /// operands load them. The interpreter refuses the statement as it
+    /// refuses all assembly.
+    #[test]
+    fn aggregates_move_through_registers_as_their_bytes() {
+        let source =
+            "#include <stdio.h>\nstruct pair { int x, y; };\nstruct halves { short s[2]; };\nint \
+             main(void) {\nint a[2] = {0, 0};\n__asm__(\"movabsq $0x0000000200000001, %0\" : \
+             \"=r\"(a));\nstruct pair p = {0, 0};\n__asm__(\"movabsq $0x0000000400000003, %0\" : \
+             \"=r\"(p));\nint u[2] = {5, 6};\n__asm__(\"rolq $32, %0\" : \"+r\"(u));\nstruct pair \
+             q = {7, 8};\nlong long bits;\n__asm__(\"movq %1, %0\" : \"=r\"(bits) : \
+             \"r\"(q));\nstruct halves h = {{0, 0}};\n__asm__(\"movl $0x00090008, %0\" : \
+             \"=r\"(h));\nstruct pair x = {0, 0};\n__asm__(\"movq %1, %0\" : \"=x\"(x) : \
+             \"x\"(q));\nvolatile char c[1];\n__asm__(\"movb $65, %0\" : \"=q\"(c));\nstruct pair \
+             t;\n__asm__(\"\" : \"=r\"(t) : \"0\"(q));\nprintf(\"%d %d %d %d %d %d %llx %d %d %d \
+             %d %c %d %d\\n\", a[0], a[1], p.x, p.y, u[0], u[1], bits, h.s[0], h.s[1], x.x, x.y, \
+             c[0], t.x, t.y);\nreturn 0;\n}\n";
+        let interpreted = bcc(
+            source,
+            &["--target=x86_64-unknown-linux-gnu", "--interpret"],
+        );
+        assert_eq!(
+            interpreted.status.code(),
+            Some(70),
+            "{}",
+            text(&interpreted.stderr)
+        );
+        assert!(
+            text(&interpreted.stderr).contains("unsupported by the interpreter: inline assembly"),
+            "{}",
+            text(&interpreted.stderr)
+        );
+        let Some(target) = host() else {
+            eprintln!("skipping: the host is not an x86-64 target bcc supports");
+            return;
+        };
+        for flags in [
+            &["--backend=llvm"][..],
+            &["--backend=llvm", "-O2"][..],
+            &["--backend=llvm", "--opt=bcc"][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
+            let executable = temporary("inline-asm-aggregates.exe");
+            let built = bcc(
+                source,
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{flags:?}");
+            assert_eq!(
+                text(&run.stdout),
+                "1 2 3 4 6 5 800000007 8 9 7 8 A 7 8\n",
+                "{flags:?}"
+            );
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    /// Which aggregate operands each compiler takes in a register, and its
+    /// words for those it refuses, as GCC 13.3 and Clang 23.1.1 print them
+    /// when they generate code: 1, 2, 4 and 8 bytes fit a register, other
+    /// sizes are an impossible constraint, and a const variable is
+    /// read-only. Memory takes any size.
+    #[test]
+    fn aggregate_operands_follow_each_compiler() {
+        const IMPOSSIBLE_GCC: &str = "error: impossible constraint in 'asm'";
+        const IMPOSSIBLE_CLANG: &str =
+            "error: impossible constraint in asm: cannot store value into a register";
+        let read_only_gcc = "error: read-only variable 'a' used as 'asm' output";
+        let read_only_clang = "error: invalid lvalue in asm output";
+        let rows: &[(&str, &str, Option<(&str, &str)>)] = &[
+            (
+                "char a[3]",
+                ": \"=r\"(a)",
+                Some((IMPOSSIBLE_GCC, IMPOSSIBLE_CLANG)),
+            ),
+            (
+                "char a[3]",
+                ": \"+r\"(a)",
+                Some((IMPOSSIBLE_GCC, IMPOSSIBLE_CLANG)),
+            ),
+            (
+                "char a[3]",
+                ": \"=x\"(a)",
+                Some((IMPOSSIBLE_GCC, IMPOSSIBLE_CLANG)),
+            ),
+            (
+                "int a[0]",
+                ": \"=r\"(a)",
+                Some((IMPOSSIBLE_GCC, IMPOSSIBLE_CLANG)),
+            ),
+            (
+                "char a[32]",
+                ": \"=r\"(a)",
+                Some((IMPOSSIBLE_GCC, IMPOSSIBLE_CLANG)),
+            ),
+            ("char a[3]", ": \"=m\"(a)", None),
+            ("char a[3]", ": \"=rm\"(a)", None),
+            ("char a[3]", ":: \"r\"(a)", None),
+            ("char a[4]", ": \"=r\"(a)", None),
+            ("char a[4]", ": \"+r\"(a)", None),
+            ("char a[4]", ": \"=x\"(a)", None),
+            ("int a[2]", ": \"=r\"(a)", None),
+            ("int a[2]", ": \"+r\"(a)", None),
+            ("int a[2]", ": \"=x\"(a)", None),
+            ("int a[2][1]", ": \"=r\"(a)", None),
+            ("int a[2][1]", ": \"+x\"(a)", None),
+            ("int a[2]", ":: \"r\"(a)", None),
+            ("int a[2]", ":: \"x\"(a)", None),
+            (
+                "const int a[2]",
+                ": \"=r\"(a)",
+                Some((read_only_gcc, read_only_clang)),
+            ),
+            (
+                "const int a[2]",
+                ": \"+r\"(a)",
+                Some((read_only_gcc, read_only_clang)),
+            ),
+            (
+                "const int a[2]",
+                ": \"=m\"(a)",
+                Some((read_only_gcc, read_only_clang)),
+            ),
+            ("const int a[2]", ":: \"r\"(a)", None),
+            (
+                "struct { const int x, y; } a",
+                ": \"=r\"(a)",
+                Some((read_only_gcc, read_only_clang)),
+            ),
+            ("struct { int x, y; } a", ": \"=r\"(a)", None),
+            ("struct { int x, y; } a", ": \"+r\"(a)", None),
+            ("struct { int x, y; } a", ": \"=x\"(a)", None),
+            ("struct { int x, y; } a", ":: \"r\"(a)", None),
+            ("struct { int x, y; } a", ":: \"x\"(a)", None),
+            ("struct { int x, y; } a", ":: \"g\"(a)", None),
+            ("union { int x; float f; } a", ": \"+x\"(a)", None),
+            (
+                "struct { char c[3]; } a",
+                ":: \"r\"(a)",
+                Some((IMPOSSIBLE_GCC, IMPOSSIBLE_GCC)),
+            ),
+            ("struct { char c[3]; } a", ":: \"rm\"(a)", None),
+        ];
+        for &(declaration, operands, refused) in rows {
+            let source = format!("void f(void) {{ {declaration}; __asm__(\"\" {operands}); }}");
+            for (compiler, format) in [
+                ("gcc", "--diagnostic-format=gcc"),
+                ("clang", "--diagnostic-format=clang"),
+            ] {
+                let output = bcc(
+                    &source,
+                    &[
+                        "--target=x86_64-unknown-linux-gnu",
+                        &format!("--compiler-identity={compiler}"),
+                        format,
+                    ],
+                );
+                let stderr = text(&output.stderr);
+                match refused {
+                    | None => assert!(output.status.success(), "{compiler} {source}: {stderr}"),
+                    | Some((gcc, clang)) => {
+                        let words = if compiler == "gcc" { gcc } else { clang };
+                        assert_eq!(output.status.code(), Some(1), "{compiler} {source}");
+                        assert!(stderr.contains(words), "{compiler} {source}: {stderr}");
+                    },
+                }
+            }
         }
     }
 

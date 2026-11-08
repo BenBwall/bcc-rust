@@ -2762,7 +2762,8 @@ impl SemanticErrorKind {
 
 impl SemanticError {
     /// GCC 14's, Clang 23's and TCC's own words for the C type-safety
-    /// diagnostics those compilers make errors or warnings by default, in
+    /// diagnostics those compilers make errors or warnings by default, and
+    /// for the `asm` outputs GCC and Clang cannot write, in
     /// their diagnostic formats, with the `-W` option each names (none for
     /// TCC, and none for a Clang error that no option controls); other
     /// diagnostics, and the other formats, keep bcc's.
@@ -2771,6 +2772,7 @@ impl SemanticError {
         context: &Context<'_>,
         arena: &'d Bump,
     ) -> Option<(&'d str, Option<&'static str>)> {
+        use super::assembly::AsmFault;
         use crate::configuration::DiagnosticFormat as F;
         let format = context.configuration.diagnostic_format();
         let name = self.name.map_or("", |name| context.string_cache.at(name));
@@ -2887,6 +2889,14 @@ impl SemanticError {
                 "parameter names (without types) in function declaration",
             | (F::Clang, SemanticErrorKind::TypeSpecifierRequired) =>
                 return Some(("a type specifier is required for all declarations", None)),
+            // GNU extension: GCC manual, "Extended Asm"; GCC's and Clang's
+            // words for an output they cannot write.
+            | (F::Gcc, SemanticErrorKind::InvalidAsm(AsmFault::ReadOnlyVariable)) =>
+                format_in!(arena, "read-only variable '{name}' used as 'asm' output"),
+            | (F::Clang, SemanticErrorKind::InvalidAsm(AsmFault::ReadOnlyVariable)) =>
+                "invalid lvalue in asm output",
+            | (F::Gcc, SemanticErrorKind::InvalidAsm(AsmFault::ImpossibleOutput)) =>
+                "impossible constraint in 'asm'",
             | _ => return None,
         };
         Some((message, if format == F::Tcc { None } else { group }))
