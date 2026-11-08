@@ -3304,3 +3304,73 @@ the other sanitizers.
 function), `local-bounds`, `implicit-conversion` and the other checks outside
 `undefined`; a `_BitInt` of a non-standard width, a GNU complex integer, a
 vector, a 16-bit floating type, and a floating conversion to a 128-bit integer.
+
+## Outer frame addresses (2026-11-08)
+
+GCC's `__builtin_frame_address (N)` and `__builtin_return_address (N)` for
+N > 0 ([Return Address](https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html))
+walk the frame-pointer chain: on x86-64 each frame address holds the
+caller's, and the return address is the word above it. The manual calls the
+outer levels unpredictable, and they are right only where every frame on the
+way keeps a frame pointer. TinyCC's `tests/tcctest.c` relies on them
+(`builtin_frame_address_test`, built with `-O0 -fno-omit-frame-pointer`).
+
+- **Lowering** (`lowering/builtins.rs`). Level 0 is `frame_address` or
+  `return_address`. Levels 1 to 64 outside Windows are `frame_address` and N
+  `load.ptr`s, and the return address one more load 8 bytes above the frame
+  reached. A deeper level, and any outer level on Windows (Win64 unwinds
+  through tables, and a Win64 `%rbp` points into its frame, so no chain
+  exists), stay refused as "not yet supported by lowering: this builtin".
+- **Frame pointers.** `-fno-omit-frame-pointer` (`Hardening::
+  keep_frame_pointer`) gives the LLVM back end `"frame-pointer"="all"` and
+  now the native back end GCC's System V frames, `%rbp` pushed first and set
+  to its own slot (see [docs/design/native-backend.md](docs/design/native-backend.md),
+  "Frame pointers"). As in GCC, which turns `-fomit-frame-pointer` on from
+  `-O1`, and Clang, a compilation without `__OPTIMIZE__` keeps them by
+  default on Linux, the only targets the command line passes the option to;
+  `-fomit-frame-pointer` drops them (`Hardening::initial`, used by the
+  command line and the explorer). Measured on lz4 1.10.0 at `-O0`, kept frame
+  pointers grow the native back end's text by 2.0% (198,047 to 201,991 bytes)
+  and shrink LLVM's by 8.5% (544,268 to 497,890, as `%rbp`-relative operands
+  need no SIB byte); compressing and decompressing an 88 MB file took the
+  same time either way, within run-to-run noise.
+- **Without frame pointers** (optimized, or `-fomit-frame-pointer`) bcc does
+  what GCC does rather than refuse: the walk reads whatever each frame's
+  `%rbp` slot holds. A function that takes its frame address still pushes
+  `%rbp` first, so level 1 is right whenever its caller keeps a frame
+  pointer; deeper levels may be any value, and following one may fault.
+  Optimization also changes which frames exist: inlined functions have none
+  and sibling calls replace theirs. TinyCC's test prints different lines with
+  GCC 13 at `-O2 -fno-omit-frame-pointer` and crashes with Clang 18 at `-O1`
+  and `-O2`; bcc's `--opt=bcc` inlines its `bfa` functions in the same way,
+  so the command-line test marks them `noinline`.
+- **Interpreter.** Its frames link no machine frames, so a load through a
+  frame address (or the word above it) stops the program as unsupported: "a
+  frame or return address of an outer frame (__builtin_frame_address or
+  __builtin_return_address above level 0); compile it with -o instead",
+  where it reported undefined behaviour through a pointer that names no
+  object before.
+- **`__builtin_longjmp` through LLVM.** The X86 back end reloads the frame
+  pointer from word 0 of the buffer before words 1 and 2, so a buffer in a
+  frame addressed from the frame pointer was read through the new one; with
+  frame pointers kept, `builtin_setjmp.c` crashed (as Clang 18 at `-O2
+  -fno-omit-frame-pointer` does). An empty `asm` now passes the buffer's
+  address in a register.
+
+Evidence: `code_generation_cli.rs` runs TinyCC's test and a return address
+check through LLVM and the native back end, with and without `--opt=bcc` and
+through the direct ELF writer, and at the unoptimized default, against what
+`gcc -O0 -fno-omit-frame-pointer` prints, and checks which options keep the
+frame pointer; `builtin_setjmp_and_longjmp_match_gcc_on_every_back_end` adds
+LLVM at `-O2 -fno-omit-frame-pointer`; `lowering/tests/extensions.rs` pins
+the chain loads, the bound and the Windows refusal; the native frame-layout
+tests are in `backend/native/tests/selection.rs`, and
+`programs_keeping_frame_pointers_match_the_interpreter` runs every native
+end-to-end program with frame pointers kept. `tests/fixtures/x86_interrupt/
+iret.c` read the flags with a `pushfq` into its leaf's red zone, which
+`gcc -O0` builds crashed on; it now steps over the red zone first.
+
+Remaining differences: GCC's `-Wframe-address` warning (in `-Wall`) is not
+implemented; outer levels stay refused on Windows and in the interpreter;
+the native back end addresses a fixed-size frame from `%rsp` where GCC's
+`-O0` code uses `%rbp`, which no program observes.
