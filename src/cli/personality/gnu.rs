@@ -1709,6 +1709,8 @@ impl State<'_> {
                     | "-Wno-tautological-unsigned-zero-compare"
                     | "-Wtautological-type-limit-compare"
                     | "-Wno-tautological-type-limit-compare"
+                    | "-Wunused-local-typedef"
+                    | "-Wno-unused-local-typedef"
                     | "-Wlogical-op-parentheses"
                     | "-Wno-logical-op-parentheses"
                     | "-Wbitwise-op-parentheses"

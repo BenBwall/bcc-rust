@@ -152,6 +152,102 @@ block3:
 }
 
 #[test]
+fn a_block_threading_bypasses_does_not_absorb_a_reachable_arm() {
+    // Threading sends block0's constant edge past block3 straight to
+    // block4, and block2's past it to block5, so nothing reaches block3. Of
+    // block4's two predecessors only block0 is reachable; block3 must not
+    // merge block4's test into itself as if it were the only one, or block0
+    // would branch to a removed block. Reduced from lz4's
+    // `LZ4_compress_fast_extState` at -O2.
+    let input = "\
+function @f(i1, i32) -> i32 external {
+block0(v0: i1, v1: i32):
+    v2 = iconst.i1 1
+    v3 = iconst.i1 0
+    brif v0, block1, block2
+block1:
+    jump block3(v2)
+block2:
+    jump block3(v3)
+block3(v4: i1):
+    brif v4, block4, block5
+block4:
+    v5 = iconst.i32 0
+    v6 = icmp.i32 slt v1, v5
+    brif v6, block6, block5
+block5:
+    return v1
+block6:
+    v7 = iconst.i32 7
+    return v7
+}
+";
+    let expected = "\
+function @f(i1, i32) -> i32 external {
+block0(v0: i1, v1: i32):
+    v2 = iconst.i1 0
+    v3 = iconst.i32 0
+    v4 = icmp.i32 slt v1, v3
+    v5 = select.i1 v0, v4, v2
+    brif v5, block2, block1
+block1:
+    return v1
+block2:
+    v6 = iconst.i32 7
+    return v6
+}
+";
+    assert_threaded(input, expected);
+}
+
+#[test]
+fn a_block_left_unreachable_does_not_absorb_a_reachable_arm() {
+    // As `fold` leaves the branch of `if (never ()) { if (a) goto test;
+    // goto done; }` (block1) once it decides the call: nothing reaches it
+    // until step 6 removes it, but step 4 sees it first, and block0 still
+    // leads to block2. Reduced from lz4's `LZ4_compress_fast_extState`.
+    let input = "\
+function @f(i1, i1, i32) -> i32 external {
+block0(v0: i1, v1: i1, v2: i32):
+    brif v1, block3, block2
+block1:
+    brif v0, block2, block4
+block2:
+    v3 = iconst.i32 0
+    v4 = icmp.i32 slt v2, v3
+    brif v4, block5, block4
+block3:
+    v5 = iconst.i32 3
+    return v5
+block4:
+    return v2
+block5:
+    v6 = iconst.i32 7
+    return v6
+}
+";
+    let expected = "\
+function @f(i1, i1, i32) -> i32 external {
+block0(v0: i1, v1: i1, v2: i32):
+    brif v1, block2, block1
+block1:
+    v3 = iconst.i32 0
+    v4 = icmp.i32 slt v2, v3
+    brif v4, block4, block3
+block2:
+    v5 = iconst.i32 3
+    return v5
+block3:
+    return v2
+block4:
+    v6 = iconst.i32 7
+    return v6
+}
+";
+    assert_threaded(input, expected);
+}
+
+#[test]
 fn a_loop_header_is_not_threaded() {
     // block1 branches on its parameter, but it heads the loop through
     // block2: threading block2's constant edge would enter the loop past its
