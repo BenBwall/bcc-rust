@@ -50,6 +50,7 @@ pub(crate) struct ResolvedFacts<'tu> {
     pub(crate) members:               ArenaMap<'tu, usize, MemberFacts>,
     pub(crate) statement_expressions: ArenaMap<'tu, usize, StatementExpressionFacts<'tu>>,
     branch_operands:                  ArenaMap<'tu, usize, &'tu Expression<'tu>>,
+    decided_conditions:               ArenaSet<'tu, usize>,
     #[cfg(test)]
     pub(crate) work:                  [usize; 2],
 }
@@ -127,6 +128,7 @@ pub(in crate::translation_phases::semantic_analysis) struct ResolvedBuilder<'tu,
     pub(in crate::translation_phases::semantic_analysis) members: ArenaMap<'tu, usize, MemberFacts>,
     statement_expressions: ArenaMap<'tu, usize, StatementExpressionFacts<'tu>>,
     branch_operands: ArenaMap<'tu, usize, &'tu Expression<'tu>>,
+    decided_conditions: ArenaSet<'tu, usize>,
     tails: ArenaMap<'s, usize, Option<&'tu Expression<'tu>>>,
     conversions: ArenaMap<'s, usize, ConversionSummary>,
     implicit_callees: ArenaSet<'s, usize>,
@@ -153,6 +155,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .resolved
             .branch_operands
             .insert(identity(expression), operand);
+    }
+
+    /// Records that GCC's rules decide `condition`, which still runs for its
+    /// side effects ([`Analyzer::gcc_decided_condition`]).
+    pub(in crate::translation_phases::semantic_analysis) fn retain_decided_condition(
+        &mut self,
+        condition: &'tu Expression<'tu>,
+    ) {
+        _ = self.resolved.decided_conditions.insert(identity(condition));
     }
 
     /// C89/GNU implicit declarations must be installed before the identifier
@@ -571,6 +582,15 @@ impl<'tu> SemanticTranslationUnit<'tu> {
             .copied()
     }
 
+    /// Whether `condition` decides the code it guards, as a constant does,
+    /// while it still runs for its side effects: under GCC's rules,
+    /// `d() && 0` omits what it guards, but `d` is still called.
+    pub(crate) fn decided_condition(&self, condition: &Expression<'tu>) -> bool {
+        self.resolved
+            .decided_conditions
+            .contains(&identity(condition))
+    }
+
     pub(crate) fn designation(&self, expression: &Expression<'tu>) -> Option<Designation<'tu>> {
         self.resolved
             .designations
@@ -615,6 +635,7 @@ impl<'tu, 's> ResolvedBuilder<'tu, 's> {
             members:               ArenaMap::with_hasher_in(FxBuildHasher, tu),
             statement_expressions: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             branch_operands:       ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            decided_conditions:    ArenaSet::with_hasher_in(FxBuildHasher, tu),
             tails:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             conversions:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             implicit_callees:      ArenaSet::with_hasher_in(FxBuildHasher, scratch),
@@ -662,6 +683,7 @@ impl<'tu, 's> ResolvedBuilder<'tu, 's> {
             members:               self.members,
             statement_expressions: self.statement_expressions,
             branch_operands:       self.branch_operands,
+            decided_conditions:    self.decided_conditions,
             #[cfg(test)]
             work:                  self.work,
         }

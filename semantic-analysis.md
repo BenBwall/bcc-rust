@@ -992,6 +992,18 @@ lowering straight to the chosen label when collection succeeded, so unselected
 case labels, also those after the selected `break`, are never lowered; only a
 tentative `default` keeps the case labels after its `break`, since a later case
 may still replace it. An `if` with an elided arm lowers only its selected arm.
+Under GCC's rules (GCC, TinyCC and MSVC identities) a condition with side
+effects that GCC's front end folds also decides what it guards
+(`emission/gcc_folding.rs`): `fold` turns `X && 0` into `(X, 0)` and `X || 1`
+into `(X, 1)`, through commas, `!` and nested logical operands, so
+`d() && 0 && u()` and `if (d() && 0) r();` omit `u` and `r` at `-O0`, as GCC
+does, while `d` is still called. The decided left operand becomes the logical
+operator's retained branch operand, and an `if` whose arm it elides keeps its
+condition in a retained set that lowering evaluates for its effects before the
+selected arm. Arithmetic folds such as `X * 0`, and comparisons and casts of
+a folded operand, stay unfolded. A `?:`, loop or `switch` condition such a fold
+decides is not modeled either: lowering's constant branches still drop the
+dead code, but an internal function referenced only there is still emitted.
 Every lowering consumer of a conditional or logical operator, as a value, as a
 branch condition or in an effects-only recipe, reads the same operand elision
 facts before ordinary constant shortcuts. The common operand of GNU `x ?: y`

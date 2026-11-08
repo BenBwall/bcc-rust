@@ -580,6 +580,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     {
                         self.elide_branch_operand(left_expression);
                         self.retain_branch_operand(e, right_expression);
+                    } else if self.expression_info(right_expression).elided
+                        && self.gcc_decided_condition(left_expression) == Some(!live)
+                    {
+                        // The left operand, which `DeadArm` found decides
+                        // the result under GCC's rules, is its truth value.
+                        self.retain_branch_operand(e, left_expression);
                     }
                 }
             },
@@ -642,16 +648,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if statement.is_some() && !self.statement_contains_label(owner, false) {
                     self.limit_optional_locals_for_next(condition, None);
                 }
-                let skipped = value == Some(!live)
-                    && statement
-                        .is_none_or(|statement| !self.statement_contains_label(statement, false));
-                self.functions.dead = outer.dead || skipped;
-                self.functions.unvisited = outer.unvisited || skipped;
-                self.functions.elided = outer_elided || skipped;
-                if skipped && let Some(id) = self.control.statement_id(owner) {
+                let unlabeled = statement
+                    .is_none_or(|statement| !self.statement_contains_label(statement, false));
+                let skipped = value == Some(!live) && unlabeled;
+                // GCC's rules also decide a condition that still runs.
+                let decided = value.is_none()
+                    && unlabeled
+                    && self.gcc_decided_condition(condition) == Some(!live);
+                self.functions.dead = outer.dead || skipped || decided;
+                self.functions.unvisited = outer.unvisited || skipped || decided;
+                self.functions.elided = outer_elided || skipped || decided;
+                if (skipped || decided)
+                    && let Some(id) = self.control.statement_id(owner)
+                {
                     self.control.statements[id.0].generated = super::GeneratedControl::If(!live);
-                    self.elide_condition_references(condition);
-                    self.elide_branch_operand(condition);
+                    if decided {
+                        self.retain_decided_condition(condition);
+                    } else {
+                        self.elide_condition_references(condition);
+                        self.elide_branch_operand(condition);
+                    }
                 }
             },
             | FunctionWork::ConditionalArmEnd(owner, arm, orphan) => {
@@ -735,9 +751,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // never the operand `__builtin_choose_expr` does not select.
                 let skipped = value == Some(!live)
                     && arm.is_none_or(|arm| !self.expression_contains_label(arm));
-                self.functions.dead = outer.dead || skipped;
-                self.functions.unvisited = outer.unvisited || skipped;
-                self.functions.elided = outer_elided || skipped;
+                // Under GCC's rules the right operand of `d() && 0 && X` is
+                // omitted too, and the left one, which still runs, decides
+                // the result.
+                let decided = value.is_none()
+                    && arm.is_some_and(|arm| !self.expression_contains_label(arm))
+                    && self.gcc_decided_condition(condition) == Some(!live);
+                self.functions.dead = outer.dead || skipped || decided;
+                self.functions.unvisited = outer.unvisited || skipped || decided;
+                self.functions.elided = outer_elided || skipped || decided;
                 if skipped {
                     self.elide_condition_references(condition);
                 }

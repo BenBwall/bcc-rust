@@ -181,6 +181,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     } {
                         self.tasks.push(child(selected));
                     }
+                    // A condition GCC's rules decide still runs first.
+                    let condition = expression(condition_expression, source)?;
+                    if self.unit.sema.decided_condition(condition) {
+                        self.tasks.push(Task::Discard);
+                        self.tasks.push(Task::Evaluate(condition));
+                    }
                     return Ok(());
                 }
                 let condition = expression(condition_expression, source)?;

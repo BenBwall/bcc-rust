@@ -31,6 +31,7 @@ mod declaration_initializers;
 mod encoded_strings;
 mod entity_attributes;
 mod flexible_initializers;
+mod gcc_folded_conditions;
 mod inline_control;
 mod math_builtins;
 mod predefined_identifiers;
