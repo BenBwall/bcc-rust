@@ -95,8 +95,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let mut inputs_only = false;
     let mut state = State {
         // `cl` writes `file(line):` unless `/diagnostics:column` asks for
-        // the column; clang-cl writes `file(line,col):`.
-        diagnostics: if clang_cl { "msvc" } else { "msvc-classic" },
+        // the column; clang-cl writes `file(line,col):` and the snippet, as
+        // `/diagnostics:caret` asks.
+        diagnostics: if clang_cl {
+            "msvc-caret"
+        } else {
+            "msvc-classic"
+        },
         ..State::default()
     };
     // clang-cl reads its `/clang:` options after the others, wherever they
@@ -721,7 +726,8 @@ struct State {
 
 impl Default for State {
     /// `cl`'s defaults: C17 (as clang-cl maps its default C mode), column
-    /// diagnostics (clang-cl's; `plan` gives `cl` its classic form),
+    /// diagnostics with the snippet (clang-cl's; `plan` gives `cl` its
+    /// classic form),
     /// Microsoft extensions, and the static runtime.
     fn default() -> Self {
         Self {
@@ -746,7 +752,7 @@ impl Default for State {
             verbose:                 false,
             ignore_include_variable: false,
             standard:                "c17",
-            diagnostics:             "msvc",
+            diagnostics:             "msvc-caret",
             warning_level:           1,
             warning_level_options:   (0, 0),
             warnings_error:          false,

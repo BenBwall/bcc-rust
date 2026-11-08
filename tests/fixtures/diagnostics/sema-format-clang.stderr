@@ -61,4 +61,4 @@ sema-format-clang.c:21:17: warning: format specifies type 'int *' but the argume
 sema-format-clang.c:22:25: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
    22 |     log_line(1, "%s\n", i);
       |                         ^
-2 errors and 18 warnings generated.
+18 warnings and 2 errors generated.

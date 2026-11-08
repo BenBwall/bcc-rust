@@ -138,8 +138,9 @@ impl Analyzer<'_, '_, '_> {
                 previous,
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
-            self.error_diagnostics +=
-                usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+            let hard = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+            self.error_diagnostics += hard;
+            self.hard_errors += hard;
             if !self.context.withholds(severity, false, source_vectors) {
                 self.context
                     .classified_error(at, TranslationError::Semantic(error));

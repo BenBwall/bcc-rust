@@ -767,15 +767,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Reports the variables and parameters of the scope being left.
+    /// Clang's `Sema::ActOnPopScope` reports a scope's variables and
+    /// typedefs only when no unrecoverable error occurred in it, so an
+    /// undeclared name silences them where a warning `-Werror` promotes
+    /// does not; its parameters are reported with the function.
     pub(super) fn report_unused_in_scope(&mut self) {
         if self.scope == 0 || self.scopes[self.scope].kind == ScopeKind::Prototype {
             return;
         }
+        let trapped = self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+            && self.hard_errors != self.scope_hard_errors[self.scope];
         let mut next = self.scope_entries[self.scope].head.get();
         while let Some(link) = next {
             next = link.next;
             let entry = self.entries[link.value];
-            if entry.namespace == Namespace::Ordinary {
+            if entry.namespace == Namespace::Ordinary
+                && !(trapped && self.bindings[entry.binding].kind != BindingKind::Parameter)
+            {
                 self.report_unused_variable(entry.binding, entry.name);
             }
         }

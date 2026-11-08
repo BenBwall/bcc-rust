@@ -52,4 +52,4 @@ pragma-diagnostic-malformed-clang.c:21:5: warning: `LOUD` is not defined; it eva
 pragma-diagnostic-malformed-clang.c:27:34: error: expected string literal in pragma diagnostic
    27 | #pragma clang diagnostic warning OPTION
       |                                  ^~~~~~
-4 errors and 14 warnings generated.
+14 warnings and 4 errors generated.

@@ -26,6 +26,7 @@ impl Analyzer<'_, '_, '_> {
         });
         self.scope_entries
             .push(self.scratch.alloc(Collection::new()));
+        self.scope_hard_errors.push(self.hard_errors);
         self.control.scope_regions.push(self.control.current);
         self.scope = next;
         if kind == ScopeKind::Block {
