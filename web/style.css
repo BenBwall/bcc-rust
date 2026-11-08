@@ -352,6 +352,14 @@
 
   /* Lessons: a timetable. */
   .lessons { padding: 40px 40px 0; }
+  /* Each part of the timetable is captioned like a figure: a numbered
+     line over a rule, with what its lessons share beside it. */
+  .lesson-part { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 0 24px; padding-top: 26px; }
+  .lesson-part:first-of-type { padding-top: 18px; }
+  .lesson-part-title { font-size: 10.5px; font-weight: 400; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); padding-bottom: 6px; }
+  .lesson-part-title b { color: var(--ink); font-weight: 700; }
+  .lesson-part-summary { color: var(--ink-3); font-size: 12px; padding-bottom: 6px; }
+  .lesson-part > .lesson-list { grid-column: 1 / -1; border-top: 1px solid var(--ink); }
   .lesson-list { display: grid; grid-template-columns: minmax(0, 1fr); counter-reset: lesson; }
   .lesson-list li { border-bottom: 1px solid var(--seam); }
   .lesson-card {
@@ -1353,6 +1361,8 @@
     .lessons, .about, .glossary { padding-inline: 18px; }
     .lessons { padding-top: 28px; }
     .notice { margin-inline: 18px; }
+    .lesson-part { grid-template-columns: minmax(0, 1fr); }
+    .lesson-part-title { padding-bottom: 2px; }
     .lesson-card { grid-template-columns: 40px minmax(0, 1fr); gap: 2px 12px; padding: 11px 8px 11px 0; }
     /* The number, and a UB mark under it, span the title and the summary,
        so the mark never pushes the summary down a line. */

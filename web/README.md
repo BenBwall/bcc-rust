@@ -1,7 +1,11 @@
 # How C runs: the bcc site
 
 An interactive introduction to how C programs run and how compilers translate
-them. Visitors pick a lesson (a small C program) and see it three ways:
+them. Visitors pick a lesson (a small C program) and see it three ways. The
+lessons (Table 1) come in four parts, read in order: objects and control,
+types and conversions, memory and undefined behavior, and inside the
+compiler; each part is captioned with what its lessons share
+(`demos::Part`).
 
 - **Abstract machine.** Step through the program one evaluation at a time.
   Each step leads with one plain sentence on what happened and why C says
@@ -442,8 +446,8 @@ unsigned before it compares, and shifts `1u` into the top bit and out
 again, printing each result with `%u`, `%zu` and `%d`. Like the printf
 lesson it includes `<stdio.h>`.
 
-The lesson "Floating point: close, not exact" (`demos/floating.c`), after
-the unsigned lesson, averages two ints into a double, which truncates
+The lesson "Floating point: close, not exact" (`demos/floating.c`), which
+ends the part on types and conversions, averages two ints into a double, which truncates
 first, `7 / 2` being int division, until a cast makes the division
 floating; shows `0.1 + 0.2 == 0.3` yielding 0 with the two exact values on
 screen; sums `0.1` ten times into `0.99999999999999989`; truncates
