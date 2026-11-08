@@ -24,7 +24,7 @@ pub struct Demo {
     pub source:  &'static str,
 }
 
-pub static DEMOS: [Demo; 13] = [
+pub static DEMOS: [Demo; 14] = [
     Demo {
         key:     "tour",
         title:   "Objects, loops and calls",
@@ -132,6 +132,18 @@ pub static DEMOS: [Demo; 13] = [
         path:    &[],
         name:    "unsigned.c",
         source:  include_str!("../demos/unsigned.c"),
+    },
+    Demo {
+        key:     "floating",
+        title:   "Floating point: close, not exact",
+        summary: "A double holds the nearest binary value, not what you wrote: 0.1 + 0.2 is not \
+                  0.3, ten 0.1s make 0.99999999999999989, and (int)2.99 truncates to 2.",
+        topics:  &["floating point", "conversions", "rounding"],
+        faults:  false,
+        stage:   None,
+        path:    &[],
+        name:    "floating.c",
+        source:  include_str!("../demos/floating.c"),
     },
     Demo {
         key:     "overflow",
