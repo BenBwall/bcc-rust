@@ -71,6 +71,7 @@ impl<'tu> Context<'tu> {
             retained_vectors: RegionVec::new(),
             string_cache,
             canonical_identifiers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            dangling_else_sites: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             literal_values: DedupArena::new(tu),
             expansion_sites: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
             expansion_starts: std::array::from_fn(|_| ExpansionSites::new_in(tu)),

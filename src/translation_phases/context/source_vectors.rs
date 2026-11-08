@@ -554,6 +554,16 @@ impl Context<'_> {
         SourceArena::Retained.encode(start, end)
     }
 
+    /// Retains a zero-width diagnostic anchor where the file location of
+    /// `source` starts: Clang's point location, which it marks with a caret
+    /// alone. `source` must not be empty.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    pub(crate) fn retain_source_start(&mut self, source: SourceVectors) -> SourceVectors {
+        let location = self.file_location(source);
+        let start = self.first_source_vector(location).clone();
+        self.create_retained_source_vectors(start.position(self), start.source_file_index, 0)
+    }
+
     /// Retains a zero-width diagnostic anchor immediately after `vector`.
     /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
     pub(crate) fn retain_source_end(&mut self, vector: &SourceVector) -> SourceVectors {

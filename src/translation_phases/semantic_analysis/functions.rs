@@ -1072,12 +1072,45 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && !self.declares_alias(self.function_identity(entity.latest))
             {
                 if let Some(&usage) = used.get(&self.function_identity(entity.latest)) {
-                    self.error(
-                        SemanticErrorKind::UndefinedInternal,
-                        usage.source_vectors,
-                        Some(b.name.name),
-                        Some(b.name.source_vectors),
-                    );
+                    let declared = self.bindings[entity.first.unwrap_or(entity.latest)].name;
+                    // A constraint, which GCC and Clang diagnose with a
+                    // warning: another object can't supply it, so the link
+                    // fails instead. Both report it at the declaration, under
+                    // the settings there; Clang notes the first use.
+                    if self.context.configuration.compiler_extensions() {
+                        let gcc = self.context.configuration.compiler_identity()
+                            == crate::configuration::CompilerIdentity::Gcc;
+                        let group = if gcc {
+                            crate::configuration::DiagnosticGroup::GccUndefinedInternal
+                        } else {
+                            crate::configuration::DiagnosticGroup::UndefinedInternal
+                        };
+                        // Clang's locations are points, which it marks with a
+                        // caret alone.
+                        let (site, used) = if gcc {
+                            (declared.source_vectors, None)
+                        } else {
+                            (
+                                self.context.retain_source_start(declared.source_vectors),
+                                Some(self.context.retain_source_start(usage.source_vectors)),
+                            )
+                        };
+                        self.group_diagnostic_read_at(
+                            group,
+                            SemanticErrorKind::UndefinedInternal(Some(group)),
+                            site,
+                            Some(declared.name),
+                            used,
+                            declared.source_vectors,
+                        );
+                    } else {
+                        self.error(
+                            SemanticErrorKind::UndefinedInternal(None),
+                            usage.source_vectors,
+                            Some(declared.name),
+                            Some(declared.source_vectors),
+                        );
+                    }
                 } else if b.kind == BindingKind::Function && !self.is_weak_reference(b.name.name) {
                     self.group_diagnostic(
                         crate::configuration::DiagnosticGroup::UnusedFunction,
@@ -1769,6 +1802,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let mut entity = previous.unwrap_or_default();
+        entity.first = entity.first.or(Some(index));
         entity.latest = index;
         // A file-scope declaration may make an inline body seen before it
         // an external definition, which Clang then creates and emits.
@@ -1992,6 +2026,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .get(&self.function_identity(index))
             .copied()
             .unwrap_or_default();
+        entity.first = entity.first.or(Some(index));
         entity.latest = index;
         if let Some(FunctionBody::Unique(previous)) = entity.function_body {
             self.error(
@@ -2896,6 +2931,9 @@ pub(super) enum FunctionWork<'tu> {
     reason = "Each flag is an independent declaration fact of the entity."
 )]
 pub(super) struct Entity {
+    /// The first declaration, Clang's canonical one, where both compilers
+    /// report an undefined internal function under the settings there.
+    first:               Option<usize>,
     latest:              usize,
     definition:          Option<SourceVectors>,
     tentative:           Option<usize>,

@@ -464,6 +464,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::FunctionWork(FunctionWork::JoinArms(
                     self.functions.elided,
                 )));
+                if else_statement.is_none() {
+                    self.check_dangling_else(s, then_statement);
+                }
                 let condition = super::statements::slot_expression(condition_expression);
                 if let Some(child) = else_statement {
                     self.work.push(Work::StatementWork(W::Substatement(child)));

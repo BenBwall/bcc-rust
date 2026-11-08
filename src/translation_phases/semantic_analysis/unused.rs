@@ -142,6 +142,8 @@ pub(super) struct UnusedState<'s> {
     pub(super) shadow: bool,
     /// Whether `-Wempty-body` may be on.
     pub(super) empty_body: bool,
+    /// Whether a warning about operators' grouping may be on.
+    pub(super) parentheses: bool,
     /// Whether a warning about what a `switch` handles may be on.
     pub(super) switches: bool,
     /// Whether a warning about reaching a function's end may be on.
@@ -203,6 +205,18 @@ impl<'s> UnusedState<'s> {
             values,
             shadow: on(&[G::Shadow, G::ShadowLocal, G::ShadowCompatibleLocal]),
             empty_body: on(&[G::EmptyBody]),
+            parentheses: on(&[
+                G::Parentheses,
+                G::ChainedComparison,
+                G::LogicalOpParentheses,
+                G::BitwiseOpParentheses,
+                G::ShiftOpParentheses,
+                G::ParenthesesEquality,
+                G::BitwiseConditionalParentheses,
+                G::LogicalNotParentheses,
+                G::DanglingElse,
+                G::SwitchBool,
+            ]),
             switches: on(&[
                 G::Switch,
                 G::SwitchEnum,
