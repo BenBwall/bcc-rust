@@ -53,7 +53,7 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
             size: section.size,
             // The only mergeable section is `.debug_line_str`, of strings
             // of bytes.
-            entry: if section.flags & 0x10 == 0 { 0 } else { 1 },
+            entry: u64::from(section.flags & 0x10 != 0),
             ..Header::default()
         });
         if !section.relocs.is_empty() {
