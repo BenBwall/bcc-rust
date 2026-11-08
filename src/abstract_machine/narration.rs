@@ -4466,7 +4466,6 @@ fn called(statement: &str) -> Option<&str> {
             | Some(_) if escaped => escaped = false,
             | Some(_) if character == '\\' => escaped = true,
             | Some(end) if character == end => quote = None,
-            | Some(_) => {},
             | None if matches!(character, '"' | '\'') => quote = Some(character),
             | None if character == '(' => depth += 1,
             | None if character == ')' => {
@@ -4475,7 +4474,7 @@ fn called(statement: &str) -> Option<&str> {
                     return (identifier && at + 1 == statement.len()).then_some(function);
                 }
             },
-            | None => {},
+            | _ => {},
         }
     }
     None
