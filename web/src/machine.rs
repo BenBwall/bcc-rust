@@ -90,14 +90,34 @@ impl Machine {
                 self.session = Some(session);
                 snapshot
             },
-            // The machine runs `#include <stdio.h>` itself; any other
-            // directive is the preprocessor's.
-            | Err(diagnostic) => match directives(&self.source)
-                .into_iter()
-                .find(|directive| !runs_itself(&self.source[directive.start..directive.end]))
-            {
-                | Some(directive) => before_the_machine(directive, &self.source),
-                | None => rejected(&diagnostic, &self.source),
+            // The machine runs `#include <stdio.h>` and object-like
+            // `#define` itself; a directive it stopped at is the
+            // preprocessor's. The card points at the first directive it
+            // does not run, at or before that one. A violated constraint is
+            // the program's own error, wherever it is.
+            | Err(diagnostic) => {
+                let found = directives(&self.source);
+                let at = diagnostic.source_range.start;
+                let stopped = (diagnostic.kind != "constraint")
+                    .then(|| {
+                        found
+                            .iter()
+                            .find(|directive| directive.start <= at && at <= directive.end)
+                    })
+                    .flatten();
+                match stopped {
+                    | Some(stopped) => {
+                        let first = found
+                            .iter()
+                            .take_while(|directive| directive.start <= stopped.start)
+                            .find(|directive| {
+                                !runs_itself(&self.source[directive.start..directive.end])
+                            })
+                            .unwrap_or(stopped);
+                        before_the_machine(*first, &self.source)
+                    },
+                    | None => rejected(&diagnostic, &self.source),
+                }
             },
         }
     }
@@ -113,14 +133,16 @@ impl Machine {
     }
 }
 
-/// Whether the machine runs the directive `text` itself: `#include
-/// <stdio.h>`, however it is spaced.
+/// Whether the machine may run the directive `text` itself: `#include
+/// <stdio.h>`, however it is spaced, or a `#define` of an object-like
+/// macro (the engine decides whether it takes the replacement).
 fn runs_itself(text: &str) -> bool {
     let words: Vec<&str> = text.trim_start_matches('#').split_whitespace().collect();
-    matches!(
-        words.as_slice(),
-        ["include", "<stdio.h>"] | ["include<stdio.h>"]
-    )
+    match words.as_slice() {
+        | ["include", "<stdio.h>"] | ["include<stdio.h>"] => true,
+        | ["define", name, ..] => !name.contains('('),
+        | _ => false,
+    }
 }
 
 /// The byte range of every preprocessing directive in `source`, each up to
@@ -222,16 +244,19 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
             category:       "fault".to_owned(),
             title:          "The machine starts after the preprocessor".to_owned(),
             summary:        "Lines starting with # are handled before the program runs, and this \
-                             machine runs only #include <stdio.h> itself, so it stops here. \
-                             Stopping here does not mean the program is wrong."
+                             machine runs only #include <stdio.h> and simple #define lines \
+                             itself, so it stops here. Stopping here does not mean the program is \
+                             wrong."
                 .to_owned(),
             explanation:    "C processes a file in translation phases: directives are executed \
                              and macros expanded in phase 4, and evaluation only happens once the \
-                             program runs. This machine plays phase 4 only for #include \
-                             <stdio.h>, which declares printf, puts and putchar. To see what the \
-                             other lines become, open the compiler pipeline's Preprocessor stage. \
-                             To step through the code here, remove those lines and write out what \
-                             they stood for."
+                             program runs. This machine plays phase 4 for #include <stdio.h>, \
+                             which declares printf, puts and putchar, and for #define NAME value \
+                             when the value is one number, character constant or string literal. \
+                             Function-like macros, #if and the other directives are the real \
+                             preprocessor's: to see what these lines become, open the compiler \
+                             pipeline's Preprocessor stage. To step through the code here, remove \
+                             those lines and write out what they stood for."
                 .to_owned(),
             note:           String::new(),
             flow:           Vec::new(),
@@ -260,31 +285,52 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
     }
 }
 
-/// The snapshot for source the engine could not compile.
+/// The snapshot for source the engine could not compile: outside its
+/// subset, or, for a violated constraint, not valid C at all, which every
+/// compiler must report (C99 §5.1.1.3p1).
 fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot {
     let location = range(diagnostic.source_range, source);
+    let (title, summary, explanation) = if diagnostic.kind == "constraint" {
+        (
+            "This program breaks a rule of C",
+            "The program violates a constraint of the C standard, so it does not compile: every C \
+             compiler must report this, and the program never runs."
+                .to_owned(),
+            format!(
+                "The abstract machine could not compile it: {}. The compiler pipeline view shows \
+                 the error bcc reports.",
+                diagnostic.message
+            ),
+        )
+    } else {
+        (
+            "This program is outside the supported subset",
+            "The abstract machine runs only a small subset of C, and this program uses something \
+             outside it."
+                .to_owned(),
+            format!(
+                "The abstract machine could not compile it: {}. The compiler pipeline view may \
+                 still show what bcc itself makes of it.",
+                diagnostic.message
+            ),
+        )
+    };
     Snapshot {
         step: 0,
         status: "error".to_owned(),
         location,
         event: StepEvent {
-            kind:           "fault".to_owned(),
-            category:       "fault".to_owned(),
-            title:          "This program is outside the supported subset".to_owned(),
-            summary:        "The abstract machine runs only a small subset of C, and this \
-                             program uses something outside it."
-                .to_owned(),
-            explanation:    format!(
-                "The abstract machine could not compile it: {}. The compiler pipeline view may \
-                 still show what bcc itself makes of it.",
-                diagnostic.message
-            ),
-            note:           String::new(),
-            flow:           Vec::new(),
-            access:         Vec::new(),
-            clauses:        clause(diagnostic.clause).into_iter().collect(),
-            range:          location,
-            objects:        Vec::new(),
+            kind: "fault".to_owned(),
+            category: "fault".to_owned(),
+            title: title.to_owned(),
+            summary,
+            explanation,
+            note: String::new(),
+            flow: Vec::new(),
+            access: Vec::new(),
+            clauses: clause(diagnostic.clause).into_iter().collect(),
+            range: location,
+            objects: Vec::new(),
             sequence_point: false,
         },
         tree: None,
@@ -535,6 +581,7 @@ fn diagnostic(fault: &abstract_machine::Diagnostic) -> Diagnostic {
         | "indeterminate" => "Indeterminate value read",
         | "unsupported" => "Outside the supported C subset",
         | "syntax" => "Source could not be compiled",
+        | "constraint" => "Constraint violation",
         | "limit" => "Engine resource limit reached",
         | _ => "Execution stopped",
     };
@@ -558,6 +605,7 @@ fn diagnostic(fault: &abstract_machine::Diagnostic) -> Diagnostic {
 /// Whether an object or member of the type spelled `ty` holds chars: a
 /// `char` or a `char` array, not a pointer to them.
 fn holds_chars(ty: &str) -> bool {
+    let ty = ty.strip_prefix("const ").unwrap_or(ty);
     ty == "char" || (ty.starts_with("char[") && !ty.contains('*'))
 }
 
@@ -714,7 +762,7 @@ mod tests {
     fn a_directive_stops_the_machine_without_blaming_the_program() {
         let mut machine = Machine::default();
         let state =
-            machine.load("// note\n  #define X 1\nint main(void) { return X; }\n".to_owned());
+            machine.load("// note\n  #define X(a) a\nint main(void) { return X(1); }\n".to_owned());
         assert_eq!(
             state.event.title,
             "The machine starts after the preprocessor"
@@ -885,6 +933,7 @@ mod tests {
         for (key, status, result) in [
             ("tour", "finished", Some("15")),
             ("hello", "finished", Some("0")),
+            ("constants", "finished", Some("0")),
             ("path", "finished", Some("16")),
             ("pointers", "finished", Some("17")),
             ("recursion", "finished", Some("24")),
@@ -1069,17 +1118,118 @@ mod tests {
             "#include <stdio.h>\nint main(void) {\n    putchar('!');\n    return 0;\n}\n",
         );
         assert_eq!(states.last().unwrap().output, b"!");
-        let stopped = machine
-            .load("#include <stdio.h>\n#define N 3\nint main(void) { return N; }\n".to_owned());
+        let stopped = machine.load(
+            "#include <stdio.h>\n#define N 3\n#if N\nint main(void) { return N; }\n#endif\n"
+                .to_owned(),
+        );
         assert_eq!(
             stopped.event.title,
             "The machine starts after the preprocessor"
         );
-        assert_eq!(stopped.location.map(|range| range.start.line), Some(2));
+        assert_eq!(stopped.location.map(|range| range.start.line), Some(3));
         assert!(!stopped.stdout);
+        // An object-like #define runs, as its own step, with a way to the
+        // Preprocessor stage there and at each use.
+        let states = execute(
+            &mut machine,
+            "#define N 3\nint main(void) {\n    return N;\n}\n",
+        );
+        assert_eq!(states[1].event.kind, "directive");
+        let flow: Vec<&str> = states[1]
+            .event
+            .flow
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect();
+        assert_eq!(flow, ["#define N", "stands for", "3"]);
+        let used = states
+            .iter()
+            .find(|state| state.event.title.starts_with("Macro N"))
+            .expect("the use of N");
+        assert!(used.event.preprocessed());
+        assert!(!states.last().unwrap().event.preprocessed());
+        assert_eq!(
+            integer(states.last().unwrap().return_value.as_ref()),
+            Some("3")
+        );
+        // A function-like macro still stops the machine before the program,
+        // and so does an earlier directive it does not run, even when the
+        // engine stopped at a later one.
+        let stopped = machine.load(
+            "#include <limits.h>\n#define SQUARE(x) ((x) * (x))\nint main(void) { return 0; }\n"
+                .to_owned(),
+        );
+        assert_eq!(stopped.location.map(|range| range.start.line), Some(1));
+        // A violated constraint is the program's error, not the machine's.
+        let broken = machine.load(
+            "int main(void) {\n    const int limit = 3;\n    limit = 4;\n    return 0;\n}\n"
+                .to_owned(),
+        );
+        assert_eq!(broken.event.title, "This program breaks a rule of C");
+        let diagnostic = broken.diagnostic.expect("the constraint");
+        assert_eq!(diagnostic.kind_label(), "Constraint violation");
+        assert_eq!(
+            diagnostic.clause.map(|clause| clause.id).as_deref(),
+            Some("6.5.16p2")
+        );
+        let redefined =
+            machine.load("#define N 1\n#define N 2\nint main(void) { return N; }\n".to_owned());
+        assert_eq!(redefined.event.title, "This program breaks a rule of C");
         // A program without the header has no Output panel.
         let quiet = machine.load("int main(void) { return 0; }\n".to_owned());
         assert!(!quiet.stdout);
+    }
+
+    #[test]
+    fn the_constants_lesson_shows_each_new_step_with_its_flow() {
+        let mut machine = Machine::default();
+        let states = execute(&mut machine, demos::find("constants").unwrap().source);
+        let last = states.last().unwrap();
+        assert_eq!(last.output, b"total is 056\n");
+        let flow = |kind: &str| -> Vec<String> {
+            states
+                .iter()
+                .find(|state| state.event.kind == kind)
+                .unwrap_or_else(|| panic!("a {kind} step"))
+                .event
+                .flow
+                .iter()
+                .map(|part| format!("{}:{}", part.role, part.text))
+                .collect()
+        };
+        assert_eq!(flow("cast"), ["value:300", "arrow:(char)", "value:44"]);
+        assert_eq!(
+            flow("compound_assign"),
+            [
+                "object:total",
+                "arrow:was",
+                "value:0",
+                "operator:+=",
+                "value:3",
+                "arrow:now",
+                "value:3"
+            ]
+        );
+        let update = states
+            .iter()
+            .find(|state| state.event.kind == "compound_assign")
+            .unwrap();
+        assert_eq!(update.event.access[0].kind, "write");
+        let step = last
+            .objects
+            .iter()
+            .find(|object| object.name == "step")
+            .expect("step");
+        assert_eq!(step.ty, "const int");
+        let small = last
+            .objects
+            .iter()
+            .find(|object| object.name == "small")
+            .expect("small");
+        assert_eq!(
+            crate::panels::value_text(&small.value).as_deref(),
+            Some("44 ','")
+        );
     }
 
     #[test]

@@ -71,6 +71,20 @@ pub struct StepEvent {
     pub sequence_point: bool,
 }
 
+impl StepEvent {
+    /// Whether the step belongs to translation phase 4: a directive the
+    /// machine ran, or a step whose rules include the preprocessor's
+    /// (§6.10), as a macro's use does. Such a step links to the
+    /// Preprocessor stage.
+    pub fn preprocessed(&self) -> bool {
+        self.kind == "directive"
+            || self
+                .clauses
+                .iter()
+                .any(|clause| clause.id.starts_with("6.10"))
+    }
+}
+
 /// One chip of a step's value flow.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct FlowPart {
@@ -282,6 +296,7 @@ impl Diagnostic {
             | Some("indeterminate") => "Indeterminate value",
             | Some("unsupported") => "Outside the supported subset",
             | Some("syntax") => "Compilation diagnostic",
+            | Some("constraint") => "Constraint violation",
             | Some("limit") => "Resource limit",
             | _ => "Program diagnostic",
         }

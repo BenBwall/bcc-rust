@@ -109,6 +109,8 @@ pub(super) fn flow(
             Some(arrow("now")),
             operand(result),
         ],
+        | EventKind::CompoundAssign => chips.compound(event, operator),
+        | EventKind::Cast => chips.cast(event, operator),
         | EventKind::Declare => vec![
             event.objects.first().map(|&id| chips.whole(id)),
             Some(arrow("holds")),
@@ -118,11 +120,7 @@ pub(super) fn flow(
         | EventKind::Branch => chips.branch(first),
         | EventKind::Call => chips.call(event),
         | EventKind::LibraryCall => chips.library_call(event, written),
-        | EventKind::Directive => vec![
-            Some(part("label", "#include <stdio.h>")),
-            Some(arrow("declares")),
-            Some(part("value", "printf, puts, putchar")),
-        ],
+        | EventKind::Directive => directive(event, program),
         | EventKind::Return => vec![
             operand(first),
             Some(arrow(if exited { "exit status" } else { "returned" })),
@@ -130,6 +128,38 @@ pub(super) fn flow(
         | _ => Vec::new(),
     };
     parts.into_iter().flatten().collect()
+}
+
+/// A directive the machine ran in translation phase 4: `#include
+/// <stdio.h>` declares the output functions, and `#define NAME value`
+/// makes the name stand for its replacement.
+fn directive(event: &Event, program: &Program) -> Vec<Option<FlowPart>> {
+    let text = program
+        .source()
+        .get(event.range.start..event.range.end)
+        .unwrap_or_default();
+    let words: Vec<&str> = text.trim_start_matches('#').split_whitespace().collect();
+    match words.as_slice() {
+        | ["define", name, ..] => {
+            let replacement = text
+                .trim_start_matches('#')
+                .trim_start()
+                .trim_start_matches("define")
+                .trim_start()
+                .trim_start_matches(name)
+                .trim();
+            vec![
+                Some(part("label", &format!("#define {name}"))),
+                Some(arrow("stands for")),
+                Some(part("value", replacement)),
+            ]
+        },
+        | _ => vec![
+            Some(part("label", "#include <stdio.h>")),
+            Some(arrow("declares")),
+            Some(part("value", "printf, puts, putchar")),
+        ],
+    }
 }
 
 /// How `event` used each object it touched.
@@ -185,8 +215,10 @@ pub(super) fn access(event: &Event) -> Vec<Access> {
     };
     match event.kind {
         | EventKind::LvalueConversion => at(event.operands.first(), "read"),
-        | EventKind::Initialize | EventKind::Assign | EventKind::Increment =>
-            at(event.operands.first(), "write"),
+        | EventKind::Initialize
+        | EventKind::Assign
+        | EventKind::Increment
+        | EventKind::CompoundAssign => at(event.operands.first(), "write"),
         | EventKind::Declare | EventKind::Call | EventKind::StaticStorage => whole("create"),
         | EventKind::LibraryCall => whole("read"),
         | EventKind::LeaveBlock | EventKind::Return => whole("end"),
@@ -234,6 +266,34 @@ impl Chips<'_, '_> {
         } else {
             vec![operand(value), Some(arrow("store")), operand(target)]
         }
+    }
+
+    /// `total += step`: the object, its old value, the operator and the
+    /// right operand, and what it holds now.
+    fn compound(&self, event: &Event, operator: Option<&str>) -> Vec<Option<FlowPart>> {
+        let operand = |index: usize| event.operands.get(index).map(|operand| self.operand(operand));
+        vec![
+            operand(0),
+            Some(arrow("was")),
+            operand(1),
+            operator.map(operator_chip),
+            operand(2),
+            Some(arrow("now")),
+            event.result.as_ref().map(|result| self.operand(result)),
+        ]
+    }
+
+    /// `(char)300`: the operand, the cast, and the value in its new type.
+    fn cast(&self, event: &Event, operator: Option<&str>) -> Vec<Option<FlowPart>> {
+        let ty = operator.map_or("int", |cast| cast.trim_matches(['(', ')']));
+        vec![
+            event.operands.first().map(|operand| self.operand(operand)),
+            Some(arrow(operator.unwrap_or("cast"))),
+            event
+                .result
+                .as_ref()
+                .map(|result| typed(self.operand(result), ty)),
+        ]
     }
 
     /// A condition and whether C counts it as true.

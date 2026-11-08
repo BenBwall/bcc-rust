@@ -40,9 +40,22 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   runs `#include <stdio.h>` itself, as the first step, saying what
   translation phase 4 does, with a button to the Preprocessor stage; each
   call to `printf`, `puts` or `putchar` is one step, whose note says which
-  argument fed which conversion and what text it wrote. Any other directive
-  stops the machine before its first step with a card that sends the reader
-  to the Preprocessor stage.
+  argument fed which conversion and what text it wrote, and what a
+  precision (`%.3d`, `%.2s`) did. It runs an object-like `#define NAME
+  value` too, when the value is one number, character constant or string
+  literal: the directive is a step of phase 4 (`#define N` stands for `10`),
+  and each use of the name leads with the replacement standing in for it
+  before the program ran, with the same button. Adjacent string literals
+  are one array, whose step says that phase 6 joined them. A `const` object
+  shows its type as `const int`; assigning to it does not compile, and the
+  page says the program breaks a rule of C rather than leaves the subset,
+  while a store through a pointer whose `const` a cast removed stops as
+  undefined behavior. A cast is a step of its own that says whether the
+  value was kept or, for an int that does not fit in a char, wrapped as bcc
+  and GCC do (implementation-defined), and `x += y` is narrated as `x = x +
+  (y)` with `x` evaluated once. Any other directive (a function-like macro,
+  `#if`, another header) stops the machine before its first step with a
+  card that sends the reader to the Preprocessor stage.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
   the first translation phases to machine code: the logical lines after
   line splicing (phases 1-2), the preprocessing tokens (phase 3), the
@@ -371,8 +384,8 @@ learner's own program (opened or edited) otherwise.
 
 The lesson "Before the compiler: the preprocessor" (`demos/macros.c`)
 exercises these stages and opens at the preprocessor. The abstract machine
-runs only `#include <stdio.h>` itself, so it stops that lesson at its first
-other directive.
+runs only `#include <stdio.h>` and object-like `#define` itself, so it stops
+that lesson at its first other directive.
 
 The lesson "Hello, world: printf and strings" (`demos/hello.c`), second in
 the list, is the first program most programmers write: `#include
@@ -383,6 +396,15 @@ prototype declared before `main`. In the pipeline view it stops at the
 Preprocessor stage above); its LLVM IR is precomputed by the native compiler,
 which finds the host's headers. Its Clang module is a WASI command linked
 with wasi-libc (see the WebAssembly view).
+
+The lesson "Names for values: #define, const and casts"
+(`demos/constants.c`), third in the list, follows it with what a first week
+adds: `#define LIMIT 4` and `#define LABEL "total"` (each a step of phase 4,
+and each use narrated as its replacement), a `const int step`, a loop that
+adds it with `+=`, `(char)300`, which wraps to 44, and `printf(LABEL " is
+%.3d\n", total)`, whose format is two literals joined into one array and
+whose precision pads 56 to `056`. It includes `<stdio.h>`, so the pipeline
+view and the Clang module treat it as the printf lesson's.
 
 How live compilation runs:
 
