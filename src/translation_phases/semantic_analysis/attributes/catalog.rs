@@ -146,6 +146,8 @@ pub(in crate::translation_phases::semantic_analysis) fn rule(
     let meaning = gnu(name).map(|rule| match rule {
         | Rule::Interrupt | Rule::NoCallerSaved if !linux => Rule::Convention(Convention::Other),
         | Rule::Naked if !linux => Rule::Unsupported(UnsupportedAttribute::Naked),
+        // WebAssembly's `target` names its own features, which bcc drops.
+        | Rule::Target if target.is_wasm() => Rule::Ignored,
         | rule => rule,
     });
     // A name Clang lists in this spelling takes bcc's rule for it, or has

@@ -16,6 +16,8 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/x86-Function-Attributes.html>
 //! Clang extension: Clang Attributes Reference, "target".
 //! <https://clang.llvm.org/docs/AttributeReference.html#target>
+//! C99: §6.7, p. 97; PDF p. 109 (declarations, extended by GNU attributes);
+//! §6.2.2p2, p. 30; PDF p. 42 (linked declarations share one entity).
 
 use super::{
     entities::Subject,

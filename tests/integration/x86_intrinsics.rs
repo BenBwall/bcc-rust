@@ -139,10 +139,12 @@ mod tests {
         }
     }
 
-    /// Builds `name` with the host GCC (`gcc_flags` enable its instruction
-    /// sets) and compares every bcc arm's output with that build's; the
-    /// interpreter's arms add `interpreted`.
-    fn check(name: &str, gcc_flags: &[&str], interpreted: &[&str]) {
+    /// Builds `name` with the host GCC and compares every bcc arm's output
+    /// with that build's. `features` enable the instruction sets the program
+    /// needs, in both compilers: an intrinsic whose header function has a
+    /// `target` attribute needs its feature in the caller. The interpreter's
+    /// arms add `interpreted`.
+    fn check(name: &str, features: &[&str], interpreted: &[&str]) {
         if !cfg!(all(
             target_arch = "x86_64",
             target_os = "linux",
@@ -151,7 +153,7 @@ mod tests {
             return;
         }
         let source = fixture(name);
-        let Some(expected) = reference(&source, gcc_flags) else {
+        let Some(expected) = reference(&source, features) else {
             eprintln!("note: no host GCC build of {name} runs here; skipping");
             return;
         };
@@ -160,7 +162,8 @@ mod tests {
                 &["--interpret", "--opt=none"][..],
                 &["--interpret", "--opt=bcc"],
             ] {
-                let output = bcc(&[&[identity, &source][..], flags, interpreted].concat());
+                let output =
+                    bcc(&[&[identity, &source][..], features, flags, interpreted].concat());
                 assert_eq!(
                     output.status.code(),
                     Some(0),
@@ -182,6 +185,7 @@ mod tests {
                 let executable = temporary("intrinsics.exe");
                 let built = bcc(&[
                     &[identity, &source, "-o", executable.to_str().unwrap()][..],
+                    features,
                     flags,
                 ]
                 .concat());
