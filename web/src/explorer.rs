@@ -809,11 +809,12 @@ mod tests {
         assert!(!compilation.stopped_before(Stage::Tokens));
     }
 
-    /// `<stdio.h>` is one of bcc's own headers on wasm32-wasip1 but none on
-    /// x86-64 in the browser: the WebAssembly view's squiggles come from its
-    /// own compilation, and the pipeline's stop says where the header is.
+    /// `<stdio.h>` is one of bcc's own headers in the browser, for
+    /// wasm32-wasip1 and x86-64 alike: the WebAssembly view's squiggles come
+    /// from its own compilation, and a header bcc does not bring stops the
+    /// pipeline with a note on where headers come from.
     #[test]
-    fn the_c_library_headers_are_found_only_for_webassembly() {
+    fn the_c_library_headers_are_bccs_own_on_every_target() {
         let source =
             "#include <stdio.h>\nint main(void) {\n    printf(\"%d\\n\", 1);\n    return x;\n}\n";
         let wasm = compile_wasm(source);
@@ -829,22 +830,29 @@ mod tests {
         let wasm = compile_wasm(&fixed);
         assert!(wasm.diagnostics.is_empty(), "{:#?}", wasm.diagnostics);
         assert!(wasm.module.is_ok());
-        // For x86-64 the header is missing, and the stop says where to go.
+        // For x86-64 the same header declares printf.
         let compilation = compile(&fixed, false);
+        assert!(
+            compilation
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != "error"),
+            "{:#?}",
+            compilation.diagnostics
+        );
+        // A header bcc does not bring stops the pipeline, which says why.
+        let missing = fixed.replace("<stdio.h>", "<pthread.h>");
+        let compilation = compile(&missing, false);
         let error = compilation
             .diagnostics
             .iter()
             .find(|diagnostic| diagnostic.severity == "error")
-            .expect("no <stdio.h> on x86-64");
+            .expect("no <pthread.h> in the browser");
         assert_eq!(error.range.map(|range| range.line), Some(1));
         let stop = compilation.stop().expect("the error stops bcc");
         assert!(
-            stop.explanation.contains("<stdio.h>"),
-            "{}",
-            stop.explanation
-        );
-        assert!(
-            stop.explanation.contains("choose WebAssembly"),
+            stop.explanation.contains("<pthread.h>")
+                && stop.explanation.contains("command-line bcc"),
             "{}",
             stop.explanation
         );
