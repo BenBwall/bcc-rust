@@ -31,15 +31,17 @@ mod tests {
         },
     };
 
-    /// The probe OpenSSL's perlasm runs for a GNU assembler.
+    /// The probe OpenSSL's perlasm runs for a GNU assembler, which names
+    /// `/dev/null` for its input and output; an empty file in the test's
+    /// directory stands for it, so the probe also runs on Windows.
     const PROBE: [&str; 7] = [
         "-Wa,-v",
         "-c",
         "-o",
-        "/dev/null",
+        "probe.o",
         "-x",
         "assembler",
-        "/dev/null",
+        "empty.s",
     ];
 
     /// The CET note perlasm writes when it takes the assembler for GNU's
@@ -64,6 +66,7 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("empty.s"), "").unwrap();
             Self(directory)
         }
 
@@ -149,10 +152,10 @@ mod tests {
                 "-Wa,--version",
                 "-c",
                 "-o",
-                "/dev/null",
+                "probe.o",
                 "-x",
                 "assembler",
-                "/dev/null",
+                "empty.s",
             ],
             &[],
         );
@@ -224,8 +227,8 @@ mod tests {
         assert_eq!(
             stderr(&probe),
             format!(
-                "{NO_ASSEMBLER}gcc: error: cannot assemble `/dev/null`: clang failed (exit \
-                 status: 1):\nclang: error: unsupported argument '-v' to option '-Wa,'\n\n"
+                "{NO_ASSEMBLER}gcc: error: cannot assemble `empty.s`: clang failed (exit status: \
+                 1):\nclang: error: unsupported argument '-v' to option '-Wa,'\n\n"
             )
         );
         directory.write("solaris.s", SOLARIS_SECTION);
@@ -322,10 +325,10 @@ mod tests {
                 "-Wa,--version",
                 "-c",
                 "-o",
-                "/dev/null",
+                "probe.o",
                 "-x",
                 "assembler",
-                "/dev/null",
+                "empty.s",
             ],
             &[],
         );
