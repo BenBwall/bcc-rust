@@ -112,6 +112,12 @@ without a personality as well:
   personalities map `-fwrapv`, `cl /ZpN` and `cl /Zc:trigraphs` onto, and
   `-f[no-]trapv`, `-f[no-]signaling-nans`, `-f[no-]common`, `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow` and
   `-f[no-]delete-null-pointer-checks`;
+- `-mms-bitfields` and `-mno-ms-bitfields`, which lay out every record that
+  names neither `ms_struct` nor `gcc_struct` in Microsoft's or System V's
+  bit-field layout, as GCC 14 and Clang 23 do on every target; under Clang's
+  rules `-mno-ms-bitfields` on an MSVC target makes each record Clang's
+  "Itanium-compatible layout" error, in the Clang and clang-cl personalities
+  alike;
 - `-v` (the header search and each command the driver runs, quoted as
   Clang quotes them), `-H` (the include tree), `-MG` (with `-M` or `-MM`,
   missing headers taken to be generated), and `--show-includes` (`cl
@@ -386,7 +392,7 @@ to the options TCC itself implements; see [TCC](#tcc).
   `-ffp-contract=off`: bcc forms no fused operations; `-fexcess-precision=`:
   x86-64 has none; `-mno-avx`: bcc uses only the baseline instruction set;
   `-march=x86-64`), the
-  target's own ABI choices (`-mms-bitfields` for a Windows target,
+  target's own ABI choices (`-mabi=ms` for a Windows target,
   `-mlong-double-80` for Linux; `-m` options are judged for the target,
   after the whole command line is read), options that only change
   which programs are accepted (`-fallow-parameterless-variadic-functions`),
@@ -405,9 +411,8 @@ to the options TCC itself implements; see [TCC](#tcc).
   differently from how those options pass it (see above).
 - **Refused**, with the compiler's kind of error, for everything else:
   options that change layout or the ABI away from the target's
-  (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on
-  Linux, `-mno-ms-bitfields` on Windows, `-mregparm=`, `-mlong-double-64`
-  outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
+  (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mabi=ms` on
+  Linux, `-mregparm=`, `-mlong-double-64` outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
   `-mgeneral-regs-only` except as below; `cl /arch:AVX2`, which also changes
   macros),
   language rules bcc does not follow (`-fsemantic-interposition`,
@@ -1079,7 +1084,8 @@ reject.
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MD,FILE`, `-MF`, `-MP` | the same, with `-MT` and `-MF` naming the rule and file after TCC's output (`a.out`, `a.d` for a link of one source) |
 | `-funsigned-char`, `-fsigned-char`, `-f[no-]common`, `-f[no-]gnu89-inline`, `-f[no-]dollars-in-identifiers` | the same |
 | `-f[no-]ms-extensions` | `-f[no-]ms-anonymous-structs`: TCC's flag allows only anonymous `struct` and `union` members, and is on by default |
-| `-fleading-underscore`, `-ftest-coverage`, `-mno-sse`, `-mms-bitfields` on Linux, `-m32` | refused, as the GCC personality refuses them |
+| `-mms-bitfields`, `-mno-ms-bitfields`, and the same in `#pragma comment(option, "...")` from there on | the same, in TCC's own Microsoft layout ([TCC's test suite rules](../../language-standards.md#tccs-test-suite-rules-2026-11-07)); the pragma's other options are refused, except a char signedness already in effect |
+| `-fleading-underscore`, `-ftest-coverage`, `-mno-sse`, `-m32` | refused, as the GCC personality refuses them |
 | `-freverse-funcargs` | ignored with a warning: C leaves the order unspecified |
 | `-g`, `-gN`, `-gdwarf[-N]` | [debug information](#debug-information), as for GCC |
 | `-fasynchronous-unwind-tables`, `-msse`, `-m64`, `-gstabs` and other `-g*`, `-B` | ignored |
