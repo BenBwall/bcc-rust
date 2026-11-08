@@ -139,6 +139,15 @@ impl Renderer {
             for mark in &mut marks {
                 mark.label = None;
             }
+            // A place is one caret at the start of its first character.
+            if diagnostic.point {
+                marks.truncate(1);
+                for mark in &mut marks {
+                    let text = context.source_text(mark.file).unwrap_or_default();
+                    let width = text[mark.start..].chars().next().map_or(0, char::len_utf8);
+                    mark.end = mark.end.min(mark.start + width);
+                }
+            }
         }
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
         let gutter_width = if max_line == 0 {

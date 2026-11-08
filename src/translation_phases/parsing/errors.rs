@@ -1761,17 +1761,21 @@ impl Display for ParserError<'_> {
 
 impl ParserError<'_> {
     /// GCC's and Clang's words for a missing expression, in their diagnostic
-    /// formats. GCC names what it found, as its `c_parse_error` does.
+    /// formats, and Clang's for the other syntax it expects most often. GCC
+    /// names what it found, as its `c_parse_error` does.
     fn gnu_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
         use crate::configuration::DiagnosticFormat as Format;
+        let format = context.configuration.diagnostic_format();
+        if format == Format::Clang {
+            return self.clang_message(context, arena);
+        }
         if !matches!(
             self.error_type,
             ParserErrorType::ExpectedStatementExpression("expression operand", _)
         ) {
             return None;
         }
-        match context.configuration.diagnostic_format() {
-            | Format::Clang => Some("expected expression"),
+        match format {
             | Format::Gcc => Some(match (self.found, self.found_spelling) {
                 | (None, _) | (_, None) => "expected expression at end of input",
                 | (Some(TokenType::Identifier | TokenType::Keyword(_)), Some(spelling)) =>
@@ -1790,6 +1794,83 @@ impl ParserError<'_> {
             }),
             | _ => None,
         }
+    }
+
+    /// Clang's words for the syntax it expected, as its `err_expected`
+    /// family and the declaration-specifier warnings word them, for the
+    /// errors bcc reports where Clang does.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23 leaves the form of a
+    /// diagnostic implementation-defined.
+    fn clang_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
+        use ParserErrorType as E;
+        // The keyword that begins a statement position, `if` in "if statement".
+        let keyword = |position: &'static str| {
+            let keyword = position
+                .split_once(' ')
+                .map_or(position, |(keyword, _)| keyword);
+            matches!(
+                keyword,
+                "if" | "switch" | "while" | "for" | "do" | "case" | "default"
+            )
+            .then_some(keyword)
+        };
+        Some(match self.error_type {
+            | E::ExpectedStatementExpression("expression operand", _) => "expected expression",
+            | E::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(_) =>
+                "expected identifier or '('",
+            | E::EnumSpecifierWithoutNameAndBody(_) => "expected identifier or '{'",
+            | E::ExpectedGotoLabel(_)
+            | E::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(_)
+            | E::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(_) =>
+                "expected identifier",
+            | E::ExpectedClosingParenthesisAfterParenthesizedDeclarator(_)
+            | E::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(_)
+            | E::ExpectedCommaOrClosingParenthesisInFunctionCall(_)
+            | E::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(_)
+            | E::ExpectedClosingParenthesisInStatement(..) => "expected ')'",
+            | E::ExpectedClosingCurlyBraceInInitializerList(_)
+            | E::ExpectedClosingCurlyBraceInCompoundStatement(_)
+            | E::ExpectedClosingCurlyBraceInStructDeclarationList(_) => "expected '}'",
+            | E::ExpectedClosingSquareBracketInSubscript(_) => "expected ']'",
+            | E::ExpectedOpeningParenthesisInStatement(position, _) =>
+                format_in!(arena, "expected '(' after '{}'", keyword(position)?),
+            | E::ExpectedColonInLabel(position, _) =>
+                format_in!(arena, "expected ':' after '{}'", keyword(position)?),
+            | E::ExpectedWhileAfterDoBody(_) => "expected 'while' in do/while loop",
+            | E::ConstSpecifiedTwice => self.duplicate_specifier(context, arena, "const"),
+            | E::VolatileSpecifiedTwice => self.duplicate_specifier(context, arena, "volatile"),
+            | E::RestrictSpecifiedTwice => self.duplicate_specifier(context, arena, "restrict"),
+            | E::InlineSpecifiedTwice => self.duplicate_specifier(context, arena, "inline"),
+            | E::ThreadLocalSpecifiedTwice(spelling) =>
+                self.duplicate_specifier(context, arena, spelling),
+            | _ => return None,
+        })
+    }
+
+    /// Clang's warning for a repeated qualifier, `inline` or thread storage
+    /// class, which names `-Werror` when that made it an error.
+    /// C99: §6.7.3 paragraph 4, p. 108; PDF p. 120; §6.7.4 paragraph 5,
+    /// p. 112; PDF p. 124.
+    fn duplicate_specifier<'d>(
+        &self,
+        context: &Context<'_>,
+        arena: &'d Bump,
+        specifier: &str,
+    ) -> &'d str {
+        let severity = if self.severity_is_final {
+            self.severity
+        } else {
+            context.configuration.warning_severity(self.severity)
+        };
+        let promoted = if severity == ErrorSeverity::Error {
+            "-Werror,"
+        } else {
+            ""
+        };
+        format_in!(
+            arena,
+            "duplicate '{specifier}' declaration specifier [{promoted}-Wduplicate-decl-specifier]"
+        )
     }
 }
 
@@ -1812,8 +1893,13 @@ impl ToDiagnostic for ParserError<'_> {
                 "ISO C forbids an empty translation unit [-Wpedantic]"
             };
         }
-        if let Some(words) = self.gnu_message(context, arena) {
+        let gnu_words = self.gnu_message(context, arena);
+        if let Some(words) = gnu_words {
             explanation.message = words;
+            // Clang's words for a repeated specifier name its option.
+            if self.warning_group == Some(ParserWarningGroup::RepeatedSpecifiers) {
+                explanation = explanation.option_suffix();
+            }
         }
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
@@ -1840,6 +1926,10 @@ impl ToDiagnostic for ParserError<'_> {
             );
         }
         let mut diagnostic = explanation.at(self.severity, source);
+        // Clang marks where it expected the syntax, not what it found.
+        diagnostic.point = gnu_words.is_some()
+            && context.configuration.diagnostic_format()
+                == crate::configuration::DiagnosticFormat::Clang;
         let primary = context.get_source_vectors(source);
         for range in self.ranges.iter() {
             // Show only input skipped beyond the token the error is about.
