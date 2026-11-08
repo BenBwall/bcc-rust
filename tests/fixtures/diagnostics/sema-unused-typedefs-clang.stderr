@@ -1,0 +1,25 @@
+sema-unused-typedefs-clang.c:2:29: warning: unused typedef 'T' [-Wunused-local-typedef]
+    2 | void f1(void) { typedef int T; }
+      |                             ^
+sema-unused-typedefs-clang.c:6:42: warning: unused typedef 'U' [-Wunused-local-typedef]
+    6 | void f5(void) { typedef int T; typedef T U; }
+      |                                          ^
+sema-unused-typedefs-clang.c:7:43: warning: unused typedef 'S' [-Wunused-local-typedef]
+    7 | void f6(void) { typedef struct { int a; } S; }
+      |                                           ^
+sema-unused-typedefs-clang.c:8:32: warning: unused typedef 'C' [-Wunused-local-typedef]
+    8 | void f7(void) { { typedef char C; } }
+      |                                ^
+sema-unused-typedefs-clang.c:9:30: warning: unused typedef 'A' [-Wunused-local-typedef]
+    9 | void f8(int n) { typedef int A[n]; }
+      |                              ^
+sema-unused-typedefs-clang.c:11:44: warning: unused typedef 'T' [-Wunused-local-typedef]
+   11 | void g1(void) { typedef int T; typedef int T; }
+      |                                            ^
+sema-unused-typedefs-clang.c:20:13: warning: unused typedef 'T' [-Wunused-local-typedef]
+   20 | typedef int T;
+      |             ^
+sema-unused-typedefs-clang.c:25:17: warning: unused typedef 'T' [-Wunused-local-typedef]
+   25 |   { typedef int T; }
+      |                 ^
+8 warnings generated.

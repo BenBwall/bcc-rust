@@ -1,0 +1,61 @@
+sema-shadow-clang.c:6:12: warning: declaration shadows a variable in the global scope [-Wshadow]
+    6 | int f1(int g) { return g; }
+      |            ^
+sema-shadow-clang.c:1:5: note: previous declaration is here
+    1 | int g;
+      |     ^
+sema-shadow-clang.c:7:20: warning: declaration shadows a variable in the global scope [-Wshadow]
+    7 | int f2(void) { int g = 1; return g; }
+      |                    ^
+sema-shadow-clang.c:1:5: note: previous declaration is here
+    1 | int g;
+      |     ^
+sema-shadow-clang.c:8:23: warning: declaration shadows a local variable [-Wshadow]
+    8 | int f3(int a) { { int a = 2; return a; } }
+      |                       ^
+sema-shadow-clang.c:8:12: note: previous declaration is here
+    8 | int f3(int a) { { int a = 2; return a; } }
+      |            ^
+sema-shadow-clang.c:9:34: warning: declaration shadows a local variable [-Wshadow]
+    9 | int f4(int a) { int b = a; { int b = 3; (void)b; } return b; }
+      |                                  ^
+sema-shadow-clang.c:9:21: note: previous declaration is here
+    9 | int f4(int a) { int b = a; { int b = 3; (void)b; } return b; }
+      |                     ^
+sema-shadow-clang.c:13:26: warning: declaration shadows a local variable [-Wshadow]
+   13 | int f8(int x) { for (int x = 0; x < 3; x++) ; return x; }
+      |                          ^
+sema-shadow-clang.c:13:12: note: previous declaration is here
+   13 | int f8(int x) { for (int x = 0; x < 3; x++) ; return x; }
+      |            ^
+sema-shadow-clang.c:14:36: warning: declaration shadows a local variable [-Wshadow]
+   14 | int f9(void) { int i = 0; for (int i = 0; i < 3; i++) ; return i; }
+      |                                    ^
+sema-shadow-clang.c:14:20: note: previous declaration is here
+   14 | int f9(void) { int i = 0; for (int i = 0; i < 3; i++) ; return i; }
+      |                    ^
+sema-shadow-clang.c:16:28: warning: declaration shadows a variable in the global scope [-Wshadow]
+   16 | int f11(void) { static int g = 1; return g; }
+      |                            ^
+sema-shadow-clang.c:1:5: note: previous declaration is here
+    1 | int g;
+      |     ^
+sema-shadow-clang.c:17:35: warning: declaration shadows a local variable [-Wshadow]
+   17 | void f12(int n) { int a[n]; { int n = 2; (void)n; } (void)a; }
+      |                                   ^
+sema-shadow-clang.c:17:14: note: previous declaration is here
+   17 | void f12(int n) { int a[n]; { int n = 2; (void)n; } (void)a; }
+      |              ^
+sema-shadow-clang.c:19:31: warning: declaration shadows a local variable [-Wshadow]
+   19 | void f14(void) { int x; { int x; (void)x; } (void)x; { void x(void); } }
+      |                               ^
+sema-shadow-clang.c:19:22: note: previous declaration is here
+   19 | void f14(void) { int x; { int x; (void)x; } (void)x; { void x(void); } }
+      |                      ^
+sema-shadow-clang.c:20:33: warning: declaration shadows a local variable [-Wshadow]
+   20 | int f15(int p) { int q = ({ int p = 1; p; }); return q; }
+      |                                 ^
+sema-shadow-clang.c:20:13: note: previous declaration is here
+   20 | int f15(int p) { int q = ({ int p = 1; p; }); return q; }
+      |             ^
+10 warnings generated.

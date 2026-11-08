@@ -138,6 +138,10 @@ pub(super) struct UnusedState<'s> {
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
+    /// Whether a warning about a hidden declaration may be on.
+    pub(super) shadow: bool,
+    /// Whether `-Wempty-body` may be on.
+    pub(super) empty_body: bool,
     /// Whether a warning about operators' grouping may be on.
     pub(super) parentheses: bool,
     /// Whether a warning about what a `switch` handles may be on.
@@ -194,11 +198,15 @@ impl<'s> UnusedState<'s> {
             G::UnusedButSetParameter,
             G::UnusedLabel,
             G::UnusedFunction,
+            G::UnusedLocalTypedefs,
+            G::UnusedLocalTypedef,
         ]);
         let values = on(&[G::UnusedValue, G::UnusedComparison]);
         Self {
             tracking,
             values,
+            shadow: on(&[G::Shadow, G::ShadowLocal, G::ShadowCompatibleLocal]),
+            empty_body: on(&[G::EmptyBody]),
             parentheses: on(&[
                 G::Parentheses,
                 G::ChainedComparison,
@@ -270,6 +278,10 @@ pub(crate) enum UnusedRule {
     ClangRelational,
     ClangCommaLeft,
     ClangVoidPointerCast,
+    /// GCC's words for a typedef a block declares and never uses.
+    GccLocalTypedef,
+    /// Clang's.
+    ClangLocalTypedef,
 }
 
 impl UnusedRule {
@@ -292,6 +304,8 @@ impl UnusedRule {
             | Self::ClangResult
             | Self::ClangCommaLeft
             | Self::ClangVoidPointerCast => G::UnusedValue,
+            | Self::GccLocalTypedef => G::UnusedLocalTypedefs,
+            | Self::ClangLocalTypedef => G::UnusedLocalTypedef,
         }
     }
 
@@ -321,6 +335,8 @@ impl UnusedRule {
                 "expression result unused; should this cast be to 'void'?",
                 "",
             ),
+            | Self::GccLocalTypedef => ("typedef", "locally defined but not used"),
+            | Self::ClangLocalTypedef => ("unused typedef", ""),
         }
     }
 
@@ -524,6 +540,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.unused.file_scope.entry(name.name).or_default().inline = true;
         }
         let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
+        // A typedef declared again in its block: GCC merges the two and says
+        // nothing of either, and Clang counts the first as used.
+        if kind == BindingKind::Typedef
+            && self.unused.tracking
+            && let Some(prior) = self.lookup(Namespace::Ordinary, name.name)
+            && prior.scope == self.scope
+            && self.bindings[prior.binding].kind == BindingKind::Typedef
+        {
+            self.unused.variable(prior.binding).referenced = true;
+            if gcc {
+                self.unused.variable(binding).referenced = true;
+            }
+        }
         let marked = match kind {
             // C99 §6.7.7p3: a typedef declares no new type, and GCC merges a
             // redeclared one into the first.
@@ -757,6 +786,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let parameter = match data.kind {
             | BindingKind::Parameter => true,
             | BindingKind::Object => false,
+            | BindingKind::Typedef => {
+                self.report_unused_typedef(binding, name);
+                return;
+            },
             | _ => return,
         };
         if self.types.unanalyzed(data.ty) {
@@ -839,6 +872,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             Some(name.name),
             settings_at,
         );
+    }
+
+    /// Reports a typedef a block declares and nothing names. Unlike a
+    /// variable's, GCC's warning asks the settings at the typedef: it reports
+    /// at the end of the function through `warning_at`, which looks the
+    /// pragmas up at the location it is given, so a `push` and `pop` around
+    /// the declaration silence it.
+    /// GCC: `maybe_warn_unused_local_typedefs`; Clang:
+    /// `Sema::DiagnoseUnusedDecl`.
+    /// C99: §6.7.7, p. 123; PDF p. 135.
+    fn report_unused_typedef(&mut self, binding: usize, name: Identifier) {
+        let usage = *self.unused.variable(binding);
+        if usage.referenced || usage.marked || usage.exempt || self.is_marked(binding) {
+            return;
+        }
+        let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
+        let rule = if gcc {
+            UnusedRule::GccLocalTypedef
+        } else {
+            UnusedRule::ClangLocalTypedef
+        };
+        self.unused_rule_read_at(
+            rule,
+            name.source_vectors,
+            Some(name.name),
+            name.source_vectors,
+        );
+    }
+
+    /// Notes a type specifier that names the typedef `binding`.
+    /// C99: §6.7.7p3, p. 123; PDF p. 135.
+    pub(super) fn note_typedef_use(&mut self, binding: usize) {
+        if self.unused.tracking {
+            self.unused.variable(binding).referenced = true;
+        }
     }
 
     /// Notes that `source`, a compound or `for` statement, ends the scope just

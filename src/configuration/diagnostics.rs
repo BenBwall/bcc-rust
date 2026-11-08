@@ -207,6 +207,14 @@ impl CompilerConfiguration {
                 &[DiagnosticGroup::MissingFormatAttribute],
             | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
             | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
+            | DiagnosticGroup::Shadow => &[
+                DiagnosticGroup::ShadowLocal,
+                DiagnosticGroup::ShadowCompatibleLocal,
+            ],
+            | DiagnosticGroup::ShadowLocal => &[DiagnosticGroup::ShadowCompatibleLocal],
+            | DiagnosticGroup::ShadowAll => &[DiagnosticGroup::Shadow],
+            | DiagnosticGroup::UnusedLocalTypedefs if clang =>
+                &[DiagnosticGroup::UnusedLocalTypedef],
             | _ => &[],
         };
         for &child in children {
@@ -334,6 +342,7 @@ impl CompilerConfiguration {
         for group in [
             DiagnosticGroup::SignCompare,
             DiagnosticGroup::MissingFieldInitializers,
+            DiagnosticGroup::EmptyBody,
         ] {
             self.warning_options[group as usize].apply_all(enabled);
         }
@@ -1012,6 +1021,23 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// A declaration that hides another one in an enclosing scope.
+    Shadow => Some("shadow"), Ignored, false;
+    /// GCC's `-Wshadow=local`: one that hides a local declaration.
+    ShadowLocal => Some("shadow=local"), Ignored, false;
+    /// GCC's `-Wshadow=compatible-local`: one that hides a local of a
+    /// compatible type.
+    ShadowCompatibleLocal => Some("shadow=compatible-local"), Ignored, false;
+    /// Clang's `-Wshadow-all`, which holds `-Wshadow` in C.
+    ShadowAll => Some("shadow-all"), Ignored, false;
+    /// A body that is only `;`. `-Wextra` holds it in GCC, and Clang reports
+    /// it by default.
+    EmptyBody => Some("empty-body"), ClangWarning, false;
+    /// A typedef a block declares and never uses, in GCC's spelling, which
+    /// Clang accepts too.
+    UnusedLocalTypedefs => Some("unused-local-typedefs"), Ignored, false;
+    /// Clang's own spelling, which its warning names.
+    UnusedLocalTypedef => Some("unused-local-typedef"), Ignored, false;
     /// `-Wparentheses`, which reports the rest of its family itself. `-Wall`
     /// holds it in GCC, and Clang reports most of it by default.
     Parentheses => Some("parentheses"), ClangWarning, false;
@@ -1200,6 +1226,7 @@ impl DiagnosticGroup {
     /// them.
     const UNDER_EXTRA: &[Self] = &[
         Self::SignCompare,
+        Self::EmptyBody,
         Self::MissingFieldInitializers,
         Self::UnusedParameter,
         Self::UnusedButSetParameter,
@@ -1215,6 +1242,8 @@ impl DiagnosticGroup {
         Self::UnusedLabel,
         Self::UnusedValue,
         Self::UnusedComparison,
+        Self::UnusedLocalTypedefs,
+        Self::UnusedLocalTypedef,
     ];
 
     /// Whether Clang's `-Wconversion` holds this group.
@@ -1236,6 +1265,8 @@ impl DiagnosticGroup {
             self,
             Self::Normalized
                 | Self::PedanticNormalized
+                | Self::ShadowLocal
+                | Self::ShadowCompatibleLocal
                 | Self::FormatContainsNul
                 | Self::SwitchOutsideRange
         )
@@ -1360,6 +1391,7 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::EmptyBody
                 | DiagnosticGroup::Parentheses
                 | DiagnosticGroup::DanglingElse
                 | DiagnosticGroup::LogicalNotParentheses
@@ -1375,6 +1407,8 @@ impl WarningSettings {
                 | DiagnosticGroup::UnusedLabel
                 | DiagnosticGroup::UnusedValue
                 | DiagnosticGroup::UnusedComparison
+                | DiagnosticGroup::UnusedLocalTypedefs
+                | DiagnosticGroup::UnusedLocalTypedef
                 | DiagnosticGroup::Main
                 | DiagnosticGroup::UnknownPragmas
                 | DiagnosticGroup::PointerBoolConversion => all,

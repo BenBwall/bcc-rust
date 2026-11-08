@@ -8365,6 +8365,118 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(!text.contains("<pragma string>"), "{text}");
     }
 
+    /// A typedef a block declares and never uses, under each compiler's
+    /// options and words. Measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_unused_local_typedefs_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "void f(void) { typedef int T; typedef int U; U u = 0; (void)u; }\n",
+        );
+        let text = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stderr(&output)
+        };
+        let gcc = text("--gcc-mode", &["-Wall"]);
+        assert!(
+            gcc.contains("typedef 'T' locally defined but not used [-Wunused-local-typedefs]"),
+            "{gcc}"
+        );
+        assert!(!gcc.contains("'U'"), "{gcc}");
+        let clang = text("--clang-mode", &["-Wall"]);
+        assert!(
+            clang.contains("unused typedef 'T' [-Wunused-local-typedef]"),
+            "{clang}"
+        );
+        assert_eq!(text("--gcc-mode", &[]), "");
+        assert_eq!(text("--clang-mode", &[]), "");
+        assert_eq!(
+            text("--gcc-mode", &["-Wall", "-Wno-unused-local-typedefs"]),
+            ""
+        );
+        assert_eq!(
+            text("--clang-mode", &["-Wall", "-Wno-unused-local-typedefs"]),
+            ""
+        );
+        assert_eq!(
+            text("--clang-mode", &["-Wall", "-Wno-unused-local-typedef"]),
+            ""
+        );
+    }
+
+    /// A declaration that hides another and a body that is only `;`, under
+    /// the options each compiler has for them. Each row was measured against
+    /// GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_shadow_and_empty_body_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int g;\nint f(int a) {\n    int b = a;\n    {\n        int a = 1;\n        int g = \
+             a;\n        b += g;\n    }\n    if (b);\n    return b;\n}\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            let mut flags: Vec<String> = stderr(&output)
+                .lines()
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.dedup();
+            flags.join(" ")
+        };
+        for (mode, args, expected) in [
+            ("--gcc-mode", &["-Wall"][..], ""),
+            ("--gcc-mode", &["-Wextra"][..], "empty-body"),
+            ("--gcc-mode", &["-Wshadow"][..], "shadow"),
+            (
+                "--gcc-mode",
+                &["-Wshadow=local"][..],
+                "shadow=compatible-local",
+            ),
+            (
+                "--gcc-mode",
+                &["-Wshadow=compatible-local"][..],
+                "shadow=compatible-local",
+            ),
+            ("--clang-mode", &[][..], "empty-body"),
+            (
+                "--clang-mode",
+                &["-Wno-empty-body", "-Wshadow"][..],
+                "shadow",
+            ),
+            (
+                "--clang-mode",
+                &["-Wno-empty-body", "-Wshadow-all"][..],
+                "shadow",
+            ),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
+        // GCC's levels are its own.
+        let args = ["-Wshadow=local", "-fsyntax-only", "a.c"];
+        assert!(
+            !directory.bcc("--clang-mode", &args).status.success() || {
+                let output = directory.bcc("--clang-mode", &args);
+                stderr(&output).contains("unknown warning option")
+            }
+        );
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();
