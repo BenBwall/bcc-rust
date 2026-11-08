@@ -218,6 +218,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | Rule::NoStackProtector => self.no_stack_protector(subject, attribute),
                 | Rule::NoInstrument => self.no_instrument(subject, attribute),
                 | Rule::NoSanitize => self.no_sanitize(subject, attribute),
+                | Rule::ReturnsNonnull => self.returns_nonnull(subject, attribute),
                 | _ => {},
             }
         }
@@ -585,6 +586,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// string, and Clang takes that as one unknown name.
     /// GNU extension: GCC manual, "Common Function Attributes".
     fn no_sanitize(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        use crate::target::sanitizers::{
+            Named,
+            UbChecks,
+        };
         let Subject::Function { binding, .. } = subject else {
             self.ignored(attribute);
             return;
@@ -592,6 +597,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let gcc = self.gcc_identity();
         let mut address = attribute.name == "no_sanitize_address";
         let mut thread = attribute.name == "no_sanitize_thread";
+        let mut undefined = if attribute.name == "no_sanitize_undefined" {
+            UbChecks::all()
+        } else {
+            UbChecks::empty()
+        };
         for token in attribute.arguments.unwrap_or_default() {
             let TokenType::String(StringTokenType::String(id)) = token.kind else {
                 continue;
@@ -599,10 +609,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             let Some(text) = self.context.literal_text_in(self.scratch, id, false) else {
                 continue;
             };
-            let mut note = |name: &str| match name {
-                | "address" => address = true,
-                | "thread" => thread = true,
-                | "all" => (address, thread) = (true, true),
+            let mut note = |name: &str| match Named::of(name, !gcc) {
+                | Some(Named::Address) => address = true,
+                | Some(Named::Thread) => thread = true,
+                | Some(Named::All) => {
+                    (address, thread) = (true, true);
+                    undefined = UbChecks::all();
+                },
+                | Some(Named::Checks(checks)) => undefined |= checks,
                 | _ => {},
             };
             if gcc {
@@ -615,6 +629,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let attributes = self.attributes.entity(entity);
         attributes.no_sanitize_address |= address;
         attributes.no_sanitize_thread |= thread;
+        attributes.no_sanitize_undefined |= undefined;
+    }
+
+    /// `returns_nonnull` on a function returning a pointer: the result is
+    /// never null. On another function GCC and Clang only warn, and the
+    /// attribute has no effect.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    fn returns_nonnull(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        let Subject::Function { binding, .. } = subject else {
+            self.ignored(attribute);
+            return;
+        };
+        let TypeKind::Function { result, .. } = self.types.nodes[self.bindings[binding].ty.index]
+        else {
+            return;
+        };
+        if self.pointer_target(result).is_none() {
+            self.ignored(attribute);
+            return;
+        }
+        let entity = self.entity_of(binding);
+        let attributes = self.attributes.entity(entity);
+        attributes.returns_nonnull = attributes.returns_nonnull.or(Some(attribute.source));
     }
 
     /// Retains GNU `nonnull` parameter indices after checking each integer
@@ -644,6 +684,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return;
         };
         let entity = self.entity_of(binding);
+        let site = &mut self.attributes.entity(entity).nonnull_site;
+        *site = site.or(Some(attribute.source));
         if attribute.arguments.is_none_or(<[_]>::is_empty) {
             self.attributes.entity(entity).nonnull = Some(&[]);
             return;

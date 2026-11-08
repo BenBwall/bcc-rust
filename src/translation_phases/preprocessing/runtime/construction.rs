@@ -151,6 +151,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     query_depth: 0,
                     conditional_queries: false,
                     in_directive: false,
+                    pragma_operator: None,
                     retain_placeholders: false,
                     as_text: context.phase_four_text,
                     text_includes: 0,

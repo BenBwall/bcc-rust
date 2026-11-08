@@ -3232,3 +3232,75 @@ Clang's, the inlined subroutines too. What differs:
   nothing and `-fdebug-prefix-map=` maps nothing.
 - A compiled `.i` names the `.i` in `DW_AT_name`, where GCC names the file of
   its first line marker.
+
+## UndefinedBehaviorSanitizer (2026-11-07)
+
+`-fsanitize=undefined` (`target/sanitizers.rs` for the options,
+`lowering/sanitizer.rs` and `sanitizer/` for the checks) is written by lowering,
+as Clang's front end writes it, rather than by an LLVM pass: every check is
+ordinary IR, so the optimizer, the LLVM back end, the native back end and the
+interpreter all run the same checks, and nothing depends on a back end noticing
+an option. A check is a condition that the operation would be undefined, a
+`brif` on it, and on the failing edge either `trap; unreachable`
+(`-fsanitize-trap`) or a call of the run-time library's
+`__ubsan_handle_<check>` (or `_abort`) with a pointer to the check's static
+data and the operands, after which the block jumps back (the default, recovery)
+or ends in `unreachable`. The operation itself is computed so that its
+undefined case stays defined in the IR: a checked signed `+`, `-`, `*` and
+`++`/`--` has no `nsw`, and a checked pointer offset no `nsw` on its scaling;
+the overflow condition is the one `-ftrapv` uses (`overflow_condition`).
+`check_undefined` writes one check; `check_together` combines the conditions
+one report covers (a shift's count and base, a pointer's `null`, `alignment`
+and Clang's `object-size`) into one branch when the options treat them alike,
+as both compilers do.
+
+The static data are internal writable globals (`.ubsan.data`), since the
+library marks a location it has reported: a `SourceLocation` (a relocation to
+the file name, line, column), then the check's fields, in the layout of
+compiler-rt's `ubsan_handlers.h`, which GCC's `libubsan` shares. Type
+descriptors (`.ubsan.type`) are shared constants: kind, information (an
+integer's `log2(bits) << 1 | signed`, a floating type's bits) and the quoted
+name. An operand is passed as a `ValueHandle`: its bits zero-extended to `i64`
+when it has at most 64, else the address of a stack copy (`value_handle`).
+
+**Following the compiler.** The checks, their operands and their places follow
+the compiler bcc answers as (`gcc_reports`), measured against GCC 13.3 and Clang
+23.1 on the corpus in `docs/design/driver-modes.md`, "UndefinedBehaviorSanitizer":
+
+- Locations (`sanitizer/sites.rs`). Clang's are `Expr::getExprLoc`. GCC's
+  depend on where it instruments: front-end checks (shifts, division, bounds,
+  conversions, variable length array bounds) at the operator; the others after
+  gimplification, at the statement an operation's value belongs to when it is
+  computed straight into a register, a call's argument, or a name, and at the
+  operator otherwise. Lowering records those statements (`note_statement_site`)
+  as it schedules an assignment, an initializer or a call, before the operand is
+  lowered.
+- Type names (`data.rs`): Clang's diagnostic spelling; GCC's three
+  `ubsan_print_style`s.
+- Which accesses are checked (`sanitizer/memory.rs`). An address that lowering
+  placed (a stack slot, a global, a dynamic allocation, or a known offset from
+  one) is known not to be null, and as aligned as its offsets keep it
+  (`FunctionSanitizer::known`, kept by `note_storage` as `inst` emits); others
+  are checked against the alignment of the access's C type, or of its member,
+  whatever lowering knows of the pointer's provenance (a `(int *)(buf + 1)`
+  load is `align 1` in the IR but still a misaligned `int` access). Clang checks
+  converted lvalues, assignment targets and member access bases; GCC every load
+  and store, and one through a member of a record a pointer points to as a
+  member access with the record's type (`FunctionSanitizer::members`).
+- `object-size` asks `object_size dynamic ptr, 0` (see "Object sizes"), which
+  `resolve_object_sizes` answers at every level before ABI lowering; Clang
+  asks only when optimizing and GCC at `-O0` only of placed objects, as each
+  compiler's own answers are available only then.
+
+**Back ends.** The LLVM and native back ends compile the checks and link the
+library through `Hardening::link_flags`: the bundled clang's `-fsanitize=`
+driver flag for Clang's library, or `-lubsan` (as GCC links it, not as needed)
+for GCC's. The interpreter has no library: it refuses a module whose checks
+report through it, before running anything, and runs trapping checks. The
+WebAssembly, musl and Windows targets are refused by the personalities, as for
+the other sanitizers.
+
+**Not checked.** Clang's `function` (it needs a type hash before each
+function), `local-bounds`, `implicit-conversion` and the other checks outside
+`undefined`; a `_BitInt` of a non-standard width, a GNU complex integer, a
+vector, a 16-bit floating type, and a floating conversion to a 128-bit integer.

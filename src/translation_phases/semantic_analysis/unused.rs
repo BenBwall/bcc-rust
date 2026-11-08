@@ -140,6 +140,8 @@ pub(super) struct UnusedState<'s> {
     pub(super) values: bool,
     /// Whether a warning about a comparison the types decide may be on.
     pub(super) type_limits: bool,
+    /// Whether a warning about operators' grouping may be on.
+    pub(super) parentheses: bool,
     /// Whether a warning about what a `switch` handles may be on.
     pub(super) switches: bool,
     /// Whether a warning about reaching a function's end may be on.
@@ -205,6 +207,18 @@ impl<'s> UnusedState<'s> {
                 G::TautologicalConstantOutOfRangeCompare,
                 G::TautologicalUnsignedZeroCompare,
                 G::TautologicalTypeLimitCompare,
+            ]),
+            parentheses: on(&[
+                G::Parentheses,
+                G::ChainedComparison,
+                G::LogicalOpParentheses,
+                G::BitwiseOpParentheses,
+                G::ShiftOpParentheses,
+                G::ParenthesesEquality,
+                G::BitwiseConditionalParentheses,
+                G::LogicalNotParentheses,
+                G::DanglingElse,
+                G::SwitchBool,
             ]),
             switches: on(&[
                 G::Switch,

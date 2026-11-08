@@ -49,6 +49,10 @@ use crate::{
         StackProtector,
         Target,
         TlsModel,
+        sanitizers::{
+            SanitizerOption,
+            UndefinedSanitizer,
+        },
     },
     translation_phases::Context,
 };
@@ -450,7 +454,16 @@ impl Cli {
             return hardening;
         }
         let gcc = self.compiler_identity == Identity::Gcc;
+        let mut undefined = UndefinedSanitizer::initial(gcc);
         for option in &self.language_option {
+            if let Some(sanitizer) = SanitizerOption::parse(option) {
+                undefined.apply(
+                    sanitizer,
+                    &mut hardening.sanitize_address,
+                    &mut hardening.sanitize_thread,
+                );
+                continue;
+            }
             match option.as_str() {
                 | "-fstack-protector" => hardening.stack_protector = StackProtector::Basic,
                 | "-fstack-protector-strong" => hardening.stack_protector = StackProtector::Strong,
@@ -476,20 +489,13 @@ impl Cli {
                 },
                 | "-fstack-clash-protection" => hardening.stack_clash = true,
                 | "-fno-stack-clash-protection" => hardening.stack_clash = false,
-                | "-fsanitize=address" => hardening.sanitize_address = true,
-                | "-fsanitize=thread" => hardening.sanitize_thread = true,
-                | "-fno-sanitize=address" => hardening.sanitize_address = false,
-                | "-fno-sanitize=thread" => hardening.sanitize_thread = false,
-                | "-fno-sanitize=all" => {
-                    hardening.sanitize_address = false;
-                    hardening.sanitize_thread = false;
-                },
                 | "-pg" => hardening.profile = true,
                 | "-fno-omit-frame-pointer" => hardening.keep_frame_pointer = true,
                 | "-fomit-frame-pointer" => hardening.keep_frame_pointer = false,
                 | _ => {},
             }
         }
+        hardening.undefined = undefined.finish();
         hardening
     }
 
@@ -739,17 +745,11 @@ pub(super) fn is_hardening_option(text: &str) -> bool {
     ) || is_sanitizer_option(text)
 }
 
-/// Whether `text` turns a sanitizer bcc can give on or off. GCC's and Clang's
-/// other sanitizers and lists of several stay refused.
+/// Whether `text` is a sanitizer option: `-f[no-]sanitize=`, its recovery
+/// and trap lists, and their forms without a list. The personality checks
+/// the names in it.
 pub(super) fn is_sanitizer_option(text: &str) -> bool {
-    matches!(
-        text,
-        "-fsanitize=address"
-            | "-fsanitize=thread"
-            | "-fno-sanitize=address"
-            | "-fno-sanitize=thread"
-            | "-fno-sanitize=all"
-    )
+    SanitizerOption::parse(text).is_some()
 }
 
 /// Whether `text` chooses what GCC's or Clang's format writes. Each compiler
