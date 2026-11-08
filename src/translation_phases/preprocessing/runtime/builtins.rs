@@ -220,8 +220,11 @@ impl Expander<'_, '_, '_, '_> {
             // pp-tokens of a `#pragma`, and all four tokens
             // are removed.
             | "_Pragma" => {
-                let from = self.invocation_location(token).index;
+                let invocation = self.invocation_location(token);
+                let from = invocation.index;
+                let outer = self.state.pragma_operator.replace(invocation);
                 self.expand_pragma_operator(from);
+                self.state.pragma_operator = outer;
                 None
             },
             | name if super::language_features::LANGUAGE_BUILTINS

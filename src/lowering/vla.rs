@@ -131,6 +131,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 LoweringError::missing("bound extent conversion is not retained", source)
             })?;
         let value = self.value(item, source)?;
+        self.check_vla_bound(index, value, bound.ty);
         let value = self.extend(value, signed, super::types::int_type(bits));
         let value = self.extend(value, converted_signed, Type::I64);
         self.draft.def_var(self.bounds[&index], value);

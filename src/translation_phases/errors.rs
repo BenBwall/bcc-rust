@@ -109,7 +109,7 @@ impl TranslationError<'_> {
             | Self::InitialProcessing(_) => Some(G::NewlineEof),
             | Self::Preprocessing(error) => match error.error_type {
                 | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
-                | P::UnknownPragmaDirective => Some(G::UnknownPragmas),
+                | P::UnknownPragmaDirective | P::IgnoredPragma(_) => Some(G::UnknownPragmas),
                 | P::WarningDirective(_) => Some(G::Cpp),
                 | P::PragmaMessage { error: false, .. } => Some(G::PragmaMessages),
                 | P::StorageOrderPragmaOperand { .. } => Some(G::Pragmas),

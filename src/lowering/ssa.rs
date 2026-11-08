@@ -545,6 +545,11 @@ impl<'s> Draft<'s> {
             })
     }
 
+    /// The alignment `slot` was created with.
+    pub(super) fn slot_align(&self, slot: StackSlot) -> crate::ir::Align {
+        self.slots[slot.index()].align
+    }
+
     pub(super) fn create_slot(&mut self, size: u32, align: crate::ir::Align) -> StackSlot {
         let slot = StackSlot::new(self.slots.len());
         self.slots.push(StackSlotData { size, align });
