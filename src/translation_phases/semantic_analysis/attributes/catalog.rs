@@ -108,6 +108,9 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     Ignored,
     /// Dropping its meaning could change behavior: lowering refuses it.
     Unsupported(UnsupportedAttribute),
+    /// x86 `target`: the features a function's code may use
+    /// (`function_target.rs`).
+    Target,
     /// `ms_struct` or `gcc_struct`: the record's own bit-field layout,
     /// which record completion takes over the target's.
     RecordLayout,
@@ -143,6 +146,8 @@ pub(in crate::translation_phases::semantic_analysis) fn rule(
     let meaning = gnu(name).map(|rule| match rule {
         | Rule::Interrupt | Rule::NoCallerSaved if !linux => Rule::Convention(Convention::Other),
         | Rule::Naked if !linux => Rule::Unsupported(UnsupportedAttribute::Naked),
+        // WebAssembly's `target` names its own features, which bcc drops.
+        | Rule::Target if target.is_wasm() => Rule::Ignored,
         | rule => rule,
     });
     // A name Clang lists in this spelling takes bcc's rule for it, or has
@@ -306,9 +311,10 @@ fn gnu(name: &str) -> Option<Rule> {
         | "swift_indirect_result" => Rule::Unsupported(U::SwiftParameter),
         | "internal_linkage" => Rule::Unsupported(U::InternalLinkage),
         | "transparent_union" => Rule::TransparentUnion,
+        | "target" => Rule::Target,
         // Dropped with a warning: link-time or multi-version effects that a
         // single executable's behavior does not depend on.
-        | "target" | "target_clones" | "weak_import" | "copy" => Rule::Ignored,
+        | "target_clones" | "weak_import" | "copy" => Rule::Ignored,
         | "overloadable"
         | "pass_object_size"
         | "pass_dynamic_object_size"

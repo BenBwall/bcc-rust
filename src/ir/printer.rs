@@ -251,6 +251,14 @@ impl<'ir> Module<'ir> {
             if let Some(keyword) = function.entry.keyword() {
                 write!(f, " {keyword}")?;
             }
+            if let Some(target) = function.target {
+                f.write_str(" target \"")?;
+                for (index, (sign, name)) in target.parts().enumerate() {
+                    let comma = if index == 0 { "" } else { "," };
+                    write!(f, "{comma}{sign}{name}")?;
+                }
+                f.write_char('"')?;
+            }
             write!(f, "{}", self.display_symbol_attributes(function.attributes))?;
             let Some(body) = &function.body else {
                 return f.write_char('\n');

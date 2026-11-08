@@ -321,7 +321,7 @@ fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
             call_diagnostic:       None,
             declared_alignment:    false,
             inlining:              Inlining::Default,
-            target_vector_abi:     false,
+            target:                None,
             no_instrument:         false,
             no_stack_protector:    false,
             no_sanitize_address:   false,

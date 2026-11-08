@@ -145,12 +145,11 @@ pub(crate) struct EntityAttributes<'tu> {
     /// GNU `no_sanitize` naming `UndefinedBehaviorSanitizer`'s checks, or
     /// `no_sanitize_undefined`, on a function: the checks it leaves out.
     pub(crate) no_sanitize_undefined: crate::target::sanitizers::UbChecks,
-    /// GNU `target` on a function, with text that makes GCC or Clang pass
-    /// vectors of 32 bytes or more otherwise than the command line does. bcc
-    /// ignores the attribute (`lowering/wide_vectors.rs` refuses what that
-    /// would miscompile).
-    /// GNU extension: GCC manual, "x86 Function Attributes".
-    pub(crate) target_vector_abi:     bool,
+    /// x86 `target` on a function: the features its code may use, read over
+    /// the command line's, after every declaration as its compiler merges
+    /// them.
+    /// GNU extension: GCC manual, "x86 Function Attributes", `target`.
+    pub(crate) target:                Option<&'tu crate::target::FunctionTarget>,
     /// x86 `interrupt`: an interrupt or exception handler.
     /// GNU extension: GCC manual, "x86 Function Attributes".
     pub(crate) interrupt:             bool,
@@ -336,6 +335,9 @@ pub(crate) enum UnsupportedAttribute {
     /// Clang `internal_linkage`: an external declaration given internal
     /// linkage.
     InternalLinkage,
+    /// x86 `target` turning off x87, MMX, FXSR, SSE or SSE2, or asking for
+    /// general registers only: code bcc writes for every function needs them.
+    TargetBaseline,
 }
 
 impl UnsupportedAttribute {
@@ -352,6 +354,9 @@ impl UnsupportedAttribute {
             | Self::AddressSpace => "the `address_space` attribute",
             | Self::SwiftParameter => "Swift parameter attributes such as `swift_async_context`",
             | Self::InternalLinkage => "the `internal_linkage` attribute",
+            | Self::TargetBaseline =>
+                "a `target` attribute that turns off x87, MMX, FXSR, SSE or SSE2, or asks for \
+                 general registers only",
         }
     }
 }

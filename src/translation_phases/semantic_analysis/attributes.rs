@@ -22,6 +22,7 @@
 //! - `written.rs` splits a specifier into attribute entries;
 //! - `catalog.rs` gives every known name its rule;
 //! - `entities.rs` applies entity attributes and finalizes them;
+//! - `function_target.rs` reads x86 `target` as GCC and Clang do;
 //! - `jumps.rs` forbids jumps into cleanup scopes and indirect jumps across
 //!   them;
 //! - `layout.rs` retains packing, alignment and scalar machine modes;
@@ -47,6 +48,7 @@ mod catalog;
 mod dll;
 mod entities;
 mod formats;
+mod function_target;
 mod functions;
 mod jumps;
 mod layout;

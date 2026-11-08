@@ -1,9 +1,11 @@
 //! The x86-64 features beyond the baseline that `-mavx2` and its kin ask for,
-//! and that `-march=` names in groups. Each option turns on what its feature
-//! needs and off what needs it, as GCC and Clang do, and the result decides the
+//! that `-march=` names in groups, and that a function's `target` attribute
+//! changes for its own code. Each option turns on what its feature needs and
+//! off what needs it, as GCC and Clang do, and the result decides the
 //! predefined macros, what LLVM may generate, and, for AVX, how vectors of 32
-//! bytes and more travel. Intrinsics do not depend on these: bcc's headers
-//! compute them on any x86-64.
+//! bytes and more travel. Intrinsics do not depend on the command line: bcc's
+//! headers compute them on any x86-64, and only those whose header function
+//! carries a `target` attribute ask the calling function for its features.
 //!
 //! The last `-march=` names defaults, which an explicit option outranks
 //! wherever it stands: `-mno-avx -march=x86-64-v3` has no AVX, and `-mavx2
@@ -14,90 +16,125 @@
 //! `-mno-xsave` leaves AVX on and turning AVX off takes XSAVE with it. These
 //! are `i386-options.cc`'s `ix86_option_override_internal` in GCC and
 //! `TargetInfo::initFeatureMap` in Clang (`clang/lib/Basic/Targets/X86.cpp`).
-//! GCC manual, "x86 Options"; Clang Command Line Reference, "X86".
+//! The command line implements 18 of the features ([`COMMAND_LINE`]); the
+//! others are options bcc only warns about.
+//!
+//! A `target` attribute (`"avx2,no-bmi,arch=haswell,tune=znver3"`) reads
+//! like those options, from the command line's features, over every feature
+//! and processor either compiler knows: `table.rs` holds what each compiler
+//! accepts and turns on, measured by `scripts/measure_x86_target_attribute.py`.
+//! Each compiler reads the text its own way ([`target_attribute_faults`]):
+//! Clang trims each part and ignores the whole attribute, with a warning,
+//! for one it does not know; GCC takes the parts as written and refuses one
+//! it does not know. In Clang `arch=` replaces the processor's defaults; in
+//! GCC it also forgets every feature turned on or off before it, the command
+//! line's too.
+//! GCC manual, "x86 Options" and "x86 Function Attributes"; Clang Command Line
+//! Reference, "X86"; Clang Attributes Reference, "target".
 
-use std::ffi::CStr;
+mod table;
 
-/// One feature: the option after `-m`, LLVM's name, its macro, and the
-/// features it needs, which it turns on and which turning off takes it along.
+use std::{
+    ffi::CStr,
+    fmt,
+};
+
+use table::{
+    AES,
+    AVX,
+    AVX2,
+    AVX512F,
+    BMI,
+    BMI2,
+    BUILTINS,
+    CRC32,
+    F16C,
+    FEATURES,
+    FMA,
+    LZCNT,
+    MOVBE,
+    PCLMUL,
+    POPCNT,
+    PROCESSORS,
+    SAHF,
+    SSE3,
+    SSE4_1,
+    SSE4_2,
+    SSSE3,
+    XSAVE,
+};
+
+/// One feature: its name in an option or attribute, LLVM's name, its macro,
+/// whether GCC and Clang know it, and, for GCC and then Clang, the features
+/// it needs, which it turns on and which turning off takes it along, and those
+/// it turns on unless an option decided them.
 struct Feature {
-    option:  &'static str,
-    llvm:    &'static str,
-    defines: &'static str,
-    needs:   u32,
+    name:       &'static str,
+    llvm:       Option<&'static str>,
+    macro_name: &'static str,
+    gcc:        bool,
+    clang:      bool,
+    needs:      [u128; 2],
+    defaults:   [u128; 2],
 }
 
-const SSE3: u32 = 1 << 0;
-const SSSE3: u32 = 1 << 1;
-const SSE4_1: u32 = 1 << 2;
-const SSE4_2: u32 = 1 << 3;
-const POPCNT: u32 = 1 << 4;
-const CRC32: u32 = 1 << 5;
-const AVX: u32 = 1 << 6;
-const AVX2: u32 = 1 << 7;
-const FMA: u32 = 1 << 8;
-const F16C: u32 = 1 << 9;
-const BMI: u32 = 1 << 10;
-const BMI2: u32 = 1 << 11;
-const LZCNT: u32 = 1 << 12;
-const MOVBE: u32 = 1 << 13;
-const AES: u32 = 1 << 14;
-const PCLMUL: u32 = 1 << 15;
-const XSAVE: u32 = 1 << 16;
-const SAHF: u32 = 1 << 17;
+/// A processor `arch=` or `tune=` names: LLVM's names for it, whether each of
+/// GCC and Clang takes it after `arch=` and after `tune=`, and its features
+/// in each.
+struct Processor {
+    name:      &'static str,
+    llvm:      Option<&'static str>,
+    llvm_tune: Option<&'static str>,
+    arch:      [bool; 2],
+    tune:      [bool; 2],
+    features:  [u128; 2],
+}
 
-/// In bit order: entry `n` is the feature with bit `n`.
-const FEATURES: [Feature; 18] = [
-    feature("sse3", "sse3", "__SSE3__", 0),
-    feature("ssse3", "ssse3", "__SSSE3__", SSE3),
-    feature("sse4.1", "sse4.1", "__SSE4_1__", SSSE3 | SSE3),
-    feature("sse4.2", "sse4.2", "__SSE4_2__", SSE4_1 | SSSE3 | SSE3),
-    feature("popcnt", "popcnt", "__POPCNT__", 0),
-    feature("crc32", "crc32", "__CRC32__", 0),
-    feature("avx", "avx", "__AVX__", AVX_NEEDS),
-    feature("avx2", "avx2", "__AVX2__", AVX | AVX_NEEDS),
-    feature("fma", "fma", "__FMA__", AVX | AVX_NEEDS),
-    feature("f16c", "f16c", "__F16C__", AVX | AVX_NEEDS),
-    feature("bmi", "bmi", "__BMI__", 0),
-    feature("bmi2", "bmi2", "__BMI2__", 0),
-    feature("lzcnt", "lzcnt", "__LZCNT__", 0),
-    feature("movbe", "movbe", "__MOVBE__", 0),
-    feature("aes", "aes", "__AES__", 0),
-    feature("pclmul", "pclmul", "__PCLMUL__", 0),
-    feature("xsave", "xsave", "__XSAVE__", 0),
-    feature("sahf", "sahf", "__LAHF_SAHF__", 0),
+/// The features `-m` options implement, in the order bcc defines their
+/// macros and writes LLVM's feature string.
+const COMMAND_LINE: [u128; 18] = [
+    SSE3, SSSE3, SSE4_1, SSE4_2, POPCNT, CRC32, AVX, AVX2, FMA, F16C, BMI, BMI2, LZCNT, MOVBE, AES,
+    PCLMUL, XSAVE, SAHF,
 ];
 
-const AVX_NEEDS: u32 = SSE4_2 | SSE4_1 | SSSE3 | SSE3 | XSAVE;
-/// What SSE4.2 turns on unless the command line turned it off itself.
-const SSE4_2_DEFAULTS: u32 = POPCNT | CRC32;
-const V2: u32 = SSE4_2 | SSE4_1 | SSSE3 | SSE3 | POPCNT | SAHF;
-const V3: u32 = V2 | AVX | AVX2 | FMA | F16C | BMI | BMI2 | LZCNT | MOVBE | XSAVE;
+const COMMAND_LINE_MASK: u128 = SSE3
+    | SSSE3
+    | SSE4_1
+    | SSE4_2
+    | POPCNT
+    | CRC32
+    | AVX
+    | AVX2
+    | FMA
+    | F16C
+    | BMI
+    | BMI2
+    | LZCNT
+    | MOVBE
+    | AES
+    | PCLMUL
+    | XSAVE
+    | SAHF;
 
-const fn feature(
-    option: &'static str,
-    llvm: &'static str,
-    defines: &'static str,
-    needs: u32,
-) -> Feature {
-    Feature {
-        option,
-        llvm,
-        defines,
-        needs,
-    }
-}
+const ALL_FEATURES: u128 = u128::MAX >> (128 - FEATURES.len());
+
+const V2: u128 = SSE4_2 | SSE4_1 | SSSE3 | SSE3 | POPCNT | SAHF;
+const V3: u128 = V2 | AVX | AVX2 | FMA | F16C | BMI | BMI2 | LZCNT | MOVBE | XSAVE;
+
+/// The features x86-64 always has. An attribute may name them; turning one
+/// off is something bcc does not compile ([`FunctionTarget::refused`]).
+const BASELINE: [&str; 5] = ["x87", "mmx", "fxsr", "sse", "sse2"];
 
 /// What the feature options said, in the order they came.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct X86Features {
     /// The features explicit options left on.
-    turned_on:    u32,
+    turned_on:    u128,
     /// The features an explicit option decided, either way: the last
     /// `-march=` has no say in these.
-    decided:      u32,
+    decided:      u128,
     /// The features of the last `-march=`.
-    architecture: u32,
+    architecture: u128,
     cpu:          Option<Cpu>,
     /// The last `-march=` names a processor this table doesn't model.
     unknown_cpu:  bool,
@@ -119,6 +156,9 @@ pub(crate) enum Cpu {
     V3,
     /// `-march=native`: the processor running the compiler.
     Native,
+    /// The processor of a `target` attribute's `arch=`, by its row in the
+    /// processor table.
+    Named(u8),
 }
 
 impl X86Features {
@@ -176,25 +216,29 @@ impl X86Features {
     fn apply(&mut self, option: &str) {
         if let Some(architecture) = option.strip_prefix("-march=") {
             self.architecture(architecture);
-        } else if let Some(name) = option.strip_prefix("-m") {
-            self.machine(name);
+        } else if let Some(name) = option.strip_prefix("-m")
+            && self.machine(name, COMMAND_LINE_MASK).is_none()
+            && turns_on_avx(name)
+        {
+            self.unknown_avx = true;
         }
     }
 
-    /// Reads the text of a `target` attribute, as `"avx2,no-bmi,arch=core2"`,
-    /// which says the same as the command-line options, read in order with
-    /// nothing cancelled and as far as a NUL, as GCC reads a C string.
-    /// GCC manual, "x86 Function Attributes", `target`.
-    pub(crate) fn apply_target_attribute(&mut self, text: &str) {
-        let text = text.split('\0').next().unwrap_or(text);
-        for part in text.split(',') {
-            let part = part.trim();
-            if let Some(architecture) = part.strip_prefix("arch=") {
-                self.architecture(architecture);
-            } else if !part.contains('=') {
-                self.machine(part);
-            }
-        }
+    /// Reads a `target` attribute's `text`, which [`target_attribute_faults`]
+    /// found nothing wrong with, over these features, as far as a NUL, as GCC
+    /// reads a C string.
+    /// GCC manual, "x86 Function Attributes", `target`; Clang Attributes
+    /// Reference, "target".
+    pub(crate) fn target_attribute(self, text: &str) -> FunctionTarget {
+        let mut target = FunctionTarget {
+            features:          self,
+            named:             0,
+            tune:              None,
+            baseline_off:      0,
+            general_regs_only: false,
+        };
+        target.read(text);
+        target
     }
 
     fn architecture(&mut self, architecture: &str) {
@@ -209,57 +253,56 @@ impl X86Features {
         self.unknown_cpu = !BASELINE_ARCHITECTURES.contains(&architecture) && cpu.is_none();
     }
 
-    /// Reads `name`, what follows `-m`.
-    fn machine(&mut self, name: &str) {
-        if let Some((bit, feature)) = find(name) {
-            let needs = if self.clang {
-                feature.needs & !XSAVE
-            } else {
-                feature.needs
-            };
-            let on = bit | needs;
+    /// Reads `name`, what follows `-m` or a part of a `target` attribute, if it
+    /// names a feature of `allowed`: the feature, and whether it is on.
+    fn machine(&mut self, name: &str, allowed: u128) -> Option<(u128, bool)> {
+        let compiler = usize::from(self.clang);
+        if let Some(bit) = find(name, allowed) {
+            let on = bit | FEATURES[index(bit)].needs[compiler];
             self.turned_on |= on;
             self.decided |= on;
-        } else if let Some((bit, _)) = name.strip_prefix("no-").and_then(find_off) {
-            let off = if self.clang && bit == XSAVE {
-                bit
-            } else {
-                bit | what_needs(bit)
-            };
+            Some((bit, true))
+        } else if let Some(bit) = name
+            .strip_prefix("no-")
+            .and_then(|name| find_off(name, allowed))
+        {
+            let off = bit | what_needs(bit, compiler);
             self.turned_on &= !off;
             self.decided |= off;
             // What turns on AVX beyond the table needs what these turn off.
             if off & AVX != 0 {
                 self.unknown_avx = false;
             }
-        } else if turns_on_avx(name) {
-            self.unknown_avx = true;
+            Some((bit, false))
+        } else {
+            None
         }
     }
 
     /// Whether a `target` attribute's `text` changes how vectors of 32 bytes
     /// and more travel from what these options give.
-    pub(crate) fn target_changes_vector_abi(self, text: &str) -> bool {
-        let mut changed = self;
-        changed.apply_target_attribute(text);
+    pub(crate) fn target_changes_vector_abi(self, target: &FunctionTarget) -> bool {
+        let changed = target.features;
         changed.avx() != self.avx() || changed.unknown_vector_abi() != self.unknown_vector_abi()
     }
 
-    /// The features in effect.
-    const fn enabled(self) -> u32 {
+    /// The features in effect: those explicitly turned on, the processor's
+    /// that no option decided, and what those bring by default.
+    const fn enabled(self) -> u128 {
+        let compiler = self.clang as usize;
         let mut enabled = self.turned_on | (self.architecture & !self.decided);
-        if enabled & SSE4_2 != 0 {
-            enabled |= SSE4_2_DEFAULTS & !self.decided;
-        }
-        if self.clang && enabled & AVX != 0 {
-            enabled |= XSAVE & !self.decided;
+        let mut rest = enabled;
+        while rest != 0 {
+            let bit = rest.trailing_zeros() as usize;
+            rest &= rest - 1;
+            enabled |= FEATURES[bit].defaults[compiler] & !self.decided;
         }
         enabled
     }
 
     /// `-march=x86-64-v2` has CRC32 of its own in Clang, and from SSE4.2 alone
     /// in GCC.
-    const fn architecture_crc32(self) -> u32 {
+    const fn architecture_crc32(self) -> u128 {
         if self.clang { CRC32 } else { 0 }
     }
 
@@ -275,22 +318,28 @@ impl X86Features {
 
     /// Whether another compiler given these options would pass vectors of 32
     /// bytes or wider, or of 64 bytes, differently from what this table knows:
-    /// a `-march=` or feature option bcc only warns about, or the native
-    /// processor's AVX-512, which gives 64-byte vectors ZMM registers. The
-    /// smallest vector whose convention bcc doesn't know, in bytes.
+    /// a `-march=` or feature option bcc only warns about, or AVX-512, which
+    /// gives 64-byte vectors ZMM registers. The smallest vector whose
+    /// convention bcc doesn't know, in bytes.
     pub(crate) fn unknown_vector_abi(self) -> Option<u64> {
         if self.unknown_cpu || self.unknown_avx {
             Some(32)
-        } else if self.cpu == Some(Cpu::Native) && self.avx() && native_avx512() {
+        } else if self.avx()
+            && (self.enabled() & AVX512F != 0 || (self.cpu == Some(Cpu::Native) && native_avx512()))
+        {
             Some(64)
         } else {
             None
         }
     }
 
-    /// The macros of the features in effect.
+    /// The macros of the features in effect that the command line implements.
     pub(crate) fn macros(self) -> impl Iterator<Item = &'static str> {
-        self.features().map(|feature| feature.defines)
+        let enabled = self.enabled();
+        COMMAND_LINE
+            .into_iter()
+            .filter(move |&bit| enabled & bit != 0)
+            .map(|bit| FEATURES[index(bit)].macro_name)
     }
 
     /// Whether code may use fused multiply-add, which GCC announces with its
@@ -305,21 +354,23 @@ impl X86Features {
         self.cpu.is_some()
     }
 
-    /// LLVM's feature string, written into `buffer`, which is long enough for
-    /// every feature at once. An explicit `-mno-avx` names `-avx`, since the
-    /// processor may have it: LLVM takes what needs a feature along with it,
-    /// and what `-march=` turned on is what the features turned on say.
+    /// LLVM's feature string for the command line, written into `buffer`,
+    /// which is long enough for every feature at once. An explicit `-mno-avx`
+    /// names `-avx`, since the processor may have it: LLVM takes what needs a
+    /// feature along with it, and what `-march=` turned on is what the features
+    /// turned on say.
     pub(crate) fn llvm_features(self, buffer: &mut [u8; 256]) -> &CStr {
         let mut length = 0;
         let enabled = self.enabled();
         let off = self.decided & !enabled;
-        for (index, feature) in FEATURES.iter().enumerate() {
-            let sign: &[u8] = match (off >> index & 1, enabled >> index & 1) {
-                | (1, _) => b"-",
-                | (_, 1) => b"+",
+        for bit in COMMAND_LINE {
+            let sign: &[u8] = match (off & bit != 0, enabled & bit != 0) {
+                | (true, _) => b"-",
+                | (_, true) => b"+",
                 | _ => continue,
             };
-            for byte in [sign, feature.llvm.as_bytes(), b","].concat_bytes() {
+            let name = FEATURES[index(bit)].llvm.unwrap_or_default();
+            for byte in [sign, name.as_bytes(), b","].concat_bytes() {
                 buffer[length] = byte;
                 length += 1;
             }
@@ -329,14 +380,476 @@ impl X86Features {
         buffer[end] = 0;
         CStr::from_bytes_with_nul(&buffer[..=end]).expect("a feature name holds no NUL")
     }
+}
 
-    fn features(self) -> impl Iterator<Item = &'static Feature> {
-        let enabled = self.enabled();
+/// A function's features: the command line's with its `target` attribute read
+/// over them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FunctionTarget {
+    features:          X86Features,
+    /// The features the attribute itself turned on.
+    named:             u128,
+    /// The processor of `tune=`, by its row in the processor table.
+    tune:              Option<u8>,
+    /// The baseline features the attribute leaves off, by their bit in
+    /// [`BASELINE`]'s order, which bcc does not compile.
+    baseline_off:      u8,
+    /// The attribute asks for general registers only, which bcc does not
+    /// compile either.
+    general_regs_only: bool,
+}
+
+impl FunctionTarget {
+    /// Reads `text` part by part, in order.
+    fn read(&mut self, text: &str) {
+        let text = text.split('\0').next().unwrap_or(text);
+        let clang = self.features.clang;
+        for part in parts(text, clang) {
+            let (negated, name) = match part.strip_prefix("no-") {
+                | Some(name) => (true, name),
+                | None => (false, part),
+            };
+            if let Some(name) = name.strip_prefix("arch=") {
+                if let Some(row) = processor(processor_name(name, clang), clang, false) {
+                    self.arch(row);
+                }
+            } else if let Some(name) = name.strip_prefix("tune=") {
+                if let Some(row) = processor(processor_name(name, clang), clang, true) {
+                    self.tune = Some(row);
+                }
+            } else if name == "general-regs-only" {
+                self.general_regs_only = !negated;
+            } else if let Some(at) = BASELINE.iter().position(|&baseline| baseline == name) {
+                self.baseline(at, negated);
+            } else {
+                match self.features.machine(part, ALL_FEATURES) {
+                    | Some((bit, true)) => self.named |= bit,
+                    | Some((_, false)) => self.named &= self.features.turned_on,
+                    | None => {},
+                }
+            }
+        }
+    }
+
+    /// A baseline feature, by its index in [`BASELINE`], turned off or back
+    /// on; a later part may restore what an earlier one turned off. SSE2
+    /// needs SSE, so turning SSE off turns SSE2 off and turning SSE2 on
+    /// turns SSE on.
+    fn baseline(&mut self, at: usize, off: bool) {
+        let sse = 3;
+        let mut bits = 1u8 << at;
+        if off && at == sse {
+            bits |= 1 << (sse + 1);
+        } else if !off && at == sse + 1 {
+            bits |= 1 << sse;
+        }
+        if off {
+            self.baseline_off |= bits;
+        } else {
+            self.baseline_off &= !bits;
+        }
+    }
+
+    /// `arch=` names the processor in table row `row`: its features become
+    /// the defaults, and in GCC every feature an option decided before is
+    /// forgotten, as `ix86_valid_target_attribute_inner_p` clears them.
+    fn arch(&mut self, row: u8) {
+        let features = &mut self.features;
+        let compiler = usize::from(features.clang);
+        features.cpu = Some(Cpu::Named(row));
+        features.architecture = PROCESSORS[usize::from(row)].features[compiler];
+        features.unknown_cpu = false;
+        if !features.clang {
+            features.turned_on = 0;
+            features.decided = 0;
+            features.unknown_avx = false;
+            self.named = 0;
+            self.baseline_off = 0;
+        }
+    }
+
+    /// These features with GCC's next `target` attribute of the same
+    /// declaration, `text`, read over them.
+    pub(crate) fn extended(&self, text: &str) -> Self {
+        let mut target = *self;
+        target.read(text);
+        target
+    }
+
+    /// Whether bcc refuses to compile the function: the attribute turns off
+    /// x87, MMX, FXSR, SSE or SSE2, which every x86-64 function bcc compiles
+    /// may use, or asks for general registers only.
+    pub(crate) const fn refused(&self) -> bool {
+        self.baseline_off != 0 || self.general_regs_only
+    }
+
+    /// What the back ends read.
+    pub(crate) const fn code(&self) -> CodeFeatures {
+        let enabled = self.features.enabled();
+        CodeFeatures {
+            enabled,
+            disabled: self.features.decided & !enabled,
+            cpu: match self.features.cpu {
+                | Some(Cpu::Named(row)) => Some(row),
+                | _ => None,
+            },
+            tune: self.tune,
+        }
+    }
+
+    /// The feature the x86 builtin `name` needs that this function lacks, if
+    /// any, as Clang measured it.
+    pub(crate) fn lacks_builtin_feature(&self, name: &str) -> Option<&'static str> {
+        let row = BUILTINS
+            .binary_search_by(|&(builtin, _)| builtin.cmp(name))
+            .ok()?;
+        let bit = BUILTINS[row].1;
+        (self.features.enabled() & bit == 0).then(|| FEATURES[index(bit)].name)
+    }
+
+    /// The first feature `callee` uses that this function lacks, if any, which
+    /// Clang names when it refuses to inline an `always_inline` function: one
+    /// the callee's attribute itself named, if there is one.
+    pub(crate) fn missing(&self, callee: &Self) -> Option<&'static str> {
+        let missing = callee.features.enabled() & !self.features.enabled();
+        let first = if missing & callee.named != 0 {
+            missing & callee.named
+        } else {
+            missing
+        };
+        (first != 0).then(|| FEATURES[first.trailing_zeros() as usize].name)
+    }
+}
+
+/// What a function's code may use, as the IR and the back ends keep it: the
+/// features on and those explicitly off, and the processors of `arch=` and
+/// `tune=`, by their rows in the processor table. LLVM takes the rest from
+/// the command line's processor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct CodeFeatures {
+    enabled:  u128,
+    disabled: u128,
+    cpu:      Option<u8>,
+    tune:     Option<u8>,
+}
+
+impl CodeFeatures {
+    /// Whether this function's code may use everything `callee`'s does, so
+    /// that the callee may be expanded into it, as LLVM's `areInlineCompatible`
+    /// compares the subtargets' features.
+    pub(crate) const fn includes(&self, callee: &Self) -> bool {
+        callee.enabled & !self.enabled == 0
+    }
+
+    /// LLVM's names of the features on (`true`) and explicitly off, in table
+    /// order; GCC's features without an LLVM name are left out.
+    pub(crate) fn llvm_features(&self) -> impl Iterator<Item = (bool, &'static str)> {
+        let (enabled, disabled) = (self.enabled, self.disabled);
         FEATURES
             .iter()
             .enumerate()
-            .filter(move |(index, _)| enabled & (1 << index) != 0)
-            .map(|(_, feature)| feature)
+            .filter_map(move |(bit, feature)| {
+                let on = enabled >> bit & 1 != 0;
+                let off = disabled >> bit & 1 != 0;
+                feature.llvm.filter(|_| on || off).map(|name| (on, name))
+            })
+    }
+
+    /// LLVM's name of the `arch=` processor; a processor LLVM does not know
+    /// stands as baseline x86-64, whose features the feature list completes.
+    pub(crate) fn llvm_cpu(&self) -> Option<&'static str> {
+        self.cpu
+            .map(|row| PROCESSORS[usize::from(row)].llvm.unwrap_or("x86-64"))
+    }
+
+    /// LLVM's name of the `tune=` processor, if LLVM knows it.
+    pub(crate) fn llvm_tune(&self) -> Option<&'static str> {
+        self.tune
+            .and_then(|row| PROCESSORS[usize::from(row)].llvm_tune)
+    }
+
+    /// The names the IR text gives these: each feature on or off, with `+`
+    /// or `-`, and `arch=` and `tune=` with their processor names.
+    pub(crate) fn parts(&self) -> impl Iterator<Item = (&'static str, &'static str)> {
+        let (enabled, disabled) = (self.enabled, self.disabled);
+        let features = FEATURES
+            .iter()
+            .enumerate()
+            .filter_map(move |(bit, feature)| {
+                if enabled >> bit & 1 != 0 {
+                    Some(("+", feature.name))
+                } else if disabled >> bit & 1 != 0 {
+                    Some(("-", feature.name))
+                } else {
+                    None
+                }
+            });
+        let cpu = self
+            .cpu
+            .map(|row| ("arch=", PROCESSORS[usize::from(row)].name));
+        let tune = self
+            .tune
+            .map(|row| ("tune=", PROCESSORS[usize::from(row)].name));
+        features.chain(cpu).chain(tune)
+    }
+
+    /// Adds one of [`Self::parts`] back, as the IR parser reads it, or says
+    /// it names nothing.
+    pub(crate) fn add_part(&mut self, sign: &str, name: &str) -> bool {
+        let row = |name: &str| {
+            PROCESSORS
+                .iter()
+                .position(|processor| processor.name == name)
+                .and_then(|row| u8::try_from(row).ok())
+        };
+        match sign {
+            | "arch=" => self.cpu = row(name),
+            | "tune=" => self.tune = row(name),
+            | "+" | "-" => {
+                let Some(bit) = FEATURES.iter().position(|feature| feature.name == name) else {
+                    return false;
+                };
+                if sign == "+" {
+                    self.enabled |= 1 << bit;
+                } else {
+                    self.disabled |= 1 << bit;
+                }
+                return true;
+            },
+            | _ => return false,
+        }
+        row(name).is_some()
+    }
+}
+
+/// The parts of a `target` attribute's `text`: Clang trims each and skips
+/// none, while GCC takes each as written and stops at a trailing comma.
+fn parts(text: &str, clang: bool) -> impl Iterator<Item = &str> {
+    let trailing = !clang && text.ends_with(',');
+    let text = if trailing {
+        &text[..text.len() - 1]
+    } else {
+        text
+    };
+    text.split(',')
+        .map(move |part| if clang { part.trim() } else { part })
+        .filter(move |_| clang || !text.is_empty())
+}
+
+/// The processor `name` after `arch=` or `tune=`, which Clang trims.
+fn processor_name(name: &str, clang: bool) -> &str {
+    if clang { name.trim() } else { name }
+}
+
+/// The row of the processor `name`, if the compiler of `clang` takes it after
+/// `arch=` (or `tune=`, with `tune`).
+fn processor(name: &str, clang: bool, tune: bool) -> Option<u8> {
+    let compiler = usize::from(clang);
+    PROCESSORS
+        .iter()
+        .position(|processor| {
+            processor.name == name
+                && if tune {
+                    processor.tune[compiler]
+                } else {
+                    processor.arch[compiler]
+                }
+        })
+        .and_then(|row| u8::try_from(row).ok())
+}
+
+/// What the compiler of `clang` finds wrong with a `target` attribute's
+/// `text`: everything GCC refuses, in order, or the one thing for which Clang
+/// ignores the attribute. A whole text of `default`, which names the default
+/// version of a multiversioned function, is the caller's to handle.
+pub(crate) fn target_attribute_faults(
+    text: &str,
+    clang: bool,
+) -> impl Iterator<Item = TargetFault<'_>> + '_ {
+    let text = text.split('\0').next().unwrap_or(text);
+    let gcc = (!clang).then(|| gcc_faults(text)).into_iter().flatten();
+    clang
+        .then(|| clang_fault(text))
+        .flatten()
+        .into_iter()
+        .chain(gcc)
+}
+
+/// Clang's `checkTargetAttr`: `fpmath=` anywhere, then an unknown processor,
+/// tune processor, a repeated `arch=` or `tune=`, and the first unknown
+/// feature, as `TargetInfo::parseTargetAttr` splits the text.
+fn clang_fault(text: &str) -> Option<TargetFault<'_>> {
+    if text.contains("fpmath=") {
+        return Some(TargetFault::Unsupported("fpmath="));
+    }
+    let (mut cpu, mut tune, mut duplicate) = (None, None, None);
+    for part in parts(text, true) {
+        for (prefix, slot) in [("arch=", &mut cpu), ("tune=", &mut tune)] {
+            if let Some(value) = part.strip_prefix(prefix) {
+                if slot.is_some() {
+                    duplicate = duplicate.or(Some(prefix));
+                } else {
+                    *slot = Some(value.trim());
+                }
+            }
+        }
+    }
+    if let Some(cpu) = cpu.filter(|cpu| !cpu.is_empty() && processor(cpu, true, false).is_none()) {
+        return Some(TargetFault::UnknownCpu(cpu));
+    }
+    if let Some(tune) =
+        tune.filter(|tune| !tune.is_empty() && processor(tune, true, true).is_none())
+    {
+        return Some(TargetFault::UnknownTune(tune));
+    }
+    if let Some(prefix) = duplicate {
+        return Some(TargetFault::Duplicate(prefix));
+    }
+    parts(text, true)
+        .filter(|part| !part.starts_with("arch=") && !part.starts_with("tune="))
+        .map(|part| match part.split_once('-') {
+            | Some(("no", name)) => name,
+            | _ => part,
+        })
+        .find(|&name| !known(name, true) && !matches!(name, "general-regs-only" | "prefer-256-bit"))
+        .map(TargetFault::Unsupported)
+}
+
+/// GCC's `ix86_valid_target_attribute_inner_p`, then the processors that
+/// `ix86_option_override_internal` refuses.
+fn gcc_faults(text: &str) -> impl Iterator<Item = TargetFault<'_>> + '_ {
+    let mut seen = [false; 2];
+    let parsed = parts(text, false).filter_map(move |part| {
+        let name = part.strip_prefix("no-").unwrap_or(part);
+        for (slot, prefix) in ["arch=", "tune="].into_iter().enumerate() {
+            if let Some(value) = name.strip_prefix(prefix) {
+                if value.is_empty() {
+                    return Some(TargetFault::UnknownArgument(part));
+                }
+                if seen[slot] {
+                    return Some(TargetFault::AlreadySpecified(part));
+                }
+                seen[slot] = true;
+                return None;
+            }
+        }
+        if let Some(value) = name.strip_prefix("fpmath=") {
+            return (!matches!(value, "sse" | "387" | "sse+387" | "387+sse" | "both"))
+                .then_some(TargetFault::UnknownValue(part));
+        }
+        if let Some(value) = name.strip_prefix("prefer-vector-width=") {
+            return (!matches!(value, "128" | "256" | "512" | "none"))
+                .then_some(TargetFault::UnknownValue(part));
+        }
+        if name == "general-regs-only" {
+            return (name != part).then_some(TargetFault::NegatedForm("general-regs-only"));
+        }
+        (!known(name, false) && !GCC_OPTIONS.contains(&name))
+            .then_some(TargetFault::UnknownArgument(part))
+    });
+    let mut first = [true; 2];
+    let processors = parts(text, false).filter_map(move |part| {
+        let name = part.strip_prefix("no-").unwrap_or(part);
+        for (slot, prefix) in ["arch", "tune"].into_iter().enumerate() {
+            if let Some(value) = name
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_prefix('='))
+                .filter(|value| !value.is_empty())
+            {
+                let valid = processor(value, false, slot == 1).is_some();
+                let report = first[slot] && !valid;
+                first[slot] = false;
+                return report.then_some(TargetFault::BadValue(prefix, value));
+            }
+        }
+        None
+    });
+    parsed.chain(processors)
+}
+
+/// The options GCC takes in an attribute that bcc has nothing to do for:
+/// they choose code, not instructions it may use.
+const GCC_OPTIONS: [&str; 8] = [
+    "align-stringops",
+    "cld",
+    "fancy-math-387",
+    "ieee-fp",
+    "inline-all-stringops",
+    "inline-stringops-dynamically",
+    "recip",
+    "relax-cmpxchg-loop",
+];
+
+/// Whether `name` is a feature the compiler of `clang` knows.
+fn known(name: &str, clang: bool) -> bool {
+    name == "sse4"
+        || (BASELINE.contains(&name) && (clang || name != "x87"))
+        || FEATURES
+            .iter()
+            .any(|feature| feature.name == name && if clang { feature.clang } else { feature.gcc })
+}
+
+/// Why a compiler does not take a `target` attribute's text, in its words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetFault<'t> {
+    /// Clang: a part it does not know, so it ignores the attribute.
+    Unsupported(&'t str),
+    /// Clang: an `arch=` processor it does not know.
+    UnknownCpu(&'t str),
+    /// Clang: a `tune=` processor it does not know.
+    UnknownTune(&'t str),
+    /// Clang: a second `arch=` or `tune=`.
+    Duplicate(&'static str),
+    /// GCC: a part it does not know.
+    UnknownArgument(&'t str),
+    /// GCC: a second `arch=` or `tune=`.
+    AlreadySpecified(&'t str),
+    /// GCC: an `fpmath=` or `prefer-vector-width=` value it does not know.
+    UnknownValue(&'t str),
+    /// GCC: `no-general-regs-only`.
+    NegatedForm(&'static str),
+    /// GCC: a processor `arch` or `tune` does not take.
+    BadValue(&'static str, &'t str),
+}
+
+impl TargetFault<'_> {
+    /// Whether the compiler refuses the program, as GCC does, rather than
+    /// ignoring the attribute with a warning, as Clang does.
+    pub(crate) const fn is_error(self) -> bool {
+        !matches!(
+            self,
+            Self::Unsupported(_) | Self::UnknownCpu(_) | Self::UnknownTune(_) | Self::Duplicate(_)
+        )
+    }
+}
+
+impl fmt::Display for TargetFault<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const IGNORED: &str = "in the 'target' attribute string; 'target' attribute ignored";
+        match *self {
+            | Self::Unsupported(part) => write!(f, "unsupported '{part}' {IGNORED}"),
+            | Self::UnknownCpu(cpu) => write!(f, "unknown CPU '{cpu}' {IGNORED}"),
+            | Self::UnknownTune(cpu) => write!(f, "unknown tune CPU '{cpu}' {IGNORED}"),
+            | Self::Duplicate(prefix) => write!(f, "duplicate '{prefix}' {IGNORED}"),
+            | Self::UnknownArgument(part) =>
+                write!(f, "attribute 'target' argument '{part}' is unknown"),
+            | Self::AlreadySpecified(part) => write!(
+                f,
+                "attribute value '{part}' was already specified in 'target' attribute"
+            ),
+            | Self::UnknownValue(part) => write!(
+                f,
+                "attribute value '{part}' is unknown in 'target' attribute"
+            ),
+            | Self::NegatedForm(name) => write!(
+                f,
+                "pragma or attribute 'target(\"{name}\")' does not allow a negated form"
+            ),
+            | Self::BadValue(prefix, value) => write!(
+                f,
+                "bad value '{value}' for 'target(\"{prefix}=\")' attribute"
+            ),
+        }
     }
 }
 
@@ -349,7 +862,7 @@ fn opposite_family(option: &str, clang: bool) -> Option<(&str, bool)> {
         | Some(feature) => (true, feature),
         | None => (false, name),
     };
-    if find(feature).is_none() && !turns_on_avx(feature) {
+    if find(feature, COMMAND_LINE_MASK).is_none() && !turns_on_avx(feature) {
         return None;
     }
     Some(match (feature, clang, negative) {
@@ -360,13 +873,18 @@ fn opposite_family(option: &str, clang: bool) -> Option<(&str, bool)> {
     })
 }
 
-/// The features that need any of `bits`.
-fn what_needs(bits: u32) -> u32 {
+/// The features that need `bit` in the compiler of `compiler`.
+fn what_needs(bit: u128, compiler: usize) -> u128 {
     FEATURES
         .iter()
         .enumerate()
-        .filter(|(_, feature)| feature.needs & bits != 0)
+        .filter(|(_, feature)| feature.needs[compiler] & bit != 0)
         .fold(0, |needing, (index, _)| needing | 1 << index)
+}
+
+/// The table row of the feature with the single bit `bit`.
+const fn index(bit: u128) -> usize {
+    bit.trailing_zeros() as usize
 }
 
 /// The names of the baseline processor, which `unimplemented.rs` also ignores
@@ -403,24 +921,24 @@ impl<const N: usize> ConcatBytes for [&[u8]; N] {
     }
 }
 
-/// The feature `-m` followed by `name` turns on. `-msse4` is the newer of the
-/// two.
-fn find(name: &str) -> Option<(u32, &'static Feature)> {
+/// The feature of `allowed` that `-m` or an attribute part `name` turns on.
+/// `sse4` is the newer of the two.
+fn find(name: &str, allowed: u128) -> Option<u128> {
     let name = match name {
         | "sse4" => "sse4.2",
         | other => other,
     };
     FEATURES
         .iter()
-        .enumerate()
-        .find(|(_, feature)| feature.option == name)
-        .map(|(index, feature)| (1 << index, feature))
+        .position(|feature| feature.name == name)
+        .map(|index| 1 << index)
+        .filter(|bit| allowed & bit != 0)
 }
 
-/// The feature `-mno-` followed by `name` turns off. `-mno-sse4` is the older
-/// of the two.
-fn find_off(name: &str) -> Option<(u32, &'static Feature)> {
-    find(if name == "sse4" { "sse4.1" } else { name })
+/// The feature `no-` followed by `name` turns off. `no-sse4` is the older of
+/// the two.
+fn find_off(name: &str, allowed: u128) -> Option<u128> {
+    find(if name == "sse4" { "sse4.1" } else { name }, allowed)
 }
 
 /// Whether `text` is an option this table implements, rather than the options
@@ -429,13 +947,19 @@ pub(crate) fn is_feature_option(text: &str) -> bool {
     matches!(
         text,
         "-march=x86-64" | "-march=x86-64-v2" | "-march=x86-64-v3" | "-march=native"
-    ) || text.strip_prefix("-m").and_then(find).is_some()
-        || text.strip_prefix("-mno-").and_then(find_off).is_some()
+    ) || text
+        .strip_prefix("-m")
+        .and_then(|name| find(name, COMMAND_LINE_MASK))
+        .is_some()
+        || text
+            .strip_prefix("-mno-")
+            .and_then(|name| find_off(name, COMMAND_LINE_MASK))
+            .is_some()
 }
 
 /// The features of the processor running the compiler.
 #[cfg(target_arch = "x86_64")]
-fn native() -> u32 {
+fn native() -> u128 {
     let mut features = 0;
     for (found, bit) in [
         (std::is_x86_feature_detected!("sse3"), SSE3),
@@ -470,7 +994,7 @@ fn native_avx512() -> bool {
 
 /// A compiler running elsewhere can't ask an x86-64 processor.
 #[cfg(not(target_arch = "x86_64"))]
-const fn native() -> u32 {
+const fn native() -> u128 {
     0
 }
 
@@ -479,3 +1003,6 @@ const fn native() -> u32 {
 const fn native_avx512() -> bool {
     false
 }
+
+#[cfg(test)]
+mod tests;
