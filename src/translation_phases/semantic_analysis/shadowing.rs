@@ -411,10 +411,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 fn skip_blank(mut text: &str) -> &str {
     loop {
         let rest = text.trim_start();
-        text = if let Some(comment) = rest.strip_prefix("/*") {
-            comment.split_once("*/").map_or("", |(_, after)| after)
-        } else if let Some(comment) = rest.strip_prefix("//") {
-            comment.split_once('\n').map_or("", |(_, after)| after)
+        text = if let Some(after) = skip_comment(rest) {
+            after
         } else if let Some(splice) = rest.strip_prefix('\\') {
             splice
         } else {
@@ -423,43 +421,74 @@ fn skip_blank(mut text: &str) -> &str {
     }
 }
 
+/// The text after the comment that starts `text`, or `None` when no comment
+/// starts it. A `//` comment runs to a new-line that no line splice deletes.
+/// C99: §6.4.9p1-2, p. 66; PDF p. 78; §5.1.1.2p1 item 2, p. 10; PDF p. 22.
+fn skip_comment(text: &str) -> Option<&str> {
+    if let Some(comment) = text.strip_prefix("/*") {
+        return Some(comment.split_once("*/").map_or("", |(_, after)| after));
+    }
+    let comment = text.strip_prefix("//")?;
+    let mut length = 0;
+    for line in comment.split_inclusive('\n') {
+        length += line.len();
+        if !line.trim_end_matches(['\r', '\n']).ends_with('\\') {
+            break;
+        }
+    }
+    Some(&comment[length..])
+}
+
 /// Where an invocation whose name ends at `name_end` in `text` ends: after
-/// its parenthesized arguments, when a `(` follows the name.
+/// its parenthesized arguments, when a `(` follows the name. Parentheses in
+/// comments, string literals and character constants do not count.
 /// C99: §6.10.3p10, p. 152; PDF p. 164.
 fn invocation_end(text: &str, name_end: usize) -> usize {
     let Some(after_name) = text.get(name_end..) else {
         return name_end;
     };
-    let rest = skip_blank(after_name);
+    let mut rest = skip_blank(after_name);
     if !rest.starts_with('(') {
         return name_end;
     }
-    let open = text.len() - rest.len();
     let mut depth = 0_usize;
-    let mut quote = None;
-    let mut escaped = false;
-    for (offset, byte) in rest.bytes().enumerate() {
-        match quote {
-            | Some(q) =>
-                if escaped {
-                    escaped = false;
-                } else if byte == b'\\' {
-                    escaped = true;
-                } else if byte == q {
-                    quote = None;
-                },
-            | None => match byte {
-                | b'"' | b'\'' => quote = Some(byte),
-                | b'(' => depth += 1,
-                | b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return open + offset + 1;
-                    }
-                },
-                | _ => (),
+    loop {
+        if let Some(after) = skip_comment(rest) {
+            rest = after;
+            continue;
+        }
+        let mut characters = rest.chars();
+        let Some(character) = characters.next() else {
+            return name_end;
+        };
+        rest = characters.as_str();
+        match character {
+            | '"' | '\'' => rest = skip_quoted(rest, character),
+            | '(' => depth += 1,
+            | ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return text.len() - rest.len();
+                }
             },
+            | _ => (),
         }
     }
-    name_end
+}
+
+/// The text after the string literal or character constant whose opening
+/// `quote` precedes `text`.
+/// C99: §6.4.4.4p1, p. 59; PDF p. 71; §6.4.5p1, p. 62; PDF p. 74.
+fn skip_quoted(text: &str, quote: char) -> &str {
+    let mut escaped = false;
+    for (offset, character) in text.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == quote || character == '\n' {
+            return &text[offset + 1..];
+        }
+    }
+    ""
 }

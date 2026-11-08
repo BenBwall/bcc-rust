@@ -47,3 +47,14 @@ void macro_headers(int x) {
   IF_HEADER(x);
   OBJECT_HEADER;
 }
+
+/* Comments inside an invocation hide no parenthesis or quote. */
+void commented_invocations(int x) {
+  IF_HEADER(x /* ) */);
+  IF_HEADER(x /* ( */);
+  IF_HEADER(x /* " */);
+  IF_HEADER(x /* ' */);
+  IF_HEADER(x // )
+  );
+  IF_HEADER(x /* ) */) NOTHING(/* ( */);
+}

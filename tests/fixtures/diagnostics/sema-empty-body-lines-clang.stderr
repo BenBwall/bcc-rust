@@ -70,4 +70,28 @@ sema-empty-body-lines-clang.c:48:16: warning: if statement has empty body [-Wemp
 sema-empty-body-lines-clang.c:48:16: note: put the semicolon on a separate line to silence this warning
    48 |   OBJECT_HEADER;
       |                ^
-12 warnings generated.
+sema-empty-body-lines-clang.c:53:23: warning: if statement has empty body [-Wempty-body]
+   53 |   IF_HEADER(x /* ) */);
+      |                       ^
+sema-empty-body-lines-clang.c:53:23: note: put the semicolon on a separate line to silence this warning
+   53 |   IF_HEADER(x /* ) */);
+      |                       ^
+sema-empty-body-lines-clang.c:54:23: warning: if statement has empty body [-Wempty-body]
+   54 |   IF_HEADER(x /* ( */);
+      |                       ^
+sema-empty-body-lines-clang.c:54:23: note: put the semicolon on a separate line to silence this warning
+   54 |   IF_HEADER(x /* ( */);
+      |                       ^
+sema-empty-body-lines-clang.c:55:23: warning: if statement has empty body [-Wempty-body]
+   55 |   IF_HEADER(x /* " */);
+      |                       ^
+sema-empty-body-lines-clang.c:55:23: note: put the semicolon on a separate line to silence this warning
+   55 |   IF_HEADER(x /* " */);
+      |                       ^
+sema-empty-body-lines-clang.c:56:23: warning: if statement has empty body [-Wempty-body]
+   56 |   IF_HEADER(x /* ' */);
+      |                       ^
+sema-empty-body-lines-clang.c:56:23: note: put the semicolon on a separate line to silence this warning
+   56 |   IF_HEADER(x /* ' */);
+      |                       ^
+16 warnings generated.
