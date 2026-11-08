@@ -396,7 +396,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Whether a direct call through `binding` is GNU `alloca`, which GCC
     /// and Clang expand in place, as `__builtin_alloca`, when the C library
-    /// declares the function (`<alloca.h>`, or TinyCC's `tcclib.h`) with a
+    /// declares the function (`<alloca.h>`, or TCC's `tcclib.h`) with a
     /// type compatible with `void *(size_t)`, even where the program defines
     /// it. A strict ISO mode, freestanding translation, `-fno-builtin` or
     /// `-fno-builtin-alloca`, internal linkage or an incompatible declaration

@@ -24,7 +24,10 @@
 //! GNU extension: GCC manual, "Other Built-in Functions Provided by GCC",
 //! `__builtin_constant_p`.
 
-use super::super::Analyzer;
+use super::super::{
+    Analyzer,
+    Integer,
+};
 use crate::translation_phases::parsing::syntax::{
     BinaryOperator,
     Expression,
@@ -146,7 +149,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } if [left_expression, right_expression].iter().any(|operand| {
                 self.expression_info(operand)
                     .integer
-                    .is_some_and(|value| value.is_zero())
+                    .is_some_and(Integer::is_zero)
             }) && self.integer_type(self.expression_info(e).ty).is_some() =>
             {
                 let left = self.gcc_constant(left_expression, next);

@@ -195,7 +195,7 @@ fn builtin_spelling_function_declarations_remain_runtime_symbols() {
     }
 }
 
-/// `<alloca.h>` and TinyCC's `tcclib.h` declare `void *alloca(size_t)`:
+/// `<alloca.h>` and TCC's `tcclib.h` declare `void *alloca(size_t)`:
 /// GCC 13 (`-std=gnu99 -S`) and Clang 23 (`-std=gnu17 -emit-llvm`: `alloca
 /// i8, i64 7`) expand a direct call through a compatible declaration in GNU
 /// modes, and call the function in strict ISO modes, through its address,

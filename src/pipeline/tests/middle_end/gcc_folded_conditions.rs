@@ -1,7 +1,7 @@
 //! What unoptimized code keeps of a condition GCC's front end folds while
 //! its side effects still run (`d() && 0`, `d() || 1`), pinned to GCC 13
 //! and Clang 23 at `-O0` (`nm` of `-c` output): GCC never references `u`
-//! below, nor emits the unused `static inline` function `r`. TinyCC's
+//! below, nor emits the unused `static inline` function `r`. TCC's
 //! `tcctest.c` (`optimize_out_test`) links only if `u` stays unreferenced.
 //! C99: §6.5.13-§6.5.14, pp. 89-90; PDF pp. 101-102; §6.5.17p2, p. 94;
 //! PDF p. 106; §6.8.4.1p2, pp. 133-134; PDF pp. 145-146.
@@ -170,18 +170,21 @@ fn gcc_rules_answer_constant_queries_from_the_fold() {
         ("1 + 2", true, true),
     ];
     for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        use std::fmt::Write as _;
         let mut checks = String::new();
-        for &(operand, gcc, clang) in QUERIES {
+        for (index, &(operand, gcc, clang)) in QUERIES.iter().enumerate() {
             let expected = if identity == CompilerIdentity::Gcc {
                 gcc
             } else {
                 clang
             };
-            checks.push_str(&format!(
-                "if (__builtin_constant_p({operand}) != {}) return {};\n",
+            writeln!(
+                checks,
+                "if (__builtin_constant_p({operand}) != {}) return {};",
                 i32::from(expected),
-                checks.lines().count() + 1
-            ));
+                index + 1
+            )
+            .unwrap();
         }
         let source = format!(
             "static int i_init = 3;\nstatic int s = __builtin_constant_p(i_init && 0);\nint \
