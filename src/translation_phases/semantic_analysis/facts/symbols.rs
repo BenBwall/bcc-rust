@@ -55,6 +55,32 @@ impl<'tu> SymbolFacts<'tu> {
     }
 }
 
+/// What a GNU `format` attribute's archetype says the format string
+/// directs. GNU extension: GCC manual, "Common Function Attributes",
+/// `format`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FormatKind {
+    /// `printf`, `gnu_printf`: output conversions (C99 §7.19.6.1).
+    Printf,
+    /// `scanf`, `gnu_scanf`: input conversions (C99 §7.19.6.2).
+    Scanf,
+    /// An archetype bcc recognizes and does not check, such as `strftime`.
+    Unchecked,
+}
+
+/// A GNU `format` attribute's operands, as written: the archetype, the
+/// format parameter and the first data parameter, each from 1, the last 0
+/// for a function that takes its data as a `va_list`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FormatAttribute {
+    pub(crate) kind:   FormatKind,
+    pub(crate) format: u32,
+    pub(crate) first:  u32,
+    /// Whether GCC reads the format by the Microsoft C runtime's rules
+    /// (`ms_printf`, `ms_scanf`), as MinGW does `format(printf)`.
+    pub(crate) ms:     bool,
+}
+
 /// Attributes merged over every declaration of one entity.
 #[derive(Debug, Clone, Copy, Default)]
 #[expect(
@@ -85,6 +111,12 @@ pub(crate) struct EntityAttributes<'tu> {
     /// An empty slice applies to every pointer parameter. These facts are
     /// diagnostic only.
     pub(crate) nonnull:             Option<&'tu [usize]>,
+    /// GNU `format(archetype, string-index, first-to-check)`, from the
+    /// last declaration that gave one. Diagnostic only.
+    pub(crate) format:              Option<FormatAttribute>,
+    /// GNU `format_arg(string-index)`: one bit for each parameter, from 0,
+    /// whose format string the result is. Diagnostic only.
+    pub(crate) format_arg:          u32,
     /// GNU error/warning contract, retained from the first declaration.
     pub(crate) call_diagnostic:     Option<FunctionCallDiagnostic>,
     /// A declaration of the object specifies its alignment, by GNU

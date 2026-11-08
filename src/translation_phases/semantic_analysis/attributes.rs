@@ -46,6 +46,7 @@ mod call_diagnostics;
 mod catalog;
 mod dll;
 mod entities;
+mod formats;
 mod functions;
 mod jumps;
 mod layout;
@@ -62,6 +63,7 @@ mod written_types;
 pub(crate) use catalog::clang_attribute_version;
 pub(super) use entities::{
     AttributeState,
+    FormatHolder,
     Subject,
 };
 pub(super) use written::known_names;

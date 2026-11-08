@@ -1,0 +1,43 @@
+sema-format-msvcrt.c:10:33: warning: format specifies type 'unsigned __int64' (aka 'unsigned long long') but the argument has type 'int' [-Wformat]
+   10 |     printf("%I64x %I32x %Iu\n", i, lp, i);
+      |                                 ^
+sema-format-msvcrt.c:10:36: warning: format specifies type 'unsigned __int32' (aka 'unsigned int') but the argument has type 'long *' [-Wformat]
+   10 |     printf("%I64x %I32x %Iu\n", i, lp, i);
+      |                                    ^~
+sema-format-msvcrt.c:10:40: warning: format specifies type 'unsigned __int64' (aka 'unsigned long long') but the argument has type 'int' [-Wformat]
+   10 |     printf("%I64x %I32x %Iu\n", i, lp, i);
+      |                                        ^
+sema-format-msvcrt.c:12:35: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   12 |     printf("%hhd %ld %d\n", i, l, l);
+      |                                   ^
+sema-format-msvcrt.c:14:28: warning: format specifies type 'wint_t' (aka 'unsigned short') but the argument has type 'int' [-Wformat]
+   14 |     printf("%lc %C %hc\n", i, i, i);
+      |                            ^
+sema-format-msvcrt.c:15:25: warning: length modifier 'L' results in undefined behavior or no effect with 'd' conversion specifier [-Wformat]
+   15 |     printf("%m %Lf %Lg %Ld\n", ld, ld, ll);
+      |                         ^
+sema-format-msvcrt.c:15:25: note: did you mean to use 'll'?
+   15 |     printf("%m %Lf %Lg %Ld\n", ld, ld, ll);
+      |                         ^
+sema-format-msvcrt.c:20:13: warning: zero field width in scanf format string is unused [-Wformat]
+   20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
+      |             ^
+sema-format-msvcrt.c:20:27: warning: length modifier 'L' results in undefined behavior or no effect with 'd' conversion specifier [-Wformat]
+   20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
+      |                           ^
+sema-format-msvcrt.c:20:27: note: did you mean to use 'll'?
+   20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
+      |                           ^
+sema-format-msvcrt.c:21:41: warning: format specifies type 'wchar_t *' (aka 'unsigned short *') but the argument has type 'char *' [-Wformat]
+   21 |     scanf("%*Ld %hs %hc %S %C\n", s, s, s, s);
+      |                                         ^
+sema-format-msvcrt.c:21:44: warning: format specifies type 'wchar_t *' (aka 'unsigned short *') but the argument has type 'char *' [-Wformat]
+   21 |     scanf("%*Ld %hs %hc %S %C\n", s, s, s, s);
+      |                                            ^
+sema-format-msvcrt.c:22:46: warning: format specifies type 'char *' but the argument has type 'int *' [-Wformat]
+   22 |     scanf("%I64d %lld %hhd %zu\n", llp, llp, ip, ip);
+      |                                              ^~
+sema-format-msvcrt.c:22:50: warning: format specifies type 'size_t *' (aka 'unsigned long long *') but the argument has type 'int *' [-Wformat]
+   22 |     scanf("%I64d %lld %hhd %zu\n", llp, llp, ip, ip);
+      |                                                  ^~
+12 warnings generated.
