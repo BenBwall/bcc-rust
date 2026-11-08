@@ -90,6 +90,11 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     /// IR function, as the external-symbol contract does for `setjmp`.
     ReturnsTwice,
     Nonnull,
+    /// GNU `format`: the format a call's arguments follow, which
+    /// `format.rs` checks.
+    Format,
+    /// GNU `format_arg`: the result is the format string an argument is.
+    FormatArg,
     /// GNU error/warning: diagnose emitted direct calls.
     CallDiagnostic,
     /// A calling convention, checked against the target's default.
@@ -274,6 +279,8 @@ fn gnu(name: &str) -> Option<Rule> {
         | "naked" => Rule::Naked,
         | "returns_twice" => Rule::ReturnsTwice,
         | "nonnull" => Rule::Nonnull,
+        | "format" => Rule::Format,
+        | "format_arg" => Rule::FormatArg,
         | "cpu_dispatch" | "cpu_specific" | "target_version" =>
             Rule::Unsupported(U::Multiversioning),
         | "address_space" => Rule::Unsupported(U::AddressSpace),
@@ -338,8 +345,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "fallthrough"
         | "flag_enum"
         | "flatten"
-        | "format"
-        | "format_arg"
         | "force_align_arg_pointer"
         | "function_return"
         | "gnu_inline"

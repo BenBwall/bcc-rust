@@ -36,7 +36,8 @@
 //!   need memory; `extensions.rs` reports retained attribute refusals and
 //!   queries decoded symbol requests; `symbols.rs` maps retained entity
 //!   attributes to weak linkage, aliases, sections and constructor/destructor
-//!   lists.
+//!   lists; `tcc_runtime.rs` gives a `--tcc-mode` unit the bodies of the
+//!   `libtcc1.a` functions it references.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
 //!   conversions, including the floating ones; `saturation.rs` GCC's folds of
@@ -71,6 +72,7 @@ mod address_taken;
 mod extensions;
 mod module_items;
 mod symbols;
+pub(crate) mod tcc_runtime;
 
 // Function bodies
 mod alignment;

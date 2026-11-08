@@ -863,6 +863,8 @@ enum LanguageFlag {
     WarningGroup(DiagnosticGroup, WarningOption),
     AllWarnings(bool),
     ExtraWarnings(bool),
+    /// `-Wformat=0`, `-Wformat=1` or `-Wformat=2`.
+    FormatLevel(u8),
     UnknownWarning,
     /// `-Wfatal-errors` or `-Wno-fatal-errors`.
     FatalErrors(bool),
@@ -1161,6 +1163,14 @@ impl LanguageFlag {
                 } else {
                     Self::UnknownWarning
                 });
+            } else if let Some(level) = text.strip_prefix("format=") {
+                // The levels of GCC's `-Wformat=` and Clang's groups:
+                // `-Wformat=0` is `-Wno-format`, 1 is `-Wformat`, and 2 adds
+                // `-Wformat-security` and `-Wformat-nonliteral`.
+                return Some(match level {
+                    | "0" | "1" | "2" => Self::FormatLevel(level.as_bytes()[0] - b'0'),
+                    | _ => Self::UnknownWarning,
+                });
             } else if let Some(level) = text.strip_prefix("normalized=") {
                 // GCC's level: `none` turns the check off, and the others
                 // all report the one case bcc detects.
@@ -1210,6 +1220,7 @@ impl LanguageFlag {
             | Self::ExtraWarnings(enabled) => configuration.with_extra_warnings(enabled),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
+            | Self::FormatLevel(level) => configuration.with_format_level(level),
             | Self::FatalErrors(enabled) => configuration.with_fatal_errors(enabled),
             | Self::Pedantic(enabled) => configuration.with_pedantic(enabled),
             | Self::PedanticErrors => configuration.with_pedantic_errors(),

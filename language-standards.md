@@ -2975,6 +2975,31 @@ literals. bcc's identities do not gate language features, which follow
 `-std`; so `_BitInt` is a reported C23 extension before C23, and an array
 compound literal keeps GCC's static-only rule with its pedantic report.
 
+### TCC's test suite rules (2026-11-07)
+
+Probed with host GCC 13.3, the bundled Clang 23.1.1 and TCC `mob` (the
+build TinyCC's `tests/tests2` runs against):
+
+| Rule | GCC | Clang | TCC |
+| --- | --- | --- | --- |
+| A function's result qualifiers (`const int f(void);` then `int f(void) {}`, `150_return_qualifiers`) | dropped from C11 on, as C17's §6.7.6.3p5 (DR 423) says; C89 and C99 keep them, refusing a `const` difference and warning about a `volatile` one | kept in every revision: "conflicting types" | dropped in every revision |
+| An `aligned(n)` bit-field under `#pragma pack(m)`, `n > m` (`95_bitfields`) | starts at an `m`-byte boundary | at the bit cursor | as GCC |
+| `&atomic_signal_fence` and the other `<stdatomic.h>` functions (`151_atomic_header`) | libatomic, with `-latomic` | libatomic, with `-latomic` | `libtcc1.a`, linked into every program |
+
+bcc follows each column, except that GCC's C99 `volatile` difference is an
+error too. Under `--tcc-mode`, a unit that references one of
+those functions without defining it gets a weak definition compiled from
+`src/lowering/tcc_runtime/libtcc1.c`, so a program's own definition still
+wins. The `--gcc-mode` and `--clang-mode` links still leave the functions to
+libatomic. `(const void *)0` is no null pointer constant in any identity:
+§6.3.2.3p3 allows only a cast to `void *` itself (`94_generic`).
+
+TCC differences bcc does not model: an `aligned(n)` member or bit-field
+takes `n` as its alignment even below its type's (TCC's `struct { char c;
+__attribute__((aligned(1))) int x; }` is 5 bytes), and TCC's
+`-mms-bitfields`, which `#pragma comment(option, "-mms-bitfields")` sets in
+`95_bitfields_ms`, has no `--tcc-mode` equivalent on Linux.
+
 ### `_BitInt` widths
 
 The width N of `_BitInt(N)` is an integer constant expression of at least 2

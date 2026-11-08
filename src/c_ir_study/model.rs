@@ -302,7 +302,8 @@ impl<'ir> Signature<'ir> {
 }
 
 /// Ordinary direct calls can create a default attributes record while sema
-/// checks `nonnull`. Record presence alone does not imply an extension.
+/// checks `nonnull` and formats. Record presence alone does not imply an
+/// extension.
 fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
     matches!(
         attributes,
@@ -333,6 +334,8 @@ fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
             common:                None,
             dll:                   None,
             inline_odr:            None,
+            format:                _,
+            format_arg:            _,
         }
     )
 }
