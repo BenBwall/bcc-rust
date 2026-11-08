@@ -58,3 +58,15 @@ void commented_invocations(int x) {
   );
   IF_HEADER(x /* ) */) NOTHING(/* ( */);
 }
+
+/* A statement a macro writes stands where the macro is invoked, as
+   `assert(p)` does under NDEBUG. */
+#define                                  STEP(x) ((void)(x))
+void macro_statements(int x) {
+  while (x);
+  STEP(x);
+  for (;;);
+  STEP(x);
+  while (x);
+    STEP(x);
+}
