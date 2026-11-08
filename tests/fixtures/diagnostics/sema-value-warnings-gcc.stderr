@@ -58,3 +58,21 @@ sema-value-warnings-gcc.c:38:33: warning: function returns address of local vari
 sema-value-warnings-gcc.c:39:34: warning: function returns address of local variable [-Wreturn-local-addr]
    39 | char *e10(void) { char x; return (char *)(1 + (long)&x); }
       |                                  ^~~~~~~~~~~~~~~~~~~~~~
+sema-value-warnings-gcc.c:43:40: warning: function returns address of local variable [-Wreturn-local-addr]
+   43 | int *f3(int a) { int x; return ((void)a, &x); }
+      |                                        ^
+sema-value-warnings-gcc.c:44:45: warning: function returns address of local variable [-Wreturn-local-addr]
+   44 | int *f4(void) { int x; return __extension__ &x; }
+      |                                             ^~
+sema-value-warnings-gcc.c:46:35: warning: function returns address of local variable [-Wreturn-local-addr]
+   46 | int *f6(void) { int x; return &x ?: 0; }
+      |                                   ^
+sema-value-warnings-gcc.c:47:48: warning: function returns address of local variable [-Wreturn-local-addr]
+   47 | int *f7(void) { int x; return _Generic(0, int: &x); }
+      |                                                ^~
+sema-value-warnings-gcc.c:48:56: warning: function returns address of local variable [-Wreturn-local-addr]
+   48 | int *f8(void) { int x; return __builtin_choose_expr(1, &x, 0); }
+      |                                                        ^~
+sema-value-warnings-gcc.c:49:44: warning: function returns address of local variable [-Wreturn-local-addr]
+   49 | int *f9(void) { int x; return (1 ? &x : 0) + 1; }
+      |                                            ^

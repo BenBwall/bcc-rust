@@ -29,6 +29,7 @@ use crate::{
     },
     diagnostics::format_in,
     translation_phases::{
+        Context,
         SourceVectors,
         parsing::syntax::{
             BinaryOperator as B,
@@ -36,7 +37,9 @@ use crate::{
             ExpressionType as E,
             UnaryOperator as U,
         },
+        preprocessing::KeywordTokenType,
     },
+    util::bump::ArenaVec,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -50,9 +53,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if self.pointer_target(result).is_none() {
                 return;
             }
+            // GCC points at the outermost node its folding keeps, which a
+            // parenthesis or a selection does not make.
+            let e = self.selected_operand(e);
             if self.gcc_local_address(e) {
                 let site = match e.kind {
                     | E::Binary { .. } => e.operator_source_vectors.unwrap_or(e.source_vectors),
+                    // GCC places a conditional at its `:`.
+                    | E::Conditional(_) | E::OmittedConditional(_) => e
+                        .operator_source_vectors
+                        .map_or(e.source_vectors, Context::last_source_vector),
                     | _ => e.source_vectors,
                 };
                 self.value_warning(
@@ -64,6 +74,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else if self.holds_address(result) {
             // The conversion to a `_Bool` result keeps only the truth.
             self.clang_local_address(e);
+        }
+    }
+
+    /// `e` through the forms that only pass an operand's value on:
+    /// parentheses, `__extension__` and the operand `_Generic` or
+    /// `__builtin_choose_expr` selects.
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+    fn selected_operand(&self, mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+        loop {
+            e = match e.kind {
+                | E::Parenthesized { expression }
+                | E::Unary {
+                    operator: U::Extension,
+                    operand_expression: expression,
+                } => expression,
+                | E::Generic(_) => match self.expression_info(e).selected_expression {
+                    | Some(selected) => selected,
+                    | None => return e,
+                },
+                | E::Builtin(builtin) if builtin.keyword == KeywordTokenType::BuiltinChooseExpr =>
+                    match self.expression_info(e).selected_expression {
+                        | Some(selected) => selected,
+                        | None => return e,
+                    },
+                | _ => return e,
+            };
         }
     }
 
@@ -83,10 +119,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GCC's walk: through conversions and pointer arithmetic to an address
     /// whose object is one of this function's.
-    fn gcc_local_address(&self, mut e: &'tu Expression<'tu>) -> bool {
+    fn gcc_local_address(&mut self, mut e: &'tu Expression<'tu>) -> bool {
         loop {
+            e = self.selected_operand(e);
             e = match e.kind {
-                | E::Parenthesized { expression } => expression,
+                // GCC's folding drops a comma's left operand that has no
+                // side effects, and a conditional whose condition is a
+                // constant, which an address no link can make null is.
+                // C99: §6.5.17p2, p. 94; PDF p. 106; §6.5.15p4, p. 90;
+                // PDF p. 102.
+                | E::Binary {
+                    operator: B::Comma,
+                    left_expression,
+                    right_expression,
+                } if !self.has_side_effects(left_expression) => right_expression,
+                | E::Conditional(c) | E::OmittedConditional(c) =>
+                    match self.constant_truth_of(c.condition_expression, 0) {
+                        | Some(true) => c.then_expression,
+                        | Some(false) => c.else_expression,
+                        | None => return false,
+                    },
                 // GCC strips every conversion between pointers and
                 // integers, so an address survives a round trip through
                 // `long`.
@@ -214,17 +266,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Clang's walk, which also takes both arms of a conditional, and names
-    /// the object at its reference.
+    /// Clang's walk, which also takes both arms of every conditional and a
+    /// comma's right operand, and names the object at its reference.
     fn clang_local_address(&mut self, e: &'tu Expression<'tu>) {
-        let mut pending = [Some(e), None];
-        while let Some(index) = pending.iter().position(Option::is_some) {
-            let Some(mut e) = pending[index].take() else {
-                break;
-            };
+        // The arms still to visit, last first, so the warnings follow the
+        // source as Clang's depth-first walk does.
+        let mut pending = ArenaVec::new_in(self.scratch);
+        pending.push(e);
+        while let Some(mut e) = pending.pop() {
             let found = loop {
+                e = self.selected_operand(e);
                 e = match e.kind {
-                    | E::Parenthesized { expression } => expression,
+                    // C99: §6.5.17p2, p. 94; PDF p. 106.
+                    | E::Binary {
+                        operator: B::Comma,
+                        right_expression,
+                        ..
+                    } => right_expression,
                     // Clang follows an address through a cast to a pointer
                     // or an integer, but not to `_Bool`.
                     | E::Cast {
@@ -243,10 +301,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         } else {
                             break None;
                         },
-                    | E::Conditional(c) if pending[1].is_none() => {
-                        pending[1] = Some(c.else_expression);
+                    // C99: §6.5.15p4, p. 90; PDF p. 102.
+                    | E::Conditional(c) => {
+                        pending.push(c.else_expression);
                         c.then_expression
                     },
+                    // Clang's walk does not see through the condition that
+                    // stands for the omitted operand.
+                    | E::OmittedConditional(c) => c.else_expression,
                     | E::Unary {
                         operator: U::AddressOf,
                         operand_expression,
