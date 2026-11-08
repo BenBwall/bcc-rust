@@ -212,7 +212,7 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                     | ".ascii" => {
                         arity(args, 1, 1)?;
                         let bytes = ascii(args, arena)?;
-                        Kind::Bytes(bytes)
+                        Kind::Bytes(bytes.as_bytes())
                     },
                     | ".seh_proc" => {
                         arity(args, 1, 1)?;

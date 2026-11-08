@@ -8,6 +8,7 @@ use super::{
     Reloc,
     Result,
     Symbol,
+    line_table::uleb128,
     listing::{
         number,
         split,
@@ -137,7 +138,7 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
                 match op {
                     | ".cfi_def_cfa_offset" => {
                         data.push(0x0E);
-                        uleb(
+                        uleb128(
                             &mut data,
                             number(args)?
                                 .try_into()
@@ -151,19 +152,19 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
                             return Err(Error("invalid CFI saved-register offset"));
                         }
                         data.push(0x80 + reg);
-                        uleb(&mut data, offset.unsigned_abs() / 8);
+                        uleb128(&mut data, offset.unsigned_abs() / 8);
                     },
                     | ".cfi_def_cfa_register" => {
                         data.push(0x0D);
-                        uleb(&mut data, u64::from(dwarf(args)?));
+                        uleb128(&mut data, u64::from(dwarf(args)?));
                     },
                     | ".cfi_def_cfa" => {
                         data.push(0x0C);
-                        uleb(
+                        uleb128(
                             &mut data,
                             u64::from(dwarf(parts.next().ok_or(Error("missing CFA register"))?)?),
                         );
-                        uleb(
+                        uleb128(
                             &mut data,
                             number(parts.next().ok_or(Error("missing CFA offset"))?)?
                                 .try_into()
@@ -193,17 +194,6 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
     object.sections[section].size = data.len() as u64;
     object.sections[section].data = data;
     Ok(())
-}
-
-fn uleb(data: &mut ArenaVec<'_, u8>, mut value: u64) {
-    loop {
-        let byte = value.to_le_bytes()[0] & 0x7F;
-        value >>= 7;
-        data.push(byte | if value == 0 { 0 } else { 0x80 });
-        if value == 0 {
-            break;
-        }
-    }
 }
 
 fn dwarf(reg: &str) -> Result<u8> {

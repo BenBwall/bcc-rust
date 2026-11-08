@@ -1683,7 +1683,8 @@ it prints its assembly.
 For `-o` it encodes COFF objects directly on the Windows targets and has the
 bundled clang assemble its listing on Linux; `--native-object` and
 `--no-native-object` choose either path on any target, and the last of the
-two wins. By default a listing the encoder refuses is assembled.
+two wins. By default a listing the encoder refuses is assembled. With `-g` it
+writes DWARF 5 on ELF ([Debug information](#debug-information-2026-11-06)).
 
 ## Source layout
 
@@ -3101,8 +3102,8 @@ subprogram per function) and interned locations on the module. A body maps an
 instruction to a location in a side table that stays empty without `-g`, so the
 instruction record does not grow and a compilation without it pays nothing but
 a few empty tables. The configuration leaves `debug_info` unset when the back
-end would not use it, so lowering records nothing for the native back end, the
-WebAssembly back end or the interpreter. The explorer is the exception: it asks
+end would not use it, so lowering records nothing for the native back end on
+Windows, the WebAssembly back end or the interpreter. The explorer is the exception: it asks
 for the `-g1` tables with physical lines (`DebugOptions::physical`), so that
 every view links to the source line by line, and has the native back end follow
 each machine instruction to the IR instruction it was selected for
@@ -3197,8 +3198,39 @@ to the bundled clang, which asks `lld-link` for `-debug`. This has been checked
 by the object's sections (`.debug$S`, `.debug_info`) from Linux and not run on
 Windows.
 
-**Other back ends.** The native and WebAssembly back ends warn that they write
-no debug information and ignore `-g`. The interpreter ignores it silently, as it
+**Native back end.** On ELF `--backend=native` writes DWARF 5 itself
+(`src/backend/native/debug_info.rs`, designed in
+[docs/design/native-backend.md](docs/design/native-backend.md)), into the
+listing `-S` prints and into its direct objects alike: a `.loc` row before each
+instruction whose position changes, with the prologue at the scope line, unless
+the prologue is empty, and `prologue_end` and `is_stmt` where LLVM puts them; a
+compile unit, a subprogram per described function with `DW_OP_call_frame_cfa`
+as its frame base, lexical blocks bounded by the runs of their code, the types,
+the globals at `DW_OP_addr`, and the variables in stack slots at `DW_OP_fbreg`.
+Since it describes variables, `--stack-locals` and the personalities keep the
+`-O0` locals in memory with it too. The direct object's `.debug_line` matches
+what the bundled clang assembles from the same listing byte for byte. Its line
+tables agree with the LLVM back end's on the probes compared, except that a
+`do` or `while` whose branch falls through has no instruction and so no row,
+as with GCC. What it does not write, compared with the LLVM back end:
+
+- No `DW_TAG_inlined_subroutine`: an inlined copy's rows have the callee's
+  lines, and its frame is not shown.
+- A variable in a register, or one in a slot aligned beyond 16 bytes, has no
+  location, so at `-O1` and above most locals are optimized out, where LLVM's
+  passes follow some of them.
+- A variable kept at an address in a value (a variable-length array, or a
+  parameter its caller copied) has no location.
+- No `.debug_aranges`, `.debug_str` (strings are inline, `DW_FORM_string`),
+  MD5 checksums, `DW_AT_call_*` call sites, or location lists.
+- Only DWARF 5: `-gdwarf-2` to `-gdwarf-4` are ignored with a warning. A header
+  whose name is the main file's is attributed to it, since the assembler tells
+  the two apart only by their checksums.
+- Nothing for Windows targets, which warn that they ignore `-g`: no CodeView,
+  and no DWARF in COFF.
+
+**Other back ends.** The WebAssembly back end warns that it writes no debug
+information and ignores `-g`. The interpreter ignores it silently, as it
 writes no output a debugger could read. Assembly inputs get `-g` when clang
 assembles them, as GCC and Clang pass it on.
 

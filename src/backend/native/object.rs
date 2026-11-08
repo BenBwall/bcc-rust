@@ -9,10 +9,11 @@
 //!
 //! Read `encode`, `listing::parse`, `encoder::instruction`, then `elf::write`.
 //! `layout` resolves section offsets and fixups. `unwind` implements DWARF
-//! call-frame instructions (LSB 5.0 §10.6); `elf` implements the ELF gABI and
-//! AMD64 psABI §4.4 relocations. For Windows, read `coff::encode`, then its
-//! listing, unwind and writer modules (Microsoft PE format and x64 EH).
-//! `inspection` lays out the ELF text without writing an object, for the
+//! call-frame instructions (LSB 5.0 §10.6); `line_table` turns `.file` and
+//! `.loc` into the DWARF 5 line number program (§6.2); `elf` implements the
+//! ELF gABI and AMD64 psABI §4.4 relocations. For Windows, read `coff::encode`,
+//! then its listing, unwind and writer modules (Microsoft PE format and x64
+//! EH). `inspection` lays out the ELF text without writing an object, for the
 //! explorer's per-instruction machine-code view.
 
 mod coff;
@@ -20,6 +21,7 @@ mod elf;
 mod encoder;
 mod inspection;
 mod layout;
+mod line_table;
 mod listing;
 mod unwind;
 
@@ -27,6 +29,7 @@ pub(crate) use inspection::{
     FunctionCode,
     functions,
 };
+pub(super) use line_table::sleb128;
 
 use crate::util::bump::{
     ArenaMap,
@@ -40,6 +43,7 @@ pub(super) fn encode<'a>(text: &'a str, arena: &'a Bump) -> Result<ArenaVec<'a, 
     object.layout()?;
     object.materialize()?;
     unwind::generate(&mut object)?;
+    line_table::generate(&mut object)?;
     elf::write(&object)
 }
 
@@ -66,6 +70,32 @@ struct Object<'a> {
     symbols:  ArenaVec<'a, Symbol<'a>>,
     names:    ArenaMap<'a, &'a str, usize>,
     items:    ArenaVec<'a, Item<'a>>,
+    /// The line table's files by number, as `.file` gave them; 0 is the
+    /// root file, the compilation unit's own.
+    files:    ArenaVec<'a, Option<LineFile<'a>>>,
+}
+
+/// A source file of the line table, as one `.file` directive names it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct LineFile<'a> {
+    directory: &'a [u8],
+    name:      &'a [u8],
+}
+
+/// One `.loc`: the source position of the code that follows, and the
+/// `DWARF2_FLAG_*` bits of its row (DWARF 5 §6.2.2, Table 6.3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Loc {
+    file:   u32,
+    line:   u32,
+    column: u32,
+    flags:  u8,
+}
+
+impl Loc {
+    const EPILOGUE_BEGIN: u8 = 8;
+    const IS_STMT: u8 = 1;
+    const PROLOGUE_END: u8 = 4;
 }
 
 struct Section<'a> {
@@ -114,13 +144,19 @@ enum Kind<'a> {
     Code(encoder::Code<'a>),
     Value(u8, &'a str),
     CoffValue(u8, &'a str, u32),
-    Bytes(&'a str),
+    /// Bytes written as they are: `.ascii`, `.asciz`, `.uleb128` and
+    /// `.sleb128`.
+    Bytes(&'a [u8]),
     Branch {
         condition: Option<u8>,
         target:    usize,
         near:      bool,
     },
     Cfi(&'a str, &'a str),
+    /// A `.loc`, which takes effect at the next instruction or data.
+    Loc(Loc),
+    /// A change of the current section, which drops a pending `.loc`.
+    SectionChange,
 }
 
 #[derive(Clone, Copy)]

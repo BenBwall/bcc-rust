@@ -304,6 +304,18 @@ impl<'a> Frame<'a> {
         self.size - self.allocated_below()
     }
 
+    /// Whether the prologue writes any instruction: a handler's always does,
+    /// and another function's when it saves a register, allocates the frame,
+    /// sets the frame pointer or realigns `%rsp`.
+    pub(crate) fn writes_prologue(&self) -> bool {
+        self.entry == EntryConvention::Interrupt
+            || !self.saved.is_empty()
+            || !self.saved_xmm.is_empty()
+            || self.allocation() > 0
+            || self.rbp_based
+            || self.realign > 16
+    }
+
     /// The distance from `%rsp` after the prologue to the canonical frame
     /// address (the caller's `%rsp` before the call).
     pub(crate) fn cfa_offset(&self) -> u32 {
