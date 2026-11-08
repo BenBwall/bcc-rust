@@ -1,0 +1,21 @@
+sema-unused-typedefs-gcc.c:2:29: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    2 | void f1(void) { typedef int T; }
+      |                             ^
+sema-unused-typedefs-gcc.c:6:42: warning: typedef 'U' locally defined but not used [-Wunused-local-typedefs]
+    6 | void f5(void) { typedef int T; typedef T U; }
+      |                                          ^
+sema-unused-typedefs-gcc.c:7:43: warning: typedef 'S' locally defined but not used [-Wunused-local-typedefs]
+    7 | void f6(void) { typedef struct { int a; } S; }
+      |                                           ^
+sema-unused-typedefs-gcc.c:8:32: warning: typedef 'C' locally defined but not used [-Wunused-local-typedefs]
+    8 | void f7(void) { { typedef char C; } }
+      |                                ^
+sema-unused-typedefs-gcc.c:9:30: warning: typedef 'A' locally defined but not used [-Wunused-local-typedefs]
+    9 | void f8(int n) { typedef int A[n]; }
+      |                              ^
+sema-unused-typedefs-gcc.c:20:13: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+   20 | typedef int T;
+      |             ^
+sema-unused-typedefs-gcc.c:25:17: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+   25 |   { typedef int T; }
+      |                 ^

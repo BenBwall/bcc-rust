@@ -213,6 +213,8 @@ impl CompilerConfiguration {
             ],
             | DiagnosticGroup::ShadowLocal => &[DiagnosticGroup::ShadowCompatibleLocal],
             | DiagnosticGroup::ShadowAll => &[DiagnosticGroup::Shadow],
+            | DiagnosticGroup::UnusedLocalTypedefs if clang =>
+                &[DiagnosticGroup::UnusedLocalTypedef],
             | _ => &[],
         };
         for &child in children {
@@ -1031,6 +1033,11 @@ diagnostic_groups! {
     /// A body that is only `;`. `-Wextra` holds it in GCC, and Clang reports
     /// it by default.
     EmptyBody => Some("empty-body"), ClangWarning, false;
+    /// A typedef a block declares and never uses, in GCC's spelling, which
+    /// Clang accepts too.
+    UnusedLocalTypedefs => Some("unused-local-typedefs"), Ignored, false;
+    /// Clang's own spelling, which its warning names.
+    UnusedLocalTypedef => Some("unused-local-typedef"), Ignored, false;
     /// `-Wparentheses`, which reports the rest of its family itself. `-Wall`
     /// holds it in GCC, and Clang reports most of it by default.
     Parentheses => Some("parentheses"), ClangWarning, false;
@@ -1235,6 +1242,8 @@ impl DiagnosticGroup {
         Self::UnusedLabel,
         Self::UnusedValue,
         Self::UnusedComparison,
+        Self::UnusedLocalTypedefs,
+        Self::UnusedLocalTypedef,
     ];
 
     /// Whether Clang's `-Wconversion` holds this group.
@@ -1398,6 +1407,8 @@ impl WarningSettings {
                 | DiagnosticGroup::UnusedLabel
                 | DiagnosticGroup::UnusedValue
                 | DiagnosticGroup::UnusedComparison
+                | DiagnosticGroup::UnusedLocalTypedefs
+                | DiagnosticGroup::UnusedLocalTypedef
                 | DiagnosticGroup::Main
                 | DiagnosticGroup::UnknownPragmas
                 | DiagnosticGroup::PointerBoolConversion => all,

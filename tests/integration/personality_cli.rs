@@ -8365,6 +8365,52 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(!text.contains("<pragma string>"), "{text}");
     }
 
+    /// A typedef a block declares and never uses, under each compiler's
+    /// options and words. Measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_unused_local_typedefs_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "void f(void) { typedef int T; typedef int U; U u = 0; (void)u; }\n",
+        );
+        let text = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stderr(&output)
+        };
+        let gcc = text("--gcc-mode", &["-Wall"]);
+        assert!(
+            gcc.contains("typedef 'T' locally defined but not used [-Wunused-local-typedefs]"),
+            "{gcc}"
+        );
+        assert!(!gcc.contains("'U'"), "{gcc}");
+        let clang = text("--clang-mode", &["-Wall"]);
+        assert!(
+            clang.contains("unused typedef 'T' [-Wunused-local-typedef]"),
+            "{clang}"
+        );
+        assert_eq!(text("--gcc-mode", &[]), "");
+        assert_eq!(text("--clang-mode", &[]), "");
+        assert_eq!(
+            text("--gcc-mode", &["-Wall", "-Wno-unused-local-typedefs"]),
+            ""
+        );
+        assert_eq!(
+            text("--clang-mode", &["-Wall", "-Wno-unused-local-typedefs"]),
+            ""
+        );
+        assert_eq!(
+            text("--clang-mode", &["-Wall", "-Wno-unused-local-typedef"]),
+            ""
+        );
+    }
+
     /// A declaration that hides another and a body that is only `;`, under
     /// the options each compiler has for them. Each row was measured against
     /// GCC 14.2 and Clang 23.1.
