@@ -2538,7 +2538,15 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                         | BinaryOperator::Subtraction),
                     left_expression,
                     right_expression,
-                } if (operator == BinaryOperator::Subscript) == place => {
+                } if if operator == BinaryOperator::Subscript {
+                    // `a[i]` of array type, as a value, decays to its first
+                    // element's address, so it too designates `a[i]` in
+                    // place: `static char *p = rows[1];` (C99 §6.3.2.1p3).
+                    place || matches!(self.sema.types.kind(info.ty), TypeKind::Array(..))
+                } else {
+                    !place
+                } =>
+                {
                     let left = self
                         .sema
                         .expression_info(left_expression)
