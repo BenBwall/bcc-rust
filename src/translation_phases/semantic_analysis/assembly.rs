@@ -585,9 +585,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 return Ok(AsmOperandKind::Immediate { symbolic: false });
             }
         }
-        // A function designator decays to an address constant (§6.6p9).
+        // A function designator, and an array of static storage duration
+        // such as a string literal, decay to an address constant (§6.6p9),
+        // which GCC and Clang take as a symbolic immediate.
         let address = matches!(info.constant, ConstantClass::Address)
-            || info.category == ValueCategory::FunctionDesignator;
+            || info.category == ValueCategory::FunctionDesignator
+            || (info.static_address
+                && matches!(self.types.nodes[info.ty.index], TypeKind::Array(..)));
         if generic == Some(true) && register.is_none() && address {
             return Ok(AsmOperandKind::Immediate { symbolic: true });
         }

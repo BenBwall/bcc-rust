@@ -223,6 +223,50 @@ int main(void) {
         }
     }
 
+    /// A string literal, and any array of static storage duration, decays
+    /// to an address constant (C99 6.6p9), which `i` takes as a symbolic
+    /// immediate, as GCC and Clang take it: TCC's `tests/tcctest.c` names
+    /// one in `%c0`.
+    #[test]
+    fn static_arrays_are_symbolic_immediates() {
+        let source = "static const char table[] = \"table\";\nconst char *literal(void) { const \
+                      char *r; __asm__(\"leaq %c1(%%rip), %0\" : \"=r\"(r) : \"i\"(\"A \
+                      string\")); return r; }\nconst char *array(void) { const char *r; \
+                      __asm__(\"leaq %c1(%%rip), %0\" : \"=r\"(r) : \"i\"(table)); return r; \
+                      }\nint main(void) { const char *l = literal(); return l[0] != 'A' || l[7] \
+                      != 'g' || l[8] != 0 || array() != table; }\n";
+        let Some(target) = host() else {
+            eprintln!("skipping: the host is not an x86-64 target bcc supports");
+            return;
+        };
+        for flags in [
+            &["--backend=llvm"][..],
+            &["--backend=llvm", "-O2"][..],
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
+            for identity in ["--compiler-identity=gcc", "--compiler-identity=clang"] {
+                let executable = temporary("inline-asm-static-array.exe");
+                let built = bcc(
+                    source,
+                    &[
+                        &[target, identity, "-o", executable.to_str().unwrap()][..],
+                        flags,
+                    ]
+                    .concat(),
+                );
+                assert!(
+                    built.status.success(),
+                    "{identity} {flags:?}: {}",
+                    text(&built.stderr)
+                );
+                let run = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(run.status.code(), Some(0), "{identity} {flags:?}");
+                std::fs::remove_file(executable).unwrap();
+            }
+        }
+    }
+
     /// A GNU local register variable is an ordinary object whose register
     /// places it when it is an `asm` operand, under both identities: the
     /// templates name the registers themselves.
