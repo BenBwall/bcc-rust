@@ -22,6 +22,7 @@ use crate::util::bump::{
 /// How bad a driver message is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(in crate::cli) enum Severity {
+    Note,
     Warning,
     Error,
 }
@@ -31,6 +32,7 @@ pub(in crate::cli) enum Severity {
 /// `cl`'s command-line form without a code, since bcc invents none.
 pub(in crate::cli) fn report(args: &Cli, severity: Severity, message: fmt::Arguments<'_>) {
     let label = match severity {
+        | Severity::Note => "note",
         | Severity::Warning => "warning",
         | Severity::Error => "error",
     };

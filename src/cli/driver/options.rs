@@ -11,6 +11,8 @@ use clap::{
     ValueEnum,
 };
 
+use super::assembler::Assembler;
+
 /// The driver's options: the `-E` stage, the `-x` language of the inputs
 /// after it, and the linker's inputs and options.
 #[derive(Args)]
@@ -54,6 +56,23 @@ pub(in crate::cli) struct DriverOptions {
     /// GCC -Wa,ARGS, or -Xassembler ARG.
     #[arg(long, hide = true, allow_hyphen_values = true)]
     pub(in crate::cli) assembler_option:       Vec<String>,
+    /// Which assembler assembles the assembly inputs: the bundled clang's
+    /// integrated assembler, the system's `as`, or `as` when one is found
+    /// (also accepts Clang -fintegrated-as and -fno-integrated-as); the
+    /// last one wins.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "ASSEMBLER",
+        default_value_t,
+        overrides_with = "assembler"
+    )]
+    pub(in crate::cli) assembler:              Assembler,
+    /// Look for the system assembler as PREFIX followed by `as` before
+    /// COMPILER_PATH and PATH, as GCC's -B PREFIX does (GCC manual,
+    /// "Directory Options").
+    #[arg(short = 'B', value_name = "PREFIX")]
+    pub(in crate::cli) program_prefix:         Vec<PathBuf>,
     /// Write make rules for the files the source depends on instead of its
     /// preprocessed text: every file, or only the user's (also accepts GCC
     /// -M and -MM).
