@@ -11437,7 +11437,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(
             text.contains(&format!(
                 " {exe} -v --compiler-extensions --compiler-identity=gcc --diagnostic-format=gcc \
-                 --target={triple} --driver-name=gcc a.c -c\n"
+                 --target={triple} --driver-name=gcc --assembler=auto a.c -c\n"
             )),
             "{text}"
         );
@@ -12092,8 +12092,8 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(
             text.ends_with(&format!(
                 " --compiler-extensions \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
-                 \"--target={}\" \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \
-                 \"--output=o\\$.o\"\n",
+                 \"--target={}\" \"--driver-name=gcc\" \"--assembler=auto\" \"a b.c\" -D \
+                 \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n",
                 HOST_TARGET.0
             )),
             "{text}"

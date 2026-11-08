@@ -289,6 +289,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     );
     common.push(format!("--target={}", target.triple()).into());
     common.push(format!("--driver-name={}", invocation.name).into());
+    // GCC's driver assembles with the system's `as` (GCC manual, "Overall
+    // Options"), so its `-Wa,` options and directives reach that.
+    if personality == Personality::Gcc {
+        common.push("--assembler=auto".into());
+    }
     // Before the command line's `-D` and `-U`, as the compilers' own
     // macros come before them.
     if !machine.mmx {
@@ -1580,9 +1585,16 @@ impl State<'_> {
             | "-o" => self.outputs.push(operand.into()),
             // Tuning parameters of GCC's optimizers.
             | "--param" => {},
-            | "-B" => self.invocation.warning(format_args!(
-                "'-B {lossy}' is ignored: bcc uses its bundled assembler and linker"
-            )),
+            // GCC manual, "Directory Options": where the driver finds the
+            // programs it runs, of which bcc runs only the assembler.
+            | "-B" => {
+                self.out.push("-B".into());
+                self.out.push(operand.into());
+                self.invocation.warning(format_args!(
+                    "'-B {lossy}' finds only the system assembler: bcc links with its bundled \
+                     linker"
+                ));
+            },
             | "-Xclang" => self.unsupported(
                 &format!("-Xclang {lossy}"),
                 "bcc has no Clang frontend options",
@@ -1650,6 +1662,19 @@ impl State<'_> {
         {
             self.error(format_args!("unknown argument: '{text}'"));
             return;
+        }
+        // Clang's choice of assembler (Clang command line argument
+        // reference, -fintegrated-as).
+        if self.compiler == Compiler::Clang {
+            let assembler = match text {
+                | "-fintegrated-as" => Some("--assembler=integrated"),
+                | "-fno-integrated-as" => Some("--assembler=system"),
+                | _ => None,
+            };
+            if let Some(assembler) = assembler {
+                self.out.push(assembler.into());
+                return;
+            }
         }
         // Each compiler has its own spellings of these.
         if is_diagnostic_presentation(text) && !knows(self.compiler, text) {
