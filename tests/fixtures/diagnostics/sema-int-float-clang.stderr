@@ -1,0 +1,67 @@
+sema-int-float-clang.c:4:11: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+    4 | float a = 16777217;
+      |           ^~~~~~~~
+sema-int-float-clang.c:5:12: warning: implicit conversion from 'long long' to 'double' changes value from 9007199254740993 to 9007199254740992 [-Wimplicit-const-int-float-conversion]
+    5 | double b = 9007199254740993LL;
+      |            ^~~~~~~~~~~~~~~~~~
+sema-int-float-clang.c:6:11: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+    6 | float c = BIG;
+      |           ^~~
+sema-int-float-clang.c:7:11: warning: implicit conversion from 'int' to 'float' changes value from -16777217 to -16777216 [-Wimplicit-const-int-float-conversion]
+    7 | float d = -16777217;
+      |           ^
+sema-int-float-clang.c:8:12: warning: implicit conversion from 'long long' to 'double' changes value from 100000000000000001 to 1.0E+17 [-Wimplicit-const-int-float-conversion]
+    8 | double e = 100000000000000001LL;
+      |            ^~~~~~~~~~~~~~~~~~~~
+sema-int-float-clang.c:9:11: warning: implicit conversion from 'unsigned __int128' to 'float' changes value from 340282366920938463463374607431768211455 to +Inf [-Wimplicit-const-int-float-conversion]
+    9 | float f = (unsigned __int128)-1;
+      |           ^~~~~~~~~~~~~~~~~~~
+sema-int-float-clang.c:10:41: warning: implicit conversion from 'unsigned __int128' to 'float' changes value from 170141183460469231731687303715884105729 to 1.70141183460469231731687E+38 [-Wimplicit-const-int-float-conversion]
+   10 | float g = ((unsigned __int128)1 << 127) + 1;
+      |                                         ^
+sema-int-float-clang.c:18:10: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   18 |     take(16777217);
+      |          ^~~~~~~~
+sema-int-float-clang.c:19:9: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   19 |     x = 16777217;
+      |         ^~~~~~~~
+sema-int-float-clang.c:20:10: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   20 |     x += 16777217;
+      |          ^~~~~~~~
+sema-int-float-clang.c:21:13: warning: implicit conversion from 'long long' to 'double' changes value from 9223372036854775807 to 9223372036854775808 [-Wimplicit-const-int-float-conversion]
+   21 |     if (y > 9223372036854775807LL)
+      |             ^~~~~~~~~~~~~~~~~~~~~
+sema-int-float-clang.c:22:20: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   22 |         return x * 16777217;
+      |                    ^~~~~~~~
+sema-int-float-clang.c:23:16: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   23 |     return i ? 16777217 : x;
+      |                ^~~~~~~~
+sema-int-float-clang.c:28:35: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   28 | float selected = _Generic(0, int: 16777217 + 0.0f, default: 1);
+      |                                   ^~~~~~~~
+sema-int-float-clang.c:29:55: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   29 | float nested = _Generic(0, int: _Generic(0.0, double: 16777217 + 0.0f, default: 0), default: 1);
+      |                                                       ^~~~~~~~
+sema-int-float-clang.c:32:56: warning: implicit conversion from 'int' to 'float' changes value from 16777219 to 16777220 [-Wimplicit-const-int-float-conversion]
+   32 |     return _Generic(0, long: 16777217 + 0.0f, default: 16777219 + 0.0f);
+      |                                                        ^~~~~~~~
+sema-int-float-clang.c:35:17: warning: implicit conversion from 'int' to '_Float16' changes value from 65536 to +Inf [-Wimplicit-const-int-float-conversion]
+   35 | _Float16 half = 65536;
+      |                 ^~~~~
+sema-int-float-clang.c:36:25: warning: implicit conversion from 'int' to '_Float16' changes value from 65520 to +Inf [-Wimplicit-const-int-float-conversion]
+   36 | _Float16 half_rounded = 65520;
+      |                         ^~~~~
+sema-int-float-clang.c:39:31: warning: implicit conversion from 'long' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   39 | float expected(void) { return __builtin_expect(16777217, 1); }
+      |                               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-int-float-clang.c:40:17: warning: implicit conversion from 'unsigned int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   40 | float swapped = __builtin_bswap32(0x01000001) + 0.0f;
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-int-float-clang.c:41:65: warning: implicit conversion from 'long' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+   41 | float expected_sum(void) { return __builtin_expect(16777216, 1) + 1 + 0.0f; }
+      |                                                                 ^
+sema-int-float-clang.c:43:64: warning: implicit conversion from 'unsigned __int128' to 'float' changes value from 973504655446534955899702617590802 to 9.73504673319912113749395E+32 [-Wimplicit-const-int-float-conversion]
+   43 | float truncated = ((unsigned __int128)52773793117994ULL << 64) | 5216560818296212498ULL;
+      |                                                                ^
+22 warnings generated.

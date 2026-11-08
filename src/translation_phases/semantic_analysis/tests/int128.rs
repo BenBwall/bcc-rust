@@ -354,12 +354,8 @@ fn unsigned_high_half_floating_and_pointer_constants_use_the_value() {
          static _Bool b = (__uint128_t)-1; void test(void) { (void)(long double)((__uint128_t)1 \
          << 127); }",
         |context, unit| {
-            assert_eq!(
-                context.pending_error_count(),
-                0,
-                "{:?}",
-                context.take_pending_errors()
-            );
+            // Clang warns that `f` rounds 2^128 - 1 up.
+            assert_eq!(int_float_warnings(context), 1);
             let pointer = unit
                 .expressions
                 .iter()

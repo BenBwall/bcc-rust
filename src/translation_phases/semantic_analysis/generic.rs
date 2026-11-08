@@ -24,6 +24,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         e: &'tu Expression<'tu>,
         generic: &'tu GenericSelection<'tu>,
     ) -> ExpressionInfo<'tu> {
+        let info = self.select_association(e, generic);
+        // A selection given up on before its association is known.
+        self.forget_generic(generic);
+        info
+    }
+
+    fn select_association(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        generic: &'tu GenericSelection<'tu>,
+    ) -> ExpressionInfo<'tu> {
         let controlling = match generic.controlling {
             | SyntaxOperand::Expression(operand) => self.converted(self.expression_info(operand)),
             | SyntaxOperand::Type(name) => self

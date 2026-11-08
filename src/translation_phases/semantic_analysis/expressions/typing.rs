@@ -516,11 +516,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return self
                         .invalid_expression(e, SemanticErrorKind::InvalidArithmeticOperands);
                 }
-                info.ty = self.common_arithmetic(left, right, lt, rt);
+                info.ty = self.checked_common_arithmetic(left, right, lt, rt);
             },
             | B::Addition | B::Subtraction =>
                 if self.arithmetic(lt) && self.arithmetic(rt) {
-                    info.ty = self.common_arithmetic(left, right, lt, rt);
+                    info.ty = self.checked_common_arithmetic(left, right, lt, rt);
                 } else if let Some(target) = self.pointer_target(lt) {
                     if !self.pointer_arithmetic_target(target) {
                         return self
@@ -641,7 +641,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.real(lt) && self.real(rt)
                 };
                 if arithmetic {
-                    arithmetic_operands = Some(self.common_arithmetic(left, right, lt, rt));
+                    arithmetic_operands = Some(self.checked_common_arithmetic(left, right, lt, rt));
                 } else {
                     let null_pair = equality
                         && ((self.nullptr_type(lt) && self.null_pointer_constant(right))

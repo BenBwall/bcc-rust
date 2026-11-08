@@ -41,6 +41,7 @@ mod imaginary_constants;
 mod inference;
 mod initializer_plans;
 mod int128;
+mod int_float_text;
 mod interchange_floats;
 mod labels_as_values;
 mod library_modes;
@@ -63,6 +64,24 @@ mod transparent_unions;
 mod type_generic;
 mod unused;
 mod vectors;
+
+/// Takes the pending diagnostics, which must all be Clang's
+/// `-Wimplicit-const-int-float-conversion`, and counts them.
+fn int_float_warnings(context: &mut Context<'_>) -> usize {
+    let warnings = context.take_pending_errors();
+    for warning in &warnings {
+        assert!(
+            matches!(
+                warning,
+                TranslationError::Semantic(e) if e.kind == SemanticErrorKind::ValueWarning(
+                    crate::configuration::DiagnosticGroup::ImplicitConstIntFloatConversion
+                )
+            ),
+            "{warnings:?}"
+        );
+    }
+    warnings.len()
+}
 
 fn with_source(source: &str, run: impl FnOnce(&mut Context<'_>, &SemanticTranslationUnit<'_>)) {
     with_configuration(

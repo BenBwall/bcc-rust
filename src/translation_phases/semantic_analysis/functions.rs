@@ -755,6 +755,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     references:  self.functions.uses.len(),
                     definitions: self.definitions.len(),
                     orphan:      self.functions.emission.orphan,
+                    int_float:   self.functions.pending_int_float.len(),
                 };
                 let scratch = self.scratch;
                 let marks = self
@@ -2315,10 +2316,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         if marks.len() != 2 * generic.associations.len() + 2 {
+            self.settle_generic_int_float(marks.first().map(|mark| mark.int_float), None);
             return;
         }
         let mut ranges = ArenaVec::new_in(self.scratch);
         ranges.push((marks[0], marks[1]));
+        let mut kept = None;
         for (index, association) in generic.associations.iter().enumerate() {
             if selected.is_none_or(|selected| !std::ptr::eq(selected, association.expression)) {
                 ranges.push((marks[2 + 2 * index], marks[3 + 2 * index]));
@@ -2326,8 +2329,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Code generation continues in the block the selected
                 // association ends in.
                 self.functions.emission.orphan = marks[3 + 2 * index].orphan;
+                kept = Some(marks[2 + 2 * index].int_float..marks[3 + 2 * index].int_float);
             }
         }
+        self.settle_generic_int_float(Some(marks[0].int_float), kept);
         for (start, end) in ranges {
             self.elide_references(start.references..end.references);
             for definition in &mut self.definitions[start.definitions..end.definitions] {
@@ -2335,6 +2340,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     definition.elided = true;
                 }
             }
+        }
+    }
+
+    /// Forgets the boundaries of a generic selection that typing gave up
+    /// on, with the integer-to-floating warnings in it.
+    pub(super) fn forget_generic(&mut self, generic: &'tu GenericSelection<'tu>) {
+        if let Some(marks) = self
+            .functions
+            .generic_marks
+            .remove(&std::ptr::from_ref(generic).addr())
+        {
+            self.settle_generic_int_float(marks.first().map(|mark| mark.int_float), None);
+        }
+    }
+
+    /// Keeps, of the integer-to-floating warnings pending since `start`, only
+    /// those in `kept`, the selected association's, and reports every
+    /// pending one once no generic selection is open. Clang checks the
+    /// conversions of only the selected association, which its
+    /// `IgnoreParens` steps into (`AnalyzeImplicitConversions`).
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+    fn settle_generic_int_float(
+        &mut self,
+        start: Option<usize>,
+        kept: Option<core::ops::Range<usize>>,
+    ) {
+        if let Some(start) = start {
+            let kept = kept.unwrap_or(start..start);
+            let pending = &mut self.functions.pending_int_float;
+            pending.copy_within(kept.clone(), start);
+            pending.truncate(start + kept.len());
+        }
+        if self.functions.generic_marks.is_empty() {
+            self.report_pending_int_float();
         }
     }
 
@@ -3050,6 +3089,8 @@ struct EmissionMark {
     references:  usize,
     definitions: usize,
     orphan:      Option<usize>,
+    /// The number of pending integer-to-floating warnings.
+    int_float:   usize,
 }
 
 /// A break's evaluation context settles after an enclosing sizeof/typeof
@@ -3198,6 +3239,10 @@ pub(super) struct State<'tu, 's> {
     /// operand and of each association's expression, with the emission
     /// model's block state at each boundary.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
+    /// Clang's integer-to-floating warnings, with the text of each, found
+    /// while a generic selection is analyzed: only those of the selected
+    /// association are reported, once the outermost selection is typed.
+    pub(super) pending_int_float: ArenaVec<'s, (SourceVectors, StringCacheId)>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
     pub(super) optional_local_bindings: ArenaMap<'s, usize, ()>,
     condition_uses: ArenaMap<'s, usize, ConditionUses>,
@@ -3239,6 +3284,7 @@ impl<'s> State<'_, 's> {
             inline_objects: ArenaVec::new_in(scratch),
             outside: [None; 2],
             generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            pending_int_float: ArenaVec::new_in(scratch),
             definition_contexts: ArenaVec::new_in(scratch),
             optional_local_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             condition_uses: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -3246,6 +3292,11 @@ impl<'s> State<'_, 's> {
             #[cfg(test)]
             condition_reference_steps: 0,
         }
+    }
+
+    /// Whether a generic selection is being analyzed.
+    pub(super) fn generic_marks_open(&self) -> bool {
+        !self.generic_marks.is_empty()
     }
 }
 
