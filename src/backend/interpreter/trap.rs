@@ -273,6 +273,11 @@ pub(crate) enum Unsupported {
     /// A write to a pipe that no descriptor reads, which raises `SIGPIPE`
     /// and ends the program.
     PipeSignal,
+    /// A load through a frame address, as `__builtin_frame_address` and
+    /// `__builtin_return_address` above level 0 walk the frame-pointer
+    /// chain: the interpreter's frames link no machine frames. GNU
+    /// extension: GCC manual, "Return Address".
+    FrameChain,
 }
 
 impl fmt::Display for Unsupported {
@@ -292,6 +297,9 @@ impl fmt::Display for Unsupported {
             | Self::HostExitHandler => "an exit handler the program does not define",
             | Self::PipeWait => "a pipe read or write that would wait forever for another process",
             | Self::PipeSignal => "a write to a pipe without a reader, which raises SIGPIPE",
+            | Self::FrameChain =>
+                "a frame or return address of an outer frame (__builtin_frame_address or \
+                 __builtin_return_address above level 0); compile it with -o instead",
         })
     }
 }
