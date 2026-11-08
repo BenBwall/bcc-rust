@@ -15,8 +15,13 @@ pub struct Program {
     pub(super) structures: Arc<[Structure]>,
     /// Objects with static storage duration, in declaration order: file-scope
     /// objects and block-scope `static` ones. They are initialized before
-    /// `main` runs and take the first object IDs.
+    /// `main` runs and take the first object IDs. String literals are
+    /// among them, in source order.
     pub(super) statics:    Vec<Static>,
+    /// The preprocessing directives the machine runs itself, in source
+    /// order: each `#include <stdio.h>`. They run before the static objects
+    /// are initialized, as translation phase 4 comes before execution.
+    pub(super) directives: Vec<SourceRange>,
 }
 
 /// A structure type and its layout on x86-64: each member at an offset
@@ -81,6 +86,10 @@ pub struct State {
     pub diagnostics:     Vec<Diagnostic>,
     /// The value returned by `main` after successful termination.
     pub return_value:    Option<Value>,
+    /// Every byte the program has written to standard output so far.
+    pub output:          Vec<u8>,
+    /// How many bytes at the end of `output` the last operation wrote.
+    pub written:         usize,
 }
 
 impl State {
@@ -144,6 +153,9 @@ impl Event {
 pub enum EventKind {
     /// The initial state: `main` is about to run.
     Start,
+    /// Translation phase 4 ran a preprocessing directive: `#include
+    /// <stdio.h>` declared the library's output functions.
+    Directive,
     /// Before `main`, an object with static storage duration received its
     /// initial value: zero, or its constant initializer's.
     StaticStorage,
@@ -196,6 +208,9 @@ pub enum EventKind {
     Branch,
     /// A function call created a new activation.
     Call,
+    /// A call to a library function (`printf`, `puts`, `putchar`) ran to
+    /// completion in one step, writing to standard output.
+    LibraryCall,
     /// A function returned a value to its caller.
     Return,
     /// A diagnostic stopped execution.
@@ -208,6 +223,7 @@ impl EventKind {
     pub const fn name(self) -> &'static str {
         match self {
             | Self::Start => "start",
+            | Self::Directive => "directive",
             | Self::StaticStorage => "static_storage",
             | Self::StaticLocal => "static_local",
             | Self::EnterBlock => "enter_block",
@@ -233,6 +249,7 @@ impl EventKind {
             | Self::Jump => "jump",
             | Self::Branch => "branch",
             | Self::Call => "call",
+            | Self::LibraryCall => "library_call",
             | Self::Return => "return",
             | Self::Fault => "fault",
         }
@@ -262,8 +279,9 @@ impl EventKind {
             | Self::Declare
             | Self::StaticStorage
             | Self::StaticLocal => "lifetime",
-            | Self::Start | Self::Discard | Self::Jump | Self::Branch => "control",
-            | Self::Call | Self::Return => "call",
+            | Self::Start | Self::Directive | Self::Discard | Self::Jump | Self::Branch =>
+                "control",
+            | Self::Call | Self::LibraryCall | Self::Return => "call",
             | Self::Fault => "fault",
         }
     }
@@ -374,6 +392,10 @@ pub struct Object {
     pub lifetime:         &'static str,
     /// Whether this object is a function parameter.
     pub parameter:        bool,
+    /// Whether this object is the array a string literal denotes, which
+    /// the program must not modify (C99 §6.4.5p6). Its name is the
+    /// literal as written.
+    pub literal:          bool,
     /// Stored scalar or aggregate contents.
     pub value:            Value,
 }
@@ -489,6 +511,23 @@ pub enum Undefined {
     OnePastEnd,
     /// Pointer arithmetic that leaves the array and its one-past position.
     PointerOutside,
+    /// A store into the array of a string literal (C99 §6.4.5p6).
+    StringLiteralWrite,
+    /// A library function read a string that has no null character before
+    /// the end of its array.
+    Unterminated,
+    /// A null pointer where a library function needs a string (C99
+    /// §7.1.4p1).
+    NullString,
+    /// A `printf` conversion with no argument left for it (C99
+    /// §7.19.6.1p2).
+    MissingArgument,
+    /// A `printf` argument of the wrong type for its conversion (C99
+    /// §7.19.6.1p9).
+    WrongArgument,
+    /// An invalid `printf` conversion specification (C99 §7.19.6.1p9,
+    /// §7.19.6.1p6).
+    InvalidConversion,
 }
 
 impl Diagnostic {
@@ -588,6 +627,9 @@ pub(super) enum Op {
     },
     /// The integer promotion of a loaded `char` to `int`.
     Promote,
+    /// The default argument promotion of a `char` passed through a
+    /// variadic function's `...` (C99 §6.5.2.2p6-7).
+    DefaultPromote,
     Decay(Place),
     AddressOf,
     Dereference,
@@ -616,8 +658,51 @@ pub(super) enum Op {
     /// Skip to the target when the condition of the named statement is zero.
     Branch(usize, &'static str),
     Call(String, usize),
+    /// A call to a library function with the arguments' types, after the
+    /// default argument promotions for those passed through `...`.
+    Library(Library, Vec<Type>),
+    /// Initialize the char array the address on the stack designates from
+    /// a string literal's characters (C99 §6.7.8p14): `bytes` holds them
+    /// without the null, `length` is the array's.
+    InitializeString {
+        bytes:           Vec<u8>,
+        length:          usize,
+        /// Whether this ends a full expression (C99 §6.8p4).
+        full_expression: bool,
+    },
     Return,
     Fallthrough,
+}
+
+/// A function `<stdio.h>` declares that the machine runs itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Library {
+    /// `int printf(const char *format, ...)`.
+    Printf,
+    /// `int puts(const char *s)`.
+    Puts,
+    /// `int putchar(int c)`.
+    Putchar,
+}
+
+impl Library {
+    /// The function `name` names, when `<stdio.h>` declares it.
+    pub(super) fn named(name: &str) -> Option<Self> {
+        match name {
+            | "printf" => Some(Self::Printf),
+            | "puts" => Some(Self::Puts),
+            | "putchar" => Some(Self::Putchar),
+            | _ => None,
+        }
+    }
+
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            | Self::Printf => "printf",
+            | Self::Puts => "puts",
+            | Self::Putchar => "putchar",
+        }
+    }
 }
 
 /// Where a name's object is found when it is evaluated.
@@ -642,6 +727,8 @@ pub(super) struct Static {
     pub value:    Value,
     /// Whether the declaration has an initializer.
     pub explicit: bool,
+    /// Whether this is the array of a string literal, named as written.
+    pub literal:  bool,
     pub range:    SourceRange,
 }
 
@@ -659,6 +746,34 @@ pub(super) enum Type {
     Struct(usize),
     /// A pointer to a structure.
     StructPointer(usize),
+    /// `char[n]`.
+    CharArray(usize),
+    /// `char *`, or `const char *` when set.
+    CharPointer(bool),
+}
+
+impl Type {
+    /// Whether values of this type are pointers.
+    pub(super) const fn is_pointer(self) -> bool {
+        matches!(
+            self,
+            Self::Pointer | Self::StructPointer(_) | Self::CharPointer(_)
+        )
+    }
+
+    /// Whether this is an array type, which a name of it decays from.
+    pub(super) const fn is_array(self) -> bool {
+        matches!(self, Self::Array(_) | Self::CharArray(_))
+    }
+
+    /// The pointer an array of this type decays to.
+    pub(super) const fn decayed(self) -> Self {
+        match self {
+            | Self::Array(_) => Self::Pointer,
+            | Self::CharArray(_) => Self::CharPointer(false),
+            | other => other,
+        }
+    }
 }
 
 pub(super) const MAX_SOURCE: usize = 32 * 1024;
@@ -672,3 +787,7 @@ pub(super) const MAX_MEMBERS: usize = 32;
 pub(super) const MAX_CELLS: usize = 512;
 pub(super) const MAX_OPERANDS: usize = 1024;
 pub(super) const MAX_TRACE_BYTES: usize = 8 * 1024 * 1024;
+/// The most a program may write to standard output.
+pub(super) const MAX_OUTPUT: usize = 4096;
+/// The most arguments a library call takes.
+pub(super) const MAX_ARGUMENTS: usize = 16;

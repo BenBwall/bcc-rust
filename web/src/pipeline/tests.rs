@@ -72,7 +72,12 @@ expression 0 type=int category=rvalue value=0 ice constant=arithmetic @2:17"
 #[cfg(feature = "compiler")]
 #[test]
 fn every_lesson_shows_its_declarations_after_semantic_analysis() {
-    for demo in &DEMOS {
+    // A lesson that includes <stdio.h> stops before semantic analysis in the
+    // browser, which has no C library headers for x86-64.
+    for demo in DEMOS
+        .iter()
+        .filter(|demo| !crate::wasm::is_command(demo.source))
+    {
         let compilation = crate::explorer::compile(demo.source, false);
         let semantic = compilation
             .output(Stage::SemanticTypes)

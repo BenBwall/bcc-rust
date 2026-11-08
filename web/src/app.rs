@@ -49,6 +49,7 @@ use crate::{
         Knob,
         LiveCompile,
         Narration,
+        Output,
         PipelineView,
         Reel,
         Schematic,
@@ -2246,9 +2247,17 @@ fn MachineView(state: State) -> impl IntoView {
                 <Cells snapshot=state.current />
             </div>
             <div class="notes-row">
-                <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder running=state.running.into() />
+                <Narration
+                    snapshot=state.current
+                    recent=state.recent
+                    on_jump=Callback::new(move |index| state.jump(index))
+                    on_preprocessor=Callback::new(move |()| state.open_view(Mode::Pipeline, Some(Stage::Preprocessor)))
+                    placeholder=state.placeholder
+                    running=state.running.into()
+                />
                 <div class="machine-side">
                     <Schematic snapshot=state.current />
+                    <Output snapshot=state.current />
                     <Datasheet snapshot=state.current history=state.history reel />
                 </div>
             </div>

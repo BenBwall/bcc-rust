@@ -26,11 +26,23 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   the step's numbered note hangs off it, the current full expression is
   wired up as a schematic whose wires fill with values (Figure 2), and a
   datasheet lists the objects (Table 1). Objects with static storage
-  duration (file-scope and `static` ones) are created one step each before
-  `main` and kept in a group of their own, outside every call. A structure
+  duration (file-scope and `static` ones, and the unnamed char array of
+  each string literal, named by its spelling) are created one step each
+  before `main` and kept in a group of their own, outside every call. A
+  char shows its character beside its value (`65 'A'`), and a char array
+  its characters. A structure
   is drawn as its members: one cell per member under the head, with a
   hatched cell for each run of padding bcc's x86-64 layout leaves, and a row
-  per member in the datasheet with its byte offsets.
+  per member in the datasheet with its byte offsets. A program that writes
+  output has a terminal screen (Figure 3, Standard output) with everything
+  written so far at the playhead and the bytes the step wrote lit in
+  vermilion; Back and Forward show it as it was at each step. The machine
+  runs `#include <stdio.h>` itself, as the first step, saying what
+  translation phase 4 does, with a button to the Preprocessor stage; each
+  call to `printf`, `puts` or `putchar` is one step, whose note says which
+  argument fed which conversion and what text it wrote. Any other directive
+  stops the machine before its first step with a card that sends the reader
+  to the Preprocessor stage.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
   the first translation phases to machine code: the logical lines after
   line splicing (phases 1-2), the preprocessing tokens (phase 3), the
@@ -359,7 +371,18 @@ learner's own program (opened or edited) otherwise.
 
 The lesson "Before the compiler: the preprocessor" (`demos/macros.c`)
 exercises these stages and opens at the preprocessor. The abstract machine
-has no preprocessor, so it rejects that lesson as outside its subset.
+runs only `#include <stdio.h>` itself, so it stops that lesson at its first
+other directive.
+
+The lesson "Hello, world: printf and strings" (`demos/hello.c`), second in
+the list, is the first program most programmers write: `#include
+<stdio.h>`, `puts`, a `char name[] = "Ada";` and `printf("%s has %d
+letters\n", name, len)`, with a loop that counts letters through a
+prototype declared before `main`. In the pipeline view it stops at the
+`#include`, as any program that includes `<stdio.h>` does there (see the
+Preprocessor stage above); its LLVM IR is precomputed by the native compiler,
+which finds the host's headers. Its Clang module is a WASI command linked
+with wasi-libc (see the WebAssembly view).
 
 How live compilation runs:
 
@@ -478,7 +501,11 @@ are two:
   `proc_exit`, 125 instructions before `main` at `-O0`. When bcc refuses a program for WebAssembly (`setjmp`,
   `_Float16`, …), the view shows its diagnostics.
 - `Precompiled` serves the lessons, compiled by clang at `-O0 -g` into
-  `web/wasm/`, whose DWARF line tables the stepper reads.
+  `web/wasm/`, whose DWARF line tables the stepper reads. A lesson calls no
+  library function and is a bare module whose entry point is `main`, except
+  one that includes `<stdio.h>`: it is a WASI command linked with wasi-libc,
+  a copy of which `generate.sh` strips of its debug information, so that only
+  the lesson's own code has C lines.
 
 The view steps bcc's module unless the learner switches to Clang's, which
 only the lessons have; the browser's local storage keeps that choice for
@@ -511,7 +538,8 @@ themes, layout, components, and the classes the editor decorations use). In
 `src/`, `lib.rs` maps the modules. `app.rs` owns the page state, controls,
 keyboard shortcuts and layout. `panels/` renders the note (`narration.rs`),
 the tape (`tape.rs`, which also records the run's lanes), the cells under its
-playhead, the expression schematic, the objects' datasheet, the encoders
+playhead, the expression schematic, standard output (`output.rs`), the
+objects' datasheet, the encoders
 (`knob.rs`) and the pipeline view, with the front-end stages' cards and
 source marks in `panels/front_end.rs`. `editor.rs` mounts Monaco, and
 `highlight.rs` colours the prerendered fallback. `app/wasm.rs` holds the
