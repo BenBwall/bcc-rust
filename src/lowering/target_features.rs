@@ -50,6 +50,7 @@ use crate::{
         semantic_analysis::{
             Callee,
             Inlining,
+            Linkage,
             TypeKind,
             UnsupportedAttribute,
         },
@@ -70,7 +71,11 @@ impl Unit<'_, '_, '_> {
                 source,
             ));
         }
-        if self.moves_vector_registers(binding) {
+        // Another object can reach an external function, whose refusal
+        // `check_foreign_vectors` gives.
+        if self.sema.bindings[binding].linkage == Linkage::Internal
+            && self.moves_vector_registers(binding)
+        {
             let TypeKind::Function {
                 result, parameters, ..
             } = self.sema.types.kind(self.sema.bindings[binding].ty)
