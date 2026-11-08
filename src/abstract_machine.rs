@@ -208,6 +208,13 @@ impl Program {
         text
     }
 
+    /// Whether the program can write to standard output: it includes
+    /// `<stdio.h>`, whose functions the machine runs.
+    #[must_use]
+    pub fn writes_output(&self) -> bool {
+        !self.directives.is_empty()
+    }
+
     /// The name of function `function`, in definition order.
     #[must_use]
     pub fn function_name(&self, function: usize) -> Option<&str> {
