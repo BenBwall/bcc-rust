@@ -216,10 +216,11 @@ impl X86Features {
     fn apply(&mut self, option: &str) {
         if let Some(architecture) = option.strip_prefix("-march=") {
             self.architecture(architecture);
-        } else if let Some(name) = option.strip_prefix("-m") {
-            if self.machine(name, COMMAND_LINE_MASK).is_none() && turns_on_avx(name) {
-                self.unknown_avx = true;
-            }
+        } else if let Some(name) = option.strip_prefix("-m")
+            && self.machine(name, COMMAND_LINE_MASK).is_none()
+            && turns_on_avx(name)
+        {
+            self.unknown_avx = true;
         }
     }
 

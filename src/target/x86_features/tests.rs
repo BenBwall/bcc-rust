@@ -1,6 +1,12 @@
 //! The feature options and `target` attribute texts as GCC 14.2 and Clang 23
 //! read them, measured with the probes of
 //! `scripts/measure_x86_target_attribute.py`.
+#![expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::disallowed_macros,
+    reason = "Tests compare collected lists and rendered texts."
+)]
 
 use super::{
     CodeFeatures,

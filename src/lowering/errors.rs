@@ -81,12 +81,12 @@ pub(crate) enum LoweringErrorKind {
     /// after a callee's named parameters. GCC reports the same error.
     /// GNU extension: GCC manual, "Constructing Calls".
     InvalidArgumentPack(bool),
-    /// A direct call of `always_inline` function `callee` from `caller`,
-    /// which lacks its feature `feature`, as both compilers refuse it.
-    /// GNU extension: GCC manual, "x86 Function Attributes", `target`.
+    /// A direct call of `always_inline` function `inlined` from function
+    /// `calling`, which lacks its feature `feature`, as both compilers refuse
+    /// it. GNU extension: GCC manual, "x86 Function Attributes", `target`.
     TargetFeature {
-        callee:  StringCacheId,
-        caller:  StringCacheId,
+        inlined: StringCacheId,
+        calling: StringCacheId,
         feature: &'static str,
     },
     /// A call of x86 builtin `builtin` from a function that lacks its
@@ -358,25 +358,25 @@ impl ToDiagnostic for LoweringError {
                 self.kind.message()
             ),
             | LoweringErrorKind::TargetFeature {
-                callee,
-                caller,
+                inlined,
+                calling,
                 feature,
             } => {
-                let (callee, caller) = (
-                    context.string_cache.at(callee),
-                    context.string_cache.at(caller),
+                let (inlined, calling) = (
+                    context.string_cache.at(inlined),
+                    context.string_cache.at(calling),
                 );
                 if context.configuration.compiler_identity() == CompilerIdentity::Gcc {
                     format_in!(
                         arena,
-                        "inlining failed in call to 'always_inline' '{callee}': target specific \
+                        "inlining failed in call to 'always_inline' '{inlined}': target specific \
                          option mismatch"
                     )
                 } else {
                     format_in!(
                         arena,
-                        "always_inline function '{callee}' requires target feature '{feature}', \
-                         but would be inlined into function '{caller}' that is compiled without \
+                        "always_inline function '{inlined}' requires target feature '{feature}', \
+                         but would be inlined into function '{calling}' that is compiled without \
                          support for '{feature}'"
                     )
                 }

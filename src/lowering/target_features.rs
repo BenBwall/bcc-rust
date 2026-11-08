@@ -165,26 +165,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
     }
 
-    /// Refuses a direct call of `always_inline` function `callee` whose
+    /// Refuses a direct call of `always_inline` function `inlined` whose
     /// features this function lacks, as both compilers do, when either has a
     /// `target` attribute.
     pub(super) fn check_inlined_features(
         &self,
-        callee: usize,
+        inlined: usize,
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
         let unit = &*self.unit;
         if unit
             .sema
-            .entity_attributes(callee)
+            .entity_attributes(inlined)
             .is_none_or(|attributes| attributes.inlining != Inlining::Always)
         {
             return Ok(());
         }
-        let caller = self.record.binding;
-        let callee_target = unit.attribute_target(callee);
-        let caller_target = caller.and_then(|caller| unit.attribute_target(caller));
-        if callee_target.is_none() && caller_target.is_none() {
+        let calling = self.record.binding;
+        let inlined_target = unit.attribute_target(inlined);
+        let calling_target = calling.and_then(|binding| unit.attribute_target(binding));
+        if inlined_target.is_none() && calling_target.is_none() {
             return Ok(());
         }
         let command_line = unit
@@ -193,14 +193,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .code_options()
             .x86_features
             .target_attribute("");
-        let feature = caller_target
+        let feature = calling_target
             .unwrap_or(&command_line)
-            .missing(callee_target.unwrap_or(&command_line));
-        match (feature, caller) {
-            | (Some(feature), Some(caller)) => Err(at(
+            .missing(inlined_target.unwrap_or(&command_line));
+        match (feature, calling) {
+            | (Some(feature), Some(calling)) => Err(at(
                 LoweringErrorKind::TargetFeature {
-                    callee: unit.sema.bindings[callee].name.name,
-                    caller: unit.sema.bindings[caller].name.name,
+                    inlined: unit.sema.bindings[inlined].name.name,
+                    calling: unit.sema.bindings[calling].name.name,
                     feature,
                 },
                 source,
