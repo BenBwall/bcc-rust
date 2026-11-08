@@ -101,7 +101,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     left_expression,
                     right_expression,
                 } =>
-                    if self.address_valued(right_expression) && !self.address_valued(left_expression)
+                    if self.address_valued(right_expression)
+                        && !self.address_valued(left_expression)
                         || self.expression_info(left_expression).integer.is_some()
                     {
                         right_expression
