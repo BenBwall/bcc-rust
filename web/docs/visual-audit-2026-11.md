@@ -26,7 +26,7 @@ For each configuration the script opened:
 - the WebAssembly view of the floating lesson, before and after six
   instructions.
 
-That made 715 screenshots (one browser run per lesson, to stay under the
+That made 766 screenshots (one browser run per lesson, to stay under the
 machine's memory limit), with the phone views taken twice: with the
 workbench at the top of the window and with the note at the top. On each state the script also measured: whether
 the page scrolls sideways; every visible element that clips its text; the
