@@ -239,7 +239,9 @@ mod tests {
     /// level, back end and the interpreter print what GCC prints.
     #[test]
     fn a_decided_branch_keeps_the_arm_live_code_reaches() {
-        const SOURCE: &str = "#include <stdio.h>
+        // Declared rather than included, as a Windows host has no C headers.
+        const SOURCE: &str = "int printf(const char *, ...);
+int puts(const char *);
 static int never(void) { return 0; }
 int pick(int a, int b, int c) {
     if (never()) {
