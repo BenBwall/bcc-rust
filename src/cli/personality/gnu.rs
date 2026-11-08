@@ -1703,6 +1703,8 @@ impl State<'_> {
                     | "-Wno-main-return-type"
                     | "-Wreturn-stack-address"
                     | "-Wno-return-stack-address"
+                    | "-Wshadow-all"
+                    | "-Wno-shadow-all"
                     | "-Wunused-local-typedef"
                     | "-Wno-unused-local-typedef"
                     | "-Wlogical-op-parentheses"
