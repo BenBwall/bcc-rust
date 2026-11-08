@@ -70,7 +70,10 @@ block0(v0: ptr):
         "call ptr @llvm.frameaddress.p0(i32 0)",
         "call ptr @llvm.stacksave.p0()",
         "call i32 @llvm.eh.sjlj.setjmp(ptr %v0)",
-        "call void @llvm.eh.sjlj.longjmp(ptr %v0)\n  unreachable",
+        // The buffer reaches `llvm.eh.sjlj.longjmp` through an empty `asm`,
+        // in a register, not addressed from the frame pointer it reloads.
+        "%0 = call ptr asm \"\", \"=r,0\"(ptr %v0)\n  call void @llvm.eh.sjlj.longjmp(ptr %0)\n  \
+         unreachable",
         "declare void @llvm.eh.sjlj.longjmp(ptr) #",
     ] {
         assert!(llvm.contains(expected), "{expected}: {llvm}");
