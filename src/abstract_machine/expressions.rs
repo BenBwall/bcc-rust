@@ -554,9 +554,9 @@ impl Parser<'_> {
             return error(
                 "unsupported",
                 &format!(
-                    "no type in the list for `{text}` can hold its value, so C99 gives it none \
-                     (C99 §6.4.4.1p5-6); the largest decimal constant without a u suffix is \
-                     9223372036854775807"
+                    "no type in the list for `{text}` can hold its value, and bcc has no wider \
+                     extended integer type to give it (C99 §6.4.4.1p5-6); the largest decimal \
+                     constant without a u suffix is 9223372036854775807"
                 ),
             );
         };
