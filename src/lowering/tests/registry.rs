@@ -77,8 +77,17 @@ fn m4_missing_checked_instances_and_operands_report_provenance() {
 fn m6_family_calls_remain_unsupported_builtins() {
     for (source, refusal) in [
         (
-            "unsigned f(unsigned a,unsigned b){return __builtin_ia32_crc32si(a,b);}",
+            "__attribute__((target(\"crc32\"))) unsigned f(unsigned a,unsigned b){return \
+             __builtin_ia32_crc32si(a,b);}",
             LoweringErrorKind::Unsupported(Construct::Builtin),
+        ),
+        // Without its feature, Clang's refusal comes first.
+        (
+            "unsigned f(unsigned a,unsigned b){return __builtin_ia32_crc32si(a,b);}",
+            LoweringErrorKind::BuiltinFeature {
+                builtin: "__builtin_ia32_crc32si",
+                feature: "crc32",
+            },
         ),
         (
             "int f(int *p){return __builtin_nontemporal_load(p);}",
