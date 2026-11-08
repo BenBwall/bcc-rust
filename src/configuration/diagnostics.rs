@@ -1021,6 +1021,11 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// GCC's words for a function returning its own automatic object's
+    /// address.
+    ReturnLocalAddr => Some("return-local-addr"), Warning, false;
+    /// Clang's.
+    ReturnStackAddress => Some("return-stack-address"), Warning, false;
     /// A declaration that hides another one in an enclosing scope.
     Shadow => Some("shadow"), Ignored, false;
     /// GCC's `-Wshadow=local`: one that hides a local declaration.
@@ -1265,6 +1270,7 @@ impl DiagnosticGroup {
             self,
             Self::Normalized
                 | Self::PedanticNormalized
+                | Self::ReturnLocalAddr
                 | Self::ShadowLocal
                 | Self::ShadowCompatibleLocal
                 | Self::FormatContainsNul

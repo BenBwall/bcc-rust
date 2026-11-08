@@ -88,6 +88,7 @@ mod sign_compare;
 mod statements;
 mod traversal;
 mod unused;
+mod value_warnings;
 
 // Types and constant values
 mod address_truth;

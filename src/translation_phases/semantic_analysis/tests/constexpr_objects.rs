@@ -43,11 +43,16 @@ fn holds(source: &str) {
 
 /// Asserts that `source` reports exactly `fault` under `identity`.
 fn rejects(source: &str, identity: CompilerIdentity, fault: ConstexprFault) {
-    assert_eq!(
-        kinds(source, identity),
-        [SemanticErrorKind::InvalidConstexpr(fault)],
-        "{identity:?}: {source}"
-    );
+    // GCC's `-Woverflow` also reports a value neither signedness of the type
+    // holds; Clang says nothing more.
+    let mut expected = Vec::new();
+    if identity == CompilerIdentity::Gcc && source == "constexpr signed char a = 1234;" {
+        expected.push(SemanticErrorKind::ValueWarning(
+            crate::configuration::DiagnosticGroup::Overflow,
+        ));
+    }
+    expected.push(SemanticErrorKind::InvalidConstexpr(fault));
+    assert_eq!(kinds(source, identity), expected, "{identity:?}: {source}");
 }
 
 #[test]
