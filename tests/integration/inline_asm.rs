@@ -501,12 +501,19 @@ int main(void) {
     /// read-only. Memory takes any size.
     #[test]
     fn aggregate_operands_follow_each_compiler() {
+        /// The declaration of `a`, the operands, and GCC's and Clang's
+        /// words when they refuse the statement.
+        type Row = (
+            &'static str,
+            &'static str,
+            Option<(&'static str, &'static str)>,
+        );
         const IMPOSSIBLE_GCC: &str = "error: impossible constraint in 'asm'";
         const IMPOSSIBLE_CLANG: &str =
             "error: impossible constraint in asm: cannot store value into a register";
-        let read_only_gcc = "error: read-only variable 'a' used as 'asm' output";
-        let read_only_clang = "error: invalid lvalue in asm output";
-        let rows: &[(&str, &str, Option<(&str, &str)>)] = &[
+        const READ_ONLY_GCC: &str = "error: read-only variable 'a' used as 'asm' output";
+        const READ_ONLY_CLANG: &str = "error: invalid lvalue in asm output";
+        let rows: &[Row] = &[
             (
                 "char a[3]",
                 ": \"=r\"(a)",
@@ -548,23 +555,23 @@ int main(void) {
             (
                 "const int a[2]",
                 ": \"=r\"(a)",
-                Some((read_only_gcc, read_only_clang)),
+                Some((READ_ONLY_GCC, READ_ONLY_CLANG)),
             ),
             (
                 "const int a[2]",
                 ": \"+r\"(a)",
-                Some((read_only_gcc, read_only_clang)),
+                Some((READ_ONLY_GCC, READ_ONLY_CLANG)),
             ),
             (
                 "const int a[2]",
                 ": \"=m\"(a)",
-                Some((read_only_gcc, read_only_clang)),
+                Some((READ_ONLY_GCC, READ_ONLY_CLANG)),
             ),
             ("const int a[2]", ":: \"r\"(a)", None),
             (
                 "struct { const int x, y; } a",
                 ": \"=r\"(a)",
-                Some((read_only_gcc, read_only_clang)),
+                Some((READ_ONLY_GCC, READ_ONLY_CLANG)),
             ),
             ("struct { int x, y; } a", ": \"=r\"(a)", None),
             ("struct { int x, y; } a", ": \"+r\"(a)", None),
