@@ -8282,6 +8282,89 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         );
     }
 
+    /// GCC's `-Wunknown-pragmas`, which `-Wall` holds: each pragma GCC does not
+    /// know, named by its first one or two names. Measured against GCC 14.2.
+    #[test]
+    fn gcc_ignores_unknown_pragmas_with_a_warning() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "#pragma foo bar baz\n#pragma omp parallel\n#pragma GCC foo\n#pragma clang \
+             fp\n#pragma STDC FP_CONTRACT ON\n#pragma comment(lib, \"x\")\n#pragma once\n#pragma \
+             GCC diagnostic push\n#pragma GCC diagnostic pop\n#pragma pack(1)\nint x;\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "a.c"]);
+        succeeds(&output);
+        let text = stderr(&output);
+        let ignored: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once("ignoring '").map(|(_, rest)| rest))
+            .filter_map(|rest| rest.split_once('\'').map(|(name, _)| name))
+            .collect();
+        assert_eq!(
+            ignored,
+            [
+                "#pragma foo bar",
+                "#pragma omp parallel",
+                "#pragma GCC foo",
+                "#pragma clang fp",
+                "#pragma STDC FP_CONTRACT",
+                "#pragma comment ",
+            ],
+            "{text}"
+        );
+        assert!(text.contains("[-Wunknown-pragmas]"), "{text}");
+        let quiet = directory.bcc("--gcc-mode", &["-fsyntax-only", "a.c"]);
+        assert!(!stderr(&quiet).contains("ignoring"), "{}", stderr(&quiet));
+        let quiet = directory.bcc(
+            "--gcc-mode",
+            &["-Wall", "-Wno-unknown-pragmas", "-fsyntax-only", "a.c"],
+        );
+        assert!(!stderr(&quiet).contains("ignoring"), "{}", stderr(&quiet));
+    }
+
+    /// A `_Pragma` operator's unknown pragma is reported at the line that
+    /// invokes it, and withheld where that is in a system header: a system
+    /// macro invoked in user code warns, and a user macro a system header
+    /// invokes does not. Each line was measured against GCC 14.2.
+    #[test]
+    fn gcc_reports_an_unknown_pragma_operator_where_it_is_invoked() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sys")).unwrap();
+        directory.write(
+            "sys/psys.h",
+            "_Pragma(\"mystery foo\")\n#define DO_PRAGMA _Pragma(\"mystery \
+             bar\")\nDO_PRAGMA\n#define SYS_P(x) _Pragma(#x)\nUSER_P(mystery user)\n",
+        );
+        directory.write(
+            "p.c",
+            "#define USER_P(x) _Pragma(#x)\n#include <psys.h>\nDO_PRAGMA\nSYS_P(mystery \
+             sysp)\nUSER_P(nosuch bar)\nint x;\n  _Pragma(\"mystery direct\") int y;\n",
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-Wall", "-isystem", "sys", "-fsyntax-only", "p.c"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        let warned: Vec<(&str, &str)> = text
+            .lines()
+            .filter_map(|line| line.split_once(": warning: ignoring '"))
+            .filter_map(|(at, rest)| Some((at.rsplit_once(':')?.0, rest.split_once('\'')?.0)))
+            .collect();
+        assert_eq!(
+            warned,
+            [
+                ("p.c:3", "#pragma mystery bar"),
+                ("p.c:4", "#pragma mystery sysp"),
+                ("p.c:5", "#pragma nosuch bar"),
+                ("p.c:7", "#pragma mystery direct"),
+            ],
+            "{text}"
+        );
+        assert!(!text.contains("<pragma string>"), "{text}");
+    }
+
     #[test]
     fn wrapv_makes_signed_overflow_wrap() {
         let directory = Directory::new();

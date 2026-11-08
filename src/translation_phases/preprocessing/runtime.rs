@@ -116,6 +116,11 @@ pub(super) struct PreprocessorState<'pp> {
     pub(super) conditional_queries: bool,
     /// Directives end at their first new-line (C99 §6.10p2).
     pub(super) in_directive:        bool,
+    /// Where the `_Pragma` operator whose pragma is running was invoked, the
+    /// outermost macro invocation that wrote it included: a warning about
+    /// that pragma is reported and asks its settings there, as GCC's does,
+    /// since the tokens of its string belong to no file (C99 §6.10.9p1).
+    pub(super) pragma_operator:     Option<SourceVector>,
     pub(super) retain_placeholders: bool,
     /// Produce phase 4's tokens for a text of them, unconverted
     /// ([`Context::phase_four_text`](crate::translation_phases::Context::phase_four_text)).
