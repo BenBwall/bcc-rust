@@ -53,7 +53,21 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   undefined behavior. A cast is a step of its own that says whether the
   value was kept or, for an int that does not fit in a char, wrapped as bcc
   and GCC do (implementation-defined), and `x += y` is narrated as `x = x +
-  (y)` with `x` evaluated once. Any other directive (a function-like macro,
+  (y)` with `x` evaluated once. The machine knows every integer type, from
+  `char` to `unsigned long long`, with its x86-64 width (a declaration says
+  it, and that C promises only a minimum range); each cell under the
+  playhead is as wide as its object's bytes and says how many, as the
+  datasheet does beside each type. A value narrower than int is promoted in a
+  step of its own, and when a binary operator's operands differ in type, a
+  step says which one the usual arithmetic conversions convert and why
+  (rank, or signedness), so `-1 < 1u` shows `-1 + 2^32 = 4294967295` before
+  it compares. Unsigned arithmetic that leaves its range is reduced modulo
+  2^N, and its step says that this is defined, unlike signed overflow, which
+  stops; a store or a cast into a signed type that cannot hold the value is
+  implementation-defined, and the step says bcc and GCC wrap. Shifts stop on
+  a count out of range and on left-shifting a negative or overflowing signed
+  value, `sizeof` is a step yielding a `size_t`, and a condition may count
+  down with `k-- > 0`. Any other directive (a function-like macro,
   `#if`, another header) stops the machine before its first step with a
   card that sends the reader to the Preprocessor stage.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
@@ -405,6 +419,16 @@ adds it with `+=`, `(char)300`, which wraps to 44, and `printf(LABEL " is
 %.3d\n", total)`, whose format is two literals joined into one array and
 whose precision pads 56 to `056`. It includes `<stdio.h>`, so the pipeline
 view and the Clang module treat it as the printf lesson's.
+
+The lesson "Unsigned numbers wrap; signed numbers don't"
+(`demos/unsigned.c`), after "Integer promotions", computes `2u - 3`, which
+wraps to 4294967295, counts an `unsigned` down with a test (`i < 3`) that
+stands in for the `i >= 0` that never fails, so it stops only after `i`
+wraps, then counts down correctly with `for (unsigned int k = 3; k-- > 0;)`.
+It takes a `size_t` from `sizeof`, shows `-1 < 1u` converting -1 to
+unsigned before it compares, and shifts `1u` into the top bit and out
+again, printing each result with `%u`, `%zu` and `%d`. Like the printf
+lesson it includes `<stdio.h>`.
 
 How live compilation runs:
 
