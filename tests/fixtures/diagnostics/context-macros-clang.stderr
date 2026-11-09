@@ -1,0 +1,34 @@
+context-macros-clang.c:13:27: warning: shift count >= width of type [-Wshift-count-overflow]
+   13 | int shifts(void) { return SHIFT_TOO_FAR; }
+      |                           ^~~~~~~~~~~~~
+context-macros-clang.c:4:26: note: expanded from macro 'SHIFT_TOO_FAR'
+    4 | #define SHIFT_TOO_FAR (1 << 40)
+      |                          ^~
+context-macros-clang.c:14:31: error: use of undeclared identifier 'some_undeclared_thing'
+   14 | int undeclared(void) { return UNDECLARED_VALUE; }
+      |                               ^~~~~~~~~~~~~~~~
+context-macros-clang.c:5:26: note: expanded from macro 'UNDECLARED_VALUE'
+    5 | #define UNDECLARED_VALUE some_undeclared_thing
+      |                          ^~~~~~~~~~~~~~~~~~~~~
+context-macros-clang.c:15:1: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+   15 | DECLARE_POINTER;
+      | ^~~~~~~~~~~~~~~
+context-macros-clang.c:6:30: note: expanded from macro 'DECLARE_POINTER'
+    6 | #define DECLARE_POINTER int *declared = 7
+      |                              ^~~~~~~~
+context-macros-clang.c:16:1: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+   16 | CONTINUED;
+      | ^~~~~~~~~
+context-macros-clang.c:8:8: note: expanded from macro 'CONTINUED'
+    8 |   int *continued = \
+      |        ^~~~~~~~~
+context-macros-clang.c:17:1: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+   17 | NESTED;
+      | ^~~~~~
+context-macros-clang.c:11:29: note: expanded from macro 'DECLARE_NESTED'
+   11 | #define DECLARE_NESTED int *nested = 9
+      |                             ^~~~~~
+context-macros-clang.c:18:6: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+   18 | int *argument = ARGUMENT(10);
+      |      ^~~~~~~~            ~~
+5 errors and 1 warning generated.

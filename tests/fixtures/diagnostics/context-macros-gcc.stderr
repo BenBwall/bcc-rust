@@ -1,0 +1,36 @@
+context-macros-gcc.c: In function 'shifts':
+context-macros-gcc.c:4:26: warning: left shift count >= width of type [-Wshift-count-overflow]
+    4 | #define SHIFT_TOO_FAR (1 << 40)
+      |                          ^~
+context-macros-gcc.c:13:27: note: in expansion of macro 'SHIFT_TOO_FAR'
+   13 | int shifts(void) { return SHIFT_TOO_FAR; }
+      |                           ^~~~~~~~~~~~~
+context-macros-gcc.c: In function 'undeclared':
+context-macros-gcc.c:5:26: error: 'some_undeclared_thing' undeclared (first use in this function)
+    5 | #define UNDECLARED_VALUE some_undeclared_thing
+      |                          ^~~~~~~~~~~~~~~~~~~~~
+context-macros-gcc.c:14:31: note: in expansion of macro 'UNDECLARED_VALUE'
+   14 | int undeclared(void) { return UNDECLARED_VALUE; }
+      |                               ^~~~~~~~~~~~~~~~
+context-macros-gcc.c: At top level:
+context-macros-gcc.c:6:41: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    6 | #define DECLARE_POINTER int *declared = 7
+      |                                         ^
+context-macros-gcc.c:15:1: note: in expansion of macro 'DECLARE_POINTER'
+   15 | DECLARE_POINTER;
+      | ^~~~~~~~~~~~~~~
+context-macros-gcc.c:9:5: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    9 |     8
+      |     ^
+context-macros-gcc.c:16:1: note: in expansion of macro 'CONTINUED'
+   16 | CONTINUED;
+      | ^~~~~~~~~
+context-macros-gcc.c:11:38: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   11 | #define DECLARE_NESTED int *nested = 9
+      |                                      ^
+context-macros-gcc.c:17:1: note: in expansion of macro 'NESTED'
+   17 | NESTED;
+      | ^~~~~~
+context-macros-gcc.c:18:26: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   18 | int *argument = ARGUMENT(10);
+      |                          ^~

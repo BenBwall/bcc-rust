@@ -106,6 +106,7 @@ impl Analyzer<'_, '_, '_> {
         else {
             return;
         };
+        let origin = source_vectors;
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
         let highlights = self.highlights_at_file();
@@ -122,6 +123,7 @@ impl Analyzer<'_, '_, '_> {
                 name,
                 previous,
                 highlights,
+                origin,
             }),
         );
     }
@@ -172,6 +174,7 @@ impl Analyzer<'_, '_, '_> {
                 name,
                 previous,
                 highlights,
+                origin: at,
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
             self.error_diagnostics +=
@@ -212,6 +215,7 @@ impl Analyzer<'_, '_, '_> {
                         name,
                         previous: None,
                         highlights: [SourceVectors::default(); 2],
+                        origin: SourceVectors::default(),
                     })
                 },
             );

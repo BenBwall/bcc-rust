@@ -117,7 +117,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
                 diagnostic
             };
             let mut diagnostic = diagnostic;
-            diagnostic.reading = Some(source);
+            diagnostic.reading = diagnostic.reading.or(Some(source));
             if !parser && diagnostic.severity == ErrorSeverity::Error && !location.is_empty() {
                 _ = self.other_errors.insert(location, self.pending.len());
             }

@@ -1,0 +1,1 @@
+--compiler-extensions --compiler-identity=gcc --diagnostic-format=gcc

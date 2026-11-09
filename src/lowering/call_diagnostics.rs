@@ -128,6 +128,7 @@ impl CallDiagnostic {
                     name:               Some(self.message),
                     previous:           Some(self.declaration),
                     highlights:         Default::default(),
+                    origin:             Default::default(),
                 },
             ),
         );

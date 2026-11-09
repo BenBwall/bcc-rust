@@ -22,7 +22,10 @@ pragma-diagnostic-gcc.c:39:28: warning: unknown escape sequence `\q` [-Wunknown-
 pragma-diagnostic-gcc.c:43:2: error: #warning promoted
    43 | #warning promoted
       |  ^~~~~~~
-pragma-diagnostic-gcc.c:24:1: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+pragma-diagnostic-gcc.c:22:45: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   22 | #define DEFINED_QUIET char *defined_quiet = 2;
+      |                                             ^
+pragma-diagnostic-gcc.c:24:1: note: in expansion of macro 'DEFINED_QUIET'
    24 | DEFINED_QUIET
       | ^~~~~~~~~~~~~
 pragma-diagnostic-gcc.c:32:23: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]

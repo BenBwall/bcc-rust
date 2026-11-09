@@ -322,6 +322,22 @@ impl Context<'_> {
         self.expansion_starts[arena as usize].get(start).is_some()
     }
 
+    /// Where a macro's replacement list wrote the first token of `source`,
+    /// and where the outermost invocation that produced it begins, when one
+    /// did: the places GCC reports a diagnostic about the token and notes
+    /// the expansion at, and Clang notes the macro at.
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
+    pub(crate) fn macro_body_expansion(
+        &self,
+        source: SourceVectors,
+    ) -> Option<(&SourceVector, &SourceVector)> {
+        if source.length() == 0 {
+            return None;
+        }
+        let site = self.invocation_site(source)?;
+        Some((self.first_source_vector(source), site))
+    }
+
     /// Whether a macro's replacement list, not its argument or the file,
     /// wrote the first token of `source`. `source` must not be empty.
     pub(crate) fn written_by_macro_body(&self, source: SourceVectors) -> bool {

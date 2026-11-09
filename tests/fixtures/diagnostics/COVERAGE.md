@@ -18,7 +18,16 @@ prints them. `context-ranges-clang` pins the ranges Clang underlines with
 `~` beside the caret: an initializer's and an assignment's value, and both
 operands of an invalid binary operator or of a pointer and integer
 comparison; its caret lines match Clang 23's, its messages keep bcc's
-words for the operator errors.
+words for the operator errors. `context-macros-gcc` and
+`context-macros-clang` pin the notes about a token a macro's body wrote:
+GCC reports the diagnostic in the body and adds `in expansion of macro
+'X'` at the invocation, Clang reports it at the invocation and adds
+`expanded from macro 'X'` at the body, a continued definition included. A
+warning a system header's macro wrote stays at the user's invocation under
+GCC's format. bcc keeps only the outermost invocation of a token, so a
+nested expansion gets GCC's note for the outermost macro and Clang's for
+the innermost, not the levels between; a token from an argument gets
+neither GCC's `in definition of macro` note nor Clang's notes.
 
 Diagnostic pragmas: `pragma-diagnostic-{gcc,clang}` pin the warning of each phase
 under `#pragma GCC diagnostic` and `#pragma clang diagnostic`, a macro's body and

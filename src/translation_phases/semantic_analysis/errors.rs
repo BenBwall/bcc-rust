@@ -42,6 +42,10 @@ pub(crate) struct SemanticError {
     /// The operands Clang underlines with `~` beside the caret, empty when
     /// there are fewer.
     pub(crate) highlights:         [SourceVectors; 2],
+    /// The range reported, before it was moved to a place in a file: where
+    /// a macro's body wrote it, which GCC reports and Clang notes, and the
+    /// order of its tokens. Empty when it is `source_vectors`.
+    pub(crate) origin:             SourceVectors,
 }
 
 /// What an excess initializer element lies beyond, as GCC and Clang word it.
@@ -3260,6 +3264,9 @@ impl ToDiagnostic for SemanticError {
             if highlight.length() != 0 {
                 diagnostic = diagnostic.highlight(highlight);
             }
+        }
+        if self.origin.length() != 0 {
+            diagnostic.reading = Some(self.origin);
         }
         diagnostic
     }

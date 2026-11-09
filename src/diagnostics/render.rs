@@ -18,7 +18,10 @@ use super::{
     ColorChoice,
     Diagnostic,
     Renderer,
-    model::Label,
+    model::{
+        Label,
+        LabelSource,
+    },
 };
 use crate::{
     configuration::{
@@ -78,9 +81,31 @@ impl Renderer {
         {
             self.write_context_lines(&mut out, context, vector, segment, false);
         }
+        // About a token a macro's body wrote: GCC reports it there and
+        // notes the invocation, Clang notes the macro after the snippet.
+        // GCC reports a warning a system header's macro wrote, which it
+        // reports at all, where the user invoked the macro.
+        let expansion = location
+            .filter(|_| compiler_snippet)
+            .and_then(|vector| Self::macro_expansion(context, diagnostic.reading?, vector))
+            .filter(|expansion| {
+                format != DiagnosticFormat::Gcc
+                    || diagnostic.severity != ErrorSeverity::Warning
+                    || !context.in_system_header(&expansion.spelling)
+            });
+        let gcc_spelling = expansion
+            .as_ref()
+            .filter(|_| format == DiagnosticFormat::Gcc)
+            .map(|expansion| &expansion.spelling);
+        let location = gcc_spelling.or(location);
         if let Some(vector) = location
             && format != DiagnosticFormat::Bcc
         {
+            let segment = if gcc_spelling.is_some() {
+                None
+            } else {
+                segment
+            };
             let file = Self::file_name(context, vector, segment);
             let _ = match format {
                 | DiagnosticFormat::Msvc { column: true, .. } =>
@@ -154,8 +179,20 @@ impl Renderer {
                         label.message.is_some()
                     })
         };
+        // GCC's caret goes where the macro's body wrote the token.
+        let spelled = gcc_spelling.map(|spelling| Label {
+            source:  LabelSource::Segments(scratch.alloc_slice_fill_iter([spelling.clone()])),
+            message: None,
+            primary: true,
+        });
         let mut marks = ArenaVec::new_in(scratch);
-        for label in diagnostic.labels.iter().filter(drawn) {
+        for label in diagnostic
+            .labels
+            .iter()
+            .filter(drawn)
+            .filter(|label| spelled.is_none() || !label.primary)
+            .chain(spelled.as_ref().filter(|_| presentation.caret))
+        {
             Self::push_label_marks(label, context, &mut marks);
         }
         if compiler_snippet {
@@ -255,12 +292,15 @@ impl Renderer {
             );
         }
         if compiler_snippet {
+            if let Some(expansion) = &expansion {
+                self.render_expansion_note(&mut out, expansion, context, scratch);
+            }
             for label in diagnostic
                 .labels
                 .iter()
                 .filter(|label| !label.primary && label.message.is_some())
             {
-                self.render_related_note(&mut out, label, context, scratch);
+                self.render_related_note(&mut out, label, context, scratch, true);
             }
             return out.into_str();
         }
@@ -295,12 +335,15 @@ impl Renderer {
     /// Writes `label`, a secondary place in a diagnostic, as GCC and Clang do:
     /// a `note:` of its own, at the place's reported location, over its source
     /// lines when there are any to quote.
-    fn render_related_note(
+    /// GCC's macro notes have no context lines of their own
+    /// (`with_context`), being part of the diagnostic they follow.
+    pub(super) fn render_related_note(
         &self,
         out: &mut ArenaString<'_>,
         label: &Label<'_>,
         context: &Context<'_>,
         scratch: &Bump,
+        with_context: bool,
     ) {
         let Some(vector) = label.source.vectors(context).first() else {
             return;
@@ -308,7 +351,9 @@ impl Renderer {
         let format = context.configuration.diagnostic_format();
         let presentation = context.configuration.diagnostic_presentation();
         let segment = self.segment_of(context, vector, [label.source.range(), None]);
-        self.write_context_lines(out, context, vector, segment, true);
+        if with_context {
+            self.write_context_lines(out, context, vector, segment, true);
+        }
         let _ = write!(
             out,
             "{}:{}:",

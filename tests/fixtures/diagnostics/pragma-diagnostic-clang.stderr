@@ -16,11 +16,17 @@ pragma-diagnostic-clang.c:43:2: error: #warning promoted
 pragma-diagnostic-clang.c:24:1: warning: incompatible integer to pointer conversion initializing 'char *' with an expression of type 'int' [-Wint-conversion]
    24 | DEFINED_QUIET
       | ^~~~~~~~~~~~~
+pragma-diagnostic-clang.c:22:29: note: expanded from macro 'DEFINED_QUIET'
+   22 | #define DEFINED_QUIET char *defined_quiet = 2;
+      |                             ^~~~~~~~~~~~~
 pragma-diagnostic-clang.c:32:7: warning: incompatible integer to pointer conversion initializing 'char *' with an expression of type 'int' [-Wint-conversion]
    32 | char *after_wrapped = 4;
       |       ^~~~~~~~~~~~~   ~
-In file included from pragma-diagnostic-clang.c:49:
+In file included from pragma-diagnostic-clang.c:53:
 ./pragma-diagnostic-twice.h:1:7: warning: incompatible integer to pointer conversion initializing 'char *' with an expression of type 'int' [-Wint-conversion]
     1 | char *twice = 1;
       |       ^~~~~   ~
+pragma-diagnostic-clang.c:52:15: note: expanded from macro 'twice'
+   52 | #define twice second_twice
+      |               ^~~~~~~~~~~~
 2 errors and 6 warnings generated.

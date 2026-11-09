@@ -37,7 +37,10 @@ use crate::{
         SourceVector,
         SourceVectors,
     },
-    util::bump::ArenaString,
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 /// What GCC and Clang last said about where diagnostics are.
@@ -202,6 +205,112 @@ impl Renderer {
             here,
         }
     }
+}
+
+/// A diagnostic about a token a macro's replacement list wrote: where the
+/// list wrote it, where the outermost invocation that produced it begins,
+/// the macro whose definition holds the token, and the invoked one's name.
+pub(super) struct MacroExpansion<'c> {
+    pub(super) spelling: SourceVector,
+    site:                SourceVector,
+    defined:             &'c str,
+    invoked:             &'c str,
+}
+
+impl Renderer {
+    /// The macro expansion that wrote the token `origin`, a diagnostic's
+    /// range as reported, starts with, when the diagnostic's place
+    /// `location` is the invocation (GCC manual, "Diagnostic Message
+    /// Formatting Options", `-ftrack-macro-expansion`).
+    pub(super) fn macro_expansion<'c>(
+        context: &'c Context<'_>,
+        origin: SourceVectors,
+        location: &SourceVector,
+    ) -> Option<MacroExpansion<'c>> {
+        let (spelling, site) = context.macro_body_expansion(origin)?;
+        if site.source_file_index != location.source_file_index || site.index != location.index {
+            return None;
+        }
+        let invoked = context
+            .source_text(site.source_file_index)?
+            .get(site.range())?;
+        let defined = macro_defined_at(context, spelling)?;
+        Some(MacroExpansion {
+            spelling: spelling.clone(),
+            site: site.clone(),
+            defined,
+            invoked,
+        })
+    }
+
+    /// GCC's `in expansion of macro 'X'` note at the invocation, or Clang's
+    /// `expanded from macro 'X'` at the replacement list. Only the
+    /// outermost invocation and the innermost list are known, so a nested
+    /// expansion's other levels are not noted.
+    pub(super) fn render_expansion_note(
+        &self,
+        out: &mut ArenaString<'_>,
+        expansion: &MacroExpansion<'_>,
+        context: &Context<'_>,
+        scratch: &Bump,
+    ) {
+        let gcc = context.configuration.diagnostic_format() == DiagnosticFormat::Gcc;
+        let (place, message) = if gcc {
+            (
+                &expansion.site,
+                crate::diagnostics::format_in!(
+                    scratch,
+                    "in expansion of macro '{}'",
+                    expansion.invoked
+                ),
+            )
+        } else {
+            (
+                &expansion.spelling,
+                crate::diagnostics::format_in!(
+                    scratch,
+                    "expanded from macro '{}'",
+                    expansion.defined
+                ),
+            )
+        };
+        let label = super::model::Label {
+            source:  super::model::LabelSource::Segments(
+                scratch.alloc_slice_fill_iter([place.clone()]),
+            ),
+            message: Some(message),
+            primary: false,
+        };
+        self.render_related_note(out, &label, context, scratch, !gcc);
+    }
+}
+
+/// The name of the macro whose definition holds `vector`: the identifier
+/// after `#define` on the logical line it is on.
+/// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
+fn macro_defined_at<'c>(context: &'c Context<'_>, vector: &SourceVector) -> Option<&'c str> {
+    let file = vector.source_file_index;
+    let text = context.source_text(file)?;
+    let starts = context.source_line_starts(file)?;
+    let offset = (vector.index as usize).min(text.len());
+    let mut line = starts
+        .partition_point(|&start| start <= offset)
+        .checked_sub(1)?;
+    // The lines a backslash continues belong to the line before.
+    while line > 0
+        && text[starts[line - 1]..starts[line]]
+            .trim_end_matches(['\n', '\r'])
+            .ends_with('\\')
+    {
+        line -= 1;
+    }
+    let rest = text[starts[line]..].trim_start_matches([' ', '\t']);
+    let rest = rest.strip_prefix('#')?.trim_start_matches([' ', '\t']);
+    let rest = rest.strip_prefix("define")?.trim_start_matches([' ', '\t']);
+    let end = rest
+        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .unwrap_or(rest.len());
+    (end != 0).then(|| &rest[..end])
 }
 
 /// A file's name as a location writes it.

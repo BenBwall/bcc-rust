@@ -598,6 +598,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 name: Some(message.text),
                 previous: Some(message.source),
                 highlights: Default::default(),
+                origin: Default::default(),
             }),
         ]);
     }
