@@ -836,9 +836,11 @@ pub fn Deck(
     // stretch of the viewport. The tape glides a short way, and jumps when
     // Run is stepping, for a long way, or when motion is reduced. Where the
     // deck holds more rows than its window, it also scrolls up or down to
-    // the rows the step used.
+    // the rows the step used, and again when the key at its foot appears or
+    // goes, which changes the window's height.
     Effect::new(move || {
         let index = at();
+        overflows.track();
         let x = (px(index) + 0.5) * step_width.get();
         // While the scale glides the tape follows it frame by frame.
         let running =
