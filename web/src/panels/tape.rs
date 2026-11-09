@@ -834,9 +834,12 @@ pub fn Deck(
     observe_rows(body, measure);
     // A step moves the tape, not the head: keep the playhead in the middle
     // stretch of the viewport. The tape glides a short way, and jumps when
-    // Run is stepping, for a long way, or when motion is reduced.
+    // Run is stepping, for a long way, or when motion is reduced. Where the
+    // deck holds more rows than its window, it also scrolls up or down to
+    // the rows the step used.
     Effect::new(move || {
-        let x = (px(at()) + 0.5) * step_width.get();
+        let index = at();
+        let x = (px(index) + 0.5) * step_width.get();
         // While the scale glides the tape follows it frame by frame.
         let running =
             running.get() || (step_width.get_untracked() - fitted.get_untracked()).abs() > 0.01;
@@ -863,16 +866,47 @@ pub fn Deck(
         } else {
             None
         };
-        if let Some(target) = target {
-            let glide = !running && (target - left).abs() < view && !reduced_motion();
+        let used =
+            reel.with_untracked(|reel| rows.with_untracked(|rows| used_rows(reel, rows, index)));
+        let glide = !running
+            && target.is_none_or(|target| (target - left).abs() < view)
+            && !reduced_motion();
+        let scroll = move |element: &web_sys::HtmlDivElement, down: Option<f64>| {
+            if target.is_none() && down.is_none() {
+                return;
+            }
+            // One scroll moves both ways: a second would cut the first's
+            // glide short.
             let options = web_sys::ScrollToOptions::new();
-            options.set_left(target.round());
+            options.set_left(target.map_or(f64::from(element.scroll_left()), f64::round));
+            if let Some(down) = down {
+                options.set_top(down.round());
+            }
             options.set_behavior(if glide {
                 web_sys::ScrollBehavior::Smooth
             } else {
                 web_sys::ScrollBehavior::Instant
             });
             element.scroll_to_with_scroll_to_options(&options);
+        };
+        let extent = |element: &web_sys::HtmlDivElement| {
+            (
+                f64::from(element.scroll_top()),
+                f64::from(element.client_height()),
+            )
+        };
+        // A step that adds a row lays the rows out after this effect has
+        // run, so the rows are placed a frame later, when the deck may
+        // have grown, or scrolls.
+        match used {
+            | Some(used) if row_scroll(used, extent(&element), ROW_SLACK).is_some() => {
+                request_animation_frame(move || {
+                    if let Some(Some(element)) = body.try_get_untracked() {
+                        scroll(&element, row_scroll(used, extent(&element), 0.0));
+                    }
+                });
+            },
+            | _ => scroll(&element, None),
         }
     });
     // New rows (a call, an opened fold) may run past the deck's foot.
@@ -1325,6 +1359,70 @@ fn glide(
             glide(scale, glides, generation, (from, to), start);
         }
     });
+}
+
+/// The rows step `index` used, from the top of the first to the bottom of
+/// the last, in the deck body's coordinates: every object it read, wrote,
+/// created or ended, on its lane or its folded group's row; and the same
+/// for the objects it wrote or created alone, which matter most when the
+/// rows are more than the deck shows at once.
+fn used_rows(reel: &Reel, rows: &[Row], index: usize) -> Option<Used> {
+    let access = reel.access.get(index)?;
+    let Layout {
+        objects, folded, ..
+    } = layout(reel, rows);
+    let span = |stored: bool| {
+        access
+            .iter()
+            .filter(|(_, kind)| !stored || kind == "write" || kind == "create")
+            .filter_map(|(object, _)| {
+                objects
+                    .get(object)
+                    .map(|&(y, _)| y)
+                    .or_else(|| folded.get(object).copied())
+            })
+            .fold(None, |span: Option<(f64, f64)>, y| {
+                let (top, bottom) = (y - LANE / 2.0, y + LANE / 2.0);
+                Some(span.map_or((top, bottom), |(a, b)| (a.min(top), b.max(bottom))))
+            })
+    };
+    let all = span(false)?;
+    Some(Used {
+        all,
+        stored: span(true).unwrap_or(all),
+    })
+}
+
+/// The rows a step used ([`used_rows`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Used {
+    all:    (f64, f64),
+    stored: (f64, f64),
+}
+
+/// How far the deck may be off by before a row it scrolls to counts as
+/// out of view, while the rows have yet to be laid out: the height of the
+/// key at its foot, which may appear.
+const ROW_SLACK: f64 = 24.0;
+
+/// Where the deck body, scrolled down `top` with a window `height` pixels
+/// tall, scrolls to bring `used` into view, under the ruler pinned at its
+/// top: all of the rows when they fit, else those the step stored into;
+/// `None` when they are in view, within `slack` pixels.
+fn row_scroll(used: Used, (top, height): (f64, f64), slack: f64) -> Option<f64> {
+    let room = height - AXIS;
+    let (first, last) = if used.all.1 - used.all.0 <= room {
+        used.all
+    } else {
+        used.stored
+    };
+    if first < top + AXIS {
+        Some((first - AXIS).max(0.0))
+    } else if last > top + height - slack {
+        Some((last - height).min(first - AXIS).max(0.0))
+    } else {
+        None
+    }
 }
 
 /// The first rung of a folded recursion's ladder, below its row's top,

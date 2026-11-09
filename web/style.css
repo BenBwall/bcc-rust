@@ -546,13 +546,15 @@
   /* The deck's window: the lane names and the tape scroll together in
      both directions, like a spreadsheet, the names pinned at its left and
      the ruler at its top. It grows with the run up to what the window
-     leaves above the cells and the note, then scrolls; past either end the
-     page scrolls on. */
-  .deck-window { position: relative; min-width: 0; }
+     leaves above the cells and the note's lead (the deck's caption and its
+     key to the rows below, the cells, the note's heading on two lines and
+     four lines of its lead: 400 px), then scrolls, following the rows each
+     step uses; past either end the page scrolls on. */
+  .deck-window { position: relative; min-width: 0; --deck-height: clamp(236px, calc(100svh - var(--sticky-bottom) - 400px), 640px); }
   .deck-body {
     display: grid; grid-template-columns: 168px max-content; align-items: start;
     min-height: 236px;
-    max-height: clamp(236px, calc(100svh - var(--sticky-bottom) - 250px), 640px);
+    max-height: var(--deck-height);
     overflow: auto;
     scrollbar-width: thin; scrollbar-color: #8a8a82 #1a1a18;
   }
@@ -568,7 +570,7 @@
   .deck-more[hidden] { display: none; }
   .deck-more:hover { color: var(--accent); }
   .deck-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .deck-body:has(~ .deck-more:not([hidden])) { max-height: calc(clamp(236px, calc(100svh - var(--sticky-bottom) - 250px), 640px) - 24px); }
+  .deck-body:has(~ .deck-more:not([hidden])) { max-height: calc(var(--deck-height) - 24px); }
   .spool svg { stroke: none; }
   .spool-turn { transform-origin: 0 0; transform-box: view-box; transition: transform .35s cubic-bezier(.3, .7, .3, 1); }
   .spool-pack { fill: #2a2a27; transition: r .35s var(--ease); }
@@ -1414,6 +1416,9 @@
     .transport .button { flex: 1; padding: 0 6px; height: 42px; }
     .deck { grid-template-columns: minmax(0, 1fr); }
     .deck-body { grid-template-columns: 136px max-content; min-height: 0; }
+    /* The note comes before the deck here, so the deck keeps more of the
+       window. */
+    .deck-window { --deck-height: clamp(236px, calc(100svh - var(--sticky-bottom) - 250px), 640px); }
     .spool { display: none; }
     /* The note first, then the tape and the cells it describes, then the
        expression and the datasheet, so the note is on the first screen. */
