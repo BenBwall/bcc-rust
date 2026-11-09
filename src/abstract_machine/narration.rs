@@ -54,6 +54,11 @@ use super::{
 const UNORDERED: &str = " C leaves the order of evaluating the two operands unspecified; this \
                          machine evaluated the left one first.";
 
+/// The longest string literal (as written, quotes included) whose array
+/// decay's lead spells its first element as `"…"[0]`; a longer one would
+/// fill the lead with the literal twice.
+const SPELLED_ELEMENT: usize = 24;
+
 /// An idea an event's note explains: why the rule it applied matters. Every
 /// event of a topic carries its note; the site shows a note the first time
 /// the learner sees it, so the many reads, stores and constants of a
@@ -1970,11 +1975,21 @@ impl Machine {
                         range,
                         format!("`{}` becomes a pointer to its first char", object.name),
                     ),
-                    &format!(
-                        "The string literal `{name}` is an array of chars, so in an expression it \
-                         becomes a pointer to its first element, `{name}[0]`.",
-                        name = object.name
-                    ),
+                    &if object.name.chars().count() <= SPELLED_ELEMENT {
+                        format!(
+                            "The string literal `{name}` is an array of chars, so in an \
+                             expression it becomes a pointer to its first element, `{name}[0]`.",
+                            name = object.name
+                        )
+                    } else {
+                        // A long literal is spelled once; its first element
+                        // is named in words.
+                        format!(
+                            "The string literal `{name}` is an array of chars, so in an \
+                             expression it becomes a pointer to its first element.",
+                            name = object.name
+                        )
+                    },
                     &format!(
                         "A string literal stands for its array, {ty}, which has existed since \
                          before main. Like every array used in an expression, it is not copied: \

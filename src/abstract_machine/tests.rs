@@ -3339,6 +3339,55 @@ fn sizeof_gives_a_size_t_without_evaluating_its_operand() {
 }
 
 #[test]
+fn long_leads_leave_the_details_to_the_explanation() {
+    let source = "#include <stdio.h>\nint main(void) {\n    printf(\"%d and %d, %d and %d \
+                  together\\n\", 1, 2, 3, 4);\n    printf(\"%d\\n\", 5);\n    return 0;\n}\n";
+    let steps = states(source);
+    let printed: Vec<&State> = steps
+        .iter()
+        .filter(|state| state.event.title.starts_with("printf writes"))
+        .collect();
+    assert_eq!(printed.len(), 2);
+    // Four conversions: the lead names each one's argument, and the
+    // explanation says what each wrote.
+    assert_eq!(
+        printed[0].event.summary,
+        "printf writes its format to standard output with its 4 conversions filled in: %d took \
+         `1`, %d took `2`, %d took `3`, and %d took `4`."
+    );
+    assert!(
+        printed[0]
+            .event
+            .explanation
+            .contains("takes argument 4 after the format, `4`, the int 4, and writes \"4\""),
+        "{}",
+        printed[0].event.explanation
+    );
+    // One conversion: the lead says what it wrote.
+    assert!(
+        printed[1]
+            .event
+            .summary
+            .contains("%d took `5` and wrote \"5\""),
+        "{}",
+        printed[1].event.summary
+    );
+    // A long literal's decay spells it once; a short one names `"…"[0]`.
+    let decays: Vec<&str> = steps
+        .iter()
+        .filter(|state| state.event.kind == EventKind::ArrayDecay)
+        .map(|state| state.event.summary.as_str())
+        .collect();
+    assert_eq!(decays.len(), 2);
+    assert!(
+        decays[0].ends_with("becomes a pointer to its first element."),
+        "{}",
+        decays[0]
+    );
+    assert!(decays[1].ends_with("`\"%d\\n\"[0]`."), "{}", decays[1]);
+}
+
+#[test]
 fn an_object_declared_size_t_keeps_the_typedef_name() {
     let source = "#include <stdio.h>\nconst size_t limit = 4;\nint main(void) {\n    int \
                   values[3] = {1, 2, 3};\n    size_t size = sizeof values;\n    size_t *at = \
