@@ -23,6 +23,7 @@ use crate::{
     },
     palette,
     snapshot::{
+        Clause,
         Encoding,
         FlowPart,
         Snapshot,
@@ -309,32 +310,52 @@ fn Details(
     }
 }
 
-/// The paragraphs of C99 the step applied, each a link to the standard
-/// with its heading.
+/// The paragraphs of C99 the step applied, each a link to the standard,
+/// grouped by clause: paragraphs of one clause share its heading, which
+/// shows once after them (`C99 §7.19.7.10p2, p3 The puts function`).
 #[component]
 fn Clauses(event: Memo<Option<StepEvent>>) -> impl IntoView {
     view! {
         <ul class="clauses" aria-label="C standard rules applied" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.clauses.is_empty()))>
             {move || event.with(|event| {
-                event
-                    .as_ref()
-                    .map(|event| event.clauses.clone())
-                    .unwrap_or_default()
+                by_clause(event.as_ref().map(|event| event.clauses.clone()).unwrap_or_default())
                     .into_iter()
-                    .map(|clause| {
-                        let id = format!("C99 §{}", clause.id);
-                        let label = match clause.link() {
-                            | Some(link) => view! {
-                                <a class="clause-id" href=link target="_blank" rel="noopener" title=format!("{}: open the standard at this paragraph", clause.citation)>
-                                    {id}<span class="sr-only">" (opens the standard in a new tab)"</span>
-                                </a>
-                            }.into_any(),
-                            | None => view! { <span class="clause-id" title=clause.citation.clone()>{id}</span> }.into_any(),
-                        };
+                    .map(|group| {
+                        let title = group[0].title.clone();
+                        let links = group
+                            .into_iter()
+                            .enumerate()
+                            .map(|(place, clause)| {
+                                // The first paragraph names its clause; the
+                                // others show only their paragraph, and
+                                // name the clause to a screen reader.
+                                let id = if place == 0 {
+                                    format!("C99 §{}", clause.id).into_any()
+                                } else {
+                                    view! {
+                                        <span class="sr-only">{format!("C99 §{}", section(&clause.id))}</span>
+                                        {paragraph(&clause.id).to_owned()}
+                                    }
+                                    .into_any()
+                                };
+                                let label = match clause.link() {
+                                    | Some(link) => view! {
+                                        <a class="clause-id" href=link target="_blank" rel="noopener" title=format!("{}: open the standard at this paragraph", clause.citation)>
+                                            {id}<span class="sr-only">" (opens the standard in a new tab)"</span>
+                                        </a>
+                                    }.into_any(),
+                                    | None => view! { <span class="clause-id" title=clause.citation.clone()>{id}</span> }.into_any(),
+                                };
+                                view! {
+                                    {(place > 0).then_some(view! { <span class="clause-comma" aria-hidden="true">","</span> })}
+                                    {label}
+                                }
+                            })
+                            .collect_view();
                         view! {
                             <li class="clause">
-                                {label}
-                                <span class="clause-title">{clause.title}</span>
+                                <span class="clause-ids">{links}</span>
+                                <span class="clause-title">{title}</span>
                             </li>
                         }
                     })
@@ -342,6 +363,31 @@ fn Clauses(event: Memo<Option<StepEvent>>) -> impl IntoView {
             })}
         </ul>
     }
+}
+
+/// `clauses` grouped by the clause each paragraph belongs to, in the order
+/// of each clause's first citation.
+fn by_clause(clauses: Vec<Clause>) -> Vec<Vec<Clause>> {
+    let mut groups: Vec<Vec<Clause>> = Vec::new();
+    for clause in clauses {
+        match groups.iter_mut().find(|group| {
+            section(&group[0].id) == section(&clause.id) && group[0].title == clause.title
+        }) {
+            | Some(group) => group.push(clause),
+            | None => groups.push(vec![clause]),
+        }
+    }
+    groups
+}
+
+/// The clause of a paragraph's id: `7.19.7.10` of `7.19.7.10p2`.
+fn section(id: &str) -> &str {
+    id.rsplit_once('p').map_or(id, |(section, _)| section)
+}
+
+/// The paragraph of a paragraph's id: `p2` of `7.19.7.10p2`.
+fn paragraph(id: &str) -> &str {
+    id.rfind('p').map_or(id, |at| &id[at..])
 }
 
 /// What each cited paragraph says, in plain words.
@@ -771,14 +817,46 @@ fn chip(part: &FlowPart) -> AnyView {
 #[cfg(test)]
 mod tests {
     use super::{
+        by_clause,
         closing_marks,
         explained_pieces,
         lead,
     };
     use crate::{
         glossary::Piece,
-        snapshot::StepEvent,
+        snapshot::{
+            Clause,
+            StepEvent,
+        },
     };
+
+    #[test]
+    fn paragraphs_of_one_clause_share_its_heading() {
+        let clause = |id: &str, title: &str| Clause {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            ..Clause::default()
+        };
+        let groups = by_clause(vec![
+            clause("7.19.7.10p2", "The puts function"),
+            clause("6.5.2.2p10", "Function calls"),
+            clause("7.19.7.10p3", "The puts function"),
+            clause("6.5.2.2p1", "Function calls"),
+            clause("6.5.2p1", "Postfix operators"),
+        ]);
+        let ids: Vec<Vec<&str>> = groups
+            .iter()
+            .map(|group| group.iter().map(|clause| clause.id.as_str()).collect())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                vec!["7.19.7.10p2", "7.19.7.10p3"],
+                vec!["6.5.2.2p10", "6.5.2.2p1"],
+                vec!["6.5.2p1"],
+            ]
+        );
+    }
 
     #[test]
     fn closing_marks_stay_with_the_word_before_them() {

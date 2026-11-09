@@ -751,6 +751,8 @@
   a.clause-id::after { content: " ↗"; font-weight: 400; }
   a.clause-id:hover { color: var(--accent-ink); }
   .clause-title { font-size: 11.5px; color: var(--ink-3); }
+  /* Paragraphs of one clause share its heading: `§7.19.7.10p2, p3`. */
+  .clause-comma { margin-right: .5em; font-size: 11px; color: var(--ink); }
   .clause-gloss { font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
   .narration .clauses { display: flex; flex-wrap: wrap; gap: 4px 16px; }
   .narration .clauses[hidden] { display: none; }
