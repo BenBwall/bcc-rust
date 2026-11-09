@@ -25,10 +25,24 @@ block0(v0: i32, v1: ptr, v2: ptr):
 }
 ";
 
+/// x87 stack operands: `t` written and read through a tie, `u`, and `f`,
+/// with `long double`, `double` and an x87 clobber.
+/// GNU extension: GCC manual, "Machine Constraints", x86 family.
+const X87: &str = "\
+function @g(f80, f80, ptr, f64) -> f80 external {
+block0(v0: f80, v1: f80, v2: ptr, v3: f64):
+    asm \"fprem\" (out \"t\" f80 v2, in \"u\" f80 v1, in \"0\" f80 v0, in \"f\" f64 v3) clobber(st)
+    v4 = load.f80 v2, align 16
+    return v4
+}
+";
+
 #[test]
 fn inline_asm_round_trips_and_verifies() {
     assert_round_trip(ASM);
     assert!(verify_text(ASM).is_empty(), "{:?}", verify_text(ASM));
+    assert_round_trip(X87);
+    assert!(verify_text(X87).is_empty(), "{:?}", verify_text(X87));
 }
 
 #[test]
@@ -86,6 +100,10 @@ fn verifier_keeps_the_operand_rules() {
         (
             "asm \"\" (in \"x\" i32 v0)",
             "an SSE register holds a f32 or f64",
+        ),
+        (
+            "asm \"\" (in \"t\" i32 v0)",
+            "an x87 register holds a f32, f64 or f80",
         ),
         (
             "asm \"\" (in \"i\" i32 v0)",

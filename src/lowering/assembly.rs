@@ -741,6 +741,18 @@ fn register_class(
             };
             Ok((AsmConstraint::Sse, register))
         },
+        // The x87 stack holds any floating type, `long double` included.
+        // GNU extension: GCC manual, "Machine Constraints", x86 family.
+        | AsmRegisterClass::Other(class @ (b't' | b'u' | b'f'))
+            if matches!(ty, Type::F32 | Type::F64 | Type::F80) =>
+        {
+            let register = match class {
+                | b't' => AsmConstraint::X87_TOP,
+                | b'u' => AsmConstraint::X87_SECOND,
+                | _ => AsmConstraint::X87_ANY,
+            };
+            Ok((AsmConstraint::X87(register), ty))
+        },
         | AsmRegisterClass::Other(_) => Err(unsupported()),
     }
 }

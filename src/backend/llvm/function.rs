@@ -1257,6 +1257,12 @@ impl<'m> BodyBuilder<'_, '_, 'm, '_> {
                                 .ok_or(EmitError::AsmRegisterSet(operand.constraint))?,
                         ),
                         | C::Sse => constraints.push('x'),
+                        // Clang's spellings of GCC's `t`, `u` and `f`; LLVM's
+                        // x87 stackifier keeps the stack balanced around them.
+                        | C::X87(crate::ir::AsmConstraint::X87_TOP) => constraints.push_str("{st}"),
+                        | C::X87(crate::ir::AsmConstraint::X87_SECOND) =>
+                            constraints.push_str("{st(1)}"),
+                        | C::X87(_) => constraints.push('f'),
                         | C::Immediate => constraints.push('i'),
                         | C::Tied(output) => write!(constraints, "{output}")?,
                         | C::Flag(condition) => write!(
