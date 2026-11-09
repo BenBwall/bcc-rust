@@ -1466,6 +1466,17 @@
     .stage-group-label { display: none; }
     .stage-item { flex: none; scroll-snap-align: start; }
     .stage-button { width: auto; white-space: nowrap; }
+    /* The stage's output first, right under the channel keys that name the
+       stage (as on a wide screen, where only the one-line hand-off comes
+       before it); why bcc stopped, if it did, comes before it, and what the
+       stage is and does after it. */
+    .stage-card { display: flex; flex-direction: column; padding-top: 12px; }
+    .stage-card > .stop-banner { order: -3; margin: 0 0 12px; }
+    .stage-card > .stage-output, .stage-card > .stage-missing { order: -2; margin: 0 0 12px; }
+    .stage-card > .link-reading, .stage-card > .stage-toolbar { order: -1; }
+    .stage-card > .link-reading { margin: 0 0 12px; }
+    .stage-card > .stage-toolbar .stage-note { margin: 0 0 10px; }
+    .stage-card > .stage-command { align-self: flex-start; max-width: 100%; }
     .source-legend { gap: 2px 12px; padding: 8px 12px; font-size: 10px; }
     .link-reading { min-height: calc(3 * 1.55em + 12px); }
     .link-reading.is-source { min-height: calc(3 * 1.55em + 12px); padding: 6px 12px; }
