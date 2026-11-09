@@ -223,6 +223,81 @@ int main(void) {
         }
     }
 
+    /// musl's x86-64 `long double` math: `t` (the x87 stack top) written and
+    /// read, `u` (`%st(1)`), `f` (any x87 register), a `"st"` clobber that
+    /// pops the input, and `double` and `float` operands.
+    /// GNU extension: GCC manual, "Machine Constraints", x86 family.
+    const X87_PROGRAM: &str = r#"
+static long double fabs_x87(long double x) { __asm__ ("fabs" : "+t"(x)); return x; }
+static long double sqrt_x87(long double x) { __asm__ ("fsqrt" : "+t"(x)); return x; }
+static long double fmod_x87(long double x, long double y) {
+    unsigned short status;
+    do __asm__ ("fprem; fnstsw %%ax" : "+t"(x), "=a"(status) : "u"(y)); while (status & 0x400);
+    return x;
+}
+static long long llrint_x87(long double x) {
+    long long r; __asm__ ("fistpll %0" : "=m"(r) : "t"(x) : "st"); return r;
+}
+static long double add_x87(long double a, long double b) {
+    __asm__ ("fadd %1, %0" : "+t"(a) : "f"(b)); return a;
+}
+static double sqrt_double(double x) { __asm__ ("fsqrt" : "+t"(x)); return x; }
+static float fabs_float(float x) { __asm__ ("fabs" : "+t"(x)); return x; }
+int main(void) {
+    if (fabs_x87(-2.5L) != 2.5L) return 1;
+    long double root = sqrt_x87(2.0L);
+    if (root * root < 1.999999999L || root * root > 2.000000001L) return 2;
+    if (fmod_x87(10.5L, 3.0L) != 1.5L) return 3;
+    if (llrint_x87(-7.5L) != -8 || llrint_x87(1e15L + 0.5L) != 1000000000000000LL) return 4;
+    if (add_x87(1.25L, 2.5L) != 3.75L) return 5;
+    if (sqrt_double(9.0) != 3.0 || fabs_float(-1.25f) != 1.25f) return 6;
+    return 0;
+}
+"#;
+
+    /// LLVM gets Clang's x87 constraints and runs them; the native back end,
+    /// which keeps no x87 stack, refuses them by name.
+    #[test]
+    fn x87_stack_operands_run_through_llvm() {
+        let output = bcc(
+            "long double f(long double x, long double y) { __asm__(\"fprem\" : \"+t\"(x) : \
+             \"u\"(y), \"f\"(y)); return x; }",
+            &["--target=x86_64-unknown-linux-gnu", "--emit=llvm"],
+        );
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let llvm = text(&output.stdout);
+        assert!(llvm.contains("\"={st},{st(1)},f,0,~{dirflag}"), "{llvm}");
+        let Some(target) = host() else {
+            eprintln!("skipping: the host is not an x86-64 target bcc supports");
+            return;
+        };
+        for flags in [
+            &["--backend=llvm"][..],
+            &["--backend=llvm", "-O2"][..],
+            &["--backend=llvm", "--opt=bcc"][..],
+        ] {
+            let executable = temporary("x87-asm.exe");
+            let built = bcc(
+                X87_PROGRAM,
+                &[&[target, "-o", executable.to_str().unwrap()][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{flags:?}");
+            std::fs::remove_file(executable).unwrap();
+        }
+        let refused = bcc(X87_PROGRAM, &[target, "--backend=native", "-S", "-o", "-"]);
+        assert_eq!(refused.status.code(), Some(1));
+        assert!(
+            text(&refused.stderr).contains(
+                "not yet supported by the native back end: inline assembly with x87 stack \
+                 operands (`t`, `u` or `f`)"
+            ),
+            "{}",
+            text(&refused.stderr)
+        );
+    }
+
     /// A GNU local register variable is an ordinary object whose register
     /// places it when it is an `asm` operand, under both identities: the
     /// templates name the registers themselves.
