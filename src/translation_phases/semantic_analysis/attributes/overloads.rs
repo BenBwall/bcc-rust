@@ -597,6 +597,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 source_vectors,
                 name: Some(message.text),
                 previous: Some(message.source),
+                highlights: Default::default(),
             }),
         ]);
     }

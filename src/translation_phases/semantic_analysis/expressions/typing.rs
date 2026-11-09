@@ -3140,12 +3140,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         kind: SemanticErrorKind,
     ) -> ExpressionInfo<'tu> {
         if !e.recovered {
-            self.error(
-                kind,
-                e.operator_source_vectors.unwrap_or(e.source_vectors),
-                None,
-                None,
-            );
+            // Clang underlines the operands beside the operator's caret.
+            let operands = match e.kind {
+                | ExpressionType::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } => [
+                    left_expression.source_vectors,
+                    right_expression.source_vectors,
+                ],
+                | ExpressionType::Unary {
+                    operand_expression, ..
+                } if e.operator_source_vectors.is_some() => [
+                    operand_expression.source_vectors,
+                    crate::translation_phases::SourceVectors::default(),
+                ],
+                | _ => [crate::translation_phases::SourceVectors::default(); 2],
+            };
+            self.with_highlights(operands, |analyzer| {
+                analyzer.error(
+                    kind,
+                    e.operator_source_vectors.unwrap_or(e.source_vectors),
+                    None,
+                    None,
+                );
+            });
         }
         Self::expression_result(e, self.types.unknown())
     }

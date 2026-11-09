@@ -118,6 +118,7 @@ fn warn(
         source_vectors: source,
         name: None,
         previous: None,
+        highlights: Default::default(),
     })]);
 }
 

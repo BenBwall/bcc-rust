@@ -12,9 +12,13 @@ and `At top level:` lines, which come when the function changes: a
 diagnostic just past a definition's name, in its parameters or body, is in
 the function, and one at the name (`-Wmain`, an unused function) at top level.
 `context-functions-clang` shows that Clang names no function. Both outputs
-match the compilers' line for line but for the ranges Clang underlines and
-GCC's for an unused parameter. The other GCC-format snapshots gained these
-lines where GCC prints them.
+match the compilers' line for line but for GCC's range for an unused
+parameter. The other GCC-format snapshots gained these lines where GCC
+prints them. `context-ranges-clang` pins the ranges Clang underlines with
+`~` beside the caret: an initializer's and an assignment's value, and both
+operands of an invalid binary operator or of a pointer and integer
+comparison; its caret lines match Clang 23's, its messages keep bcc's
+words for the operator errors.
 
 Diagnostic pragmas: `pragma-diagnostic-{gcc,clang}` pin the warning of each phase
 under `#pragma GCC diagnostic` and `#pragma clang diagnostic`, a macro's body and

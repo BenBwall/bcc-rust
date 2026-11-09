@@ -142,15 +142,31 @@ impl Renderer {
         // GCC and Clang share one snippet: a gutter five wide, nothing around
         // the source line and its caret, and what relates to the message in
         // `note:` lines of its own.
+        // GCC's format draws only the primary range; Clang's also the ranges
+        // it underlines with `~`, on the caret's lines (Clang's
+        // `TextDiagnostic::emitCaret`); the others draw every labelled one.
+        let drawn = |label: &&Label<'_>| {
+            presentation.caret
+                && (label.primary
+                    || if compiler_snippet {
+                        format == DiagnosticFormat::Clang && label.message.is_none()
+                    } else {
+                        label.message.is_some()
+                    })
+        };
         let mut marks = ArenaVec::new_in(scratch);
-        for label in diagnostic
-            .labels
-            .iter()
-            .filter(|label| presentation.caret && (!compiler_snippet || label.primary))
-        {
+        for label in diagnostic.labels.iter().filter(drawn) {
             Self::push_label_marks(label, context, &mut marks);
         }
         if compiler_snippet {
+            let mut caret_lines = ArenaVec::new_in(scratch);
+            caret_lines.extend(
+                marks
+                    .iter()
+                    .filter(|mark| mark.primary)
+                    .map(|mark| (mark.file, mark.line)),
+            );
+            marks.retain(|mark| mark.primary || caret_lines.contains(&(mark.file, mark.line)));
             for mark in &mut marks {
                 mark.label = None;
             }
@@ -370,8 +386,10 @@ impl Renderer {
         gutter: &Gutter<'_>,
         scratch: &Bump,
     ) {
-        // GCC and Clang mark the rest of a range with tildes.
+        // GCC and Clang mark the rest of a range with tildes, and Clang
+        // the ranges beside the caret.
         let tail = if gutter.compiler_snippet { '~' } else { '^' };
+        let secondary = if gutter.compiler_snippet { '~' } else { '-' };
         let bar = self.paint("|", Self::gutter_style());
         // What stands before an underline.
         let lead = match gutter.without_numbers {
@@ -457,11 +475,11 @@ impl Renderer {
                         underline.push(' ');
                     },
                     | (Some(primary), Some((current, text))) if current == primary =>
-                        text.push(if *primary { tail } else { '-' }),
+                        text.push(if *primary { tail } else { secondary }),
                     | (Some(primary), _) => {
                         flush(&mut run, &mut underline);
                         let mut text = ArenaString::new_in(scratch);
-                        text.push(if *primary { '^' } else { '-' });
+                        text.push(if *primary { '^' } else { secondary });
                         run = Some((*primary, text));
                     },
                 }
@@ -544,6 +562,7 @@ impl Renderer {
         marks: &mut ArenaVec<'_, Mark<'a>>,
     ) {
         let mut label_text = label.message;
+        let first = marks.len();
         for vector in label.source.vectors(context) {
             let file = vector.source_file_index;
             let Some(text) = context.source_text(file) else {
@@ -557,7 +576,8 @@ impl Renderer {
             let start = offset.max(line_start);
             let end = vector.end().clamp(start, line_end);
             // Adjacent segments of one range on one line form one mark.
-            if let Some(last) = marks.last_mut()
+            if marks.len() > first
+                && let Some(last) = marks.last_mut()
                 && last.file == file
                 && last.line == line
                 && last.primary == label.primary

@@ -39,6 +39,9 @@ pub(crate) struct SemanticError {
     pub(crate) source_vectors:     SourceVectors,
     pub(crate) name:               Option<StringCacheId>,
     pub(crate) previous:           Option<SourceVectors>,
+    /// The operands Clang underlines with `~` beside the caret, empty when
+    /// there are fewer.
+    pub(crate) highlights:         [SourceVectors; 2],
 }
 
 /// What an excess initializer element lies beyond, as GCC and Clang word it.
@@ -3252,6 +3255,11 @@ impl ToDiagnostic for SemanticError {
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
+        }
+        for highlight in self.highlights {
+            if highlight.length() != 0 {
+                diagnostic = diagnostic.highlight(highlight);
+            }
         }
         diagnostic
     }

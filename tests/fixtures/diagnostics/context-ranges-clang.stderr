@@ -1,0 +1,19 @@
+context-ranges-clang.c:6:13: error: invalid operand types for pointer or arithmetic addition
+    6 |   int x = s + y;
+      |           ~ ^ ~
+context-ranges-clang.c:7:8: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    7 |   int *q = y + 1;
+      |        ^   ~~~~~
+context-ranges-clang.c:8:5: error: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+    8 |   p = y;
+      |     ^ ~
+context-ranges-clang.c:9:5: error: incompatible pointer types assigning to 'int *' from 'long *' [-Wincompatible-pointer-types]
+    9 |   p = lp;
+      |     ^ ~~
+context-ranges-clang.c:10:9: error: multiplicative operator requires arithmetic operands
+   10 |   x = p * y;
+      |       ~ ^ ~
+context-ranges-clang.c:11:11: warning: ordered comparison between pointer and integer
+   11 |   x = s.a < p;
+      |       ~~~ ^ ~
+5 errors and 1 warning generated.

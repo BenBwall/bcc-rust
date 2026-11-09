@@ -118,6 +118,7 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
             source_vectors,
             name: Some(name),
             previous: None,
+            highlights: Default::default(),
         })]);
     }
 }

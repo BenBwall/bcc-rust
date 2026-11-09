@@ -19,6 +19,38 @@ use crate::{
 };
 
 impl Analyzer<'_, '_, '_> {
+    /// Runs `report` with `operands` as the ranges Clang underlines with `~`
+    /// beside the caret of what it reports: an assignment's or initializer's
+    /// value, a binary operator's operands (Clang's
+    /// `TextDiagnostic::emitCaret` draws a diagnostic's ranges).
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn with_highlights<R>(
+        &mut self,
+        operands: [SourceVectors; 2],
+        report: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let outer = std::mem::replace(&mut self.highlights, operands);
+        let result = report(self);
+        self.highlights = outer;
+        result
+    }
+
+    /// The highlighted operands at the places a file holds them, for
+    /// Clang's format only: the others draw none.
+    fn highlights_at_file(&mut self) -> [SourceVectors; 2] {
+        let mut highlights = [SourceVectors::default(); 2];
+        if self.context.configuration.diagnostic_format()
+            == crate::configuration::DiagnosticFormat::Clang
+        {
+            for (highlight, &operand) in highlights.iter_mut().zip(&self.highlights) {
+                if operand.length() != 0 {
+                    *highlight = self.context.file_location(operand);
+                }
+            }
+        }
+        highlights
+    }
+
     /// Central emitter for pointer constraints; classification has no severity
     /// decisions. Accepted warnings do not taint initializer/ICE recovery.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
@@ -76,6 +108,7 @@ impl Analyzer<'_, '_, '_> {
         };
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
+        let highlights = self.highlights_at_file();
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
@@ -88,6 +121,7 @@ impl Analyzer<'_, '_, '_> {
                 source_vectors,
                 name,
                 previous,
+                highlights,
             }),
         );
     }
@@ -130,12 +164,14 @@ impl Analyzer<'_, '_, '_> {
             self.semantic_errors += 1;
             let at = source_vectors;
             let source_vectors = self.context.file_location(source_vectors);
+            let highlights = self.highlights_at_file();
             let error = SemanticError {
                 extension_severity: None,
                 kind,
                 source_vectors,
                 name,
                 previous,
+                highlights,
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
             self.error_diagnostics +=
@@ -175,6 +211,7 @@ impl Analyzer<'_, '_, '_> {
                         source_vectors,
                         name,
                         previous: None,
+                        highlights: [SourceVectors::default(); 2],
                     })
                 },
             );

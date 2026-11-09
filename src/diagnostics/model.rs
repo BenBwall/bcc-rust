@@ -64,6 +64,17 @@ impl<'d> Diagnostic<'d> {
         self
     }
 
+    /// Adds a range Clang's format underlines with `~` beside the caret,
+    /// with no message; the other formats draw none.
+    pub(crate) fn highlight(mut self, source: SourceVectors) -> Self {
+        self.labels.push(Label {
+            source:  LabelSource::Range(source),
+            message: None,
+            primary: false,
+        });
+        self
+    }
+
     /// Folds a follow-on diagnostic reported at the same place into this
     /// one, keeping only its related ranges: one mistake, one error.
     pub(crate) fn absorb(&mut self, other: Self, context: &Context<'_>) {
@@ -72,7 +83,7 @@ impl<'d> Diagnostic<'d> {
                 existing.message == label.message
                     && existing.source.vectors(context) == label.source.vectors(context)
             });
-            if !label.primary && !duplicate {
+            if !label.primary && label.message.is_some() && !duplicate {
                 self.labels.push(label);
             }
         }
@@ -217,7 +228,8 @@ pub(crate) trait ToDiagnostic {
 }
 
 /// A source range the diagnostic points at, optionally with a short message
-/// printed under it.
+/// printed under it. A related range without a message is one Clang
+/// underlines beside the caret ([`Diagnostic::highlight`]).
 #[derive(Debug)]
 pub(super) struct Label<'d> {
     pub(super) source:  LabelSource<'d>,

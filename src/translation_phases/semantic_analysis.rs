@@ -2238,6 +2238,9 @@ struct Analyzer<'a, 'tu, 's> {
     /// than 128 bits that `i128` does not hold.
     wide:                    WideIntegers<'tu>,
     tainted:                 bool,
+    /// The operands Clang underlines beside the caret of what is reported
+    /// now; see [`Self::with_highlights`].
+    highlights:              [SourceVectors; 2],
     function_name:           Option<Identifier>,
     old_parameter_mode:      bool,
     /// Exceptional evaluation yields a variable array bound, not an error.
