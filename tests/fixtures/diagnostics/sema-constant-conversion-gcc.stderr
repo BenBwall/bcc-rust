@@ -1,33 +1,43 @@
+sema-constant-conversion-gcc.c: In function 'd1':
 sema-constant-conversion-gcc.c:1:36: warning: overflow in conversion from 'int' to 'char' changes value from '1000' to '-24' [-Woverflow]
     1 | void d1(void) { char c; if (0) c = 1000; (void)c; }
       |                                    ^~~~
+sema-constant-conversion-gcc.c: In function 'd3':
 sema-constant-conversion-gcc.c:3:39: warning: overflow in conversion from 'int' to 'char' changes value from '1001' to '-23' [-Woverflow]
     3 | void d3(void) { char c; while (0) c = 1001; (void)c; }
       |                                       ^~~~
+sema-constant-conversion-gcc.c: In function 'd5':
 sema-constant-conversion-gcc.c:5:37: warning: overflow in conversion from 'int' to 'char' changes value from '1004' to '-20' [-Woverflow]
     5 | void d5(void) { char c; return; c = 1004; }
       |                                     ^~~~
+sema-constant-conversion-gcc.c: In function 'd6':
 sema-constant-conversion-gcc.c:6:63: warning: overflow in conversion from 'int' to 'char' changes value from '1005' to '-19' [-Woverflow]
     6 | void d6(void) { char c; c = _Generic(0, int: 1, default: (c = 1005)); }
       |                                                               ^~~~
+sema-constant-conversion-gcc.c: In function 'd9':
 sema-constant-conversion-gcc.c:9:37: warning: overflow in conversion from 'int' to 'char' changes value from '1008' to '-16' [-Woverflow]
     9 | void d9(int a) { char c; if (a) c = 1008; (void)c; }
       |                                     ^~~~
+sema-constant-conversion-gcc.c: In function 'd10':
 sema-constant-conversion-gcc.c:10:61: warning: overflow in conversion from 'int' to 'char' changes value from '1009' to '-15' [-Woverflow]
    10 | void d10(void) { char c; (void)__builtin_choose_expr(1, c = 1009, c = 1010); }
       |                                                             ^~~~
 sema-constant-conversion-gcc.c:10:71: warning: overflow in conversion from 'int' to 'char' changes value from '1010' to '-14' [-Woverflow]
    10 | void d10(void) { char c; (void)__builtin_choose_expr(1, c = 1009, c = 1010); }
       |                                                                       ^~~~
+sema-constant-conversion-gcc.c: In function 'd11':
 sema-constant-conversion-gcc.c:11:57: warning: overflow in conversion from 'int' to 'char' changes value from '1011' to '-13' [-Woverflow]
    11 | void d11(void) { char c; (void)__builtin_constant_p(c = 1011); }
       |                                                         ^~~~
+sema-constant-conversion-gcc.c: In function 'd12':
 sema-constant-conversion-gcc.c:12:63: warning: overflow in conversion from 'int' to 'char' changes value from '1012' to '-12' [-Woverflow]
    12 | void d12(void) { char c; (void)_Generic(0, long: 0, int: (c = 1012)); }
       |                                                               ^~~~
+sema-constant-conversion-gcc.c: In function 'e6':
 sema-constant-conversion-gcc.c:18:24: warning: overflow in conversion from 'int' to 'char' changes value from '1006' to '-18' [-Woverflow]
    18 | char e6(void) { return 1 ? 1006 : 0; }
       |                        ^~~~~~~~~~~~
+sema-constant-conversion-gcc.c: At top level:
 sema-constant-conversion-gcc.c:38:11: warning: overflow in conversion from 'int' to 'char' changes value from '1028' to '4' [-Woverflow]
    38 | char g2 = 1 ? 1028 : 0;
       |           ^~~~~~~~~~~~
@@ -112,21 +122,27 @@ sema-constant-conversion-gcc.c:70:77: warning: overflow in conversion from 'int'
 sema-constant-conversion-gcc.c:70:100: warning: overflow in conversion from 'int' to 'char' changes value from '1121' to '97' [-Woverflow]
    70 | void *u18 = _Generic(0, int: _Generic(0, int: &(char){1119}, default: (gc = 1120)), default: (gc = 1121));
       |                                                                                                    ^~~~
+sema-constant-conversion-gcc.c: In function 'b1':
 sema-constant-conversion-gcc.c:71:67: warning: overflow in conversion from 'int' to 'char' changes value from '1200' to '-80' [-Woverflow]
    71 | void b1(void) { static int s = _Generic(0, int: 0, default: (gc = 1200)); (void)s; }
       |                                                                   ^~~~
+sema-constant-conversion-gcc.c: In function 'b2':
 sema-constant-conversion-gcc.c:72:65: warning: overflow in conversion from 'int' to 'char' changes value from '1201' to '-79' [-Woverflow]
    72 | void b2(void) { static int s = __builtin_choose_expr(1, 0, gc = 1201); (void)s; }
       |                                                                 ^~~~
+sema-constant-conversion-gcc.c: In function 'b3':
 sema-constant-conversion-gcc.c:73:84: warning: overflow in conversion from 'int' to 'char' changes value from '1202' to '-78' [-Woverflow]
    73 | void b3(void) { static int s = _Generic(0, int: _Generic(0, int: 0, default: (gc = 1202)), default: 0); (void)s; }
       |                                                                                    ^~~~
+sema-constant-conversion-gcc.c: In function 'b5':
 sema-constant-conversion-gcc.c:75:97: warning: overflow in conversion from 'int' to 'char' changes value from '1204' to '-76' [-Woverflow]
    75 | void b5(void) { static int s = _Generic(0, long: 0, default: _Generic(0, int: 0, default: (gc = 1204))); (void)s; }
       |                                                                                                 ^~~~
+sema-constant-conversion-gcc.c: In function 'b6':
 sema-constant-conversion-gcc.c:76:33: warning: overflow in conversion from 'int' to 'char' changes value from '1205' to '-75' [-Woverflow]
    76 | void b6(void) { static char s = _Generic(0, int: 1205, default: 1206); (void)s; }
       |                                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-constant-conversion-gcc.c: In function 'b7':
 sema-constant-conversion-gcc.c:77:80: warning: overflow in conversion from 'int' to 'char' changes value from '1207' to '-73' [-Woverflow]
    77 | void b7(void) { static int s = __builtin_choose_expr(0, _Generic(0, int: (gc = 1207), default: 0), 0); (void)s; }
       |                                                                                ^~~~
