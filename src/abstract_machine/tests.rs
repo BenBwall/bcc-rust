@@ -2150,6 +2150,31 @@ fn char_arrays_take_string_and_brace_initializers() {
 }
 
 #[test]
+fn a_multibyte_character_after_a_backslash_is_rejected_whole() {
+    for (source, quoted) in [
+        (
+            "#include <stdio.h>\nint main(void) { puts(\"\\é\"); return 0; }",
+            "\"\\é\"",
+        ),
+        ("int main(void) { char c = '\\é'; return c; }", "'\\é'"),
+        ("int main(void) { char c = '\\€'; return c; }", "'\\€'"),
+    ] {
+        let diagnostic = compile(source).map(|_| ()).expect_err(source);
+        assert_eq!(diagnostic.kind, "unsupported", "{source}");
+        assert!(
+            diagnostic.message.contains("non-ASCII"),
+            "{source}: {}",
+            diagnostic.message
+        );
+        // The range covers the whole character after the backslash.
+        let after = source.find(quoted).expect("the literal") + 2;
+        let character = &source[after..diagnostic.source_range.end];
+        assert_eq!(diagnostic.source_range.start, after, "{source}");
+        assert_eq!(character.chars().count(), 1, "{source}: {character:?}");
+    }
+}
+
+#[test]
 fn modifying_a_string_literal_is_undefined_and_const_is_enforced() {
     let (cause, title) = undefined("int main(void) { char *p = \"hi\"; p[0] = 'H'; return 0; }");
     assert_eq!(cause, Some(super::Undefined::StringLiteralWrite));
@@ -3188,6 +3213,52 @@ fn conversions_to_unsigned_wrap_and_to_signed_are_the_implementations() {
          4294967295u); }",
         2,
     );
+}
+
+#[test]
+fn static_initializers_negate_an_unsigned_constant_in_its_own_type() {
+    // -1u is 4294967295 before the initializer converts it to long, in a
+    // file-scope object, a static local and aggregate leaves as at block
+    // scope; a negated signed constant keeps its value.
+    let source =
+        "#include <stdio.h>\nlong x = -1u;\nstruct pair { long a; unsigned long b; };\nstruct \
+         pair p = {-1u, -1ul};\nlong table[3] = {-1u, -1, -2147483648};\nlong get(void) {\n    \
+         static long s = -1u;\n    return s;\n}\nint main(void) {\n    long y = -1u;\n    long z \
+         = get();\n    printf(\"%ld %ld %ld\\n\", x, y, z);\n    printf(\"%ld %lu\\n\", p.a, \
+         p.b);\n    printf(\"%ld %ld %ld\\n\", table[0], table[1], table[2]);\n    return 0;\n}\n";
+    let (state, text) = output(source);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    assert_eq!(
+        text,
+        "4294967295 4294967295 4294967295\n4294967295 18446744073709551615\n4294967295 -1 \
+         -2147483648\n"
+    );
+}
+
+#[test]
+fn repeating_a_type_specifier_past_its_counter_still_names_no_type() {
+    // A narrow counter would wrap back to a valid combination after 256
+    // repetitions, or overflow summing `signed` and `unsigned`.
+    let mut sources = vec![format!(
+        "int main(void){{{}x=1;return x;}}\n",
+        "int ".repeat(257)
+    )];
+    for words in ["int ", "long ", "char ", "unsigned ", "float ", "double "] {
+        sources.push(format!(
+            "int main(void) {{ {} x = 1; return x; }}\n",
+            words.repeat(256)
+        ));
+    }
+    sources.push(format!(
+        "int main(void) {{ {}{}int x = 1; return x; }}\n",
+        "signed ".repeat(128),
+        "unsigned ".repeat(128)
+    ));
+    for source in &sources {
+        let diagnostic = compile(source).map(|_| ()).expect_err(source);
+        assert_eq!(diagnostic.kind, "constraint", "{}", diagnostic.message);
+        assert_eq!(diagnostic.clause.map(|clause| clause.id), Some("6.7.2p2"));
+    }
 }
 
 #[test]
@@ -4285,6 +4356,14 @@ int main(void) {
     assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
     assert_eq!(text, "0.25 -2 0\n");
     assert!(rejected("int x = 1e10; int main(void) { return x; }").contains("does not fit"));
+    // -1u is 4294967295 before the initializer converts it to double, in a
+    // static object as in an automatic one.
+    let (state, text) = output(
+        "#include <stdio.h>\ndouble x = -1u;\nint main(void) {\n    static double s = -1u;\n    \
+         double y = -1u;\n    printf(\"%.0f %.0f %.0f\\n\", x, s, y);\n    return 0;\n}\n",
+    );
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    assert_eq!(text, "4294967295 4294967295 4294967295\n");
 }
 
 const FLOATING: &str = include_str!("../../web/demos/floating.c");
