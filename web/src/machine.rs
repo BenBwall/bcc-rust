@@ -27,6 +27,7 @@ use crate::{
     snapshot::{
         Clause,
         Diagnostic,
+        Encoding,
         Frame,
         MemberValue,
         Object,
@@ -270,6 +271,7 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
                 citation: "C99 §5.1.1.2p1, p. 10; PDF p. 22".to_owned(),
             }],
             range:          location,
+            encoding:       None,
             objects:        Vec::new(),
             sequence_point: false,
         },
@@ -332,6 +334,7 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
             range: location,
             objects: Vec::new(),
             sequence_point: false,
+            encoding: None,
         },
         tree: None,
         stack: Vec::new(),
@@ -397,6 +400,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             range:          range(event.range, source),
             objects:        event.objects.clone(),
             sequence_point: event.sequence_point,
+            encoding:       encoding(event),
         },
         tree:         state
             .evaluation
@@ -433,6 +437,32 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
     }
 }
 
+/// The fields of the floating value a step produced, for the bit view:
+/// a constant, a conversion, an arithmetic result or a store, not a read,
+/// which only copies a value already shown.
+fn encoding(event: &abstract_machine::Event) -> Option<Encoding> {
+    if event.kind == abstract_machine::EventKind::LvalueConversion {
+        return None;
+    }
+    let Some(Operand::Value(abstract_machine::Value::Floating(real))) = &event.result else {
+        return None;
+    };
+    let fields = real.fields();
+    Some(Encoding {
+        ty:          real.format().spelling().to_owned(),
+        value:       real.short(),
+        sign:        fields.sign,
+        exponent:    fields.exponent,
+        biased:      fields.biased,
+        bias:        fields.bias,
+        scale:       fields.scale,
+        integer_bit: fields.integer_bit,
+        fraction:    fields.fraction,
+        significand: fields.significand,
+        class:       fields.class.to_owned(),
+    })
+}
+
 /// The page's form of an object; `functions` names each live call.
 fn object(
     object: &abstract_machine::Object,
@@ -454,6 +484,7 @@ fn object(
         scope:     object.function.clone(),
         parameter: object.parameter,
         literal:   object.literal,
+        size:      object.size,
         value:     value(&object.value, holds_chars(&object.r#type), objects, program),
     }
 }
@@ -532,6 +563,7 @@ fn value_text(
     match value {
         | abstract_machine::Value::Indeterminate => "?".to_owned(),
         | abstract_machine::Value::Integer(integer) => integer.to_string(),
+        | abstract_machine::Value::Floating(real) => real.short(),
         | abstract_machine::Value::Pointer { target: None, .. } => "NULL".to_owned(),
         | &abstract_machine::Value::Pointer {
             target: Some(target),
@@ -602,16 +634,21 @@ fn diagnostic(fault: &abstract_machine::Diagnostic) -> Diagnostic {
     }
 }
 
-/// Whether an object or member of the type spelled `ty` holds chars: a
-/// `char` or a `char` array, not a pointer to them.
+/// Whether an object or member of the type spelled `ty` holds chars: one
+/// of the character types (`char`, `signed char`, `unsigned char`) or an
+/// array of one, not a pointer to them.
 fn holds_chars(ty: &str) -> bool {
     let ty = ty.strip_prefix("const ").unwrap_or(ty);
+    let ty = ty
+        .strip_prefix("signed ")
+        .or_else(|| ty.strip_prefix("unsigned "))
+        .unwrap_or(ty);
     ty == "char" || (ty.starts_with("char[") && !ty.contains('*'))
 }
 
 /// A char's value as a character constant spells it: `'A'`, `'\n'`,
 /// `'\0'`, or an escape for a byte that is not printable ASCII.
-fn character(value: i32) -> String {
+fn character(value: i128) -> String {
     let byte = value.to_le_bytes()[0];
     let text = match byte {
         | b'\n' => "\\n".to_owned(),
@@ -639,6 +676,17 @@ fn value(
         | abstract_machine::Value::Integer(number) => Value::Integer {
             text:      number.to_string(),
             character: chars.then(|| character(*number)),
+        },
+        | abstract_machine::Value::Floating(real) => Value::Floating {
+            text:  real.short(),
+            exact: real.exact(),
+            ty:    real.format().spelling().to_owned(),
+            bytes: real
+                .bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" "),
         },
         | abstract_machine::Value::Array(elements) => Value::Array {
             elements: elements
@@ -776,11 +824,11 @@ mod tests {
         );
 
         for source in [
-            "int main(void) { return 1.5; }\n",
-            "/*\n#define X 1\n*/\nint main(void) { return 1.5; }\n",
-            "// a line \\\n#define X 1\nint main(void) { return 1.5; }\n",
-            "int a = 1.5; int s = \"\\\n#define X\";\nint main(void) { return 0; }\n",
-            "int a = 1.5 /* a\n*/ #define\n;",
+            "int main(void) { return 1 & 2; }\n",
+            "/*\n#define X 1\n*/\nint main(void) { return 1 & 2; }\n",
+            "// a line \\\n#define X 1\nint main(void) { return 1 & 2; }\n",
+            "int a = 1 & 2; int s = \"\\\n#define X\";\nint main(void) { return 0; }\n",
+            "int a = 1 & 2 /* a\n*/ #define\n;",
         ] {
             let state = machine.load(source.to_owned());
             assert_eq!(
@@ -939,6 +987,7 @@ mod tests {
             ("recursion", "finished", Some("24")),
             ("structs", "finished", Some("31")),
             ("promotion", "finished", Some("255")),
+            ("unsigned", "finished", Some("0")),
             ("overflow", "undefined_behavior", None),
             ("bounds", "undefined_behavior", None),
             ("indeterminate", "error", None),

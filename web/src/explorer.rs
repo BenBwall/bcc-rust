@@ -747,16 +747,9 @@ mod tests {
     fn every_lesson_compiles_live_at_both_levels() {
         for lesson in &crate::demos::DEMOS {
             for optimize in [false, true] {
+                // A lesson that includes <stdio.h> compiles too: bcc brings
+                // its own C library's headers on every target.
                 let compilation = compile(lesson.source, optimize);
-                // In the browser x86-64 has no C library headers: a lesson
-                // that includes <stdio.h> stops in the front end, and the
-                // stop says where the header is.
-                if crate::wasm::is_command(lesson.source) {
-                    let stop = compilation.stop().expect("no <stdio.h> on x86-64");
-                    assert!(stop.explanation.contains("<stdio.h>"), "{}", lesson.name);
-                    assert!(compilation.stopped_before(Stage::Ir), "{}", lesson.name);
-                    continue;
-                }
                 assert!(
                     compilation.diagnostics.is_empty(),
                     "{}: {:#?}",
