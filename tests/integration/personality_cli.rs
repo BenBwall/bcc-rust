@@ -475,7 +475,8 @@ mod tests {
             let output = gcc(source);
             succeeds(&output);
             assert!(
-                stderr(&output).contains("warning: attribute ignored: `scalar_storage_order`"),
+                stderr(&output)
+                    .contains("warning: 'scalar_storage_order' attribute ignored [-Wattributes]"),
                 "{source}{}",
                 stderr(&output)
             );
@@ -1566,6 +1567,39 @@ mod tests {
         }
     }
 
+    /// An attribute GCC drops is worded by its name under GCC's one
+    /// `-Wattributes`, which in both compilers holds the attributes they
+    /// ignore, known or not (GCC 14, Clang 23).
+    #[test]
+    fn dropped_attributes_follow_wattributes() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int v __attribute__((target(\"avx\")));\nvoid f(void) __attribute__((bogus_attr));\n",
+        );
+        let text = |mode: &str, options: &[&str]| {
+            stderr(&directory.bcc(mode, &[options, &["-fsyntax-only", "a.c"]].concat()))
+        };
+        let gcc = text("--gcc-mode", &[]);
+        assert!(
+            gcc.contains("warning: 'target' attribute ignored [-Wattributes]\n"),
+            "{gcc}"
+        );
+        assert!(
+            gcc.contains("warning: 'bogus_attr' attribute directive ignored [-Wattributes]\n"),
+            "{gcc}"
+        );
+        let promoted = text("--gcc-mode", &["-Werror=attributes"]);
+        assert!(
+            promoted.contains("error: 'target' attribute ignored [-Werror=attributes]\n"),
+            "{promoted}"
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let silenced = text(mode, &["-Wno-attributes"]);
+            assert!(!silenced.contains("warning"), "{mode}: {silenced}");
+        }
+    }
+
     /// GCC's and Clang's snippet and their words for the commonest errors, and
     /// a related place as a note of its own.
     #[test]
@@ -1598,6 +1632,54 @@ mod tests {
             text("--gcc-mode", "c.c")
                 .starts_with("c.c:1:25: error: expected expression before ';' token\n")
         );
+        // GCC says which way a call misses its prototype, naming the callee.
+        directory.write(
+            "e.c",
+            "int f(int);\nint (*p)(int);\nvoid g(void) { f(1, 2); p(1, 2); f(); }\n",
+        );
+        let calls = text("--gcc-mode", "e.c");
+        for expected in [
+            "e.c:3:16: error: too many arguments to function 'f'\n",
+            "e.c:3:25: error: too many arguments to function 'p'\n",
+            "e.c:3:34: error: too few arguments to function 'f'\n",
+        ] {
+            assert!(calls.contains(expected), "{calls}");
+        }
+        // Member access and void values, in each compiler's words.
+        directory.write(
+            "f.c",
+            "struct T; struct S { int y; };\nvoid v(void);\nint f(struct T *t, struct S *s) { \
+             return t->x + s->x; }\nvoid g(void) { int x = v(); x = v(); (long)v(); }\nvoid \
+             h(void) { struct S s = v(); }\n",
+        );
+        for (mode, expected) in [
+            (
+                "--gcc-mode",
+                [
+                    "error: invalid use of undefined type 'struct T'\n",
+                    "error: 'struct S' has no member named 'x'\n",
+                    "error: void value not ignored as it ought to be\n",
+                    "error: invalid use of void expression\n",
+                    "error: invalid initializer\n",
+                ],
+            ),
+            (
+                "--clang-mode",
+                [
+                    "error: incomplete definition of type 'struct T'\n",
+                    "error: no member named 'x' in 'struct S'\n",
+                    "error: initializing 'int' with an expression of incompatible type 'void'\n",
+                    "error: assigning to 'int' from incompatible type 'void'\n",
+                    "error: initializing 'struct S' with an expression of incompatible type \
+                     'void'\n",
+                ],
+            ),
+        ] {
+            let output = text(mode, "f.c");
+            for expected in expected {
+                assert!(output.contains(expected), "{mode}: {output}");
+            }
+        }
         assert!(text("--clang-mode", "c.c").starts_with("c.c:1:25: error: expected expression\n"));
         let related = text("--clang-mode", "d.c");
         assert!(
@@ -4664,6 +4746,80 @@ mod tests {
                 "int x = 1; int x = 2;",
                 "e.c:1: error: redefinition of 'x'\n",
             ),
+            (
+                "int main(void){ int i; long l = &i; return 0; }",
+                "e.c:1: warning: assignment makes integer from pointer without a cast\n",
+            ),
+            (
+                "int main(void){ int *p = 5; return 0; }",
+                "e.c:1: warning: assignment makes pointer from integer without a cast\n",
+            ),
+            (
+                "int f(int); int main(void){ return f(1, 2); }",
+                "e.c:1: error: too many arguments to function\n",
+            ),
+            (
+                "int f(int, int); int main(void){ return f(1); }",
+                "e.c:1: error: too few arguments to function\n",
+            ),
+            (
+                "struct S s;",
+                "e.c:1: error: initialization of incomplete type\n",
+            ),
+            (
+                "int main(void){ int a = 1 }",
+                "e.c:1: error: ';' expected (got '}')\n",
+            ),
+            (
+                "int main(void){ return 1 return }",
+                "e.c:1: error: ';' expected (got 'return')\n",
+            ),
+            (
+                "int main(void){ return 1 +; }",
+                "e.c:1: error: expression expected before ';'\n",
+            ),
+            (
+                "int main(void){ return 1 + ); }",
+                "e.c:1: error: expression expected before ')'\n",
+            ),
+            // TCC names a constant by its value and a floating one by its
+            // type, and escapes a character's values.
+            (
+                "void f(void){ int x = 1 0x10UL }",
+                "e.c:1: error: ';' expected (got '16')\n",
+            ),
+            (
+                "void f(void){ int x = 1 1.5f }",
+                "e.c:1: error: ';' expected (got '<float>')\n",
+            ),
+            (
+                "void f(void){ int x = 1 '\\t' }",
+                "e.c:1: error: ';' expected (got ''\\011'')\n",
+            ),
+            (
+                "void f(void){ int x = 1 \"a\\tb\" }",
+                "e.c:1: error: ';' expected (got '\"a\\011b\"')\n",
+            ),
+            (
+                "int main(void){ struct T *t; return t->x; }",
+                "e.c:1: error: dereferencing incomplete type 'T'\n",
+            ),
+            (
+                "struct S { int y; }; int main(void){ struct S s; return s.x; }",
+                "e.c:1: error: field not found: x\n",
+            ),
+            (
+                "void f(void); int main(void){ int x = f(); return x; }",
+                "e.c:1: error: cannot convert 'void' to 'int'\n",
+            ),
+            (
+                "void f(void); int main(void){ char *p; p = f(); return 0; }",
+                "e.c:1: error: cannot convert 'void' to 'char *'\n",
+            ),
+            (
+                "void f(void); int main(void){ return (long)f(); }",
+                "e.c:1: error: cannot convert 'void' to 'long'\n",
+            ),
             // A user's text keeps what only looks like an option.
             (
                 "#warning see [-Wfoo]\nint x;",
@@ -5622,6 +5778,156 @@ mod tests {
             let text = stderr(&run(&[option]));
             assert!(!text.contains("unexpected argument"), "{option}: {text}");
             assert!(!text.contains("Usage:"), "{option}: {text}");
+        }
+        // clang-cl's `/W1` to `/W3` are `-Wall`, `/W4` adds `-Wextra`, and
+        // without a level it reports neither (clang-cl 23).
+        directory.write(
+            "w.c",
+            "int f(int a) { int unused; unsigned u = 1; return a < u; }\n",
+        );
+        for (level, unused, sign) in [
+            (None, false, false),
+            (Some("/W0"), false, false),
+            (Some("/W1"), true, false),
+            (Some("/W3"), true, false),
+            (Some("/W4"), true, true),
+        ] {
+            let args: Vec<&str> = level.into_iter().chain(["/c", "w.c"]).collect();
+            let text = stderr(&directory.bcc("--clang-cl-mode", &args));
+            assert_eq!(
+                text.contains("[-Wunused-variable]"),
+                unused,
+                "{level:?}: {text}"
+            );
+            assert_eq!(text.contains("[-Wsign-compare]"), sign, "{level:?}: {text}");
+        }
+    }
+
+    /// clang-cl's warning levels are aliases of Clang options, which add up
+    /// as Clang's own do, where `cl`'s rightmost level wins: `-w` from `/w`
+    /// or `/W0` stays whatever level follows, and `/W4`'s `-Wextra` stays
+    /// under a later `/W1` to `/W3`. Each order of two levels, alone and
+    /// with `/WX`, as clang-cl 23 reports it. The source has no warning that
+    /// only `/Wall`'s `-Weverything` enables, which bcc does not have.
+    /// Clang Compiler User's Manual, "clang-cl".
+    #[test]
+    fn clang_cl_warning_levels_add_up_as_clang_options_do() {
+        #[derive(Clone, Copy, Debug)]
+        enum Reported {
+            Silent,
+            Default,
+            All,
+            Extra,
+        }
+        use Reported::{
+            All,
+            Default,
+            Extra,
+            Silent,
+        };
+        let directory = Directory::new();
+        directory.write(
+            "levels.c",
+            "int g(void);\nint h(void);\nint use(void);\nint h(void) { }\nstatic int f(int \
+             unusedparam) { int unused; unsigned u = 1; return g() < u; }\nint use(void) { return \
+             f(0); }\n",
+        );
+        for (levels, reported) in [
+            ("", Default),
+            ("/w", Silent),
+            ("/W0", Silent),
+            ("/W1", All),
+            ("/W2", All),
+            ("/W3", All),
+            ("/W4", Extra),
+            ("/Wall", Extra),
+            ("/w /w", Silent),
+            ("/w /W0", Silent),
+            ("/w /W1", Silent),
+            ("/w /W2", Silent),
+            ("/w /W3", Silent),
+            ("/w /W4", Silent),
+            ("/w /Wall", Silent),
+            ("/W0 /w", Silent),
+            ("/W0 /W0", Silent),
+            ("/W0 /W1", Silent),
+            ("/W0 /W2", Silent),
+            ("/W0 /W3", Silent),
+            ("/W0 /W4", Silent),
+            ("/W0 /Wall", Silent),
+            ("/W1 /w", Silent),
+            ("/W1 /W0", Silent),
+            ("/W1 /W1", All),
+            ("/W1 /W2", All),
+            ("/W1 /W3", All),
+            ("/W1 /W4", Extra),
+            ("/W1 /Wall", Extra),
+            ("/W2 /w", Silent),
+            ("/W2 /W0", Silent),
+            ("/W2 /W1", All),
+            ("/W2 /W2", All),
+            ("/W2 /W3", All),
+            ("/W2 /W4", Extra),
+            ("/W2 /Wall", Extra),
+            ("/W3 /w", Silent),
+            ("/W3 /W0", Silent),
+            ("/W3 /W1", All),
+            ("/W3 /W2", All),
+            ("/W3 /W3", All),
+            ("/W3 /W4", Extra),
+            ("/W3 /Wall", Extra),
+            ("/W4 /w", Silent),
+            ("/W4 /W0", Silent),
+            ("/W4 /W1", Extra),
+            ("/W4 /W2", Extra),
+            ("/W4 /W3", Extra),
+            ("/W4 /W4", Extra),
+            ("/W4 /Wall", Extra),
+            ("/Wall /w", Silent),
+            ("/Wall /W0", Silent),
+            ("/Wall /W1", Extra),
+            ("/Wall /W2", Extra),
+            ("/Wall /W3", Extra),
+            ("/Wall /W4", Extra),
+            ("/Wall /Wall", Extra),
+        ] {
+            let expected: &[&str] = match reported {
+                | Silent => &[],
+                | Default => &["-Wreturn-type"],
+                | All => &["-Wreturn-type", "-Wunused-variable"],
+                | Extra => &[
+                    "-Wreturn-type",
+                    "-Wunused-variable",
+                    "-Wunused-parameter",
+                    "-Wsign-compare",
+                ],
+            };
+            for werror in [false, true] {
+                let mut args: Vec<&str> = levels.split_whitespace().collect();
+                if werror {
+                    args.push("/WX");
+                }
+                args.extend(["/nologo", "/Zs", "levels.c"]);
+                let output = directory.bcc("--clang-cl-mode", &args);
+                let text = stderr(&output);
+                let severity = if werror { ": error: " } else { ": warning: " };
+                // Which warnings, not their order, which differs from Clang's.
+                let mut reported: Vec<&str> = text
+                    .lines()
+                    .filter(|line| line.contains(severity))
+                    .filter_map(|line| line.rsplit_once("[-")?.1.strip_suffix(']'))
+                    .map(|option| option.trim_start_matches("Werror,-"))
+                    .collect();
+                reported.sort_unstable();
+                let mut expected: Vec<&str> = expected.iter().map(|option| &option[1..]).collect();
+                expected.sort_unstable();
+                assert_eq!(reported, expected, "{args:?}: {text}");
+                assert_eq!(
+                    output.status.code(),
+                    Some(i32::from(werror && !expected.is_empty())),
+                    "{args:?}: {text}"
+                );
+            }
         }
     }
 
@@ -7411,7 +7717,7 @@ mod tests {
     /// `/wd`, `/we` and `/wN` name a warning by its number. `cl` only warns
     /// about a conversion between a pointer and an integer or between
     /// incompatible pointers, so it succeeds unless `/WX` is given.
-    /// clang-cl keeps Clang's rules and bcc's words.
+    /// clang-cl keeps Clang's rules and words.
     #[test]
     fn cl_diagnostics_take_cls_codes_words_and_levels() {
         let directory = Directory::new();
@@ -7556,13 +7862,179 @@ mod tests {
         assert_eq!(warnings(&["/we4113"]).0, Some(2));
         assert_eq!(warnings(&["/wd4133", "/WX"]).0, Some(2));
         assert_eq!(warnings(&["/wd4113", "/wd4090", "/WX"]).0, Some(0));
-        // clang-cl writes Clang's errors in bcc's words.
+        // clang-cl writes Clang's errors in Clang's words.
         let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "pointers.c"]);
         assert_eq!(clang_cl.status.code(), Some(1));
         let text = stderr(&clang_cl);
         assert!(!text.contains(" C40"), "{text}");
         assert!(text.contains("pointers.c(2,"), "{text}");
         assert!(text.contains("): error: "), "{text}");
+    }
+
+    /// clang-cl is Clang with `cl`'s locations: Clang's words, snippets,
+    /// notes and closing counts, `file(line,col):` before each, as the
+    /// pinned clang-cl writes them. `/WX` makes each warning an error
+    /// Clang marks `-Werror`, `/diagnostics:column` drops the snippets and
+    /// with them the counts, and `/diagnostics:classic` drops the column
+    /// too.
+    #[test]
+    fn clang_cl_writes_clangs_diagnostics_at_cls_locations() {
+        let directory = Directory::new();
+        directory.write(
+            "undeclared.c",
+            "int f(int x) { return x + undefined_thing; }\n",
+        );
+        directory.write("unused.c", "int f(void) { int unused; return 0; }\n");
+        directory.write(
+            "pointer.c",
+            "int main(void) { long x = 1; char *p = x; return 0; }\n",
+        );
+        directory.write(
+            "jump.c",
+            "void f(int n) { goto L; int a[n]; L:; (void)a; }\n",
+        );
+        let clang_cl = |args: &[&str]| {
+            let output = directory.bcc(
+                "--clang-cl-mode",
+                &[&["/c", "/nologo", "/W4"], args].concat(),
+            );
+            (output.status.code(), stderr(&output))
+        };
+        assert_eq!(
+            clang_cl(&["undeclared.c"]),
+            (
+                Some(1),
+                "undeclared.c(1,27): error: use of undeclared identifier 'undefined_thing'\n    1 \
+                 | int f(int x) { return x + undefined_thing; }\n      |                           \
+                 ^~~~~~~~~~~~~~~\n1 error generated.\n"
+                    .into()
+            )
+        );
+        // Clang reports no unused variable in a scope an unrecoverable
+        // error occurred in.
+        directory.write(
+            "trapped.c",
+            "int f(int x) { int unused; return x + undefined_thing; }\n",
+        );
+        assert_eq!(
+            clang_cl(&["trapped.c"]),
+            (
+                Some(1),
+                "trapped.c(1,39): error: use of undeclared identifier 'undefined_thing'\n    1 | int \
+                 f(int x) { int unused; return x + undefined_thing; }\n      |                                       \
+                 ^~~~~~~~~~~~~~~\n1 error generated.\n"
+                    .into()
+            )
+        );
+        let unused =
+            "    1 | int f(void) { int unused; return 0; }\n      |                   ^~~~~~\n";
+        assert_eq!(
+            clang_cl(&["unused.c"]),
+            (
+                Some(0),
+                format!(
+                    "unused.c(1,19): warning: unused variable 'unused' \
+                     [-Wunused-variable]\n{unused}1 warning generated.\n"
+                )
+            )
+        );
+        assert_eq!(
+            clang_cl(&["/WX", "unused.c"]),
+            (
+                Some(1),
+                format!(
+                    "unused.c(1,19): error: unused variable 'unused' \
+                     [-Werror,-Wunused-variable]\n{unused}1 error generated.\n"
+                )
+            )
+        );
+        assert_eq!(
+            clang_cl(&["/diagnostics:caret", "unused.c"]),
+            clang_cl(&["unused.c"])
+        );
+        assert_eq!(
+            clang_cl(&["/diagnostics:column", "unused.c"]),
+            (
+                Some(0),
+                "unused.c(1,19): warning: unused variable 'unused' [-Wunused-variable]\n".into()
+            )
+        );
+        assert_eq!(
+            clang_cl(&["/diagnostics:classic", "unused.c"]),
+            (
+                Some(0),
+                "unused.c(1): warning: unused variable 'unused' [-Wunused-variable]\n".into()
+            )
+        );
+        // Clang counts warnings first, and a warning `/WX` makes an error
+        // stays beside the error at its place.
+        let (status, text) = clang_cl(&["pointer.c"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.starts_with(
+                "pointer.c(1,36): error: incompatible integer to pointer conversion initializing \
+                 'char *' with an expression of type 'long' [-Wint-conversion]\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("\npointer.c(1,36): warning: unused variable 'p' [-Wunused-variable]\n"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("\n1 warning and 1 error generated.\n"),
+            "{text}"
+        );
+        let (status, text) = clang_cl(&["/WX", "pointer.c"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.contains(
+                "\npointer.c(1,36): error: unused variable 'p' [-Werror,-Wunused-variable]\n"
+            ),
+            "{text}"
+        );
+        assert!(text.ends_with("\n2 errors generated.\n"), "{text}");
+        // A note takes the same location form.
+        let (status, text) = clang_cl(&["jump.c"]);
+        assert_eq!(status, Some(1));
+        assert!(text.contains("\njump.c(1,29): note: "), "{text}");
+        // Clang's words for the syntax and directives it expected, at a
+        // caret without a range.
+        directory.write("declarator.c", "int 123;\n");
+        assert_eq!(
+            clang_cl(&["declarator.c"]),
+            (
+                Some(1),
+                "declarator.c(1,5): error: expected identifier or '('\n    1 | int 123;\n      |     \
+                 ^\n1 error generated.\n"
+                    .into()
+            )
+        );
+        directory.write(
+            "directives.c",
+            "#if 1 2\n#endif\n#define 1\nconst const int x;\n",
+        );
+        let (status, text) = clang_cl(&["/WX", "directives.c"]);
+        assert_eq!(status, Some(1));
+        for line in
+            [
+                "directives.c(1,7): error: token is not a valid binary operator in a preprocessor \
+                 subexpression\n",
+                "\ndirectives.c(3,9): error: macro name must be an identifier\n    3 | #define \
+                 1\n      |         ^\n",
+                "\ndirectives.c(4,7): error: duplicate 'const' declaration specifier \
+                 [-Werror,-Wduplicate-decl-specifier]\n    4 | const const int x;\n      |       \
+                 ^\n3 errors generated.\n",
+            ]
+        {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
+        // `cl` keeps its own codes and words.
+        let cl = directory.bcc("--msvc-mode", &["/c", "/nologo", "/W4", "undeclared.c"]);
+        assert_eq!(
+            stderr(&cl),
+            "undeclared.c(1): error C2065: 'undefined_thing': undeclared identifier\n"
+        );
     }
 
     /// `cl` reads its options from command files (`@file`, UTF-8 or UTF-16
@@ -8363,6 +8835,60 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             "{text}"
         );
         assert!(!text.contains("<pragma string>"), "{text}");
+    }
+
+    /// Comparisons the operand's type decides, under each compiler's options.
+    /// Each row was measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_type_limit_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int f(unsigned u, unsigned char c) { return (u < 0) + (c > 300) + (c > 255); }\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            let mut flags: Vec<String> = stderr(&output)
+                .lines()
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.join(" ")
+        };
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], ""),
+            ("--gcc-mode", &["-Wall"][..], ""),
+            (
+                "--gcc-mode",
+                &["-Wextra"][..],
+                "type-limits type-limits type-limits",
+            ),
+            (
+                "--clang-mode",
+                &[][..],
+                "tautological-constant-out-of-range-compare",
+            ),
+            (
+                "--clang-mode",
+                &["-Wno-tautological-constant-compare"][..],
+                "",
+            ),
+            (
+                "--clang-mode",
+                &["-Wtype-limits"][..],
+                "tautological-constant-out-of-range-compare tautological-type-limit-compare \
+                 tautological-unsigned-zero-compare",
+            ),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
     }
 
     /// A typedef a block declares and never uses, under each compiler's
@@ -11212,14 +11738,14 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         succeeds(&output);
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: warning: incompatible integer and pointer conversion\nptr.c:1: warning: \
-             assignment from incompatible pointer type\n"
+            "ptr.c:1: warning: assignment makes pointer from integer without a cast\nptr.c:1: \
+             warning: assignment from incompatible pointer type\n"
         );
         let output = directory.bcc("--tcc-mode", &["-Werror", "-c", "ptr.c"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: error: incompatible integer and pointer conversion\n"
+            "ptr.c:1: error: assignment makes pointer from integer without a cast\n"
         );
         // `$` follows `-f[no-]dollars-in-identifiers`, in every personality.
         directory.write("dollar.c", "int a$b = 3;\n");

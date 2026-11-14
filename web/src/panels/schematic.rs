@@ -12,10 +12,19 @@ use crate::snapshot::{
     Tree,
 };
 
+/// The narrowest step from one logic level to the next, in pixels.
 const COLUMN: f64 = 132.0;
 const ROW: f64 = 34.0;
 /// Width of one character of the labels, in pixels.
 const CHAR: f64 = 8.0;
+/// Width of one character of a wire's value (10.5 px type), in pixels.
+const VALUE_CHAR: f64 = 6.6;
+/// The run of wire a level keeps before the next level's bend.
+const GAP: f64 = 30.0;
+/// The most characters an operand's label or a wire's value shows; a
+/// string literal is cut short, as on the tape, and the outline for screen
+/// readers keeps it whole.
+const SHOWN: usize = 16;
 
 #[component]
 pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
@@ -88,17 +97,16 @@ fn walk(tree: &Tree, index: usize, row: &mut [f64], leaves: &mut usize) -> f64 {
 fn drawing(tree: &Tree) -> impl IntoView {
     let (level, row, leaves) = place(tree);
     let root = tree.nodes.len() - 1;
-    let x = |index: usize| px(level[index]) * COLUMN + 10.0;
+    let width_of = |index: usize| width_of(tree, index);
+    let shown_value = |index: usize| shown_value(tree, index);
+    let start = columns(tree, &level);
+    let x = |index: usize| start[level[index]];
     let y = |index: usize| row[index] * ROW + ROW / 2.0 + 6.0;
-    let width_of = |index: usize| {
-        let label = px(tree.nodes[index].label.chars().count());
-        if tree.nodes[index].children.is_empty() {
-            label * CHAR + 16.0
-        } else {
-            (label * CHAR + 14.0).max(30.0)
-        }
-    };
-    let width = px(level[root]) * COLUMN + width_of(root) + 70.0;
+    let result = tree.nodes[root]
+        .value
+        .as_ref()
+        .map_or(1, |value| shown(value).chars().count());
+    let width = x(root) + width_of(root) + 34.0 + px(result) * VALUE_CHAR;
     let height = px(leaves.max(1)) * ROW + 14.0;
     let mut parent = vec![None; tree.nodes.len()];
     for (index, node) in tree.nodes.iter().enumerate() {
@@ -116,13 +124,14 @@ fn drawing(tree: &Tree) -> impl IntoView {
             };
             let bend = to - 14.0;
             let state = wire_state(node.value.is_some(), node.active);
-            let shown = node.value.as_ref().filter(|value| !(node.children.is_empty() && **value == node.label));
-            let value = shown.map(|value| if node.lvalue { "object".to_owned() } else { value.clone() });
+            // The full expression's own value is written once, at the end
+            // of its wire.
+            let value = shown_value(index).filter(|_| parent[index].is_some());
             view! {
                 <path class=format!("wire {state}") d=format!("M{from:.1} {y0:.1} H{bend:.1} V{y1:.1} H{to:.1}") />
                 {value.map(|value| view! { <text class="wire-value" x=from + 4.0 y=y0 - 5.0>{value}</text> })}
                 {parent[index].is_none().then(|| view! {
-                    <text class="wire-value" x=to + 4.0 y=y0 + 4.0>{node.value.clone().unwrap_or_else(|| "?".to_owned())}</text>
+                    <text class="wire-value" x=to + 4.0 y=y0 + 4.0>{node.value.as_deref().map_or_else(|| "?".to_owned(), shown)}</text>
                 })}
             }
         })
@@ -138,7 +147,7 @@ fn drawing(tree: &Tree) -> impl IntoView {
                 view! {
                     <g class=format!("schematic-input{active}")>
                         <circle cx=x0 + 3.0 cy=y0 r="3" />
-                        <text x=x0 + 10.0 y=y0 + 4.0>{node.label.clone()}</text>
+                        <text x=x0 + 10.0 y=y0 + 4.0>{shown(&node.label)}</text>
                     </g>
                 }
                 .into_any()
@@ -147,7 +156,7 @@ fn drawing(tree: &Tree) -> impl IntoView {
                 view! {
                     <g class=format!("schematic-gate{active}")>
                         <rect x=x0 y=y0 - 12.0 width=box_width height="24" />
-                        <text x=x0 + box_width / 2.0 y=y0 + 4.5 text-anchor="middle">{node.label.clone()}</text>
+                        <text x=x0 + box_width / 2.0 y=y0 + 4.5 text-anchor="middle">{shown(&node.label)}</text>
                     </g>
                 }
                 .into_any()
@@ -159,6 +168,64 @@ fn drawing(tree: &Tree) -> impl IntoView {
             {wires}
             {nodes}
         </svg>
+    }
+}
+
+/// The left edge of each logic level. Each level is as wide as its widest
+/// node and the value on its wire, so a long operand (a string literal)
+/// never runs into its operator.
+fn columns(tree: &Tree, level: &[usize]) -> Vec<f64> {
+    let count = level.iter().max().map_or(1, |&deepest| deepest + 1);
+    let mut start = vec![10.0; count + 1];
+    for column in 0..count {
+        let widest = (0..tree.nodes.len())
+            .filter(|&index| level[index] == column)
+            .map(|index| {
+                let value = shown_value(tree, index)
+                    .map_or(0.0, |value| px(value.chars().count()) * VALUE_CHAR + 8.0);
+                width_of(tree, index) + value.max(GAP)
+            })
+            .fold(0.0, f64::max);
+        start[column + 1] = start[column] + widest.max(COLUMN);
+    }
+    start
+}
+
+/// The width of node `index`'s label: an operand's name, or an operator's
+/// box.
+fn width_of(tree: &Tree, index: usize) -> f64 {
+    let label = px(shown(&tree.nodes[index].label).chars().count());
+    if tree.nodes[index].children.is_empty() {
+        label * CHAR + 16.0
+    } else {
+        (label * CHAR + 14.0).max(30.0)
+    }
+}
+
+/// The value written on node `index`'s wire, if it has one to show: not an
+/// operand's own spelling, and "object" for an lvalue.
+fn shown_value(tree: &Tree, index: usize) -> Option<String> {
+    let node = &tree.nodes[index];
+    node.value
+        .as_ref()
+        .filter(|value| !(node.children.is_empty() && **value == node.label))
+        .map(|value| {
+            if node.lvalue {
+                "object".to_owned()
+            } else {
+                shown(value)
+            }
+        })
+}
+
+/// `text` cut to [`SHOWN`] characters, ending in `…` when it was longer.
+fn shown(text: &str) -> String {
+    if text.chars().count() <= SHOWN {
+        text.to_owned()
+    } else {
+        let mut cut: String = text.chars().take(SHOWN - 1).collect();
+        cut.push('…');
+        cut
     }
 }
 

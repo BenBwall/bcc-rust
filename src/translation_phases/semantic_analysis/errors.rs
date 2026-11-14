@@ -119,6 +119,8 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
     /// The words are the diagnostic's name.
+    /// C99: §6.5.8p6, p. 86; PDF p. 98.
+    TypeLimits(crate::configuration::DiagnosticGroup),
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
     ShadowOrBody(crate::configuration::DiagnosticGroup),
     /// C99: §6.5p3, p. 67; PDF p. 79.
@@ -394,10 +396,18 @@ pub(crate) enum SemanticErrorKind {
     IncompleteValue,
     /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
     InvalidMemberAccess,
+    /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
+    IncompleteMemberAccess,
+    /// C99: §6.3.2.2p1, p. 46; PDF p. 58.
+    VoidValueUsed,
     /// C99: §6.5.2.2p1, p. 71; PDF p. 83.
     InvalidCall,
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentCount,
+    /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
+    TooFewArguments,
+    /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
+    TooManyArguments,
     /// C99: §6.5.2.2p2, p. 71; PDF p. 83.
     InvalidArgumentType,
     /// Clang: Microsoft's `selectany` applies to data with external linkage.
@@ -1072,8 +1082,12 @@ impl SemanticErrorKind {
             | Self::InvalidSizeof => "operand has no size",
             | Self::IncompleteValue => "value of incomplete type",
             | Self::InvalidMemberAccess => "no such member",
+            | Self::IncompleteMemberAccess => "incomplete record",
+            | Self::VoidValueUsed => "void value",
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
+            | Self::TooFewArguments => "too few arguments",
+            | Self::TooManyArguments => "too many arguments",
             | Self::AnnotationArgument => "not a wide string literal",
             | Self::CpuBuiltinNotLiteral => "not a string literal",
             | Self::CpuBuiltinParameter | Self::CpuNameUnknown | Self::CpuFeatureUnknown =>
@@ -1150,6 +1164,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::TypeLimits(_) => "the types decide this comparison",
             | Self::ShadowOrBody(_) => "this may not be what it looks like",
             | Self::Parentheses(_) => "this may not group as written",
             | Self::KnrPromotedParameter => "the prototype gives it another type",
@@ -1382,6 +1397,11 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::TypeLimits
+                    | crate::configuration::DiagnosticGroup::TautologicalConstantCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalConstantOutOfRangeCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalUnsignedZeroCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalTypeLimitCompare
                     | crate::configuration::DiagnosticGroup::Shadow
                     | crate::configuration::DiagnosticGroup::ShadowLocal
                     | crate::configuration::DiagnosticGroup::ShadowCompatibleLocal
@@ -1834,6 +1854,10 @@ impl SemanticErrorKind {
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
             ),
+            | Self::TypeLimits(_) => (
+                "comparison decided by type",
+                "C99 §6.5.8p6: the result is the same for every value the operand's type can hold",
+            ),
             | Self::ShadowOrBody(_) => (
                 "hidden declaration or empty body",
                 "C99 §6.2.1p4 hides an outer declaration in an inner scope, and §6.8.3p3 makes \
@@ -2150,6 +2174,16 @@ impl SemanticErrorKind {
                 "value of an object requires a complete type",
                 "C99 §6.3.2.1p2: an lvalue of incomplete non-array type has no value to convert to",
             ),
+            | Self::VoidValueUsed => (
+                "a void expression has no value to use",
+                "C99 §6.3.2.2p1: the nonexistent value of a void expression shall not be used in \
+                 any way, and no conversion other than to void applies to it",
+            ),
+            | Self::IncompleteMemberAccess => (
+                "member access requires a complete structure or union",
+                "C99 §6.5.2.3p1-2: member access names a member of a structure or union, which an \
+                 incomplete type does not yet declare",
+            ),
             | Self::InvalidMemberAccess => (
                 "member access requires a declared record member",
                 "C99 §6.5.2.3p1-2: member access names a member of the designated structure or \
@@ -2193,6 +2227,15 @@ impl SemanticErrorKind {
             ),
             | Self::InvalidArgumentCount => (
                 "function call has the wrong number of arguments",
+                "C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis \
+                 permits additional arguments",
+            ),
+            | Self::TooFewArguments => (
+                "function call has too few arguments",
+                "C99 §6.5.2.2p2: a call passes an argument for every parameter of the prototype",
+            ),
+            | Self::TooManyArguments => (
+                "function call has too many arguments",
                 "C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis \
                  permits additional arguments",
             ),
@@ -2734,6 +2777,7 @@ impl SemanticErrorKind {
         use crate::configuration::DiagnosticGroup as G;
         match self {
             | Self::PointerConstraint(group)
+            | Self::TypeLimits(group)
             | Self::ShadowOrBody(group)
             | Self::Parentheses(group)
             | Self::Format(group, _)
@@ -2762,7 +2806,8 @@ impl SemanticErrorKind {
 
 impl SemanticError {
     /// GCC 14's, Clang 23's and TCC's own words for the C type-safety
-    /// diagnostics those compilers make errors or warnings by default, in
+    /// diagnostics those compilers make errors or warnings by default, and
+    /// for the `asm` outputs GCC and Clang cannot write, in
     /// their diagnostic formats, with the `-W` option each names (none for
     /// TCC, and none for a Clang error that no option controls); other
     /// diagnostics, and the other formats, keep bcc's.
@@ -2771,6 +2816,7 @@ impl SemanticError {
         context: &Context<'_>,
         arena: &'d Bump,
     ) -> Option<(&'d str, Option<&'static str>)> {
+        use super::assembly::AsmFault;
         use crate::configuration::DiagnosticFormat as F;
         let format = context.configuration.diagnostic_format();
         let name = self.name.map_or("", |name| context.string_cache.at(name));
@@ -2800,6 +2846,17 @@ impl SemanticError {
                     group.name()
                 };
                 return Some((arena.alloc_str(name), option));
+            },
+            // GCC words an attribute it drops by its name, under its one
+            // `-Wattributes`.
+            | (F::Gcc, SemanticErrorKind::IgnoredAttribute) =>
+                return Some((
+                    format_in!(arena, "'{name}' attribute ignored"),
+                    Some("attributes"),
+                )),
+            | (F::Gcc, SemanticErrorKind::UnknownAttribute) => {
+                let message = format_in!(arena, "'{name}' attribute directive ignored");
+                return Some((message, Some("attributes")));
             },
             // An error by default, which `-Wno-parentheses` controls.
             | (
@@ -2887,6 +2944,14 @@ impl SemanticError {
                 "parameter names (without types) in function declaration",
             | (F::Clang, SemanticErrorKind::TypeSpecifierRequired) =>
                 return Some(("a type specifier is required for all declarations", None)),
+            // GNU extension: GCC manual, "Extended Asm"; GCC's and Clang's
+            // words for an output they cannot write.
+            | (F::Gcc, SemanticErrorKind::InvalidAsm(AsmFault::ReadOnlyVariable)) =>
+                format_in!(arena, "read-only variable '{name}' used as 'asm' output"),
+            | (F::Clang, SemanticErrorKind::InvalidAsm(AsmFault::ReadOnlyVariable)) =>
+                "invalid lvalue in asm output",
+            | (F::Gcc, SemanticErrorKind::InvalidAsm(AsmFault::ImpossibleOutput)) =>
+                "impossible constraint in 'asm'",
             | _ => return None,
         };
         Some((message, if format == F::Tcc { None } else { group }))
@@ -2899,7 +2964,11 @@ impl SemanticError {
     fn promoted_option<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
         use crate::configuration::DiagnosticFormat as F;
         let group = self.kind.group()?;
-        let name = group.name()?;
+        let name = if gcc_attributes(context, self.kind) {
+            "attributes"
+        } else {
+            group.name()?
+        };
         if self.severity() != ErrorSeverity::Error
             || group.default_severity() != ErrorSeverity::Warning
         {
@@ -2982,6 +3051,17 @@ impl SemanticError {
             )),
             | (Format::Gcc, SemanticErrorKind::UndefinedInternal(_)) =>
                 Some(format_in!(arena, "'{name}' used but never defined")),
+            // Worded by `Analyzer::member_wording`.
+            | (
+                Format::Gcc | Format::Clang,
+                SemanticErrorKind::InvalidMemberAccess
+                | SemanticErrorKind::IncompleteMemberAccess
+                | SemanticErrorKind::VoidValueUsed,
+            ) => Some(arena.alloc_str(name)),
+            | (Format::Gcc, SemanticErrorKind::TooFewArguments) =>
+                Some(format_in!(arena, "too few arguments to function '{name}'")),
+            | (Format::Gcc, SemanticErrorKind::TooManyArguments) =>
+                Some(format_in!(arena, "too many arguments to function '{name}'")),
             | (Format::Clang, SemanticErrorKind::UndefinedInternal(_)) => Some(format_in!(
                 arena,
                 "function '{name}' has internal linkage but is not defined"
@@ -3024,6 +3104,10 @@ impl SemanticError {
                 format_in!(arena, "redefinition of '{name}'"),
             | (SemanticErrorKind::UndefinedLabel, Some(name)) =>
                 format_in!(arena, "label '{name}' used but not defined"),
+            | (SemanticErrorKind::IncompleteTentativeDefinition, _) =>
+                "initialization of incomplete type",
+            | (SemanticErrorKind::TooFewArguments, _) => "too few arguments to function",
+            | (SemanticErrorKind::TooManyArguments, _) => "too many arguments to function",
             | (SemanticErrorKind::BreakOutsideLoopOrSwitch, _) => "cannot break",
             | (SemanticErrorKind::ContinueOutsideLoop, _) => "cannot continue",
             | (SemanticErrorKind::ExpectedModifiableLvalue, _) => "lvalue expected",
@@ -3033,9 +3117,30 @@ impl SemanticError {
                 ),
                 _,
             ) => "assignment from incompatible pointer type",
+            // Worded by `Analyzer::member_wording`, `void_value_wording`
+            // and, with the conversion's direction, `conversion_wording`.
+            | (
+                SemanticErrorKind::InvalidMemberAccess
+                | SemanticErrorKind::IncompleteMemberAccess
+                | SemanticErrorKind::VoidValueUsed
+                | SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IntConversion,
+                ),
+                Some(words),
+            ) => arena.alloc_str(words),
             | _ => return None,
         })
     }
+}
+
+/// Whether `kind` is an attribute GCC drops, which GCC's format names under
+/// its one `-Wattributes`.
+fn gcc_attributes(context: &Context<'_>, kind: SemanticErrorKind) -> bool {
+    context.configuration.diagnostic_format() == crate::configuration::DiagnosticFormat::Gcc
+        && matches!(
+            kind,
+            SemanticErrorKind::IgnoredAttribute | SemanticErrorKind::UnknownAttribute
+        )
 }
 
 impl ToDiagnostic for SemanticError {
@@ -3096,6 +3201,7 @@ impl ToDiagnostic for SemanticError {
             self.kind,
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::TypeLimits(_)
                 | SemanticErrorKind::ShadowOrBody(_)
                 | SemanticErrorKind::Parentheses(_)
                 | SemanticErrorKind::Format(..)

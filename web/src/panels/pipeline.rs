@@ -203,7 +203,9 @@ pub fn PipelineView(
                         | (None, Some(path)) => view! {
                             <p class="stage-command is-internal">
                                 "No command prints this stage: it happens inside bcc, in "
-                                <a href=format!("{SOURCE_URL}{path}")><code>{path}</code></a>
+                                // A narrow screen wraps the path after a
+                                // `/`, never inside a name.
+                                <a href=format!("{SOURCE_URL}{path}")><code class="stage-path">{path.split_inclusive('/').map(|part| view! { {part}<wbr /> }).collect_view()}</code></a>
                             </p>
                         }.into_any(),
                         | (None, None) => ().into_any(),
