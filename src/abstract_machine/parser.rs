@@ -1759,7 +1759,10 @@ impl<'a> Parser<'a> {
             return Ok(Some(Integer::UnsignedLong));
         }
         let first = self.current();
-        let mut counts = [0_u8; 6];
+        // Each count is bounded by the token count, which the source size
+        // limit keeps far below usize::MAX, so repeating a specifier cannot
+        // wrap it back into a valid combination.
+        let mut counts = [0_usize; 6];
         let words = ["signed", "unsigned", "char", "short", "int", "long"];
         while let Some(word) = words.iter().position(|word| self.at(word)) {
             counts[word] += 1;

@@ -3197,6 +3197,32 @@ fn static_initializers_negate_an_unsigned_constant_in_its_own_type() {
 }
 
 #[test]
+fn repeating_a_type_specifier_past_its_counter_still_names_no_type() {
+    // A narrow counter would wrap back to a valid combination after 256
+    // repetitions, or overflow summing `signed` and `unsigned`.
+    let mut sources = vec![format!(
+        "int main(void){{{}x=1;return x;}}\n",
+        "int ".repeat(257)
+    )];
+    for words in ["int ", "long ", "char ", "unsigned "] {
+        sources.push(format!(
+            "int main(void) {{ {} x = 1; return x; }}\n",
+            words.repeat(256)
+        ));
+    }
+    sources.push(format!(
+        "int main(void) {{ {}{}int x = 1; return x; }}\n",
+        "signed ".repeat(128),
+        "unsigned ".repeat(128)
+    ));
+    for source in &sources {
+        let diagnostic = compile(source).map(|_| ()).expect_err(source);
+        assert_eq!(diagnostic.kind, "constraint", "{}", diagnostic.message);
+        assert_eq!(diagnostic.clause.map(|clause| clause.id), Some("6.7.2p2"));
+    }
+}
+
+#[test]
 fn shifts_promote_each_operand_and_stop_outside_their_width() {
     returned("int main(void) { return (1u << 31) == 2147483648u; }", 1);
     returned(
