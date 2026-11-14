@@ -1440,6 +1440,7 @@ pub fn precomputed_llvm(stem: &str, optimize: bool) -> Option<&'static str> {
     lessons!(
         "objects",
         "hello",
+        "constants",
         "pointers",
         "recursion",
         "structs",
@@ -1469,6 +1470,7 @@ pub fn precomputed_llvm_lines(stem: &str, optimize: bool) -> Vec<LineOrigin> {
     lessons!(
         "objects",
         "hello",
+        "constants",
         "pointers",
         "recursion",
         "structs",
@@ -1504,6 +1506,7 @@ pub fn precomputed_source(stem: &str) -> Option<&'static str> {
     Some(match stem {
         | "objects" => include_str!("../pipeline/objects/source.c"),
         | "hello" => include_str!("../pipeline/hello/source.c"),
+        | "constants" => include_str!("../pipeline/constants/source.c"),
         | "pointers" => include_str!("../pipeline/pointers/source.c"),
         | "recursion" => include_str!("../pipeline/recursion/source.c"),
         | "structs" => include_str!("../pipeline/structs/source.c"),

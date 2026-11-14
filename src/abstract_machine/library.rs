@@ -7,10 +7,11 @@
 //! one conversion specification at a time.
 //!
 //! The subset of `printf` is the conversions `%d %i %u %x %c %s %%`, with
-//! the `-` and `0` flags and a field width. Other valid specifications
-//! (precision, `*`, length modifiers, other conversions and flags) stop
-//! with an explicit diagnostic; invalid ones, a missing argument and an
-//! argument of the wrong type are undefined behavior.
+//! the `-` and `0` flags, a field width and a precision. Other valid
+//! specifications (`*`, length modifiers, other conversions and flags) stop
+//! with an explicit diagnostic; invalid ones (a precision with `%c`
+//! among them), a missing argument and an argument of the wrong type are
+//! undefined behavior.
 //!
 //! C99: §7.19.6.1 paragraphs 2, 4, 6, 8 and 9, pp. 274-280; PDF pp.
 //! 286-292 (fprintf).
@@ -62,16 +63,22 @@ enum Piece {
         source:        String,
         took:          String,
         wrote:         Vec<u8>,
+        /// What the precision did, or empty.
+        precision:     String,
     },
 }
 
 /// A parsed conversion specification.
 struct Specification {
-    left:       bool,
-    zero:       bool,
-    width:      usize,
-    conversion: u8,
-    text:       String,
+    left:         bool,
+    zero:         bool,
+    width:        usize,
+    /// The precision, when the specification has one.
+    precision:    Option<usize>,
+    /// Whether a precision made the 0 flag be ignored (C99 §7.19.6.1p6).
+    zero_ignored: bool,
+    conversion:   u8,
+    text:         String,
 }
 
 impl Machine {
@@ -106,7 +113,7 @@ impl Machine {
             },
             | Library::Puts => {
                 let pointer = arguments.first().cloned().unwrap_or(Value::Indeterminate);
-                let mut string = self.read_string(&pointer, "puts", text(0))?;
+                let mut string = self.read_string(&pointer, "puts", text(0), None)?;
                 string.push(b'\n');
                 self.write(&string)?;
                 // C promises only a nonnegative value; glibc returns the
@@ -117,7 +124,7 @@ impl Machine {
             },
             | Library::Printf => {
                 let pointer = arguments.first().cloned().unwrap_or(Value::Indeterminate);
-                let format = self.read_string(&pointer, "printf", text(0))?;
+                let format = self.read_string(&pointer, "printf", text(0), None)?;
                 let (pieces, written) = self.format(&format, &arguments, types, &texts)?;
                 self.write(&written)?;
                 let returned = i32::try_from(written.len()).unwrap_or(i32::MAX);
@@ -165,13 +172,16 @@ impl Machine {
     }
 
     /// The characters of the string `pointer` points to, read one element
-    /// at a time up to its null character, which is not included. `function`
-    /// reads it as its argument `text`.
+    /// at a time up to its null character, which is not included, or up to
+    /// `limit` characters: a `%s` with a precision reads no further, so its
+    /// array needs no null (C99 §7.19.6.1p8). `function` reads it as its
+    /// argument `text`.
     fn read_string(
         &self,
         pointer: &Value,
         function: &str,
         text: &str,
+        limit: Option<usize>,
     ) -> Result<Vec<u8>, Diagnostic> {
         let &Value::Pointer {
             target: Some(target),
@@ -194,6 +204,9 @@ impl Machine {
         let mut bytes = Vec::new();
         let mut at = offset;
         loop {
+            if limit == Some(bytes.len()) {
+                return Ok(bytes);
+            }
             if at >= first + length {
                 let array = self.array_name(target, first);
                 let from = self.location(target, offset);
@@ -250,6 +263,7 @@ impl Machine {
                     source:        String::new(),
                     took:          String::new(),
                     wrote:         Vec::from(*b"%"),
+                    precision:     String::new(),
                 });
                 continue;
             }
@@ -269,18 +283,20 @@ impl Machine {
             let ty = types.get(next).copied().unwrap_or(Type::Int);
             let text = texts.get(next).map_or("", String::as_str);
             let converted = self.convert(&specification, argument, ty, next, text)?;
+            let precision = precision_note(&specification, argument, &converted);
             let padded = pad(&specification, converted);
             written.extend_from_slice(&padded);
             pieces.push(Piece::Converted {
                 specification: specification.text,
-                argument:      Some(next),
-                source:        String::from(text),
-                took:          if text.is_empty() {
+                argument: Some(next),
+                source: String::from(text),
+                took: if text.is_empty() {
                     self.argument_text(argument)
                 } else {
                     format!("`{text}`, {}", self.argument_text(argument))
                 },
-                wrote:         padded,
+                wrote: padded,
+                precision,
             });
             next += 1;
         }
@@ -324,6 +340,29 @@ impl Machine {
                 "a field width above 256 is outside this subset",
             ));
         }
+        // A period and an optional decimal integer: just the period is a
+        // precision of zero (C99 §7.19.6.1p4).
+        let precision = if format.get(*at) == Some(&b'.') && format.get(*at + 1) != Some(&b'*') {
+            *at += 1;
+            let digits = format[*at..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            let precision = std::str::from_utf8(&format[*at..*at + digits])
+                .ok()
+                .and_then(|digits| digits.parse::<usize>().ok())
+                .unwrap_or(if digits == 0 { 0 } else { usize::MAX });
+            *at += digits;
+            if precision > 256 {
+                return Err(Diagnostic::limit(
+                    self.state.source_range,
+                    "a precision above 256 is outside this subset",
+                ));
+            }
+            Some(precision)
+        } else {
+            None
+        };
         let Some(&conversion) = format.get(*at) else {
             return Err(Diagnostic::ub(
                 self.state.source_range,
@@ -364,11 +403,17 @@ impl Machine {
                     Undefined::InvalidConversion,
                 ));
             },
+            | b'c' if precision.is_some() => {
+                return Err(invalid(format!(
+                    "`{text}` gives %c a precision, which C defines only for the numeric \
+                     conversions and %s"
+                )));
+            },
             | b'%' | b'd' | b'i' | b'u' | b'x' | b'c' | b's' => {},
             | b'.' | b'*' | b'h' | b'l' | b'L' | b'j' | b'z' | b't' => {
                 return Err(self.error(&format!(
-                    "`{text}…` uses a precision, `*` or a length modifier, which are outside this \
-                     subset; the machine takes flags, a width and a conversion"
+                    "`{text}…` uses `*` or a length modifier, which are outside this subset; the \
+                     machine takes flags, a width, a precision and a conversion"
                 )));
             },
             | b'o' | b'X' | b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' | b'p' | b'n' => {
@@ -384,10 +429,15 @@ impl Machine {
                 )));
             },
         }
+        // With a precision, the numeric conversions ignore the 0 flag
+        // (C99 §7.19.6.1p6).
+        let zero_ignored = zero && !left && precision.is_some();
         Ok(Specification {
             left,
-            zero: zero && !left,
+            zero: zero && !left && !zero_ignored,
             width,
+            precision,
+            zero_ignored,
             conversion,
             text,
         })
@@ -418,10 +468,25 @@ impl Machine {
                 Undefined::WrongArgument,
             )
         };
+        let digits = |text: String| {
+            // The precision is the minimum number of digits; a zero value
+            // with precision zero writes none (C99 §7.19.6.1p8).
+            let (sign, digits) = text.split_at(usize::from(text.starts_with('-')));
+            let mut written = Vec::from(sign.as_bytes());
+            match specification.precision {
+                | Some(0) if digits == "0" => {},
+                | Some(precision) => {
+                    written.resize(written.len() + precision.saturating_sub(digits.len()), b'0');
+                    written.extend_from_slice(digits.as_bytes());
+                },
+                | None => written.extend_from_slice(digits.as_bytes()),
+            }
+            written
+        };
         match (conversion, argument) {
             | (b'd' | b'i' | b'c' | b'u' | b'x', Value::Integer(value)) if ty == Type::Int =>
                 Ok(match conversion {
-                    | b'd' | b'i' => format!("{value}").into_bytes(),
+                    | b'd' | b'i' => digits(format!("{value}")),
                     | b'c' => Vec::from([value.to_le_bytes()[0]]),
                     | _ if *value < 0 => {
                         return Err(wrong(
@@ -433,13 +498,13 @@ impl Machine {
                             ),
                         ));
                     },
-                    | b'u' => format!("{value}").into_bytes(),
-                    | _ => format!("{value:x}").into_bytes(),
+                    | b'u' => digits(format!("{value}")),
+                    | _ => digits(format!("{value:x}")),
                 }),
             | (b'd' | b'i' | b'c', _) => Err(wrong("an int", "")),
             | (b'u' | b'x', _) => Err(wrong("an unsigned int", "")),
             | (_, pointer @ Value::Pointer { .. }) if matches!(ty, Type::CharPointer(_)) =>
-                self.read_string(pointer, "printf's %s", text),
+                self.read_string(pointer, "printf's %s", text, specification.precision),
             | _ => Err(wrong("a pointer to a string (a char *)", "")),
         }
     }
@@ -567,6 +632,7 @@ impl Machine {
                     source,
                     took,
                     wrote,
+                    precision,
                 } => {
                     let _ = write!(
                         steps,
@@ -574,6 +640,9 @@ impl Machine {
                          writes {}",
                         quoted(wrote)
                     );
+                    if !precision.is_empty() {
+                        let _ = write!(steps, " ({precision})");
+                    }
                     let taken = if source.is_empty() {
                         format!("argument {index}")
                     } else {
@@ -650,6 +719,11 @@ impl Machine {
         }) {
             cited.extend([clauses::CONVERSION_SPECIFICATION, clauses::PRINTF_FLAGS]);
         }
+        if pieces.iter().any(
+            |piece| matches!(piece, Piece::Converted { precision, .. } if !precision.is_empty()),
+        ) {
+            cited.insert(3, clauses::PRECISION);
+        }
         if variadic {
             cited.extend([clauses::VARIADIC_ARGUMENTS, clauses::DEFAULT_PROMOTIONS]);
         }
@@ -680,6 +754,65 @@ impl Machine {
             i32::try_from(count).unwrap_or(i32::MAX),
         )));
         event
+    }
+}
+
+/// What the precision of `specification` meant for `argument`, which it
+/// converted to `converted` (before any padding), in words; empty without
+/// a precision.
+///
+/// C99: §7.19.6.1 paragraph 4, p. 275; PDF p. 287.
+fn precision_note(specification: &Specification, argument: &Value, converted: &[u8]) -> String {
+    let Some(precision) = specification.precision else {
+        return String::new();
+    };
+    let ignored = if specification.zero_ignored {
+        "; with a precision the 0 flag is ignored, so any padding is spaces"
+    } else {
+        ""
+    };
+    if specification.conversion == b's' {
+        let plural = if precision == 1 { "" } else { "s" };
+        return if converted.len() == precision {
+            format!(
+                "the precision .{precision} writes at most {precision} character{plural} of the \
+                 string, so printf stops there, without needing to reach the null"
+            )
+        } else {
+            format!(
+                "the precision .{precision} allows up to {precision} character{plural}, and the \
+                 string has only {}, so all of it is written",
+                converted.len()
+            )
+        };
+    }
+    let written = converted
+        .iter()
+        .filter(|byte| byte.is_ascii_hexdigit())
+        .count();
+    let zero = matches!(argument, Value::Integer(0));
+    let plural = if precision == 1 { "" } else { "s" };
+    if precision == 0 && zero {
+        return format!("the precision .0 with the value 0 writes no digits at all{ignored}");
+    }
+    let natural = match argument {
+        | Value::Integer(value) if specification.conversion == b'x' => format!("{value:x}").len(),
+        | Value::Integer(value) => format!("{}", value.unsigned_abs()).len(),
+        | _ => written,
+    };
+    let leading = written.saturating_sub(natural);
+    if leading == 0 {
+        format!(
+            "the precision .{precision} asks for at least {precision} digit{plural}, and the \
+             value already has {natural}, so it adds nothing{ignored}"
+        )
+    } else {
+        format!(
+            "the precision .{precision} asks for at least {precision} digit{plural}, so {leading} \
+             leading zero{} {} added{ignored}",
+            if leading == 1 { "" } else { "s" },
+            if leading == 1 { "is" } else { "are" }
+        )
     }
 }
 
@@ -723,7 +856,7 @@ const fn pointer_target(value: &Value) -> Option<usize> {
 fn type_text(ty: Type) -> &'static str {
     match ty {
         | Type::Int | Type::Char => "an int",
-        | Type::Pointer => "a pointer to int",
+        | Type::Pointer(_) => "a pointer to int",
         | Type::CharPointer(_) => "a pointer to char",
         | Type::StructPointer(_) => "a pointer to a structure",
         | _ => "an aggregate",

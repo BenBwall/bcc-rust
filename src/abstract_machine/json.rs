@@ -39,7 +39,7 @@ impl Diagnostic {
 }
 
 pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
-    let mut output = String::from("{\"schema_version\":4,\"source\":");
+    let mut output = String::from("{\"schema_version\":5,\"source\":");
     string(&mut output, &program.source);
     output.push_str(",\"structures\":[");
     for (index, structure) in program.structures.iter().enumerate() {
@@ -79,7 +79,7 @@ pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
 fn state(output: &mut String, state: &State) {
     write!(
         output,
-        "{{\"schema_version\":4,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
+        "{{\"schema_version\":5,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
         state.step
     )
     .expect("String write");

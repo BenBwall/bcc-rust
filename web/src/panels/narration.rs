@@ -154,12 +154,14 @@ pub fn Narration(
     }
 }
 
-/// After the step that ran `#include <stdio.h>`, a way to the compiler's
-/// Preprocessor stage, which shows what the real preprocessor does.
+/// After a step of translation phase 4 (a directive the machine ran, or a
+/// use of a macro, which cites the preprocessing clauses of §6.10), a way
+/// to the compiler's Preprocessor stage, which shows what the real
+/// preprocessor does.
 #[component]
 fn StageLink(event: Memo<Option<StepEvent>>, on_preprocessor: Callback<()>) -> impl IntoView {
     view! {
-        <p class="narration-stage" hidden=move || !event.with(|event| event.as_ref().is_some_and(|event| event.kind == "directive"))>
+        <p class="narration-stage" hidden=move || !event.with(|event| event.as_ref().is_some_and(StepEvent::preprocessed))>
             <button type="button" class="button ghost" on:click=move |_| on_preprocessor.run(())>
                 "See the real preprocessor: open the Preprocessor stage"
             </button>

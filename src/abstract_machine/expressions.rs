@@ -51,7 +51,7 @@ impl Parser<'_> {
             }
             let ty = match (operator, lhs.ty, rhs.ty) {
                 | (_, Type::Int | Type::Char, Type::Int | Type::Char)
-                | ("==" | "!=", Type::Pointer, Type::Pointer)
+                | ("==" | "!=", Type::Pointer(_), Type::Pointer(_))
                 | ("==" | "!=", Type::CharPointer(_), Type::CharPointer(_)) => Type::Int,
                 | ("==" | "!=", Type::StructPointer(a), Type::StructPointer(b)) if a == b =>
                     Type::Int,
@@ -65,8 +65,8 @@ impl Parser<'_> {
                         "arithmetic on structure pointers needs an array of structures, which is \
                          outside this subset",
                     )),
-                | ("+" | "-", Type::Pointer, Type::Int | Type::Char)
-                | ("+", Type::Int | Type::Char, Type::Pointer) => Type::Pointer,
+                | ("+" | "-", Type::Pointer(constant), Type::Int | Type::Char)
+                | ("+", Type::Int | Type::Char, Type::Pointer(constant)) => Type::Pointer(constant),
                 | ("+" | "-", Type::CharPointer(constant), Type::Int | Type::Char)
                 | ("+", Type::Int | Type::Char, Type::CharPointer(constant)) =>
                     Type::CharPointer(constant),
@@ -93,6 +93,9 @@ impl Parser<'_> {
         let token = self.current();
         let range = token.range;
         let text = String::from(token.text);
+        if self.at("(") && is_type_word(self.peek(1)) {
+            return self.cast();
+        }
         if let Some(operator) = unary(&text) {
             self.position += 1;
             let child = self.expression(6)?;
@@ -103,7 +106,7 @@ impl Parser<'_> {
             let readonly = expression.readonly;
             let ty = match (operator, expression.ty) {
                 | ("+" | "-" | "!", Type::Int | Type::Char)
-                | ("!" | "*", Type::Pointer)
+                | ("!" | "*", Type::Pointer(_))
                 | ("!", Type::StructPointer(_) | Type::CharPointer(_)) => Type::Int,
                 | ("*", Type::CharPointer(_)) => Type::Char,
                 | ("*", Type::StructPointer(id)) => self.complete_type(id)?,
@@ -113,7 +116,7 @@ impl Parser<'_> {
                 },
                 | ("&", Type::Int) => {
                     self.check_lvalue(child)?;
-                    Type::Pointer
+                    Type::Pointer(readonly)
                 },
                 | ("&", Type::Struct(id)) => {
                     self.check_lvalue(child)?;
@@ -127,10 +130,10 @@ impl Parser<'_> {
             let range = combined(range, self.expressions[child].range);
             let height = self.expressions[child].height + 1;
             let node = self.node(ExprKind::Unary(operator, child), ty, false, range, height)?;
-            // `*p` for a `const char *p` designates a char the program may
-            // not modify through it (C99 §6.3.2.1p1).
+            // `*p` for a `const char *p` or a `const int *p` designates an
+            // object the program may not modify through it (C99 §6.3.2.1p1).
             self.expressions[node].readonly =
-                operator == "*" && self.expressions[child].ty == Type::CharPointer(true);
+                operator == "*" && self.expressions[child].ty.points_to_const();
             return Ok(node);
         }
         let mut value = if self.take("(") {
@@ -141,21 +144,26 @@ impl Parser<'_> {
             self.expressions[value].range = combined(range, closing);
             value
         } else if text.starts_with('"') {
-            self.position += 1;
-            self.adjacent_literal()?;
-            let index = self.string_literal(token)?;
+            let literal = self.take_literal()?;
+            let (spelling, range) = (literal.spelling.clone(), literal.range);
+            let macro_use = literal.macro_use;
+            let index = self.string_literal(literal)?;
             let declared = self.statics[index].ty;
-            self.node(
-                ExprKind::Name(text, declared, Place::Static(index)),
+            let node = self.node(
+                ExprKind::Name(spelling, declared, Place::Static(index)),
                 declared.decayed(),
                 false,
                 range,
                 1,
-            )?
+            )?;
+            self.expressions[node].macro_use = macro_use;
+            node
         } else if text.starts_with('\'') {
             let value = self.character_constant(token)?;
             self.position += 1;
-            self.node(ExprKind::Character(value, text), Type::Int, false, range, 1)?
+            let node = self.node(ExprKind::Character(value, text), Type::Int, false, range, 1)?;
+            self.expressions[node].macro_use = token.macro_use;
+            node
         } else if text.as_bytes().first().is_some_and(u8::is_ascii_digit) {
             if text.len() > 1 && text.starts_with('0') {
                 return Err(
@@ -167,7 +175,9 @@ impl Parser<'_> {
                     .error("literal must be an unsuffixed decimal value within signed int range"));
             };
             self.position += 1;
-            self.node(ExprKind::Number(integer), Type::Int, false, range, 1)?
+            let node = self.node(ExprKind::Number(integer), Type::Int, false, range, 1)?;
+            self.expressions[node].macro_use = token.macro_use;
+            node
         } else if is_identifier(&text) {
             self.position += 1;
             let binding = self
@@ -175,7 +185,7 @@ impl Parser<'_> {
                 .iter()
                 .rev()
                 .find(|symbol| symbol.name == text)
-                .map(|symbol| (symbol.ty, symbol.place));
+                .map(|symbol| (symbol.ty, symbol.place, symbol.constant));
             if self.take("(") {
                 if binding.is_some() {
                     return Err(self.error("calling a local object is not supported"));
@@ -232,15 +242,19 @@ impl Parser<'_> {
                     height,
                 )?
             } else {
-                let Some((declared, place)) = binding else {
+                let Some((declared, place, constant)) = binding else {
                     return Err(self.error("use of an undeclared identifier"));
                 };
                 // Arrays decay to pointers. A char's value keeps type char:
                 // only the operators that need it promote it (see `promoted`).
+                // A `const` object is no modifiable lvalue, and a `const`
+                // array decays to a pointer to `const` elements.
                 // C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58.
-                let ty = declared.decayed();
+                let ty = declared.decayed_qualified(constant);
                 let place = place.map_or_else(|| Place::Local(text.clone()), Place::Static);
-                self.node(ExprKind::Name(text, declared, place), ty, false, range, 1)?
+                let node = self.node(ExprKind::Name(text, declared, place), ty, false, range, 1)?;
+                self.expressions[node].readonly = constant && !declared.is_array();
+                node
             }
         } else {
             return Err(self.error(
@@ -262,7 +276,7 @@ impl Parser<'_> {
             let base = &self.expressions[value];
             let subscript = &self.expressions[index];
             let element = match base.ty {
-                | Type::Pointer => Some(Type::Int),
+                | Type::Pointer(_) => Some(Type::Int),
                 | Type::CharPointer(_) => Some(Type::Char),
                 | _ => None,
             };
@@ -273,7 +287,7 @@ impl Parser<'_> {
                     "subscript requires an int or char pointer and a side-effect-free int index",
                 ));
             };
-            let readonly = base.ty == Type::CharPointer(true);
+            let readonly = base.ty.points_to_const();
             value = self.node(
                 ExprKind::Index(value, index),
                 element,
@@ -284,6 +298,100 @@ impl Parser<'_> {
             self.expressions[value].readonly = readonly;
         }
         Ok(value)
+    }
+
+    /// `(type-name) operand`: a cast to `int`, `char`, or between pointers
+    /// to the same type that differ only in `const`. Its operand binds as
+    /// a unary operator's does, so `(char)300 + 1` adds 1 to the cast.
+    ///
+    /// C99: §6.5.4 paragraphs 2 and 4, p. 81; PDF p. 93.
+    fn cast(&mut self) -> Result<usize, Diagnostic> {
+        let opening = self.current();
+        self.position += 1;
+        let start = self.current();
+        let to = match self.current().text {
+            | "unsigned" =>
+                return Err(self.error(
+                    "unsigned types are outside this subset, which models int and char; \
+                     converting a negative value to an unsigned type wraps it modulo 2^N, so \
+                     (unsigned)-1 is 4294967295 (C99 §6.3.1.3p2)",
+                )),
+            | "void" =>
+                return Err(self.error(
+                    "a cast to void, which discards a value, is outside this subset; write the \
+                     expression as a statement of its own",
+                )),
+            | "int" | "char" | "const" => {
+                let constant = self.take("const");
+                let base = if self.take("int") {
+                    Type::Int
+                } else if self.take("char") {
+                    Type::Char
+                } else {
+                    return Err(self.error(
+                        "a cast in this subset names int, char, or a pointer to int or char",
+                    ));
+                };
+                if self.take("*") {
+                    if base == Type::Int {
+                        Type::Pointer(constant)
+                    } else {
+                        Type::CharPointer(constant)
+                    }
+                } else {
+                    // A cast yields a value, not an object, so a qualifier
+                    // on the type it names changes nothing (C99 §6.5.4,
+                    // footnote 89).
+                    base
+                }
+            },
+            | _ =>
+                return Err(self.error(
+                    "a cast in this subset names int, char, or a pointer to int or char; other \
+                     types (unsigned, long, float, structures, ...) are outside it",
+                )),
+        };
+        if !self.at(")") {
+            return Err(self.error(
+                "a cast in this subset names int, char, or a pointer to int or char (such as \
+                 `(int *)`); pointers to pointers and other declarators are outside it",
+            ));
+        }
+        let closing = self.current();
+        self.position += 1;
+        let child = self.expression(6)?;
+        let operand = &self.expressions[child];
+        if operand.call {
+            return Err(self.error(
+                "a cast of a call's result is outside this subset; store the result first",
+            ));
+        }
+        let from = operand.ty;
+        let allowed = match (from, to) {
+            | (Type::Int | Type::Char, Type::Int | Type::Char)
+            | (Type::Pointer(_), Type::Pointer(_))
+            | (Type::CharPointer(_), Type::CharPointer(_)) => true,
+            | (Type::Struct(_) | Type::Array(_) | Type::CharArray(_), _) =>
+                return Err(Diagnostic::constraint(
+                    combined(opening.range, operand.range),
+                    "a cast converts a scalar, a number or a pointer; a structure has no scalar \
+                     value to convert (C99 §6.5.4p2)",
+                    &super::clauses::CAST_CONSTRAINT,
+                )),
+            | _ => false,
+        };
+        if !allowed {
+            return Err(Diagnostic::new(
+                "unsupported",
+                combined(start.range, closing.range),
+                "this subset casts between int and char, and between pointers to the same type \
+                 that differ only in const; casts between integers and pointers or between \
+                 different pointer types are outside it",
+            ));
+        }
+        let range = combined(opening.range, operand.range);
+        let height = operand.height + 1;
+        self.node(ExprKind::Cast(to, child), to, false, range, height)
     }
 
     /// `base.m` or `base->m`: the member's lvalue (C99 §6.5.2.3p3, p4).
@@ -379,6 +487,7 @@ impl Parser<'_> {
             height,
             parenthesized: false,
             readonly: false,
+            macro_use: None,
         });
         Ok(index)
     }
@@ -505,16 +614,26 @@ impl Parser<'_> {
             | ExprKind::Number(integer) => {
                 let tree = self.tree(&format!("{integer}"), range, Vec::new())?;
                 self.emit_node(Op::Push(integer), range, tree)?;
+                self.mark_macro(node.macro_use);
                 tree
             },
             | ExprKind::Character(value, spelling) => {
                 let tree = self.tree(&spelling, range, Vec::new())?;
                 self.emit_node(Op::Push(value), range, tree)?;
+                self.mark_macro(node.macro_use);
                 tree
             },
             | ExprKind::Name(name, declared, place) if declared.is_array() => {
                 let tree = self.tree(&name, range, Vec::new())?;
                 self.emit_node(Op::Decay(place), range, tree)?;
+                self.mark_macro(node.macro_use);
+                tree
+            },
+            | ExprKind::Cast(to, child) => {
+                let from = self.expressions[child].ty;
+                let operand = self.emit_expression(child, false)?;
+                let tree = self.tree(&format!("({})", cast_spelling(to)), range, vec![operand])?;
+                self.emit_node(Op::Cast { from, to }, range, tree)?;
                 tree
             },
             | ExprKind::Name(name, declared, place) => {
@@ -714,9 +833,11 @@ pub(super) struct Expr {
     pub range:         SourceRange,
     pub height:        usize,
     pub parenthesized: bool,
-    /// A `const`-qualified lvalue, which no store may modify: a char
-    /// reached through a `const char *`.
+    /// A `const`-qualified lvalue, which no store may modify: an object
+    /// defined `const`, or one reached through a pointer to `const`.
     pub readonly:      bool,
+    /// The macro whose replacement this constant or literal is.
+    pub macro_use:     Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -737,6 +858,8 @@ pub(super) enum ExprKind {
     Unary(&'static str, usize),
     Binary(&'static str, usize, usize),
     Index(usize, usize),
+    /// `(type) operand`, converting to the type.
+    Cast(Type, usize),
     Call(String, Vec<usize>),
     /// A call to a function `<stdio.h>` declares.
     Library(Library, Vec<usize>),
@@ -776,5 +899,39 @@ pub(super) fn combined(left: SourceRange, right: SourceRange) -> SourceRange {
         end_line: right.end_line,
         end_column: right.end_column,
         ..left
+    }
+}
+
+/// Whether `word` starts a type name, as after the `(` of a cast.
+fn is_type_word(word: &str) -> bool {
+    matches!(
+        word,
+        "int"
+            | "char"
+            | "const"
+            | "unsigned"
+            | "signed"
+            | "short"
+            | "long"
+            | "float"
+            | "double"
+            | "void"
+            | "struct"
+            | "union"
+            | "enum"
+            | "volatile"
+            | "_Bool"
+    )
+}
+
+/// A cast's type as C spells it: `char`, `int *`, `const char *`.
+pub(super) const fn cast_spelling(ty: Type) -> &'static str {
+    match ty {
+        | Type::Char => "char",
+        | Type::Pointer(false) => "int *",
+        | Type::Pointer(true) => "const int *",
+        | Type::CharPointer(false) => "char *",
+        | Type::CharPointer(true) => "const char *",
+        | _ => "int",
     }
 }

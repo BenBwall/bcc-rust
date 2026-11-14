@@ -19,9 +19,44 @@ pub struct Program {
     /// among them, in source order.
     pub(super) statics:    Vec<Static>,
     /// The preprocessing directives the machine runs itself, in source
-    /// order: each `#include <stdio.h>`. They run before the static objects
-    /// are initialized, as translation phase 4 comes before execution.
-    pub(super) directives: Vec<SourceRange>,
+    /// order: each `#include <stdio.h>` and each object-like `#define`.
+    /// They run before the static objects are initialized, as translation
+    /// phase 4 comes before execution.
+    pub(super) directives: Vec<Directive>,
+    /// The object-like macros the program defines, in definition order.
+    pub(super) macros:     Vec<Macro>,
+}
+
+/// A preprocessing directive the machine runs as one step of translation
+/// phase 4.
+#[derive(Debug, Clone)]
+pub(super) struct Directive {
+    pub range: SourceRange,
+    pub kind:  DirectiveKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DirectiveKind {
+    /// `#include <stdio.h>`.
+    Include,
+    /// `#define NAME replacement`, defining macro `index` of
+    /// [`Program::macros`]; `again` when it repeats an identical
+    /// definition, which C allows (C99 §6.10.3p2).
+    Define { index: usize, again: bool },
+}
+
+/// An object-like macro whose replacement list is one integer or
+/// character constant or string literal (C99 §6.10.3p9).
+#[derive(Debug, Clone)]
+pub(super) struct Macro {
+    pub name:        String,
+    /// The replacement list as written.
+    pub replacement: String,
+    /// What the replacement is: `integer constant`, `character constant`
+    /// or `string literal`.
+    pub kind:        &'static str,
+    /// The `#define` line.
+    pub range:       SourceRange,
 }
 
 /// A structure type and its layout on x86-64: each member at an offset
@@ -176,6 +211,8 @@ pub enum EventKind {
     LvalueConversion,
     /// A `char` value was promoted to `int`.
     IntegerPromotion,
+    /// A cast converted a value to the type it names.
+    Cast,
     /// An array was converted to a pointer to its first element.
     ArrayDecay,
     /// `&` formed a pointer to an object.
@@ -200,6 +237,9 @@ pub enum EventKind {
     Assign,
     /// `++` or `--` updated an object.
     Increment,
+    /// A compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`) updated an
+    /// object.
+    CompoundAssign,
     /// An expression statement's value was discarded.
     Discard,
     /// Control moved without a test (loop back, skip an else).
@@ -233,6 +273,7 @@ impl EventKind {
             | Self::Designate => "designate",
             | Self::LvalueConversion => "lvalue_conversion",
             | Self::IntegerPromotion => "integer_promotion",
+            | Self::Cast => "cast",
             | Self::ArrayDecay => "array_decay",
             | Self::AddressOf => "address_of",
             | Self::Dereference => "dereference",
@@ -245,6 +286,7 @@ impl EventKind {
             | Self::Initialize => "initialize",
             | Self::Assign => "assign",
             | Self::Increment => "increment",
+            | Self::CompoundAssign => "compound_assign",
             | Self::Discard => "discard",
             | Self::Jump => "jump",
             | Self::Branch => "branch",
@@ -265,7 +307,8 @@ impl EventKind {
             | Self::Arithmetic
             | Self::PointerArithmetic
             | Self::Comparison => "evaluate",
-            | Self::LvalueConversion | Self::IntegerPromotion | Self::ArrayDecay => "convert",
+            | Self::LvalueConversion | Self::IntegerPromotion | Self::Cast | Self::ArrayDecay =>
+                "convert",
             | Self::Designate
             | Self::AddressOf
             | Self::Dereference
@@ -273,7 +316,8 @@ impl EventKind {
             | Self::Member
             | Self::Initialize
             | Self::Assign
-            | Self::Increment => "memory",
+            | Self::Increment
+            | Self::CompoundAssign => "memory",
             | Self::EnterBlock
             | Self::LeaveBlock
             | Self::Declare
@@ -474,8 +518,8 @@ impl Value {
 /// A structured diagnostic. Unsupported features and limits never claim UB.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
-    /// `syntax`, `unsupported`, `undefined_behavior`, `indeterminate` or
-    /// `limit`.
+    /// `syntax`, `constraint`, `unsupported`, `undefined_behavior`,
+    /// `indeterminate` or `limit`.
     pub kind:         &'static str,
     /// Human-readable explanation.
     pub message:      String,
@@ -513,6 +557,9 @@ pub enum Undefined {
     PointerOutside,
     /// A store into the array of a string literal (C99 §6.4.5p6).
     StringLiteralWrite,
+    /// A store into an object defined `const`, through an lvalue that is
+    /// not (C99 §6.7.3p5).
+    ConstWrite,
     /// A library function read a string that has no null character before
     /// the end of its array.
     Unterminated,
@@ -560,6 +607,16 @@ impl Diagnostic {
         }
     }
 
+    /// A violated constraint: C requires a diagnostic, and the program
+    /// does not compile (C99 §5.1.1.3p1).
+    pub(super) fn constraint(range: SourceRange, message: &str, clause: &'static Clause) -> Self {
+        Self {
+            citation: Some(clause.citation),
+            clause: Some(clause),
+            ..Self::new("constraint", range, message)
+        }
+    }
+
     pub(super) fn indeterminate(
         range: SourceRange,
         message: &str,
@@ -585,17 +642,25 @@ pub(super) struct Function {
 
 #[derive(Debug, Clone)]
 pub(super) struct Instruction {
-    pub op:    Op,
-    pub range: SourceRange,
+    pub op:        Op,
+    pub range:     SourceRange,
     /// The expression-tree node this operation evaluates, if any.
-    pub node:  Option<usize>,
+    pub node:      Option<usize>,
+    /// The macro of [`Program::macros`] whose replacement this operation
+    /// evaluates, when the source spells a macro name here.
+    pub macro_use: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) enum Op {
     Enter,
     Leave,
-    Declare(String, Type),
+    /// Create an automatic object; `constant` when it is defined `const`.
+    Declare {
+        name:     String,
+        ty:       Type,
+        constant: bool,
+    },
     /// Reaching the declaration of block-scope static `index`: nothing to do.
     StaticLocal(usize),
     Push(i32),
@@ -627,6 +692,12 @@ pub(super) enum Op {
     },
     /// The integer promotion of a loaded `char` to `int`.
     Promote,
+    /// `(type) value`: convert the value of type `from` to `to` (C99
+    /// §6.5.4p4).
+    Cast {
+        from: Type,
+        to:   Type,
+    },
     /// The default argument promotion of a `char` passed through a
     /// variadic function's `...` (C99 §6.5.2.2p6-7).
     DefaultPromote,
@@ -653,6 +724,9 @@ pub(super) enum Op {
         delta:  i32,
         prefix: bool,
     },
+    /// `E1 op= E2` as a statement: read the object the address below the
+    /// value on the stack designates, apply `op`, store the result.
+    Compound(&'static str),
     Pop,
     Jump(usize),
     /// Skip to the target when the condition of the named statement is zero.
@@ -669,6 +743,8 @@ pub(super) enum Op {
         length:          usize,
         /// Whether this ends a full expression (C99 §6.8p4).
         full_expression: bool,
+        /// How many adjacent literals translation phase 6 joined into it.
+        parts:           usize,
     },
     Return,
     Fallthrough,
@@ -729,6 +805,14 @@ pub(super) struct Static {
     pub explicit: bool,
     /// Whether this is the array of a string literal, named as written.
     pub literal:  bool,
+    /// Whether the object is defined `const`.
+    pub constant: bool,
+    /// For a string literal, how many adjacent literals translation phase
+    /// 6 joined into it.
+    pub parts:    usize,
+    /// The macros whose replacements the declaration uses, in order: a
+    /// literal a macro stands for, or the constants of its initializer.
+    pub macros:   Vec<usize>,
     pub range:    SourceRange,
 }
 
@@ -738,8 +822,8 @@ pub(super) enum Type {
     /// Plain `char`, signed with 8 bits as on x86-64 (implementation-defined;
     /// C99 §6.2.5p15).
     Char,
-    /// `int *`.
-    Pointer,
+    /// `int *`, or `const int *` when set.
+    Pointer(bool),
     /// `int[n]`.
     Array(usize),
     /// A structure, by index into [`Program::structures`].
@@ -757,7 +841,7 @@ impl Type {
     pub(super) const fn is_pointer(self) -> bool {
         matches!(
             self,
-            Self::Pointer | Self::StructPointer(_) | Self::CharPointer(_)
+            Self::Pointer(_) | Self::StructPointer(_) | Self::CharPointer(_)
         )
     }
 
@@ -769,10 +853,25 @@ impl Type {
     /// The pointer an array of this type decays to.
     pub(super) const fn decayed(self) -> Self {
         match self {
-            | Self::Array(_) => Self::Pointer,
+            | Self::Array(_) => Self::Pointer(false),
             | Self::CharArray(_) => Self::CharPointer(false),
             | other => other,
         }
+    }
+
+    /// The pointer an array of this type decays to, to `const` elements
+    /// when the array is defined `const` (C99 §6.3.2.1p3, §6.7.3p8).
+    pub(super) const fn decayed_qualified(self, constant: bool) -> Self {
+        match self {
+            | Self::Array(_) => Self::Pointer(constant),
+            | Self::CharArray(_) => Self::CharPointer(constant),
+            | other => other,
+        }
+    }
+
+    /// Whether this is a pointer to `const`-qualified elements.
+    pub(super) const fn points_to_const(self) -> bool {
+        matches!(self, Self::Pointer(true) | Self::CharPointer(true))
     }
 }
 

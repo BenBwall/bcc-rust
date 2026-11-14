@@ -152,7 +152,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 4.
+    /// Encodes the current observation using schema version 5.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()
@@ -212,7 +212,9 @@ impl Program {
     /// `<stdio.h>`, whose functions the machine runs.
     #[must_use]
     pub fn writes_output(&self) -> bool {
-        !self.directives.is_empty()
+        self.directives
+            .iter()
+            .any(|directive| directive.kind == model::DirectiveKind::Include)
     }
 
     /// The name of function `function`, in definition order.

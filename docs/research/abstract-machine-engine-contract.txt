@@ -1,4 +1,4 @@
-Bounded C execution API and schema v4
+Bounded C execution API and schema v5
 
 CHOICE: independent, explicitly bounded C subset evaluator. No compiler/LLVM,
 filesystem, virtual-memory arena, serde, wasm-bindgen, or other dependencies.
@@ -25,10 +25,11 @@ PUBLIC API:
   Diagnostic::to_json(&self) -> String;
 No unsafe ABI in engine; wrapper can hold Session and return JSON bytes.
 
-JSON schema v4 (v1 fields shown; later versions add the event, evaluation
+JSON schema v5 (v1 fields shown; later versions add the event, evaluation
 and structure fields, objects' storage_duration "static", function, parameter
-and literal, and the state's output and written):
-  {schema_version:4, engine:"bounded-c-subset", step:number,
+and literal, and the state's output and written; v5 adds the diagnostic kind
+"constraint"):
+  {schema_version:5, engine:"bounded-c-subset", step:number,
    status:"ready"|"running"|"finished"|"undefined_behavior"|"error"|"limit",
    source_range:{start:byteOffset,end:exclusiveByteOffset,line:oneBased,
                  column:oneBased,end_line:oneBased,end_column:oneBased},
@@ -44,30 +45,40 @@ and literal, and the state's output and written):
   Value = {kind:"indeterminate"} | {kind:"integer",value:number}
         | {kind:"pointer",target:number|null,offset:number}
         | {kind:"array",elements:[Value]}
-  Diagnostic = {kind:"unsupported"|"syntax"|"undefined_behavior"|"indeterminate"|"limit",
+  Diagnostic = {kind:"unsupported"|"syntax"|"constraint"|"undefined_behavior"
+                     |"indeterminate"|"limit",
                 message:string,source_range:Range,citation:string|null}
+  "constraint" is a compile-time violation of a C99 constraint, which every
+  compiler must diagnose (5.1.1.3p1): the program is not valid C, as opposed
+  to "unsupported", valid C outside the subset.
 Pointer offsets are int elements, never host addresses. Object IDs never reused.
 source_range is the next operation; event describes the last completed step.
-Trace JSON: {schema_version:4,source:string,structures:[...],states:[State,...]}.
+Trace JSON: {schema_version:5,source:string,structures:[...],states:[State,...]}.
 Back restores a recorded complete machine state; forward replays existing states.
 
 Subset: signed 32-bit int, plain char (signed, 8 bits), pointers to int and
-char (and const char *), fixed int and char arrays, structures and pointers to
-them, file-scope and block-scope static objects, int- or structure-returning
-named functions with named parameters of those types, prototypes declared
-before their definitions, block locals/scopes, if/else, while, for, return,
+char (and to const int and const char), fixed int and char arrays, const int
+and const char objects and arrays, structures and pointers to them,
+file-scope and block-scope static objects, int- or structure-returning named
+functions with named parameters of those types, prototypes declared before
+their definitions, block locals/scopes, if/else, while, for, return,
 assignments, arithmetic/comparisons, address/dereference/subscript/member,
-prefix/postfix increment as standalone statements. Array and structure brace
-initialization; char arrays also from a string literal, with or without a
-size. Character constants and string literals with the simple, octal and
-hexadecimal escapes. `#include <stdio.h>` at file scope, run by the machine as
-one step of translation phase 4, and the calls printf, puts and putchar.
-printf takes %d %i %u %x %c %s %% with the - and 0 flags and a decimal field
-width. No other directive, header or library function, no casts, floating
-point, unsigned or long types, malloc, function pointers, arbitrary
-declarators, adjacent-literal concatenation, wide literals, or compound
-side-effect expressions. Unsupported input is an explicit diagnostic, never
-scripted or ignored.
+casts between int and char and between pointers that differ only in const,
+prefix/postfix increment and the compound assignments += -= *= /= %= as
+standalone statements. Array and structure brace initialization; char arrays
+also from a string literal, with or without a size. Character constants and
+string literals with the simple, octal and hexadecimal escapes; adjacent
+string literals are joined (translation phase 6). At file scope, `#include
+<stdio.h>` and object-like `#define NAME replacement` whose replacement is one
+decimal integer constant, character constant or string literal, each run by
+the machine as one step of translation phase 4, and the calls printf, puts
+and putchar. printf takes %d %i %u %x %c %s %% with the - and 0 flags, a
+decimal field width and a decimal precision. No other directive (function-like
+macros, #if, #undef, ...), header or library function, no floating point,
+unsigned or long types (so no cast to them), malloc, function pointers,
+arbitrary declarators (const pointers `* const`, const parameters and
+members), wide literals, or compound side-effect expressions. Unsupported
+input is an explicit diagnostic, never scripted or ignored.
 Evaluation order: chosen left-to-right for side-effect-free operands; calls
 are allowed as a whole scalar initializer/RHS/return/condition/expression
 statement. Calls in array initializer lists and nested calls are rejected.
@@ -78,7 +89,8 @@ this prototype does not model deferred/unsequenced writes.
 Bounds: source <=32 KiB; parser nesting <=64; code <=8192 operations;
 runtime <=2048 steps, <=32 frames, <=128 total objects (string literals
 included), <=512 scalar cells, <=1024 operands; a string literal holds <=511
-characters, a library call <=16 arguments, a printf field width <=256, and
+characters (after joining), a library call <=16 arguments, a printf field
+width and precision <=256 each, and
 standard output <=4096 bytes; recorded states stop at an 8 MiB conservative
 retention threshold (output included; plus one bounded terminal state and
 vector capacity overhead). Limits are explicit terminal diagnostics, not UB or
@@ -96,13 +108,48 @@ IMPLEMENTATION NOTES:
   a null pointer where a string is needed (7.1.4p1), a string with no null
   before the end of its array (7.1.1p1, 7.19.6.1p8), a conversion with no
   argument left (7.19.6.1p2), an argument of the wrong type for its
-  conversion, a negative int for %u or %x, an invalid specification, and the 0
-  flag with %c or %s (7.19.6.1p6, p9).
+  conversion, a negative int for %u or %x, an invalid specification, the 0
+  flag with %c or %s (7.19.6.1p6, p9), and a precision with %c (7.19.6.1p4);
+  a store into an object defined const through an lvalue that is not, which
+  only a cast that removed the const can form (6.7.3p5).
 - Directives run before the static objects are created, one step each; the
   machine runs only `#include <stdio.h>`, which must come before the first
-  call to printf, puts or putchar (7.1.2p4). Every other directive, and a
-  directive inside a function, is rejected; the site then shows its "machine
-  starts after the preprocessor" card.
+  call to printf, puts or putchar (7.1.2p4), and object-like `#define`. Every
+  other directive, a #define with any other replacement list, and a directive
+  inside a function, is rejected; the site then shows its "machine starts
+  after the preprocessor" card. A redefinition with a different replacement
+  is a constraint diagnostic (6.10.3p2); an identical one is a step that
+  changes nothing.
+- A #define replaces each later instance of its name before compilation
+  (6.10.3p9), so the program the machine compiles never mentions it. Each
+  operation that evaluates a replacement (a constant, a character constant,
+  a string literal's array) is marked with its macro and narrated as the
+  replacement standing in for the name, citing 6.10.3p9; a macro in an array
+  size or a static initializer is noted on that declaration's step. The
+  replacement is checked where it is defined.
+- Adjacent string literals become one literal after escape replacement
+  (5.1.1.2p1 item 6, 6.4.5p4), so "\x4" "1" is two characters: one static
+  array named by the literals as written, separated by one space, whose
+  creation step says they were joined.
+- const objects: assignment, compound assignment, ++ and -- on a const object
+  or through a pointer to const are constraint diagnostics (6.5.16p2,
+  6.5.2.4p1, 6.5.3.1p1), and so is storing a pointer to const into a pointer
+  to non-const (6.5.16.1p1). A const object's type is spelled "const int" or
+  "const char". A const array decays to a pointer to const.
+- A cast is one step converting its operand: an int that fits in char, or a
+  char to int, keeps its value (6.3.1.3p1); an int outside -128..127 cast to
+  char wraps modulo 256, the implementation-defined result bcc and GCC give
+  (6.3.1.3p3); a cast to the operand's own type changes nothing (6.5.4p4);
+  between pointers it adds or removes const. Casts to other types, between
+  integers and pointers, and between different pointer types are
+  unsupported; a cast of a structure is a constraint diagnostic (6.5.4p2).
+- `E1 op= E2` designates E1 in one step, evaluates E2, and in one step reads
+  E1, applies op with the plain operator's checks and stores the result
+  converted to E1's type (6.5.16.2p3); its operands follow 6.5.16.2p1-2.
+- printf precision is the minimum number of digits for %d %i %u %x (a zero
+  with precision 0 writes nothing) and the maximum number of characters %s
+  writes, which then needs no null within that many (7.19.6.1p4, p8); with
+  a precision the 0 flag is ignored (7.19.6.1p6).
 - Each string literal in the source is its own unnamed char array of static
   storage duration, named by its spelling, created before main in source
   order. A literal that initializes a char array names no object: its
@@ -113,13 +160,15 @@ IMPLEMENTATION NOTES:
   character as an unsigned char, puts a nonnegative value: the count written,
   as glibc returns). A char passed through printf's `...` gets the default
   argument promotions as a step of its own. Valid printf specifications the
-  machine does not model (precision, *, length modifiers, other flags and
-  conversions) stop as unsupported, not UB.
+  machine does not model (*, length modifiers, other flags and conversions)
+  stop as unsupported, not UB.
 - &*p and &array[n] cancel indirection per C99 6.5.3.2p3, allowing formation
   of a one-past pointer without treating it as a read.
 - Syntax, type and call-arity checks run for all parsed code, including dead
   branches. Unknown names/callees, incompatible pointer/int assignments,
   nested writes/calls, and unsupported preprocessing transformations fail.
+  Constraint checks (const, compound-assignment operands, casts) run there
+  too, so a program that breaks one never starts.
 - Non-main fallthrough is conservatively unsupported even if a caller would
   discard the value. Main fallthrough returns zero. Array tails initialize zero.
 - Pending effects describe the imminent store/increment; there is no deferred

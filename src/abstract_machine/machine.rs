@@ -64,8 +64,8 @@ impl Machine {
             let index = self.preprocessed;
             self.preprocessed += 1;
             self.state.status = "running";
-            self.state.source_range = program.directives[index];
-            self.state.event = narration::directive(program.directives[index], index);
+            self.state.source_range = program.directives[index].range;
+            self.state.event = narration::directive(program, index);
             self.refresh(program);
             return;
         }
@@ -75,7 +75,19 @@ impl Machine {
             self.state.status = "running";
             self.state.source_range = program.statics[index].range;
             match self.allocate_static(program, index) {
-                | Ok(id) => self.state.event = self.static_storage(program, index, id),
+                | Ok(id) => {
+                    let mut event = self.static_storage(program, index, id);
+                    let declared = &program.statics[index];
+                    for &used in &declared.macros {
+                        event = narration::macro_use(
+                            event,
+                            &program.macros[used],
+                            &program.source,
+                            declared.literal,
+                        );
+                    }
+                    self.state.event = event;
+                },
                 | Err(diagnostic) => self.stop(diagnostic),
             }
             self.refresh(program);
@@ -98,7 +110,12 @@ impl Machine {
         self.activations[top].pc += 1;
         self.track(program, &instruction);
         match self.operation(&instruction, program) {
-            | Ok(event) => {
+            | Ok(mut event) => {
+                if let Some(used) = instruction.macro_use {
+                    let lead = !matches!(instruction.op, Op::Declare { .. });
+                    event =
+                        narration::macro_use(event, &program.macros[used], &program.source, lead);
+                }
                 if let (Some(node), Some(result)) = (instruction.node, &event.result)
                     && !matches!(
                         instruction.op,
@@ -151,21 +168,32 @@ impl Machine {
                 self.activations[top].scope -= 1;
                 self.leave_block(range, ended)
             },
-            | Op::Declare(name, ty) => {
+            | &Op::Declare {
+                ref name,
+                ty,
+                constant,
+            } => {
                 let id = self.allocate(
                     name,
-                    *ty,
+                    ty,
                     self.activations[top].scope,
                     Value::Indeterminate,
                     false,
                 )?;
-                self.declare(range, id, *ty)
+                if constant {
+                    self.make_const(id);
+                }
+                self.declare(range, id, ty)
             },
             | &Op::StaticLocal(index) => self.static_local(range, index + 1),
             | Op::Push(integer) => {
                 let value = Operand::Value(Value::Integer(*integer));
                 self.push(value.clone())?;
-                let spelling = source.get(range.start..range.end).unwrap_or_default();
+                // A macro name stands for its replacement's spelling.
+                let spelling = instruction.macro_use.map_or_else(
+                    || source.get(range.start..range.end).unwrap_or_default(),
+                    |used| program.macros[used].replacement.as_str(),
+                );
                 if spelling.starts_with('\'') {
                     narration::character(range, *integer, spelling, value)
                 } else {
@@ -280,6 +308,16 @@ impl Machine {
                 self.push(Operand::Value(value.clone()))?;
                 self.promote(range, value)
             },
+            | &Op::Cast { from, to } => {
+                let value = self.pop_value()?;
+                let converted = match (to, &value) {
+                    | (Type::Char, &Value::Integer(integer)) =>
+                        parser::char_value(integer.to_le_bytes()[0]),
+                    | _ => value.clone(),
+                };
+                self.push(Operand::Value(converted.clone()))?;
+                self.cast(range, source, from, to, value, converted)
+            },
             | Op::DefaultPromote => {
                 let value = self.pop_value()?;
                 self.push(Operand::Value(value.clone()))?;
@@ -289,6 +327,7 @@ impl Machine {
                 bytes,
                 length,
                 full_expression,
+                parts,
             } => {
                 let (target, offset) = self.pop_address()?;
                 let mut stored = Vec::new();
@@ -304,6 +343,7 @@ impl Machine {
                     bytes,
                     Value::Array(stored),
                     *full_expression,
+                    *parts,
                 )
             },
             | Op::Library(library, types) =>
@@ -398,6 +438,9 @@ impl Machine {
             } => {
                 let value = self.pop_value()?;
                 let (target, offset) = self.pop_address()?;
+                if !initializer {
+                    self.check_writable(target, offset)?;
+                }
                 if let Some(structure) = structure {
                     let previous = self.read_structure(target, offset, structure)?;
                     let stored = self.store(target, offset, value)?;
@@ -429,6 +472,7 @@ impl Machine {
             },
             | &Op::Increment { delta, prefix } => {
                 let (target, offset) = self.pop_address()?;
+                self.check_writable(target, offset)?;
                 let current = self.read(target, offset)?;
                 // `--` subtracts 1, so an overflow reads as a subtraction.
                 let operator = if delta > 0 { "+" } else { "-" };
@@ -436,6 +480,17 @@ impl Machine {
                 let stored = self.store(target, offset, sum.clone())?;
                 self.increment(
                     range, source, delta, prefix, target, offset, current, &sum, stored,
+                )
+            },
+            | &Op::Compound(operator) => {
+                let right = self.pop_value()?;
+                let (target, offset) = self.pop_address()?;
+                self.check_writable(target, offset)?;
+                let current = self.read(target, offset)?;
+                let result = self.binary_value(operator, current.clone(), right.clone())?;
+                let stored = self.store(target, offset, result.clone())?;
+                self.compound(
+                    range, source, operator, target, offset, current, right, &result, stored,
                 )
             },
             | Op::Pop => {
@@ -529,6 +584,7 @@ impl Machine {
             | _ if initializes => Designation::Initialized,
             | Some("&") => Designation::Address,
             | Some("++" | "--") => Designation::Updated,
+            | Some("+=" | "-=" | "*=" | "/=" | "%=") => Designation::Compound,
             | Some(label) if label.starts_with('.') => Designation::Member,
             | _ => Designation::Assigned,
         }
@@ -649,7 +705,7 @@ impl Machine {
         let Some(node) = instruction.node else {
             if matches!(
                 instruction.op,
-                Op::Enter | Op::Leave | Op::Declare(..) | Op::Jump(_)
+                Op::Enter | Op::Leave | Op::Declare { .. } | Op::Jump(_)
             ) {
                 activation.evaluation = None;
             } else if let Some(evaluation) = &mut activation.evaluation {
@@ -734,7 +790,7 @@ impl Machine {
         program
             .directives
             .get(self.preprocessed)
-            .copied()
+            .map(|directive| directive.range)
             .or_else(|| {
                 program
                     .statics
@@ -756,7 +812,7 @@ impl Machine {
         let first = program
             .directives
             .first()
-            .copied()
+            .map(|directive| directive.range)
             .or_else(|| program.statics.first().map(|object| object.range))
             .unwrap_or(program.functions[program.entry].code[0].range);
         let mut machine = Self {
@@ -764,11 +820,7 @@ impl Machine {
                 step:            0,
                 status:          "ready",
                 source_range:    first,
-                event:           narration::start(
-                    first,
-                    program.statics.len(),
-                    !program.directives.is_empty(),
-                ),
+                event:           narration::start(first, program),
                 evaluation:      None,
                 frames:          Vec::new(),
                 objects:         Vec::new(),
@@ -912,6 +964,8 @@ pub(super) struct Activation {
 
 #[derive(Debug, Clone)]
 pub(super) struct ObjectMetadata {
-    pub scope: usize,
-    pub ty:    Type,
+    pub scope:    usize,
+    pub ty:       Type,
+    /// Whether the object is defined `const` (C99 §6.7.3p5).
+    pub constant: bool,
 }
