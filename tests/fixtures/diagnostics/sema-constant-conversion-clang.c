@@ -49,3 +49,29 @@ long w8 = -((__int128)1 << 100);
 unsigned long w9 = (unsigned __int128)0xffffffffffffffffULL;
 unsigned char w10 = 256u;
 unsigned char w11 = 256;
+char gc;
+int u1 = _Generic(0, int: 0, default: (gc = 1100));
+int u2 = _Generic(0, int: 0, long: (gc = 1101));
+int u3 = _Generic(0, int: _Generic(0, int: 0, default: (gc = 1102)), default: 0);
+char u4 = _Generic(0, int: 0, default: 1103);
+int u5 = __builtin_choose_expr(1, 0, gc = 1104);
+char u6 = _Generic(0, int: 1105, default: 0);
+void *u7 = _Generic(0, int: &(char){1106}, default: 0);
+void *u8 = _Generic(0, long: &(char){1107}, default: (void *)0);
+int u9 = _Generic(0, long: _Generic(0, int: (gc = 1108), default: 0), default: 0);
+int u10 = __builtin_choose_expr(0, _Generic(0, int: (gc = 1109), default: 0), 0);
+void *u11 = __builtin_choose_expr(1, _Generic(0, int: &(char){1110}, default: (gc = 1111)), 0);
+void *u12 = __builtin_choose_expr(0, 0, &(char){1112});
+int u13 = _Generic(0, int: __builtin_choose_expr(1, 0, gc = 1113), default: 0);
+int u14 = _Generic(0, long: __builtin_choose_expr(1, &(char){1114}, 0), default: 0);
+int u15[] = { _Generic(0, int: 0, default: (gc = 1115)), __builtin_choose_expr(0, gc = 1116, 1) };
+char u16 = __builtin_choose_expr(1, 1117, 0);
+char u17 = __builtin_choose_expr(1, 0, 1118);
+void *u18 = _Generic(0, int: _Generic(0, int: &(char){1119}, default: (gc = 1120)), default: (gc = 1121));
+void b1(void) { static int s = _Generic(0, int: 0, default: (gc = 1200)); (void)s; }
+void b2(void) { static int s = __builtin_choose_expr(1, 0, gc = 1201); (void)s; }
+void b3(void) { static int s = _Generic(0, int: _Generic(0, int: 0, default: (gc = 1202)), default: 0); (void)s; }
+void b4(void) { static char s = _Generic(0, long: 1203, default: 0); (void)s; }
+void b5(void) { static int s = _Generic(0, long: 0, default: _Generic(0, int: 0, default: (gc = 1204))); (void)s; }
+void b6(void) { static char s = _Generic(0, int: 1205, default: 1206); (void)s; }
+void b7(void) { static int s = __builtin_choose_expr(0, _Generic(0, int: (gc = 1207), default: 0), 0); (void)s; }

@@ -546,7 +546,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::Binary { .. } => e.operator_source_vectors.unwrap_or(e.source_vectors),
             | _ => e.source_vectors,
         };
-        self.warn_if_reachable(
+        self.warn_if_selected(
             e,
             G::ConstantConversion,
             SemanticErrorKind::ValueWarning(G::ConstantConversion),

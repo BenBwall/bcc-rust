@@ -247,6 +247,36 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         });
     }
 
+    /// [`Self::warn_if_reachable`] for a warning Clang's walk of a full
+    /// expression gives (`AnalyzeImplicitConversions`), which steps through
+    /// `_Generic` and `__builtin_choose_expr` into the operand they select
+    /// (`IgnoreParenImpCasts`) and so checks no other. In a function the
+    /// reachability walk follows the same selections. Outside one, the
+    /// operand `__builtin_choose_expr` does not select is `dead`, as code
+    /// generation skips it, and a warning in a `_Generic` waits for its
+    /// selection ([`Self::hold_warning`]).
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97. GNU extension: GCC manual, "Other
+    /// Builtins".
+    pub(super) fn warn_if_selected(
+        &mut self,
+        anchor: &'tu Expression<'tu>,
+        group: DiagnosticGroup,
+        kind: SemanticErrorKind,
+        site: SourceVectors,
+        name: Option<StringCacheId>,
+    ) {
+        if self.functions.current.is_some() {
+            self.warn_if_reachable(anchor, group, kind, site, name);
+        } else if !self.tainted && !self.functions.dead {
+            self.hold_warning(super::functions::HeldWarning {
+                group,
+                kind,
+                site,
+                name,
+            });
+        }
+    }
+
     /// Reports the current function's waiting warnings that are reachable,
     /// when its analysis is done.
     pub(super) fn report_reachable_warnings(&mut self) {

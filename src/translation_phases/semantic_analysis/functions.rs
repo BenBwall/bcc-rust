@@ -759,6 +759,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     references:  self.functions.uses.len(),
                     definitions: self.definitions.len(),
                     orphan:      self.functions.emission.orphan,
+                    held:        self.functions.held_warnings.len(),
                 };
                 let scratch = self.scratch;
                 let marks = self
@@ -2319,10 +2320,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         if marks.len() != 2 * generic.associations.len() + 2 {
+            self.settle_held_warnings(marks.first().map(|mark| mark.held), None);
             return;
         }
         let mut ranges = ArenaVec::new_in(self.scratch);
         ranges.push((marks[0], marks[1]));
+        let mut kept = None;
         for (index, association) in generic.associations.iter().enumerate() {
             if selected.is_none_or(|selected| !std::ptr::eq(selected, association.expression)) {
                 ranges.push((marks[2 + 2 * index], marks[3 + 2 * index]));
@@ -2330,8 +2333,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Code generation continues in the block the selected
                 // association ends in.
                 self.functions.emission.orphan = marks[3 + 2 * index].orphan;
+                kept = Some(marks[2 + 2 * index].held..marks[3 + 2 * index].held);
             }
         }
+        self.settle_held_warnings(Some(marks[0].held), kept);
         for (start, end) in ranges {
             self.elide_references(start.references..end.references);
             for definition in &mut self.definitions[start.definitions..end.definitions] {
@@ -2340,6 +2345,63 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+    }
+
+    /// Forgets the boundaries of a generic selection that typing gave up
+    /// on, with the warnings held in it.
+    pub(super) fn forget_generic(&mut self, generic: &'tu GenericSelection<'tu>) {
+        let start = self
+            .functions
+            .generic_marks
+            .remove(&std::ptr::from_ref(generic).addr())
+            .and_then(|marks| marks.first().map(|mark| mark.held));
+        self.settle_held_warnings(start, None);
+    }
+
+    /// Reports `warning` now, or, in a generic selection being analyzed,
+    /// once the outermost selection is typed if it is in the associations
+    /// selected ([`Self::settle_held_warnings`]).
+    pub(super) fn hold_warning(&mut self, warning: HeldWarning) {
+        if self.functions.generic_selections == 0 {
+            self.report_held_warning(warning);
+        } else {
+            self.functions.held_warnings.push(warning);
+        }
+    }
+
+    /// Keeps, of the warnings held since `start`, only those in `kept`, the
+    /// selected association's, and reports every held one once no generic
+    /// selection is open, as Clang checks only the selected association
+    /// ([`Self::warn_if_selected`]).
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+    fn settle_held_warnings(&mut self, start: Option<usize>, kept: Option<std::ops::Range<usize>>) {
+        if let Some(start) = start {
+            let kept = kept.unwrap_or(start..start);
+            let held = &mut self.functions.held_warnings;
+            held.copy_within(kept.clone(), start);
+            held.truncate(start + kept.len());
+        }
+        if self.functions.generic_selections != 0 || self.functions.held_warnings.is_empty() {
+            return;
+        }
+        let held = self.scratch.alloc_slice_copy(&self.functions.held_warnings);
+        self.functions.held_warnings.clear();
+        // Each warning was taken only where nothing recovered around it.
+        let tainted = std::mem::replace(&mut self.tainted, false);
+        for &warning in &*held {
+            self.report_held_warning(warning);
+        }
+        self.tainted = tainted;
+    }
+
+    fn report_held_warning(&mut self, warning: HeldWarning) {
+        self.group_diagnostic(
+            warning.group,
+            warning.kind,
+            warning.site,
+            warning.name,
+            None,
+        );
     }
 
     /// Pushes the work that enters operand `arm` of `condition`, taken when
@@ -3119,6 +3181,21 @@ struct EmissionMark {
     references:  usize,
     definitions: usize,
     orphan:      Option<usize>,
+    /// The number of held warnings ([`HeldWarning`]).
+    held:        usize,
+}
+
+/// A warning in a generic selection being analyzed, reported once the
+/// outermost selection is typed if it is in the associations selected: one
+/// outside a function that Clang gives only in the selected operand
+/// ([`Analyzer::warn_if_selected`]).
+/// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+#[derive(Clone, Copy)]
+pub(super) struct HeldWarning {
+    pub(super) group: crate::configuration::DiagnosticGroup,
+    pub(super) kind:  SemanticErrorKind,
+    pub(super) site:  SourceVectors,
+    pub(super) name:  Option<StringCacheId>,
 }
 
 /// A break's evaluation context settles after an enclosing sizeof/typeof
@@ -3269,6 +3346,8 @@ pub(super) struct State<'tu, 's> {
     /// operand and of each association's expression, with the emission
     /// model's block state at each boundary.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
+    /// The warnings held while a generic selection is analyzed.
+    held_warnings: ArenaVec<'s, HeldWarning>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
     pub(super) optional_local_bindings: ArenaMap<'s, usize, ()>,
     condition_uses: ArenaMap<'s, usize, ConditionUses>,
@@ -3311,6 +3390,7 @@ impl<'s> State<'_, 's> {
             inline_objects: ArenaVec::new_in(scratch),
             outside: [None; 2],
             generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            held_warnings: ArenaVec::new_in(scratch),
             definition_contexts: ArenaVec::new_in(scratch),
             optional_local_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             condition_uses: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
