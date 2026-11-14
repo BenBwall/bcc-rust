@@ -5769,6 +5769,134 @@ mod tests {
         }
     }
 
+    /// clang-cl's warning levels are aliases of Clang options, which add up
+    /// as Clang's own do, where `cl`'s rightmost level wins: `-w` from `/w`
+    /// or `/W0` stays whatever level follows, and `/W4`'s `-Wextra` stays
+    /// under a later `/W1` to `/W3`. Each order of two levels, alone and
+    /// with `/WX`, as clang-cl 23 reports it. The source has no warning that
+    /// only `/Wall`'s `-Weverything` enables, which bcc does not have.
+    /// Clang Compiler User's Manual, "clang-cl".
+    #[test]
+    fn clang_cl_warning_levels_add_up_as_clang_options_do() {
+        #[derive(Clone, Copy, Debug)]
+        enum Reported {
+            Silent,
+            Default,
+            All,
+            Extra,
+        }
+        use Reported::{
+            All,
+            Default,
+            Extra,
+            Silent,
+        };
+        let directory = Directory::new();
+        directory.write(
+            "levels.c",
+            "int g(void);\nint h(void);\nint use(void);\nint h(void) { }\nstatic int f(int \
+             unusedparam) { int unused; unsigned u = 1; return g() < u; }\nint use(void) { return \
+             f(0); }\n",
+        );
+        for (levels, reported) in [
+            ("", Default),
+            ("/w", Silent),
+            ("/W0", Silent),
+            ("/W1", All),
+            ("/W2", All),
+            ("/W3", All),
+            ("/W4", Extra),
+            ("/Wall", Extra),
+            ("/w /w", Silent),
+            ("/w /W0", Silent),
+            ("/w /W1", Silent),
+            ("/w /W2", Silent),
+            ("/w /W3", Silent),
+            ("/w /W4", Silent),
+            ("/w /Wall", Silent),
+            ("/W0 /w", Silent),
+            ("/W0 /W0", Silent),
+            ("/W0 /W1", Silent),
+            ("/W0 /W2", Silent),
+            ("/W0 /W3", Silent),
+            ("/W0 /W4", Silent),
+            ("/W0 /Wall", Silent),
+            ("/W1 /w", Silent),
+            ("/W1 /W0", Silent),
+            ("/W1 /W1", All),
+            ("/W1 /W2", All),
+            ("/W1 /W3", All),
+            ("/W1 /W4", Extra),
+            ("/W1 /Wall", Extra),
+            ("/W2 /w", Silent),
+            ("/W2 /W0", Silent),
+            ("/W2 /W1", All),
+            ("/W2 /W2", All),
+            ("/W2 /W3", All),
+            ("/W2 /W4", Extra),
+            ("/W2 /Wall", Extra),
+            ("/W3 /w", Silent),
+            ("/W3 /W0", Silent),
+            ("/W3 /W1", All),
+            ("/W3 /W2", All),
+            ("/W3 /W3", All),
+            ("/W3 /W4", Extra),
+            ("/W3 /Wall", Extra),
+            ("/W4 /w", Silent),
+            ("/W4 /W0", Silent),
+            ("/W4 /W1", Extra),
+            ("/W4 /W2", Extra),
+            ("/W4 /W3", Extra),
+            ("/W4 /W4", Extra),
+            ("/W4 /Wall", Extra),
+            ("/Wall /w", Silent),
+            ("/Wall /W0", Silent),
+            ("/Wall /W1", Extra),
+            ("/Wall /W2", Extra),
+            ("/Wall /W3", Extra),
+            ("/Wall /W4", Extra),
+            ("/Wall /Wall", Extra),
+        ] {
+            let expected: &[&str] = match reported {
+                | Silent => &[],
+                | Default => &["-Wreturn-type"],
+                | All => &["-Wreturn-type", "-Wunused-variable"],
+                | Extra => &[
+                    "-Wreturn-type",
+                    "-Wunused-variable",
+                    "-Wunused-parameter",
+                    "-Wsign-compare",
+                ],
+            };
+            for werror in [false, true] {
+                let mut args: Vec<&str> = levels.split_whitespace().collect();
+                if werror {
+                    args.push("/WX");
+                }
+                args.extend(["/nologo", "/Zs", "levels.c"]);
+                let output = directory.bcc("--clang-cl-mode", &args);
+                let text = stderr(&output);
+                let severity = if werror { ": error: " } else { ": warning: " };
+                // Which warnings, not their order, which differs from Clang's.
+                let mut reported: Vec<&str> = text
+                    .lines()
+                    .filter(|line| line.contains(severity))
+                    .filter_map(|line| line.rsplit_once("[-")?.1.strip_suffix(']'))
+                    .map(|option| option.trim_start_matches("Werror,-"))
+                    .collect();
+                reported.sort_unstable();
+                let mut expected: Vec<&str> = expected.iter().map(|option| &option[1..]).collect();
+                expected.sort_unstable();
+                assert_eq!(reported, expected, "{args:?}: {text}");
+                assert_eq!(
+                    output.status.code(),
+                    Some(i32::from(werror && !expected.is_empty())),
+                    "{args:?}: {text}"
+                );
+            }
+        }
+    }
+
     /// The options around GCC 14's permerrors and Clang's default errors,
     /// as each compiler orders them: `-Werror` does not reach into a system
     /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`
