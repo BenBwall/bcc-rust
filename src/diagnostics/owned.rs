@@ -119,6 +119,7 @@ impl OwnedDiagnostic {
             message: &self.message,
             option_suffix: self.option_suffix,
             code: self.code,
+            point: false,
             labels,
             notes,
             help,

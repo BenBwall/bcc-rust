@@ -759,7 +759,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     references:  self.functions.uses.len(),
                     definitions: self.definitions.len(),
                     orphan:      self.functions.emission.orphan,
-                    int_float:   self.functions.pending_int_float.len(),
+                    held:        self.functions.held_warnings.len(),
                 };
                 let scratch = self.scratch;
                 let marks = self
@@ -2320,7 +2320,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         if marks.len() != 2 * generic.associations.len() + 2 {
-            self.settle_generic_int_float(marks.first().map(|mark| mark.int_float), None);
+            self.settle_held_warnings(marks.first().map(|mark| mark.held), None);
             return;
         }
         let mut ranges = ArenaVec::new_in(self.scratch);
@@ -2333,10 +2333,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Code generation continues in the block the selected
                 // association ends in.
                 self.functions.emission.orphan = marks[3 + 2 * index].orphan;
-                kept = Some(marks[2 + 2 * index].int_float..marks[3 + 2 * index].int_float);
+                kept = Some(marks[2 + 2 * index].held..marks[3 + 2 * index].held);
             }
         }
-        self.settle_generic_int_float(Some(marks[0].int_float), kept);
+        self.settle_held_warnings(Some(marks[0].held), kept);
         for (start, end) in ranges {
             self.elide_references(start.references..end.references);
             for definition in &mut self.definitions[start.definitions..end.definitions] {
@@ -2348,37 +2348,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Forgets the boundaries of a generic selection that typing gave up
-    /// on, with the integer-to-floating warnings in it.
+    /// on, with the warnings held in it.
     pub(super) fn forget_generic(&mut self, generic: &'tu GenericSelection<'tu>) {
-        if let Some(marks) = self
+        let start = self
             .functions
             .generic_marks
             .remove(&std::ptr::from_ref(generic).addr())
-        {
-            self.settle_generic_int_float(marks.first().map(|mark| mark.int_float), None);
+            .and_then(|marks| marks.first().map(|mark| mark.held));
+        self.settle_held_warnings(start, None);
+    }
+
+    /// Reports `warning` now, or, in a generic selection being analyzed,
+    /// once the outermost selection is typed if it is in the associations
+    /// selected ([`Self::settle_held_warnings`]).
+    pub(super) fn hold_warning(&mut self, warning: HeldWarning) {
+        if self.functions.generic_selections == 0 {
+            self.report_held_warning(warning);
+        } else {
+            self.functions.held_warnings.push(warning);
         }
     }
 
-    /// Keeps, of the integer-to-floating warnings pending since `start`, only
-    /// those in `kept`, the selected association's, and reports every
-    /// pending one once no generic selection is open. Clang checks the
-    /// conversions of only the selected association, which its
-    /// `IgnoreParens` steps into (`AnalyzeImplicitConversions`).
+    /// Keeps, of the warnings held since `start`, only those in `kept`, the
+    /// selected association's, and reports every held one once no generic
+    /// selection is open, as Clang checks only the selected association
+    /// ([`Self::warn_if_selected`]).
     /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
-    fn settle_generic_int_float(
-        &mut self,
-        start: Option<usize>,
-        kept: Option<core::ops::Range<usize>>,
-    ) {
+    fn settle_held_warnings(&mut self, start: Option<usize>, kept: Option<std::ops::Range<usize>>) {
         if let Some(start) = start {
             let kept = kept.unwrap_or(start..start);
-            let pending = &mut self.functions.pending_int_float;
-            pending.copy_within(kept.clone(), start);
-            pending.truncate(start + kept.len());
+            let held = &mut self.functions.held_warnings;
+            held.copy_within(kept.clone(), start);
+            held.truncate(start + kept.len());
         }
-        if self.functions.generic_marks.is_empty() {
-            self.report_pending_int_float();
+        if self.functions.generic_selections != 0 || self.functions.held_warnings.is_empty() {
+            return;
         }
+        let held = self.scratch.alloc_slice_copy(&self.functions.held_warnings);
+        self.functions.held_warnings.clear();
+        // Each warning was taken only where nothing recovered around it.
+        let tainted = std::mem::replace(&mut self.tainted, false);
+        for &warning in &*held {
+            self.report_held_warning(warning);
+        }
+        self.tainted = tainted;
+    }
+
+    fn report_held_warning(&mut self, warning: HeldWarning) {
+        self.group_diagnostic(
+            warning.group,
+            warning.kind,
+            warning.site,
+            warning.name,
+            None,
+        );
     }
 
     /// Pushes the work that enters operand `arm` of `condition`, taken when
@@ -2448,6 +2471,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | ReferenceContextKind::ConstantQuery { .. } => constant_queries,
                 | _ => false,
             } {
+                return true;
+            }
+            next = context.parent;
+        }
+        false
+    }
+
+    /// Whether the expression being analyzed is an operand of `sizeof`,
+    /// `typeof` or `_Alignof`, which Clang does not analyze at all.
+    /// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    pub(super) fn unevaluated_operand(&self) -> bool {
+        self.functions.sizeof.is_some()
+            || self.in_reference_context(|kind| {
+                matches!(
+                    kind,
+                    ReferenceContextKind::Typeof(_) | ReferenceContextKind::Unevaluated
+                )
+            })
+    }
+
+    /// Whether the expression being analyzed is an operand of a `_Generic`, or
+    /// of a `&&`, `||` or `?:` that a constant decides: Clang analyzes it,
+    /// but drops its warnings about what runs.
+    /// C99: §6.5.13p4, p. 89; PDF p. 101; §6.5.14p4, p. 89; PDF p. 101;
+    /// §6.5.15p4, p. 90; PDF p. 102.
+    pub(super) fn skipped_operand(&self) -> bool {
+        self.functions.skipped_operand
+            || self.in_reference_context(|kind| {
+                matches!(kind, ReferenceContextKind::ConditionalArm { .. })
+            })
+    }
+
+    fn in_reference_context(&self, test: impl Fn(ReferenceContextKind<'tu>) -> bool) -> bool {
+        let mut next = self.functions.reference_context;
+        while let Some(index) = next {
+            let context = self.functions.reference_contexts[index];
+            if test(context.kind) {
                 return true;
             }
             next = context.parent;
@@ -3121,8 +3181,22 @@ struct EmissionMark {
     references:  usize,
     definitions: usize,
     orphan:      Option<usize>,
-    /// The number of pending integer-to-floating warnings.
-    int_float:   usize,
+    /// The number of held warnings ([`HeldWarning`]).
+    held:        usize,
+}
+
+/// A warning in a generic selection being analyzed, reported once the
+/// outermost selection is typed if it is in the associations selected: one
+/// outside a function that Clang gives only in the selected operand
+/// ([`Analyzer::warn_if_selected`]), and Clang's integer-to-floating warning
+/// anywhere ([`Analyzer::check_int_float_constant`]).
+/// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+#[derive(Clone, Copy)]
+pub(super) struct HeldWarning {
+    pub(super) group: crate::configuration::DiagnosticGroup,
+    pub(super) kind:  SemanticErrorKind,
+    pub(super) site:  SourceVectors,
+    pub(super) name:  Option<StringCacheId>,
 }
 
 /// A break's evaluation context settles after an enclosing sizeof/typeof
@@ -3273,10 +3347,8 @@ pub(super) struct State<'tu, 's> {
     /// operand and of each association's expression, with the emission
     /// model's block state at each boundary.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
-    /// Clang's integer-to-floating warnings, with the text of each, found
-    /// while a generic selection is analyzed: only those of the selected
-    /// association are reported, once the outermost selection is typed.
-    pub(super) pending_int_float: ArenaVec<'s, (SourceVectors, StringCacheId)>,
+    /// The warnings held while a generic selection is analyzed.
+    held_warnings: ArenaVec<'s, HeldWarning>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
     pub(super) optional_local_bindings: ArenaMap<'s, usize, ()>,
     condition_uses: ArenaMap<'s, usize, ConditionUses>,
@@ -3319,7 +3391,7 @@ impl<'s> State<'_, 's> {
             inline_objects: ArenaVec::new_in(scratch),
             outside: [None; 2],
             generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            pending_int_float: ArenaVec::new_in(scratch),
+            held_warnings: ArenaVec::new_in(scratch),
             definition_contexts: ArenaVec::new_in(scratch),
             optional_local_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             condition_uses: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -3327,11 +3399,6 @@ impl<'s> State<'_, 's> {
             #[cfg(test)]
             condition_reference_steps: 0,
         }
-    }
-
-    /// Whether a generic selection is being analyzed.
-    pub(super) fn generic_marks_open(&self) -> bool {
-        !self.generic_marks.is_empty()
     }
 }
 

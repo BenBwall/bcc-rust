@@ -106,4 +106,25 @@ sema-constant-conversion-clang.c:50:21: warning: implicit conversion from 'unsig
 sema-constant-conversion-clang.c:51:21: warning: implicit conversion from 'int' to 'unsigned char' changes value from 256 to 0 [-Wconstant-conversion]
    51 | unsigned char w11 = 256;
       |                     ^~~
-36 warnings generated.
+sema-constant-conversion-clang.c:58:28: warning: implicit conversion from 'int' to 'char' changes value from 1105 to 81 [-Wconstant-conversion]
+   58 | char u6 = _Generic(0, int: 1105, default: 0);
+      |                            ^~~~
+sema-constant-conversion-clang.c:59:37: warning: implicit conversion from 'int' to 'char' changes value from 1106 to 82 [-Wconstant-conversion]
+   59 | void *u7 = _Generic(0, int: &(char){1106}, default: 0);
+      |                                     ^~~~
+sema-constant-conversion-clang.c:63:63: warning: implicit conversion from 'int' to 'char' changes value from 1110 to 86 [-Wconstant-conversion]
+   63 | void *u11 = __builtin_choose_expr(1, _Generic(0, int: &(char){1110}, default: (gc = 1111)), 0);
+      |                                                               ^~~~
+sema-constant-conversion-clang.c:64:49: warning: implicit conversion from 'int' to 'char' changes value from 1112 to 88 [-Wconstant-conversion]
+   64 | void *u12 = __builtin_choose_expr(0, 0, &(char){1112});
+      |                                                 ^~~~
+sema-constant-conversion-clang.c:68:37: warning: implicit conversion from 'int' to 'char' changes value from 1117 to 93 [-Wconstant-conversion]
+   68 | char u16 = __builtin_choose_expr(1, 1117, 0);
+      |                                     ^~~~
+sema-constant-conversion-clang.c:70:55: warning: implicit conversion from 'int' to 'char' changes value from 1119 to 95 [-Wconstant-conversion]
+   70 | void *u18 = _Generic(0, int: _Generic(0, int: &(char){1119}, default: (gc = 1120)), default: (gc = 1121));
+      |                                                       ^~~~
+sema-constant-conversion-clang.c:76:50: warning: implicit conversion from 'int' to 'char' changes value from 1205 to -75 [-Wconstant-conversion]
+   76 | void b6(void) { static char s = _Generic(0, int: 1205, default: 1206); (void)s; }
+      |                                                  ^~~~
+43 warnings generated.

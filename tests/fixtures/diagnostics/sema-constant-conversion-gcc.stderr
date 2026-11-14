@@ -64,3 +64,69 @@ sema-constant-conversion-gcc.c:50:21: warning: conversion from 'unsigned int' to
 sema-constant-conversion-gcc.c:51:21: warning: unsigned conversion from 'int' to 'unsigned char' changes value from '256' to '0' [-Woverflow]
    51 | unsigned char w11 = 256;
       |                     ^~~
+sema-constant-conversion-gcc.c:53:45: warning: overflow in conversion from 'int' to 'char' changes value from '1100' to '76' [-Woverflow]
+   53 | int u1 = _Generic(0, int: 0, default: (gc = 1100));
+      |                                             ^~~~
+sema-constant-conversion-gcc.c:55:62: warning: overflow in conversion from 'int' to 'char' changes value from '1102' to '78' [-Woverflow]
+   55 | int u3 = _Generic(0, int: _Generic(0, int: 0, default: (gc = 1102)), default: 0);
+      |                                                              ^~~~
+sema-constant-conversion-gcc.c:57:43: warning: overflow in conversion from 'int' to 'char' changes value from '1104' to '80' [-Woverflow]
+   57 | int u5 = __builtin_choose_expr(1, 0, gc = 1104);
+      |                                           ^~~~
+sema-constant-conversion-gcc.c:58:11: warning: overflow in conversion from 'int' to 'char' changes value from '1105' to '81' [-Woverflow]
+   58 | char u6 = _Generic(0, int: 1105, default: 0);
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-constant-conversion-gcc.c:59:37: warning: overflow in conversion from 'int' to 'char' changes value from '1106' to '82' [-Woverflow]
+   59 | void *u7 = _Generic(0, int: &(char){1106}, default: 0);
+      |                                     ^~~~
+sema-constant-conversion-gcc.c:62:59: warning: overflow in conversion from 'int' to 'char' changes value from '1109' to '85' [-Woverflow]
+   62 | int u10 = __builtin_choose_expr(0, _Generic(0, int: (gc = 1109), default: 0), 0);
+      |                                                           ^~~~
+sema-constant-conversion-gcc.c:63:63: warning: overflow in conversion from 'int' to 'char' changes value from '1110' to '86' [-Woverflow]
+   63 | void *u11 = __builtin_choose_expr(1, _Generic(0, int: &(char){1110}, default: (gc = 1111)), 0);
+      |                                                               ^~~~
+sema-constant-conversion-gcc.c:63:85: warning: overflow in conversion from 'int' to 'char' changes value from '1111' to '87' [-Woverflow]
+   63 | void *u11 = __builtin_choose_expr(1, _Generic(0, int: &(char){1110}, default: (gc = 1111)), 0);
+      |                                                                                     ^~~~
+sema-constant-conversion-gcc.c:64:49: warning: overflow in conversion from 'int' to 'char' changes value from '1112' to '88' [-Woverflow]
+   64 | void *u12 = __builtin_choose_expr(0, 0, &(char){1112});
+      |                                                 ^~~~
+sema-constant-conversion-gcc.c:65:61: warning: overflow in conversion from 'int' to 'char' changes value from '1113' to '89' [-Woverflow]
+   65 | int u13 = _Generic(0, int: __builtin_choose_expr(1, 0, gc = 1113), default: 0);
+      |                                                             ^~~~
+sema-constant-conversion-gcc.c:67:50: warning: overflow in conversion from 'int' to 'char' changes value from '1115' to '91' [-Woverflow]
+   67 | int u15[] = { _Generic(0, int: 0, default: (gc = 1115)), __builtin_choose_expr(0, gc = 1116, 1) };
+      |                                                  ^~~~
+sema-constant-conversion-gcc.c:67:88: warning: overflow in conversion from 'int' to 'char' changes value from '1116' to '92' [-Woverflow]
+   67 | int u15[] = { _Generic(0, int: 0, default: (gc = 1115)), __builtin_choose_expr(0, gc = 1116, 1) };
+      |                                                                                        ^~~~
+sema-constant-conversion-gcc.c:68:12: warning: overflow in conversion from 'int' to 'char' changes value from '1117' to '93' [-Woverflow]
+   68 | char u16 = __builtin_choose_expr(1, 1117, 0);
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-constant-conversion-gcc.c:70:55: warning: overflow in conversion from 'int' to 'char' changes value from '1119' to '95' [-Woverflow]
+   70 | void *u18 = _Generic(0, int: _Generic(0, int: &(char){1119}, default: (gc = 1120)), default: (gc = 1121));
+      |                                                       ^~~~
+sema-constant-conversion-gcc.c:70:77: warning: overflow in conversion from 'int' to 'char' changes value from '1120' to '96' [-Woverflow]
+   70 | void *u18 = _Generic(0, int: _Generic(0, int: &(char){1119}, default: (gc = 1120)), default: (gc = 1121));
+      |                                                                             ^~~~
+sema-constant-conversion-gcc.c:70:100: warning: overflow in conversion from 'int' to 'char' changes value from '1121' to '97' [-Woverflow]
+   70 | void *u18 = _Generic(0, int: _Generic(0, int: &(char){1119}, default: (gc = 1120)), default: (gc = 1121));
+      |                                                                                                    ^~~~
+sema-constant-conversion-gcc.c:71:67: warning: overflow in conversion from 'int' to 'char' changes value from '1200' to '-80' [-Woverflow]
+   71 | void b1(void) { static int s = _Generic(0, int: 0, default: (gc = 1200)); (void)s; }
+      |                                                                   ^~~~
+sema-constant-conversion-gcc.c:72:65: warning: overflow in conversion from 'int' to 'char' changes value from '1201' to '-79' [-Woverflow]
+   72 | void b2(void) { static int s = __builtin_choose_expr(1, 0, gc = 1201); (void)s; }
+      |                                                                 ^~~~
+sema-constant-conversion-gcc.c:73:84: warning: overflow in conversion from 'int' to 'char' changes value from '1202' to '-78' [-Woverflow]
+   73 | void b3(void) { static int s = _Generic(0, int: _Generic(0, int: 0, default: (gc = 1202)), default: 0); (void)s; }
+      |                                                                                    ^~~~
+sema-constant-conversion-gcc.c:75:97: warning: overflow in conversion from 'int' to 'char' changes value from '1204' to '-76' [-Woverflow]
+   75 | void b5(void) { static int s = _Generic(0, long: 0, default: _Generic(0, int: 0, default: (gc = 1204))); (void)s; }
+      |                                                                                                 ^~~~
+sema-constant-conversion-gcc.c:76:33: warning: overflow in conversion from 'int' to 'char' changes value from '1205' to '-75' [-Woverflow]
+   76 | void b6(void) { static char s = _Generic(0, int: 1205, default: 1206); (void)s; }
+      |                                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sema-constant-conversion-gcc.c:77:80: warning: overflow in conversion from 'int' to 'char' changes value from '1207' to '-73' [-Woverflow]
+   77 | void b7(void) { static int s = __builtin_choose_expr(0, _Generic(0, int: (gc = 1207), default: 0), 0); (void)s; }
+      |                                                                                ^~~~

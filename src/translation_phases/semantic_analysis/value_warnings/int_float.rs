@@ -19,14 +19,10 @@ use super::super::{
 use crate::{
     configuration::DiagnosticGroup as G,
     diagnostics::format_in,
-    translation_phases::{
-        SourceVectors,
-        parsing::syntax::{
-            Expression,
-            ExpressionType as E,
-        },
+    translation_phases::parsing::syntax::{
+        Expression,
+        ExpressionType as E,
     },
-    util::string_cache::StringCacheId,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -160,28 +156,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => e.operator_source_vectors.unwrap_or(e.source_vectors),
         };
         let text = self.context.string_cache.intern(text);
-        if self.functions.generic_marks_open() {
-            self.functions.pending_int_float.push((site, text));
-        } else {
-            self.int_float_warning(site, text);
-        }
-    }
-
-    /// Reports the integer-to-floating warnings a generic selection held
-    /// back, in order.
-    pub(in crate::translation_phases::semantic_analysis) fn report_pending_int_float(&mut self) {
-        let pending = &mut self.functions.pending_int_float;
-        let warnings = self.scratch.alloc_slice_copy(pending);
-        pending.clear();
-        for &(site, text) in &*warnings {
-            self.int_float_warning(site, text);
-        }
-    }
-
-    fn int_float_warning(&mut self, site: SourceVectors, text: StringCacheId) {
+        // Only the selected association's, which a generic selection waits
+        // for.
         let group = G::ImplicitConstIntFloatConversion;
-        let kind = super::super::SemanticErrorKind::ValueWarning(group);
-        self.spelled_group_diagnostic(group, kind, site, Some(text), site);
+        self.hold_warning(super::super::functions::HeldWarning {
+            group,
+            kind: super::super::SemanticErrorKind::ValueWarning(group),
+            site,
+            name: Some(text),
+        });
     }
 
     /// Whether `e`, which has no integer constant value, is an integer
