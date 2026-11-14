@@ -1799,7 +1799,10 @@ impl<'a> Parser<'a> {
             return Ok(Some(Arithmetic::Integer(Integer::UnsignedLong)));
         }
         let first = self.current();
-        let mut counts = [0_u8; 8];
+        // Each count is bounded by the token count, which the source size
+        // limit keeps far below usize::MAX, so repeating a specifier cannot
+        // wrap it back into a valid combination.
+        let mut counts = [0_usize; 8];
         let words = [
             "signed", "unsigned", "char", "short", "int", "long", "float", "double",
         ];
@@ -2257,8 +2260,19 @@ impl<'a> Parser<'a> {
                 {
                     return Err(not_constant(self));
                 }
+                // Unary minus negates in the constant's own type, which
+                // reduces modulo 2^N when it is unsigned: -1u is
+                // 4294967295. A decimal constant is never negative, so the
+                // negation of a signed one always fits; a floating one flips
+                // its sign.
+                // C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91 (unary minus).
+                // C99: §6.2.5 paragraph 9, p. 34; PDF p. 46 (unsigned
+                // arithmetic is reduced modulo 2^N).
                 let value = match Self::number_constant(token)? {
+                    | Number::Integer(value, constant) if negative =>
+                        Value::Integer(constant.convert(-value)),
                     | Number::Integer(value, _) => Value::Integer(value),
+                    | Number::Real(rounded) if negative => Value::Floating(rounded.value.negate()),
                     | Number::Real(rounded) => Value::Floating(rounded.value),
                 };
                 self.position += 1;
@@ -2269,15 +2283,14 @@ impl<'a> Parser<'a> {
                          no arithmetic on it",
                     ));
                 }
-                // The initializer converts as by assignment: modulo 2^N
-                // into an unsigned type, wrapped into a signed one, rounded
-                // into a floating type, truncated into an integer one (C99
-                // §6.7.8p11, §6.3.1.3, §6.3.1.4).
-                let value = match value {
-                    | Value::Integer(value) if negative => Value::Integer(-value),
-                    | Value::Floating(real) if negative => Value::Floating(real.negate()),
-                    | value => value,
-                };
+                // Only then does the initializer convert as by assignment:
+                // modulo 2^N into an unsigned type, wrapped into a signed
+                // one, rounded into a floating type, truncated into an
+                // integer one.
+                // C99: §6.7.8 paragraph 11, p. 126; PDF p. 138 (a scalar
+                // initializer converts as by assignment).
+                // C99: §6.3.1.3 paragraphs 1-3, p. 43; PDF p. 55.
+                // C99: §6.3.1.4 paragraphs 1-2, pp. 43-44; PDF pp. 55-56.
                 leaves[offset] = Self::static_conversion(value, ty, token)?;
                 Ok(())
             },
