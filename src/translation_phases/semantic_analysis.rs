@@ -89,6 +89,7 @@ mod statements;
 mod traversal;
 mod type_limits;
 mod unused;
+mod value_warnings;
 
 // Types and constant values
 mod address_truth;

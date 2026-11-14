@@ -1701,6 +1701,8 @@ impl State<'_> {
                     | "-fno-approx-func"
                     | "-Wmain-return-type"
                     | "-Wno-main-return-type"
+                    | "-Wreturn-stack-address"
+                    | "-Wno-return-stack-address"
                     | "-Wtautological-constant-compare"
                     | "-Wno-tautological-constant-compare"
                     | "-Wtautological-constant-out-of-range-compare"

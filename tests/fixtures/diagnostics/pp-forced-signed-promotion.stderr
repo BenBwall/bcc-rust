@@ -4,4 +4,12 @@ warning: integer constant does not fit in `int`
 1 | int value = 2147483648;
   |             ^^^^^^^^^^ this constant has type `long`
 
-1 warning generated.
+warning: implicit conversion from 'long' to 'int' changes value from 2147483648 to -2147483648 [-Wconstant-conversion]
+ --> pp-forced-signed-promotion.c:1:13
+  |
+1 | int value = 2147483648;
+  |             ^^^^^^^^^^ this value is not what it seems
+  |
+  = note: C99 §6.3.1.3p3: converting a value the new type cannot represent gives an implementation-defined result
+
+2 warnings generated.
