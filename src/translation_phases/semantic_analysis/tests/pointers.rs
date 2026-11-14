@@ -309,6 +309,60 @@ fn conditional_mismatches_warn_and_take_clang_result_types() {
     );
 }
 
+/// GCC 13.3 and 14 and TCC 0.9.28 merge the element qualifiers of arms
+/// that point to arrays, as C23 does, where Clang reports a mismatch and
+/// takes `void *` (the test above). GCC reports it under `-pedantic` before
+/// C23 only.
+#[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "Test sources are built outside compiler allocation measurements."
+)]
+fn gnu_conditionals_merge_array_element_qualifiers() {
+    use crate::configuration::CompilerIdentity;
+    let declarations = "int c; int (*pa)[3]; const int (*cpa)[3]; volatile int (*vpa)[2][3]; \
+                        const int (*cpa2)[2][3]; int (*pinc)[];";
+    for (expression, ty) in [
+        ("c ? pa : cpa", "const int (*)[3]"),
+        ("c ? cpa : pa", "const int (*)[3]"),
+        ("c ? vpa : cpa2", "const volatile int (*)[2][3]"),
+        ("c ? pinc : cpa", "const int (*)[3]"),
+    ] {
+        let source = format!(
+            "{declarations} _Static_assert(__builtin_types_compatible_p(__typeof__({expression}), \
+             {ty}), \"type\"); void use(void) {{ (void)({expression}); }}"
+        );
+        for identity in [CompilerIdentity::Gcc, CompilerIdentity::Tcc] {
+            for (standard, pedantic) in [(CStandard::C17, 2), (CStandard::C23, 0)] {
+                let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Warn)
+                    .with_compiler_identity(identity);
+                with_configuration(&source, configuration, |context, unit| {
+                    let errors = context.take_pending_errors();
+                    assert_eq!(
+                        unit.errors, 0,
+                        "{identity:?} {standard:?} {source}: {errors:?}"
+                    );
+                    let reported = errors
+                        .iter()
+                        .filter(|error| {
+                            matches!(
+                                error,
+                                TranslationError::Semantic(error)
+                                    if matches!(error.kind, SemanticErrorKind::PedanticConstant(_))
+                            )
+                        })
+                        .count();
+                    assert_eq!(
+                        (reported, errors.len()),
+                        (pedantic, pedantic),
+                        "{identity:?} {standard:?} {source}: {errors:?}"
+                    );
+                });
+            }
+        }
+    }
+}
+
 #[test]
 fn conditional_mismatch_groups_follow_options_and_pedantic_errors() {
     let source =
