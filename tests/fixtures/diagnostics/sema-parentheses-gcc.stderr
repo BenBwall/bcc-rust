@@ -94,3 +94,24 @@ sema-parentheses-gcc.c:81:10: warning: suggest parentheses around operand of '!'
 sema-parentheses-gcc.c:82:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
    82 |     r += !a & (long)!(b || a);
       |          ^~
+sema-parentheses-gcc.c:90:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   90 |     r += !a & (int)(_Bool)(double)(b || a);
+      |          ^~
+sema-parentheses-gcc.c:93:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   93 |     r += !a & !(b ? 1 : 0);
+      |          ^~
+sema-parentheses-gcc.c:94:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   94 |     r += !a & !(_Bool)(b ? 1 : 0);
+      |          ^~
+sema-parentheses-gcc.c:95:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+   95 |     r += !a & !(int)(double)(b ? 0 : 0);
+      |          ^~
+sema-parentheses-gcc.c:101:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+  101 |     r += !a & (long)(char *)0;
+      |          ^~
+sema-parentheses-gcc.c:104:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+  104 |     r += !a & (int)(unsigned)(1 || b);
+      |          ^~
+sema-parentheses-gcc.c:105:10: warning: suggest parentheses around operand of '!' or change '&' to '&&' or '!' to '~' [-Wparentheses]
+  105 |     r += !a & (int)(_Bool)(char *)(long)(a++, b != 0);
+      |          ^~
