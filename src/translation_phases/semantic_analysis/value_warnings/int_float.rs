@@ -48,7 +48,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Checks the value `source` converts to `target`. Clang checks the arms
     /// of a `?:` against the type its value converts to, not the `?:`'s own
-    /// type, and leaves out an arm a constant condition does not take.
+    /// type, and leaves out an arm a constant condition does not take; it
+    /// finds them through the forms `IgnoreParens` passes: parentheses,
+    /// `__extension__`, and the operand `_Generic` or
+    /// `__builtin_choose_expr` selects.
     /// C99: §6.5.15p4-5, p. 90; PDF p. 102.
     pub(in crate::translation_phases::semantic_analysis) fn check_int_float_source(
         &mut self,
@@ -61,20 +64,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut pending = crate::util::bump::ArenaVec::new_in(self.scratch);
         pending.push(source);
         while let Some(source) = pending.pop() {
-            let mut e = source.expression;
-            while let E::Parenthesized { expression } = e.kind {
-                e = expression;
-            }
-            let E::Conditional(c) = e.kind else {
-                self.check_int_float_constant(target, source);
-                continue;
+            let e = self.selected_operand(source.expression);
+            let (c, then_expression) = match e.kind {
+                | E::Conditional(c) => (c, c.then_expression),
+                // The omitted operand is the condition's value.
+                // GNU extension: GCC manual, "Conditionals".
+                | E::OmittedConditional(c) => (c, c.condition_expression),
+                | _ => {
+                    let source = if std::ptr::eq(e, source.expression) {
+                        source
+                    } else {
+                        self.expression_info(e)
+                    };
+                    self.check_int_float_constant(target, source);
+                    continue;
+                },
             };
             let taken = Self::constant_truth(self.expression_info(c.condition_expression));
             if taken != Some(true) {
                 pending.push(self.expression_info(c.else_expression));
             }
             if taken != Some(false) {
-                pending.push(self.expression_info(c.then_expression));
+                pending.push(self.expression_info(then_expression));
             }
         }
     }
