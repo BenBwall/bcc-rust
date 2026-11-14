@@ -39,6 +39,15 @@ mod tests {
             .flat_map(|directory| std::fs::read_dir(root.join(directory)).unwrap())
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.extension().is_some_and(|extension| extension == "c"))
+            // The lessons that print include the C library's `<stdio.h>`,
+            // which the explorer, built without a C library, cannot find; the
+            // site shows that stop, and their precomputed LLVM IR.
+            .filter(|path| {
+                !std::fs::read_to_string(path)
+                    .unwrap()
+                    .lines()
+                    .any(|line| line.trim() == "#include <stdio.h>")
+            })
             .map(|path| {
                 (
                     path.strip_prefix(root).unwrap().display().to_string(),
@@ -100,6 +109,35 @@ mod tests {
         ExplorerOptions {
             optimize,
             ..ExplorerOptions::default()
+        }
+    }
+
+    /// The explorer has no host C library, so it declares the standard
+    /// library from bcc's embedded headers for every target: a program
+    /// that prints, like the site's printf lesson, compiles through every
+    /// stage, and its `#include` is one the preprocessor stage shows.
+    #[test]
+    fn programs_that_print_compile_through_every_stage() {
+        let source = "#include <stdio.h>\n#include <string.h>\nint main(void) {\n    char name[] \
+                      = \"Ada\";\n    printf(\"%s has %d letters\\n\", name, \
+                      (int)strlen(name));\n    puts(\"Hello, world!\");\n    return 0;\n}\n";
+        for optimize in [false, true] {
+            let output = compile(source, &options(optimize));
+            assert!(
+                output.diagnostics.iter().all(|d| d.severity != "error"),
+                "{:#?}",
+                output.diagnostics
+            );
+            let ir = output.ir.as_deref().unwrap_or_default();
+            assert!(ir.contains("@printf"), "{ir}");
+            assert!(
+                output
+                    .asm
+                    .as_deref()
+                    .is_some_and(|asm| asm.contains("printf"))
+            );
+            let includes = &output.preprocessing.as_ref().unwrap().includes;
+            assert!(includes.len() >= 2, "{includes:#?}");
         }
     }
 
@@ -1269,7 +1307,13 @@ mod tests {
                 .map(|d| d.rendered.as_str())
                 .collect();
             let summary = stderr.rfind("\n\n").map_or(0, |at| at + 2);
-            assert_eq!(rendered, stderr[..summary], "{source}");
+            // The explorer also searches bcc's embedded C library, which the
+            // command line leaves to the host's.
+            let expected = stderr[..summary].replace(
+                "            <built-in>\n",
+                "            <built-in>\n            <wasi-libc>\n",
+            );
+            assert_eq!(rendered, expected, "{source}");
             for diagnostic in &output.diagnostics {
                 assert_eq!(
                     diagnostic.file.as_deref(),
