@@ -177,6 +177,7 @@ impl Machine {
                 ref name,
                 ty,
                 constant,
+                typedef,
             } => {
                 let id = self.allocate(
                     name,
@@ -185,6 +186,9 @@ impl Machine {
                     Value::Indeterminate,
                     false,
                 )?;
+                if let Some(typedef) = typedef {
+                    self.name_type(id, typedef);
+                }
                 if constant {
                     self.make_const(id);
                 }
@@ -1110,4 +1114,7 @@ pub(super) struct ObjectMetadata {
     pub ty:       Type,
     /// Whether the object is defined `const` (C99 §6.7.3p5).
     pub constant: bool,
+    /// The typedef name its type was spelled with, which names the type
+    /// where the program did (C99 §6.7.7p3).
+    pub typedef:  Option<&'static str>,
 }

@@ -54,6 +54,11 @@ use super::{
 const UNORDERED: &str = " C leaves the order of evaluating the two operands unspecified; this \
                          machine evaluated the left one first.";
 
+/// The longest string literal (as written, quotes included) whose array
+/// decay's lead spells its first element as `"…"[0]`; a longer one would
+/// fill the lead with the literal twice.
+const SPELLED_ELEMENT: usize = 24;
+
 /// An idea an event's note explains: why the rule it applied matters. Every
 /// event of a topic carries its note; the site shows a note the first time
 /// the learner sees it, so the many reads, stores and constants of a
@@ -958,7 +963,16 @@ impl Machine {
     pub(super) fn declare(&self, range: SourceRange, id: usize, ty: Type) -> Event {
         let object = &self.state.objects[id - 1];
         let function = self.function_name(object.frame_id);
+        // A type spelled with a typedef name keeps it; the explanation says
+        // which type it names (C99 §6.7.7p3).
+        let typedef = self.metadata[id - 1].typedef;
         let what = match ty {
+            | Type::Integer(integer) if let Some(typedef) = typedef => format!(
+                "a {typedef} object: {typedef} is a typedef name, which <stdio.h> defines here as \
+                 {} ({}). Its value is",
+                integer.spelling(),
+                width_text(integer)
+            ),
             | Type::Array(Arithmetic::INT, count) => format!(
                 "an array of {count} ints ({} bytes on x86-64). Each element's value is",
                 count.saturating_mul(4)
@@ -1011,6 +1025,8 @@ impl Machine {
             | Type::Pointer(element, _) => format!("a pointer to {}", element.spelling()),
             | Type::StructPointer(_) => String::from("a pointer to a structure"),
             | Type::Struct(_) => format!("a {}", object.r#type),
+            | Type::Integer(_) if let Some(typedef) = typedef =>
+                format!("a {qualifier}{typedef} object"),
             | Type::Integer(integer) if !qualifier.is_empty() =>
                 format!("a {qualifier}{} object", integer.spelling()),
             | Type::Floating(floating) if !qualifier.is_empty() =>
@@ -1039,6 +1055,9 @@ impl Machine {
                  a const object is not a modifiable lvalue."
             );
             cited.push(clauses::MODIFIABLE_LVALUE);
+        }
+        if typedef == Some("size_t") {
+            cited.push(clauses::SIZE_T);
         }
         if matches!(ty, Type::Struct(_)) {
             cited.extend([
@@ -1956,11 +1975,21 @@ impl Machine {
                         range,
                         format!("`{}` becomes a pointer to its first char", object.name),
                     ),
-                    &format!(
-                        "The string literal `{name}` is an array of chars, so in an expression it \
-                         becomes a pointer to its first element, `{name}[0]`.",
-                        name = object.name
-                    ),
+                    &if object.name.chars().count() <= SPELLED_ELEMENT {
+                        format!(
+                            "The string literal `{name}` is an array of chars, so in an \
+                             expression it becomes a pointer to its first element, `{name}[0]`.",
+                            name = object.name
+                        )
+                    } else {
+                        // A long literal is spelled once; its first element
+                        // is named in words.
+                        format!(
+                            "The string literal `{name}` is an array of chars, so in an \
+                             expression it becomes a pointer to its first element.",
+                            name = object.name
+                        )
+                    },
                     &format!(
                         "A string literal stands for its array, {ty}, which has existed since \
                          before main. Like every array used in an expression, it is not copied: \

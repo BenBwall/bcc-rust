@@ -86,10 +86,30 @@ impl Machine {
             object.function.clone(),
             object.literal,
         )?;
+        if let Some(typedef) = object.typedef {
+            self.name_type(id, typedef);
+        }
         if object.constant {
             self.make_const(id);
         }
         Ok(id)
+    }
+
+    /// Spell object `id`'s type with the typedef name `typedef`, as its
+    /// declaration did: `size_t` rather than `unsigned long`, `size_t *`
+    /// rather than `unsigned long *`. The type stays the one it names.
+    ///
+    /// C99: §6.7.7 paragraph 3, p. 123; PDF p. 135.
+    pub fn name_type(&mut self, id: usize, typedef: &'static str) {
+        let metadata = &mut self.metadata[id - 1];
+        metadata.typedef = Some(typedef);
+        let named = match metadata.ty {
+            | Type::Integer(integer) => integer.spelling(),
+            | Type::Pointer(element, _) | Type::Array(element, _) => element.spelling(),
+            | _ => return,
+        };
+        let object = &mut self.state.objects[id - 1];
+        object.r#type = object.r#type.replacen(named, typedef, 1);
     }
 
     /// Mark object `id` as defined `const`: its type is spelled with the
@@ -175,6 +195,7 @@ impl Machine {
             scope,
             ty,
             constant: false,
+            typedef: None,
         });
         self.cells += cells;
         Ok(id)

@@ -3410,6 +3410,108 @@ fn sizeof_gives_a_size_t_without_evaluating_its_operand() {
 }
 
 #[test]
+fn long_leads_leave_the_details_to_the_explanation() {
+    let source = "#include <stdio.h>\nint main(void) {\n    printf(\"%d and %d, %d and %d \
+                  together\\n\", 1, 2, 3, 4);\n    printf(\"%d\\n\", 5);\n    return 0;\n}\n";
+    let steps = states(source);
+    let printed: Vec<&State> = steps
+        .iter()
+        .filter(|state| state.event.title.starts_with("printf writes"))
+        .collect();
+    assert_eq!(printed.len(), 2);
+    // Four conversions: the lead names each one's argument, and the
+    // explanation says what each wrote.
+    assert_eq!(
+        printed[0].event.summary,
+        "printf writes its format to standard output with its 4 conversions filled in: %d took \
+         `1`, %d took `2`, %d took `3`, and %d took `4`."
+    );
+    assert!(
+        printed[0]
+            .event
+            .explanation
+            .contains("takes argument 4 after the format, `4`, the int 4, and writes \"4\""),
+        "{}",
+        printed[0].event.explanation
+    );
+    // One conversion: the lead says what it wrote.
+    assert!(
+        printed[1]
+            .event
+            .summary
+            .contains("%d took `5` and wrote \"5\""),
+        "{}",
+        printed[1].event.summary
+    );
+    // A long literal's decay spells it once; a short one names `"…"[0]`.
+    let decays: Vec<&str> = steps
+        .iter()
+        .filter(|state| state.event.kind == EventKind::ArrayDecay)
+        .map(|state| state.event.summary.as_str())
+        .collect();
+    assert_eq!(decays.len(), 2);
+    assert!(
+        decays[0].ends_with("becomes a pointer to its first element."),
+        "{}",
+        decays[0]
+    );
+    assert!(decays[1].ends_with("`\"%d\\n\"[0]`."), "{}", decays[1]);
+}
+
+#[test]
+fn an_object_declared_size_t_keeps_the_typedef_name() {
+    let source = "#include <stdio.h>\nconst size_t limit = 4;\nint main(void) {\n    int \
+                  values[3] = {1, 2, 3};\n    size_t size = sizeof values;\n    size_t *at = \
+                  &size;\n    static size_t calls;\n    unsigned long plain = 2;\n    \
+                  printf(\"%zu %zu\\n\", size, plain);\n    return *at + limit + calls;\n}\n";
+    returned(source, 16);
+    let steps = states(source);
+    let last = steps.last().expect("a step");
+    let ty = |name: &str| {
+        last.objects
+            .iter()
+            .find(|object| object.name == name)
+            .map(|object| object.r#type.as_str())
+    };
+    // C99 §6.7.7p3: the typedef name is a synonym for unsigned long, and
+    // the machine spells each object's type as its declaration did.
+    assert_eq!(ty("size"), Some("size_t"));
+    assert_eq!(ty("at"), Some("size_t *"));
+    assert_eq!(ty("limit"), Some("const size_t"));
+    assert_eq!(ty("calls"), Some("size_t"));
+    assert_eq!(ty("plain"), Some("unsigned long"));
+    let declared = steps
+        .iter()
+        .find(|state| state.event.title == "Create `size` (size_t)")
+        .expect("size is declared");
+    assert!(
+        declared.event.summary.contains("a size_t object"),
+        "{}",
+        declared.event.summary
+    );
+    // The disclosure names the type it stands for.
+    assert!(
+        declared
+            .event
+            .explanation
+            .contains("<stdio.h> defines here as unsigned long (8 bytes"),
+        "{}",
+        declared.event.explanation
+    );
+    assert!(cited(declared).contains(&"7.17p2"));
+    // %zu names the size_t it takes; an unsigned long given to it is one.
+    let printed = steps
+        .iter()
+        .find(|state| state.event.title.starts_with("printf writes"))
+        .expect("printf runs");
+    assert!(
+        printed.event.explanation.contains("`size`, the size_t 12"),
+        "{}",
+        printed.event.explanation
+    );
+}
+
+#[test]
 fn integer_constants_take_their_type_from_their_value_and_suffix() {
     let source = "int main(void) {\n    long big = 2147483648;\n    unsigned long a = 10ul;\n    \
                   long long b = 5LL;\n    unsigned int c = 7u;\n    return big > 0;\n}\n";

@@ -298,14 +298,19 @@ impl Machine {
             let precision = precision_note(&specification, printed, &converted);
             let padded = pad(&specification, converted);
             written.extend_from_slice(&padded);
+            // %zu takes a size_t, and an unsigned long given to it is one,
+            // named so (C99 §7.19.6.1p7, §7.17p2).
+            let named = (specification.length == "z" && ty == Type::Integer(Integer::UnsignedLong))
+                .then_some("size_t");
+            let took = self.argument_text(argument, Some(ty), named);
             pieces.push(Piece::Converted {
                 specification: specification.text,
                 argument: Some(next),
                 source: String::from(text),
                 took: if text.is_empty() {
-                    self.argument_text(argument, Some(ty))
+                    took
                 } else {
-                    format!("`{text}`, {}", self.argument_text(argument, Some(ty)))
+                    format!("`{text}`, {took}")
                 },
                 wrote: padded,
                 precision,
@@ -625,12 +630,13 @@ impl Machine {
         Ok((written, Some(shown)))
     }
 
-    /// An argument's value in words, of type `ty` when known.
-    fn argument_text(&self, value: &Value, ty: Option<Type>) -> String {
+    /// An argument's value in words, of type `ty` when known, spelled as
+    /// the typedef name `named` when the conversion names one.
+    fn argument_text(&self, value: &Value, ty: Option<Type>, named: Option<&str>) -> String {
         match value {
             | Value::Integer(integer) => {
                 let name = ty.and_then(Type::integer).unwrap_or(Integer::Int);
-                format!("the {} {integer}", name.spelling())
+                format!("the {} {integer}", named.unwrap_or(name.spelling()))
             },
             | Value::Floating(real) => format!("the {} {}", real.format().spelling(), real.short()),
             | Value::Pointer { target: None, .. } => String::from("a null pointer"),
@@ -695,7 +701,7 @@ impl Machine {
              new-line: {}. The null itself is not written. C promises only a nonnegative result \
              when puts succeeds; this machine returns the number of characters written, \
              {returned}, as glibc does.",
-            self.argument_text(pointer, None),
+            self.argument_text(pointer, None, None),
             string.len(),
             quoted(written)
         );
@@ -721,6 +727,9 @@ impl Machine {
         event
     }
 
+    /// printf's step: what it wrote, and which argument each conversion
+    /// took. The lead says what each conversion wrote too, for up to
+    /// [`LEAD_CONVERSIONS`] of them.
     fn printf_event(
         range: super::SourceRange,
         format: &[u8],
@@ -768,9 +777,9 @@ impl Machine {
                     } else {
                         format!("`{source}`")
                     };
-                    fed.push(format!(
-                        "{specification} took {taken} and wrote {}",
-                        quoted(wrote)
+                    fed.push((
+                        format!("{specification} took {taken}"),
+                        format!(" and wrote {}", quoted(wrote)),
                     ));
                 },
             }
@@ -822,16 +831,32 @@ impl Machine {
                 quoted(written)
             )
         } else {
+            // Past three conversions the lead says only which argument fed
+            // each, and leaves the text to the title, so it stays a
+            // sentence of a few lines; the explanation says what each wrote.
+            let conversions = fed.len();
+            let wrote = conversions <= LEAD_CONVERSIONS;
+            let mut fed: Vec<String> = fed
+                .into_iter()
+                .map(|(took, what)| if wrote { took + &what } else { took })
+                .collect();
             let last = fed.pop().unwrap_or_default();
             let all = if fed.is_empty() {
                 last
             } else {
                 format!("{}, and {last}", fed.join(", "))
             };
-            format!(
-                "printf writes {} to standard output: {all}.",
-                quoted(written)
-            )
+            if wrote {
+                format!(
+                    "printf writes {} to standard output: {all}.",
+                    quoted(written)
+                )
+            } else {
+                format!(
+                    "printf writes its format to standard output with its {conversions} \
+                     conversions filled in: {all}."
+                )
+            }
         };
         let mut cited = vec![clauses::PRINTF, clauses::FPRINTF, clauses::CONVERSIONS];
         if pieces.iter().any(|piece| {
@@ -998,6 +1023,11 @@ fn pad(specification: &Specification, mut converted: Vec<u8>) -> Vec<u8> {
     }
     padded
 }
+
+/// The most conversions a printf step's lead lists with the text each
+/// wrote; past that the lead names only their arguments, so it stays one
+/// sentence of a few lines.
+const LEAD_CONVERSIONS: usize = 3;
 
 /// The object a pointer value points into.
 const fn pointer_target(value: &Value) -> Option<usize> {

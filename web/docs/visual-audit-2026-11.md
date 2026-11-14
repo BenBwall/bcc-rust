@@ -250,6 +250,8 @@ above.
 
 ## Left for later
 
+Part 2 below fixes all five.
+
 - **A run with many named objects still reaches the fold.** The last steps
   of the structs and unsigned lessons have eight and nine lanes of the
   programs' own objects; their leads end at y = 904 at 1440x900. Folding a function's lanes when they have not changed
@@ -271,3 +273,127 @@ above.
   the output before the explanation; on a phone the source could shrink too.
 - **The Logical lines stage breaks a source path mid-word** at 390 px
   (`…/spli` / `cing.rs`).
+
+## Part 2: what the first pass left (2026-11)
+
+The five items above were fixed on `agent/site-polish-2`, stacked on this
+pass (#371). The method was the same, with the script extended: at every
+step of every lesson at 1440x900 it scrolls the workbench to the top of the
+window and records where the note's lead sentence ends, whether each cell
+the step lit passes a hit test at its centre (inside the window, not
+scrolled out of the cells' row, not under a sticky bar), and whether the
+tape segments the step used sit inside the deck's scrolled window. On the
+fixed build it ran at all four configurations: every lesson, the landing
+page and glossary, the pipeline at all eleven stages for two lessons, and
+the WebAssembly view, 756 screenshots in all. On this pass's build it ran
+every lesson at 1440x900 light and the phone pipeline, for the before
+column below.
+
+| Measure, 1440x900, all 1,279 notes of the 14 lessons | Before | After |
+| --- | ---: | ---: |
+| Notes whose lead ends below the fold (y > 900) | 98 | 0 |
+| Lowest lead bottom | 1054 | 894 |
+| Notes with a segment they used outside the deck's window | 5 | 0 |
+| Notes with no lit cell on screen | 0 | 0 |
+| Tallest deck window | 493 px | 360 px |
+
+The 98 were in "Structs and static storage" (55), "Recursion and frames"
+(21), "Unsigned numbers wrap" (21) and "Floating point" (1). After the fix
+the light and dark runs measured the same. Every lesson still steps to its
+end with a title and a lead sentence at every step in all four
+configurations, no page logged an error, and the step counts are those in
+the table above (197, 86, 97, 78, 34, 183, 37, 230, 140, 134, 20, 6, 23 and
+0).
+
+The screenshots are in
+[`screenshots/visual-pass-2/`](screenshots/visual-pass-2/), named as in
+part 1.
+
+### 1. The note under a tape of many lanes
+
+**Fixed.** The deck grew to 493 px before it scrolled, so eight or nine
+lanes pushed the note's lead past the fold. It now grows only to what the
+window leaves for its key, the cells, the note's heading on two lines and
+four lines of its lead (`100svh` less the sticky bars and 400 px), then
+scrolls, and each step scrolls it to the rows it used: all of them when
+they fit, else those it stored into, in the same scroll that moves the tape
+sideways. When the "More rows below" key appears it takes 24 px from the
+window, so the deck follows the step's rows again then. Below 821 px, where
+the note comes before the deck, the deck keeps its former height. Two leads
+were long enough to reach the fold on their own: a printf with five
+conversions (six lines) and the decay of a 41-character literal, spelled
+out twice. A printf with more than three conversions now leads with which
+argument each took, and a literal longer than 24 characters decays to "its
+first element".
+[`tape-structs-1440-light`](screenshots/visual-pass-2/tape-structs-1440-light-before.png)
+([after](screenshots/visual-pass-2/tape-structs-1440-light-after.png)),
+[`tape-structs-static-1440-light`](screenshots/visual-pass-2/tape-structs-static-1440-light-before.png)
+([after](screenshots/visual-pass-2/tape-structs-static-1440-light-after.png)),
+[`tape-structs-call-1440-light`](screenshots/visual-pass-2/tape-structs-call-1440-light-before.png)
+([after](screenshots/visual-pass-2/tape-structs-call-1440-light-after.png)),
+[`tape-unsigned-1440-dark`](screenshots/visual-pass-2/tape-unsigned-1440-dark-before.png)
+([after](screenshots/visual-pass-2/tape-unsigned-1440-dark-after.png)),
+[`size-printf-1440-light`](screenshots/visual-pass-2/size-printf-1440-light-before.png)
+([after](screenshots/visual-pass-2/size-printf-1440-light-after.png)).
+
+### 2. `size_t` keeps its name
+
+**Fixed.** A typedef name is a synonym for its type (6.7.7p3), so the
+object's type is still `unsigned long`, but an object declared `size_t`
+(automatic, static, through a pointer or in an array) now spells its type
+as the program wrote it: its declaration leads with "a `size_t` object",
+and the tape label, the cell and Table 1 of the datasheet say `size_t`. The
+declaration cites 7.17p2, and its explanation says the header defines the
+name as `unsigned long` here; printf's `%zu` names the `size_t` it takes.
+[`size-declaration-1440-light`](screenshots/visual-pass-2/size-declaration-1440-light-before.png)
+([after](screenshots/visual-pass-2/size-declaration-1440-light-after.png)),
+[`size-datasheet-1440-light`](screenshots/visual-pass-2/size-datasheet-1440-light-before.png)
+([after](screenshots/visual-pass-2/size-datasheet-1440-light-after.png)),
+[`size-tape-1440-dark`](screenshots/visual-pass-2/size-tape-1440-dark-before.png)
+([after](screenshots/visual-pass-2/size-tape-1440-dark-after.png)),
+[`size-cells-390-dark`](screenshots/visual-pass-2/size-cells-390-dark-before.png)
+([after](screenshots/visual-pass-2/size-cells-390-dark-after.png)).
+
+### 3. Each cited clause once
+
+**Fixed.** Paragraphs of one clause share one line, `C99 §7.19.7.10p2, p3`
+and the heading, each paragraph still its own link and named in full to a
+screen reader. A printf step's citations went from seven lines to four.
+[`citations-puts-1440-light`](screenshots/visual-pass-2/citations-puts-1440-light-before.png)
+([after](screenshots/visual-pass-2/citations-puts-1440-light-after.png)),
+[`citations-puts-390-dark`](screenshots/visual-pass-2/citations-puts-390-dark-before.png)
+([after](screenshots/visual-pass-2/citations-puts-390-dark-after.png)).
+
+### 4. A phone's pipeline leads with the output
+
+**Fixed.** At 390x844 the stage's output began at y = 1016 to 1081, below
+the fold, at every stage. On a phone the output (or why bcc stopped, then
+the missing stage's note) now comes right after the stage keys that name
+the stage, at y = 516 at all eleven stages of both lessons, and the
+heading, the switches and the hand-off follow it.
+[`pipeline-lines-390-light`](screenshots/visual-pass-2/pipeline-lines-390-light-before.png)
+([after](screenshots/visual-pass-2/pipeline-lines-390-light-after.png)),
+[`pipeline-ir-390-light`](screenshots/visual-pass-2/pipeline-ir-390-light-before.png)
+([after](screenshots/visual-pass-2/pipeline-ir-390-light-after.png)),
+[`pipeline-asm-390-dark`](screenshots/visual-pass-2/pipeline-asm-390-dark-before.png)
+([after](screenshots/visual-pass-2/pipeline-asm-390-dark-after.png)).
+
+### 5. Source paths wrap at their slashes
+
+**Fixed.** Each `/` in the stage's source path is followed by a word-break
+opportunity, so `src/translation_phases/preprocessor_tokenizer/splicing.rs`
+wraps between directories.
+[`path-lines-390-light`](screenshots/visual-pass-2/path-lines-390-light-before.png)
+([after](screenshots/visual-pass-2/path-lines-390-light-after.png)).
+
+### Left for later
+
+- **A wide object's cells run past the cells' row.** When a step creates or
+  reads a string literal or an array of more bytes than the row shows, the
+  row starts at its first lit byte and the
+  rest are off to the right: 2 of 42 bytes on screen at the third literal
+  of the unsigned lesson. Some lit cells are on screen at every step, so
+  the rule holds, but a string could read better as one wide cell.
+- **The phone's "Earlier steps" strip clips long titles** with an ellipsis
+  ("#include <stdio.h>: declare printf, puts…"), as designed; the full
+  title is in the note above it.
