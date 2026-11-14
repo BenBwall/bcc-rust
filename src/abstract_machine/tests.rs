@@ -3209,7 +3209,7 @@ fn repeating_a_type_specifier_past_its_counter_still_names_no_type() {
         "int main(void){{{}x=1;return x;}}\n",
         "int ".repeat(257)
     )];
-    for words in ["int ", "long ", "char ", "unsigned "] {
+    for words in ["int ", "long ", "char ", "unsigned ", "float ", "double "] {
         sources.push(format!(
             "int main(void) {{ {} x = 1; return x; }}\n",
             words.repeat(256)
@@ -4220,6 +4220,14 @@ int main(void) {
     assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
     assert_eq!(text, "0.25 -2 0\n");
     assert!(rejected("int x = 1e10; int main(void) { return x; }").contains("does not fit"));
+    // -1u is 4294967295 before the initializer converts it to double, in a
+    // static object as in an automatic one.
+    let (state, text) = output(
+        "#include <stdio.h>\ndouble x = -1u;\nint main(void) {\n    static double s = -1u;\n    \
+         double y = -1u;\n    printf(\"%.0f %.0f %.0f\\n\", x, s, y);\n    return 0;\n}\n",
+    );
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    assert_eq!(text, "4294967295 4294967295 4294967295\n");
 }
 
 const FLOATING: &str = include_str!("../../web/demos/floating.c");
