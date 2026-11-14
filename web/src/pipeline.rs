@@ -257,12 +257,12 @@ impl Compilation {
             | _ if let Some(include) = self.missing_header(error) => (
                 "Front end",
                 format!(
-                    "bcc could not find the header {include}{at}. This view compiles for x86-64 \
-                     in your browser, where bcc has only its own freestanding headers, such as \
-                     <limits.h>, <stdint.h> and <stddef.h>, and no C library: no <stdio.h> or \
-                     <stdlib.h>. Its WebAssembly view compiles for wasm32-wasip1 with bcc's own C \
-                     library, which has them: choose WebAssembly to compile this program and step \
-                     it."
+                    "bcc could not find the header {include}{at}. Your browser has no C library \
+                     of its own, so bcc finds only the headers it brings: the freestanding ones, \
+                     such as <limits.h>, <stdint.h> and <stddef.h>, and those of its own small C \
+                     library, such as <stdio.h>, <stdlib.h>, <string.h>, <ctype.h> and \
+                     <math.h>. A header outside that set, such as <pthread.h> or another \
+                     library's, needs the command-line bcc and a full C library."
                 ),
             ),
             | _ => (
@@ -1439,6 +1439,8 @@ pub fn precomputed_llvm(stem: &str, optimize: bool) -> Option<&'static str> {
     }
     lessons!(
         "objects",
+        "hello",
+        "constants",
         "pointers",
         "recursion",
         "structs",
@@ -1467,6 +1469,8 @@ pub fn precomputed_llvm_lines(stem: &str, optimize: bool) -> Vec<LineOrigin> {
     }
     lessons!(
         "objects",
+        "hello",
+        "constants",
         "pointers",
         "recursion",
         "structs",
@@ -1501,6 +1505,8 @@ fn recorded_origin(entry: &str) -> LineOrigin {
 pub fn precomputed_source(stem: &str) -> Option<&'static str> {
     Some(match stem {
         | "objects" => include_str!("../pipeline/objects/source.c"),
+        | "hello" => include_str!("../pipeline/hello/source.c"),
+        | "constants" => include_str!("../pipeline/constants/source.c"),
         | "pointers" => include_str!("../pipeline/pointers/source.c"),
         | "recursion" => include_str!("../pipeline/recursion/source.c"),
         | "structs" => include_str!("../pipeline/structs/source.c"),

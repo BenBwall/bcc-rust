@@ -25,6 +25,13 @@ pub struct Snapshot {
     pub effects:      Vec<String>,
     pub diagnostic:   Option<Diagnostic>,
     pub return_value: Option<Value>,
+    /// Whether the program can write to standard output: it includes
+    /// `<stdio.h>`, so the page shows the Output panel.
+    pub stdout:       bool,
+    /// Every byte the program has written to standard output so far.
+    pub output:       Vec<u8>,
+    /// How many bytes at the end of `output` the last step wrote.
+    pub written:      usize,
 }
 
 impl Snapshot {
@@ -62,6 +69,20 @@ pub struct StepEvent {
     /// Objects the operation created, read, wrote or ended.
     pub objects:        Vec<usize>,
     pub sequence_point: bool,
+}
+
+impl StepEvent {
+    /// Whether the step belongs to translation phase 4: a directive the
+    /// machine ran, or a step whose rules include the preprocessor's
+    /// (§6.10), as a macro's use does. Such a step links to the
+    /// Preprocessor stage.
+    pub fn preprocessed(&self) -> bool {
+        self.kind == "directive"
+            || self
+                .clauses
+                .iter()
+                .any(|clause| clause.id.starts_with("6.10"))
+    }
 }
 
 /// One chip of a step's value flow.
@@ -172,6 +193,8 @@ pub struct Object {
     /// The function a block-scope `static` object is declared in.
     pub scope:     Option<String>,
     pub parameter: bool,
+    /// Whether this is the array of a string literal, named as written.
+    pub literal:   bool,
     pub value:     Value,
 }
 
@@ -180,7 +203,11 @@ pub struct Object {
 pub enum Value {
     Indeterminate,
     Integer {
-        text: String,
+        text:      String,
+        /// The character a char holds, as a constant spells it (`'A'`,
+        /// `'\n'`); `None` for an int.
+        #[serde(default)]
+        character: Option<String>,
     },
     Array {
         elements: Vec<Value>,
@@ -269,6 +296,7 @@ impl Diagnostic {
             | Some("indeterminate") => "Indeterminate value",
             | Some("unsupported") => "Outside the supported subset",
             | Some("syntax") => "Compilation diagnostic",
+            | Some("constraint") => "Constraint violation",
             | Some("limit") => "Resource limit",
             | _ => "Program diagnostic",
         }
