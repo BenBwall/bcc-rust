@@ -226,11 +226,11 @@ fn prototype_variadic_and_unprototyped_calls() {
     );
     rejects(
         "int f(int); void g(void) {f();}",
-        SemanticErrorKind::InvalidArgumentCount,
+        SemanticErrorKind::TooFewArguments,
     );
     rejects(
         "int f(int); void g(void) {f(1,2);}",
-        SemanticErrorKind::InvalidArgumentCount,
+        SemanticErrorKind::TooManyArguments,
     );
     rejects(
         "int f(int *); void g(void) {f(1);}",
@@ -854,7 +854,7 @@ fn explicit_library_declaration_keeps_the_user_type() {
         crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),
         |context, _| {
             assert!(context.take_pending_errors().iter().any(|e|
-            matches!(e, TranslationError::Semantic(e) if e.kind == SemanticErrorKind::InvalidArgumentCount)));
+            matches!(e, TranslationError::Semantic(e) if e.kind == SemanticErrorKind::TooFewArguments)));
         },
     );
 }

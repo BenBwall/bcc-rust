@@ -18,6 +18,7 @@ use crate::{
             SourcePosition,
             SourceVector,
             SourceVectors,
+            source_offset,
         },
     },
     util::{
@@ -533,6 +534,48 @@ impl Context<'_> {
         let anchor = self.first_source_vector(anchor);
         let start = self.first_source_vector(source);
         anchor.source_file_index == start.source_file_index && anchor.index == start.index
+    }
+
+    /// The first token on the line where the file location of `source`
+    /// starts, as GCC reports a diagnostic it gives while finishing a
+    /// function (its location there is the closing brace's line, which its
+    /// line map places at that line's first token). A token that is not an
+    /// identifier, keyword or number is taken as one character. `source`
+    /// comes back unchanged when its file text is not recorded.
+    /// GNU extension: GCC manual, "Warning Options" (`-Wreturn-type`).
+    pub(crate) fn first_token_on_line(&mut self, source: SourceVectors) -> SourceVectors {
+        if source.length() == 0 {
+            return source;
+        }
+        let location = self.file_location(source);
+        let vector = self.first_source_vector(location).clone();
+        let file = vector.source_file_index;
+        let (Some(text), Some(starts)) = (self.source_text(file), self.source_line_starts(file))
+        else {
+            return source;
+        };
+        let offset = (vector.index as usize).min(text.len());
+        let line_start = starts[starts.partition_point(|&start| start <= offset) - 1];
+        let Some(before) = text.get(line_start..offset) else {
+            return source;
+        };
+        let indent = before.len() - before.trim_start_matches([' ', '\t', '\x0b', '\x0c']).len();
+        let index = line_start + indent;
+        let word = text[index..]
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        let length = word.max(1);
+        let column = vector.column - source_offset(offset - index);
+        self.create_retained_source_vectors(
+            SourcePosition {
+                index,
+                line: vector.line,
+                column,
+            },
+            file,
+            length,
+        )
     }
 
     /// Creates a location in the retained arena, which preprocessor-arena

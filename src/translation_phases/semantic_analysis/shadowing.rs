@@ -24,6 +24,7 @@ use crate::{
     },
     diagnostics::format_in,
     translation_phases::{
+        GetPosition,
         SourceVectors,
         parsing::syntax::{
             BlockItem,
@@ -303,8 +304,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if !self.null_on_same_line(lp, body) {
                 continue;
             }
-            let indented = self.context.diagnostic_position(next.source_vectors).column
-                > self.context.diagnostic_position(lp.source_vectors).column;
+            // Clang compares presumed columns, which a macro's tokens take
+            // from the invocation: `assert(p)` under `NDEBUG` stands where
+            // `assert` is written, not inside `<assert.h>`.
+            let column = |source| self.context.expansion_location(source).column(self.context);
+            let indented = column(next.source_vectors) > column(lp.source_vectors);
             if matches!(next.kind, S::Compound { .. }) || indented {
                 self.empty_body_warning(body.source_vectors, text);
             }
