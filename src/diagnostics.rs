@@ -27,6 +27,7 @@
 mod model;
 
 // Rendering
+mod cell_width;
 mod color;
 mod context_lines;
 mod render;

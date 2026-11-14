@@ -1,0 +1,9 @@
+sema-return-type-comment-gcc.c:4:16: warning: no return statement in function returning non-void [-Wreturn-type]
+    4 |  /* comment */ }
+      |                ^
+sema-return-type-comment-gcc.c:6:17: warning: no return statement in function returning non-void [-Wreturn-type]
+    6 | /* a */ /* b */ }
+      |                 ^
+sema-return-type-comment-gcc.c:8:10: warning: no return statement in function returning non-void [-Wreturn-type]
+    8 |  /* c */ x++; }
+      |          ^
