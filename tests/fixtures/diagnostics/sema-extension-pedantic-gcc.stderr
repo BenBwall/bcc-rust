@@ -1,0 +1,9 @@
+sema-extension-pedantic-gcc.c:3:35: warning: ISO C does not support '__PRETTY_FUNCTION__' predefined identifier [-Wpedantic]
+    3 | const char *pretty(void) { return __PRETTY_FUNCTION__; }
+      |                                   ^~~~~~~~~~~~~~~~~~~
+sema-extension-pedantic-gcc.c:5:33: warning: ISO C does not support '__FUNCTION__' predefined identifier [-Wpedantic]
+    5 | const char *name(void) { return __FUNCTION__; }
+      |                                 ^~~~~~~~~~~~
+sema-extension-pedantic-gcc.c:8:70: warning: ISO C does not support '__FUNCTION__' predefined identifier [-Wpedantic]
+    8 | const char *outside(int c) { return c ? __extension__ __FUNCTION__ : __FUNCTION__; }
+      |                                                                      ^~~~~~~~~~~~

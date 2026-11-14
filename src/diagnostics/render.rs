@@ -78,7 +78,12 @@ impl Renderer {
                     write!(out, "{file}({}): ", vector.line),
                 | DiagnosticFormat::Tcc => write!(out, "{file}:{}: ", vector.line),
                 | _ if !presentation.column => write!(out, "{file}:{}: ", vector.line),
-                | _ => write!(out, "{file}:{}:{}: ", vector.line, vector.column),
+                | _ => write!(
+                    out,
+                    "{file}:{}:{}: ",
+                    vector.line,
+                    Self::location_column(context, format, vector)
+                ),
             };
         }
         // TCC names no warning options, so a message drops the `[-W…]`
@@ -283,7 +288,7 @@ impl Renderer {
             vector.line
         );
         if presentation.column {
-            let _ = write!(out, "{}:", vector.column);
+            let _ = write!(out, "{}:", Self::location_column(context, format, vector));
         }
         let _ = writeln!(
             out,
@@ -400,7 +405,10 @@ impl Renderer {
 
             // Underline row: secondary marks first so primary ones win.
             let column_of = |offset: usize| {
-                display_width(&source[..offset.saturating_sub(line_start).min(source.len())])
+                display_width(
+                    &source[..offset.saturating_sub(line_start).min(source.len())],
+                    Tabs::of(gutter.compiler_snippet),
+                )
             };
             let mut cells = ArenaVec::new_in(scratch);
             for primary in [false, true] {
@@ -499,7 +507,7 @@ impl Renderer {
         gutter: &Gutter<'_>,
         scratch: &Bump,
     ) {
-        let visible = visible_source(source, scratch);
+        let visible = visible_source(source, Tabs::of(gutter.compiler_snippet), scratch);
         if let Some(lead) = gutter.without_numbers {
             let _ = writeln!(out, "{lead}{}", visible.as_str().trim_end());
             return;
@@ -561,6 +569,33 @@ impl Renderer {
 
     /// Returns the 1-based physical line containing `offset` and the byte
     /// range of that line, excluding its terminator.
+    /// The column a location prints: GCC counts display columns, its
+    /// `-fdiagnostics-column-unit=display` default since GCC 11, in which a
+    /// tab moves to the next tab stop and a character is one column however
+    /// many bytes spell it (GCC manual, "Diagnostic Message Formatting
+    /// Options"). Clang and MSVC count bytes, as the vector does.
+    fn location_column(
+        context: &Context<'_>,
+        format: DiagnosticFormat,
+        vector: &crate::translation_phases::SourceVector,
+    ) -> usize {
+        let bytes = vector.column as usize;
+        if format != DiagnosticFormat::Gcc {
+            return bytes;
+        }
+        let file = vector.source_file_index;
+        let (Some(text), Some(starts)) =
+            (context.source_text(file), context.source_line_starts(file))
+        else {
+            return bytes;
+        };
+        let offset = (vector.index as usize).min(text.len());
+        let (_, line_start, _) = Self::locate(starts, text, offset);
+        text.get(line_start..offset).map_or(bytes, |prefix| {
+            display_width(prefix, Tabs::Stops(COMPILER_TAB_STOP)) + 1
+        })
+    }
+
     fn locate(starts: &[usize], text: &str, offset: usize) -> (usize, usize, usize) {
         let line = starts.partition_point(|&start| start <= offset);
         let start = starts[line - 1];
@@ -654,14 +689,24 @@ struct Painted<'a> {
 /// Expands tabs and shows other control characters as their one-column
 /// Unicode control pictures, so a snippet never emits raw control bytes
 /// and carets stay aligned.
-fn visible_source<'scratch>(text: &str, scratch: &'scratch Bump) -> ArenaString<'scratch> {
+fn visible_source<'scratch>(
+    text: &str,
+    tabs: Tabs,
+    scratch: &'scratch Bump,
+) -> ArenaString<'scratch> {
     let mut visible = ArenaString::new_in(scratch);
+    let mut width = 0;
     for c in text.chars() {
         if c == '\t' {
-            for _ in 0..TAB_WIDTH {
+            let advance = tabs.advance(width);
+            for _ in 0..advance {
                 visible.push(' ');
             }
-        } else if let Some(byte) = raw_bytes::raw_byte(c) {
+            width += advance;
+            continue;
+        }
+        width += char_width(c);
+        if let Some(byte) = raw_bytes::raw_byte(c) {
             // A byte of malformed UTF-8 shows as Clang shows it.
             let _ = write!(visible, "<{byte:02X}>");
         } else {
@@ -675,22 +720,58 @@ fn visible_source<'scratch>(text: &str, scratch: &'scratch Bump) -> ArenaString<
     visible
 }
 
-fn display_width(text: &str) -> usize {
-    text.chars()
-        .map(|c| {
-            if c == '\t' {
-                TAB_WIDTH
-            } else if raw_bytes::raw_byte(c).is_some() {
-                RAW_BYTE_WIDTH
-            } else {
-                1
-            }
-        })
-        .sum()
+fn display_width(text: &str, tabs: Tabs) -> usize {
+    text.chars().fold(0, |width, c| {
+        if c == '\t' {
+            width + tabs.advance(width)
+        } else {
+            width + char_width(c)
+        }
+    })
 }
 
-/// Width a tab occupies when a source line is echoed.
-const TAB_WIDTH: usize = 4;
+/// Columns a character other than a tab occupies when a line is echoed.
+fn char_width(c: char) -> usize {
+    if raw_bytes::raw_byte(c).is_some() {
+        RAW_BYTE_WIDTH
+    } else {
+        1
+    }
+}
+
+/// How a tab is laid out when a source line is echoed. GCC and Clang move to
+/// the next multiple of their tab stop, 8 unless `-ftabstop=` says otherwise
+/// (GCC manual, "Diagnostic Message Formatting Options"; Clang's
+/// `-ftabstop`); bcc's own format gives every tab four columns.
+#[derive(Clone, Copy)]
+enum Tabs {
+    Stops(usize),
+    Fixed(usize),
+}
+
+impl Tabs {
+    /// The columns a tab that starts at column `width` occupies.
+    const fn advance(self, width: usize) -> usize {
+        match self {
+            | Self::Stops(stop) => stop - width % stop,
+            | Self::Fixed(columns) => columns,
+        }
+    }
+
+    const fn of(compiler_snippet: bool) -> Self {
+        if compiler_snippet {
+            Self::Stops(COMPILER_TAB_STOP)
+        } else {
+            Self::Fixed(BCC_TAB_WIDTH)
+        }
+    }
+}
+
+/// Width bcc's own format gives a tab when a source line is echoed.
+const BCC_TAB_WIDTH: usize = 4;
+
+/// GCC's and Clang's default tab stop.
+const COMPILER_TAB_STOP: usize = 8;
 
 /// Width of a malformed-UTF-8 byte echoed as `<FF>`.
 const RAW_BYTE_WIDTH: usize = 4;

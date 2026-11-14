@@ -69,7 +69,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// What GCC's `-pedantic` says of `__FUNCTION__` and
+    /// What GCC's `-pedantic` says of each use of `__FUNCTION__` and
     /// `__PRETTY_FUNCTION__`; Clang says nothing.
     /// GNU extension: GCC manual, "Function Names as Strings".
     pub(super) fn report_predefined_identifier(&mut self, name: Identifier) {
