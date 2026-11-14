@@ -180,7 +180,13 @@ fn literal_end(source: &str, start: usize) -> Result<usize, Diagnostic> {
     while let Some(&byte) = bytes.get(at) {
         match byte {
             | b'\n' => break,
-            | b'\\' => at += 2,
+            // Every escape sequence continues with an ASCII character, so
+            // before anything else skip the backslash alone: the non-ASCII
+            // arm below then rejects a multibyte character whole instead of
+            // the lexer stepping inside it.
+            // C99: §6.4.4.4 paragraph 1, p. 59; PDF p. 71 (escape-sequence).
+            | b'\\' if bytes.get(at + 1).is_some_and(u8::is_ascii) => at += 2,
+            | b'\\' => at += 1,
             | _ if byte == quote => return Ok(at + 1),
             | _ if !byte.is_ascii() => {
                 let end = at + source[at..].chars().next().map_or(1, char::len_utf8);
