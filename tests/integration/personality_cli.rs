@@ -475,7 +475,8 @@ mod tests {
             let output = gcc(source);
             succeeds(&output);
             assert!(
-                stderr(&output).contains("warning: attribute ignored: `scalar_storage_order`"),
+                stderr(&output)
+                    .contains("warning: 'scalar_storage_order' attribute ignored [-Wattributes]"),
                 "{source}{}",
                 stderr(&output)
             );
@@ -1563,6 +1564,39 @@ mod tests {
                 directory.write("u.i", &output);
                 succeeds(&directory.bcc(mode, &["-fsyntax-only", "u.i"]));
             }
+        }
+    }
+
+    /// An attribute GCC drops is worded by its name under GCC's one
+    /// `-Wattributes`, which in both compilers holds the attributes they
+    /// ignore, known or not (GCC 14, Clang 23).
+    #[test]
+    fn dropped_attributes_follow_wattributes() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int v __attribute__((target(\"avx\")));\nvoid f(void) __attribute__((bogus_attr));\n",
+        );
+        let text = |mode: &str, options: &[&str]| {
+            stderr(&directory.bcc(mode, &[options, &["-fsyntax-only", "a.c"]].concat()))
+        };
+        let gcc = text("--gcc-mode", &[]);
+        assert!(
+            gcc.contains("warning: 'target' attribute ignored [-Wattributes]\n"),
+            "{gcc}"
+        );
+        assert!(
+            gcc.contains("warning: 'bogus_attr' attribute directive ignored [-Wattributes]\n"),
+            "{gcc}"
+        );
+        let promoted = text("--gcc-mode", &["-Werror=attributes"]);
+        assert!(
+            promoted.contains("error: 'target' attribute ignored [-Werror=attributes]\n"),
+            "{promoted}"
+        );
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let silenced = text(mode, &["-Wno-attributes"]);
+            assert!(!silenced.contains("warning"), "{mode}: {silenced}");
         }
     }
 
@@ -7683,7 +7717,7 @@ mod tests {
     /// `/wd`, `/we` and `/wN` name a warning by its number. `cl` only warns
     /// about a conversion between a pointer and an integer or between
     /// incompatible pointers, so it succeeds unless `/WX` is given.
-    /// clang-cl keeps Clang's rules and bcc's words.
+    /// clang-cl keeps Clang's rules and words.
     #[test]
     fn cl_diagnostics_take_cls_codes_words_and_levels() {
         let directory = Directory::new();
@@ -7828,13 +7862,179 @@ mod tests {
         assert_eq!(warnings(&["/we4113"]).0, Some(2));
         assert_eq!(warnings(&["/wd4133", "/WX"]).0, Some(2));
         assert_eq!(warnings(&["/wd4113", "/wd4090", "/WX"]).0, Some(0));
-        // clang-cl writes Clang's errors in bcc's words.
+        // clang-cl writes Clang's errors in Clang's words.
         let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "pointers.c"]);
         assert_eq!(clang_cl.status.code(), Some(1));
         let text = stderr(&clang_cl);
         assert!(!text.contains(" C40"), "{text}");
         assert!(text.contains("pointers.c(2,"), "{text}");
         assert!(text.contains("): error: "), "{text}");
+    }
+
+    /// clang-cl is Clang with `cl`'s locations: Clang's words, snippets,
+    /// notes and closing counts, `file(line,col):` before each, as the
+    /// pinned clang-cl writes them. `/WX` makes each warning an error
+    /// Clang marks `-Werror`, `/diagnostics:column` drops the snippets and
+    /// with them the counts, and `/diagnostics:classic` drops the column
+    /// too.
+    #[test]
+    fn clang_cl_writes_clangs_diagnostics_at_cls_locations() {
+        let directory = Directory::new();
+        directory.write(
+            "undeclared.c",
+            "int f(int x) { return x + undefined_thing; }\n",
+        );
+        directory.write("unused.c", "int f(void) { int unused; return 0; }\n");
+        directory.write(
+            "pointer.c",
+            "int main(void) { long x = 1; char *p = x; return 0; }\n",
+        );
+        directory.write(
+            "jump.c",
+            "void f(int n) { goto L; int a[n]; L:; (void)a; }\n",
+        );
+        let clang_cl = |args: &[&str]| {
+            let output = directory.bcc(
+                "--clang-cl-mode",
+                &[&["/c", "/nologo", "/W4"], args].concat(),
+            );
+            (output.status.code(), stderr(&output))
+        };
+        assert_eq!(
+            clang_cl(&["undeclared.c"]),
+            (
+                Some(1),
+                "undeclared.c(1,27): error: use of undeclared identifier 'undefined_thing'\n    1 \
+                 | int f(int x) { return x + undefined_thing; }\n      |                           \
+                 ^~~~~~~~~~~~~~~\n1 error generated.\n"
+                    .into()
+            )
+        );
+        // Clang reports no unused variable in a scope an unrecoverable
+        // error occurred in.
+        directory.write(
+            "trapped.c",
+            "int f(int x) { int unused; return x + undefined_thing; }\n",
+        );
+        assert_eq!(
+            clang_cl(&["trapped.c"]),
+            (
+                Some(1),
+                "trapped.c(1,39): error: use of undeclared identifier 'undefined_thing'\n    1 | int \
+                 f(int x) { int unused; return x + undefined_thing; }\n      |                                       \
+                 ^~~~~~~~~~~~~~~\n1 error generated.\n"
+                    .into()
+            )
+        );
+        let unused =
+            "    1 | int f(void) { int unused; return 0; }\n      |                   ^~~~~~\n";
+        assert_eq!(
+            clang_cl(&["unused.c"]),
+            (
+                Some(0),
+                format!(
+                    "unused.c(1,19): warning: unused variable 'unused' \
+                     [-Wunused-variable]\n{unused}1 warning generated.\n"
+                )
+            )
+        );
+        assert_eq!(
+            clang_cl(&["/WX", "unused.c"]),
+            (
+                Some(1),
+                format!(
+                    "unused.c(1,19): error: unused variable 'unused' \
+                     [-Werror,-Wunused-variable]\n{unused}1 error generated.\n"
+                )
+            )
+        );
+        assert_eq!(
+            clang_cl(&["/diagnostics:caret", "unused.c"]),
+            clang_cl(&["unused.c"])
+        );
+        assert_eq!(
+            clang_cl(&["/diagnostics:column", "unused.c"]),
+            (
+                Some(0),
+                "unused.c(1,19): warning: unused variable 'unused' [-Wunused-variable]\n".into()
+            )
+        );
+        assert_eq!(
+            clang_cl(&["/diagnostics:classic", "unused.c"]),
+            (
+                Some(0),
+                "unused.c(1): warning: unused variable 'unused' [-Wunused-variable]\n".into()
+            )
+        );
+        // Clang counts warnings first, and a warning `/WX` makes an error
+        // stays beside the error at its place.
+        let (status, text) = clang_cl(&["pointer.c"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.starts_with(
+                "pointer.c(1,36): error: incompatible integer to pointer conversion initializing \
+                 'char *' with an expression of type 'long' [-Wint-conversion]\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("\npointer.c(1,36): warning: unused variable 'p' [-Wunused-variable]\n"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("\n1 warning and 1 error generated.\n"),
+            "{text}"
+        );
+        let (status, text) = clang_cl(&["/WX", "pointer.c"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.contains(
+                "\npointer.c(1,36): error: unused variable 'p' [-Werror,-Wunused-variable]\n"
+            ),
+            "{text}"
+        );
+        assert!(text.ends_with("\n2 errors generated.\n"), "{text}");
+        // A note takes the same location form.
+        let (status, text) = clang_cl(&["jump.c"]);
+        assert_eq!(status, Some(1));
+        assert!(text.contains("\njump.c(1,29): note: "), "{text}");
+        // Clang's words for the syntax and directives it expected, at a
+        // caret without a range.
+        directory.write("declarator.c", "int 123;\n");
+        assert_eq!(
+            clang_cl(&["declarator.c"]),
+            (
+                Some(1),
+                "declarator.c(1,5): error: expected identifier or '('\n    1 | int 123;\n      |     \
+                 ^\n1 error generated.\n"
+                    .into()
+            )
+        );
+        directory.write(
+            "directives.c",
+            "#if 1 2\n#endif\n#define 1\nconst const int x;\n",
+        );
+        let (status, text) = clang_cl(&["/WX", "directives.c"]);
+        assert_eq!(status, Some(1));
+        for line in
+            [
+                "directives.c(1,7): error: token is not a valid binary operator in a preprocessor \
+                 subexpression\n",
+                "\ndirectives.c(3,9): error: macro name must be an identifier\n    3 | #define \
+                 1\n      |         ^\n",
+                "\ndirectives.c(4,7): error: duplicate 'const' declaration specifier \
+                 [-Werror,-Wduplicate-decl-specifier]\n    4 | const const int x;\n      |       \
+                 ^\n3 errors generated.\n",
+            ]
+        {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
+        // `cl` keeps its own codes and words.
+        let cl = directory.bcc("--msvc-mode", &["/c", "/nologo", "/W4", "undeclared.c"]);
+        assert_eq!(
+            stderr(&cl),
+            "undeclared.c(1): error C2065: 'undefined_thing': undeclared identifier\n"
+        );
     }
 
     /// `cl` reads its options from command files (`@file`, UTF-8 or UTF-16
@@ -8635,6 +8835,60 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             "{text}"
         );
         assert!(!text.contains("<pragma string>"), "{text}");
+    }
+
+    /// Comparisons the operand's type decides, under each compiler's options.
+    /// Each row was measured against GCC 14.2 and Clang 23.1.
+    #[test]
+    fn gnu_type_limit_warnings_follow_their_options() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int f(unsigned u, unsigned char c) { return (u < 0) + (c > 300) + (c > 255); }\n",
+        );
+        let flags = |mode: &str, args: &[&str]| {
+            let args: Vec<&str> = args
+                .iter()
+                .copied()
+                .chain(["-fsyntax-only", "a.c"])
+                .collect();
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            let mut flags: Vec<String> = stderr(&output)
+                .lines()
+                .filter_map(|line| line.rsplit_once("[-W"))
+                .map(|(_, flag)| flag.trim_end_matches(']').to_owned())
+                .collect();
+            flags.sort_unstable();
+            flags.join(" ")
+        };
+        for (mode, args, expected) in [
+            ("--gcc-mode", &[][..], ""),
+            ("--gcc-mode", &["-Wall"][..], ""),
+            (
+                "--gcc-mode",
+                &["-Wextra"][..],
+                "type-limits type-limits type-limits",
+            ),
+            (
+                "--clang-mode",
+                &[][..],
+                "tautological-constant-out-of-range-compare",
+            ),
+            (
+                "--clang-mode",
+                &["-Wno-tautological-constant-compare"][..],
+                "",
+            ),
+            (
+                "--clang-mode",
+                &["-Wtype-limits"][..],
+                "tautological-constant-out-of-range-compare tautological-type-limit-compare \
+                 tautological-unsigned-zero-compare",
+            ),
+        ] {
+            assert_eq!(flags(mode, args), expected, "{mode} {args:?}");
+        }
     }
 
     /// A typedef a block declares and never uses, under each compiler's
