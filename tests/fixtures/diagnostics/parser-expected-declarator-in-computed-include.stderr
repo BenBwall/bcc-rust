@@ -1,0 +1,7 @@
+error: expected an identifier or `(` in the declarator, found `;`
+ --> included-error.h:1:19
+  |
+1 | int header_value, ;
+  |                   ^ expected a name
+
+1 error generated.
