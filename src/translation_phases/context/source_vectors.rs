@@ -540,8 +540,10 @@ impl Context<'_> {
     /// starts, as GCC reports a diagnostic it gives while finishing a
     /// function (its location there is the closing brace's line, which its
     /// line map places at that line's first token). A token that is not an
-    /// identifier, keyword or number is taken as one character. `source`
-    /// comes back unchanged when its file text is not recorded.
+    /// identifier, keyword or number is taken as one character. A comment
+    /// before it on the line is not a token (translation phase 3 makes it a
+    /// space), so `/* done */ }` reports at the `}`. `source` comes back
+    /// unchanged when its file text is not recorded.
     /// GNU extension: GCC manual, "Warning Options" (`-Wreturn-type`).
     pub(crate) fn first_token_on_line(&mut self, source: SourceVectors) -> SourceVectors {
         if source.length() == 0 {
@@ -559,8 +561,7 @@ impl Context<'_> {
         let Some(before) = text.get(line_start..offset) else {
             return source;
         };
-        let indent = before.len() - before.trim_start_matches([' ', '\t', '\x0b', '\x0c']).len();
-        let index = line_start + indent;
+        let index = line_start + before.len() - skip_blanks_and_comments(before).len();
         let word = text[index..]
             .bytes()
             .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
@@ -766,5 +767,22 @@ impl Context<'_> {
         let (arena, start) = SourceArena::decode(source_vectors);
         let start = start as usize;
         &self.arena(arena)[start..start + source_vectors.length() as usize]
+    }
+}
+
+/// `text` after its leading blanks and the block comments that start and end
+/// within it, each of which translation phase 3 replaces with one space.
+/// C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22; §6.4.9 paragraph 1,
+/// p. 66; PDF p. 78.
+fn skip_blanks_and_comments(mut text: &str) -> &str {
+    loop {
+        text = text.trim_start_matches([' ', '\t', '\x0b', '\x0c']);
+        match text
+            .strip_prefix("/*")
+            .and_then(|comment| comment.find("*/").map(|end| &comment[end + 2..]))
+        {
+            | Some(rest) => text = rest,
+            | None => return text,
+        }
     }
 }
