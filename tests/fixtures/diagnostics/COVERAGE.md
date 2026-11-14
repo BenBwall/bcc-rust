@@ -1,5 +1,49 @@
 # Diagnostic golden corpus
 
+Context lines (2026-11-08): `context-includes-gcc` and `context-includes-clang`
+pin the include stacks GCC 14 and Clang 23 print before a diagnostic in a
+header: headers nested two deep through `"…"` and through `<…>` with `-I`, a
+header read twice, and a function a header defines. GCC writes each
+`#include` once in a compilation and only the part of a chain it has not
+written; Clang writes the whole chain whenever the including place changes,
+outermost first, and names a header found beside an includer in the working
+directory `./name.h`. `context-functions-gcc` pins GCC's `In function 'f':`
+and `At top level:` lines, which come when the function changes: a
+diagnostic just past a definition's name, in its parameters or body, is in
+the function, and one at the name (`-Wmain`, an unused function) at top level.
+`context-functions-clang` shows that Clang names no function. Both outputs
+match the compilers' line for line but for GCC's range for an unused
+parameter. `context-includes-clang-cl` matches clang-cl 23 exactly: Clang's
+include stacks, which keep `file:line`, and macro notes, with each
+diagnostic at `cl`'s `file(line,col):` and no function lines. The other GCC-format snapshots gained these lines where GCC
+prints them. `context-ranges-clang` pins the ranges Clang underlines with
+`~` beside the caret: an initializer's and an assignment's value, both
+operands of an invalid binary operator or of a pointer and integer
+comparison, the count or divisor of a shift or division warning, and the
+operands of a `-Wsign-compare` comparison (`sema-sign-compare-clang`). The
+caret of such a diagnostic is then a point, not an underlined token
+(`int *pointer_name = value;` -> `^              ~~~~~`), as it is for a
+warning Clang gives no range at all: an unused parameter, a variable set
+but not used, an unused local typedef, and a shadowing declaration with
+its note (`sema-unused-variables-clang`, `sema-shadow-kinds-clang`). An
+operand a function-like macro wrote is underlined at the macro's name only,
+where Clang covers the whole invocation. Its caret lines
+match Clang 23's; its messages keep bcc's words for the operator errors,
+and it prints no fix-it lines (`&`). `context-macros-gcc` and
+`context-macros-clang` pin the notes about a token a macro's body wrote:
+GCC reports the diagnostic in the body and adds `in expansion of macro
+'X'` at the invocation, Clang reports it at the invocation and adds
+`expanded from macro 'X'` at the body, a continued definition included,
+where Clang draws the ranges the diagnostic names that the expansion wrote,
+on the lines next to its caret. A
+macro a header defines (`context-headers/macro.h`) gets GCC's include stack
+of the header under the function line of its invocation. A warning a
+system header's macro wrote stays at the user's invocation under GCC's
+format. bcc keeps only the outermost invocation of a token, so a
+nested expansion gets GCC's note for the outermost macro and Clang's for
+the innermost, not the levels between; a token from an argument gets
+neither GCC's `in definition of macro` note nor Clang's notes.
+
 Diagnostic pragmas: `pragma-diagnostic-{gcc,clang}` pin the warning of each phase
 under `#pragma GCC diagnostic` and `#pragma clang diagnostic`, a macro's body and
 invocation under different settings, `_Pragma` in an expansion, and a header read
@@ -102,7 +146,7 @@ Run `cargo test --test integration diagnostics_golden`. Use `BLESS=1 cargo test 
 
 Snapshots record current behavior, including defects. The guard test rejects panics, internal representations, and raw NUL bytes in any output, so a crash or control-byte leak cannot be blessed into a passing snapshot. Fix the compiler instead of normalizing such output.
 
-`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`; `system-headers/pointer-macros.h` is the system header of `sema-pointer-system-header.c`, and `system-headers/record-macros.h` of `sema-missing-fields-system-gcc.c`. The header files are included by C fixtures, not invoked independently.
+`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`; `system-headers/pointer-macros.h` is the system header of `sema-pointer-system-header.c`, and `system-headers/record-macros.h` of `sema-missing-fields-system-gcc.c`. `context-headers/` holds the headers of `context-includes-{gcc,clang,clang-cl}.c` and `context-macros-{gcc,clang}.c`. The header files are included by C fixtures, not invoked independently.
 
 ## Coverage
 

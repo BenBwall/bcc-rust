@@ -1,3 +1,4 @@
+sema-sign-compare-gcc.c: In function 'g':
 sema-sign-compare-gcc.c:2:15: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
     2 |     int r = a < b;
       |               ^

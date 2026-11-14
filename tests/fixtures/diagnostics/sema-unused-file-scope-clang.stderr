@@ -6,7 +6,7 @@ sema-unused-file-scope-clang.c:2:18: warning: unused variable 'unused_constant' 
       |                  ^~~~~~~~~~~~~~~
 sema-unused-file-scope-clang.c:3:12: warning: variable 'written' set but not used [-Wunused-but-set-global]
     3 | static int written;
-      |            ^~~~~~~
+      |            ^
 sema-unused-file-scope-clang.c:4:13: warning: unused function 'unused_function' [-Wunused-function]
     4 | static void unused_function(void) {}
       |             ^~~~~~~~~~~~~~~
