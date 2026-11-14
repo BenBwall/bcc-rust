@@ -1,7 +1,7 @@
 sema-tab-columns-wide-clang.c:3:15: error: incompatible pointer to integer conversion initializing 'int' with an expression of type 'char[2]' [-Wint-conversion]
     3 | /*界*/         int x = "s";
-      |                    ^
+      |                    ^   ~~~
 sema-tab-columns-wide-clang.c:4:15: error: incompatible pointer to integer conversion initializing 'int' with an expression of type 'char[2]' [-Wint-conversion]
     4 | /*é́*/       int y = "t";
-      |                 ^
+      |                 ^   ~~~
 2 errors generated.
