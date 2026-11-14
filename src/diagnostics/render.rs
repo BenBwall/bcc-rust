@@ -18,7 +18,10 @@ use super::{
     ColorChoice,
     Diagnostic,
     Renderer,
-    model::Label,
+    model::{
+        Label,
+        LabelSource,
+    },
 };
 use crate::{
     configuration::{
@@ -62,16 +65,58 @@ impl Renderer {
             DiagnosticPresentation::default()
         };
         // GCC, Clang and MSVC lead with the primary location.
-        let location = diagnostic
+        let located = diagnostic
             .labels
             .iter()
             .filter(|label| label.primary)
             .chain(&diagnostic.labels)
-            .find_map(|label| label.source.vectors(context).first());
+            .find_map(|label| Some((label.source.vectors(context).first()?, label.source)));
+        let location = located.map(|(vector, _)| vector);
+        let segment = located
+            .filter(|_| compiler_snippet)
+            .and_then(|(vector, source)| {
+                self.segment_of(context, vector, [diagnostic.reading, source.range()])
+            });
+        // About a token a macro's body wrote: GCC reports it there and
+        // notes the invocation, Clang notes the macro after the snippet.
+        // GCC reports a warning a system header's macro wrote, which it
+        // reports at all, where the user invoked the macro.
+        let expansion = location
+            .filter(|_| compiler_snippet)
+            .and_then(|vector| Self::macro_expansion(context, diagnostic.reading?, vector))
+            .filter(|expansion| {
+                format != DiagnosticFormat::Gcc
+                    || diagnostic.severity != ErrorSeverity::Warning
+                    || !context.in_system_header(&expansion.spelling)
+            });
+        let gcc_spelling = expansion
+            .as_ref()
+            .filter(|_| format == DiagnosticFormat::Gcc)
+            .map(|expansion| &expansion.spelling);
+        // GCC's include stack is the macro definition's, its function the
+        // one the macro was invoked in.
+        if let Some(vector) = location
+            && compiler_snippet
+        {
+            let stack = gcc_spelling.map_or(segment, |spelling| {
+                context.source_map.segment_at(
+                    context.physical_source_file(spelling.source_file_index),
+                    spelling.index,
+                    None,
+                )
+            });
+            self.write_context_lines(&mut out, context, (vector, segment), stack, false);
+        }
+        let location = gcc_spelling.or(location);
         if let Some(vector) = location
             && format != DiagnosticFormat::Bcc
         {
-            let file = context.get_source_file(vector.source_file_index).display();
+            let segment = if gcc_spelling.is_some() {
+                None
+            } else {
+                segment
+            };
+            let file = Self::file_name(context, vector, segment);
             let _ = match format {
                 | DiagnosticFormat::Msvc { column: true, .. } =>
                     write!(out, "{file}({},{}): ", vector.line, vector.column),
@@ -133,20 +178,49 @@ impl Renderer {
         // GCC and Clang share one snippet: a gutter five wide, nothing around
         // the source line and its caret, and what relates to the message in
         // `note:` lines of its own.
+        // GCC's format draws only the primary range; Clang's also the ranges
+        // it underlines with `~`, on the caret's lines (Clang's
+        // `TextDiagnostic::emitCaret`); the others draw every labelled one.
+        let drawn = |label: &&Label<'_>| {
+            presentation.caret
+                && (label.primary
+                    || if compiler_snippet {
+                        format == DiagnosticFormat::Clang && label.message.is_none()
+                    } else {
+                        label.message.is_some()
+                    })
+        };
+        // GCC's caret goes where the macro's body wrote the token.
+        let spelled = gcc_spelling.map(|spelling| Label {
+            source:  LabelSource::Segments(scratch.alloc_slice_fill_iter([spelling.clone()])),
+            message: None,
+            primary: true,
+        });
         let mut marks = ArenaVec::new_in(scratch);
         for label in diagnostic
             .labels
             .iter()
-            .filter(|label| presentation.caret && (!compiler_snippet || label.primary))
+            .filter(drawn)
+            .filter(|label| spelled.is_none() || !label.primary)
+            .chain(spelled.as_ref().filter(|_| presentation.caret))
         {
             Self::push_label_marks(label, context, &mut marks);
         }
+        // A diagnostic that names ranges of its own, or none, gets Clang's
+        // caret alone at its place, with no `~` over the token there unless
+        // a range covers it: `int *name = 1;` -> `^      ~`.
+        let point = format == DiagnosticFormat::Clang
+            && (diagnostic.point || diagnostic.labels.iter().any(Label::is_highlight));
+        if point {
+            Self::point_caret(&mut marks, context);
+        }
         if compiler_snippet {
+            Self::retain_caret_block(&mut marks, scratch);
             for mark in &mut marks {
                 mark.label = None;
             }
             // A place is one caret at the start of its first character.
-            if diagnostic.point {
+            if diagnostic.point && format == DiagnosticFormat::Clang {
                 marks.truncate(1);
                 for mark in &mut marks {
                     let text = context.source_text(mark.file).unwrap_or_default();
@@ -239,12 +313,16 @@ impl Renderer {
             );
         }
         if compiler_snippet {
+            if let Some(expansion) = &expansion {
+                self.render_expansion_note(&mut out, expansion, diagnostic, context, scratch);
+            }
             for label in diagnostic
                 .labels
                 .iter()
                 .filter(|label| !label.primary && label.message.is_some())
             {
-                self.render_related_note(&mut out, label, context, scratch);
+                let point = format == DiagnosticFormat::Clang && diagnostic.point;
+                self.render_related_note(&mut out, (label, &[]), point, context, scratch, true);
             }
             return out.into_str();
         }
@@ -279,22 +357,31 @@ impl Renderer {
     /// Writes `label`, a secondary place in a diagnostic, as GCC and Clang do:
     /// a `note:` of its own, at the place's reported location, over its source
     /// lines when there are any to quote.
-    fn render_related_note(
+    /// GCC's macro notes have no context lines of their own
+    /// (`with_context`), being part of the diagnostic they follow. Clang
+    /// underlines `highlights` with `~` on the place's lines, beside a
+    /// caret that is a `point`.
+    pub(super) fn render_related_note(
         &self,
         out: &mut ArenaString<'_>,
-        label: &Label<'_>,
+        (label, highlights): (&Label<'_>, &[Label<'_>]),
+        point: bool,
         context: &Context<'_>,
         scratch: &Bump,
+        with_context: bool,
     ) {
         let Some(vector) = label.source.vectors(context).first() else {
             return;
         };
         let format = context.configuration.diagnostic_format();
         let presentation = context.configuration.diagnostic_presentation();
-        let file = vector.source_file_index;
+        let segment = self.segment_of(context, vector, [label.source.range(), None]);
+        if with_context {
+            self.write_context_lines(out, context, (vector, segment), segment, true);
+        }
         let _ = Self::write_compiler_location(
             out,
-            context.get_source_file(file).display(),
+            Self::file_name(context, vector, segment),
             vector,
             Self::location_column(context, format, vector),
             presentation,
@@ -314,6 +401,13 @@ impl Renderer {
             mark.primary = true;
             mark.label = None;
         }
+        if point {
+            Self::point_caret(&mut marks, context);
+        }
+        for highlight in highlights {
+            Self::push_label_marks(highlight, context, &mut marks);
+        }
+        Self::retain_caret_block(&mut marks, scratch);
         let mut files = ArenaVec::new_in(scratch);
         for mark in &marks {
             if !files.contains(&mark.file) {
@@ -386,8 +480,10 @@ impl Renderer {
         gutter: &Gutter<'_>,
         scratch: &Bump,
     ) {
-        // GCC and Clang mark the rest of a range with tildes.
+        // GCC and Clang mark the rest of a range with tildes, and Clang
+        // the ranges beside the caret.
         let tail = if gutter.compiler_snippet { '~' } else { '^' };
+        let secondary = if gutter.compiler_snippet { '~' } else { '-' };
         let bar = self.paint("|", Self::gutter_style());
         // What stands before an underline.
         let lead = match gutter.without_numbers {
@@ -473,11 +569,11 @@ impl Renderer {
                         underline.push(' ');
                     },
                     | (Some(primary), Some((current, text))) if current == primary =>
-                        text.push(if *primary { tail } else { '-' }),
+                        text.push(if *primary { tail } else { secondary }),
                     | (Some(primary), _) => {
                         flush(&mut run, &mut underline);
                         let mut text = ArenaString::new_in(scratch);
-                        text.push(if *primary { '^' } else { '-' });
+                        text.push(if *primary { '^' } else { secondary });
                         run = Some((*primary, text));
                     },
                 }
@@ -560,7 +656,17 @@ impl Renderer {
         marks: &mut ArenaVec<'_, Mark<'a>>,
     ) {
         let mut label_text = label.message;
-        for vector in label.source.vectors(context) {
+        let first = marks.len();
+        // Clang draws an operand a macro wrote at the invocation.
+        let vectors = match label.source {
+            | LabelSource::Range(source) if label.is_highlight() =>
+                context.macro_body_expansion(source).map_or_else(
+                    || context.get_source_vectors(source),
+                    |(_, site)| std::slice::from_ref(site),
+                ),
+            | source => source.vectors(context),
+        };
+        for vector in vectors {
             let file = vector.source_file_index;
             let Some(text) = context.source_text(file) else {
                 continue;
@@ -573,7 +679,8 @@ impl Renderer {
             let start = offset.max(line_start);
             let end = vector.end().clamp(start, line_end);
             // Adjacent segments of one range on one line form one mark.
-            if let Some(last) = marks.last_mut()
+            if marks.len() > first
+                && let Some(last) = marks.last_mut()
                 && last.file == file
                 && last.line == line
                 && last.primary == label.primary
@@ -595,8 +702,6 @@ impl Renderer {
         }
     }
 
-    /// Returns the 1-based physical line containing `offset` and the byte
-    /// range of that line, excluding its terminator.
     /// The column a location prints: GCC counts display columns, its
     /// `-fdiagnostics-column-unit=display` default since GCC 11, in which a
     /// tab moves to the next tab stop and a character is one column however
@@ -624,6 +729,52 @@ impl Renderer {
         })
     }
 
+    /// Draws Clang's caret as a point: the first primary mark shrinks to its
+    /// first character, and the other primary marks go.
+    fn point_caret(marks: &mut ArenaVec<'_, Mark<'_>>, context: &Context<'_>) {
+        let mut first = true;
+        marks.retain(|mark| !mark.primary || std::mem::take(&mut first));
+        if let Some(mark) = marks.iter_mut().find(|mark| mark.primary) {
+            let first_char = context
+                .source_text(mark.file)
+                .and_then(|text| text.get(mark.start..)?.chars().next())
+                .map_or(0, char::len_utf8);
+            mark.end = mark.end.min(mark.start + first_char);
+        }
+    }
+
+    /// Keeps the marks on the caret's lines and on the lines joined to them
+    /// by lines that hold marks: Clang widens its snippet over the ranges
+    /// next to the caret (`TextDiagnostic::emitSnippetAndCaret`), and GCC's
+    /// format draws only the primary range.
+    fn retain_caret_block(marks: &mut ArenaVec<'_, Mark<'_>>, scratch: &Bump) {
+        let mut shown = ArenaVec::new_in(scratch);
+        shown.extend(
+            marks
+                .iter()
+                .filter(|mark| mark.primary)
+                .map(|mark| (mark.file, mark.line)),
+        );
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for mark in marks.iter() {
+                let at = (mark.file, mark.line);
+                if !shown.contains(&at)
+                    && shown
+                        .iter()
+                        .any(|&(file, line)| file == mark.file && line.abs_diff(mark.line) == 1)
+                {
+                    shown.push(at);
+                    grew = true;
+                }
+            }
+        }
+        marks.retain(|mark| shown.contains(&(mark.file, mark.line)));
+    }
+
+    /// Returns the 1-based physical line containing `offset` and the byte
+    /// range of that line, excluding its terminator.
     fn locate(starts: &[usize], text: &str, offset: usize) -> (usize, usize, usize) {
         let line = starts.partition_point(|&start| start <= offset);
         let start = starts[line - 1];
@@ -681,6 +832,8 @@ impl Renderer {
         Self {
             color,
             scratch: Bump::new(),
+            context_lines: std::cell::Cell::default(),
+            included_seen: std::cell::RefCell::new(crate::util::region_bit_set::RegionBitSet::new()),
         }
     }
 }

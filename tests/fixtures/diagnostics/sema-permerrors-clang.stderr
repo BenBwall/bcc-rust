@@ -21,19 +21,19 @@ sema-permerrors-clang.c:8:20: error: void function 'value' should not return a v
       |                    ^~~~~~~~~
 sema-permerrors-clang.c:11:7: error: incompatible pointer to integer conversion initializing 'int' with an expression of type 'int *'; dereference with * [-Wint-conversion]
    11 |   int j = p;
-      |       ^
+      |       ^   ~
 sema-permerrors-clang.c:12:8: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int'; take the address with & [-Wint-conversion]
    12 |   int *k = i;
-      |        ^
+      |        ^   ~
 sema-permerrors-clang.c:13:5: error: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
    13 |   p = i;
-      |     ^
+      |     ^ ~
 sema-permerrors-clang.c:14:6: error: incompatible pointer types assigning to 'long *' from 'int *' [-Wincompatible-pointer-types]
    14 |   lp = p;
-      |      ^
+      |      ^ ~
 sema-permerrors-clang.c:15:6: error: incompatible function pointer types assigning to 'int (*)(double)' from 'int (int)' [-Wincompatible-function-pointer-types]
    15 |   fp = h;
-      |      ^
+      |      ^ ~
 sema-permerrors-clang.c:16:9: error: incompatible integer to pointer conversion passing 'int' to parameter of type 'int *'; take the address with & [-Wint-conversion]
    16 |   takep(i);
       |         ^

@@ -555,6 +555,8 @@ fn semantic_diagnostic_positions_reject_empty_primary_ranges() {
         source_vectors:     SourceVectors::empty(),
         name:               None,
         previous:           None,
+        highlights:         Default::default(),
+        origin:             SourceVectors::default(),
     };
     _ = crate::translation_phases::GetPosition::position(&error, &context);
 }

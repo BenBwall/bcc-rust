@@ -13,7 +13,8 @@
 //!
 //! Files by role:
 //! - Diagnostic construction: `model.rs`.
-//! - Rendering and color: `render.rs`, `color.rs`.
+//! - Rendering and color: `render.rs`, `color.rs`; the include stack and
+//!   function lines before a diagnostic: `context_lines.rs`.
 //! - Folding and ordering a compilation's diagnostics: `reporter.rs`.
 //! - Arena text and spelling: `formatting.rs`.
 //! - Test views and fixtures: `owned.rs`, `tests.rs`.
@@ -27,6 +28,7 @@ mod model;
 
 // Rendering
 mod color;
+mod context_lines;
 mod render;
 mod reporter;
 
@@ -80,8 +82,13 @@ impl Renderer {
 
 /// Renders diagnostics with reusable scratch storage.
 pub(crate) struct Renderer {
-    color:   ColorChoice,
-    scratch: Bump,
+    color:         ColorChoice,
+    scratch:       Bump,
+    /// What the context lines last said, which GCC and Clang repeat only
+    /// when it changes.
+    context_lines: std::cell::Cell<context_lines::ContextLines>,
+    /// The openings whose `#include` GCC's format has written.
+    included_seen: std::cell::RefCell<crate::util::region_bit_set::RegionBitSet>,
 }
 
 // Tests

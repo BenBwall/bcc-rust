@@ -4,6 +4,7 @@ sema-format-gcc.c:4:1: warning: 'format' attribute argument 2 value '3' exceeds 
 sema-format-gcc.c:5:1: error: 'format' attribute argument 2 value '1' refers to parameter type 'int'
     5 | void bad_string(int fmt, ...) __attribute__((format(printf, 1, 2)));
       | ^~~~
+sema-format-gcc.c: In function 'f':
 sema-format-gcc.c:7:14: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Wformat=]
     7 |     printf("%d\n", l);
       |              ^

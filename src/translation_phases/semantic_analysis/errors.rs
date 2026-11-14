@@ -39,6 +39,13 @@ pub(crate) struct SemanticError {
     pub(crate) source_vectors:     SourceVectors,
     pub(crate) name:               Option<StringCacheId>,
     pub(crate) previous:           Option<SourceVectors>,
+    /// The operands Clang underlines with `~` beside the caret, where a
+    /// macro wrote them if one did; empty when there are fewer.
+    pub(crate) highlights:         [SourceVectors; 2],
+    /// The range reported, before it was moved to a place in a file: where
+    /// a macro's body wrote it, which GCC reports and Clang notes, and the
+    /// order of its tokens. Empty when it is `source_vectors`.
+    pub(crate) origin:             SourceVectors,
 }
 
 /// What an excess initializer element lies beyond, as GCC and Clang word it.
@@ -2772,6 +2779,28 @@ impl SemanticErrorKind {
 }
 
 impl SemanticErrorKind {
+    /// Whether Clang reports this at a point and names no range, so that
+    /// it underlines no token: an unused parameter, a variable set but not
+    /// used, an unused local typedef, and a declaration that shadows another
+    /// (`Sema::DiagnoseUnusedParameters`, `Sema::DiagnoseUnusedButSetDecl`,
+    /// `Sema::DiagnoseUnusedNestedTypedefs`, `Sema::CheckShadow`).
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) const fn clang_names_no_range(self) -> bool {
+        match self {
+            | Self::Unused(rule) => matches!(
+                rule,
+                UnusedRule::Parameter
+                    | UnusedRule::ButSetVariable
+                    | UnusedRule::ButSetParameter
+                    | UnusedRule::ButSetGlobal
+                    | UnusedRule::ClangLocalTypedef
+            ),
+            | Self::ShadowOrBody(group) =>
+                !matches!(group, crate::configuration::DiagnosticGroup::EmptyBody),
+            | _ => false,
+        }
+    }
+
     /// The warning group that controls this diagnostic, if any.
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
@@ -3359,6 +3388,15 @@ impl ToDiagnostic for SemanticError {
             };
             diagnostic = diagnostic.secondary(previous, label);
         }
+        for highlight in self.highlights {
+            if highlight.length() != 0 {
+                diagnostic = diagnostic.highlight(highlight);
+            }
+        }
+        if self.origin.length() != 0 {
+            diagnostic.reading = Some(self.origin);
+        }
+        diagnostic.point = self.kind.clang_names_no_range();
         diagnostic
     }
 }
