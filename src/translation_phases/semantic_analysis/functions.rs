@@ -601,6 +601,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreElided(elided) => self.functions.elided = elided,
             | FunctionWork::RestoreSkippedOperand(skipped) =>
                 self.functions.skipped_operand = skipped,
+            | FunctionWork::LeaveGeneric(skipped) => {
+                self.functions.skipped_operand = skipped;
+                self.functions.generic_selections -= 1;
+            },
             // GCC takes only a constant expression for decided.
             | FunctionWork::DecidedOperand(left, live) => {
                 let constant = self.context.configuration.compiler_identity()
@@ -2406,19 +2410,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.3.4p2, p. 80; PDF p. 92; §6.5.13p4, p. 89; PDF p. 101;
     /// §6.5.14p4, p. 89; PDF p. 101; §6.5.15p4, p. 90; PDF p. 102.
     pub(super) fn evaluation_inhibited(&self) -> bool {
-        if self.functions.sizeof.is_some() || self.functions.skipped_operand {
+        self.functions.skipped_operand || self.unevaluated_context(true)
+    }
+
+    /// [`Self::evaluation_inhibited`] for a warning that follows the
+    /// association a `_Generic` selects, and that both compilers give in a
+    /// `__builtin_constant_p` operand, which they fold: GCC warns in the
+    /// matching and the `default` association, silencing the others as
+    /// `sizeof` does ([`Self::unmatched_association`]), and Clang's
+    /// control-flow graph reaches only the selected one
+    /// ([`super::reachability`]).
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+    pub(super) fn selected_evaluation_inhibited(&self) -> bool {
+        let skipped = if self.functions.generic_selections == 0 {
+            self.functions.skipped_operand
+        } else {
+            self.inhibited_evaluations != 0
+        };
+        skipped || self.unevaluated_context(false)
+    }
+
+    /// Whether the expression being analyzed is in an operand of `sizeof`,
+    /// `typeof` or `_Alignof`, a `_Generic`'s controlling operand, an
+    /// operand a constant condition leaves unevaluated, or, with
+    /// `constant_queries`, a `__builtin_constant_p` operand.
+    fn unevaluated_context(&self, constant_queries: bool) -> bool {
+        if self.functions.sizeof.is_some() {
             return true;
         }
         let mut next = self.functions.reference_context;
         while let Some(index) = next {
             let context = self.functions.reference_contexts[index];
-            if matches!(
-                context.kind,
-                ReferenceContextKind::Typeof(_)
-                    | ReferenceContextKind::Unevaluated
-                    | ReferenceContextKind::ConstantQuery { .. }
-                    | ReferenceContextKind::ConditionalArm { .. }
-            ) {
+            if match context.kind {
+                | ReferenceContextKind::Typeof(_)
+                | ReferenceContextKind::Unevaluated
+                | ReferenceContextKind::ConditionalArm { .. } => true,
+                | ReferenceContextKind::ConstantQuery { .. } => constant_queries,
+                | _ => false,
+            } {
                 return true;
             }
             next = context.parent;
@@ -2888,6 +2917,9 @@ pub(super) enum FunctionWork<'tu> {
     /// Restores whole-statement/operand omission, including declarations.
     RestoreElided(bool),
     RestoreSkippedOperand(bool),
+    /// Leaves a `_Generic`'s associations, restoring
+    /// [`State::skipped_operand`].
+    LeaveGeneric(bool),
     /// The left operand of a `&&` (`true`) or `||` (`false`) is analyzed.
     DecidedOperand(&'tu Expression<'tu>, bool),
     /// Restores which weak names apply to the code being analyzed
@@ -3203,6 +3235,8 @@ pub(super) struct State<'tu, 's> {
     /// may be: the right operand of a `&&` or `||` that its left operand
     /// decides, or part of a `_Generic`.
     pub(super) skipped_operand: bool,
+    /// The `_Generic` selections whose associations are being analyzed.
+    pub(super) generic_selections: u32,
     /// A whole statement or operand is omitted, including its declarations:
     /// an untaken arm, an unselected switch region, or a non-simple statement
     /// without labels while `dead`. Simple declarations and compounds still
@@ -3272,6 +3306,7 @@ impl<'s> State<'_, 's> {
             sizeof_contexts: ArenaVec::new_in(scratch),
             sizeof: None,
             skipped_operand: false,
+            generic_selections: 0,
             dead: false,
             elided: false,
             unvisited: false,

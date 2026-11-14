@@ -378,8 +378,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Warns about an integer constant whose implicit conversion to `target`
-    /// changes its value.
-    /// C99: §6.3.1.3p3, p. 43; PDF p. 55.
+    /// changes its value. Neither compiler warns in an operand the program
+    /// does not evaluate (GCC's `c_inhibit_evaluation_warnings`), and Clang
+    /// warns only where the code may run (`DiagRuntimeBehavior`), about each
+    /// operand a conditional may yield (`CheckConditionalOperator`).
+    /// GCC manual, "Warning Options" (`-Woverflow`); Clang, "Diagnostic flags
+    /// in Clang" (`-Wconstant-conversion`).
+    /// C99: §6.3.1.3p3, p. 43; PDF p. 55; §6.5.15p4, p. 90; PDF p. 102.
     pub(super) fn check_constant_conversion(
         &mut self,
         target: TypeId,
@@ -392,9 +397,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.underspecified == 0 {
             self.check_int_float_source(target, source);
         }
-        let Some(value) = source.integer.and_then(super::Integer::to_i128) else {
+        if self.selected_evaluation_inhibited() {
             return;
-        };
+        }
         let target = self.types.non_atomic(target).unqualified();
         if !matches!(self.types.nodes[target.index], TypeKind::Scalar(scalar) if scalar != Scalar::Bool)
         {
@@ -403,73 +408,160 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some((bits, signed)) = self.integer_type(target) else {
             return;
         };
+        if bits >= 128 {
+            return;
+        }
+        let narrowing = Narrowing {
+            target,
+            bits,
+            signed,
+        };
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+            // GCC checks the folded value of the whole operand.
+            self.gcc_constant_conversion(narrowing, source);
+            return;
+        }
+        // Clang's `constexpr` refusal stands alone.
+        if self.underspecified > 0 {
+            return;
+        }
+        self.clang_constant_conversions(narrowing, source.expression);
+    }
+
+    /// GCC's `warnings_for_convert_and_check`, which reports a value that
+    /// neither signedness of the target holds.
+    fn gcc_constant_conversion(&mut self, narrowing: Narrowing, source: ExpressionInfo<'tu>) {
+        let Some(value) = source.integer.filter(|value| value.wide.is_none()) else {
+            return;
+        };
         let Some((source_bits, source_signed)) = self.integer_type(source.ty) else {
             return;
         };
-        if bits >= 128 || source_bits <= bits && source_signed == signed {
+        let Narrowing {
+            target,
+            bits,
+            signed,
+        } = narrowing;
+        if source_bits <= bits && source_signed == signed {
             return;
         }
-        let modulus = 1_i128 << bits;
-        let kept = value.rem_euclid(modulus);
-        let kept = if signed && kept >= modulus / 2 {
-            kept - modulus
+        // An unsigned value of 2^127 or more exceeds every target here.
+        let held = -(1_i128 << (bits - 1))..=low_mask(bits).cast_signed();
+        if (value.signed || value.value >= 0) && held.contains(&value.value) {
+            return;
+        }
+        let kind = if signed {
+            "overflow in conversion"
+        } else if source_signed {
+            "unsigned conversion"
         } else {
-            kept
+            "conversion"
         };
-        let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
-        // Clang's `constexpr` refusal stands alone.
-        if !gcc && self.underspecified > 0 {
-            return;
-        }
-        let warns = if gcc {
-            // GCC only reports a value that neither signedness holds.
-            let low = -(modulus / 2);
-            let high = modulus - 1;
-            !(low..=high).contains(&value)
-        } else {
-            // Clang compares the bits the value needs with the target's, and
-            // a signed source's nonnegative value that fills a signed
-            // target, which then turns negative.
-            let needed = if value >= 0 {
-                128 - value.leading_zeros()
-            } else {
-                129 - (!value).leading_zeros()
-            };
-            needed > bits || (needed == bits && signed && value >= 0 && source_signed)
-        };
-        if !warns {
-            return;
-        }
         let (Some(from), Some(to)) = (
-            self.type_spelling(source.ty, gcc),
-            self.type_spelling(target, gcc),
+            self.type_spelling(source.ty, true),
+            self.type_spelling(target, true),
         ) else {
             return;
         };
-        let (group, text) = if gcc {
-            let kind = if signed {
-                "overflow in conversion"
-            } else {
-                "unsigned conversion"
+        let kept = GccConstant(signed, kept_value(value.value, bits, signed));
+        let value = GccConstant(value.signed, value.value);
+        let text = format_in!(
+            self.scratch,
+            "{kind} from '{from}' to '{to}' changes value from '{value}' to '{kept}'"
+        );
+        self.value_warning(G::Overflow, source.expression.source_vectors, text);
+    }
+
+    /// Clang's walk: the operands a conditional may yield, through the forms
+    /// `IgnoreParens` passes, each checked against the target in its own
+    /// type, and each reported only where it may be evaluated.
+    fn clang_constant_conversions(&mut self, narrowing: Narrowing, e: &'tu Expression<'tu>) {
+        // Clang's control-flow graph decides which arms of a constant
+        // condition run; outside a function nothing defers the warning, so
+        // the arm is chosen here, as the graph of an initializer would.
+        let at_file_scope = self.functions.current.is_none();
+        let mut pending = ArenaVec::new_in(self.scratch);
+        pending.push(e);
+        while let Some(e) = pending.pop() {
+            let e = self.selected_operand(e);
+            let (c, taken) = match e.kind {
+                | E::Conditional(c) => (c, c.then_expression),
+                // The omitted operand is the condition's value.
+                // GNU extension: GCC manual, "Conditionals".
+                | E::OmittedConditional(c) => (c, c.condition_expression),
+                | _ => {
+                    self.clang_constant_conversion(narrowing, e);
+                    continue;
+                },
             };
-            (
-                G::Overflow,
-                format_in!(
-                    self.scratch,
-                    "{kind} from '{from}' to '{to}' changes value from '{value}' to '{kept}'"
-                ),
-            )
-        } else {
-            (
-                G::ConstantConversion,
-                format_in!(
-                    self.scratch,
-                    "implicit conversion from '{from}' to '{to}' changes value from {value} to \
-                     {kept}"
-                ),
-            )
+            let other = c.else_expression;
+            match at_file_scope
+                .then(|| self.constant_truth_of(c.condition_expression, 0))
+                .flatten()
+            {
+                | Some(true) => pending.push(taken),
+                | Some(false) => pending.push(other),
+                | None => {
+                    // Last first, so the warnings follow the source.
+                    pending.push(other);
+                    pending.push(taken);
+                },
+            }
+        }
+    }
+
+    /// Clang's `CheckImplicitConversion` of the integer constant `e`: a value
+    /// that needs more bits than the target has, or a signed source's
+    /// nonnegative value that fills a signed target and turns negative.
+    fn clang_constant_conversion(&mut self, narrowing: Narrowing, e: &'tu Expression<'tu>) {
+        let info = self.expression_info(e);
+        let Some(value) = info.integer.filter(|value| value.wide.is_none()) else {
+            return;
         };
-        self.value_warning(group, source.expression.source_vectors, text);
+        let Some((source_bits, source_signed)) = self.integer_type(info.ty) else {
+            return;
+        };
+        let Narrowing {
+            target,
+            bits,
+            signed,
+        } = narrowing;
+        if source_bits <= bits && source_signed == signed {
+            return;
+        }
+        let negative = value.signed && value.value < 0;
+        let needed = if negative {
+            129 - (!value.value).leading_zeros()
+        } else {
+            128 - value.value.cast_unsigned().leading_zeros()
+        };
+        if !(needed > bits || needed == bits && signed && !negative && source_signed) {
+            return;
+        }
+        let (Some(from), Some(to)) = (
+            self.type_spelling(info.ty, false),
+            self.type_spelling(target, false),
+        ) else {
+            return;
+        };
+        let kept = kept_value(value.value, bits, signed);
+        let text = format_in!(
+            self.scratch,
+            "implicit conversion from '{from}' to '{to}' changes value from {value} to {kept}"
+        );
+        let name = self.context.string_cache.intern(text);
+        // Clang points at a binary operator's operator (`getExprLoc`).
+        let site = match e.kind {
+            | E::Binary { .. } => e.operator_source_vectors.unwrap_or(e.source_vectors),
+            | _ => e.source_vectors,
+        };
+        self.warn_if_reachable(
+            e,
+            G::ConstantConversion,
+            SemanticErrorKind::ValueWarning(G::ConstantConversion),
+            site,
+            Some(name),
+        );
     }
 
     fn value_warning(&mut self, group: G, site: SourceVectors, text: &str) {
@@ -481,5 +573,57 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             Some(name),
             site,
         );
+    }
+}
+
+/// The integer type an implicit conversion narrows a constant to, of fewer
+/// than 128 bits.
+#[derive(Clone, Copy)]
+struct Narrowing {
+    target: TypeId,
+    bits:   u32,
+    signed: bool,
+}
+
+/// The low `bits` bits, for `bits` below 128.
+const fn low_mask(bits: u32) -> u128 {
+    (1_u128 << bits) - 1
+}
+
+/// The value the two's complement pattern `value` has as an integer of
+/// `bits` bits, below 128: its low bits, negative when `signed` and the
+/// sign bit is set.
+/// C99: §6.3.1.3p2-3, p. 43; PDF p. 55 (the wrap is GCC's and Clang's).
+const fn kept_value(value: i128, bits: u32, signed: bool) -> i128 {
+    let low = value.cast_unsigned() & low_mask(bits);
+    if signed && low >> (bits - 1) != 0 {
+        (low | !low_mask(bits)).cast_signed()
+    } else {
+        low.cast_signed()
+    }
+}
+
+/// An integer constant as GCC prints it (`pp_c_integer_constant`): in
+/// decimal when a 64-bit integer of either signedness holds it, else in
+/// hexadecimal with its sign. The flag is the value's signedness.
+struct GccConstant(bool, i128);
+
+impl std::fmt::Display for GccConstant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(signed, value) = *self;
+        if signed && value < 0 {
+            if i64::try_from(value).is_ok() {
+                value.fmt(f)
+            } else {
+                write!(f, "-{:#x}", value.unsigned_abs())
+            }
+        } else {
+            let value = value.cast_unsigned();
+            if u64::try_from(value).is_ok() {
+                value.fmt(f)
+            } else {
+                write!(f, "{value:#x}")
+            }
+        }
     }
 }
