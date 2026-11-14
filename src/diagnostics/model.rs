@@ -33,6 +33,10 @@ pub(crate) struct Diagnostic<'d> {
     /// `cl`'s code for the diagnostic (`C2065`), which the MSVC formats
     /// write after the severity under the `cl` identity.
     pub(crate) code:          Option<&'static str>,
+    /// The diagnostic is about a place rather than a range, as Clang's
+    /// "expected" errors are: GCC's and Clang's snippets mark only where
+    /// the primary range starts.
+    pub(crate) point:         bool,
     pub(super) labels:        ArenaVec<'d, Label<'d>>,
     pub(super) notes:         ArenaVec<'d, &'d str>,
     pub(super) help:          ArenaVec<'d, &'d str>,
@@ -155,6 +159,7 @@ impl<'d> Explanation<'d> {
             message: self.message,
             option_suffix: self.option_suffix,
             code: self.code,
+            point: false,
             labels: ArenaVec::new_in(self.arena),
             notes: self.notes,
             help: self.help,

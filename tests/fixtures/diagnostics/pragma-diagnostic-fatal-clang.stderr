@@ -4,4 +4,4 @@ pragma-diagnostic-fatal-clang.c:1:2: warning: #warning shown
 pragma-diagnostic-fatal-clang.c:3:5: fatal error: `FIRST` is not defined; it evaluates to 0
     3 | #if FIRST
       |     ^~~~~
-1 error and 1 warning generated.
+1 warning and 1 error generated.

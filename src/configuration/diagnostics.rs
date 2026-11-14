@@ -21,8 +21,9 @@ pub(crate) enum PragmaClass {
 /// How diagnostics are printed, which `--diagnostic-format` and the driver
 /// personalities select: bcc's annotated snippets, Clang's and GCC's
 /// `file:line:col: error: message` lines with the snippet (Clang adds the
-/// error and warning counts), MSVC's `file(line,col): error: message`, or
-/// TCC's `file:line: error: message`.
+/// warning and error counts), MSVC's `file(line,col): error: message`, or
+/// TCC's `file:line: error: message`. clang-cl writes Clang's format with
+/// `cl`'s locations ([`DiagnosticPresentation::msvc_locations`]).
 /// The wording and the snippets are bcc's in every format, except for the
 /// diagnostics TCC's users meet most and the C type-safety diagnostics GCC 14
 /// and Clang make errors, which the TCC, GCC and Clang formats word as
@@ -36,8 +37,7 @@ pub(crate) enum DiagnosticFormat {
     Clang,
     Gcc,
     /// `cl.exe`'s location format, with the column for `/diagnostics:column`
-    /// (the default here, as clang-cl writes it) and the snippet for
-    /// `/diagnostics:caret`.
+    /// and the snippet for `/diagnostics:caret`.
     Msvc {
         column: bool,
         caret:  bool,
@@ -67,27 +67,31 @@ pub(crate) enum DiagnosticColor {
 pub(crate) struct DiagnosticPresentation {
     /// The quoted source and its caret: `-f[no-]diagnostics-show-caret`,
     /// `-f[no-]caret-diagnostics`.
-    pub(crate) caret:        bool,
+    pub(crate) caret:          bool,
     /// The column after the line: `-f[no-]show-column`.
-    pub(crate) column:       bool,
+    pub(crate) column:         bool,
     /// The line numbers beside quoted source:
     /// `-f[no-]diagnostics-show-line-numbers`.
-    pub(crate) line_numbers: bool,
+    pub(crate) line_numbers:   bool,
     /// The `[-Wname]` after a message: `-f[no-]diagnostics-show-option`.
-    pub(crate) option_names: bool,
+    pub(crate) option_names:   bool,
     /// What an option says about color: `-fdiagnostics-color=`,
     /// `-f[no-]color-diagnostics`.
-    pub(crate) color:        DiagnosticColor,
+    pub(crate) color:          DiagnosticColor,
+    /// Locations in `cl`'s `file(line,col):` form, as Clang's
+    /// `-fdiagnostics-format=msvc` writes them for clang-cl.
+    pub(crate) msvc_locations: bool,
 }
 
 impl Default for DiagnosticPresentation {
     fn default() -> Self {
         Self {
-            caret:        true,
-            column:       true,
-            line_numbers: true,
-            option_names: true,
-            color:        DiagnosticColor::Unset,
+            caret:          true,
+            column:         true,
+            line_numbers:   true,
+            option_names:   true,
+            color:          DiagnosticColor::Unset,
+            msvc_locations: false,
         }
     }
 }
@@ -125,7 +129,7 @@ impl CompilerConfiguration {
 
     /// Whether diagnostics take `cl`'s codes and words where bcc models
     /// them: the `cl` identity writing one of `cl`'s formats. clang-cl
-    /// writes Clang's words in the same formats.
+    /// writes Clang's format, words and all, with `cl`'s locations.
     pub(crate) fn msvc_wording(self) -> bool {
         self.identity == super::CompilerIdentity::Msvc
             && matches!(self.diagnostic_format, DiagnosticFormat::Msvc { .. })
