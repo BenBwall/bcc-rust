@@ -26,6 +26,7 @@
 mod model;
 
 // Rendering
+mod cell_width;
 mod color;
 mod render;
 mod reporter;
