@@ -605,7 +605,7 @@ impl Renderer {
     fn location_column(
         context: &Context<'_>,
         format: DiagnosticFormat,
-        vector: &crate::translation_phases::SourceVector,
+        vector: &SourceVector,
     ) -> usize {
         let bytes = vector.column as usize;
         if format != DiagnosticFormat::Gcc {
