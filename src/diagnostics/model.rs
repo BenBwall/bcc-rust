@@ -33,13 +33,18 @@ pub(crate) struct Diagnostic<'d> {
     /// `cl`'s code for the diagnostic (`C2065`), which the MSVC formats
     /// write after the severity under the `cl` identity.
     pub(crate) code:          Option<&'static str>,
-    /// The diagnostic is about a place rather than a range, as Clang's
-    /// "expected" errors are: GCC's and Clang's snippets mark only where
-    /// the primary range starts.
+    /// Clang names a place rather than a range for it, as for its
+    /// "expected" errors and some warnings: Clang's snippet marks only where
+    /// the primary range starts, with no `~` over the token there, and its
+    /// macro notes' carets are points too.
     pub(crate) point:         bool,
     pub(super) labels:        ArenaVec<'d, Label<'d>>,
     pub(super) notes:         ArenaVec<'d, &'d str>,
     pub(super) help:          ArenaVec<'d, &'d str>,
+    /// The range of the token or syntax that the diagnostic was reported
+    /// about, before it was moved to a place in a file, whose order says
+    /// which reading of a file read twice it is in.
+    pub(crate) reading:       Option<SourceVectors>,
 }
 
 impl<'d> Diagnostic<'d> {
@@ -64,6 +69,17 @@ impl<'d> Diagnostic<'d> {
         self
     }
 
+    /// Adds a range Clang's format underlines with `~` beside the caret,
+    /// with no message; the other formats draw none.
+    pub(crate) fn highlight(mut self, source: SourceVectors) -> Self {
+        self.labels.push(Label {
+            source:  LabelSource::Range(source),
+            message: None,
+            primary: false,
+        });
+        self
+    }
+
     /// Folds a follow-on diagnostic reported at the same place into this
     /// one, keeping only its related ranges: one mistake, one error.
     pub(crate) fn absorb(&mut self, other: Self, context: &Context<'_>) {
@@ -72,7 +88,7 @@ impl<'d> Diagnostic<'d> {
                 existing.message == label.message
                     && existing.source.vectors(context) == label.source.vectors(context)
             });
-            if !label.primary && !duplicate {
+            if !label.primary && label.message.is_some() && !duplicate {
                 self.labels.push(label);
             }
         }
@@ -163,6 +179,7 @@ impl<'d> Explanation<'d> {
             labels: ArenaVec::new_in(self.arena),
             notes: self.notes,
             help: self.help,
+            reading: None,
         }
         .primary(source, self.label)
     }
@@ -217,12 +234,20 @@ pub(crate) trait ToDiagnostic {
 }
 
 /// A source range the diagnostic points at, optionally with a short message
-/// printed under it.
+/// printed under it. A related range without a message is one Clang
+/// underlines beside the caret ([`Diagnostic::highlight`]).
 #[derive(Debug)]
 pub(super) struct Label<'d> {
     pub(super) source:  LabelSource<'d>,
     pub(super) message: Option<&'d str>,
     pub(super) primary: bool,
+}
+
+impl Label<'_> {
+    /// Whether this is a range Clang underlines beside the caret.
+    pub(super) const fn is_highlight(&self) -> bool {
+        !self.primary && self.message.is_none()
+    }
 }
 
 /// Where a label points: a provenance range, or explicit segments when only
@@ -234,6 +259,14 @@ pub(super) enum LabelSource<'d> {
 }
 
 impl<'d> LabelSource<'d> {
+    /// The provenance range, unless the label gives explicit segments.
+    pub(super) const fn range(self) -> Option<SourceVectors> {
+        match self {
+            | Self::Range(source) => Some(source),
+            | Self::Segments(_) => None,
+        }
+    }
+
     pub(super) fn vectors<'a>(self, context: &'a Context<'_>) -> &'a [SourceVector]
     where
         'd: 'a,

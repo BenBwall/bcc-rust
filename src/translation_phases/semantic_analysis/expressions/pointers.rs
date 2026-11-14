@@ -115,15 +115,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 diagnostic_site
             };
-            self.group_diagnostic(
-                group,
-                crate::translation_phases::semantic_analysis::SemanticErrorKind::PointerConstraint(
+            // Clang underlines the value beside a caret placed elsewhere.
+            let value = source.expression.source_vectors;
+            let highlight = if diagnostic_site == value {
+                SourceVectors::default()
+            } else {
+                value
+            };
+            self.with_highlights([highlight, SourceVectors::default()], |analyzer| {
+                analyzer.group_diagnostic(
                     group,
-                ),
-                diagnostic_site,
-                wording,
-                None,
-            );
+                    crate::translation_phases::semantic_analysis::SemanticErrorKind::PointerConstraint(
+                        group,
+                    ),
+                    diagnostic_site,
+                    wording,
+                    None,
+                );
+            });
             return true;
         }
         // Clang accepts function/void pointers silently by default and reports
@@ -859,7 +868,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Accepts only scalar pointer comparisons. Other invalid operands retain
-    /// the existing error and recovered unknown result.
+    /// the existing error and recovered unknown result. Clang underlines
+    /// both operands of what it reports.
     /// C99: §6.5.9p2, p. 86; PDF p. 98; §6.5.8p2, p. 85; PDF p. 97.
     pub(super) fn pointer_comparison(
         &mut self,
@@ -867,6 +877,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         right: ExpressionInfo<'tu>,
         lt: TypeId,
         rt: TypeId,
+        equality: bool,
+        source: SourceVectors,
+    ) -> bool {
+        let operands = [
+            left.expression.source_vectors,
+            right.expression.source_vectors,
+        ];
+        self.with_highlights(operands, |analyzer| {
+            analyzer.compare_pointers(left, right, (lt, rt), equality, source)
+        })
+    }
+
+    /// [`Self::pointer_comparison`] of operands of types `lt` and `rt`.
+    fn compare_pointers(
+        &mut self,
+        left: ExpressionInfo<'tu>,
+        right: ExpressionInfo<'tu>,
+        (lt, rt): (TypeId, TypeId),
         equality: bool,
         source: SourceVectors,
     ) -> bool {

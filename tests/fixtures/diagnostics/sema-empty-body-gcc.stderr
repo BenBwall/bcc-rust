@@ -1,3 +1,4 @@
+sema-empty-body-gcc.c: In function 'f':
 sema-empty-body-gcc.c:3:9: warning: suggest braces around empty body in an 'if' statement [-Wempty-body]
     3 |   if (x);
       |         ^

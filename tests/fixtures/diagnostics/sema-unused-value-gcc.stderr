@@ -1,3 +1,4 @@
+sema-unused-value-gcc.c: In function 'g':
 sema-unused-value-gcc.c:3:5: warning: statement with no effect [-Wunused-value]
     3 |     a;
       |     ^
