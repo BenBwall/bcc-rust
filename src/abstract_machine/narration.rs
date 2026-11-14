@@ -66,6 +66,12 @@ pub(super) enum Topic {
     ExitStatus,
     Undefined,
     IndeterminateRead,
+    Preprocessor,
+    StringLiteral,
+    StringInitializer,
+    CharacterConstant,
+    Format,
+    VariadicPromotion,
 }
 
 impl Topic {
@@ -184,6 +190,34 @@ impl Topic {
             | Self::IndeterminateRead =>
                 "In practice the read returns whatever was left in that register or stack slot, so \
                  the result can change between runs, compilers and optimization levels.",
+            | Self::Preprocessor =>
+                "#include pastes text in before the compiler reads the program, which is why it \
+                 comes first: C needs a function declared before a call to it. The header only \
+                 declares printf; the code that prints is in the C library, which the linker adds \
+                 to the program.",
+            | Self::StringLiteral =>
+                "C has no string type: a string is an array of chars ended by a null character, \
+                 and its length is stored nowhere. printf, puts and every other string function \
+                 find the end by looking for the null, so an array without one is not a string, \
+                 and reading it as one runs past its end.",
+            | Self::StringInitializer =>
+                "`char s[] = \"hi\";` makes an array of your own, a copy you may change. `char *p \
+                 = \"hi\";` only points at the literal's array, which you must not change: storing \
+                 through p is undefined, and on most systems it crashes, because literals live in \
+                 read-only memory.",
+            | Self::CharacterConstant =>
+                "A char is a small integer: 'A' is just another way to write 65 in ASCII, and 'A' \
+                 + 1 is 'B'. That is why a loop can compare a char with '\\0' or count from 'a' to \
+                 'z'.",
+            | Self::Format =>
+                "printf trusts its format: nothing at run time checks that each conversion matches \
+                 the argument it takes. A %d given a pointer, or a conversion with no argument \
+                 left, is undefined, and in a real program prints garbage or crashes. Compilers \
+                 warn about it when the format is a literal (-Wformat).",
+            | Self::VariadicPromotion =>
+                "A function with `...` cannot say what types its extra arguments have, so C widens \
+                 them to a few standard types first. printf can then read every small integer as \
+                 an int, which is why %c takes an int and why there is no conversion for a char.",
         }
     }
 }
@@ -208,7 +242,31 @@ pub(super) enum Designation {
 
 /// The initial state's event: nothing has run yet. A program with
 /// `statics` objects of static storage duration initializes them first.
-pub(super) fn start(range: SourceRange, statics: usize) -> Event {
+pub(super) fn start(range: SourceRange, statics: usize, directives: bool) -> Event {
+    if directives {
+        return noted(
+            explained(
+                Event::new(
+                    EventKind::Start,
+                    range,
+                    String::from("Ready to translate and run the program"),
+                ),
+                "Nothing has run yet: first the preprocessor runs the #include line, then the \
+                 static objects get their values, and then each Step performs one evaluation.",
+                "Nothing has run yet. Before the program can run, it is translated: the \
+                 preprocessor executes the #include directive in translation phase 4. Then, \
+                 before main is called, every object with static storage duration (each string \
+                 literal's array among them) gets its initial value, and each Step performs one \
+                 evaluation of the abstract machine, explaining the rule of C behind it.",
+                &[
+                    clauses::ABSTRACT_MACHINE,
+                    clauses::TRANSLATION_PHASES,
+                    clauses::STARTUP,
+                ],
+            ),
+            Topic::AbstractMachine,
+        );
+    }
     if statics == 0 {
         return noted(
             explained(
@@ -246,6 +304,49 @@ pub(super) fn start(range: SourceRange, statics: usize) -> Event {
             &[clauses::ABSTRACT_MACHINE, clauses::STARTUP],
         ),
         Topic::AbstractMachine,
+    )
+}
+
+/// Translation phase 4 runs `#include <stdio.h>`, the program's `index`th
+/// directive: the header's declarations replace the line.
+pub(super) fn directive(range: SourceRange, index: usize) -> Event {
+    let again = if index == 0 {
+        ""
+    } else {
+        " This file already included <stdio.h>; a standard header included again has no further \
+         effect."
+    };
+    let mut cited = vec![
+        clauses::TRANSLATION_PHASES,
+        clauses::SOURCE_INCLUSION,
+        clauses::LIBRARY_HEADERS,
+    ];
+    if index > 0 {
+        cited.push(clauses::HEADER_ORDER);
+    }
+    noted(
+        explained(
+            Event::new(
+                EventKind::Directive,
+                range,
+                String::from("#include <stdio.h>: declare printf, puts and putchar"),
+            ),
+            "Before the program runs, the preprocessor replaces this line with the header \
+             <stdio.h>, whose declarations of printf, puts and putchar let the code below call \
+             them.",
+            &format!(
+                "C translates a source file in phases, and in phase 4 the preprocessor executes \
+                 directives, the lines that start with #. #include <stdio.h> is replaced by the \
+                 entire contents of the standard header <stdio.h>, which declares the library's \
+                 input and output functions, each with a prototype. This machine declares the \
+                 three it runs: printf, puts and putchar, which write to standard output, shown \
+                 in the Output panel. The header holds only declarations: the functions \
+                 themselves are compiled code in the C library. The compiler pipeline's \
+                 Preprocessor stage shows what the real preprocessor makes of this file.{again}"
+            ),
+            &cited,
+        ),
+        Topic::Preprocessor,
     )
 }
 
@@ -308,10 +409,11 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             "Outside the supported subset",
             sentence(&diagnostic.message),
             String::from(
-                "The abstract machine runs a small subset of C: int and char objects, int \
-                 pointers, fixed int arrays, structures, file-scope and static objects, \
-                 functions, if, while and for. The compiler pipeline and WebAssembly views \
-                 compile the whole language.",
+                "The abstract machine runs a small subset of C: int and char objects, pointers to \
+                 them, int and char arrays, string literals, structures, file-scope and static \
+                 objects, functions and prototypes, if, while and for, and printf, puts and \
+                 putchar from <stdio.h>. The compiler pipeline and WebAssembly views compile the \
+                 whole language.",
             ),
             None,
         ),
@@ -330,6 +432,11 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     match diagnostic.undefined {
         | Some(Undefined::QuotientOverflow) => event.clauses.push(clauses::QUOTIENT),
         | Some(Undefined::NullSubscript) => event.clauses.push(clauses::POINTER_ARITHMETIC),
+        | Some(Undefined::Unterminated) => event.clauses.push(clauses::CONVERSIONS),
+        | Some(Undefined::WrongArgument) => event
+            .clauses
+            .extend([clauses::CONVERSIONS, clauses::VARIADIC_TYPES]),
+        | Some(Undefined::StringLiteralWrite) => event.clauses.push(clauses::STRING_LITERAL),
         | _ => {},
     }
     match topic {
@@ -396,6 +503,37 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Pointer arithmetic may move only within an array and to one past its end; this \
              result would leave both.",
         ),
+        | Some(Undefined::StringLiteralWrite) => (
+            "Undefined behavior: modifying a string literal",
+            "A string literal's array belongs to the program's constants, and C gives no meaning \
+             to changing it; real programs usually crash here, as literals sit in read-only \
+             memory.",
+        ),
+        | Some(Undefined::Unterminated) => (
+            "Undefined behavior: a string without its null",
+            "A string ends at its first null character, and this array has none from here on, so \
+             reading the string would run past the end of the array.",
+        ),
+        | Some(Undefined::NullString) => (
+            "Undefined behavior: a null pointer for a string",
+            "A library function that reads a string needs a pointer to one; a null pointer points \
+             to no characters at all.",
+        ),
+        | Some(Undefined::MissingArgument) => (
+            "Undefined behavior: printf has too few arguments",
+            "Each conversion takes the next argument, and this one has none left to take, so \
+             printf would read whatever happens to be where an argument would be.",
+        ),
+        | Some(Undefined::WrongArgument) => (
+            "Undefined behavior: printf argument of the wrong type",
+            "printf reads each argument as the type its conversion names, and this argument has \
+             another type, so C gives the result no meaning.",
+        ),
+        | Some(Undefined::InvalidConversion) => (
+            "Undefined behavior: invalid conversion specification",
+            "printf's format must spell each conversion as the standard defines it, and this one \
+             is not one of them.",
+        ),
         | None => (
             "Undefined behavior",
             "C places no requirements on what the program does from here.",
@@ -425,6 +563,14 @@ impl Machine {
             },
             | Op::Increment { .. } =>
                 Some(format!("Next: update {}", location(top.operands.last()))),
+            | Op::InitializeString { .. } => Some(format!(
+                "Next: store the string's characters into {}",
+                location(top.operands.last())
+            )),
+            | Op::Library(library, _) => Some(format!(
+                "Next: {} writes to standard output",
+                library.name()
+            )),
             | _ => None,
         }
     }
@@ -493,6 +639,14 @@ impl Machine {
             ),
             | Type::Char => String::from("a char object (1 byte). Its value is"),
             | Type::Int => String::from("an int object (4 bytes on x86-64). Its value is"),
+            | Type::CharArray(count) => format!(
+                "an array of {count} chars ({count} byte{}). Each element's value is",
+                if count == 1 { "" } else { "s" }
+            ),
+            | Type::CharPointer(_) => format!(
+                "a {} object, a pointer to char (8 bytes on x86-64). Its value is",
+                object.r#type
+            ),
         };
         let kind = match ty {
             | Type::Array(count) => format!("an array of {count} ints"),
@@ -501,6 +655,8 @@ impl Machine {
             | Type::Struct(_) => format!("a {}", object.r#type),
             | Type::Char => String::from("a char object"),
             | Type::Int => String::from("an int object"),
+            | Type::CharArray(count) => format!("an array of {count} chars"),
+            | Type::CharPointer(_) => String::from("a pointer to char"),
         };
         let summary = format!(
             "The machine draws `{name}` here, {kind} in {function}'s frame; C has it exist from \
@@ -548,10 +704,16 @@ impl Machine {
     pub(super) fn static_storage(&self, program: &Program, index: usize, id: usize) -> Event {
         let declared = &program.statics[index];
         let object = &self.state.objects[id - 1];
+        if declared.literal {
+            return self.string_literal(declared.range, id);
+        }
         let name = &object.name;
         let shown = self.short_value(&object.value);
-        let pointer = matches!(declared.ty, Type::Pointer | Type::StructPointer(_));
-        let aggregate = matches!(declared.ty, Type::Array(_) | Type::Struct(_));
+        let pointer = declared.ty.is_pointer();
+        let aggregate = matches!(
+            declared.ty,
+            Type::Array(_) | Type::Struct(_) | Type::CharArray(_)
+        );
         let (place, scope) = declared.function.as_ref().map_or_else(
             || {
                 (
@@ -644,6 +806,169 @@ impl Machine {
         event.objects.push(id);
         event.result = Some(Operand::Value(object.value.clone()));
         event
+    }
+
+    /// Before `main`: the array of the string literal at `range`, object
+    /// `id`, exists with its characters and a null.
+    fn string_literal(&self, range: SourceRange, id: usize) -> Event {
+        let object = &self.state.objects[id - 1];
+        let name = &object.name;
+        let characters = self.characters(&object.value);
+        let count = layout::count(&object.value);
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::StaticStorage,
+                    range,
+                    format!("Before main: the string literal {name} ({})", object.r#type),
+                ),
+                &format!(
+                    "The string literal {name} is an array of {count} chars with static storage \
+                     duration, existing before main runs: {characters}."
+                ),
+                &format!(
+                    "In translation phase 7 a null character, '\\0', is added to the end of each \
+                     string literal's characters, and they initialize an unnamed array of static \
+                     storage duration just long enough to hold them: here {} = {characters}. Like \
+                     every static object it exists before main is called and lasts for the whole \
+                     run, and wherever the literal appears in an expression it stands for this \
+                     array. The program must not modify it: a store into it is undefined, which \
+                     is why a pointer to one is usually declared `const char *`.",
+                    object.r#type
+                ),
+                &[
+                    clauses::STRING_LITERAL,
+                    clauses::STRING_LITERAL_WRITE,
+                    clauses::STARTUP,
+                ],
+            ),
+            Topic::StringLiteral,
+        );
+        event.objects.push(id);
+        event.result = Some(Operand::Value(object.value.clone()));
+        event
+    }
+
+    /// `char s[] = "...";`: `bytes`, then zeros, were stored into the
+    /// char array at leaf `offset` of `target`; `stored` is their values.
+    pub(super) fn initialized_string(
+        &self,
+        range: SourceRange,
+        target: usize,
+        offset: i32,
+        bytes: &[u8],
+        stored: Value,
+        full_expression: bool,
+    ) -> Event {
+        let length = layout::count(&stored);
+        let whole = self.array_name(target, offset);
+        let literal = super::library::quoted(bytes);
+        let characters = self.characters(&stored);
+        let null = if bytes.len() < length {
+            let zeros = length - bytes.len() - 1;
+            if zeros == 0 {
+                String::from(" and its null character")
+            } else {
+                format!(
+                    " and its null character, and the {zeros} element{} after them are zero",
+                    if zeros == 1 { "" } else { "s" }
+                )
+            }
+        } else {
+            String::from(
+                ", filling the array exactly: there is no room for the null, so the array holds \
+                 characters but no string",
+            )
+        };
+        let mut text = format!(
+            "A string literal may initialize a char array: its characters{null}. Here {whole} \
+             becomes {characters}. The array is the program's own, so it may be changed later. \
+             The literal only spells the initial characters: C still describes it as an array of \
+             static storage duration, but nothing can refer to that array, so the machine does \
+             not draw it."
+        );
+        if full_expression {
+            text.push_str(" The initializer is a full expression: a sequence point follows.");
+        }
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::Initialize,
+                    range,
+                    format!("Initialize {whole} from {literal}"),
+                ),
+                &format!("The characters of {literal}{null} initialize {whole}, one element each."),
+                &text,
+                &[clauses::STRING_INITIALIZER, clauses::PARTIAL_INITIALIZER],
+            ),
+            Topic::StringInitializer,
+        );
+        event.sequence_point = full_expression;
+        event.operands.push(Operand::Address {
+            target,
+            offset,
+            structure: None,
+        });
+        event.operands.push(Operand::Value(stored.clone()));
+        event.objects.push(target);
+        result(event, Operand::Value(stored))
+    }
+
+    /// A char passed through `...` gets the default argument promotions.
+    pub(super) fn default_promotion(&self, range: SourceRange, value: Value) -> Event {
+        let shown = self.short_value(&value);
+        let character = match value {
+            | Value::Integer(integer) => format!(" ({})", char_text(integer)),
+            | _ => String::new(),
+        };
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::IntegerPromotion,
+                    range,
+                    format!("Promote char {shown} to int for `...`"),
+                ),
+                &format!(
+                    "This argument goes through printf's `...`, so the default argument \
+                     promotions apply: the char {shown}{character} arrives as the int {shown}."
+                ),
+                &format!(
+                    "printf's prototype, int printf(const char *format, ...), gives a type only \
+                     to the format. Every later argument matches the `...`, and C applies the \
+                     default argument promotions to it: the integer promotions, which turn a char \
+                     into an int with the same value. So the char {shown}{character} reaches \
+                     printf as the int {shown}."
+                ),
+                &[
+                    clauses::VARIADIC_ARGUMENTS,
+                    clauses::DEFAULT_PROMOTIONS,
+                    clauses::INTEGER_PROMOTIONS,
+                ],
+            ),
+            Topic::VariadicPromotion,
+        );
+        event.operands.push(Operand::Value(value.clone()));
+        result(event, Operand::Value(value))
+    }
+
+    /// The elements of a char array value as character constants:
+    /// `{'h', 'i', '\0'}`.
+    fn characters(&self, value: &Value) -> String {
+        let Value::Array(elements) = value else {
+            return self.value_text(value);
+        };
+        let mut text = String::from("{");
+        for (index, element) in elements.iter().enumerate() {
+            if index > 0 {
+                text.push_str(", ");
+            }
+            match element {
+                | Value::Integer(integer) => text.push_str(&char_text(*integer)),
+                | other => text.push_str(&self.short_value(other)),
+            }
+        }
+        text.push('}');
+        text
     }
 
     /// Execution reaches the declaration of the block-scope static `id`.
@@ -933,6 +1258,10 @@ impl Machine {
                     bytes += within * 4;
                     break;
                 },
+                | Type::CharArray(_) => {
+                    bytes += within;
+                    break;
+                },
                 | _ => break,
             }
         }
@@ -1052,7 +1381,7 @@ impl Machine {
             | Operand::Value(_) => None,
         };
         let location = self.location_of(id, offset, structure);
-        let mut event = if matches!(self.object_type(id), Some(Type::Array(_))) {
+        let mut event = if self.object_type(id).is_some_and(Type::is_array) {
             let text = format!(
                 "An initializer list fills the array's elements in increasing index order, so the \
                  next value initializes {location}."
@@ -1101,6 +1430,34 @@ impl Machine {
 
     pub(super) fn decay(&self, range: SourceRange, id: usize, value: Value) -> Event {
         let object = &self.state.objects[id - 1];
+        if object.literal {
+            let mut event = noted(
+                explained(
+                    Event::new(
+                        EventKind::ArrayDecay,
+                        range,
+                        format!("{} becomes a pointer to its first char", object.name),
+                    ),
+                    &format!(
+                        "The string literal {name} is an array of chars, so in an expression it \
+                         becomes a pointer to its first element, {name}[0].",
+                        name = object.name
+                    ),
+                    &format!(
+                        "A string literal stands for its array, {ty}, which has existed since \
+                         before main. Like every array used in an expression, it is not copied: \
+                         it is converted to a pointer to its first element. That pointer is all a \
+                         function such as printf receives; it finds the end of the string by its \
+                         null character.",
+                        ty = object.r#type
+                    ),
+                    &[clauses::ARRAY_DECAY, clauses::STRING_LITERAL],
+                ),
+                Topic::ArrayDecay,
+            );
+            event.objects.push(id);
+            return result(event, Operand::Value(value));
+        }
         let text = format!(
             "`{name}` is an array ({ty}). Used in an expression, an array is not copied: it is \
              converted to a pointer to its first element, {name}[0]. This is array-to-pointer \
@@ -1137,7 +1494,12 @@ impl Machine {
         value: Value,
     ) -> Event {
         let location = self.location(target, offset);
-        let shown = self.value_text(&value);
+        let mut shown = self.value_text(&value);
+        if let (Some(Type::Char), Value::Integer(integer)) =
+            (self.leaf_type(target, offset), &value)
+        {
+            let _ = write!(shown, " ({})", char_text(*integer));
+        }
         let summary = format!(
             "The expression needs the value of {location}, so the machine reads it: {shown}."
         );
@@ -1402,10 +1764,18 @@ impl Machine {
                     (&right, &left)
                 };
                 let written = snippet(source, range);
+                let noun = match *pointer {
+                    | Value::Pointer {
+                        target: Some(target),
+                        first,
+                        ..
+                    } if self.leaf_type(target, first) == Some(Type::Char) => "char",
+                    | _ => "int",
+                };
                 let moved = match count {
                     | &Value::Integer(count) if operator == "-" =>
-                        movement(count.saturating_neg(), "int"),
-                    | &Value::Integer(count) => movement(count, "int"),
+                        movement(count.saturating_neg(), noun),
+                    | &Value::Integer(count) => movement(count, noun),
                     | _ => String::from("by the count"),
                 };
                 let sign = if operator == "-" {
@@ -1657,7 +2027,7 @@ impl Machine {
         }
         let mut cited = vec![clause];
         let mut topic = None;
-        if converted && matches!(leaf, Some(Type::Pointer | Type::StructPointer(_))) {
+        if converted && leaf.is_some_and(Type::is_pointer) {
             let _ = write!(
                 text,
                 " The integer constant 0 is a null pointer constant: storing it into a pointer \
@@ -2303,6 +2673,39 @@ pub(super) fn enter_block(range: SourceRange) -> Event {
     )
 }
 
+/// A character constant, spelled `spelling`, evaluates to `integer`.
+pub(super) fn character(range: SourceRange, integer: i32, spelling: &str, value: Operand) -> Event {
+    let text = format!(
+        "{spelling} is a character constant. Its type is int, not char, and its value is the \
+         character's code in the execution character set (ASCII on x86-64): {integer}."
+    );
+    result(
+        noted(
+            explained(
+                Event::new(
+                    EventKind::Constant,
+                    range,
+                    format!("Evaluate the character constant {spelling}"),
+                ),
+                &format!("The character constant {spelling} is the int {integer}, its code."),
+                &text,
+                &[clauses::CHARACTER_CONSTANT],
+            ),
+            Topic::CharacterConstant,
+        ),
+        value,
+    )
+}
+
+/// A char value as a character constant: `'A'`, `'\n'`, or its code when
+/// it is no single byte.
+fn char_text(value: i32) -> String {
+    i8::try_from(value).map_or_else(
+        |_| format!("{value}"),
+        |byte| super::library::character_name(byte.to_ne_bytes()[0]),
+    )
+}
+
 pub(super) fn constant(range: SourceRange, integer: i32, value: Operand) -> Event {
     let text = format!(
         "The integer constant {integer} has type int, because its value fits in an int. \
@@ -2408,7 +2811,7 @@ fn explained(mut event: Event, summary: &str, text: &str, cited: &[Clause]) -> E
 }
 
 /// `event` with the note on `topic`.
-fn noted(mut event: Event, topic: Topic) -> Event {
+pub(super) fn noted(mut event: Event, topic: Topic) -> Event {
     event.note = String::from(topic.text());
     event
 }

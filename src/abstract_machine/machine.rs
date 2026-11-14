@@ -35,26 +35,40 @@ use super::{
         self,
         Designation,
     },
+    parser,
 };
 
 #[derive(Debug, Clone)]
 pub(super) struct Machine {
-    pub state:       State,
-    pub activations: Vec<Activation>,
-    pub next_frame:  usize,
-    pub cells:       usize,
-    pub metadata:    Vec<ObjectMetadata>,
+    pub state:        State,
+    pub activations:  Vec<Activation>,
+    pub next_frame:   usize,
+    pub cells:        usize,
+    pub metadata:     Vec<ObjectMetadata>,
     /// The program's structure types, for layouts and member names.
-    pub structures:  Arc<[Structure]>,
+    pub structures:   Arc<[Structure]>,
+    /// How many of the program's directives have run: each is a step of
+    /// its own, before the static objects exist.
+    pub preprocessed: usize,
     /// How many of the program's static objects exist so far: the machine
     /// creates and initializes them, one per step, before `main` runs.
-    pub initialized: usize,
+    pub initialized:  usize,
     /// Whether `main` has begun: its first operation has run.
-    pub started:     bool,
+    pub started:      bool,
 }
 
 impl Machine {
     pub fn execute(&mut self, program: &Program) {
+        self.state.written = 0;
+        if self.preprocessed < program.directives.len() {
+            let index = self.preprocessed;
+            self.preprocessed += 1;
+            self.state.status = "running";
+            self.state.source_range = program.directives[index];
+            self.state.event = narration::directive(program.directives[index], index);
+            self.refresh(program);
+            return;
+        }
         if self.initialized < program.statics.len() {
             let index = self.initialized;
             self.initialized += 1;
@@ -151,7 +165,12 @@ impl Machine {
             | Op::Push(integer) => {
                 let value = Operand::Value(Value::Integer(*integer));
                 self.push(value.clone())?;
-                narration::constant(range, *integer, value)
+                let spelling = source.get(range.start..range.end).unwrap_or_default();
+                if spelling.starts_with('\'') {
+                    narration::character(range, *integer, spelling, value)
+                } else {
+                    narration::constant(range, *integer, value)
+                }
             },
             | Op::Zero => {
                 let value = Operand::Value(Value::Integer(0));
@@ -190,7 +209,8 @@ impl Machine {
             | Op::Decay(place) => {
                 let id = self.named(place)?;
                 let length = match self.object_type(id) {
-                    | Some(Type::Array(length)) => i32::try_from(length).unwrap_or(i32::MAX),
+                    | Some(Type::Array(length) | Type::CharArray(length)) =>
+                        i32::try_from(length).unwrap_or(i32::MAX),
                     | _ => 1,
                 };
                 let value = Value::pointer(id, 0, 0, length);
@@ -260,6 +280,34 @@ impl Machine {
                 self.push(Operand::Value(value.clone()))?;
                 self.promote(range, value)
             },
+            | Op::DefaultPromote => {
+                let value = self.pop_value()?;
+                self.push(Operand::Value(value.clone()))?;
+                self.default_promotion(range, value)
+            },
+            | Op::InitializeString {
+                bytes,
+                length,
+                full_expression,
+            } => {
+                let (target, offset) = self.pop_address()?;
+                let mut stored = Vec::new();
+                for at in 0..*length {
+                    let byte = bytes.get(at).copied().unwrap_or(0);
+                    let place = offset + i32::try_from(at).unwrap_or(i32::MAX);
+                    stored.push(self.store(target, place, parser::char_value(byte))?);
+                }
+                self.initialized_string(
+                    range,
+                    target,
+                    offset,
+                    bytes,
+                    Value::Array(stored),
+                    *full_expression,
+                )
+            },
+            | Op::Library(library, types) =>
+                self.library_call(program, instruction, *library, types)?,
             | Op::AddressOf => {
                 let Operand::Address {
                     target,
@@ -472,7 +520,7 @@ impl Machine {
                         Op::Store {
                             initializer: true,
                             ..
-                        }
+                        } | Op::InitializeString { .. }
                     )
             })
         });
@@ -640,15 +688,13 @@ impl Machine {
 
     pub fn refresh(&mut self, program: &Program) {
         self.state.frames.clear();
-        // Static initialization comes before program startup: no call has
-        // begun until main's first operation (C99 §5.1.2p1).
-        if !self.started && !program.statics.is_empty() {
+        // Directives run in translation, and static initialization comes
+        // before program startup: no call has begun until main's first
+        // operation (C99 §5.1.1.2p1, §5.1.2p1).
+        if !self.started && (!program.statics.is_empty() || !program.directives.is_empty()) {
             self.state.evaluation = None;
             if !self.state.terminal() {
-                self.state.source_range = program.statics.get(self.initialized).map_or_else(
-                    || program.functions[program.entry].code[0].range,
-                    |next| next.range,
-                );
+                self.state.source_range = self.before_main(program);
             }
             return;
         }
@@ -682,6 +728,22 @@ impl Machine {
         }
     }
 
+    /// The next operation before `main`: a directive, a static object's
+    /// initialization, or `main`'s first operation.
+    fn before_main(&self, program: &Program) -> super::SourceRange {
+        program
+            .directives
+            .get(self.preprocessed)
+            .copied()
+            .or_else(|| {
+                program
+                    .statics
+                    .get(self.initialized)
+                    .map(|object| object.range)
+            })
+            .unwrap_or(program.functions[program.entry].code[0].range)
+    }
+
     pub fn new(program: &Program) -> Self {
         let activations = Vec::from([Activation {
             id:         1,
@@ -691,28 +753,37 @@ impl Machine {
             operands:   Vec::new(),
             evaluation: None,
         }]);
-        let first = program.statics.first().map_or_else(
-            || program.functions[program.entry].code[0].range,
-            |object| object.range,
-        );
+        let first = program
+            .directives
+            .first()
+            .copied()
+            .or_else(|| program.statics.first().map(|object| object.range))
+            .unwrap_or(program.functions[program.entry].code[0].range);
         let mut machine = Self {
             state: State {
                 step:            0,
                 status:          "ready",
                 source_range:    first,
-                event:           narration::start(first, program.statics.len()),
+                event:           narration::start(
+                    first,
+                    program.statics.len(),
+                    !program.directives.is_empty(),
+                ),
                 evaluation:      None,
                 frames:          Vec::new(),
                 objects:         Vec::new(),
                 pending_effects: Vec::new(),
                 diagnostics:     Vec::new(),
                 return_value:    None,
+                output:          Vec::new(),
+                written:         0,
             },
             activations,
             next_frame: 2,
             cells: 0,
             metadata: Vec::new(),
             structures: Arc::clone(&program.structures),
+            preprocessed: 0,
             initialized: 0,
             started: false,
         };
@@ -809,7 +880,8 @@ impl Machine {
             + event.clauses.capacity() * size_of::<super::Clause>()
             + event.operands.capacity() * size_of::<Operand>()
             + event.objects.capacity() * size_of::<usize>()
-            + self.state.pending_effects.capacity() * size_of::<String>();
+            + self.state.pending_effects.capacity() * size_of::<String>()
+            + self.state.output.capacity();
         for effect in &self.state.pending_effects {
             bytes += effect.capacity();
         }

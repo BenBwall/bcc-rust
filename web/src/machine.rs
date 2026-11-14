@@ -90,7 +90,12 @@ impl Machine {
                 self.session = Some(session);
                 snapshot
             },
-            | Err(diagnostic) => match first_directive(&self.source) {
+            // The machine runs `#include <stdio.h>` itself; any other
+            // directive is the preprocessor's.
+            | Err(diagnostic) => match directives(&self.source)
+                .into_iter()
+                .find(|directive| !runs_itself(&self.source[directive.start..directive.end]))
+            {
                 | Some(directive) => before_the_machine(directive, &self.source),
                 | None => rejected(&diagnostic, &self.source),
             },
@@ -108,14 +113,25 @@ impl Machine {
     }
 }
 
-/// The byte range of the first preprocessing directive in `source`, up to the
-/// end of its physical line: a `#` that is the first token on its line.
+/// Whether the machine runs the directive `text` itself: `#include
+/// <stdio.h>`, however it is spaced.
+fn runs_itself(text: &str) -> bool {
+    let words: Vec<&str> = text.trim_start_matches('#').split_whitespace().collect();
+    matches!(
+        words.as_slice(),
+        ["include", "<stdio.h>"] | ["include<stdio.h>"]
+    )
+}
+
+/// The byte range of every preprocessing directive in `source`, each up to
+/// the end of its physical line: a `#` that is the first token on its line.
 /// Comments count as white space there, having become spaces in translation
 /// phase 3, and a `#` inside a comment or a literal is not a directive.
 ///
 /// C99: §5.1.1.2 paragraph 1 item 3, p. 10; PDF p. 22.
 /// C99: §6.10 paragraph 2, p. 146; PDF p. 158.
-fn first_directive(source: &str) -> Option<SourceRange> {
+fn directives(source: &str) -> Vec<SourceRange> {
+    let mut found = Vec::new();
     let bytes = source.as_bytes();
     let mut at = 0;
     let mut starts_line = true;
@@ -135,11 +151,13 @@ fn first_directive(source: &str) -> Option<SourceRange> {
             | b'/' if rest.starts_with(b"/") => at = end_of_logical_line(bytes, at),
             | b'#' if starts_line => {
                 let line = source[at..].lines().next().unwrap_or_default();
-                return Some(SourceRange {
+                found.push(SourceRange {
                     start: at,
                     end: at + line.trim_end().len(),
                     ..SourceRange::default()
                 });
+                starts_line = false;
+                at += line.len();
             },
             | b'"' | b'\'' => {
                 starts_line = false;
@@ -152,7 +170,7 @@ fn first_directive(source: &str) -> Option<SourceRange> {
             },
         }
     }
-    None
+    found
 }
 
 /// The offset of the new-line ending the line at `start`, past any line
@@ -187,10 +205,10 @@ fn end_of_literal(bytes: &[u8], start: usize) -> usize {
     bytes.len()
 }
 
-/// The snapshot for a program with preprocessing directives. The machine reads
-/// source as written, so it never gets to run one, and stopping here says
-/// nothing about the program: directives are executed in translation phase 4,
-/// long before any evaluation.
+/// The snapshot for a program with a preprocessing directive the machine does
+/// not run: every one but `#include <stdio.h>`. Stopping here says nothing
+/// about the program: directives are executed in translation phase 4, long
+/// before any evaluation.
 ///
 /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
 fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
@@ -204,14 +222,16 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
             category:       "fault".to_owned(),
             title:          "The machine starts after the preprocessor".to_owned(),
             summary:        "Lines starting with # are handled before the program runs, and this \
-                             machine reads source only as it is written, so it stops here. \
+                             machine runs only #include <stdio.h> itself, so it stops here. \
                              Stopping here does not mean the program is wrong."
                 .to_owned(),
             explanation:    "C processes a file in translation phases: directives are executed \
                              and macros expanded in phase 4, and evaluation only happens once the \
-                             program runs. To see what these lines become, open the compiler \
-                             pipeline's Preprocessor stage. To step through the code here, remove \
-                             the # lines and write out what they stood for."
+                             program runs. This machine plays phase 4 only for #include \
+                             <stdio.h>, which declares printf, puts and putchar. To see what the \
+                             other lines become, open the compiler pipeline's Preprocessor stage. \
+                             To step through the code here, remove those lines and write out what \
+                             they stood for."
                 .to_owned(),
             note:           String::new(),
             flow:           Vec::new(),
@@ -234,6 +254,9 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
         effects: Vec::new(),
         diagnostic: None,
         return_value: None,
+        stdout: false,
+        output: Vec::new(),
+        written: 0,
     }
 }
 
@@ -270,6 +293,9 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
         effects: Vec::new(),
         diagnostic: Some(self::diagnostic(diagnostic)),
         return_value: None,
+        stdout: false,
+        output: Vec::new(),
+        written: 0,
     }
 }
 
@@ -312,6 +338,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
                 event,
                 operator,
                 state.status == "finished",
+                &state.output[state.output.len() - state.written..],
                 &objects,
                 program,
             ),
@@ -346,28 +373,42 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
         objects:      state
             .objects
             .iter()
-            .map(|object| Object {
-                id:        object.id,
-                name:      object.name.clone(),
-                ty:        object.r#type.clone(),
-                storage:   object.storage_duration.to_owned(),
-                alive:     object.lifetime == "alive",
-                frame_id:  object.frame_id,
-                function:  functions
-                    .get(&object.frame_id)
-                    .map(|name| (*name).to_owned())
-                    .unwrap_or_default(),
-                scope:     object.function.clone(),
-                parameter: object.parameter,
-                value:     value(&object.value, &objects, program),
-            })
+            .map(|object| self::object(object, &functions, &objects, program))
             .collect(),
         effects:      state.pending_effects.clone(),
         diagnostic:   fault.map(diagnostic),
         return_value: state
             .return_value
             .as_ref()
-            .map(|returned| value(returned, &objects, program)),
+            .map(|returned| value(returned, false, &objects, program)),
+        stdout:       program.writes_output(),
+        output:       state.output.clone(),
+        written:      state.written,
+    }
+}
+
+/// The page's form of an object; `functions` names each live call.
+fn object(
+    object: &abstract_machine::Object,
+    functions: &HashMap<usize, &str>,
+    objects: &HashMap<usize, &abstract_machine::Object>,
+    program: &Program,
+) -> Object {
+    Object {
+        id:        object.id,
+        name:      object.name.clone(),
+        ty:        object.r#type.clone(),
+        storage:   object.storage_duration.to_owned(),
+        alive:     object.lifetime == "alive",
+        frame_id:  object.frame_id,
+        function:  functions
+            .get(&object.frame_id)
+            .map(|name| (*name).to_owned())
+            .unwrap_or_default(),
+        scope:     object.function.clone(),
+        parameter: object.parameter,
+        literal:   object.literal,
+        value:     value(&object.value, holds_chars(&object.r#type), objects, program),
     }
 }
 
@@ -514,20 +555,47 @@ fn diagnostic(fault: &abstract_machine::Diagnostic) -> Diagnostic {
     }
 }
 
+/// Whether an object or member of the type spelled `ty` holds chars: a
+/// `char` or a `char` array, not a pointer to them.
+fn holds_chars(ty: &str) -> bool {
+    ty == "char" || (ty.starts_with("char[") && !ty.contains('*'))
+}
+
+/// A char's value as a character constant spells it: `'A'`, `'\n'`,
+/// `'\0'`, or an escape for a byte that is not printable ASCII.
+fn character(value: i32) -> String {
+    let byte = value.to_le_bytes()[0];
+    let text = match byte {
+        | b'\n' => "\\n".to_owned(),
+        | b'\t' => "\\t".to_owned(),
+        | b'\r' => "\\r".to_owned(),
+        | 0 => "\\0".to_owned(),
+        | b'\\' => "\\\\".to_owned(),
+        | b'\'' => "\\'".to_owned(),
+        | 0x20..=0x7E => char::from(byte).to_string(),
+        | _ => format!("\\x{byte:02x}"),
+    };
+    format!("'{text}'")
+}
+
+/// The page's form of an engine value; `chars` when its scalars are chars,
+/// which then carry their character.
 fn value(
     value: &abstract_machine::Value,
+    chars: bool,
     objects: &HashMap<usize, &abstract_machine::Object>,
     program: &Program,
 ) -> Value {
     match value {
         | abstract_machine::Value::Indeterminate => Value::Indeterminate,
         | abstract_machine::Value::Integer(number) => Value::Integer {
-            text: number.to_string(),
+            text:      number.to_string(),
+            character: chars.then(|| character(*number)),
         },
         | abstract_machine::Value::Array(elements) => Value::Array {
             elements: elements
                 .iter()
-                .map(|element| self::value(element, objects, program))
+                .map(|element| self::value(element, chars, objects, program))
                 .collect(),
         },
         | abstract_machine::Value::Struct { structure, members } => {
@@ -548,7 +616,12 @@ fn value(
                             offset:  declared.map_or(0, |member| member.offset),
                             size:    declared.map_or(0, |member| member.size),
                             padding: declared.map_or(0, |member| member.padding),
-                            value:   self::value(member, objects, program),
+                            value:   self::value(
+                                member,
+                                declared.is_some_and(|member| holds_chars(&member.r#type)),
+                                objects,
+                                program,
+                            ),
                         }
                     })
                     .collect(),
@@ -624,7 +697,7 @@ mod tests {
 
     #[test]
     fn finds_a_directive_only_where_one_can_stand() {
-        let found = |source| first_directive(source).map(|range| range.start);
+        let found = |source| directives(source).first().map(|range| range.start);
         assert_eq!(found("#define X\n"), Some(0));
         assert_eq!(found("  /* note */ # define X\r\nint y;\n"), Some(13));
         assert_eq!(found("int x;\n#if 0\n"), Some(7));
@@ -672,7 +745,7 @@ mod tests {
 
     fn integer(value: Option<&Value>) -> Option<&str> {
         match value {
-            | Some(Value::Integer { text }) => Some(text),
+            | Some(Value::Integer { text, .. }) => Some(text),
             | _ => None,
         }
     }
@@ -811,6 +884,7 @@ mod tests {
         let mut machine = Machine::default();
         for (key, status, result) in [
             ("tour", "finished", Some("15")),
+            ("hello", "finished", Some("0")),
             ("path", "finished", Some("16")),
             ("pointers", "finished", Some("17")),
             ("recursion", "finished", Some("24")),
@@ -905,6 +979,107 @@ mod tests {
             assert_eq!(finished.event.category, "fault");
             assert!(finished.location.is_some(), "{key} locates the fault");
         }
+    }
+
+    #[test]
+    fn the_first_lesson_writes_its_output_step_by_step() {
+        let mut machine = Machine::default();
+        let states = execute(&mut machine, demos::find("hello").unwrap().source);
+        let last = states.last().unwrap();
+        assert!(last.stdout);
+        assert_eq!(last.output, b"Hello, world!\nAda has 3 letters\n");
+        // Each write is lit at its own step, and the steps around it keep
+        // the output they had.
+        let writes: Vec<(usize, &[u8])> = states
+            .iter()
+            .filter(|state| state.written > 0)
+            .map(|state| {
+                (
+                    state.step,
+                    &state.output[state.output.len() - state.written..],
+                )
+            })
+            .collect();
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0].1, b"Hello, world!\n");
+        assert_eq!(writes[1].1, b"Ada has 3 letters\n");
+        let before = &states[writes[1].0 - 1];
+        assert_eq!(before.output, b"Hello, world!\n");
+        assert_eq!(before.written, 0);
+        let printf = &states[writes[1].0];
+        assert_eq!(printf.event.kind, "library_call");
+        assert_eq!(printf.event.category, "call");
+        let flow: Vec<String> = printf
+            .event
+            .flow
+            .iter()
+            .map(|part| format!("{}:{}", part.role, part.text))
+            .collect();
+        assert_eq!(
+            flow,
+            [
+                "value:&\"%s has %d letters\\n\"[0]",
+                "separator:,",
+                "value:&name[0]",
+                "separator:,",
+                "value:3",
+                "arrow:writes",
+                "value:\"Ada has 3 letters\\n\""
+            ]
+        );
+        assert!(
+            printf
+                .event
+                .access
+                .iter()
+                .all(|access| access.kind == "read")
+        );
+        // A char shows its character, a string literal's array its chars.
+        let name = last
+            .objects
+            .iter()
+            .find(|object| object.name == "name")
+            .unwrap();
+        assert_eq!(
+            crate::panels::value_text(&name.value).as_deref(),
+            Some("{'A','d','a','\\0'}")
+        );
+        let Value::Array { elements } = &name.value else {
+            panic!("name is an array");
+        };
+        assert_eq!(
+            crate::panels::value_text(&elements[0]).as_deref(),
+            Some("65 'A'")
+        );
+        assert!(
+            last.objects
+                .iter()
+                .any(|object| object.literal && object.name == "\"Hello, world!\"")
+        );
+        // The directive step is the first, before any static object.
+        assert_eq!(states[1].event.kind, "directive");
+        assert_eq!(states[1].objects.len(), 0, "no object before the static ones");
+    }
+
+    #[test]
+    fn the_machine_runs_the_stdio_include_and_stops_at_any_other_directive() {
+        let mut machine = Machine::default();
+        let states = execute(
+            &mut machine,
+            "#include <stdio.h>\nint main(void) {\n    putchar('!');\n    return 0;\n}\n",
+        );
+        assert_eq!(states.last().unwrap().output, b"!");
+        let stopped = machine
+            .load("#include <stdio.h>\n#define N 3\nint main(void) { return N; }\n".to_owned());
+        assert_eq!(
+            stopped.event.title,
+            "The machine starts after the preprocessor"
+        );
+        assert_eq!(stopped.location.map(|range| range.start.line), Some(2));
+        assert!(!stopped.stdout);
+        // A program without the header has no Output panel.
+        let quiet = machine.load("int main(void) { return 0; }\n".to_owned());
+        assert!(!quiet.stdout);
     }
 
     #[test]

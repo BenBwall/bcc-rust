@@ -34,7 +34,8 @@ impl WasmBackEnd for Precompiled {
             lines:    None,
             producer: "clang -O0 -g, precompiled".into(),
             command:  format!(
-                "$ clang {LESSON_FLAGS} {} -o {}",
+                "$ clang {} {} -o {}",
+                lesson_flags(demo.source),
                 demo.name,
                 demo.name.replace(".c", ".wasm")
             ),
@@ -48,6 +49,29 @@ impl WasmBackEnd for Precompiled {
 pub const LESSON_FLAGS: &str =
     "--target=wasm32-unknown-unknown -nostdlib -O0 -g -Wl,--no-entry -Wl,--export-all";
 
+/// The flags for a lesson that includes `<stdio.h>`: a WASI command linked
+/// with wasi-libc, whose `_start` calls `main` and passes its result to
+/// `proc_exit`. The script links a copy of the C library without its debug
+/// information, so only the lesson has C lines.
+pub const COMMAND_FLAGS: &str = "--target=wasm32-wasip1 -O0 -g";
+
+/// The flags `web/wasm/generate.sh` builds the lesson `source` with.
+pub fn lesson_flags(source: &str) -> &'static str {
+    if is_command(source) {
+        COMMAND_FLAGS
+    } else {
+        LESSON_FLAGS
+    }
+}
+
+/// Whether the lesson `source` uses the C library, so that its module is a
+/// WASI command rather than a bare module whose entry point is `main`.
+pub fn is_command(source: &str) -> bool {
+    source
+        .lines()
+        .any(|line| line.trim() == "#include <stdio.h>")
+}
+
 /// The custom section that records how a lesson module was built.
 pub const LESSON_SECTION: &str = "bcc.lesson";
 
@@ -56,8 +80,9 @@ pub const UNAVAILABLE: &str =
     "Only the bundled lessons have a module that clang compiled ahead of time.";
 
 /// Each lesson's module, by its file name in `web/demos/`.
-const MODULES: [(&str, &[u8]); 10] = [
+const MODULES: [(&str, &[u8]); 11] = [
     ("objects.c", include_bytes!("../../wasm/objects.wasm")),
+    ("hello.c", include_bytes!("../../wasm/hello.wasm")),
     ("pointers.c", include_bytes!("../../wasm/pointers.wasm")),
     ("recursion.c", include_bytes!("../../wasm/recursion.wasm")),
     ("structs.c", include_bytes!("../../wasm/structs.wasm")),

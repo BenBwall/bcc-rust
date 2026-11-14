@@ -53,6 +53,7 @@ mod parser;
 // Execution and observations
 mod json;
 mod layout;
+mod library;
 mod machine;
 mod memory;
 mod model;
@@ -151,7 +152,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 3.
+    /// Encodes the current observation using schema version 4.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()
@@ -205,6 +206,13 @@ impl Program {
             &self.structures,
         ));
         text
+    }
+
+    /// Whether the program can write to standard output: it includes
+    /// `<stdio.h>`, whose functions the machine runs.
+    #[must_use]
+    pub fn writes_output(&self) -> bool {
+        !self.directives.is_empty()
     }
 
     /// The name of function `function`, in definition order.

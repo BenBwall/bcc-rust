@@ -26,8 +26,9 @@ impl Type {
         match self {
             | Self::Int => (4, 4),
             | Self::Char => (1, 1),
-            | Self::Pointer | Self::StructPointer(_) => (8, 8),
+            | Self::Pointer | Self::StructPointer(_) | Self::CharPointer(_) => (8, 8),
             | Self::Array(count) => (count.saturating_mul(4), 4),
+            | Self::CharArray(count) => (count, 1),
             | Self::Struct(id) => structures
                 .get(id)
                 .map_or((0, 1), |structure| (structure.size, structure.align)),
@@ -37,7 +38,7 @@ impl Type {
     /// How many scalars an object of this type holds.
     pub(super) fn leaves(self, structures: &[Structure]) -> usize {
         match self {
-            | Self::Array(count) => count,
+            | Self::Array(count) | Self::CharArray(count) => count,
             | Self::Struct(id) => structures.get(id).map_or(0, |structure| {
                 structure
                     .members
@@ -57,6 +58,9 @@ impl Type {
             | Self::Char => String::from("char"),
             | Self::Pointer => String::from("int *"),
             | Self::Array(count) => format!("int[{count}]"),
+            | Self::CharArray(count) => format!("char[{count}]"),
+            | Self::CharPointer(false) => String::from("char *"),
+            | Self::CharPointer(true) => String::from("const char *"),
             | Self::Struct(id) => format!("struct {}", tag(id)),
             | Self::StructPointer(id) => format!("struct {} *", tag(id)),
         }
@@ -73,7 +77,7 @@ impl Type {
     /// every pointer, member by member (C99 §6.7.8p10).
     pub(super) fn zero(self, structures: &[Structure]) -> Value {
         self.filled(structures, &mut |ty| {
-            if matches!(ty, Self::Pointer | Self::StructPointer(_)) {
+            if ty.is_pointer() {
                 Value::null()
             } else {
                 Value::Integer(0)
@@ -94,6 +98,8 @@ impl Type {
     fn filled(self, structures: &[Structure], scalar: &mut impl FnMut(Self) -> Value) -> Value {
         match self {
             | Self::Array(count) => Value::Array((0..count).map(|_| scalar(Self::Int)).collect()),
+            | Self::CharArray(count) =>
+                Value::Array((0..count).map(|_| scalar(Self::Char)).collect()),
             | Self::Struct(id) => Value::Struct {
                 structure: id,
                 members:   structures.get(id).map_or_else(Vec::new, |structure| {
@@ -112,6 +118,7 @@ impl Type {
     pub(super) fn leaf_type(self, structures: &[Structure], offset: usize) -> Option<Self> {
         match self {
             | Self::Array(count) => (offset < count).then_some(Self::Int),
+            | Self::CharArray(count) => (offset < count).then_some(Self::Char),
             | Self::Struct(id) => {
                 let (member, within) = member_at(structures.get(id)?, offset)?;
                 member.ty.leaf_type(structures, within)
