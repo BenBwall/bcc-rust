@@ -1,0 +1,28 @@
+context-functions-gcc.c: In function 'unused_parameter':
+context-functions-gcc.c:3:33: warning: unused parameter 'a' [-Wunused-parameter]
+    3 | static int unused_parameter(int a) { return 0; }
+      |                                 ^
+context-functions-gcc.c: At top level:
+context-functions-gcc.c:4:6: warning: return type of 'main' is not 'int' [-Wmain]
+    4 | void main(void) { }
+      |      ^~~~
+context-functions-gcc.c: In function 'first':
+context-functions-gcc.c:6:12: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    6 |   int *p = 1;
+      |            ^
+context-functions-gcc.c: In function 'second':
+context-functions-gcc.c:10:12: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   10 |   int *q = 2;
+      |            ^
+context-functions-gcc.c: At top level:
+context-functions-gcc.c:13:19: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   13 | int *file_scope = 3;
+      |                   ^
+context-functions-gcc.c: In function 'third':
+context-functions-gcc.c:14:28: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   14 | int third(void) { int *r = 4; return *r; }
+      |                            ^
+context-functions-gcc.c: At top level:
+context-functions-gcc.c:3:12: warning: 'unused_parameter' defined but not used [-Wunused-function]
+    3 | static int unused_parameter(int a) { return 0; }
+      |            ^~~~~~~~~~~~~~~~

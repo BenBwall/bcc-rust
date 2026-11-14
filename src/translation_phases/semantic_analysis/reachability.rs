@@ -83,13 +83,15 @@ use crate::{
 /// A warning waiting for the end of its function.
 #[derive(Clone, Copy)]
 struct DeferredWarning {
-    function: usize,
+    function:   usize,
     /// The identity of the expression whose reachability decides.
-    anchor:   usize,
-    group:    DiagnosticGroup,
-    kind:     SemanticErrorKind,
-    site:     SourceVectors,
-    name:     Option<StringCacheId>,
+    anchor:     usize,
+    group:      DiagnosticGroup,
+    kind:       SemanticErrorKind,
+    site:       SourceVectors,
+    name:       Option<StringCacheId>,
+    /// The ranges Clang underlines beside the caret.
+    highlights: [SourceVectors; 2],
 }
 
 /// What the walk needs that analysis alone knows.
@@ -244,6 +246,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             kind,
             site,
             name,
+            highlights: self.highlights,
         });
     }
 
@@ -277,13 +280,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             if warning.function != function.id {
                 self.reachability.deferred.push(*warning);
             } else if flow.anchors.get(&warning.anchor).copied().unwrap_or(false) {
-                self.group_diagnostic(
-                    warning.group,
-                    warning.kind,
-                    warning.site,
-                    warning.name,
-                    None,
-                );
+                self.with_highlights(warning.highlights, |analyzer| {
+                    analyzer.group_diagnostic(
+                        warning.group,
+                        warning.kind,
+                        warning.site,
+                        warning.name,
+                        None,
+                    );
+                });
             }
         }
         self.tainted = tainted;

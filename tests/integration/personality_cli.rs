@@ -1614,10 +1614,12 @@ mod tests {
             assert_eq!(output.status.code(), Some(1), "{mode} {file}");
             stderr(&output)
         };
+        // GCC names the function first (GCC manual, "Diagnostic Message
+        // Formatting Options").
         assert_eq!(
             text("--gcc-mode", "a.c"),
-            "a.c:1:22: error: 'x' undeclared (first use in this function)\n\x20   1 | int f(void) \
-             { return x; }\n\x20     |                      ^\n"
+            "a.c: In function 'f':\na.c:1:22: error: 'x' undeclared (first use in this \
+             function)\n\x20   1 | int f(void) { return x; }\n\x20     |                      ^\n"
         );
         assert_eq!(
             text("--clang-mode", "a.c"),
@@ -1628,10 +1630,9 @@ mod tests {
             text("--gcc-mode", "b.c")
                 .starts_with("b.c:1:15: error: 'y' undeclared here (not in a function)\n")
         );
-        assert!(
-            text("--gcc-mode", "c.c")
-                .starts_with("c.c:1:25: error: expected expression before ';' token\n")
-        );
+        assert!(text("--gcc-mode", "c.c").starts_with(
+            "c.c: In function 'f':\nc.c:1:25: error: expected expression before ';' token\n"
+        ));
         // GCC says which way a call misses its prototype, naming the callee.
         directory.write(
             "e.c",
