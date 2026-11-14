@@ -1,0 +1,1 @@
+--compiler-extensions --compiler-identity=clang-cl --diagnostic-format=msvc-caret -I context-headers

@@ -1,0 +1,37 @@
+In file included from context-includes-gcc.c:3:
+context-headers/outer.h:1:21: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    1 | int *outer_before = 1;
+      |                     ^
+In file included from context-headers/outer.h:2:
+context-headers/inner.h:1:14: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    1 | int *inner = 2;
+      |              ^
+context-headers/outer.h:3:20: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    3 | int *outer_after = 3;
+      |                    ^
+In file included from context-headers/angle-outer.h:1,
+                 from context-includes-gcc.c:4:
+context-headers/angle-inner.h:1:20: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    1 | int *angle_inner = 4;
+      |                    ^
+context-includes-gcc.c:5:16: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    5 | int *in_main = 7;
+      |                ^
+In file included from context-includes-gcc.c:7:
+context-headers/twice.h: In function 'reads_twice':
+context-headers/twice.h:1:12: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    1 | { int *p = 5; (void)p; }
+      |            ^
+In file included from context-includes-gcc.c:8:
+context-headers/twice.h:1:12: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    1 | { int *p = 5; (void)p; }
+      |            ^
+In file included from context-includes-gcc.c:10:
+context-headers/function.h: In function 'header_function':
+context-headers/function.h:1:45: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    1 | static int header_function(void) { int *p = 6; return *p; }
+      |                                             ^
+context-includes-gcc.c: In function 'main':
+context-includes-gcc.c:11:27: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   11 | int main(void) { int *q = 8; return *q + header_function(); }
+      |                           ^

@@ -19,6 +19,36 @@ use crate::{
 };
 
 impl Analyzer<'_, '_, '_> {
+    /// Runs `report` with `operands` as the ranges Clang underlines with `~`
+    /// beside the caret of what it reports: an assignment's or initializer's
+    /// value, a binary operator's operands (Clang's
+    /// `TextDiagnostic::emitCaret` draws a diagnostic's ranges).
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn with_highlights<R>(
+        &mut self,
+        operands: [SourceVectors; 2],
+        report: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let outer = std::mem::replace(&mut self.highlights, operands);
+        let result = report(self);
+        self.highlights = outer;
+        result
+    }
+
+    /// The highlighted operands, for Clang's format only: the others draw
+    /// none. They keep the places macros wrote them, which the renderer
+    /// draws at the invocation and again in Clang's `expanded from macro`
+    /// note.
+    fn clang_highlights(&self) -> [SourceVectors; 2] {
+        if self.context.configuration.diagnostic_format()
+            == crate::configuration::DiagnosticFormat::Clang
+        {
+            self.highlights
+        } else {
+            [SourceVectors::default(); 2]
+        }
+    }
+
     /// Central emitter for pointer constraints; classification has no severity
     /// decisions. Accepted warnings do not taint initializer/ICE recovery.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
@@ -74,8 +104,10 @@ impl Analyzer<'_, '_, '_> {
         else {
             return;
         };
+        let origin = source_vectors;
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
+        let highlights = self.clang_highlights();
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
@@ -88,6 +120,8 @@ impl Analyzer<'_, '_, '_> {
                 source_vectors,
                 name,
                 previous,
+                highlights,
+                origin,
             }),
         );
     }
@@ -130,16 +164,20 @@ impl Analyzer<'_, '_, '_> {
             self.semantic_errors += 1;
             let at = source_vectors;
             let source_vectors = self.context.file_location(source_vectors);
+            let highlights = self.clang_highlights();
             let error = SemanticError {
                 extension_severity: None,
                 kind,
                 source_vectors,
                 name,
                 previous,
+                highlights,
+                origin: at,
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
-            self.error_diagnostics +=
-                usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+            let hard = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+            self.error_diagnostics += hard;
+            self.hard_errors += hard;
             if !self.context.withholds(severity, false, source_vectors) {
                 self.context
                     .classified_error(at, TranslationError::Semantic(error));
@@ -175,6 +213,8 @@ impl Analyzer<'_, '_, '_> {
                         source_vectors,
                         name,
                         previous: None,
+                        highlights: [SourceVectors::default(); 2],
+                        origin: SourceVectors::default(),
                     })
                 },
             );

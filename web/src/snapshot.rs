@@ -25,6 +25,13 @@ pub struct Snapshot {
     pub effects:      Vec<String>,
     pub diagnostic:   Option<Diagnostic>,
     pub return_value: Option<Value>,
+    /// Whether the program can write to standard output: it includes
+    /// `<stdio.h>`, so the page shows the Output panel.
+    pub stdout:       bool,
+    /// Every byte the program has written to standard output so far.
+    pub output:       Vec<u8>,
+    /// How many bytes at the end of `output` the last step wrote.
+    pub written:      usize,
 }
 
 impl Snapshot {
@@ -62,6 +69,51 @@ pub struct StepEvent {
     /// Objects the operation created, read, wrote or ended.
     pub objects:        Vec<usize>,
     pub sequence_point: bool,
+    /// How the floating value the step produced is stored, field by field,
+    /// for the bit view.
+    #[serde(default)]
+    pub encoding:       Option<Encoding>,
+}
+
+/// A stored floating value taken apart, as the engine reports it: the sign
+/// bit, the exponent field and the fraction, and what they mean.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Encoding {
+    /// `float`, `double` or `long double`.
+    #[serde(rename = "type")]
+    pub ty:          String,
+    /// The value, as the page shows it.
+    pub value:       String,
+    pub sign:        bool,
+    /// The exponent field's bits.
+    pub exponent:    String,
+    pub biased:      u32,
+    pub bias:        i32,
+    /// The power of two the significand is scaled by.
+    pub scale:       i32,
+    /// The x87 format's explicit integer bit.
+    pub integer_bit: Option<bool>,
+    /// The fraction field's bits.
+    pub fraction:    String,
+    /// The significand's exact value.
+    pub significand: String,
+    /// `zero`, `subnormal`, `normal`, `infinity` or `NaN`.
+    pub class:       String,
+}
+
+impl StepEvent {
+    /// Whether the step belongs to translation phase 4: a directive the
+    /// machine ran, or a step whose rules include the preprocessor's
+    /// (§6.10), as a macro's use does. Such a step links to the
+    /// Preprocessor stage.
+    pub fn preprocessed(&self) -> bool {
+        self.kind == "directive"
+            || self
+                .clauses
+                .iter()
+                .any(|clause| clause.id.starts_with("6.10"))
+    }
 }
 
 /// One chip of a step's value flow.
@@ -172,6 +224,11 @@ pub struct Object {
     /// The function a block-scope `static` object is declared in.
     pub scope:     Option<String>,
     pub parameter: bool,
+    /// Whether this is the array of a string literal, named as written.
+    pub literal:   bool,
+    /// Size in bytes on x86-64.
+    #[serde(default)]
+    pub size:      usize,
     pub value:     Value,
 }
 
@@ -180,7 +237,23 @@ pub struct Object {
 pub enum Value {
     Indeterminate,
     Integer {
-        text: String,
+        text:      String,
+        /// The character a char holds, as a constant spells it (`'A'`,
+        /// `'\n'`); `None` for an int.
+        #[serde(default)]
+        character: Option<String>,
+    },
+    /// A value of a floating type.
+    Floating {
+        /// The shortest decimal that reads back as the value: `0.1`.
+        text:  String,
+        /// Its exact decimal value.
+        exact: String,
+        /// `float`, `double` or `long double`.
+        #[serde(rename = "type")]
+        ty:    String,
+        /// The bytes in memory, lowest address first, in hexadecimal.
+        bytes: String,
     },
     Array {
         elements: Vec<Value>,
@@ -269,6 +342,7 @@ impl Diagnostic {
             | Some("indeterminate") => "Indeterminate value",
             | Some("unsupported") => "Outside the supported subset",
             | Some("syntax") => "Compilation diagnostic",
+            | Some("constraint") => "Constraint violation",
             | Some("limit") => "Resource limit",
             | _ => "Program diagnostic",
         }

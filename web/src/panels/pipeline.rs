@@ -203,7 +203,9 @@ pub fn PipelineView(
                         | (None, Some(path)) => view! {
                             <p class="stage-command is-internal">
                                 "No command prints this stage: it happens inside bcc, in "
-                                <a href=format!("{SOURCE_URL}{path}")><code>{path}</code></a>
+                                // A narrow screen wraps the path after a
+                                // `/`, never inside a name.
+                                <a href=format!("{SOURCE_URL}{path}")><code class="stage-path">{path.split_inclusive('/').map(|part| view! { {part}<wbr /> }).collect_view()}</code></a>
                             </p>
                         }.into_any(),
                         | (None, None) => ().into_any(),
@@ -237,11 +239,7 @@ pub fn PipelineView(
                     <strong>"In this program: "</strong>
                     {move || path_note().map(super::rich_text)}
                 </p>
-                <p class="stage-explanation">{move || stage.get().explanation()}</p>
-                <StageClauses stage />
                 <StopBanner compilation=shown />
-                <FrontEndCard stage compilation on_reveal />
-                <OptimizerNote stage optimize compilation other shown=Signal::derive(move || output.with(Option::is_some)) />
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
                         {move || if !shown_links.with(Links::is_exact) {
@@ -306,6 +304,13 @@ pub fn PipelineView(
                         <code class="stage-command">{move || Stage::Llvm.command(&filename.get(), optimize.get()).map(|command| format!("$ {command}"))}</code>
                     </div>
                 </div>
+                // What the stage did comes first, where a 1440x900 screen
+                // shows it; how it works and what the optimizer changed
+                // follow it.
+                <p class="stage-explanation">{move || stage.get().explanation()}</p>
+                <StageClauses stage />
+                <FrontEndCard stage compilation on_reveal />
+                <OptimizerNote stage optimize compilation other shown=Signal::derive(move || output.with(Option::is_some)) />
             </article>
             <Diagnostics compilation live on_reveal />
         </section>

@@ -34,6 +34,7 @@ use super::{
     SemanticErrorKind,
     Subobject,
     WideStore,
+    compiler_wording::VoidUse,
     errors::InitializedObject,
     expressions::{
         ConstantClass,
@@ -274,12 +275,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
                                 || !self.initializer_conversion(target, info, diagnostic_site)
                             {
-                                self.error(
-                                    SemanticErrorKind::InvalidInitializer,
-                                    diagnostic_site,
-                                    None,
-                                    None,
-                                );
+                                let (kind, words) = if self.void_value(info.ty) {
+                                    (
+                                        SemanticErrorKind::VoidValueUsed,
+                                        self.void_value_wording(VoidUse::Initialization, target),
+                                    )
+                                } else {
+                                    (SemanticErrorKind::InvalidInitializer, None)
+                                };
+                                self.error(kind, diagnostic_site, words, None);
                                 continue;
                             }
                             if self.semantic_errors != errors_before_conversion {

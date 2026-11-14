@@ -94,4 +94,10 @@ sema-empty-body-lines-clang.c:56:23: warning: if statement has empty body [-Wemp
 sema-empty-body-lines-clang.c:56:23: note: put the semicolon on a separate line to silence this warning
    56 |   IF_HEADER(x /* ' */);
       |                       ^
-16 warnings generated.
+sema-empty-body-lines-clang.c:70:12: warning: while loop has empty body [-Wempty-body]
+   70 |   while (x);
+      |            ^
+sema-empty-body-lines-clang.c:70:12: note: put the semicolon on a separate line to silence this warning
+   70 |   while (x);
+      |            ^
+17 warnings generated.
