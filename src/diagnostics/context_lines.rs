@@ -311,11 +311,11 @@ impl Renderer {
         }
         let mut place = place.clone();
         if highlighted {
-            place.length = context
+            let first = context
                 .source_text(place.source_file_index)
                 .and_then(|text| text.get(place.index as usize..)?.chars().next())
-                .map_or(0, |first| first.len_utf8() as u32)
-                .min(place.length);
+                .map_or(0, char::len_utf8);
+            place.length = place.length.min(u32::try_from(first).unwrap_or(u32::MAX));
         }
         let label = Label {
             source:  LabelSource::Segments(scratch.alloc_slice_fill_iter([place])),
