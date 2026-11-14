@@ -2205,7 +2205,7 @@ impl<'a> Parser<'a> {
                 {
                     return Err(not_constant(self));
                 }
-                let (value, _) = Self::integer_constant(token)?;
+                let (value, constant) = Self::integer_constant(token)?;
                 self.position += 1;
                 if !(self.at(",") || self.at(";") || self.at("}")) {
                     return Err(self.error(
@@ -2213,10 +2213,23 @@ impl<'a> Parser<'a> {
                          decimal integer constant, optionally negated, and no arithmetic on it",
                     ));
                 }
-                // The initializer converts as by assignment: modulo 2^N
-                // into an unsigned type, wrapped into a signed one (C99
-                // §6.7.8p11, §6.3.1.3).
-                let value = if negative { -value } else { value };
+                // Unary minus negates in the constant's own type, which
+                // reduces modulo 2^N when it is unsigned: -1u is
+                // 4294967295. A decimal constant is never negative, so the
+                // negation of a signed one always fits. Only then does the
+                // initializer convert as by assignment: modulo 2^N into an
+                // unsigned type, wrapped into a signed one.
+                // C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91 (unary minus).
+                // C99: §6.2.5 paragraph 9, p. 34; PDF p. 46 (unsigned
+                // arithmetic is reduced modulo 2^N).
+                // C99: §6.7.8 paragraph 11, p. 126; PDF p. 138 (a scalar
+                // initializer converts as by assignment).
+                // C99: §6.3.1.3 paragraphs 1-3, p. 43; PDF p. 55.
+                let value = if negative {
+                    constant.convert(-value)
+                } else {
+                    value
+                };
                 leaves[offset] = Value::Integer(integer.convert(value));
                 Ok(())
             },

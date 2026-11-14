@@ -3177,6 +3177,26 @@ fn conversions_to_unsigned_wrap_and_to_signed_are_the_implementations() {
 }
 
 #[test]
+fn static_initializers_negate_an_unsigned_constant_in_its_own_type() {
+    // -1u is 4294967295 before the initializer converts it to long, in a
+    // file-scope object, a static local and aggregate leaves as at block
+    // scope; a negated signed constant keeps its value.
+    let source =
+        "#include <stdio.h>\nlong x = -1u;\nstruct pair { long a; unsigned long b; };\nstruct \
+         pair p = {-1u, -1ul};\nlong table[3] = {-1u, -1, -2147483648};\nlong get(void) {\n    \
+         static long s = -1u;\n    return s;\n}\nint main(void) {\n    long y = -1u;\n    long z \
+         = get();\n    printf(\"%ld %ld %ld\\n\", x, y, z);\n    printf(\"%ld %lu\\n\", p.a, \
+         p.b);\n    printf(\"%ld %ld %ld\\n\", table[0], table[1], table[2]);\n    return 0;\n}\n";
+    let (state, text) = output(source);
+    assert_eq!(state.status, "finished", "{:?}", state.diagnostics);
+    assert_eq!(
+        text,
+        "4294967295 4294967295 4294967295\n4294967295 18446744073709551615\n4294967295 -1 \
+         -2147483648\n"
+    );
+}
+
+#[test]
 fn shifts_promote_each_operand_and_stop_outside_their_width() {
     returned("int main(void) { return (1u << 31) == 2147483648u; }", 1);
     returned(
