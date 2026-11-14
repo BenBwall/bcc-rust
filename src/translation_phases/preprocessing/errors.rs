@@ -1545,6 +1545,49 @@ impl PreprocessorErrorType<'_> {
             Self::LineDirectiveNumberTooLarge(_, ErrorSeverity::Warning)
         )
     }
+
+    /// Clang's words for the preprocessing errors its users meet most, in
+    /// its diagnostic format, for the errors bcc reports where Clang does.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23 leaves the form of a
+    /// diagnostic implementation-defined.
+    fn clang_message<'d>(&self, arena: &'d Bump) -> Option<&'d str> {
+        Some(match self {
+            | Self::TildeInsteadOfBinaryOperatorInPreprocessorExpression
+            | Self::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression
+            | Self::NumberInsteadOfBinaryOperatorInPreprocessorExpression
+            | Self::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression
+            | Self::CharacterInsteadOfBinaryOperatorInPreprocessorExpression
+            | Self::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression =>
+                "token is not a valid binary operator in a preprocessor subexpression",
+            | Self::ExpectedIdentifierInDefineDirective(_)
+            | Self::ExpectedIdentifierInUndefDirective(_)
+            | Self::ExpectedIdentifierInIfdefDirective(..)
+            | Self::ExpectedIdentifierInIfndefDirective(..)
+            | Self::MissingIdentifierInDefinedDirective(_)
+            | Self::MissingOpeningParenthesisOrIdentifierInDefinedDirective(_) =>
+                "macro name must be an identifier",
+            | Self::MissingClosingParenthesisInDefinedDirective(_) => "missing ')' after 'defined'",
+            | Self::FloatInsteadOfIntegerInPreprocessorExpression =>
+                "floating point literal in preprocessor expression",
+            | Self::DivideByZero => "division by zero in preprocessor expression",
+            | Self::ModuloByZero => "remainder by zero in preprocessor expression",
+            | Self::MoreIfDirectivesThanEndifDirectives => "unterminated conditional directive",
+            | Self::MoreEndifDirectivesThanIfDirectives => "#endif without #if",
+            | Self::ElseDirectiveWithoutIfDirective => "#else without #if",
+            | Self::ElifDirectiveWithoutIfDirective(name) =>
+                format_in!(arena, "#{name} without #if"),
+            | Self::DuplicateMacroParameter(name) =>
+                format_in!(arena, "duplicate macro parameter name '{name}'"),
+            | Self::HashOperatorMustBeFollowedByAMacroArgument(_)
+            | Self::IdentifierNotMacroArgumentAfterHashOperator(_) =>
+                "'#' is not followed by a macro parameter",
+            | Self::MissingLeftHandSideOfHashHashOperator =>
+                "'##' cannot appear at start of macro expansion",
+            | Self::MissingRightHandSideOfHashHashOperator =>
+                "'##' cannot appear at end of macro expansion",
+            | _ => return None,
+        })
+    }
 }
 
 impl Display for PreprocessorError<'_> {
@@ -1571,8 +1614,16 @@ impl ToDiagnostic for PreprocessorError<'_> {
                 != crate::configuration::DiagnosticFormat::Tcc;
         let mut diagnostic = compiler
             .unwrap_or_else(|| {
-                self.error_type
-                    .explain_in(arena, context.source_spelling(source))
+                let mut explanation = self
+                    .error_type
+                    .explain_in(arena, context.source_spelling(source));
+                if context.configuration.diagnostic_format()
+                    == crate::configuration::DiagnosticFormat::Clang
+                    && let Some(words) = self.error_type.clang_message(arena)
+                {
+                    explanation.message = words;
+                }
+                explanation
             })
             .at(self.severity(), source);
         diagnostic.fatal |= fatal;

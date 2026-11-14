@@ -87,6 +87,7 @@ mod shadowing;
 mod sign_compare;
 mod statements;
 mod traversal;
+mod type_limits;
 mod unused;
 mod value_warnings;
 
@@ -2273,6 +2274,11 @@ struct Analyzer<'a, 'tu, 's> {
     semantic_errors:         usize,
     /// Reported diagnostics of error severity only, retained for lowering.
     error_diagnostics:       usize,
+    /// Errors outside any warning group, which Clang's
+    /// `DiagnosticErrorTrap` counts as unrecoverable.
+    hard_errors:             usize,
+    /// [`Self::hard_errors`] when each scope began, by scope.
+    scope_hard_errors:       ArenaVec<'s, usize>,
     member_indices:          ArenaMap<'s, (usize, StringCacheId), usize>,
     member_names:            ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
     tag_declarations:        ArenaVec<'tu, (usize, usize)>,
