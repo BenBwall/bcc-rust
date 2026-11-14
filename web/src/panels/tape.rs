@@ -14,7 +14,9 @@
 //! register's line; a group with no live call folds to one row that still
 //! shows each call as a bar. Objects with static storage duration belong to
 //! no call: they share one group, `static storage`, whose rule runs from the
-//! first of them to the end of the run.
+//! first of them to the end of the run. When it holds nothing but the arrays
+//! of string literals, which the program only reads, it starts folded, so a
+//! program that prints keeps its own objects in view.
 
 use std::{
     collections::HashMap,
@@ -358,6 +360,14 @@ impl Reel {
     }
 }
 
+impl Group {
+    /// Whether every lane is a string literal's array: the static group of a
+    /// program whose only static objects are the literals it prints.
+    fn literals_only(&self) -> bool {
+        self.key == STATIC_GROUP && self.lanes.iter().all(|lane| lane.name.starts_with('"'))
+    }
+}
+
 impl Lane {
     /// The lane's name as its label shows it. A string literal's array is
     /// named by its spelling, which can be long: the label keeps the start.
@@ -501,7 +511,7 @@ pub fn value_text(value: &Value) -> Option<String> {
             text,
             character: Some(character),
         } => Some(format!("{text} {character}")),
-        | Value::Integer { text, .. } => Some(text.clone()),
+        | Value::Integer { text, .. } | Value::Floating { text, .. } => Some(text.clone()),
         // A char array reads as its characters.
         | Value::Array { elements }
             if !elements.is_empty()
@@ -609,7 +619,10 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
             .filter(|&at| reel.groups[at].name == name)
             .collect();
         groups.sort_by_key(|&at| reel.groups[at].depth);
-        let mut folded: Vec<bool> = groups.iter().map(|&at| !live(at)).collect();
+        let mut folded: Vec<bool> = groups
+            .iter()
+            .map(|&at| !live(at) || reel.groups[at].literals_only())
+            .collect();
         // A deep recursion keeps its outermost and innermost calls open.
         let open: Vec<usize> = (0..groups.len()).filter(|&place| !folded[place]).collect();
         if open.len() > OPEN_DEPTHS {
@@ -821,9 +834,14 @@ pub fn Deck(
     observe_rows(body, measure);
     // A step moves the tape, not the head: keep the playhead in the middle
     // stretch of the viewport. The tape glides a short way, and jumps when
-    // Run is stepping, for a long way, or when motion is reduced.
+    // Run is stepping, for a long way, or when motion is reduced. Where the
+    // deck holds more rows than its window, it also scrolls up or down to
+    // the rows the step used, and again when the key at its foot appears or
+    // goes, which changes the window's height.
     Effect::new(move || {
-        let x = (px(at()) + 0.5) * step_width.get();
+        let index = at();
+        overflows.track();
+        let x = (px(index) + 0.5) * step_width.get();
         // While the scale glides the tape follows it frame by frame.
         let running =
             running.get() || (step_width.get_untracked() - fitted.get_untracked()).abs() > 0.01;
@@ -850,16 +868,47 @@ pub fn Deck(
         } else {
             None
         };
-        if let Some(target) = target {
-            let glide = !running && (target - left).abs() < view && !reduced_motion();
+        let used =
+            reel.with_untracked(|reel| rows.with_untracked(|rows| used_rows(reel, rows, index)));
+        let glide = !running
+            && target.is_none_or(|target| (target - left).abs() < view)
+            && !reduced_motion();
+        let scroll = move |element: &web_sys::HtmlDivElement, down: Option<f64>| {
+            if target.is_none() && down.is_none() {
+                return;
+            }
+            // One scroll moves both ways: a second would cut the first's
+            // glide short.
             let options = web_sys::ScrollToOptions::new();
-            options.set_left(target.round());
+            options.set_left(target.map_or(f64::from(element.scroll_left()), f64::round));
+            if let Some(down) = down {
+                options.set_top(down.round());
+            }
             options.set_behavior(if glide {
                 web_sys::ScrollBehavior::Smooth
             } else {
                 web_sys::ScrollBehavior::Instant
             });
             element.scroll_to_with_scroll_to_options(&options);
+        };
+        let extent = |element: &web_sys::HtmlDivElement| {
+            (
+                f64::from(element.scroll_top()),
+                f64::from(element.client_height()),
+            )
+        };
+        // A step that adds a row lays the rows out after this effect has
+        // run, so the rows are placed a frame later, when the deck may
+        // have grown, or scrolls.
+        match used {
+            | Some(used) if row_scroll(used, extent(&element), ROW_SLACK).is_some() => {
+                request_animation_frame(move || {
+                    if let Some(Some(element)) = body.try_get_untracked() {
+                        scroll(&element, row_scroll(used, extent(&element), 0.0));
+                    }
+                });
+            },
+            | _ => scroll(&element, None),
         }
     });
     // New rows (a call, an opened fold) may run past the deck's foot.
@@ -941,13 +990,26 @@ pub fn Deck(
                         // The depth tells a recursion's calls apart.
                         let recursive = reel.groups.iter().filter(|other| other.name == group.name).count() > 1;
                         let statics = group.key == STATIC_GROUP;
-                        let call = if statics { group.name.clone() } else { format!("{}()", group.name) };
+                        // Folded, the group of a program's string literals says how
+                        // many it holds.
+                        let call = match (statics, folded) {
+                            | (true, true) => {
+                                let literals = group.lanes.len();
+                                format!("{literals} string literal{}", if literals == 1 { "" } else { "s" })
+                            },
+                            | (true, false) => group.name.clone(),
+                            | (false, _) => format!("{}()", group.name),
+                        };
                         view! {
                             <div class="deck-label is-group" class:is-folded=folded class:is-live=live>
                                 <button
                                     type="button"
                                     aria-expanded=(!folded).to_string()
-                                    aria-label=format!("{call}{}: {} its objects on the tape", if recursive { format!(" at depth {}", group.depth) } else { String::new() }, if folded { "show" } else { "fold" })
+                                    aria-label=if statics && folded {
+                                        format!("static storage, {call}: show them on the tape")
+                                    } else {
+                                        format!("{call}{}: {} its objects on the tape", if recursive { format!(" at depth {}", group.depth) } else { String::new() }, if folded { "show" } else { "fold" })
+                                    }
                                     on:click=move |_| toggle(keys.clone())
                                 >
                                     <span class="deck-fold" aria-hidden="true">{if folded { "▸" } else { "▾" }}</span>
@@ -1299,6 +1361,70 @@ fn glide(
             glide(scale, glides, generation, (from, to), start);
         }
     });
+}
+
+/// The rows step `index` used, from the top of the first to the bottom of
+/// the last, in the deck body's coordinates: every object it read, wrote,
+/// created or ended, on its lane or its folded group's row; and the same
+/// for the objects it wrote or created alone, which matter most when the
+/// rows are more than the deck shows at once.
+fn used_rows(reel: &Reel, rows: &[Row], index: usize) -> Option<Used> {
+    let access = reel.access.get(index)?;
+    let Layout {
+        objects, folded, ..
+    } = layout(reel, rows);
+    let span = |stored: bool| {
+        access
+            .iter()
+            .filter(|(_, kind)| !stored || kind == "write" || kind == "create")
+            .filter_map(|(object, _)| {
+                objects
+                    .get(object)
+                    .map(|&(y, _)| y)
+                    .or_else(|| folded.get(object).copied())
+            })
+            .fold(None, |span: Option<(f64, f64)>, y| {
+                let (top, bottom) = (y - LANE / 2.0, y + LANE / 2.0);
+                Some(span.map_or((top, bottom), |(a, b)| (a.min(top), b.max(bottom))))
+            })
+    };
+    let all = span(false)?;
+    Some(Used {
+        all,
+        stored: span(true).unwrap_or(all),
+    })
+}
+
+/// The rows a step used ([`used_rows`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Used {
+    all:    (f64, f64),
+    stored: (f64, f64),
+}
+
+/// How far the deck may be off by before a row it scrolls to counts as
+/// out of view, while the rows have yet to be laid out: the height of the
+/// key at its foot, which may appear.
+const ROW_SLACK: f64 = 24.0;
+
+/// Where the deck body, scrolled down `top` with a window `height` pixels
+/// tall, scrolls to bring `used` into view, under the ruler pinned at its
+/// top: all of the rows when they fit, else those the step stored into;
+/// `None` when they are in view, within `slack` pixels.
+fn row_scroll(used: Used, (top, height): (f64, f64), slack: f64) -> Option<f64> {
+    let room = height - AXIS;
+    let (first, last) = if used.all.1 - used.all.0 <= room {
+        used.all
+    } else {
+        used.stored
+    };
+    if first < top + AXIS {
+        Some((first - AXIS).max(0.0))
+    } else if last > top + height - slack {
+        Some((last - height).min(first - AXIS).max(0.0))
+    } else {
+        None
+    }
 }
 
 /// The first rung of a folded recursion's ladder, below its row's top,
@@ -2429,6 +2555,44 @@ mod tests {
     }
 
     #[test]
+    fn string_literals_alone_start_folded_and_open_on_request() {
+        let history = run("floating");
+        let reel = Reel::record(&history);
+        let at = reel
+            .groups
+            .iter()
+            .position(|group| group.key == STATIC_GROUP)
+            .expect("the literals' group");
+        assert!(reel.groups[at].lanes.len() > 1);
+        let cursor = history.len() - 1;
+        let shut = rows(&reel, cursor, &[]);
+        assert!(shut.contains(&Row::Group {
+            at,
+            folded: true,
+            live: true,
+        }));
+        assert!(
+            !shut
+                .iter()
+                .any(|row| matches!(row, Row::Lane { group, .. } if *group == at))
+        );
+        let opened = rows(&reel, cursor, &[STATIC_GROUP.to_owned()]);
+        assert_eq!(
+            opened.len(),
+            shut.len() + reel.groups[at].lanes.len(),
+            "its label opens it"
+        );
+        // A program with named static objects keeps the group open.
+        let structs = run("structs");
+        let reel = Reel::record(&structs);
+        assert!(rows(&reel, structs.len() - 1, &[]).contains(&Row::Group {
+            at:     0,
+            folded: false,
+            live:   true,
+        }));
+    }
+
+    #[test]
     fn static_objects_share_one_group_that_spans_the_run() {
         let history = run("structs");
         let reel = Reel::record(&history);
@@ -2443,7 +2607,7 @@ mod tests {
             rows(&reel, history.len() - 1, &[])
                 .first()
                 .is_some_and(|row| matches!(row, &Row::Group { at: 0, folded: false, .. })),
-            "the static group is never folded"
+            "a static group with named objects stays open"
         );
         // A structure's lane writes its members.
         let origin = &statics.lanes[1];
