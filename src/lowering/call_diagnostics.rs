@@ -127,6 +127,8 @@ impl CallDiagnostic {
                     source_vectors:     self.source,
                     name:               Some(self.message),
                     previous:           Some(self.declaration),
+                    highlights:         Default::default(),
+                    origin:             SourceVectors::default(),
                 },
             ),
         );

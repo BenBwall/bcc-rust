@@ -59,6 +59,8 @@ pub(crate) use context::{
     Context,
     FileSystem,
     IncludeEntry,
+    Inclusion,
+    ReadingPosition,
     STDIN_NAME,
     TextEvent,
     TextEventKind,

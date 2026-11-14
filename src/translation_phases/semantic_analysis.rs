@@ -87,6 +87,7 @@ mod shadowing;
 mod sign_compare;
 mod statements;
 mod traversal;
+mod type_limits;
 mod unused;
 
 // Types and constant values
@@ -2238,6 +2239,9 @@ struct Analyzer<'a, 'tu, 's> {
     /// than 128 bits that `i128` does not hold.
     wide:                    WideIntegers<'tu>,
     tainted:                 bool,
+    /// The operands Clang underlines beside the caret of what is reported
+    /// now; see [`Self::with_highlights`].
+    highlights:              [SourceVectors; 2],
     function_name:           Option<Identifier>,
     old_parameter_mode:      bool,
     /// Exceptional evaluation yields a variable array bound, not an error.
@@ -2247,6 +2251,10 @@ struct Analyzer<'a, 'tu, 's> {
     /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92; §6.5.13-§6.5.15,
     /// pp. 89-91; PDF pp. 101-103.
     inhibited_evaluations:   u32,
+    /// How many enclosing `__extension__` operators silence `-pedantic`, as
+    /// GCC's `disable_extension_diagnostics` does for the operand.
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    extension_operands:      u32,
     /// How many enclosing contexts require a constant expression: Clang's
     /// `ConstantEvaluated`, which silences its warnings about code.
     constant_contexts:       u32,
@@ -2268,6 +2276,11 @@ struct Analyzer<'a, 'tu, 's> {
     semantic_errors:         usize,
     /// Reported diagnostics of error severity only, retained for lowering.
     error_diagnostics:       usize,
+    /// Errors outside any warning group, which Clang's
+    /// `DiagnosticErrorTrap` counts as unrecoverable.
+    hard_errors:             usize,
+    /// [`Self::hard_errors`] when each scope began, by scope.
+    scope_hard_errors:       ArenaVec<'s, usize>,
     member_indices:          ArenaMap<'s, (usize, StringCacheId), usize>,
     member_names:            ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
     tag_declarations:        ArenaVec<'tu, (usize, usize)>,

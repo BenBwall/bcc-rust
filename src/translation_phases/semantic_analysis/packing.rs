@@ -118,6 +118,8 @@ fn warn(
         source_vectors: source,
         name: None,
         previous: None,
+        highlights: Default::default(),
+        origin: crate::translation_phases::SourceVectors::default(),
     })]);
 }
 

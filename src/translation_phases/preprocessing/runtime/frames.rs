@@ -63,11 +63,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if let Some(TokenizerFrame {
             frame_type:
                 TokenizerFrameType::SourceFile {
-                    conditional_base, ..
+                    conditional_base,
+                    physical_source_file_index,
+                    ..
                 },
             ..
         }) = frame
         {
+            self.context.leave_source_file(physical_source_file_index);
             // File-local openings are owned copies, so their provenance
             // survives preprocessor-arena compaction. Macro frame pops
             // leave conditional state untouched.

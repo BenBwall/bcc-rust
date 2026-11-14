@@ -91,6 +91,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             }
         }
         let source_file_index = context.intern_source_file(source_name);
+        context.source_map.open_main(source_file_index);
         let mut lexed_files = LexedFiles::new_in(pp);
         let tokenizer = lexed_files.open(context, source_file_index, source);
         let mut file_frames = ArenaVec::new_in(pp);

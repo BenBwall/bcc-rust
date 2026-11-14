@@ -69,10 +69,12 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             integers: ArenaVec::new_in(scratch),
             wide: super::WideIntegers::new(tu),
             tainted: false,
+            highlights: Default::default(),
             function_name: None,
             old_parameter_mode: false,
             runtime_bound: false,
             inhibited_evaluations: 0,
+            extension_operands: 0,
             constant_contexts: 0,
             constant_site: super::exceptional_constants::ConstantSite::default(),
             expression_depth: 0,
@@ -82,6 +84,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             bit_field_overflowed: 0,
             semantic_errors: 0,
             error_diagnostics: 0,
+            hard_errors: 0,
+            scope_hard_errors: ArenaVec::new_in(scratch),
             member_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             member_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             tag_declarations: ArenaVec::new_in(tu),
@@ -141,6 +145,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         analyzer
             .scope_entries
             .push(scratch.alloc(Collection::new()));
+        analyzer.scope_hard_errors.push(0);
         analyzer
     }
 

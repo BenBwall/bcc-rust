@@ -182,12 +182,21 @@ Most messages keep bcc's wording. The wording is each compiler's for an
 undeclared identifier, a missing expression, and the conversions in
 `semantic_analysis/compiler_wording.rs`. The differences left:
 
-- GCC's `In function 'f':` header and `each undeclared identifier` note, its
-  labels under an operand, and both compilers' `In file included from` lines
-  and macro expansion notes are not written.
-- Every range is a caret and tildes, where Clang marks a single token with the
-  caret alone and each side of an operator with tildes, and a range over several
-  lines starts each line with a caret.
+- GCC's `In function 'f':` and `At top level:` lines, both compilers'
+  `In file included from` lines, and their notes about the macro whose list
+  wrote a token are written, but not GCC's `each undeclared identifier` note,
+  its `in definition of macro` note for a token from an argument, its labels
+  under an operand, or either compiler's notes for the middle levels of a
+  nested expansion.
+- A range is a caret and tildes. Clang's caret is a point beside the operands
+  it underlines for a rejected conversion, an invalid operator, a sign
+  comparison, a shift count or a divisor, and alone for an unused parameter,
+  a variable set but not used, an unused local typedef and a shadowing
+  declaration; other diagnostics underline the token where Clang marks it with
+  the caret alone. An operand a function-like macro wrote is underlined at the
+  macro's name, where Clang covers the whole invocation. GCC's range from a
+  parameter's type to its name (`~~~~^~~~`) starts at the caret, and a range
+  over several lines starts each line with a caret.
 - A snippet's line number is the physical line, where Clang shows the one `#line`
   gave. Tabs print as four spaces and each Unicode scalar counts as one cell, and
   a column counts scalars, where GCC's counts display cells and Clang's bytes.

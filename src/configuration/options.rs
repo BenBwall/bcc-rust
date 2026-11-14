@@ -1149,11 +1149,12 @@ impl CompilerConfiguration {
             identity: super::CompilerIdentity::Clang,
             diagnostic_format: super::DiagnosticFormat::Bcc,
             diagnostic_presentation: super::DiagnosticPresentation {
-                caret:        true,
-                column:       true,
-                line_numbers: true,
-                option_names: true,
-                color:        super::DiagnosticColor::Unset,
+                caret:          true,
+                column:         true,
+                line_numbers:   true,
+                option_names:   true,
+                color:          super::DiagnosticColor::Unset,
+                msvc_locations: false,
             },
             warning_options: [super::diagnostics::WarningSettings::DEFAULT;
                 super::DiagnosticGroup::COUNT],

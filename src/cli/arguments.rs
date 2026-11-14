@@ -356,6 +356,7 @@ impl Cli {
         let clang = configuration.compiler_identity().rules() == RuleSet::Clang;
         let first = |option: &str| clang && matches!(option, "-pedantic" | "-pedantic-errors");
         let options = self.language_option.iter().map(std::ops::Deref::deref);
+        let (format, presentation) = self.diagnostic_style();
         options
             .clone()
             .filter(|option| first(option))
@@ -377,8 +378,8 @@ impl Cli {
             .with_compiler_identity(self.compiler_identity.into())
             .with_compiler_extensions(self.compiler_extensions)
             .with_default_math_errno()
-            .with_diagnostic_format(self.diagnostic_format.into())
-            .with_diagnostic_presentation(self.diagnostic_presentation())
+            .with_diagnostic_format(format)
+            .with_diagnostic_presentation(presentation)
             .with_max_nesting_depth(self.max_nesting_depth)
     }
 
@@ -531,6 +532,29 @@ impl Cli {
             }
         }
         presentation
+    }
+
+    /// The diagnostic format and what it writes. clang-cl is Clang with
+    /// `cl`'s locations (`-fdiagnostics-format=msvc`), so under its identity
+    /// `cl`'s formats are Clang's, where `/diagnostics:column` drops the
+    /// snippet and `/diagnostics:classic` the column too, as clang-cl's
+    /// driver passes `-fno-caret-diagnostics` and `-fno-show-column` for
+    /// them.
+    fn diagnostic_style(&self) -> (DiagnosticFormat, DiagnosticPresentation) {
+        let mut presentation = self.diagnostic_presentation();
+        let format = self.diagnostic_format;
+        if self.compiler_identity != Identity::ClangCl
+            || !matches!(
+                format,
+                Format::Msvc | Format::MsvcClassic | Format::MsvcCaret
+            )
+        {
+            return (format.into(), presentation);
+        }
+        presentation.msvc_locations = true;
+        presentation.caret &= format == Format::MsvcCaret;
+        presentation.column &= format != Format::MsvcClassic;
+        (DiagnosticFormat::Clang, presentation)
     }
 
     /// Whether `on` came after the last `off`, and at all.
