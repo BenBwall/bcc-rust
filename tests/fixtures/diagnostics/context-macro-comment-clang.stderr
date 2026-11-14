@@ -1,0 +1,25 @@
+context-macro-comment-clang.c:7:22: error: use of undeclared identifier 'missing_name'
+    7 | int f(void) { return BAD + WORSE + DIGRAPH + SPLICED; }
+      |                      ^~~
+context-macro-comment-clang.c:2:26: note: expanded from macro 'BAD'
+    2 | # /*comment*/ define BAD missing_name
+      |                          ^~~~~~~~~~~~
+context-macro-comment-clang.c:7:28: error: use of undeclared identifier 'missing_other'
+    7 | int f(void) { return BAD + WORSE + DIGRAPH + SPLICED; }
+      |                            ^~~~~
+context-macro-comment-clang.c:3:22: note: expanded from macro 'WORSE'
+    3 | #/**/define/**/WORSE missing_other
+      |                      ^~~~~~~~~~~~~
+context-macro-comment-clang.c:7:36: error: use of undeclared identifier 'missing_digraph'
+    7 | int f(void) { return BAD + WORSE + DIGRAPH + SPLICED; }
+      |                                    ^~~~~~~
+context-macro-comment-clang.c:4:18: note: expanded from macro 'DIGRAPH'
+    4 | %:define DIGRAPH missing_digraph
+      |                  ^~~~~~~~~~~~~~~
+context-macro-comment-clang.c:7:46: error: use of undeclared identifier 'missing_spliced'
+    7 | int f(void) { return BAD + WORSE + DIGRAPH + SPLICED; }
+      |                                              ^~~~~~~
+context-macro-comment-clang.c:6:16: note: expanded from macro 'SPLICED'
+    6 | define SPLICED missing_spliced
+      |                ^~~~~~~~~~~~~~~
+4 errors generated.

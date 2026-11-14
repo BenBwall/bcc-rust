@@ -1,0 +1,25 @@
+context-macro-comment-gcc.c: In function 'f':
+context-macro-comment-gcc.c:2:26: error: 'missing_name' undeclared (first use in this function)
+    2 | # /*comment*/ define BAD missing_name
+      |                          ^~~~~~~~~~~~
+context-macro-comment-gcc.c:7:22: note: in expansion of macro 'BAD'
+    7 | int f(void) { return BAD + WORSE + DIGRAPH + SPLICED; }
+      |                      ^~~
+context-macro-comment-gcc.c:3:22: error: 'missing_other' undeclared (first use in this function)
+    3 | #/**/define/**/WORSE missing_other
+      |                      ^~~~~~~~~~~~~
+context-macro-comment-gcc.c:7:28: note: in expansion of macro 'WORSE'
+    7 | int f(void) { return BAD + WORSE + DIGRAPH + SPLICED; }
+      |                            ^~~~~
+context-macro-comment-gcc.c:4:18: error: 'missing_digraph' undeclared (first use in this function)
+    4 | %:define DIGRAPH missing_digraph
+      |                  ^~~~~~~~~~~~~~~
+context-macro-comment-gcc.c:7:36: note: in expansion of macro 'DIGRAPH'
+    7 | int f(void) { return BAD + WORSE + DIGRAPH + SPLICED; }
+      |                                    ^~~~~~~
+context-macro-comment-gcc.c:6:16: error: 'missing_spliced' undeclared (first use in this function)
+    6 | define SPLICED missing_spliced
+      |                ^~~~~~~~~~~~~~~
+context-macro-comment-gcc.c:7:46: note: in expansion of macro 'SPLICED'
+    7 | int f(void) { return BAD + WORSE + DIGRAPH + SPLICED; }
+      |                                              ^~~~~~~
