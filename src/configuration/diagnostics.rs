@@ -194,6 +194,12 @@ impl CompilerConfiguration {
                 &[DiagnosticGroup::UnusedButSetGlobal],
             | DiagnosticGroup::UnusedValue if clang => &[DiagnosticGroup::UnusedComparison],
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
+            // GCC's and Clang's `-Wattributes` hold the attributes they
+            // drop, known or not.
+            | DiagnosticGroup::GccAttributes => &[
+                DiagnosticGroup::IgnoredAttributes,
+                DiagnosticGroup::UnknownAttributes,
+            ],
             | DiagnosticGroup::Parentheses if clang => DiagnosticGroup::CLANG_PARENTHESES,
             | DiagnosticGroup::Parentheses => &[DiagnosticGroup::DanglingElse],
             | DiagnosticGroup::Format if clang => DiagnosticGroup::CLANG_FORMAT,
