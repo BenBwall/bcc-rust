@@ -204,21 +204,13 @@ impl Renderer {
         {
             Self::push_label_marks(label, context, &mut marks);
         }
-        // A diagnostic that names ranges of its own gets Clang's caret
-        // alone at its place, with no `~` over the token there unless a
-        // range covers it: `int *name = 1;` -> `^      ~`.
-        let highlighted =
-            format == DiagnosticFormat::Clang && diagnostic.labels.iter().any(Label::is_highlight);
-        if highlighted {
-            let mut first = true;
-            marks.retain(|mark| !mark.primary || std::mem::take(&mut first));
-            if let Some(mark) = marks.iter_mut().find(|mark| mark.primary) {
-                let first_char = context
-                    .source_text(mark.file)
-                    .and_then(|text| text.get(mark.start..)?.chars().next())
-                    .map_or(0, char::len_utf8);
-                mark.end = mark.end.min(mark.start + first_char);
-            }
+        // A diagnostic that names ranges of its own, or none, gets Clang's
+        // caret alone at its place, with no `~` over the token there unless
+        // a range covers it: `int *name = 1;` -> `^      ~`.
+        let point = format == DiagnosticFormat::Clang
+            && (diagnostic.point || diagnostic.labels.iter().any(Label::is_highlight));
+        if point {
+            Self::point_caret(&mut marks, context);
         }
         if compiler_snippet {
             Self::retain_caret_block(&mut marks, scratch);
@@ -318,7 +310,8 @@ impl Renderer {
                 .iter()
                 .filter(|label| !label.primary && label.message.is_some())
             {
-                self.render_related_note(&mut out, (label, &[]), context, scratch, true);
+                let point = format == DiagnosticFormat::Clang && diagnostic.point;
+                self.render_related_note(&mut out, (label, &[]), point, context, scratch, true);
             }
             return out.into_str();
         }
@@ -355,11 +348,13 @@ impl Renderer {
     /// lines when there are any to quote.
     /// GCC's macro notes have no context lines of their own
     /// (`with_context`), being part of the diagnostic they follow. Clang
-    /// underlines `highlights` with `~` on the place's lines.
+    /// underlines `highlights` with `~` on the place's lines, beside a
+    /// caret that is a `point`.
     pub(super) fn render_related_note(
         &self,
         out: &mut ArenaString<'_>,
         (label, highlights): (&Label<'_>, &[Label<'_>]),
+        point: bool,
         context: &Context<'_>,
         scratch: &Bump,
         with_context: bool,
@@ -396,6 +391,9 @@ impl Renderer {
         for mark in &mut marks {
             mark.primary = true;
             mark.label = None;
+        }
+        if point {
+            Self::point_caret(&mut marks, context);
         }
         for highlight in highlights {
             Self::push_label_marks(highlight, context, &mut marks);
@@ -701,6 +699,20 @@ impl Renderer {
         text.get(line_start..offset).map_or(bytes, |prefix| {
             display_width(prefix, Tabs::Stops(COMPILER_TAB_STOP)) + 1
         })
+    }
+
+    /// Draws Clang's caret as a point: the first primary mark shrinks to its
+    /// first character, and the other primary marks go.
+    fn point_caret(marks: &mut ArenaVec<'_, Mark<'_>>, context: &Context<'_>) {
+        let mut first = true;
+        marks.retain(|mark| !mark.primary || std::mem::take(&mut first));
+        if let Some(mark) = marks.iter_mut().find(|mark| mark.primary) {
+            let first_char = context
+                .source_text(mark.file)
+                .and_then(|text| text.get(mark.start..)?.chars().next())
+                .map_or(0, char::len_utf8);
+            mark.end = mark.end.min(mark.start + first_char);
+        }
     }
 
     /// Keeps the marks on the caret's lines and on the lines joined to them

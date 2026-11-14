@@ -17,9 +17,15 @@ parameter. The other GCC-format snapshots gained these lines where GCC
 prints them. `context-ranges-clang` pins the ranges Clang underlines with
 `~` beside the caret: an initializer's and an assignment's value, both
 operands of an invalid binary operator or of a pointer and integer
-comparison, and the count or divisor of a shift or division warning. The
+comparison, the count or divisor of a shift or division warning, and the
+operands of a `-Wsign-compare` comparison (`sema-sign-compare-clang`). The
 caret of such a diagnostic is then a point, not an underlined token
-(`int *pointer_name = value;` -> `^              ~~~~~`). Its caret lines
+(`int *pointer_name = value;` -> `^              ~~~~~`), as it is for a
+warning Clang gives no range at all: an unused parameter, a variable set
+but not used, an unused local typedef, and a shadowing declaration with
+its note (`sema-unused-variables-clang`, `sema-shadow-kinds-clang`). An
+operand a function-like macro wrote is underlined at the macro's name only,
+where Clang covers the whole invocation. Its caret lines
 match Clang 23's; its messages keep bcc's words for the operator errors,
 and it prints no fix-it lines (`&`). `context-macros-gcc` and
 `context-macros-clang` pin the notes about a token a macro's body wrote:

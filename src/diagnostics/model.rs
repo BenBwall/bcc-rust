@@ -40,6 +40,9 @@ pub(crate) struct Diagnostic<'d> {
     /// about, before it was moved to a place in a file, whose order says
     /// which reading of a file read twice it is in.
     pub(crate) reading:       Option<SourceVectors>,
+    /// Clang names no range for it, so its caret and its notes' are a
+    /// point, with no `~` over the token there.
+    pub(crate) point:         bool,
 }
 
 impl<'d> Diagnostic<'d> {
@@ -174,6 +177,7 @@ impl<'d> Explanation<'d> {
             notes: self.notes,
             help: self.help,
             reading: None,
+            point: false,
         }
         .primary(source, self.label)
     }

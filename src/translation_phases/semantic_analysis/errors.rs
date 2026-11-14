@@ -2736,6 +2736,28 @@ impl SemanticErrorKind {
 }
 
 impl SemanticErrorKind {
+    /// Whether Clang reports this at a point and names no range, so that
+    /// it underlines no token: an unused parameter, a variable set but not
+    /// used, an unused local typedef, and a declaration that shadows another
+    /// (`Sema::DiagnoseUnusedParameters`, `Sema::DiagnoseUnusedButSetDecl`,
+    /// `Sema::DiagnoseUnusedNestedTypedefs`, `Sema::CheckShadow`).
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) const fn clang_names_no_range(self) -> bool {
+        match self {
+            | Self::Unused(rule) => matches!(
+                rule,
+                UnusedRule::Parameter
+                    | UnusedRule::ButSetVariable
+                    | UnusedRule::ButSetParameter
+                    | UnusedRule::ButSetGlobal
+                    | UnusedRule::ClangLocalTypedef
+            ),
+            | Self::ShadowOrBody(group) =>
+                !matches!(group, crate::configuration::DiagnosticGroup::EmptyBody),
+            | _ => false,
+        }
+    }
+
     /// The warning group that controls this diagnostic, if any.
     pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
         use crate::configuration::DiagnosticGroup as G;
@@ -3268,6 +3290,7 @@ impl ToDiagnostic for SemanticError {
         if self.origin.length() != 0 {
             diagnostic.reading = Some(self.origin);
         }
+        diagnostic.point = self.kind.clang_names_no_range();
         diagnostic
     }
 }
