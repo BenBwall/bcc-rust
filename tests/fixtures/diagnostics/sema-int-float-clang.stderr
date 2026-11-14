@@ -7,6 +7,9 @@ sema-int-float-clang.c:5:12: warning: implicit conversion from 'long long' to 'd
 sema-int-float-clang.c:6:11: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
     6 | float c = BIG;
       |           ^~~
+sema-int-float-clang.c:3:13: note: expanded from macro 'BIG'
+    3 | #define BIG 16777217
+      |             ^~~~~~~~
 sema-int-float-clang.c:7:11: warning: implicit conversion from 'int' to 'float' changes value from -16777217 to -16777216 [-Wimplicit-const-int-float-conversion]
     7 | float d = -16777217;
       |           ^
