@@ -272,3 +272,26 @@ fn symbolic_immediates_are_symbol_addresses() {
         ["asm sideeffect \"\" (in \"i\" ptr v0, in \"i\" ptr v1)"]
     );
 }
+
+/// An aggregate in a register moves as the integer of its size, as Clang
+/// casts it: an input and a `+` operand load the object's bytes, and an
+/// output's slot is stored back to the object (reinterpreted for an SSE
+/// register).
+#[test]
+fn aggregate_register_operands_move_their_bytes() {
+    let ir = lower_for(
+        "struct p { int x, y; };\nvoid f(struct p q, struct p *out) { int a[2]; __asm__(\"\" : \
+         \"=r\"(a), \"+x\"(q) : \"r\"(*out)); out->x = a[0]; *out = q; }",
+        Target::LinuxGnu,
+    )
+    .unwrap();
+    assert!(
+        ir.contains(
+            "v5 = load.i64 v0, align 4\n    v6 = bitcast.f64 v5\n    v7 = load.i64 v1, align 4\n    \
+             asm \"\" (out \"r\" i64 v3, out \"x\" f64 v4, in \"r\" i64 v7, in \"1\" f64 v6)\n    \
+             v8 = load.i64 v3, align 8\n    store.i64 v8, v2, align 4\n    v9 = load.f64 v4, \
+             align 8\n    v10 = bitcast.i64 v9\n    store.i64 v10, v0, align 4\n"
+        ),
+        "{ir}"
+    );
+}
