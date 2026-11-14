@@ -57,22 +57,24 @@ pub(super) struct ContextLines {
 
 impl Renderer {
     /// Writes the context lines for a diagnostic at `vector`, which was read
-    /// in `segment`. A related note (`note`) gets GCC's include stack but no
-    /// function line, since GCC names the function being compiled when the
-    /// note was given, and none of Clang's, which a note only resets.
+    /// in `segment`, with the include stack of stretch `stack`: GCC's for a
+    /// diagnostic in a macro's definition is the definition's. A related
+    /// note (`note`) gets GCC's include stack but no function line, since
+    /// GCC names the function being compiled when the note was given, and
+    /// none of Clang's, which a note only resets.
     pub(super) fn write_context_lines(
         &self,
         out: &mut ArenaString<'_>,
         context: &Context<'_>,
-        vector: &SourceVector,
-        segment: Option<u32>,
+        (vector, segment): (&SourceVector, Option<u32>),
+        stack: Option<u32>,
         note: bool,
     ) {
-        let Some(segment) = segment else {
+        let (Some(segment), Some(stack)) = (segment, stack) else {
             return;
         };
         let map = &context.source_map;
-        let (opening, file) = map.opening_of(segment);
+        let (opening, file) = map.opening_of(stack);
         let mut state = self.context_lines.get();
         match context.configuration.diagnostic_format() {
             | DiagnosticFormat::Gcc => {

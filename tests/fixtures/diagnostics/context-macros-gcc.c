@@ -16,3 +16,5 @@ DECLARE_POINTER;
 CONTINUED;
 NESTED;
 int *argument = ARGUMENT(10);
+#include "context-headers/macro.h"
+int header_shift(void) { return HEADER_SHIFT; }

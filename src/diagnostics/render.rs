@@ -76,11 +76,6 @@ impl Renderer {
             .and_then(|(vector, source)| {
                 self.segment_of(context, vector, [diagnostic.reading, source.range()])
             });
-        if let Some(vector) = location
-            && compiler_snippet
-        {
-            self.write_context_lines(&mut out, context, vector, segment, false);
-        }
         // About a token a macro's body wrote: GCC reports it there and
         // notes the invocation, Clang notes the macro after the snippet.
         // GCC reports a warning a system header's macro wrote, which it
@@ -97,6 +92,20 @@ impl Renderer {
             .as_ref()
             .filter(|_| format == DiagnosticFormat::Gcc)
             .map(|expansion| &expansion.spelling);
+        // GCC's include stack is the macro definition's, its function the
+        // one the macro was invoked in.
+        if let Some(vector) = location
+            && compiler_snippet
+        {
+            let stack = gcc_spelling.map_or(segment, |spelling| {
+                context.source_map.segment_at(
+                    context.physical_source_file(spelling.source_file_index),
+                    spelling.index,
+                    None,
+                )
+            });
+            self.write_context_lines(&mut out, context, (vector, segment), stack, false);
+        }
         let location = gcc_spelling.or(location);
         if let Some(vector) = location
             && format != DiagnosticFormat::Bcc
@@ -352,7 +361,7 @@ impl Renderer {
         let presentation = context.configuration.diagnostic_presentation();
         let segment = self.segment_of(context, vector, [label.source.range(), None]);
         if with_context {
-            self.write_context_lines(out, context, vector, segment, true);
+            self.write_context_lines(out, context, (vector, segment), segment, true);
         }
         let _ = write!(
             out,

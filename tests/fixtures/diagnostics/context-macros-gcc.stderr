@@ -34,3 +34,11 @@ context-macros-gcc.c:17:1: note: in expansion of macro 'NESTED'
 context-macros-gcc.c:18:26: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
    18 | int *argument = ARGUMENT(10);
       |                          ^~
+In file included from context-macros-gcc.c:19:
+context-macros-gcc.c: In function 'header_shift':
+context-headers/macro.h:1:25: warning: left shift count >= width of type [-Wshift-count-overflow]
+    1 | #define HEADER_SHIFT (1 << 40)
+      |                         ^~
+context-macros-gcc.c:20:33: note: in expansion of macro 'HEADER_SHIFT'
+   20 | int header_shift(void) { return HEADER_SHIFT; }
+      |                                 ^~~~~~~~~~~~

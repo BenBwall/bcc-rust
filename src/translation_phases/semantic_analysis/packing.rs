@@ -119,7 +119,7 @@ fn warn(
         name: None,
         previous: None,
         highlights: Default::default(),
-        origin: Default::default(),
+        origin: crate::translation_phases::SourceVectors::default(),
     })]);
 }
 
