@@ -124,7 +124,6 @@ impl OwnedDiagnostic {
             notes,
             help,
             reading: None,
-            point: false,
         }
     }
 }
