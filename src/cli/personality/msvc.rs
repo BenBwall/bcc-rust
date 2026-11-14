@@ -95,8 +95,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let mut inputs_only = false;
     let mut state = State {
         // `cl` writes `file(line):` unless `/diagnostics:column` asks for
-        // the column; clang-cl writes `file(line,col):`.
-        diagnostics: if clang_cl { "msvc" } else { "msvc-classic" },
+        // the column; clang-cl writes `file(line,col):` and the snippet, as
+        // `/diagnostics:caret` asks.
+        diagnostics: if clang_cl {
+            "msvc-caret"
+        } else {
+            "msvc-classic"
+        },
         ..State::default()
     };
     // clang-cl reads its `/clang:` options after the others, wherever they
@@ -721,7 +726,8 @@ struct State {
 
 impl Default for State {
     /// `cl`'s defaults: C17 (as clang-cl maps its default C mode), column
-    /// diagnostics (clang-cl's; `plan` gives `cl` its classic form),
+    /// diagnostics with the snippet (clang-cl's; `plan` gives `cl` its
+    /// classic form),
     /// Microsoft extensions, and the static runtime.
     fn default() -> Self {
         Self {
@@ -746,7 +752,7 @@ impl Default for State {
             verbose:                 false,
             ignore_include_variable: false,
             standard:                "c17",
-            diagnostics:             "msvc",
+            diagnostics:             "msvc-caret",
             warning_level:           1,
             warning_level_options:   (0, 0),
             warnings_error:          false,
@@ -848,9 +854,21 @@ impl State {
             | "O1" | "Os" => self.bcc.push("-Os".into()),
             | "O2" | "Ox" | "Ot" => self.bcc.push("-O2".into()),
             | "Od" => self.bcc.push("-O0".into()),
-            | "W0" | "w" => self.set_warning_level(0, &["-w"]),
-            | "W1" | "W2" | "W3" => self.set_warning_level(option.as_bytes()[1] - b'0', &[]),
-            | "W4" | "Wall" => self.set_warning_level(4, &["-Wall", "-Wextra"]),
+            | "W0" | "w" => self.set_warning_level(invocation, 0, &["-w"]),
+            // clang-cl maps `/W1` to `/W3` to `-Wall` (Clang's
+            // `CLCompatOptions.td`); `cl`'s levels name coded warnings only.
+            | "W1" | "W2" | "W3" => self.set_warning_level(
+                invocation,
+                option.as_bytes()[1] - b'0',
+                if invocation.personality == Personality::ClangCl {
+                    &["-Wall"]
+                } else {
+                    &[]
+                },
+            ),
+            // clang-cl's `/Wall` is `-Weverything`, which bcc does not have;
+            // `/W4`'s options are the nearest.
+            | "W4" | "Wall" => self.set_warning_level(invocation, 4, &["-Wall", "-Wextra"]),
             | "WX" => {
                 self.warnings_error = true;
                 self.bcc.push("-Werror".into());
@@ -1298,12 +1316,18 @@ fn warning_setting(option: &str) -> Option<(u16, WarningSetting)> {
 }
 
 impl State {
-    /// Sets the warning level, with the bcc `options` that mean it in place
-    /// of an earlier level's: `cl`'s rightmost level wins, so `/W0 /W3`
-    /// keeps no `-w`. Microsoft Learn: "Order of CL Options".
-    fn set_warning_level(&mut self, level: u8, options: &[&str]) {
-        let (at, count) = self.warning_level_options;
-        drop(self.bcc.drain(at..at + count));
+    /// Sets the warning level, with the bcc `options` that mean it. `cl`'s
+    /// rightmost level wins, so they replace an earlier level's and
+    /// `/W0 /W3` keeps no `-w` (Microsoft Learn: "Order of CL Options").
+    /// clang-cl's levels are aliases of Clang options, which add up as
+    /// Clang's own do: `/W0 /W3` keeps `-w`, which no later option undoes,
+    /// and `/W4 /W1` keeps `-Wextra` (Clang Compiler User's Manual,
+    /// "clang-cl"; Clang's `CLCompatOptions.td`).
+    fn set_warning_level(&mut self, invocation: &Invocation, level: u8, options: &[&str]) {
+        if invocation.personality != Personality::ClangCl {
+            let (at, count) = self.warning_level_options;
+            drop(self.bcc.drain(at..at + count));
+        }
         self.warning_level = level;
         self.warning_level_options = (self.bcc.len(), options.len());
         self.bcc.extend(options.iter().map(OsString::from));

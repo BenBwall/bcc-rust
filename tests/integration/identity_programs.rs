@@ -147,7 +147,7 @@ mod tests {
                     );
                 } else {
                     assert!(
-                        text(&output.stderr).contains("wrong number of arguments"),
+                        text(&output.stderr).contains("too few arguments"),
                         "{identity} {flag}: {}",
                         text(&output.stderr)
                     );

@@ -16,6 +16,7 @@
 //! - Setup: `construction.rs`.
 //! - Source storage: `source_files.rs`, `source_text.rs`.
 //! - Provenance: `source_vectors.rs`, `expansion_sites.rs`, `merge_anchors.rs`.
+//! - Include stacks and function spans for diagnostics: `source_map.rs`.
 //! - Segmented storage: `segmented_vec.rs`.
 //! - Phase results: `diagnostics.rs`, `diagnostic_pragmas.rs`, `literals.rs`.
 //! - Context fixtures: `tests.rs`.
@@ -35,6 +36,7 @@ mod source_text;
 mod expansion_sites;
 mod merge_anchors;
 mod segmented_vec;
+mod source_map;
 mod source_vectors;
 
 // Literals and diagnostics
@@ -49,6 +51,11 @@ use rustc_hash::FxBuildHasher;
 pub(crate) use source_files::{
     FileSystem,
     STDIN_NAME,
+};
+use source_map::SourceMap;
+pub(crate) use source_map::{
+    Inclusion,
+    ReadingPosition,
 };
 use source_text::SourceText;
 
@@ -178,6 +185,9 @@ pub(crate) struct Context<'tu> {
     /// The pragmas a text of phase 4 ([`Self::phase_four_text`]) writes back
     /// where they were and the files it enters and leaves, in order.
     pub(crate) text_events: ArenaVec<'tu, TextEvent<'tu>>,
+    /// Each opening of a source file and the function definitions, for the
+    /// include stacks and function names GCC and Clang print.
+    pub(crate) source_map: SourceMap<'tu>,
     /// GCC's `#pragma scalar_storage_order` directives, in order, under the
     /// GCC identity only.
     pub(crate) storage_order_pragmas:

@@ -91,7 +91,8 @@ fn operands_take_registers_memory_immediates_ties_and_flags() {
 /// `g` takes a register for a constant no instruction encodes as an
 /// immediate, and memory for an aggregate; `i` takes an address constant.
 /// GCC and Clang take a whole array as a memory output, though no
-/// assignment may modify it; a const-qualified one stays read-only.
+/// assignment may modify it; a const-qualified one stays read-only, which
+/// GCC words as a read-only variable.
 #[test]
 fn arrays_are_memory_outputs() {
     for body in [
@@ -109,12 +110,125 @@ fn arrays_are_memory_outputs() {
         "const int c[2][3]; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
         "typedef const int T[2]; T c; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
         "struct s { const int x; } q; void f(void) { __asm__(\"\" : \"=m\"(q)); }",
+        "const int c[2]; void f(void) { __asm__(\"\" : \"=r\"((c))); }",
     ] {
         assert_eq!(
             kinds(body),
-            [SemanticErrorKind::InvalidAsm(AsmFault::OutputLvalue)],
+            [SemanticErrorKind::InvalidAsm(AsmFault::ReadOnlyVariable)],
             "{body}"
         );
+    }
+    // GCC names only a variable as read-only.
+    assert_eq!(
+        kinds("const int c[2][2]; void f(void) { __asm__(\"\" : \"=m\"(c[1])); }"),
+        [SemanticErrorKind::InvalidAsm(AsmFault::OutputLvalue)]
+    );
+}
+
+/// An array, structure or union of 1, 2, 4 or 8 bytes takes a register
+/// when its constraint allows no memory, as GCC and Clang move its bytes
+/// as the integer of its size; with memory allowed it stays in memory, as
+/// Clang keeps it. An array input decays to its address.
+/// GNU extension: GCC manual, "Extended Asm".
+#[test]
+fn aggregates_take_registers_of_their_size() {
+    let general =
+        AsmOperandKind::Register(AsmRegisterClass::General(AsmRegisterClass::ANY_GENERAL));
+    facts(
+        "struct p { int x, y; }; void f(struct p q) { int a[2]; char b[4][1]; union { float f; } \
+         u; __asm__(\"\" : \"=r\"(a), \"+x\"(b), \"=rm\"(q), \"+r\"(u) : \"r\"(q), \"r\"(a), \
+         \"0\"(q), \"g\"(q)); }",
+        |facts, _| {
+            let kinds: Vec<_> = facts
+                .operands
+                .iter()
+                .map(|operand| (operand.role, operand.kind))
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    (AsmRole::Output, general),
+                    (
+                        AsmRole::Update,
+                        AsmOperandKind::Register(AsmRegisterClass::Sse)
+                    ),
+                    (AsmRole::Output, AsmOperandKind::Memory),
+                    (AsmRole::Update, general),
+                    (AsmRole::Input, general),
+                    (AsmRole::Input, general),
+                    (AsmRole::Input, AsmOperandKind::Tied(0)),
+                    (AsmRole::Input, AsmOperandKind::Memory),
+                ]
+            );
+        },
+    );
+}
+
+/// An aggregate of another size in a register is GCC's "impossible
+/// constraint", for an incomplete or empty one too; one of 16 bytes,
+/// which GCC and Clang hold in two registers, is refused as `__int128`
+/// is.
+#[test]
+fn aggregates_of_other_sizes_have_no_register() {
+    for (body, expected) in [
+        (
+            "char a[3]; __asm__(\"\" : \"=r\"(a));",
+            AsmFault::ImpossibleOutput,
+        ),
+        (
+            "char a[3]; __asm__(\"\" : \"+x\"(a));",
+            AsmFault::ImpossibleOutput,
+        ),
+        (
+            "int a[0]; __asm__(\"\" : \"=a\"(a));",
+            AsmFault::ImpossibleOutput,
+        ),
+        (
+            "extern int e[]; __asm__(\"\" : \"=r\"(e));",
+            AsmFault::ImpossibleOutput,
+        ),
+        (
+            "char a[32]; __asm__(\"\" : \"=x\"(a));",
+            AsmFault::ImpossibleOutput,
+        ),
+        (
+            "struct { char c[3]; } s; __asm__(\"\" : \"=t\"(s));",
+            AsmFault::ImpossibleOutput,
+        ),
+        (
+            "struct { char c[3]; } s; __asm__(\"\" :: \"r\"(s));",
+            AsmFault::ImpossibleInput,
+        ),
+        (
+            "struct {} s; __asm__(\"\" :: \"a\"(s));",
+            AsmFault::ImpossibleInput,
+        ),
+        (
+            "int a[4]; __asm__(\"\" : \"=r\"(a));",
+            AsmFault::OperandType,
+        ),
+        (
+            "struct { int x[4]; } s; __asm__(\"\" :: \"x\"(s));",
+            AsmFault::OperandType,
+        ),
+        (
+            "struct { int x, y; } s; __asm__(\"\" : \"=t\"(s));",
+            AsmFault::OperandType,
+        ),
+    ] {
+        assert_eq!(
+            kinds(&format!("void f(void) {{ {body} }}")),
+            [SemanticErrorKind::InvalidAsm(expected)],
+            "{body}"
+        );
+    }
+    // Memory takes any size.
+    for body in [
+        "char a[3]; __asm__(\"\" : \"=rm\"(a));",
+        "char a[32]; __asm__(\"\" : \"+g\"(a));",
+        "struct { char c[3]; } s; __asm__(\"\" :: \"rm\"(s));",
+    ] {
+        assert_eq!(kinds(&format!("void f(void) {{ {body} }}")), [], "{body}");
     }
 }
 
@@ -239,7 +353,7 @@ fn invalid_statements_name_their_fault() {
         ("__asm__(\"\" :: \"=r\"(x));", AsmFault::InputConstraint),
         ("__asm__(\"\" :: \"&r\"(x));", AsmFault::InputConstraint),
         ("__asm__(\"\" : \"=r\"(x + 1));", AsmFault::OutputLvalue),
-        ("__asm__(\"\" : \"=r\"(c));", AsmFault::OutputLvalue),
+        ("__asm__(\"\" : \"=r\"(c));", AsmFault::ReadOnlyVariable),
         ("__asm__(\"\" : \"=m\"(b.f));", AsmFault::OutputLvalue),
         ("__asm__(\"\" :: \"m\"(x + 1));", AsmFault::InputLvalue),
         ("__asm__(\"\" :: \"n\"(x));", AsmFault::ImmediateRequired),
@@ -453,6 +567,11 @@ fn size_suffixes_follow_the_source_mode() {
         ("__asm__(\"inc%z0\" : \"+m\"(*s));", "incl"),
         ("__asm__(\"inc%z0\" : \"+m\"(*b));", "incb"),
         ("__asm__(\"z%z0\" :: \"i\"(&g));", "zq"),
+        ("int a[2]; __asm__(\"z%z0\" : \"=r\"(a));", "zq"),
+        (
+            "char a[2]; __asm__(\"z%z0\" :: \"r\"(*(struct { char c[2]; } *)a));",
+            "zw",
+        ),
     ] {
         assert_eq!(suffixes(body), expected, "{body}");
     }

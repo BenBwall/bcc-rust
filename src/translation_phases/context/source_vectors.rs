@@ -18,6 +18,7 @@ use crate::{
             SourcePosition,
             SourceVector,
             SourceVectors,
+            source_offset,
         },
     },
     util::{
@@ -322,6 +323,32 @@ impl Context<'_> {
         self.expansion_starts[arena as usize].get(start).is_some()
     }
 
+    /// Where a macro's replacement list wrote the first token of `source`,
+    /// and where the outermost invocation that produced it begins, when one
+    /// did: the places GCC reports a diagnostic about the token and notes
+    /// the expansion at, and Clang notes the macro at.
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
+    pub(crate) fn macro_body_expansion(
+        &self,
+        source: SourceVectors,
+    ) -> Option<(&SourceVector, &SourceVector)> {
+        if source.length() == 0 {
+            return None;
+        }
+        let site = self.invocation_site(source)?;
+        Some((self.first_source_vector(source), site))
+    }
+
+    /// The name of the outermost macro whose invocation produced the first
+    /// token of `source`, from its replacement list or an argument, or
+    /// `None` when a file spells that token outside any invocation. Clang
+    /// asks for the innermost macro's name (`Lexer::getImmediateMacroName`);
+    /// only the outermost invocation is kept. `source` must not be empty.
+    pub(crate) fn outermost_macro_name(&self, source: SourceVectors) -> Option<&str> {
+        let site = self.outermost_invocation(source)?;
+        self.source_text(site.source_file_index)?.get(site.range())
+    }
+
     /// Whether a macro's replacement list, not its argument or the file,
     /// wrote the first token of `source`. `source` must not be empty.
     pub(crate) fn written_by_macro_body(&self, source: SourceVectors) -> bool {
@@ -382,14 +409,20 @@ impl Context<'_> {
     /// The outermost invocation that produced the first token of `source`,
     /// unless a file spells that token.
     fn invocation_site(&self, source: SourceVectors) -> Option<&SourceVector> {
-        let (arena, start) = SourceArena::decode(source);
-        let sites = &self.expansion_starts[arena as usize];
-        let site = &sites.ends[sites.get(start)? as usize];
+        let site = self.outermost_invocation(source)?;
         let spelling = self.first_source_vector(source);
         // A token written within the invocation is a macro argument. Its
         // own physical location is more precise than the macro's name.
         (spelling.source_file_index != site.source_file_index || spelling.index < site.index)
             .then_some(site)
+    }
+
+    /// The outermost invocation that produced the first token of `source`,
+    /// from its replacement list or an argument.
+    fn outermost_invocation(&self, source: SourceVectors) -> Option<&SourceVector> {
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.expansion_starts[arena as usize];
+        Some(&sites.ends[sites.get(start)? as usize])
     }
 
     /// Where a source range ends in the user's input, before macro expansion.
@@ -533,6 +566,49 @@ impl Context<'_> {
         let anchor = self.first_source_vector(anchor);
         let start = self.first_source_vector(source);
         anchor.source_file_index == start.source_file_index && anchor.index == start.index
+    }
+
+    /// The first token on the line where the file location of `source`
+    /// starts, as GCC reports a diagnostic it gives while finishing a
+    /// function (its location there is the closing brace's line, which its
+    /// line map places at that line's first token). A token that is not an
+    /// identifier, keyword or number is taken as one character. A comment
+    /// before it on the line is not a token (translation phase 3 makes it a
+    /// space), so `/* done */ }` reports at the `}`. `source` comes back
+    /// unchanged when its file text is not recorded.
+    /// GNU extension: GCC manual, "Warning Options" (`-Wreturn-type`).
+    pub(crate) fn first_token_on_line(&mut self, source: SourceVectors) -> SourceVectors {
+        if source.length() == 0 {
+            return source;
+        }
+        let location = self.file_location(source);
+        let vector = self.first_source_vector(location).clone();
+        let file = vector.source_file_index;
+        let (Some(text), Some(starts)) = (self.source_text(file), self.source_line_starts(file))
+        else {
+            return source;
+        };
+        let offset = (vector.index as usize).min(text.len());
+        let line_start = starts[starts.partition_point(|&start| start <= offset) - 1];
+        let Some(before) = text.get(line_start..offset) else {
+            return source;
+        };
+        let index = line_start + before.len() - skip_blanks_and_comments(before).len();
+        let word = text[index..]
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        let length = word.max(1);
+        let column = vector.column - source_offset(offset - index);
+        self.create_retained_source_vectors(
+            SourcePosition {
+                index,
+                line: vector.line,
+                column,
+            },
+            file,
+            length,
+        )
     }
 
     /// Creates a location in the retained arena, which preprocessor-arena
@@ -741,5 +817,22 @@ impl Context<'_> {
         let (arena, start) = SourceArena::decode(source_vectors);
         let start = start as usize;
         &self.arena(arena)[start..start + source_vectors.length() as usize]
+    }
+}
+
+/// `text` after its leading blanks and the block comments that start and end
+/// within it, each of which translation phase 3 replaces with one space.
+/// C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22; §6.4.9 paragraph 1,
+/// p. 66; PDF p. 78.
+fn skip_blanks_and_comments(mut text: &str) -> &str {
+    loop {
+        text = text.trim_start_matches([' ', '\t', '\x0b', '\x0c']);
+        match text
+            .strip_prefix("/*")
+            .and_then(|comment| comment.find("*/").map(|end| &comment[end + 2..]))
+        {
+            | Some(rest) => text = rest,
+            | None => return text,
+        }
     }
 }

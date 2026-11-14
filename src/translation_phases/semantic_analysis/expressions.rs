@@ -95,6 +95,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match e.kind {
             | E::Identifier(name) => {
                 self.report_c90_func(name);
+                self.report_predefined_identifier(name);
                 let (found, self_reference) = self.identifier_lookup(name);
                 if let Some(index) = found {
                     let binding = self.bindings[index];

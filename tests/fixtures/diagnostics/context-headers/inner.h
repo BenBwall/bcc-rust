@@ -1,0 +1,1 @@
+int *inner = 2;

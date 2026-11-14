@@ -29,6 +29,7 @@ use crate::{
         self,
         DEMOS,
         Demo,
+        Part,
     },
     editor::{
         CodeEditor,
@@ -49,6 +50,7 @@ use crate::{
         Knob,
         LiveCompile,
         Narration,
+        Output,
         PipelineView,
         Reel,
         Schematic,
@@ -1690,32 +1692,51 @@ fn Lessons(state: State) -> impl IntoView {
                 <h2 id="lessons-title"><span class="section-number">"Table 1"</span>"Lessons"</h2>
                 <p>"Each lesson is a small, complete C program. Edit any of them, or open your own .c file."</p>
             </div>
-            <ol class="lesson-list">
-                {DEMOS
-                    .iter()
-                    .enumerate()
-                    .map(|(index, demo)| {
-                        let key = demo.key;
-                        view! {
-                            <li>
-                                <button
-                                    type="button"
-                                    class="lesson-card"
-                                    class:is-fault=demo.faults
-                                    aria-pressed=move || (selected() == Some(key)).to_string()
-                                    disabled=move || state.locked_tracked()
-                                    on:click=move |_| state.select_demo(demo)
-                                >
-                                    <span class="lesson-number">{format!("{:02}", index + 1)}</span>
-                                    <span class="lesson-title">{demo.title}</span>
-                                    <span class="lesson-summary">{demo.summary}</span>
-                                    <span class="lesson-topics">{demo.topics.join(" / ")}</span>
-                                </button>
-                            </li>
-                        }
-                    })
-                    .collect_view()}
-            </ol>
+            {Part::ALL
+                .into_iter()
+                .enumerate()
+                .map(|(number, part)| {
+                    let first = DEMOS.iter().position(|demo| demo.part == part).unwrap_or(0);
+                    let heading = format!("lessons-part-{}", number + 1);
+                    let labelled = heading.clone();
+                    view! {
+                        <section class="lesson-part" aria-labelledby=labelled>
+                            <h3 class="lesson-part-title" id=heading>
+                                <b>{format!("Part {}", number + 1)}</b>
+                                {format!(" — {}", part.title())}
+                            </h3>
+                            <p class="lesson-part-summary">{part.summary()}</p>
+                            <ol class="lesson-list" start=(first + 1).to_string()>
+                                {DEMOS
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, demo)| demo.part == part)
+                                    .map(|(index, demo)| {
+                                        let key = demo.key;
+                                        view! {
+                                            <li>
+                                                <button
+                                                    type="button"
+                                                    class="lesson-card"
+                                                    class:is-fault=demo.faults
+                                                    aria-pressed=move || (selected() == Some(key)).to_string()
+                                                    disabled=move || state.locked_tracked()
+                                                    on:click=move |_| state.select_demo(demo)
+                                                >
+                                                    <span class="lesson-number">{format!("{:02}", index + 1)}</span>
+                                                    <span class="lesson-title">{demo.title}</span>
+                                                    <span class="lesson-summary">{demo.summary}</span>
+                                                    <span class="lesson-topics">{demo.topics.join(" / ")}</span>
+                                                </button>
+                                            </li>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </ol>
+                        </section>
+                    }
+                })
+                .collect_view()}
         </section>
     }
 }
@@ -2246,9 +2267,17 @@ fn MachineView(state: State) -> impl IntoView {
                 <Cells snapshot=state.current />
             </div>
             <div class="notes-row">
-                <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder running=state.running.into() />
+                <Narration
+                    snapshot=state.current
+                    recent=state.recent
+                    on_jump=Callback::new(move |index| state.jump(index))
+                    on_preprocessor=Callback::new(move |()| state.open_view(Mode::Pipeline, Some(Stage::Preprocessor)))
+                    placeholder=state.placeholder
+                    running=state.running.into()
+                />
                 <div class="machine-side">
                     <Schematic snapshot=state.current />
+                    <Output snapshot=state.current />
                     <Datasheet snapshot=state.current history=state.history reel />
                 </div>
             </div>

@@ -1,4 +1,4 @@
-//! GCC's and Clang's words for the pointer conversion constraints they
+//! GCC's, Clang's and TCC's words for the pointer conversion constraints they
 //! report by default (`-Wint-conversion`, `-Wincompatible-pointer-types`
 //! and Clang's `-Wincompatible-function-pointer-types`), in their
 //! diagnostic formats: each names the conversion's context and both types,
@@ -53,7 +53,68 @@ pub(super) enum ConversionSite {
     Return,
 }
 
+/// How a program uses the value of a void expression, which GCC's and
+/// Clang's words tell apart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum VoidUse {
+    /// C99: §6.7.8p11, p. 126; PDF p. 138.
+    Initialization,
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    Assignment,
+    /// C99: §6.5.4p2, p. 81; PDF p. 93.
+    Cast,
+}
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Whether `ty` is `void`, an expression of which has no value.
+    /// C99: §6.3.2.2p1, p. 46; PDF p. 58.
+    pub(super) fn void_value(&self, ty: TypeId) -> bool {
+        matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void))
+    }
+
+    /// The text of an error that uses a void expression's value, in GCC's,
+    /// Clang's or TCC's words, interned, when the diagnostic format is one
+    /// of theirs and the target type can be spelled.
+    /// C99: §6.3.2.2p1, p. 46; PDF p. 58.
+    pub(super) fn void_value_wording(
+        &mut self,
+        use_: VoidUse,
+        target: TypeId,
+    ) -> Option<StringCacheId> {
+        let format = self.context.configuration.diagnostic_format();
+        let text = match (format, use_) {
+            | (DiagnosticFormat::Gcc, VoidUse::Cast) => "invalid use of void expression",
+            // GCC reads an aggregate's initializer as one that cannot
+            // initialize it before it looks at the value.
+            | (DiagnosticFormat::Gcc, VoidUse::Initialization) if !self.scalar_type(target) =>
+                "invalid initializer",
+            | (DiagnosticFormat::Gcc, _) => "void value not ignored as it ought to be",
+            | (DiagnosticFormat::Clang, VoidUse::Cast) =>
+                "operand of type 'void' where arithmetic or pointer type is required",
+            | (DiagnosticFormat::Clang, _) => {
+                let to = self.type_spelling(target, false)?;
+                if use_ == VoidUse::Initialization {
+                    crate::diagnostics::format_in!(
+                        self.scratch,
+                        "initializing '{to}' with an expression of incompatible type 'void'"
+                    )
+                } else {
+                    crate::diagnostics::format_in!(
+                        self.scratch,
+                        "assigning to '{to}' from incompatible type 'void'"
+                    )
+                }
+            },
+            // TCC's `cast_error` in `tccgen.c`.
+            | (DiagnosticFormat::Tcc, _) => {
+                let to = self.type_spelling(target, false)?;
+                crate::diagnostics::format_in!(self.scratch, "cannot convert 'void' to '{to}'")
+            },
+            | _ => return None,
+        };
+        Some(self.context.string_cache.intern(text))
+    }
+
     /// The text of a pointer conversion diagnostic in GCC's or Clang's
     /// words, interned, when the diagnostic format is one of theirs and
     /// the context and both types can be put in them.
@@ -69,6 +130,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let format = self.context.configuration.diagnostic_format();
         if self.context.configuration.msvc_wording() {
             return self.msvc_conversion_wording(group, site, target, from);
+        }
+        // TCC words every assignment-like conversion as an assignment and
+        // names no types (`verify_assign_cast` in TCC's `tccgen.c`).
+        if format == DiagnosticFormat::Tcc && group == DiagnosticGroup::IntConversion {
+            let text = if self.pointer_target(target).is_some() {
+                "assignment makes pointer from integer without a cast"
+            } else {
+                "assignment makes integer from pointer without a cast"
+            };
+            return Some(self.context.string_cache.intern(text));
         }
         if site == ConversionSite::Other
             || !matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang)
@@ -338,6 +409,58 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return "; take the address with &";
         }
         ""
+    }
+
+    /// The text of a member access error in GCC's, Clang's or TCC's words,
+    /// interned, when the diagnostic format is one of theirs: the record is
+    /// incomplete, or has no member `member`.
+    /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
+    pub(super) fn member_wording(
+        &mut self,
+        record: TypeId,
+        tag: usize,
+        member: StringCacheId,
+        incomplete: bool,
+    ) -> Option<StringCacheId> {
+        let format = self.context.configuration.diagnostic_format();
+        let member = self.context.string_cache.at(member);
+        let text = match format {
+            // TCC names the tag alone (`tccgen.c`, `struct_field` and
+            // `find_field`).
+            | DiagnosticFormat::Tcc if incomplete => {
+                let name = self.context.string_cache.at(self.types.tags[tag].name?);
+                crate::diagnostics::format_in!(
+                    self.scratch,
+                    "dereferencing incomplete type '{name}'"
+                )
+            },
+            | DiagnosticFormat::Tcc =>
+                crate::diagnostics::format_in!(self.scratch, "field not found: {member}"),
+            | DiagnosticFormat::Gcc | DiagnosticFormat::Clang => {
+                let gcc = format == DiagnosticFormat::Gcc;
+                let record = self.type_spelling(record, gcc)?;
+                match (gcc, incomplete) {
+                    | (true, true) => crate::diagnostics::format_in!(
+                        self.scratch,
+                        "invalid use of undefined type '{record}'"
+                    ),
+                    | (true, false) => crate::diagnostics::format_in!(
+                        self.scratch,
+                        "'{record}' has no member named '{member}'"
+                    ),
+                    | (false, true) => crate::diagnostics::format_in!(
+                        self.scratch,
+                        "incomplete definition of type '{record}'"
+                    ),
+                    | (false, false) => crate::diagnostics::format_in!(
+                        self.scratch,
+                        "no member named '{member}' in '{record}'"
+                    ),
+                }
+            },
+            | _ => return None,
+        };
+        Some(self.context.string_cache.intern(text))
     }
 
     /// `ty` as GCC (`gcc`) or Clang spells it in a diagnostic, or `None`

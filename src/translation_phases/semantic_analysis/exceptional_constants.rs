@@ -539,7 +539,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => return,
         };
         let text = self.context.string_cache.intern(text);
-        self.exceptional_warning(group, text, operator_source(e));
+        // Clang underlines the count or divisor beside the operator's caret.
+        let count = [right.expression.source_vectors, SourceVectors::default()];
+        self.with_highlights(count, |analyzer| {
+            analyzer.exceptional_warning(group, text, operator_source(e));
+        });
     }
 
     /// Reports `text` under `group`, which selects its option and severity.
@@ -786,6 +790,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Reports `text` as `-pedantic` reports an extension.
     pub(super) fn report_pedantic_constant(&mut self, text: &str, source: SourceVectors) {
+        if self.extension_operands != 0 {
+            return;
+        }
         let text = self.context.string_cache.intern(text);
         self.extension_error(
             crate::configuration::Feature::ConstantFolding,
