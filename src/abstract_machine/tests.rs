@@ -2137,6 +2137,31 @@ fn char_arrays_take_string_and_brace_initializers() {
 }
 
 #[test]
+fn a_multibyte_character_after_a_backslash_is_rejected_whole() {
+    for (source, quoted) in [
+        (
+            "#include <stdio.h>\nint main(void) { puts(\"\\é\"); return 0; }",
+            "\"\\é\"",
+        ),
+        ("int main(void) { char c = '\\é'; return c; }", "'\\é'"),
+        ("int main(void) { char c = '\\€'; return c; }", "'\\€'"),
+    ] {
+        let diagnostic = compile(source).map(|_| ()).expect_err(source);
+        assert_eq!(diagnostic.kind, "unsupported", "{source}");
+        assert!(
+            diagnostic.message.contains("non-ASCII"),
+            "{source}: {}",
+            diagnostic.message
+        );
+        // The range covers the whole character after the backslash.
+        let after = source.find(quoted).expect("the literal") + 2;
+        let character = &source[after..diagnostic.source_range.end];
+        assert_eq!(diagnostic.source_range.start, after, "{source}");
+        assert_eq!(character.chars().count(), 1, "{source}: {character:?}");
+    }
+}
+
+#[test]
 fn modifying_a_string_literal_is_undefined_and_const_is_enforced() {
     let (cause, title) = undefined("int main(void) { char *p = \"hi\"; p[0] = 'H'; return 0; }");
     assert_eq!(cause, Some(super::Undefined::StringLiteralWrite));
