@@ -71,6 +71,8 @@ enum Part {
         ty:    String,
         /// Its scalar index in the object, for an array or a structure.
         leaf:  Option<usize>,
+        /// Its size in bytes on x86-64.
+        bytes: usize,
     },
     Padding {
         bytes: usize,
@@ -85,29 +87,45 @@ fn parts(object: &Object) -> Vec<Part> {
     let mut parts = Vec::new();
     let ty = object.ty.split('[').next().unwrap_or_default().trim().to_owned();
     match &object.value {
-        | Value::Array { .. } | Value::Struct { .. } =>
-            collect(&object.value, &object.name, &ty, &mut 0, &mut parts),
+        | Value::Array { .. } | Value::Struct { .. } => collect(
+            &object.value,
+            &object.name,
+            &ty,
+            object.size,
+            &mut 0,
+            &mut parts,
+        ),
         | value => parts.push(Part::Cell {
             value: value.clone(),
             name: object.name.clone(),
             ty,
             leaf: None,
+            bytes: object.size,
         }),
     }
     parts
 }
 
-fn collect(value: &Value, name: &str, ty: &str, leaf: &mut usize, parts: &mut Vec<Part>) {
+/// The cells of `value`, which takes `size` bytes.
+fn collect(
+    value: &Value,
+    name: &str,
+    ty: &str,
+    size: usize,
+    leaf: &mut usize,
+    parts: &mut Vec<Part>,
+) {
     match value {
         | Value::Array { elements } =>
             for (index, element) in elements.iter().enumerate() {
-                collect(element, &format!("{name}[{index}]"), ty, leaf, parts);
+                let each = size / elements.len().max(1);
+                collect(element, &format!("{name}[{index}]"), ty, each, leaf, parts);
             },
         | Value::Struct { members, .. } =>
             for member in members {
                 let path = format!("{name}.{}", member.name);
                 let ty = member.ty.split('[').next().unwrap_or_default().trim();
-                collect(&member.value, &path, ty, leaf, parts);
+                collect(&member.value, &path, ty, member.size, leaf, parts);
                 if member.padding > 0 {
                     parts.push(Part::Padding {
                         bytes: member.padding,
@@ -121,6 +139,7 @@ fn collect(value: &Value, name: &str, ty: &str, leaf: &mut usize, parts: &mut Ve
                 name:  name.to_owned(),
                 ty:    ty.to_owned(),
                 leaf:  Some(*leaf),
+                bytes: size,
             });
             *leaf += 1;
         },
@@ -172,7 +191,13 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
             .into_iter()
             .flat_map(|object| {
                 parts(object).into_iter().map(move |part| match part {
-                    | Part::Cell { value, name, ty, leaf } => {
+                    | Part::Cell {
+                        value,
+                        name,
+                        ty,
+                        leaf,
+                        bytes,
+                    } => {
                         let kind = access(object.id, leaf);
                         let text = value_text(&value);
                         let indeterminate = text.is_none();
@@ -180,8 +205,9 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
                         // its cell stays narrow enough for a phone's strip.
                         let long = text.as_deref().is_some_and(|text| text.chars().count() > 5);
                         let marks = pointed(object.id, leaf.unwrap_or(0));
+                        let plural = if bytes == 1 { "" } else { "s" };
                         let description = format!(
-                            "{name}, {ty}: {}{}",
+                            "{name}, {ty}, {bytes} byte{plural}: {}{}",
                             text.as_deref().unwrap_or("indeterminate"),
                             kind.as_deref().map(|kind| format!(", {}", verb(kind))).unwrap_or_default()
                         );
@@ -192,8 +218,9 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
                                 class:is-long=long
                                 data-access=kind
                                 aria-label=description
+                                style=format!("--bytes: {bytes}")
                             >
-                                <span class="cell-type" aria-hidden="true">{ty}</span>
+                                <span class="cell-type" aria-hidden="true">{ty}<span class="cell-bytes">{format!("{bytes}B")}</span></span>
                                 <b class="cell-value" aria-hidden="true">{text.unwrap_or_else(|| "?".to_owned())}</b>
                                 <span class="cell-name" aria-hidden="true">{name}<span class="cell-pointers">{marks}</span></span>
                             </li>

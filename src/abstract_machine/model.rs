@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use super::clauses::Clause;
+use super::{
+    clauses::Clause,
+    integers::Integer,
+};
 
 /// A compiled bounded-subset program, independent of native compiler storage.
 #[derive(Debug, Clone)]
@@ -162,6 +165,12 @@ pub struct Event {
     pub objects:        Vec<usize>,
     /// Whether a full expression ended here (C99 §6.8p4).
     pub sequence_point: bool,
+    /// The type of the value the event started from, when it converted
+    /// one: `int` for a promotion, a conversion or a store that converts.
+    pub from_type:      Option<String>,
+    /// The type of the value the event produced, when it is an integer:
+    /// a constant's type, a conversion's or an operator's result type.
+    pub result_type:    Option<String>,
 }
 
 impl Event {
@@ -178,6 +187,8 @@ impl Event {
             result: None,
             objects: Vec::new(),
             sequence_point: false,
+            from_type: None,
+            result_type: None,
         }
     }
 }
@@ -205,12 +216,18 @@ pub enum EventKind {
     Declare,
     /// An integer constant produced its value.
     Constant,
+    /// `sizeof` produced the size of its operand's type, without
+    /// evaluating the operand.
+    Sizeof,
     /// An identifier evaluated to the lvalue designating its object.
     Designate,
     /// An lvalue was read for its stored value.
     LvalueConversion,
-    /// A `char` value was promoted to `int`.
+    /// A value of a type narrower than `int` was promoted to `int`.
     IntegerPromotion,
+    /// The usual arithmetic conversions converted an operand to the common
+    /// type of a binary operator's operands.
+    ArithmeticConversion,
     /// A cast converted a value to the type it names.
     Cast,
     /// An array was converted to a pointer to its first element.
@@ -270,9 +287,11 @@ impl EventKind {
             | Self::LeaveBlock => "leave_block",
             | Self::Declare => "declare",
             | Self::Constant => "constant",
+            | Self::Sizeof => "sizeof",
             | Self::Designate => "designate",
             | Self::LvalueConversion => "lvalue_conversion",
             | Self::IntegerPromotion => "integer_promotion",
+            | Self::ArithmeticConversion => "arithmetic_conversion",
             | Self::Cast => "cast",
             | Self::ArrayDecay => "array_decay",
             | Self::AddressOf => "address_of",
@@ -303,12 +322,16 @@ impl EventKind {
     pub const fn category(self) -> &'static str {
         match self {
             | Self::Constant
+            | Self::Sizeof
             | Self::Unary
             | Self::Arithmetic
             | Self::PointerArithmetic
             | Self::Comparison => "evaluate",
-            | Self::LvalueConversion | Self::IntegerPromotion | Self::Cast | Self::ArrayDecay =>
-                "convert",
+            | Self::LvalueConversion
+            | Self::IntegerPromotion
+            | Self::ArithmeticConversion
+            | Self::Cast
+            | Self::ArrayDecay => "convert",
             | Self::Designate
             | Self::AddressOf
             | Self::Dereference
@@ -424,6 +447,8 @@ pub struct Object {
     pub name:             String,
     /// Declared subset type spelling.
     pub r#type:           String,
+    /// Size in bytes on x86-64, as bcc lays the type out.
+    pub size:             usize,
     /// Owning activation, or 0 for an object with static storage duration,
     /// which belongs to no call.
     pub frame_id:         usize,
@@ -449,8 +474,11 @@ pub struct Object {
 pub enum Value {
     /// No value has been stored yet (not implicitly zero).
     Indeterminate,
-    /// Signed 32-bit `int`, or a `char` value in -128..=127.
-    Integer(i32),
+    /// The value of an integer type, always within its type's range: the
+    /// type itself is the object's or the operation's, which the machine
+    /// knows. `i128` holds every value of every type, `unsigned long long`
+    /// included.
+    Integer(i128),
     /// An `int *` or a pointer to a structure; a `None` target means null.
     Pointer {
         /// Target object ID.
@@ -467,7 +495,7 @@ pub enum Value {
         /// The structure type a pointer to a structure points to.
         structure: Option<usize>,
     },
-    /// Fixed-size int array contents.
+    /// Fixed-size array contents.
     Array(Vec<Value>),
     /// A structure's members' values, in declaration order.
     Struct {
@@ -537,8 +565,16 @@ pub struct Diagnostic {
 /// stop by it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Undefined {
-    /// A `+`, `-`, `*` or unary `-` result outside int (C99 §6.5p5).
+    /// A `+`, `-`, `*` or unary `-` result outside its signed type (C99
+    /// §6.5p5).
     SignedOverflow,
+    /// A shift by a negative count or by at least the promoted left
+    /// operand's width (C99 §6.5.7p3).
+    ShiftCount,
+    /// `E1 << E2` of a negative signed `E1` (C99 §6.5.7p4).
+    ShiftNegative,
+    /// `E1 << E2` of a signed `E1` whose result does not fit (C99 §6.5.7p4).
+    ShiftOverflow,
     /// `INT_MIN / -1` or `INT_MIN % -1`: the quotient does not fit.
     QuotientOverflow,
     /// `/` or `%` by zero (C99 §6.5.5p5).
@@ -633,7 +669,7 @@ impl Diagnostic {
 #[derive(Debug, Clone)]
 pub(super) struct Function {
     pub name:       String,
-    /// `int` or a structure.
+    /// An integer type or a structure.
     pub returns:    Type,
     pub parameters: Vec<(String, Type)>,
     pub code:       Vec<Instruction>,
@@ -663,7 +699,11 @@ pub(super) enum Op {
     },
     /// Reaching the declaration of block-scope static `index`: nothing to do.
     StaticLocal(usize),
-    Push(i32),
+    /// An integer constant of the given type.
+    Push(i128, Integer),
+    /// `sizeof`: the size in bytes of its operand's type, given, as a
+    /// `size_t`.
+    Sizeof(usize, Type),
     /// The implicit zero of an array element or member without an
     /// initializer.
     Zero,
@@ -681,7 +721,7 @@ pub(super) enum Op {
     LoadStruct(usize),
     /// `.m` (or `->m` when `arrow`) selecting the member that starts at
     /// scalar `offset` of the structure; `structure` when the member is a
-    /// structure itself, `array` (its length) when it is an int array, which
+    /// structure itself, `array` (its length) when it is an array, which
     /// decays to a pointer to its first element at once.
     Member {
         name:      String,
@@ -690,23 +730,40 @@ pub(super) enum Op {
         structure: Option<usize>,
         array:     Option<usize>,
     },
-    /// The integer promotion of a loaded `char` to `int`.
-    Promote,
+    /// The integer promotion of a value of the given type, narrower than
+    /// `int`, to `int`.
+    Promote(Integer),
+    /// The usual arithmetic conversion of one operand of a binary operator,
+    /// `depth` places below the top of the stack (0 for the right operand,
+    /// 1 for the left), from `from` to the common type `to`; `other` is the
+    /// other operand's promoted type.
+    Convert {
+        from:  Integer,
+        to:    Integer,
+        other: Integer,
+        depth: usize,
+    },
     /// `(type) value`: convert the value of type `from` to `to` (C99
     /// §6.5.4p4).
     Cast {
         from: Type,
         to:   Type,
     },
-    /// The default argument promotion of a `char` passed through a
-    /// variadic function's `...` (C99 §6.5.2.2p6-7).
-    DefaultPromote,
+    /// The default argument promotion of a value of the given type,
+    /// narrower than `int`, passed through a variadic function's `...`
+    /// (C99 §6.5.2.2p6-7).
+    DefaultPromote(Integer),
     Decay(Place),
     AddressOf,
     Dereference,
     Index,
-    Unary(&'static str),
-    Binary(&'static str),
+    /// A unary operator; the promoted integer type it computes in, `None`
+    /// for `!` and pointers.
+    Unary(&'static str, Option<Integer>),
+    /// A binary operator; the integer type it computes in (the common type,
+    /// or for a shift the promoted left operand's), `None` when an operand
+    /// is a pointer.
+    Binary(&'static str, Option<Integer>),
     /// `&E1[E2]`: `E1 + E2` without the indirection (C99 §6.5.3.2p3).
     ElementAddress,
     Store {
@@ -714,24 +771,31 @@ pub(super) enum Op {
         initializer:     bool,
         /// Whether this store ends a full expression (C99 §6.8p4).
         full_expression: bool,
-        /// Whether the stored value is a char's, not an int's, so storing it
-        /// in a char converts nothing.
-        char_value:      bool,
+        /// The type of the value stored, which the store converts to the
+        /// object's type.
+        from:            Type,
         /// The structure type, for a store that copies a whole structure.
         structure:       Option<usize>,
     },
     Increment {
         delta:  i32,
         prefix: bool,
+        /// Whether the increment is an operand of a larger expression, a
+        /// condition's, which then uses its value; otherwise it is a whole
+        /// expression statement.
+        nested: bool,
     },
     /// `E1 op= E2` as a statement: read the object the address below the
-    /// value on the stack designates, apply `op`, store the result.
-    Compound(&'static str),
+    /// value on the stack designates, apply `op` in `common` (the type the
+    /// operator computes in; `None` for pointer arithmetic), store the
+    /// result.
+    Compound(&'static str, Option<Integer>),
     Pop,
     Jump(usize),
     /// Skip to the target when the condition of the named statement is zero.
     Branch(usize, &'static str),
-    Call(String, usize),
+    /// A call with the arguments' types, which convert to the parameters'.
+    Call(String, Vec<Type>),
     /// A call to a library function with the arguments' types, after the
     /// default argument promotions for those passed through `...`.
     Library(Library, Vec<Type>),
@@ -746,7 +810,9 @@ pub(super) enum Op {
         /// How many adjacent literals translation phase 6 joined into it.
         parts:           usize,
     },
-    Return,
+    /// `return` with the type of its expression, which converts to the
+    /// function's return type.
+    Return(Type),
     Fallthrough,
 }
 
@@ -818,60 +884,59 @@ pub(super) struct Static {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Type {
-    Int,
-    /// Plain `char`, signed with 8 bits as on x86-64 (implementation-defined;
-    /// C99 §6.2.5p15).
-    Char,
-    /// `int *`, or `const int *` when set.
-    Pointer(bool),
-    /// `int[n]`.
-    Array(usize),
+    /// An integer type.
+    Integer(Integer),
+    /// A pointer to an integer type, to a `const` one when set.
+    Pointer(Integer, bool),
+    /// An array of `n` elements of an integer type.
+    Array(Integer, usize),
     /// A structure, by index into [`Program::structures`].
     Struct(usize),
     /// A pointer to a structure.
     StructPointer(usize),
-    /// `char[n]`.
-    CharArray(usize),
-    /// `char *`, or `const char *` when set.
-    CharPointer(bool),
 }
 
 impl Type {
+    /// Plain `char`.
+    pub(super) const CHAR: Self = Self::Integer(Integer::Char);
+    /// `int`.
+    pub(super) const INT: Self = Self::Integer(Integer::Int);
+
     /// Whether values of this type are pointers.
     pub(super) const fn is_pointer(self) -> bool {
-        matches!(
-            self,
-            Self::Pointer(_) | Self::StructPointer(_) | Self::CharPointer(_)
-        )
+        matches!(self, Self::Pointer(..) | Self::StructPointer(_))
     }
 
     /// Whether this is an array type, which a name of it decays from.
     pub(super) const fn is_array(self) -> bool {
-        matches!(self, Self::Array(_) | Self::CharArray(_))
+        matches!(self, Self::Array(..))
+    }
+
+    /// The integer type, when this is one.
+    pub(super) const fn integer(self) -> Option<Integer> {
+        match self {
+            | Self::Integer(integer) => Some(integer),
+            | _ => None,
+        }
     }
 
     /// The pointer an array of this type decays to.
     pub(super) const fn decayed(self) -> Self {
-        match self {
-            | Self::Array(_) => Self::Pointer(false),
-            | Self::CharArray(_) => Self::CharPointer(false),
-            | other => other,
-        }
+        self.decayed_qualified(false)
     }
 
     /// The pointer an array of this type decays to, to `const` elements
     /// when the array is defined `const` (C99 §6.3.2.1p3, §6.7.3p8).
     pub(super) const fn decayed_qualified(self, constant: bool) -> Self {
         match self {
-            | Self::Array(_) => Self::Pointer(constant),
-            | Self::CharArray(_) => Self::CharPointer(constant),
+            | Self::Array(element, _) => Self::Pointer(element, constant),
             | other => other,
         }
     }
 
     /// Whether this is a pointer to `const`-qualified elements.
     pub(super) const fn points_to_const(self) -> bool {
-        matches!(self, Self::Pointer(true) | Self::CharPointer(true))
+        matches!(self, Self::Pointer(_, true))
     }
 }
 

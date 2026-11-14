@@ -19,7 +19,7 @@ use super::{
 };
 
 impl State {
-    /// Encodes this observation as schema version 4 JSON.
+    /// Encodes this observation as schema version 6 JSON.
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut output = String::new();
@@ -39,7 +39,7 @@ impl Diagnostic {
 }
 
 pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
-    let mut output = String::from("{\"schema_version\":5,\"source\":");
+    let mut output = String::from("{\"schema_version\":6,\"source\":");
     string(&mut output, &program.source);
     output.push_str(",\"structures\":[");
     for (index, structure) in program.structures.iter().enumerate() {
@@ -79,7 +79,7 @@ pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
 fn state(output: &mut String, state: &State) {
     write!(
         output,
-        "{{\"schema_version\":5,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
+        "{{\"schema_version\":6,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
         state.step
     )
     .expect("String write");
@@ -192,7 +192,19 @@ fn event(output: &mut String, event: &Event) {
         comma(output, index);
         write!(output, "{id}").expect("String write");
     }
-    write!(output, "],\"sequence_point\":{}}}", event.sequence_point).expect("String write");
+    write!(output, "],\"sequence_point\":{}", event.sequence_point).expect("String write");
+    for (key, ty) in [
+        ("from_type", &event.from_type),
+        ("result_type", &event.result_type),
+    ] {
+        write!(output, ",\"{key}\":").expect("String write");
+        if let Some(ty) = ty {
+            string(output, ty);
+        } else {
+            output.push_str("null");
+        }
+    }
+    output.push('}');
 }
 
 fn clause(output: &mut String, clause: &Clause) {
@@ -244,6 +256,7 @@ fn object_json(output: &mut String, object: &Object) {
     string(output, &object.name);
     output.push_str(",\"type\":");
     string(output, &object.r#type);
+    write!(output, ",\"size\":{}", object.size).expect("String write");
     output.push_str(",\"storage_duration\":");
     string(output, object.storage_duration);
     output.push_str(",\"function\":");

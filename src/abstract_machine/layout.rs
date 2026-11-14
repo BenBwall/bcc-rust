@@ -1,6 +1,6 @@
 //! Types as storage: each type's size and alignment on x86-64, structure
 //! layout with its padding, and the scalars ("leaves") an object holds. The
-//! machine addresses an object by leaf: an int array's leaves are its
+//! machine addresses an object by leaf: an array's leaves are its
 //! elements, a structure's are its members' leaves in declaration order, and
 //! a scalar is one leaf. A value's shape always mirrors its type, so leaves
 //! are counted from the value itself.
@@ -24,11 +24,10 @@ impl Type {
     /// Size and alignment in bytes, as bcc lays them out for x86-64.
     pub(super) fn size_align(self, structures: &[Structure]) -> (usize, usize) {
         match self {
-            | Self::Int => (4, 4),
-            | Self::Char => (1, 1),
-            | Self::Pointer(_) | Self::StructPointer(_) | Self::CharPointer(_) => (8, 8),
-            | Self::Array(count) => (count.saturating_mul(4), 4),
-            | Self::CharArray(count) => (count, 1),
+            | Self::Integer(integer) => (integer.bytes(), integer.bytes()),
+            | Self::Pointer(..) | Self::StructPointer(_) => (8, 8),
+            | Self::Array(element, count) =>
+                (count.saturating_mul(element.bytes()), element.bytes()),
             | Self::Struct(id) => structures
                 .get(id)
                 .map_or((0, 1), |structure| (structure.size, structure.align)),
@@ -38,7 +37,7 @@ impl Type {
     /// How many scalars an object of this type holds.
     pub(super) fn leaves(self, structures: &[Structure]) -> usize {
         match self {
-            | Self::Array(count) | Self::CharArray(count) => count,
+            | Self::Array(_, count) => count,
             | Self::Struct(id) => structures.get(id).map_or(0, |structure| {
                 structure
                     .members
@@ -50,18 +49,15 @@ impl Type {
         }
     }
 
-    /// The type spelled as C writes it: `int *`, `int[3]`, `struct point`.
+    /// The type spelled as C writes it: `unsigned int *`, `int[3]`, `struct
+    /// point`.
     pub(super) fn spelling(self, structures: &[Structure]) -> String {
         let tag = |id: usize| structures.get(id).map_or("?", |structure| &structure.name);
         match self {
-            | Self::Int => String::from("int"),
-            | Self::Char => String::from("char"),
-            | Self::Pointer(false) => String::from("int *"),
-            | Self::Pointer(true) => String::from("const int *"),
-            | Self::Array(count) => format!("int[{count}]"),
-            | Self::CharArray(count) => format!("char[{count}]"),
-            | Self::CharPointer(false) => String::from("char *"),
-            | Self::CharPointer(true) => String::from("const char *"),
+            | Self::Integer(integer) => String::from(integer.spelling()),
+            | Self::Pointer(element, false) => format!("{} *", element.spelling()),
+            | Self::Pointer(element, true) => format!("const {} *", element.spelling()),
+            | Self::Array(element, count) => format!("{}[{count}]", element.spelling()),
             | Self::Struct(id) => format!("struct {}", tag(id)),
             | Self::StructPointer(id) => format!("struct {} *", tag(id)),
         }
@@ -98,9 +94,8 @@ impl Type {
     /// scalar's type, in leaf order.
     fn filled(self, structures: &[Structure], scalar: &mut impl FnMut(Self) -> Value) -> Value {
         match self {
-            | Self::Array(count) => Value::Array((0..count).map(|_| scalar(Self::Int)).collect()),
-            | Self::CharArray(count) =>
-                Value::Array((0..count).map(|_| scalar(Self::Char)).collect()),
+            | Self::Array(element, count) =>
+                Value::Array((0..count).map(|_| scalar(Self::Integer(element))).collect()),
             | Self::Struct(id) => Value::Struct {
                 structure: id,
                 members:   structures.get(id).map_or_else(Vec::new, |structure| {
@@ -118,8 +113,7 @@ impl Type {
     /// The type of the scalar at leaf `offset` of an object of this type.
     pub(super) fn leaf_type(self, structures: &[Structure], offset: usize) -> Option<Self> {
         match self {
-            | Self::Array(count) => (offset < count).then_some(Self::Int),
-            | Self::CharArray(count) => (offset < count).then_some(Self::Char),
+            | Self::Array(element, count) => (offset < count).then_some(Self::Integer(element)),
             | Self::Struct(id) => {
                 let (member, within) = member_at(structures.get(id)?, offset)?;
                 member.ty.leaf_type(structures, within)

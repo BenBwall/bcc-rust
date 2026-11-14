@@ -32,6 +32,10 @@ macro_rules! clauses {
 }
 
 clauses! {
+    /// C99: §5.2.4.2.1 paragraph 1, pp. 21-23; PDF pp. 33-35.
+    INTEGER_LIMITS = "5.2.4.2.1p1", "pp. 21-23; PDF pp. 33-35", "Sizes of integer types",
+        "C sets only minimum ranges: an int must hold at least -32767 to 32767 and a long at \
+         least -2147483647 to 2147483647; each implementation may give more.";
     /// C99: §5.1.2.3 paragraph 1, p. 13; PDF p. 25.
     ABSTRACT_MACHINE = "5.1.2.3p1", "p. 13; PDF p. 25", "Program execution",
         "The standard describes what an idealized abstract machine does; a real compiler may \
@@ -68,6 +72,14 @@ clauses! {
     CHAR_SIGNEDNESS = "6.2.5p15", "p. 35; PDF p. 47", "Types",
         "Whether plain char is signed or unsigned is up to the implementation; on x86-64 Linux \
          it is signed, holding -128 to 127.";
+    /// C99: §6.2.5 paragraph 6, p. 33; PDF p. 45.
+    UNSIGNED_TYPES = "6.2.5p6", "p. 33; PDF p. 45", "Types",
+        "Each signed integer type has an unsigned version of the same size, written with \
+         unsigned, which holds only nonnegative values.";
+    /// C99: §6.2.5 paragraph 9, p. 34; PDF p. 46.
+    UNSIGNED_WRAP = "6.2.5p9", "p. 34; PDF p. 46", "Types",
+        "Unsigned arithmetic never overflows: a result that does not fit is reduced modulo one \
+         more than the type's largest value, 2^N.";
     /// C99: §6.2.5 paragraph 20, pp. 35-36; PDF pp. 47-48.
     STRUCTURE_TYPE = "6.2.5p20", "pp. 35-36; PDF pp. 47-48", "Types",
         "A structure is a sequence of member objects, each with its own name and type, allocated \
@@ -81,6 +93,10 @@ clauses! {
     STRUCTURE_VALUE = "6.2.6.1p6", "p. 38; PDF p. 50", "Representations of types",
         "A structure's value is never a trap representation, even if a member's is; its padding \
          bytes hold unspecified values.";
+    /// C99: §6.3.1.1 paragraph 1, p. 42; PDF p. 54.
+    INTEGER_RANK = "6.3.1.1p1", "p. 42; PDF p. 54", "Boolean, characters, and integers",
+        "Integer conversion rank orders the integer types: char, short, int, long, long long, \
+         each unsigned type ranking with its signed one.";
     /// C99: §6.3.1.1 paragraph 2, pp. 42-43; PDF pp. 54-55.
     INTEGER_PROMOTIONS = "6.3.1.1p2", "pp. 42-43; PDF pp. 54-55", "Boolean, characters, and integers",
         "Before arithmetic, values of types narrower than int (like char) are converted to int.";
@@ -88,14 +104,18 @@ clauses! {
     INTEGER_UNCHANGED = "6.3.1.3p1", "p. 43; PDF p. 55", "Signed and unsigned integers",
         "Converting an integer to another integer type keeps its value whenever the new type can \
          represent it.";
+    /// C99: §6.3.1.3 paragraph 2, p. 43; PDF p. 55.
+    UNSIGNED_CONVERSION = "6.3.1.3p2", "p. 43; PDF p. 55", "Signed and unsigned integers",
+        "Converting a value that does not fit into an unsigned type adds or subtracts 2^N until \
+         it fits: -1 becomes the type's largest value. This is always defined.";
     /// C99: §6.3.1.3 paragraph 3, p. 43; PDF p. 55.
     SIGNED_CONVERSION = "6.3.1.3p3", "p. 43; PDF p. 55", "Signed and unsigned integers",
         "Converting a value that does not fit into a signed type gives an implementation-defined \
          result; x86-64 compilers keep the low bits (wrap around).";
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
     USUAL_ARITHMETIC = "6.3.1.8p1", "pp. 44-45; PDF pp. 56-57", "Usual arithmetic conversions",
-        "Binary arithmetic first converts both operands to a common type; two ints need no \
-         conversion.";
+        "Binary arithmetic first converts both operands to a common type: the higher-ranked one, \
+         or the unsigned one when its rank is at least as high; two ints need no conversion.";
     /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
     LVALUE = "6.3.2.1p1", "p. 46; PDF p. 58", "Lvalues, arrays, and function designators",
         "An lvalue is an expression that designates an object: a location, not yet a value.";
@@ -113,7 +133,12 @@ clauses! {
          to no object at all.";
     /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
     INTEGER_CONSTANT = "6.4.4.1p5", "pp. 55-56; PDF pp. 67-68", "Integer constants",
-        "A decimal constant without a suffix has type int when its value fits in an int.";
+        "A decimal constant's type is the first of int, long and long long that holds its value; \
+         a suffix such as u or l starts the list elsewhere.";
+    /// C99: §6.5 paragraph 2, p. 67; PDF p. 79.
+    UNSEQUENCED = "6.5p2", "p. 67; PDF p. 79", "Expressions",
+        "Between two sequence points an object may be modified at most once, and then read only \
+         to compute its new value.";
     /// C99: §6.5 paragraph 3, p. 67; PDF p. 79.
     EVALUATION_ORDER = "6.5p3", "p. 67; PDF p. 79", "Expressions",
         "Except for the function-call (), &&, ||, ?: and comma operators, C leaves the order in \
@@ -167,6 +192,13 @@ clauses! {
     /// C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91.
     UNARY_MINUS = "6.5.3.3p3", "p. 79; PDF p. 91", "Unary arithmetic operators",
         "Unary - negates its (promoted) operand.";
+    /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92.
+    SIZEOF = "6.5.3.4p2", "p. 80; PDF p. 92", "The sizeof operator",
+        "sizeof yields the size in bytes of its operand's type; the operand is not evaluated.";
+    /// C99: §6.5.3.4 paragraph 4, p. 80; PDF p. 92.
+    SIZEOF_RESULT = "6.5.3.4p4", "p. 80; PDF p. 92", "The sizeof operator",
+        "sizeof's result is an unsigned integer of type size_t, whose size is up to the \
+         implementation.";
     /// C99: §6.5.3.3 paragraph 5, p. 79; PDF p. 91.
     LOGICAL_NOT = "6.5.3.3p5", "p. 79; PDF p. 91", "Unary arithmetic operators",
         "!E is 1 when E compares equal to 0, and 0 otherwise; the result has type int.";
@@ -184,6 +216,21 @@ clauses! {
     /// C99: §6.5.6 paragraph 5, p. 83; PDF p. 95.
     ADDITION = "6.5.6p5", "p. 83; PDF p. 95", "Additive operators",
         "The result of + is the sum, and of - the difference, of the operands.";
+    /// C99: §6.5.7 paragraph 2, p. 84; PDF p. 96.
+    SHIFT_CONSTRAINT = "6.5.7p2", "p. 84; PDF p. 96", "Bitwise shift operators",
+        "Both operands of << and >> must have integer types.";
+    /// C99: §6.5.7 paragraph 3, p. 84; PDF p. 96.
+    SHIFT_COUNT = "6.5.7p3", "p. 84; PDF p. 96", "Bitwise shift operators",
+        "Each operand of a shift is promoted on its own, and the result has the left one's type; \
+         a negative count, or one of at least its width, is undefined.";
+    /// C99: §6.5.7 paragraph 4, p. 85; PDF p. 97.
+    LEFT_SHIFT = "6.5.7p4", "p. 85; PDF p. 97", "Bitwise shift operators",
+        "E1 << E2 is E1 × 2^E2: reduced modulo 2^N for an unsigned E1, and undefined for a \
+         signed E1 that is negative or whose result does not fit.";
+    /// C99: §6.5.7 paragraph 5, p. 85; PDF p. 97.
+    RIGHT_SHIFT = "6.5.7p5", "p. 85; PDF p. 97", "Bitwise shift operators",
+        "E1 >> E2 divides E1 by 2^E2, dropping the remainder; for a negative signed E1 the result \
+         is implementation-defined.";
     /// C99: §6.5.6 paragraph 8, p. 83; PDF p. 95.
     POINTER_ARITHMETIC = "6.5.6p8", "p. 83; PDF p. 95", "Additive operators",
         "Adding n to a pointer moves it n elements within its array. Pointing one past the last \
@@ -249,6 +296,10 @@ clauses! {
     MEMBER_ORDER = "6.7.2.1p13", "p. 103; PDF p. 115", "Structure and union specifiers",
         "Members are laid out in the order they are declared, the first at the very start; \
          there may be unnamed padding between them.";
+    /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112.
+    TYPE_SPECIFIERS = "6.7.2p2", "pp. 99-100; PDF pp. 111-112", "Type specifiers",
+        "An integer type is named by one of a fixed set of keyword combinations, such as \
+         unsigned long int, the keywords in any order.";
     /// C99: §6.7.2.1 paragraph 15, p. 103; PDF p. 115.
     TRAILING_PADDING = "6.7.2.1p15", "p. 103; PDF p. 115", "Structure and union specifiers",
         "There may be unnamed padding at the end of a structure, so that every element of an \
@@ -373,6 +424,9 @@ clauses! {
     LIBRARY_HEADERS = "7.1.2p1", "p. 165; PDF p. 177", "Standard headers",
         "Each library function is declared, with a prototype, in a header that #include makes \
          available.";
+    /// C99: §7.17 paragraph 2, p. 254; PDF p. 266.
+    SIZE_T = "7.17p2", "p. 254; PDF p. 266", "Common definitions <stddef.h>",
+        "size_t is the unsigned integer type of sizeof's result; <stdio.h> defines it too.";
     /// C99: §7.1.2 paragraph 4, p. 165; PDF p. 177.
     HEADER_ORDER = "7.1.2p4", "p. 165; PDF p. 177", "Standard headers",
         "A standard header may be included more than once with no further effect, and must be \
@@ -392,6 +446,10 @@ clauses! {
     FPRINTF = "7.19.6.1p2", "p. 274; PDF p. 286", "The fprintf function",
         "printf's format string says how to convert each later argument to text; too few \
          arguments is undefined, and extra ones are evaluated and ignored.";
+    /// C99: §7.19.6.1 paragraph 7, pp. 276-277; PDF pp. 288-289.
+    LENGTH_MODIFIERS = "7.19.6.1p7", "pp. 276-277; PDF pp. 288-289", "The fprintf function",
+        "A length modifier says which integer type a conversion takes: hh a char, h a short, l a \
+         long, ll a long long, z a size_t.";
     /// C99: §7.19.6.1 paragraph 4, p. 275; PDF p. 287.
     CONVERSION_SPECIFICATION = "7.19.6.1p4", "p. 275; PDF p. 287", "The fprintf function",
         "A conversion specification starts with % and has flags, a minimum field width, a \

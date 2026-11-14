@@ -39,12 +39,19 @@ pub(super) fn flow(
     let second = event.operands.get(1);
     let result = event.result.as_ref();
     let operand = |operand: Option<&Operand>| operand.map(|operand| chips.operand(operand));
+    let to = event.result_type.as_deref();
     let parts: Vec<Option<FlowPart>> = match event.kind {
         | EventKind::LvalueConversion => vec![operand(first), Some(arrow("read")), operand(result)],
-        | EventKind::IntegerPromotion => vec![
-            operand(first).map(|chip| typed(chip, "char")),
-            Some(arrow("promote")),
-            operand(result).map(|chip| typed(chip, "int")),
+        | EventKind::IntegerPromotion => chips.conversion(event, "promote", "char", "int"),
+        | EventKind::ArithmeticConversion =>
+            chips.conversion(event, "convert", "int", "unsigned int"),
+        | EventKind::Sizeof => vec![
+            program
+                .source()
+                .get(event.range.start..event.range.end)
+                .map(|text| part("label", text)),
+            Some(arrow("is")),
+            operand(result).map(|chip| typed(chip, "size_t")),
         ],
         | EventKind::ArrayDecay => chips.decay(event),
         | EventKind::AddressOf => vec![
@@ -102,13 +109,7 @@ pub(super) fn flow(
                 operand(first),
             ],
         | EventKind::Initialize | EventKind::Assign => chips.store(event),
-        | EventKind::Increment => vec![
-            operand(first),
-            Some(arrow("was")),
-            operand(second),
-            Some(arrow("now")),
-            operand(result),
-        ],
+        | EventKind::Increment => chips.increment(event),
         | EventKind::CompoundAssign => chips.compound(event, operator),
         | EventKind::Cast => chips.cast(event, operator),
         | EventKind::Declare => vec![
@@ -116,7 +117,7 @@ pub(super) fn flow(
             Some(arrow("holds")),
             Some(part("value", "?")),
         ],
-        | EventKind::Constant => vec![operand(result).map(|chip| typed(chip, "int"))],
+        | EventKind::Constant => vec![operand(result).map(|chip| typed(chip, to.unwrap_or("int")))],
         | EventKind::Branch => chips.branch(first),
         | EventKind::Call => chips.call(event),
         | EventKind::LibraryCall => chips.library_call(event, written),
@@ -239,6 +240,43 @@ struct Chips<'a, 'o> {
 }
 
 impl Chips<'_, '_> {
+    /// A promotion or a conversion: the value in the type it had, and in
+    /// the type it has now, as the engine names them (`from` and `to` when
+    /// it does not).
+    fn conversion(&self, event: &Event, verb: &str, from: &str, to: &str) -> Vec<Option<FlowPart>> {
+        let operand = |operand: Option<&Operand>| operand.map(|operand| self.operand(operand));
+        vec![
+            operand(event.operands.first())
+                .map(|chip| typed(chip, event.from_type.as_deref().unwrap_or(from))),
+            Some(arrow(verb)),
+            operand(event.result.as_ref())
+                .map(|chip| typed(chip, event.result_type.as_deref().unwrap_or(to))),
+        ]
+    }
+
+    /// `i++`: the object, what it held and what it holds now. Inside a
+    /// condition the update also yields a value: the old one for a postfix
+    /// operator, the new one for a prefix one.
+    fn increment(&self, event: &Event) -> Vec<Option<FlowPart>> {
+        let operand = |operand: Option<&Operand>| operand.map(|operand| self.operand(operand));
+        let mut parts = vec![
+            operand(event.operands.first()),
+            Some(arrow("was")),
+            operand(event.operands.get(1)),
+            Some(arrow("now")),
+        ];
+        if let Some(stored) = event.operands.get(2) {
+            parts.extend([
+                operand(Some(stored)),
+                Some(arrow("yields")),
+                operand(event.result.as_ref()),
+            ]);
+        } else {
+            parts.push(operand(event.result.as_ref()));
+        }
+        parts
+    }
+
     /// A store: the value, converted when the object's type changes it,
     /// into the object.
     fn store(&self, event: &Event) -> Vec<Option<FlowPart>> {
@@ -252,12 +290,13 @@ impl Chips<'_, '_> {
             .zip(stored)
             .is_some_and(|(value, stored)| value != stored);
         if converted && let Some(Operand::Address { target: id, .. }) = target {
-            let ty = self
-                .objects
-                .get(id)
-                .map_or("char", |object| object.r#type.as_str());
+            let ty = event.result_type.as_deref().unwrap_or_else(|| {
+                self.objects
+                    .get(id)
+                    .map_or("char", |object| object.r#type.as_str())
+            });
             vec![
-                operand(value).map(|chip| typed(chip, "int")),
+                operand(value).map(|chip| typed(chip, event.from_type.as_deref().unwrap_or("int"))),
                 Some(arrow("convert")),
                 operand(stored).map(|chip| typed(chip, ty)),
                 Some(arrow("store")),
@@ -315,20 +354,15 @@ impl Chips<'_, '_> {
         let array = event.objects.first().map(|&id| self.whole(id));
         // A const array decays to a pointer to const elements.
         let ty = array.as_ref().and_then(|chip| chip.ty.as_deref()).unwrap_or("int");
-        let constant = ty.starts_with("const ");
-        let pointer = match (ty.trim_start_matches("const ").starts_with("char"), constant) {
-            | (true, false) => "char *",
-            | (true, true) => "const char *",
-            | (false, false) => "int *",
-            | (false, true) => "const int *",
-        };
+        let element = ty.split('[').next().unwrap_or("int").trim();
+        let pointer = format!("{element} *");
         vec![
             array,
             Some(arrow("decays to")),
             event
                 .result
                 .as_ref()
-                .map(|result| typed(self.operand(result), pointer)),
+                .map(|result| typed(self.operand(result), &pointer)),
         ]
     }
 

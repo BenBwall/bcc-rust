@@ -24,7 +24,7 @@ pub struct Demo {
     pub source:  &'static str,
 }
 
-pub static DEMOS: [Demo; 12] = [
+pub static DEMOS: [Demo; 13] = [
     Demo {
         key:     "tour",
         title:   "Objects, loops and calls",
@@ -120,6 +120,18 @@ pub static DEMOS: [Demo; 12] = [
         path:    &[],
         name:    "promotion.c",
         source:  include_str!("../demos/promotion.c"),
+    },
+    Demo {
+        key:     "unsigned",
+        title:   "Unsigned numbers wrap; signed numbers don't",
+        summary: "Unsigned arithmetic wraps modulo 2^N and is defined: a countdown wraps to \
+                  4294967295, -1 < 1u is false, and sizeof gives an unsigned size_t.",
+        topics:  &["unsigned", "conversions", "sizeof"],
+        faults:  false,
+        stage:   None,
+        path:    &[],
+        name:    "unsigned.c",
+        source:  include_str!("../demos/unsigned.c"),
     },
     Demo {
         key:     "overflow",
