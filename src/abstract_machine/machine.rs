@@ -13,7 +13,12 @@ use std::{
 
 use super::{
     clauses,
+    floating::{
+        Floating,
+        Real,
+    },
     model::{
+        Arithmetic,
         Diagnostic,
         Evaluation,
         Event,
@@ -200,6 +205,15 @@ impl Machine {
                     narration::constant(range, integer, ty, spelling, value)
                 }
             },
+            | &Op::PushReal { value, exact } => {
+                let operand = Operand::Value(Value::Floating(value));
+                self.push(operand.clone())?;
+                let spelling = instruction.macro_use.map_or_else(
+                    || source.get(range.start..range.end).unwrap_or_default(),
+                    |used| program.macros[used].replacement.as_str(),
+                );
+                narration::floating_constant(range, value, exact, spelling, operand)
+            },
             | &Op::Sizeof(size, ty) => {
                 let value = Value::Integer(i128::try_from(size).unwrap_or(i128::MAX));
                 self.push(Operand::Value(value.clone()))?;
@@ -323,30 +337,45 @@ impl Machine {
                     .len()
                     .checked_sub(depth + 1)
                     .ok_or_else(|| self.error("empty operand stack"))?;
-                let Operand::Value(Value::Integer(integer)) = operands[slot] else {
-                    return Err(self.error("expected an integer operand"));
+                let Operand::Value(value) = operands[slot].clone() else {
+                    return Err(self.error("expected an arithmetic operand"));
                 };
-                let converted = to.convert(integer);
-                self.activations[top].operands[slot] = Operand::Value(Value::Integer(converted));
+                let converted = self.converted(&value, to)?;
+                self.activations[top].operands[slot] = Operand::Value(converted.clone());
                 let whole = self.operator_text(program, instruction);
-                Self::arithmetic_conversion(
-                    range, &whole, from, to, other, depth, integer, converted,
-                )
+                match (from, to, other, &value, &converted) {
+                    | (
+                        Arithmetic::Integer(from),
+                        Arithmetic::Integer(to),
+                        Arithmetic::Integer(other),
+                        &Value::Integer(integer),
+                        &Value::Integer(result),
+                    ) => Self::arithmetic_conversion(
+                        range, &whole, from, to, other, depth, integer, result,
+                    ),
+                    | _ => Self::floating_conversion(
+                        range, &whole, from, to, other, depth, value, converted,
+                    ),
+                }
             },
             | &Op::Cast { from, to } => {
                 let value = self.pop_value()?;
-                let converted = match (to, &value) {
-                    | (Type::Integer(integer), &Value::Integer(number)) =>
-                        Value::Integer(integer.convert(number)),
-                    | _ => value.clone(),
+                let converted = match to.arithmetic() {
+                    | Some(arithmetic) => self.converted(&value, arithmetic)?,
+                    | None => value.clone(),
                 };
                 self.push(Operand::Value(converted.clone()))?;
                 self.cast(range, source, from, to, value, converted)
             },
             | &Op::DefaultPromote(from) => {
                 let value = self.pop_value()?;
-                self.push(Operand::Value(value.clone()))?;
-                self.default_promotion(range, from, value)
+                let promoted = match from {
+                    | Arithmetic::Floating(_) =>
+                        self.converted(&value, Arithmetic::Floating(Floating::Double))?,
+                    | Arithmetic::Integer(_) => value.clone(),
+                };
+                self.push(Operand::Value(promoted.clone()))?;
+                self.default_promotion(range, from, value, promoted)
             },
             | Op::InitializeString {
                 bytes,
@@ -428,8 +457,13 @@ impl Machine {
             },
             | &Op::Unary(operator, ty) => {
                 let value = self.pop_value()?;
-                let result = match (operator, ty, &value) {
+                let integer_type = ty.and_then(Arithmetic::integer);
+                let result = match (operator, integer_type, &value) {
                     | ("+", _, Value::Integer(integer)) => Value::Integer(*integer),
+                    | ("+", _, &Value::Floating(real)) => Value::Floating(real),
+                    // Unary minus flips a floating value's sign, a zero's and
+                    // a NaN's too (C99 §F.3).
+                    | ("-", _, &Value::Floating(real)) => Value::Floating(real.negate()),
                     // An unsigned negation is reduced modulo 2^N, so it is
                     // always defined (C99 §6.2.5p9).
                     | ("-", Some(ty), &Value::Integer(integer)) if !ty.signed() =>
@@ -511,13 +545,19 @@ impl Machine {
                 let current = self.read(target, offset)?;
                 // `--` subtracts 1, so an overflow reads as a subtraction.
                 // An integer narrower than int is promoted first, and the
-                // sum converted back when it is stored (C99 §6.5.2.4p2).
+                // sum converted back when it is stored; a floating object
+                // adds the 1 of its own type (C99 §6.5.2.4p2).
                 let operator = if delta > 0 { "+" } else { "-" };
                 let ty = self
                     .leaf_type(target, offset)
-                    .and_then(Type::integer)
-                    .map(super::integers::Integer::promoted);
-                let sum = self.binary_value(operator, ty, current.clone(), Value::Integer(1))?;
+                    .and_then(Type::arithmetic)
+                    .map(Arithmetic::promoted);
+                let one = match ty {
+                    | Some(Arithmetic::Floating(floating)) =>
+                        Value::Floating(Real::from_integer(1, floating).value),
+                    | _ => Value::Integer(1),
+                };
+                let sum = self.binary_value(operator, ty, current.clone(), one)?;
                 let stored = self.store(target, offset, sum.clone())?;
                 if nested {
                     let value = if prefix { &stored } else { &current };
@@ -527,7 +567,7 @@ impl Machine {
                     range, source, delta, prefix, nested, target, offset, current, &sum, stored,
                 )
             },
-            | &Op::Compound(operator, common) => {
+            | &Op::Compound(operator, common, right_type) => {
                 let right = self.pop_value()?;
                 let (target, offset) = self.pop_address()?;
                 self.check_writable(target, offset)?;
@@ -535,12 +575,13 @@ impl Machine {
                 // Both operands convert to the type the operator computes
                 // in, as in `E1 = E1 op (E2)` (C99 §6.5.16.2p3).
                 let shift = matches!(operator, "<<" | ">>");
-                let (left, right_converted) = match (common, &current, &right) {
-                    | (Some(common), &Value::Integer(left), &Value::Integer(value)) => (
-                        Value::Integer(common.convert(left)),
-                        Value::Integer(if shift { value } else { common.convert(value) }),
+                let (left, right_converted) = match common {
+                    | Some(common) if !shift => (
+                        self.converted(&current, common)?,
+                        self.converted(&right, common)?,
                     ),
-                    | _ => (current.clone(), right.clone()),
+                    | Some(common) => (self.converted(&current, common)?, right.clone()),
+                    | None => (current.clone(), right.clone()),
                 };
                 let result =
                     self.binary_value(operator, common, left.clone(), right_converted.clone())?;
@@ -549,7 +590,7 @@ impl Machine {
                     range,
                     source,
                     operator,
-                    common,
+                    (common, right_type),
                     target,
                     offset,
                     [current, right, left, right_converted],
@@ -740,7 +781,10 @@ impl Machine {
         value: Value,
         fallthrough: bool,
     ) -> Result<Event, Diagnostic> {
-        if !matches!(value, Value::Integer(_) | Value::Struct { .. }) {
+        if !matches!(
+            value,
+            Value::Integer(_) | Value::Floating(_) | Value::Struct { .. }
+        ) {
             return Err(self.error("function returned a value of an unsupported type"));
         }
         let top = self.activations.len() - 1;
@@ -751,10 +795,9 @@ impl Machine {
         // §6.8.6.4p3).
         let returns = defined.returns;
         let original = value.clone();
-        let value = match (returns, value) {
-            | (Type::Integer(integer), Value::Integer(number)) =>
-                Value::Integer(integer.convert(number)),
-            | (_, value) => value,
+        let value = match returns.arithmetic() {
+            | Some(arithmetic) => self.converted(&value, arithmetic)?,
+            | None => value,
         };
         let mut ended = Vec::new();
         for object in &mut self.state.objects {

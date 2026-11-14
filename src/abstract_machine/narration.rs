@@ -5,7 +5,18 @@
 //! Each builder returns an [`Event`] whose clauses are the rules the
 //! operation applied (see `clauses.rs` for the citations).
 
+mod floating;
+
 use std::fmt::Write;
+
+use floating::{
+    conversion_words,
+    floating_declaration,
+};
+pub(super) use floating::{
+    floating_constant,
+    floating_precision,
+};
 
 use super::{
     clauses::{
@@ -22,6 +33,7 @@ use super::{
     machine::Machine,
     memory::article,
     model::{
+        Arithmetic,
         Diagnostic,
         DirectiveKind,
         Event,
@@ -92,6 +104,12 @@ pub(super) enum Topic {
     SignedConversion,
     Shift,
     Sizeof,
+    FloatingPoint,
+    FloatingSizes,
+    IntegerToFloating,
+    Truncation,
+    NotANumber,
+    AnnexF,
 }
 
 impl Topic {
@@ -286,6 +304,37 @@ impl Topic {
                  evaluated, so sizeof x++ leaves x alone. On an array it counts the whole array, \
                  so sizeof a / sizeof a[0] is its length, but only where a has not decayed to a \
                  pointer, as it has in a function's parameter.",
+            | Self::FloatingPoint =>
+                "Most decimal fractions have no exact binary form: 0.1 is stored as the nearest \
+                 double, 0.1000000000000000055511151231257827…, and each operation rounds its \
+                 result again, so 0.1 + 0.2 is not 0.3 and ten 0.1s do not add up to exactly 1. \
+                 printf(\"%.17g\") shows enough digits to tell any two doubles apart. Compare \
+                 floating results with a tolerance, not ==, and count money in integer cents.",
+            | Self::FloatingSizes =>
+                "On x86-64 a float is 4 bytes with about 7 significant decimal digits, a double 8 \
+                 bytes with about 16, and a long double the x87's 80-bit format, padded to 16 \
+                 bytes, with about 19. C promises much less (6 digits for float, 10 for double), \
+                 and long double varies most: on 64-bit Windows it is just a double, on ARM64 \
+                 Linux a 128-bit format. Use double unless you have a reason not to.",
+            | Self::IntegerToFloating =>
+                "Every int converts to a double exactly, but only where the program converts it. \
+                 In `double average = total / count;` the division happens first, in int, and only \
+                 its truncated result becomes a double. Converting an operand first, as in \
+                 `(double)total / count`, makes the division itself floating.",
+            | Self::Truncation =>
+                "Converting to an integer cuts the fraction off, toward zero: (int)2.99 is 2 and \
+                 (int)-2.99 is -2, never 3. To round to the nearest integer, use lround from \
+                 <math.h>. A value whose integral part does not fit, like (int)3e9, is undefined; \
+                 x86-64 gives -2147483648 for it, and an optimizer may assume it never happens.",
+            | Self::NotANumber =>
+                "A NaN, not a number, comes from operations such as 0.0 / 0.0 that have no \
+                 meaningful result. It compares unequal to everything, itself included, so x != x \
+                 is true only for a NaN, and it spreads: any arithmetic with a NaN gives a NaN.",
+            | Self::AnnexF =>
+                "Floating division by zero does not stop a program that follows Annex F: x / 0.0 \
+                 is an infinity and 0.0 / 0.0 a NaN, which printf writes as inf and nan. Integer \
+                 division by zero is still undefined, and on x86-64 it kills the program with \
+                 SIGFPE.",
             | Self::VariadicPromotion =>
                 "A function with `...` cannot say what types its extra arguments have, so C widens \
                  them to a few standard types first. printf can then read every small integer as \
@@ -728,6 +777,11 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Undefined behavior: division by zero",
             "C defines no quotient or remainder for an integer division by zero.",
         ),
+        | Some(Undefined::FloatingConversion) => (
+            "Undefined behavior: a floating value that does not fit",
+            "Converting a floating value to an integer type keeps its integral part, and C \
+             defines the result only when that part fits in the type.",
+        ),
         | Some(Undefined::NullIndirection) => (
             "Undefined behavior: null pointer dereference",
             "A null pointer points to no object, so there is nothing for `*` to designate.",
@@ -889,11 +943,11 @@ impl Machine {
         let object = &self.state.objects[id - 1];
         let function = self.function_name(object.frame_id);
         let what = match ty {
-            | Type::Array(Integer::Int, count) => format!(
+            | Type::Array(Arithmetic::INT, count) => format!(
                 "an array of {count} ints ({} bytes on x86-64). Each element's value is",
                 count.saturating_mul(4)
             ),
-            | Type::Array(Integer::Char, count) => format!(
+            | Type::Array(Arithmetic::CHAR, count) => format!(
                 "an array of {count} chars ({count} byte{}). Each element's value is",
                 if count == 1 { "" } else { "s" }
             ),
@@ -926,6 +980,8 @@ impl Machine {
                 article(integer.spelling()),
                 width_text(integer)
             ),
+            | Type::Floating(floating) =>
+                format!("{}. Its value is", floating_declaration(floating)),
         };
         let kind = match ty {
             | Type::Array(element, count) => format!("an array of {count} {}s", element.spelling()),
@@ -933,6 +989,7 @@ impl Machine {
             | Type::StructPointer(_) => String::from("a pointer to a structure"),
             | Type::Struct(_) => format!("a {}", object.r#type),
             | Type::Integer(integer) => format!("{} object", article(integer.spelling())),
+            | Type::Floating(floating) => format!("{} object", article(floating.spelling())),
         };
         let summary = format!(
             "The machine draws `{name}` here, {kind} in {function}'s frame; C has it exist from \
@@ -966,16 +1023,23 @@ impl Machine {
         }
         // Types other than int and char state their width, which C leaves
         // to the implementation within minimum ranges.
+        let element = match ty {
+            | Type::Array(element, _) => element.ty(),
+            | ty => ty,
+        };
         let sized = matches!(
-            ty,
-            Type::Integer(integer) | Type::Array(integer, _)
-                if !matches!(integer, Integer::Int | Integer::Char)
+            element,
+            Type::Integer(integer) if !matches!(integer, Integer::Int | Integer::Char)
         );
+        let floating = element.floating().is_some();
         if sized {
             cited.push(clauses::INTEGER_LIMITS);
             if ty.integer().is_some_and(|integer| !integer.signed()) {
                 cited.push(clauses::UNSIGNED_TYPES);
             }
+        }
+        if floating {
+            cited.extend([clauses::FLOATING_TYPES, clauses::FLOATING_FORMATS]);
         }
         let mut event = noted(
             explained(
@@ -994,6 +1058,8 @@ impl Machine {
                 Topic::Const
             } else if sized {
                 Topic::IntegerSizes
+            } else if floating {
+                Topic::FloatingSizes
             } else {
                 Topic::Indeterminate
             },
@@ -1309,9 +1375,14 @@ impl Machine {
     pub(super) fn default_promotion(
         &self,
         range: SourceRange,
-        from: Integer,
+        from: Arithmetic,
         value: Value,
+        promoted: Value,
     ) -> Event {
+        let from = match from {
+            | Arithmetic::Floating(_) => return Self::float_promotion(range, value, promoted),
+            | Arithmetic::Integer(integer) => integer,
+        };
         let shown = self.short_value(&value);
         let character = match value {
             | Value::Integer(integer) if from.is_char() => format!(" ({})", char_text(integer)),
@@ -1910,8 +1981,8 @@ impl Machine {
     ) -> Event {
         let location = self.location(target, offset);
         let mut shown = self.value_text(&value);
-        let leaf = self.leaf_type(target, offset).and_then(Type::integer);
-        if let (Some(integer), Value::Integer(number)) = (leaf, &value)
+        let leaf = self.leaf_type(target, offset).and_then(Type::arithmetic);
+        if let (Some(Arithmetic::Integer(integer)), Value::Integer(number)) = (leaf, &value)
             && integer.is_char()
         {
             let _ = write!(shown, " ({})", char_text(*number));
@@ -1942,7 +2013,7 @@ impl Machine {
             structure: None,
         });
         event.objects.push(target);
-        event.result_type = leaf.map(|integer| String::from(integer.spelling()));
+        event.result_type = leaf.map(|arithmetic| String::from(arithmetic.spelling()));
         result(event, Operand::Value(value))
     }
 
@@ -2267,12 +2338,18 @@ impl Machine {
         &self,
         range: SourceRange,
         operator: &str,
-        ty: Option<Integer>,
+        ty: Option<Arithmetic>,
         value: Value,
         output: Value,
     ) -> Event {
         let input = self.short_value(&value);
         let shown = self.short_value(&output);
+        if let Some(Arithmetic::Floating(format)) = ty {
+            let mut event = Self::floating_unary(range, operator, format, &input, &shown);
+            event.operands.push(Operand::Value(value));
+            return result(event, Operand::Value(output));
+        }
+        let ty = ty.and_then(Arithmetic::integer);
         let unsigned = ty.filter(|ty| !ty.signed());
         let (title, summary, text, clause) = match operator {
             | "-" if let Some(ty) = unsigned => {
@@ -2356,11 +2433,23 @@ impl Machine {
         range: SourceRange,
         source: &str,
         operator: &str,
-        ty: Option<Integer>,
+        ty: Option<Arithmetic>,
         left: Value,
         right: Value,
         output: Value,
     ) -> Event {
+        if let Some(Arithmetic::Floating(format)) = ty {
+            let mut event = if matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=") {
+                Self::floating_comparison(range, source, operator, format, &left, &right, &output)
+            } else {
+                Self::floating_arithmetic(range, operator, format, &left, &right, &output)
+            };
+            event
+                .operands
+                .extend([Operand::Value(left), Operand::Value(right)]);
+            return result(event, Operand::Value(output));
+        }
+        let ty = ty.and_then(Arithmetic::integer);
         let (operator, element) = match operator {
             | "&[]" => ("+", true),
             | _ => (operator, false),
@@ -2409,8 +2498,8 @@ impl Machine {
                         ..
                     } => self
                         .leaf_type(target, first)
-                        .and_then(Type::integer)
-                        .map_or("int", Integer::spelling),
+                        .and_then(Type::arithmetic)
+                        .map_or("int", Arithmetic::spelling),
                     | _ => "int",
                 };
                 let moved = match count {
@@ -2830,6 +2919,21 @@ impl Machine {
         value: Value,
         stored: Value,
     ) -> Event {
+        let leaf = self.leaf_type(target, offset);
+        if let (Some(from), Some(to)) = (from.arithmetic(), leaf.and_then(Type::arithmetic))
+            && let Some(event) = self.floating_store(
+                range,
+                initializer,
+                full_expression,
+                (from, to),
+                target,
+                offset,
+                value.clone(),
+                stored.clone(),
+            )
+        {
+            return event;
+        }
         let location = self.location(target, offset);
         let shown = self.short_value(&stored);
         let (kind, title, clause) = if initializer {
@@ -2846,7 +2950,6 @@ impl Machine {
             )
         };
         let converted = value != stored;
-        let leaf = self.leaf_type(target, offset);
         // The integer conversion the store makes, from the value's type to
         // the object's (C99 §6.5.16.1p2, §6.7.8p11, §6.3.1.3).
         let integers = match (from, leaf, &value, &stored) {
@@ -2913,7 +3016,7 @@ impl Machine {
                 to.bits(),
                 modulo_text(number, result, to.bits())
             ),
-            | _ if converted =>
+            | _ if converted && leaf.is_some_and(Type::is_pointer) =>
                 format!("Storing the constant 0 into a pointer makes {location} a null pointer."),
             | _ if initializer =>
                 format!("The initializer gives {location} its first value, {shown}."),
@@ -3082,6 +3185,16 @@ impl Machine {
             },
             | _ => {},
         }
+        if let Some(format) = self.leaf_type(target, offset).and_then(Type::floating) {
+            let _ = write!(
+                text,
+                " For a {} the 1 is a {} too, and the exact result is rounded to the nearest {}.",
+                format.spelling(),
+                format.spelling(),
+                format.spelling()
+            );
+            cited.push(clauses::FLOATING_OPERATIONS);
+        }
         let yielded = if prefix {
             stored.clone()
         } else {
@@ -3182,6 +3295,11 @@ impl Machine {
         value: Value,
         converted: Value,
     ) -> Event {
+        if let Some(event) =
+            Self::floating_cast(range, source, from, to, value.clone(), converted.clone())
+        {
+            return event;
+        }
         let form = snippet(source, range);
         let name = to.spelling(&self.structures);
         let name = name.as_str();
@@ -3386,7 +3504,7 @@ impl Machine {
         range: SourceRange,
         source: &str,
         operator: &str,
-        common: Option<Integer>,
+        (common, right_type): (Option<Arithmetic>, Option<Arithmetic>),
         target: usize,
         offset: i32,
         [current, right, left, right_converted]: [Value; 4],
@@ -3407,8 +3525,11 @@ impl Machine {
             });
         let meaning = format!("{left_text} = {left_text} {operator} ({right_text})");
         let pointer = matches!(current, Value::Pointer { .. });
+        let floating = common.and_then(Arithmetic::floating);
+        let common = common.and_then(Arithmetic::integer);
         let (verb, clause) = match operator {
             | _ if pointer => ("moves it", clauses::POINTER_ARITHMETIC),
+            | "/" if floating.is_some() => ("divides by", clauses::DIVISION),
             | "+" => ("adds", clauses::ADDITION),
             | "-" => ("subtracts", clauses::ADDITION),
             | "*" => ("multiplies by", clauses::MULTIPLICATION),
@@ -3540,6 +3661,44 @@ impl Machine {
             }
         } else if pointer {
             text.push_str(" Pointer arithmetic counts elements, not bytes.");
+        } else if let Some(format) = floating {
+            let name = format.spelling();
+            let leaf = self.leaf_type(target, offset).and_then(Type::arithmetic);
+            if let (Some(leaf), Some(right_type)) = (leaf, right_type) {
+                if let Some((words, used, _)) =
+                    conversion_words(leaf, Arithmetic::Floating(format), &current, &left)
+                {
+                    let _ = write!(
+                        text,
+                        " The usual arithmetic conversions make the operation {name}: {words}."
+                    );
+                    cited.extend(used);
+                }
+                if let Some((words, used, _)) = conversion_words(
+                    right_type,
+                    Arithmetic::Floating(format),
+                    &right,
+                    &right_converted,
+                ) {
+                    let _ = write!(
+                        text,
+                        " The usual arithmetic conversions make the operation {name}: {words}."
+                    );
+                    cited.extend(used);
+                }
+                let _ = write!(
+                    text,
+                    " The {name} result, {}, is the exact one rounded to the nearest {name}.",
+                    self.short_value(combined)
+                );
+                cited.extend([clauses::USUAL_ARITHMETIC, clauses::FLOATING_OPERATIONS]);
+                if let Some((words, used, _)) =
+                    conversion_words(Arithmetic::Floating(format), leaf, combined, &stored)
+                {
+                    let _ = write!(text, " Storing it back: {words}.");
+                    cited.extend(used);
+                }
+            }
         }
         text.push_str(" The full expression ends here, a sequence point.");
         cited.push(clauses::FULL_EXPRESSION);
@@ -3566,7 +3725,10 @@ impl Machine {
             },
         );
         event.sequence_point = true;
-        event.result_type = leaf.map(|leaf| String::from(leaf.spelling()));
+        event.result_type = self
+            .leaf_type(target, offset)
+            .and_then(Type::arithmetic)
+            .map(|leaf| String::from(leaf.spelling()));
         event.operands.extend([
             Operand::Address {
                 target,
@@ -3770,6 +3932,23 @@ impl Machine {
         // assignment (C99 §6.5.2.2p7).
         for ((argument, ty), id) in arguments.iter().zip(types).zip(&parameters) {
             let object = &self.state.objects[id - 1];
+            if let (Some(from), Some(to)) = (
+                ty.arithmetic(),
+                self.object_type(*id).and_then(Type::arithmetic),
+            ) && let Some((words, clauses_used, _)) =
+                conversion_words(from, to, argument, &object.value)
+            {
+                let _ = write!(
+                    text,
+                    " The argument for `{}` converts to the parameter's type, {}, as if by \
+                     assignment: {words}.",
+                    object.name,
+                    to.spelling()
+                );
+                cited.push(clauses::VARIADIC_ARGUMENTS);
+                cited.extend(clauses_used);
+                continue;
+            }
             if let (&Value::Integer(value), Type::Integer(from), Value::Integer(converted)) =
                 (argument, *ty, &object.value)
                 && let Some(Type::Integer(to)) = self.object_type(*id)
@@ -3849,7 +4028,13 @@ impl Machine {
         let names = self.names(&ended);
         // The value converts to the return type as if by assignment (C99
         // §6.8.6.4p3).
+        let floating = from
+            .arithmetic()
+            .zip(returns.arithmetic())
+            .and_then(|(from, to)| conversion_words(from, to, &original, &value))
+            .map(|(words, cited, _)| (words, cited.first().copied().unwrap_or(clauses::RETURN)));
         let conversion = match (from, returns, &original, &value) {
+            | _ if floating.is_some() => floating,
             | (
                 Type::Integer(from),
                 Type::Integer(to),
@@ -4004,6 +4189,7 @@ impl Machine {
         match value {
             | Value::Indeterminate => String::from("an indeterminate value"),
             | Value::Integer(integer) => format!("{integer}"),
+            | Value::Floating(real) => real.short(),
             | Value::Pointer { target: None, .. } => String::from("a null pointer"),
             | &Value::Pointer {
                 target: Some(target),
@@ -4059,6 +4245,7 @@ impl Machine {
         match value {
             | Value::Indeterminate => String::from("?"),
             | Value::Integer(integer) => format!("{integer}"),
+            | Value::Floating(real) => real.short(),
             | Value::Pointer { target: None, .. } => String::from("NULL"),
             | &Value::Pointer {
                 target: Some(target),
@@ -4381,6 +4568,16 @@ fn movement(delta: i128, noun: &str) -> String {
 
 fn snippet(source: &str, range: SourceRange) -> &str {
     source.get(range.start..range.end).unwrap_or("")
+}
+
+/// `text` with its first letter capitalized.
+fn sentence_case(text: &str) -> String {
+    let mut characters = text.chars();
+    characters.next().map_or_else(String::new, |first| {
+        let mut output = String::from(first.to_ascii_uppercase());
+        output.push_str(characters.as_str());
+        output
+    })
 }
 
 /// `text` as a sentence: capitalized, ending in a full stop.

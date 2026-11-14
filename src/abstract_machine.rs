@@ -16,7 +16,9 @@
 //!
 //! Read `parser.rs` and `expressions.rs` for compilation, `machine.rs` and
 //! `memory.rs` for execution, `integers.rs` for the integer types and their
-//! conversions, `narration.rs` for the explanations and
+//! conversions, `floating.rs` for the floating types, their arithmetic and
+//! conversions, and `decimal.rs` for their exact decimal forms and
+//! `printf`'s conversions of them, `narration.rs` for the explanations and
 //! `clauses.rs` for the cited rules, `model.rs` for the public observation
 //! types, and `json.rs` for the versioned wire format. `lexer.rs` retains
 //! byte ranges. `tests.rs` exercises actual execution, events, rejection, UB
@@ -25,10 +27,12 @@
 //! This independent subset does not invoke bcc's syntax/semantic frontend.
 //! It models the standard integer types with the widths bcc gives them on
 //! x86-64 Linux (8-bit char, signed; 16-bit short; 32-bit int; 64-bit long
-//! and long long), structures laid out as bcc lays them out for x86-64
-//! (`layout.rs`), and scalar-based pointer offsets. File-scope and `static`
-//! objects are created and initialized one per step before `main` runs.
-//! Operand evaluation is left-to-right; nested side effects are rejected.
+//! and long long), the real floating types in the formats x86-64 gives
+//! them (IEEE 754 binary32 and binary64, the x87 80-bit extended format
+//! for long double, computed in software), structures laid out as bcc lays them
+//! out for x86-64 (`layout.rs`), and scalar-based pointer offsets. File-scope
+//! and `static` objects are created and initialized one per step before `main`
+//! runs. Operand evaluation is left-to-right; nested side effects are rejected.
 //! It is an educational execution model, not a C conformance checker.
 //!
 //! C99: §6.7.8 paragraph 10, p. 126; PDF p. 138 (indeterminate locals).
@@ -54,6 +58,8 @@ mod lexer;
 mod parser;
 
 // Execution and observations
+mod decimal;
+pub mod floating;
 mod integers;
 mod json;
 mod layout;
@@ -67,6 +73,11 @@ pub mod clauses;
 mod narration;
 
 pub use clauses::Clause;
+pub use floating::{
+    Fields,
+    Floating,
+    Real,
+};
 use machine::Machine;
 pub use model::{
     Diagnostic,
@@ -156,7 +167,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 5.
+    /// Encodes the current observation using schema version 7.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()

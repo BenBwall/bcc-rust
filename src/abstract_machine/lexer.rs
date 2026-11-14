@@ -84,6 +84,10 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
             offset = directive_end(source, start)?;
         } else if byte == b'"' || byte == b'\'' {
             offset = literal_end(source, start)?;
+        } else if byte.is_ascii_digit()
+            || (byte == b'.' && bytes.get(offset + 1).is_some_and(u8::is_ascii_digit))
+        {
+            offset = number_end(bytes, offset);
         } else if byte.is_ascii_alphanumeric() || byte == b'_' {
             offset += 1;
             while offset < bytes.len()
@@ -99,13 +103,6 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
                     range(source, start, offset + 1),
                     "wide and Unicode literals are outside this subset; the machine models char \
                      strings",
-                ));
-            }
-            if byte.is_ascii_digit() && bytes.get(offset) == Some(&b'.') {
-                return Err(Diagnostic::new(
-                    "unsupported",
-                    range(source, start, offset + 1),
-                    "floating point is outside this subset; the machine models the integer types",
                 ));
             }
         } else if b"{}()[];,+-*/%<>=!&.".contains(&byte) {
@@ -159,6 +156,25 @@ pub(super) fn lex(source: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
         macro_use: None,
     });
     Ok(tokens)
+}
+
+/// The end of the preprocessing number starting at `start`: digits,
+/// letters, `_` and periods, and a sign right after `e`, `E`, `p` or `P`.
+/// The parser decides whether it is an integer or a floating constant.
+///
+/// C99: §6.4.8 paragraph 2, p. 65; PDF p. 77.
+fn number_end(bytes: &[u8], start: usize) -> usize {
+    let mut offset = start + 1;
+    while let Some(&byte) = bytes.get(offset) {
+        let signed =
+            matches!(byte, b'+' | b'-') && matches!(bytes[offset - 1], b'e' | b'E' | b'p' | b'P');
+        if signed || byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.') {
+            offset += 1;
+        } else {
+            break;
+        }
+    }
+    offset
 }
 
 /// The end of the directive starting with the `#` at `start`: the end of

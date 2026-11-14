@@ -69,6 +69,37 @@ pub struct StepEvent {
     /// Objects the operation created, read, wrote or ended.
     pub objects:        Vec<usize>,
     pub sequence_point: bool,
+    /// How the floating value the step produced is stored, field by field,
+    /// for the bit view.
+    #[serde(default)]
+    pub encoding:       Option<Encoding>,
+}
+
+/// A stored floating value taken apart, as the engine reports it: the sign
+/// bit, the exponent field and the fraction, and what they mean.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Encoding {
+    /// `float`, `double` or `long double`.
+    #[serde(rename = "type")]
+    pub ty:          String,
+    /// The value, as the page shows it.
+    pub value:       String,
+    pub sign:        bool,
+    /// The exponent field's bits.
+    pub exponent:    String,
+    pub biased:      u32,
+    pub bias:        i32,
+    /// The power of two the significand is scaled by.
+    pub scale:       i32,
+    /// The x87 format's explicit integer bit.
+    pub integer_bit: Option<bool>,
+    /// The fraction field's bits.
+    pub fraction:    String,
+    /// The significand's exact value.
+    pub significand: String,
+    /// `zero`, `subnormal`, `normal`, `infinity` or `NaN`.
+    pub class:       String,
 }
 
 impl StepEvent {
@@ -211,6 +242,18 @@ pub enum Value {
         /// `'\n'`); `None` for an int.
         #[serde(default)]
         character: Option<String>,
+    },
+    /// A value of a floating type.
+    Floating {
+        /// The shortest decimal that reads back as the value: `0.1`.
+        text:  String,
+        /// Its exact decimal value.
+        exact: String,
+        /// `float`, `double` or `long double`.
+        #[serde(rename = "type")]
+        ty:    String,
+        /// The bytes in memory, lowest address first, in hexadecimal.
+        bytes: String,
     },
     Array {
         elements: Vec<Value>,

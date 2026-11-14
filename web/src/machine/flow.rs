@@ -339,6 +339,7 @@ impl Chips<'_, '_> {
     fn branch(&self, condition: Option<&Operand>) -> Vec<Option<FlowPart>> {
         let truth = condition.is_some_and(|operand| match operand {
             | Operand::Value(abstract_machine::Value::Integer(value)) => *value != 0,
+            | Operand::Value(abstract_machine::Value::Floating(real)) => !real.is_zero(),
             | Operand::Value(abstract_machine::Value::Pointer { target, .. }) => target.is_some(),
             | _ => false,
         });

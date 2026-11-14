@@ -19,7 +19,7 @@ use super::{
 };
 
 impl State {
-    /// Encodes this observation as schema version 6 JSON.
+    /// Encodes this observation as schema version 7 JSON.
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut output = String::new();
@@ -39,7 +39,7 @@ impl Diagnostic {
 }
 
 pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
-    let mut output = String::from("{\"schema_version\":6,\"source\":");
+    let mut output = String::from("{\"schema_version\":7,\"source\":");
     string(&mut output, &program.source);
     output.push_str(",\"structures\":[");
     for (index, structure) in program.structures.iter().enumerate() {
@@ -79,7 +79,7 @@ pub(super) fn trace(program: &Program, history: &[Machine]) -> String {
 fn state(output: &mut String, state: &State) {
     write!(
         output,
-        "{{\"schema_version\":6,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
+        "{{\"schema_version\":7,\"engine\":\"bounded-c-subset\",\"step\":{},\"status\":",
         state.step
     )
     .expect("String write");
@@ -283,6 +283,20 @@ fn value(output: &mut String, input: &Value) {
         | Value::Indeterminate => output.push_str("{\"kind\":\"indeterminate\"}"),
         | Value::Integer(integer) =>
             write!(output, "{{\"kind\":\"integer\",\"value\":{integer}}}").expect("String write"),
+        | Value::Floating(real) => {
+            output.push_str("{\"kind\":\"floating\",\"type\":");
+            string(output, real.format().spelling());
+            output.push_str(",\"value\":");
+            string(output, &real.short());
+            output.push_str(",\"exact\":");
+            string(output, &real.exact());
+            output.push_str(",\"bytes\":[");
+            for (index, byte) in real.bytes().iter().enumerate() {
+                comma(output, index);
+                write!(output, "{byte}").expect("String write");
+            }
+            output.push_str("]}");
+        },
         | Value::Pointer {
             target,
             offset,

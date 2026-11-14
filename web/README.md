@@ -67,7 +67,22 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   implementation-defined, and the step says bcc and GCC wrap. Shifts stop on
   a count out of range and on left-shifting a negative or overflowing signed
   value, `sizeof` is a step yielding a `size_t`, and a condition may count
-  down with `k-- > 0`. Any other directive (a function-like macro,
+  down with `k-- > 0`. The floating types are there too: `float`, `double`
+  and `long double` as x86-64 stores them (IEEE 754 binary32 and binary64,
+  which C99 Annex F makes them, and the x87 80-bit format in 16 bytes),
+  computed in software so every host agrees. A floating constant's step
+  shows the exact value stored (`0.1` becomes
+  `0.1000000000000000055511151231257827…`, the nearest double); each
+  conversion to, from or between floating types is narrated (an int
+  converts exactly or rounds, a double truncates toward zero into an int,
+  and stops as undefined when its integral part does not fit); each
+  arithmetic step gives the exact result before rounding; a comparison
+  shows both exact values, so `0.1 + 0.2 == 0.3` visibly yields 0; and
+  division by zero gives inf or NaN under Annex F, which the step says bcc
+  follows. A step that produces a floating value draws its sign, exponent
+  and fraction bits under the lead sentence, and each floating cell under
+  the playhead shows its bytes. printf writes `%f %e %g %a` (and `%Lf` for
+  a long double) exactly as glibc does. Any other directive (a function-like macro,
   `#if`, another header) stops the machine before its first step with a
   card that sends the reader to the Preprocessor stage.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
@@ -428,6 +443,14 @@ wraps, then counts down correctly with `for (unsigned int k = 3; k-- > 0;)`.
 It takes a `size_t` from `sizeof`, shows `-1 < 1u` converting -1 to
 unsigned before it compares, and shifts `1u` into the top bit and out
 again, printing each result with `%u`, `%zu` and `%d`. Like the printf
+lesson it includes `<stdio.h>`.
+
+The lesson "Floating point: close, not exact" (`demos/floating.c`), after
+the unsigned lesson, averages two ints into a double, which truncates
+first, `7 / 2` being int division, until a cast makes the division
+floating; shows `0.1 + 0.2 == 0.3` yielding 0 with the two exact values on
+screen; sums `0.1` ten times into `0.99999999999999989`; truncates
+`(int)2.99` to 2; and prints the stored values with `%.17g`. Like the printf
 lesson it includes `<stdio.h>`.
 
 How live compilation runs:

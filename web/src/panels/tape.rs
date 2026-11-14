@@ -501,7 +501,7 @@ pub fn value_text(value: &Value) -> Option<String> {
             text,
             character: Some(character),
         } => Some(format!("{text} {character}")),
-        | Value::Integer { text, .. } => Some(text.clone()),
+        | Value::Integer { text, .. } | Value::Floating { text, .. } => Some(text.clone()),
         // A char array reads as its characters.
         | Value::Array { elements }
             if !elements.is_empty()

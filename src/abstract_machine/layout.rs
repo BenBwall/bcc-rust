@@ -13,11 +13,14 @@
 
 use std::fmt::Write;
 
-use super::model::{
-    Member,
-    Structure,
-    Type,
-    Value,
+use super::{
+    floating::Real,
+    model::{
+        Member,
+        Structure,
+        Type,
+        Value,
+    },
 };
 
 impl Type {
@@ -25,6 +28,7 @@ impl Type {
     pub(super) fn size_align(self, structures: &[Structure]) -> (usize, usize) {
         match self {
             | Self::Integer(integer) => (integer.bytes(), integer.bytes()),
+            | Self::Floating(floating) => (floating.bytes(), floating.bytes()),
             | Self::Pointer(..) | Self::StructPointer(_) => (8, 8),
             | Self::Array(element, count) =>
                 (count.saturating_mul(element.bytes()), element.bytes()),
@@ -55,6 +59,7 @@ impl Type {
         let tag = |id: usize| structures.get(id).map_or("?", |structure| &structure.name);
         match self {
             | Self::Integer(integer) => String::from(integer.spelling()),
+            | Self::Floating(floating) => String::from(floating.spelling()),
             | Self::Pointer(element, false) => format!("{} *", element.spelling()),
             | Self::Pointer(element, true) => format!("const {} *", element.spelling()),
             | Self::Array(element, count) => format!("{}[{count}]", element.spelling()),
@@ -73,12 +78,10 @@ impl Type {
     /// an initializer: zero for every arithmetic scalar, a null pointer for
     /// every pointer, member by member (C99 §6.7.8p10).
     pub(super) fn zero(self, structures: &[Structure]) -> Value {
-        self.filled(structures, &mut |ty| {
-            if ty.is_pointer() {
-                Value::null()
-            } else {
-                Value::Integer(0)
-            }
+        self.filled(structures, &mut |ty| match ty {
+            | Self::Floating(floating) => Value::Floating(Real::zero(floating, false)),
+            | ty if ty.is_pointer() => Value::null(),
+            | _ => Value::Integer(0),
         })
     }
 
@@ -95,7 +98,7 @@ impl Type {
     fn filled(self, structures: &[Structure], scalar: &mut impl FnMut(Self) -> Value) -> Value {
         match self {
             | Self::Array(element, count) =>
-                Value::Array((0..count).map(|_| scalar(Self::Integer(element))).collect()),
+                Value::Array((0..count).map(|_| scalar(element.ty())).collect()),
             | Self::Struct(id) => Value::Struct {
                 structure: id,
                 members:   structures.get(id).map_or_else(Vec::new, |structure| {
@@ -113,7 +116,7 @@ impl Type {
     /// The type of the scalar at leaf `offset` of an object of this type.
     pub(super) fn leaf_type(self, structures: &[Structure], offset: usize) -> Option<Self> {
         match self {
-            | Self::Array(element, count) => (offset < count).then_some(Self::Integer(element)),
+            | Self::Array(element, count) => (offset < count).then_some(element.ty()),
             | Self::Struct(id) => {
                 let (member, within) = member_at(structures.get(id)?, offset)?;
                 member.ty.leaf_type(structures, within)
