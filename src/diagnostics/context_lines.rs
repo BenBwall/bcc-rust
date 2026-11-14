@@ -165,10 +165,7 @@ impl Renderer {
         let _ = writeln!(
             out,
             "In file included from {}:{}:",
-            FileName {
-                path: context.get_source_file(at.file),
-                here: includer.here,
-            },
+            FileName::new(context, at.file, includer.here),
             at.line,
         );
     }
@@ -210,10 +207,7 @@ impl Renderer {
     ) -> FileName<'c> {
         let here = context.configuration.diagnostic_format() == DiagnosticFormat::Clang
             && segment.is_some_and(|segment| context.source_map.opening_of(segment).1.here);
-        FileName {
-            path: context.get_source_file(vector.source_file_index),
-            here,
-        }
+        FileName::new(context, vector.source_file_index, here)
     }
 }
 
@@ -320,8 +314,11 @@ impl Renderer {
 }
 
 /// The name of the macro whose definition holds `vector`: the identifier
-/// after `#define` on the logical line it is on.
-/// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
+/// after `#define` (or `%:define`) on the logical line it is on. The
+/// preprocessor's macro table is gone by the time diagnostics are written, so
+/// the name is read again from the source text.
+/// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164; §6.4.6 paragraph 3, p. 64;
+/// PDF p. 76.
 fn macro_defined_at<'c>(context: &'c Context<'_>, vector: &SourceVector) -> Option<&'c str> {
     let file = vector.source_file_index;
     let text = context.source_text(file)?;
@@ -338,13 +335,37 @@ fn macro_defined_at<'c>(context: &'c Context<'_>, vector: &SourceVector) -> Opti
     {
         line -= 1;
     }
-    let rest = text[starts[line]..].trim_start_matches([' ', '\t']);
-    let rest = rest.strip_prefix('#')?.trim_start_matches([' ', '\t']);
-    let rest = rest.strip_prefix("define")?.trim_start_matches([' ', '\t']);
-    let end = rest
-        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
-        .unwrap_or(rest.len());
+    let identifier = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let rest = skip_blanks(&text[starts[line]..]);
+    let rest = skip_blanks(rest.strip_prefix('#').or_else(|| rest.strip_prefix("%:"))?);
+    let rest = rest.strip_prefix("define")?;
+    if rest.starts_with(identifier) {
+        return None;
+    }
+    let rest = skip_blanks(rest);
+    let end = rest.find(|c: char| !identifier(c)).unwrap_or(rest.len());
     (end != 0).then(|| &rest[..end])
+}
+
+/// `text` after the blanks that may separate a directive's tokens: spaces
+/// and tabs, comments, which translation phase 3 replaces with a space, and
+/// line splices, which phase 2 deletes.
+/// C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22; §6.10 paragraph 5,
+/// p. 147; PDF p. 159.
+fn skip_blanks(mut text: &str) -> &str {
+    loop {
+        let blank = text.trim_start_matches([' ', '\t', '\x0b', '\x0c']);
+        text = if let Some(comment) = blank.strip_prefix("/*") {
+            comment.find("*/").map_or("", |end| &comment[end + 2..])
+        } else if let Some(spliced) = blank
+            .strip_prefix("\\\n")
+            .or_else(|| blank.strip_prefix("\\\r\n"))
+        {
+            spliced
+        } else {
+            return blank;
+        };
+    }
 }
 
 /// A file's name as a location writes it.
@@ -353,10 +374,25 @@ pub(super) struct FileName<'a> {
     here: bool,
 }
 
+impl<'a> FileName<'a> {
+    /// The name of source file `file`, which Clang begins with `./` when
+    /// `here` says its header was found beside an includer in the working
+    /// directory: Clang's `FileManager` names that directory `.` and
+    /// `HeaderSearch` appends the name to it with the host's separator. A
+    /// name `#line` gave is the presumed name exactly as written.
+    /// C99: §6.10.4 paragraph 4, p. 158; PDF p. 170.
+    fn new(context: &'a Context<'_>, file: u32, here: bool) -> Self {
+        Self {
+            path: context.get_source_file(file),
+            here: here && context.physical_source_file(file) == file,
+        }
+    }
+}
+
 impl Display for FileName<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.here {
-            f.write_str("./")?;
+            write!(f, ".{}", std::path::MAIN_SEPARATOR)?;
         }
         write!(f, "{}", self.path.display())
     }

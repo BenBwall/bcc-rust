@@ -208,12 +208,17 @@ impl<'tu> SourceMap<'tu> {
         self.openings[opening as usize]
     }
 
-    /// The function definition that holds `position`, by its index.
+    /// The function definition that holds `position`, by its index. A
+    /// function a macro wrote whole is read at its invocation: its name, its
+    /// closing brace and each diagnostic in it share that one place.
     pub(crate) fn function_at(&self, position: ReadingPosition) -> Option<u32> {
-        let index = self
+        let next = self
             .functions
-            .partition_point(|function| function.after < position)
-            .checked_sub(1)?;
+            .partition_point(|function| function.after < position);
+        let index = match self.functions.get(next) {
+            | Some(function) if function.after == position && function.through == position => next,
+            | _ => next.checked_sub(1)?,
+        };
         (self.functions[index].through >= position)
             .then(|| u32::try_from(index).expect("functions are counted in u32"))
     }
