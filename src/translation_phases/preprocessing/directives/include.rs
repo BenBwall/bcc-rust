@@ -930,11 +930,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// implementation-defined. A string literal is taken whole; after `<`,
     /// the spellings of the following tokens are joined up to the first `>`.
     /// Clang keeps every white space between them. GCC (libcpp
-    /// `glue_header_name`) and TCC keep only white space written next to the
-    /// token after it, its `PREV_WHITE`: none before `>`, and none before
-    /// a macro's name, whose replacement takes its place. Adjacent string
-    /// literals are not concatenated here (footnote 148), so a second one is
-    /// an extra token.
+    /// `glue_header_name`) keeps only white space written next to the token
+    /// after it, its `PREV_WHITE`: none before `>`, and none before a
+    /// macro's name, whose replacement takes its place. TCC (`parse_include`
+    /// in `tccpp.c`) reads the tokens without white space and stops once the
+    /// joined text ends with `>`, so it keeps none, and `>>` or `>=` inside
+    /// the name do not end it. Adjacent string literals are not concatenated
+    /// here (footnote 148), so a second one is an extra token.
     fn read_expanded_header(&mut self, directive: PreprocessorToken) -> Option<HeaderName<'x>> {
         let include_string =
             self.expect_token_without_rewind::<true>(
@@ -993,10 +995,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             include_string.source_vectors,
         );
         let mut closed = false;
-        let gnu_spacing = matches!(
-            self.context.configuration.compiler_identity(),
-            CompilerIdentity::Gcc | CompilerIdentity::Tcc
-        );
+        let identity = self.context.configuration.compiler_identity();
+        let gnu_spacing = identity == CompilerIdentity::Gcc;
+        let tcc = identity == CompilerIdentity::Tcc;
         // The white space read since the last token, under GCC's rule.
         let mut white: Option<SourceVectors> = None;
         loop {
@@ -1004,6 +1005,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 | Some(token) => {
                     if token.kind == PreprocessorTokenType::Newline {
                         break;
+                    }
+                    if tcc && token.kind == PreprocessorTokenType::Whitespace {
+                        continue;
                     }
                     if gnu_spacing {
                         if token.kind == PreprocessorTokenType::Whitespace {
@@ -1034,7 +1038,14 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         &mut self.context.source_vectors.0,
                         token.source_vectors,
                     );
-                    if let Some(idx) = token_contents.find('>') {
+                    let closing = if tcc {
+                        token_contents
+                            .ends_with('>')
+                            .then(|| token_contents.len() - 1)
+                    } else {
+                        token_contents.find('>')
+                    };
+                    if let Some(idx) = closing {
                         let start = contents.len();
                         contents.push_str(&token_contents[..idx]);
                         token_spans.push((start..contents.len(), token.source_vectors, 0));
