@@ -1437,9 +1437,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // `#pragma pack` treats differently from GCC's.
         let tcc_ms = ms && self.context.configuration.compiler_identity() == CompilerIdentity::Tcc;
         let mut ms_unit: Option<(u64, u64, u64)> = None; // size, byte start, used bits
-        // TCC's Microsoft run: the last bit-field's class and width, and the
-        // run's byte start and used bits.
-        let mut tcc_run: Option<(TccClass, u64, u64, u64)> = None;
+        let mut tcc_run = TccRun::default();
         let mut required = u64::from(tag.alignment.get());
         let named = members.iter().filter(|m| m.initializable()).count();
         let mut too_large = false;
@@ -1648,15 +1646,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let aligns = match member.width {
                 | None => true,
                 | Some(width) if tcc_ms =>
-                    tag.kind == TagKind::Union
-                        || width != 0
-                        || tcc_run.is_some_and(|run| run.0 == tcc_class),
+                    tag.kind == TagKind::Union || width != 0 || tcc_run.class == Some(tcc_class),
                 | Some(width) if ms && tag.kind == TagKind::Union => gcc_ms && width != 0,
                 | Some(_) => !unnamed_bit_field,
             };
             if aligns {
                 alignment = alignment.max(layout.align);
             }
+            // TCC lays a bit-field as wide as its type out as an ordinary
+            // member, unless a pack or `packed` applies (`struct_decl` in
+            // `tccgen.c`).
+            let tcc_ordinary = tcc_ms
+                && pack == 0
+                && !packed
+                && member
+                    .width
+                    .is_some_and(|width| u64::from(width) == layout.size.saturating_mul(8));
             let mut resolved = member;
             if pack != 0 {
                 resolved.ty = resolved
@@ -1697,14 +1702,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | Some(width) => u64::from(width).div_ceil(8),
                     | None => layout.size,
                 });
-            } else if let Some(width) = member.width {
+            } else if let Some(width) = member.width.filter(|_| !tcc_ordinary) {
                 if tcc_ms {
                     let width = u64::from(width);
                     let (start, used) =
                         Self::tcc_ms_bit_field(tcc_run, tcc_class, width, layout, &mut bytes);
                     resolved.offset = start + used / 8;
                     resolved.bit_offset = u32::try_from(used % 8).unwrap_or(0);
-                    tcc_run = Some((tcc_class, width, start, used + width));
+                    tcc_run = TccRun {
+                        class: Some(tcc_class),
+                        width,
+                        start,
+                        used: used + width,
+                    };
                 } else if ms {
                     // Microsoft ABI: a bit-field shares its predecessor's
                     // allocation unit only when the declared types have the
@@ -1796,7 +1806,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             } else {
                 ms_unit = None;
-                tcc_run = None;
                 let placed = align_up(bytes, layout.align).and_then(|offset| {
                     offset
                         .checked_add(layout.size)
@@ -1821,6 +1830,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 resolved.offset = offset;
                 bytes = end;
                 bit_end = bytes.saturating_mul(8);
+                tcc_run = TccRun {
+                    start: offset,
+                    ..TccRun::default()
+                };
             }
             output.push(resolved);
         }
@@ -2088,32 +2101,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Places a bit-field of `width` bits and class `class` in TCC's
-    /// Microsoft layout after `run`, the last bit-field's (`None` after
-    /// another member), and returns its run's byte start and the bits used
-    /// before it there. A bit-field starts a run when it would overflow its
-    /// type's bits, or when it is nonzero exactly when its class differs
-    /// from the last bit-field's: a nonzero one of another class, or a
-    /// zero-width one of the same. A run starts at the cursor `bytes`
-    /// aligned to the field's, and reserves the field type's bytes unless
-    /// both it and the last bit-field are zero-width, so that a zero-width
-    /// field after a nonzero one of its class reserves a unit of its own.
+    /// Microsoft layout after `run`, and returns its run's byte start and
+    /// the bits used before it there. A bit-field starts a run when it would
+    /// overflow its type's bits, or when it is nonzero exactly when its
+    /// class differs from the last bit-field's: a nonzero one of another
+    /// class, or a zero-width one of the same. A run starts at the cursor
+    /// `bytes` aligned to the field's, and reserves the field type's bytes
+    /// unless both it and the last bit-field are zero-width, so that a
+    /// zero-width field after a nonzero one of its class reserves a unit of
+    /// its own. A bit-field that starts no run stays at the last member's
+    /// offset: after an ordinary member, a zero-width bit-field and then a
+    /// nonzero one of its class overlap that member, as in TCC.
     /// TCC: `struct_layout` in `tccgen.c`.
     /// C99: implementation-defined allocation, §6.7.2.1 paragraphs 10-11,
     /// p. 102; PDF p. 114.
     fn tcc_ms_bit_field(
-        run: Option<(TccClass, u64, u64, u64)>,
+        run: TccRun,
         class: TccClass,
         width: u64,
         layout: Layout,
         bytes: &mut u64,
     ) -> (u64, u64) {
-        let changed = run.is_none_or(|run| run.0 != class);
-        let used = run.map_or(0, |run| run.3);
-        if used + width <= layout.size.saturating_mul(8) && (width > 0) != changed {
-            return (run.map_or(*bytes, |run| run.2), used);
+        let changed = run.class != Some(class);
+        if run.used + width <= layout.size.saturating_mul(8) && (width > 0) != changed {
+            return (run.start, run.used);
         }
         let start = align_up(*bytes, layout.align).unwrap_or(*bytes);
-        *bytes = if width != 0 || run.is_some_and(|run| run.1 != 0) {
+        *bytes = if width != 0 || run.width != 0 {
             start.saturating_add(layout.size)
         } else {
             start
@@ -2873,4 +2887,16 @@ impl<'tu> VariableLayout<'tu> {
 struct TccClass {
     boolean: bool,
     size:    u64,
+}
+
+/// TCC's Microsoft bit-field state between members (`struct_layout` in
+/// `tccgen.c`): the last bit-field's class (`prevbt`, `None` after an
+/// ordinary member) and width (`prev_bit_size`), the last member's byte
+/// offset (`offset`), and the bits used from it (`bit_pos`).
+#[derive(Clone, Copy, Default, Debug)]
+struct TccRun {
+    class: Option<TccClass>,
+    width: u64,
+    start: u64,
+    used:  u64,
 }

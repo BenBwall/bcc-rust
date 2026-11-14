@@ -187,6 +187,56 @@ mod tests {
         }
     }
 
+    /// The bits, sizes and alignments TCC 0.9.28 prints for
+    /// `ms_bitfields_tcc.c` under `-mms-bitfields`: TCC lays a bit-field as
+    /// wide as its type out as an ordinary member, unless a pack or
+    /// `packed` applies, and a bit-field that starts no run stays at the
+    /// last member's offset, past the record in `F4`.
+    #[test]
+    fn tcc_bits_match_tcc() {
+        if !cfg!(all(target_arch = "x86_64", target_os = "linux")) {
+            eprintln!("skipping: TCC's output was measured on an x86-64 Linux host");
+            return;
+        }
+        let expected = concat!(
+            "struct R 4 4 a@0+8 b@0+11\n",
+            "struct F1 1 1 a@0+8 b@0+3\n",
+            "struct F2 4 4 a@0+32 b@0+3\n",
+            "struct F3 8 8 a@0+64 b@0+3\n",
+            "struct F4 4 4 a@0+8 b@32+3\n",
+            "struct F5 8 4 a@0+8 b@0+20 c@32+20\n",
+            "struct F6 4 4 c@0+8 a@8+8 b@8+4\n",
+            "struct O1 4 4 x@0+8 b@0+3\n",
+            "struct O2 8 4 x@0+32 b@32+3\n",
+            "struct O3 4 2 x@0+16 b@0+5 c@16+5\n",
+            "struct O4 1 1 x@0+8 b@0+1\n",
+            "struct Z1 8 4 a@0+3 b@32+5\n",
+            "struct Z2 4 4 a@0+3 b@3+5\n",
+            "struct Z3 8 8 a@0+3 b@3+3\n",
+            "struct Z4 4 2 a@0+3 b@16+3\n",
+            "struct Z5 0 1 c@0+3\n",
+            "struct Z6 8 4 c@0+3 d@32+2\n",
+            "union U1 4 4 a@0+8 b@0+11\n",
+            "union U2 8 8 a@0+3\n",
+            "struct P1 1 1 a@0+8 b@8+11\n",
+            "struct P2 6 2 x@0+8 b@0+3 c@16+30\n",
+            "struct P3 4 4 a@0+8 b@8+11\n",
+            "struct P4 4 4 a@0+8 b@8+11\n",
+        );
+        let program = fixture("ms_bitfields_tcc.c");
+        let args = [
+            "--compiler-identity=tcc",
+            "--target=x86_64-unknown-linux-gnu",
+            "-w",
+            "-mms-bitfields",
+            "--interpret",
+            &program,
+        ];
+        let output = bcc(&args);
+        succeeds(&output, &args);
+        assert_eq!(text(&output.stdout), expected);
+    }
+
     /// TCC applies the option from the pragma on, to each record whose
     /// definition ends after it, even one whose body it is in.
     #[test]
