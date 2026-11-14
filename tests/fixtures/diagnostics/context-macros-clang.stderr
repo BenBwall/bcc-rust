@@ -39,4 +39,4 @@ context-macros-clang.c:20:33: warning: shift count >= width of type [-Wshift-cou
 ./context-headers/macro.h:1:25: note: expanded from macro 'HEADER_SHIFT'
     1 | #define HEADER_SHIFT (1 << 40)
       |                         ^  ~~
-5 errors and 2 warnings generated.
+2 warnings and 5 errors generated.

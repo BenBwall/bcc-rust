@@ -339,6 +339,16 @@ impl Context<'_> {
         Some((self.first_source_vector(source), site))
     }
 
+    /// The name of the outermost macro whose invocation produced the first
+    /// token of `source`, from its replacement list or an argument, or
+    /// `None` when a file spells that token outside any invocation. Clang
+    /// asks for the innermost macro's name (`Lexer::getImmediateMacroName`);
+    /// only the outermost invocation is kept. `source` must not be empty.
+    pub(crate) fn outermost_macro_name(&self, source: SourceVectors) -> Option<&str> {
+        let site = self.outermost_invocation(source)?;
+        self.source_text(site.source_file_index)?.get(site.range())
+    }
+
     /// Whether a macro's replacement list, not its argument or the file,
     /// wrote the first token of `source`. `source` must not be empty.
     pub(crate) fn written_by_macro_body(&self, source: SourceVectors) -> bool {
@@ -399,14 +409,20 @@ impl Context<'_> {
     /// The outermost invocation that produced the first token of `source`,
     /// unless a file spells that token.
     fn invocation_site(&self, source: SourceVectors) -> Option<&SourceVector> {
-        let (arena, start) = SourceArena::decode(source);
-        let sites = &self.expansion_starts[arena as usize];
-        let site = &sites.ends[sites.get(start)? as usize];
+        let site = self.outermost_invocation(source)?;
         let spelling = self.first_source_vector(source);
         // A token written within the invocation is a macro argument. Its
         // own physical location is more precise than the macro's name.
         (spelling.source_file_index != site.source_file_index || spelling.index < site.index)
             .then_some(site)
+    }
+
+    /// The outermost invocation that produced the first token of `source`,
+    /// from its replacement list or an argument.
+    fn outermost_invocation(&self, source: SourceVectors) -> Option<&SourceVector> {
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.expansion_starts[arena as usize];
+        Some(&sites.ends[sites.get(start)? as usize])
     }
 
     /// Where a source range ends in the user's input, before macro expansion.

@@ -25,4 +25,4 @@ context-ranges-clang.c:18:39: warning: shift count >= width of type [-Wshift-cou
 context-ranges-clang.c:18:46: warning: division by zero is undefined [-Wdivision-by-zero]
    18 | int shifts(int value) { return (value << 40) / 0; }
       |                                              ^ ~
-6 errors and 3 warnings generated.
+3 warnings and 6 errors generated.

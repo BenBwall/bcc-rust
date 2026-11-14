@@ -52,4 +52,4 @@ sema-permerrors-clang.c:21:13: error: type specifier missing, defaults to 'int';
 sema-permerrors-clang.c:22:49: warning: pointer type mismatch in conditional expression [-Wpointer-type-mismatch]
    22 | void *choose(int c, int *p, long *q) { return c ? p : q; }
       |                                                 ^~~~~
-17 errors and 1 warning generated.
+1 warning and 17 errors generated.

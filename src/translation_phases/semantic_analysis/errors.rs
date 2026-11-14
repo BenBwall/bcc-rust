@@ -126,6 +126,8 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
     /// The words are the diagnostic's name.
+    /// C99: §6.5.8p6, p. 86; PDF p. 98.
+    TypeLimits(crate::configuration::DiagnosticGroup),
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
     ShadowOrBody(crate::configuration::DiagnosticGroup),
     /// C99: §6.5p3, p. 67; PDF p. 79.
@@ -1169,6 +1171,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::TypeLimits(_) => "the types decide this comparison",
             | Self::ShadowOrBody(_) => "this may not be what it looks like",
             | Self::Parentheses(_) => "this may not group as written",
             | Self::KnrPromotedParameter => "the prototype gives it another type",
@@ -1401,6 +1404,11 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::TypeLimits
+                    | crate::configuration::DiagnosticGroup::TautologicalConstantCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalConstantOutOfRangeCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalUnsignedZeroCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalTypeLimitCompare
                     | crate::configuration::DiagnosticGroup::Shadow
                     | crate::configuration::DiagnosticGroup::ShadowLocal
                     | crate::configuration::DiagnosticGroup::ShadowCompatibleLocal
@@ -1852,6 +1860,10 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::TypeLimits(_) => (
+                "comparison decided by type",
+                "C99 §6.5.8p6: the result is the same for every value the operand's type can hold",
             ),
             | Self::ShadowOrBody(_) => (
                 "hidden declaration or empty body",
@@ -2794,6 +2806,7 @@ impl SemanticErrorKind {
         use crate::configuration::DiagnosticGroup as G;
         match self {
             | Self::PointerConstraint(group)
+            | Self::TypeLimits(group)
             | Self::ShadowOrBody(group)
             | Self::Parentheses(group)
             | Self::Format(group, _)
@@ -2862,6 +2875,17 @@ impl SemanticError {
                     group.name()
                 };
                 return Some((arena.alloc_str(name), option));
+            },
+            // GCC words an attribute it drops by its name, under its one
+            // `-Wattributes`.
+            | (F::Gcc, SemanticErrorKind::IgnoredAttribute) =>
+                return Some((
+                    format_in!(arena, "'{name}' attribute ignored"),
+                    Some("attributes"),
+                )),
+            | (F::Gcc, SemanticErrorKind::UnknownAttribute) => {
+                let message = format_in!(arena, "'{name}' attribute directive ignored");
+                return Some((message, Some("attributes")));
             },
             // An error by default, which `-Wno-parentheses` controls.
             | (
@@ -2969,7 +2993,11 @@ impl SemanticError {
     fn promoted_option<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
         use crate::configuration::DiagnosticFormat as F;
         let group = self.kind.group()?;
-        let name = group.name()?;
+        let name = if gcc_attributes(context, self.kind) {
+            "attributes"
+        } else {
+            group.name()?
+        };
         if self.severity() != ErrorSeverity::Error
             || group.default_severity() != ErrorSeverity::Warning
         {
@@ -3134,6 +3162,16 @@ impl SemanticError {
     }
 }
 
+/// Whether `kind` is an attribute GCC drops, which GCC's format names under
+/// its one `-Wattributes`.
+fn gcc_attributes(context: &Context<'_>, kind: SemanticErrorKind) -> bool {
+    context.configuration.diagnostic_format() == crate::configuration::DiagnosticFormat::Gcc
+        && matches!(
+            kind,
+            SemanticErrorKind::IgnoredAttribute | SemanticErrorKind::UnknownAttribute
+        )
+}
+
 impl ToDiagnostic for SemanticError {
     fn diagnostic_in<'d>(
         &self,
@@ -3192,6 +3230,7 @@ impl ToDiagnostic for SemanticError {
             self.kind,
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::TypeLimits(_)
                 | SemanticErrorKind::ShadowOrBody(_)
                 | SemanticErrorKind::Parentheses(_)
                 | SemanticErrorKind::Format(..)

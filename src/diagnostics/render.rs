@@ -31,6 +31,7 @@ use crate::{
     translation_phases::{
         Context,
         ErrorSeverity,
+        SourceVector,
     },
     util::{
         bump::{
@@ -122,13 +123,14 @@ impl Renderer {
                 | DiagnosticFormat::Msvc { column: false, .. } =>
                     write!(out, "{file}({}): ", vector.line),
                 | DiagnosticFormat::Tcc => write!(out, "{file}:{}: ", vector.line),
-                | _ if !presentation.column => write!(out, "{file}:{}: ", vector.line),
-                | _ => write!(
-                    out,
-                    "{file}:{}:{}: ",
-                    vector.line,
-                    Self::location_column(context, format, vector)
-                ),
+                | _ => Self::write_compiler_location(
+                    &mut out,
+                    file,
+                    vector,
+                    Self::location_column(context, format, vector),
+                    presentation,
+                )
+                .and_then(|()| out.write_char(' ')),
             };
         }
         // TCC names no warning options, so a message drops the `[-W…]`
@@ -216,6 +218,15 @@ impl Renderer {
             Self::retain_caret_block(&mut marks, scratch);
             for mark in &mut marks {
                 mark.label = None;
+            }
+            // A place is one caret at the start of its first character.
+            if diagnostic.point && format == DiagnosticFormat::Clang {
+                marks.truncate(1);
+                for mark in &mut marks {
+                    let text = context.source_text(mark.file).unwrap_or_default();
+                    let width = text[mark.start..].chars().next().map_or(0, char::len_utf8);
+                    mark.end = mark.end.min(mark.start + width);
+                }
             }
         }
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
@@ -368,15 +379,13 @@ impl Renderer {
         if with_context {
             self.write_context_lines(out, context, (vector, segment), segment, true);
         }
-        let _ = write!(
+        let _ = Self::write_compiler_location(
             out,
-            "{}:{}:",
             Self::file_name(context, vector, segment),
-            vector.line
+            vector,
+            Self::location_column(context, format, vector),
+            presentation,
         );
-        if presentation.column {
-            let _ = write!(out, "{}:", Self::location_column(context, format, vector));
-        }
         let _ = writeln!(
             out,
             " {} {}",
@@ -427,6 +436,25 @@ impl Renderer {
                 },
                 scratch,
             );
+        }
+    }
+
+    /// Writes a place as GCC and Clang lead a diagnostic or a note with it:
+    /// `file:line:col:`, or `file(line,col):` in `cl`'s form as clang-cl
+    /// writes it, without the column under `-fno-show-column`.
+    fn write_compiler_location(
+        out: &mut ArenaString<'_>,
+        file: impl Display,
+        vector: &SourceVector,
+        column: usize,
+        presentation: DiagnosticPresentation,
+    ) -> fmt::Result {
+        let line = vector.line;
+        match (presentation.msvc_locations, presentation.column) {
+            | (true, true) => write!(out, "{file}({line},{column}):"),
+            | (true, false) => write!(out, "{file}({line}):"),
+            | (false, true) => write!(out, "{file}:{line}:{column}:"),
+            | (false, false) => write!(out, "{file}:{line}:"),
         }
     }
 
@@ -682,7 +710,7 @@ impl Renderer {
     fn location_column(
         context: &Context<'_>,
         format: DiagnosticFormat,
-        vector: &crate::translation_phases::SourceVector,
+        vector: &SourceVector,
     ) -> usize {
         let bytes = vector.column as usize;
         if format != DiagnosticFormat::Gcc {

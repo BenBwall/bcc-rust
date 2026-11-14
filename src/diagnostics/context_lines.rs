@@ -235,9 +235,7 @@ impl Renderer {
         if site.source_file_index != location.source_file_index || site.index != location.index {
             return None;
         }
-        let invoked = context
-            .source_text(site.source_file_index)?
-            .get(site.range())?;
+        let invoked = context.outermost_macro_name(origin)?;
         let defined = macro_defined_at(context, spelling)?;
         Some(MacroExpansion {
             spelling: spelling.clone(),

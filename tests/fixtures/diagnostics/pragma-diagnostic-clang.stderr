@@ -29,4 +29,4 @@ In file included from pragma-diagnostic-clang.c:53:
 pragma-diagnostic-clang.c:52:15: note: expanded from macro 'twice'
    52 | #define twice second_twice
       |               ^
-2 errors and 6 warnings generated.
+6 warnings and 2 errors generated.
