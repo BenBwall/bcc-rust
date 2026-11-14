@@ -71,10 +71,13 @@ compiler; each part is captioned with what its lessons share
   implementation-defined, and the step says bcc and GCC wrap. Shifts stop on
   a count out of range and on left-shifting a negative or overflowing signed
   value, `sizeof` is a step yielding a `size_t`, and a condition may count
-  down with `k-- > 0`. The floating types are there too: `float`, `double`
-  and `long double` as x86-64 stores them (IEEE 754 binary32 and binary64,
-  which C99 Annex F makes them, and the x87 80-bit format in 16 bytes),
-  computed in software so every host agrees. A floating constant's step
+  down with `k-- > 0`. An object declared `size_t` keeps that name on the
+  tape, in its cell and in the datasheet; its declaration's explanation
+  says it is `unsigned long` on x86-64. The floating types are there too:
+  `float`, `double` and `long double` as x86-64 stores them (IEEE 754
+  binary32 and binary64, which C99 Annex F makes them, and the x87 80-bit
+  format in 16 bytes), computed in software so every host agrees. A
+  floating constant's step
   shows the exact value stored (`0.1` becomes
   `0.1000000000000000055511151231257827…`, the nearest double); each
   conversion to, from or between floating types is narrated (an int
@@ -144,10 +147,14 @@ beside the schematic and the datasheet; where the insight column is under
 760 px the schematic and the datasheet go below the note. The tape fits the
 recorded run to the screen; the ZOOM encoder scales it from a quarter to four
 times that, and a longer run scrolls, the tape moving under a playhead that
-stays in the middle of the screen. Calls are grouped by function and depth
-on the call stack, so a loop's repeated calls share one set of lanes; a group
-with no call at the playhead folds to one row of call bars, and its label
-opens it. The static objects' group comes first, and its rule runs from the
+stays in the middle of the screen. The deck grows with the run up to what
+the window leaves for the cells and four lines of the note's lead, then
+scrolls, and each step scrolls it to the rows it used, so the note, the
+cells and the lanes a step talks about share the screen. Calls are grouped
+by function and depth on the call stack, so a loop's repeated calls share
+one set of lanes; a group with no call at the playhead folds to one row of
+call bars, and its label opens it. The static objects' group comes first,
+and its rule runs from the
 first of them to the end of the run. It stays open, except in a program
 whose only static objects are its string literals' arrays (one that
 prints): there it starts folded, so the literals' lanes do not push the
@@ -161,7 +168,9 @@ screen together: down to 821 px the source stays beside the machine (a sticky
 column, sized to fit under the control strip); narrower, the device becomes a
 stack of modules with the source sized so the note follows it on the same
 screen, then the tape and the cells, and the transport keys docked at the
-bottom of the window. Windows 600 px tall or less (a phone held sideways, a
+bottom of the window. In the compiler pipeline a phone shows each stage's
+output right under the stage keys, before the stage's heading and hand-off.
+Windows 600 px tall or less (a phone held sideways, a
 zoomed laptop) let the header scroll away and drop the source's legends and
 the encoders.
 
@@ -284,10 +293,12 @@ first read-only listing, whose folding arrows use it.
 - The note names the rule each step applied and its kind (evaluate,
   convert, memory, lifetime, control flow, call, stopped), and marks
   sequence points. It is layered: a one-sentence summary (the engine's
-  `Event::summary`) and the cited C99 paragraphs as links come first; **How C
-  defines this step** opens the full explanation, what each paragraph says,
-  and links to the glossary entries of the step's terms, and stays open from
-  step to step once opened. A name is narrated by what its operator does
+  `Event::summary`) and the cited C99 paragraphs as links come first,
+  paragraphs of one clause sharing its heading (`§7.19.7.10p2, p3 The puts
+  function`); **How C defines this step** opens the full explanation,
+  what each paragraph says, and links to the glossary entries of the
+  step's terms, and stays open from step to step once opened. A name is
+  narrated by what its operator does
   with the object (read it, store into it, give it its initial value, take
   its address, update it), binary operators and calls say that the operand
   order is the machine's choice (C99 §6.5p3), and undefined behavior is
