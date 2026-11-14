@@ -1,7 +1,11 @@
 # How C runs: the bcc site
 
 An interactive introduction to how C programs run and how compilers translate
-them. Visitors pick a lesson (a small C program) and see it three ways:
+them. Visitors pick a lesson (a small C program) and see it three ways. The
+lessons (Table 1) come in four parts, read in order: objects and control,
+types and conversions, memory and undefined behavior, and inside the
+compiler; each part is captioned with what its lessons share
+(`demos::Part`).
 
 - **Abstract machine.** Step through the program one evaluation at a time.
   Each step leads with one plain sentence on what happened and why C says
@@ -53,7 +57,39 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   undefined behavior. A cast is a step of its own that says whether the
   value was kept or, for an int that does not fit in a char, wrapped as bcc
   and GCC do (implementation-defined), and `x += y` is narrated as `x = x +
-  (y)` with `x` evaluated once. Any other directive (a function-like macro,
+  (y)` with `x` evaluated once. The machine knows every integer type, from
+  `char` to `unsigned long long`, with its x86-64 width (a declaration says
+  it, and that C promises only a minimum range); each cell under the
+  playhead is as wide as its object's bytes and says how many, as the
+  datasheet does beside each type. A value narrower than int is promoted in a
+  step of its own, and when a binary operator's operands differ in type, a
+  step says which one the usual arithmetic conversions convert and why
+  (rank, or signedness), so `-1 < 1u` shows `-1 + 2^32 = 4294967295` before
+  it compares. Unsigned arithmetic that leaves its range is reduced modulo
+  2^N, and its step says that this is defined, unlike signed overflow, which
+  stops; a store or a cast into a signed type that cannot hold the value is
+  implementation-defined, and the step says bcc and GCC wrap. Shifts stop on
+  a count out of range and on left-shifting a negative or overflowing signed
+  value, `sizeof` is a step yielding a `size_t`, and a condition may count
+  down with `k-- > 0`. An object declared `size_t` keeps that name on the
+  tape, in its cell and in the datasheet; its declaration's explanation
+  says it is `unsigned long` on x86-64. The floating types are there too:
+  `float`, `double` and `long double` as x86-64 stores them (IEEE 754
+  binary32 and binary64, which C99 Annex F makes them, and the x87 80-bit
+  format in 16 bytes), computed in software so every host agrees. A
+  floating constant's step
+  shows the exact value stored (`0.1` becomes
+  `0.1000000000000000055511151231257827…`, the nearest double); each
+  conversion to, from or between floating types is narrated (an int
+  converts exactly or rounds, a double truncates toward zero into an int,
+  and stops as undefined when its integral part does not fit); each
+  arithmetic step gives the exact result before rounding; a comparison
+  shows both exact values, so `0.1 + 0.2 == 0.3` visibly yields 0; and
+  division by zero gives inf or NaN under Annex F, which the step says bcc
+  follows. A step that produces a floating value draws its sign, exponent
+  and fraction bits under the lead sentence, and each floating cell under
+  the playhead shows its bytes. printf writes `%f %e %g %a` (and `%Lf` for
+  a long double) exactly as glibc does. Any other directive (a function-like macro,
   `#if`, another header) stops the machine before its first step with a
   card that sends the reader to the Preprocessor stage.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
@@ -111,11 +147,19 @@ beside the schematic and the datasheet; where the insight column is under
 760 px the schematic and the datasheet go below the note. The tape fits the
 recorded run to the screen; the ZOOM encoder scales it from a quarter to four
 times that, and a longer run scrolls, the tape moving under a playhead that
-stays in the middle of the screen. Calls are grouped by function and depth
-on the call stack, so a loop's repeated calls share one set of lanes; a group
-with no call at the playhead folds to one row of call bars, and its label
-opens it. The static objects' group comes first and never folds: its rule
-runs from the first of them to the end of the run.
+stays in the middle of the screen. The deck grows with the run up to what
+the window leaves for the cells and four lines of the note's lead, then
+scrolls, and each step scrolls it to the rows it used, so the note, the
+cells and the lanes a step talks about share the screen. Calls are grouped
+by function and depth on the call stack, so a loop's repeated calls share
+one set of lanes; a group with no call at the playhead folds to one row of
+call bars, and its label opens it. The static objects' group comes first,
+and its rule runs from the
+first of them to the end of the run. It stays open, except in a program
+whose only static objects are its string literals' arrays (one that
+prints): there it starts folded, so the literals' lanes do not push the
+program's own objects and the note down the screen, and its label, which
+counts the literals, opens it.
 
 The page has light and dark themes (the device in daylight and under low
 light; its screens stay black in both) and works down to phone width. At
@@ -124,7 +168,9 @@ screen together: down to 821 px the source stays beside the machine (a sticky
 column, sized to fit under the control strip); narrower, the device becomes a
 stack of modules with the source sized so the note follows it on the same
 screen, then the tape and the cells, and the transport keys docked at the
-bottom of the window. Windows 600 px tall or less (a phone held sideways, a
+bottom of the window. In the compiler pipeline a phone shows each stage's
+output right under the stage keys, before the stage's heading and hand-off.
+Windows 600 px tall or less (a phone held sideways, a
 zoomed laptop) let the header scroll away and drop the source's legends and
 the encoders.
 
@@ -247,10 +293,12 @@ first read-only listing, whose folding arrows use it.
 - The note names the rule each step applied and its kind (evaluate,
   convert, memory, lifetime, control flow, call, stopped), and marks
   sequence points. It is layered: a one-sentence summary (the engine's
-  `Event::summary`) and the cited C99 paragraphs as links come first; **How C
-  defines this step** opens the full explanation, what each paragraph says,
-  and links to the glossary entries of the step's terms, and stays open from
-  step to step once opened. A name is narrated by what its operator does
+  `Event::summary`) and the cited C99 paragraphs as links come first,
+  paragraphs of one clause sharing its heading (`§7.19.7.10p2, p3 The puts
+  function`); **How C defines this step** opens the full explanation,
+  what each paragraph says, and links to the glossary entries of the
+  step's terms, and stays open from step to step once opened. A name is
+  narrated by what its operator does
   with the object (read it, store into it, give it its initial value, take
   its address, update it), binary operators and calls say that the operand
   order is the machine's choice (C99 §6.5p3), and undefined behavior is
@@ -351,15 +399,12 @@ reimplements none):
   the editor counts them; where `#line` says otherwise, the card shows that
   too. In the source, invocations are underlined with their expansion on
   hover, skipped lines are hatched, and conditionals carry a kept or
-  skipped mark. The browser build has no host headers: `#include` finds only
-  bcc's embedded freestanding headers (`<limits.h>`, `<stdint.h>`,
-  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found,
-  and the card and the stop explanation point to the WebAssembly view, whose
-  target has bcc's own C library. The pipeline does not borrow that
-  library's headers: they describe bcc's WASI runtime, not an x86-64 C
-  library, and the pipeline's stages are what the native `bcc-rust` prints
-  (`tests/integration/explorer.rs` compares them, and the lessons' LLVM IR
-  comes from the native compiler).
+  skipped mark. The browser has no host headers: `#include` finds the
+  headers bcc brings, its freestanding ones (`<limits.h>`, `<stdint.h>`,
+  `<stddef.h>`, `<stdbool.h>`, …) and those of its own small C library
+  (`<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<ctype.h>`, `<math.h>`), on
+  x86-64 as on wasm32. A header outside that set is reported as not found,
+  and the stop explanation sends it to the command-line bcc.
 - **Tokens (phases 5-7)** is the `--tokens` listing of a second, ordinary
   preprocessing run.
 - **Syntax tree** and **Semantic types** (phase 7) are `--syntax-tree` and
@@ -391,11 +436,11 @@ The lesson "Hello, world: printf and strings" (`demos/hello.c`), second in
 the list, is the first program most programmers write: `#include
 <stdio.h>`, `puts`, a `char name[] = "Ada";` and `printf("%s has %d
 letters\n", name, len)`, with a loop that counts letters through a
-prototype declared before `main`. In the pipeline view it stops at the
-`#include`, as any program that includes `<stdio.h>` does there (see the
-Preprocessor stage above); its LLVM IR is precomputed by the native compiler,
-which finds the host's headers. Its Clang module is a WASI command linked
-with wasi-libc (see the WebAssembly view).
+prototype declared before `main`. In the pipeline view it compiles like any
+other lesson, `<stdio.h>` coming from bcc's own C library; its LLVM IR is
+precomputed by the native compiler, which finds the host's headers. Its
+Clang module is a WASI command linked with wasi-libc (see the WebAssembly
+view).
 
 The lesson "Names for values: #define, const and casts"
 (`demos/constants.c`), third in the list, follows it with what a first week
@@ -405,6 +450,24 @@ adds it with `+=`, `(char)300`, which wraps to 44, and `printf(LABEL " is
 %.3d\n", total)`, whose format is two literals joined into one array and
 whose precision pads 56 to `056`. It includes `<stdio.h>`, so the pipeline
 view and the Clang module treat it as the printf lesson's.
+
+The lesson "Unsigned numbers wrap; signed numbers don't"
+(`demos/unsigned.c`), after "Integer promotions", computes `2u - 3`, which
+wraps to 4294967295, counts an `unsigned` down with a test (`i < 3`) that
+stands in for the `i >= 0` that never fails, so it stops only after `i`
+wraps, then counts down correctly with `for (unsigned int k = 3; k-- > 0;)`.
+It takes a `size_t` from `sizeof`, shows `-1 < 1u` converting -1 to
+unsigned before it compares, and shifts `1u` into the top bit and out
+again, printing each result with `%u`, `%zu` and `%d`. Like the printf
+lesson it includes `<stdio.h>`.
+
+The lesson "Floating point: close, not exact" (`demos/floating.c`), which
+ends the part on types and conversions, averages two ints into a double, which truncates
+first, `7 / 2` being int division, until a cast makes the division
+floating; shows `0.1 + 0.2 == 0.3` yielding 0 with the two exact values on
+screen; sums `0.1` ten times into `0.99999999999999989`; truncates
+`(int)2.99` to 2; and prints the stored values with `%.17g`. Like the printf
+lesson it includes `<stdio.h>`.
 
 How live compilation runs:
 

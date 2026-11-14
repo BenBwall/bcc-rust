@@ -55,6 +55,7 @@ use super::{
     JumpId,
     Scalar,
     SemanticErrorKind,
+    TagKind,
     TypeId,
     TypeKind,
     ValueCategory,
@@ -245,9 +246,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// operand's own mode, as GCC prints it: the C type of the operand, not
     /// the register that holds it (an `int` in an SSE register is `l`, a
     /// `float` in a general register `s`), `s`, `l` or `t` for floating
-    /// types, and the byte size of an aggregate memory operand. `%z` on a
-    /// numeric immediate, a flag output or any other operand is an error.
-    /// No `z` is left for lowering or a back end.
+    /// types, and the byte size of an aggregate memory or register operand.
+    /// `%z` on a numeric immediate, a flag output or any other operand is an
+    /// error. No `z` is left for lowering or a back end.
     /// GNU extension: GCC manual, "x86 Operand Modifiers", `z`.
     fn size_suffixes(
         &mut self,
@@ -323,7 +324,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | TypeKind::Scalar(Scalar::Double) => Some("l"),
             // `long double` is the x87 format, or `double` on MSVC.
             | TypeKind::Scalar(Scalar::LongDouble) => Some(if size == Some(8) { "l" } else { "t" }),
-            | TypeKind::Tag(_) | TypeKind::Array(..) if operand.kind == AsmOperandKind::Memory =>
+            | TypeKind::Tag(_) | TypeKind::Array(..)
+                if matches!(
+                    operand.kind,
+                    AsmOperandKind::Memory | AsmOperandKind::Register(_)
+                ) =>
                 match size {
                     | Some(1) => Some("b"),
                     | Some(2) => Some("w"),
@@ -426,10 +431,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             let constraint = alternatives[column];
             let role = constraint.role?;
             // Lowering reads an operand in a register, or a `+` one, through
-            // its value conversion; a memory operand stays an lvalue.
+            // its value conversion; a memory operand stays an lvalue, and so
+            // does a `+` aggregate, whose bytes lowering loads.
             let read = match role {
                 | AsmRole::Output => false,
-                | AsmRole::Update => kind != AsmOperandKind::Memory,
+                | AsmRole::Update =>
+                    kind != AsmOperandKind::Memory
+                        && !self.byte_aggregate(self.expression_info(operand.expression).ty),
                 | AsmRole::Input => matches!(
                     kind,
                     AsmOperandKind::Register(_)
@@ -464,7 +472,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     ) -> Result<(), (AsmFault, SourceVectors, Option<StringCacheId>)> {
         for (operand, alternatives) in asm.operands.iter().zip(constraints) {
             let constraint = &alternatives[column];
-            let at_expression = |fault| (fault, operand.expression.source_vectors, None);
+            // GCC names a read-only variable; another read-only lvalue is
+            // only an invalid one here.
+            let at_expression = |fault| match (fault, variable_name(operand.expression)) {
+                | (AsmFault::ReadOnlyVariable, Some(name)) =>
+                    (fault, operand.expression.source_vectors, Some(name)),
+                | (AsmFault::ReadOnlyVariable, None) => (
+                    AsmFault::OutputLvalue,
+                    operand.expression.source_vectors,
+                    None,
+                ),
+                | _ => (fault, operand.expression.source_vectors, None),
+            };
             let at_constraint = |fault| {
                 (
                     fault,
@@ -516,17 +535,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// An output's location: a flag, a register when the constraint allows
-    /// one and the lvalue's type fits it, else its memory.
+    /// one and the lvalue's type fits it, else its memory. An array,
+    /// structure or union takes a register of its size, which holds its
+    /// bytes, when the constraint allows no memory.
     /// C99: §6.5.16p2, p. 91; PDF p. 103 (a modifiable lvalue).
+    /// GNU extension: GCC manual, "Extended Asm", "Output Operands" (an
+    /// output is an lvalue).
     fn output_location(
         &mut self,
         info: ExpressionInfo<'tu>,
         constraint: &Constraint<'_>,
     ) -> Result<AsmOperandKind, AsmFault> {
         // GCC and Clang take a whole array, which no assignment may modify,
-        // as a memory output: the statement writes its bytes, even when the
-        // array is incomplete or its elements have const members. An array
-        // of const-qualified elements stays read-only.
+        // as an output: the statement writes its bytes, even when the array
+        // is incomplete or its elements have const members. An array of
+        // const-qualified elements stays read-only.
         let array = info.category == ValueCategory::Lvalue && {
             let mut element = info.ty;
             while let TypeKind::Array(inner, _) = self.types.nodes[element.index] {
@@ -536,8 +559,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 && !element.qualifiers.contains(TypeQualifiers::CONST)
                 && !info.ty.qualifiers.contains(TypeQualifiers::CONST)
         };
-        if info.category != ValueCategory::ModifiableLvalue && !(array && constraint.memory) {
-            return Err(AsmFault::OutputLvalue);
+        if info.category != ValueCategory::ModifiableLvalue && !array {
+            // An object that is const or has a const member.
+            let read_only = info.category == ValueCategory::Lvalue && self.contains_const(info.ty);
+            return Err(if read_only {
+                AsmFault::ReadOnlyVariable
+            } else {
+                AsmFault::OutputLvalue
+            });
         }
         if let Some(condition) = constraint.flag {
             if self.integer_type(info.ty).is_none() {
@@ -553,6 +582,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 return Err(AsmFault::OutputLvalue);
             }
             return Ok(AsmOperandKind::Memory);
+        }
+        if self.impossible_register(info.ty, constraint) {
+            return Err(AsmFault::ImpossibleOutput);
         }
         Err(AsmFault::OperandType)
     }
@@ -599,6 +631,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 return Err(AsmFault::InputLvalue);
             }
             return Ok(AsmOperandKind::Memory);
+        }
+        if self.impossible_register(value, constraint) {
+            return Err(AsmFault::ImpossibleInput);
         }
         if generic.is_some() || ranged {
             return Err(if integer.is_some() {
@@ -684,13 +719,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// The register class a value of type `ty` takes under `constraint`, if
     /// the constraint allows registers and the value fits one: an integer or
-    /// pointer of at most 64 bits, or a `float` or `double`.
+    /// pointer of at most 64 bits, a `float` or `double`, or an array,
+    /// structure or union of 1, 2, 4 or 8 bytes when the constraint allows
+    /// no memory, which it takes instead, as Clang does.
     fn assembly_register_class(
         &self,
         ty: TypeId,
         constraint: &Constraint<'_>,
     ) -> Option<AsmRegisterClass> {
         let ty = self.value_type_of(ty);
+        if constraint.memory && self.byte_aggregate(ty) {
+            return None;
+        }
         if constraint.general != 0 && self.assembly_register_bits(ty).is_some() {
             return Some(AsmRegisterClass::General(constraint.general));
         }
@@ -705,9 +745,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// The bits of a value a register holds and whether it is floating:
-    /// integers and pointers of at most 64 bits, `float` and `double`.
+    /// integers and pointers of at most 64 bits, `float` and `double`, and
+    /// the bytes of an array, structure or union of 1, 2, 4 or 8 bytes, which
+    /// a register holds as the integer of that size, as GCC and Clang move
+    /// it.
     fn assembly_register_bits(&self, ty: TypeId) -> Option<(u32, bool)> {
         let ty = self.value_type_of(ty);
+        if self.byte_aggregate(ty) {
+            return self
+                .types
+                .layout(ty)
+                .filter(|layout| matches!(layout.size, 1 | 2 | 4 | 8))
+                .and_then(|layout| u32::try_from(layout.size * 8).ok())
+                .map(|bits| (bits, false));
+        }
         if let Some((bits, _)) = self.integer_type(ty) {
             return (bits <= 64).then_some((bits.max(8), false));
         }
@@ -719,6 +770,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | TypeKind::Scalar(Scalar::Double) => Some((64, true)),
             | _ => None,
         }
+    }
+
+    /// Whether `ty` is an array, structure or union, whose object a register
+    /// operand moves as its bytes.
+    fn byte_aggregate(&self, ty: TypeId) -> bool {
+        match self.types.nodes[self.value_type_of(ty).index] {
+            | TypeKind::Array(..) => true,
+            | TypeKind::Tag(id) => self.types.tags[id].kind != TagKind::Enum,
+            | _ => false,
+        }
+    }
+
+    /// Whether `ty` is an aggregate that no register `constraint` allows
+    /// can hold: GCC's "impossible constraint". One of 16 bytes takes two
+    /// general registers or an SSE register in GCC and Clang, which bcc
+    /// does not model, as it does not for `__int128`.
+    fn impossible_register(&self, ty: TypeId, constraint: &Constraint<'_>) -> bool {
+        let register = constraint.general != 0 || constraint.sse || constraint.other.is_some();
+        register
+            && self.byte_aggregate(ty)
+            && !matches!(
+                self.types
+                    .layout(self.value_type_of(ty))
+                    .map(|layout| layout.size),
+                Some(1 | 2 | 4 | 8 | 16)
+            )
     }
 
     /// The type of the value an operand's register holds: its lvalue type
@@ -788,6 +865,12 @@ pub(crate) enum AsmFault {
     ImmediateRequired,
     ImmediateRange,
     OperandType,
+    /// An aggregate output whose size no register of its constraint has.
+    ImpossibleOutput,
+    /// An aggregate input whose size no register of its constraint has.
+    ImpossibleInput,
+    /// A variable that is const, or has a const member, as an output.
+    ReadOnlyVariable,
     TiedOperand,
     TiedType,
     UnknownRegister,
@@ -815,6 +898,8 @@ impl AsmFault {
             | Self::InputConstraint
             | Self::TiedOperand => "invalid constraint",
             | Self::OutputLvalue | Self::InputLvalue => "not an addressable lvalue",
+            | Self::ReadOnlyVariable => "read-only variable",
+            | Self::ImpossibleOutput | Self::ImpossibleInput => "no register has its size",
             | Self::ImmediateRequired | Self::ImmediateRange =>
                 "not a constant the constraint allows",
             | Self::OperandType | Self::TiedType => "operand type does not fit the constraint",
@@ -889,6 +974,22 @@ impl AsmFault {
                 "GNU Constraints for asm Operands: a register holds an integer or pointer of at \
                  most 64 bits, a float or a double; other types need a memory constraint",
             ),
+            | Self::ImpossibleOutput => (
+                "impossible constraint in asm: cannot store value into a register",
+                "GNU Extended Asm: an array, structure or union in a register is moved as the \
+                 integer of its size, which is 1, 2, 4, 8 or 16 bytes; other sizes need a memory \
+                 constraint",
+            ),
+            | Self::ImpossibleInput => (
+                "impossible constraint in 'asm'",
+                "GNU Extended Asm: a structure or union in a register is moved as the integer of \
+                 its size, which is 1, 2, 4, 8 or 16 bytes; other sizes need a memory constraint",
+            ),
+            | Self::ReadOnlyVariable => (
+                "invalid lvalue in asm output",
+                "C99 §6.5.16p2: an output is a modifiable lvalue, as an assignment's left \
+                 operand; the variable is const or has a const member",
+            ),
             | Self::TiedOperand => (
                 "invalid matching constraint",
                 "GNU Extended Asm: a digit or [name] in an input constraint names an earlier \
@@ -944,6 +1045,18 @@ impl AsmFault {
                  and z",
             ),
         }
+    }
+}
+
+/// The identifier `expression` names, inside any parentheses.
+fn variable_name(mut expression: &Expression<'_>) -> Option<StringCacheId> {
+    use crate::translation_phases::parsing::syntax::ExpressionType;
+    while let ExpressionType::Parenthesized { expression: inner } = expression.kind {
+        expression = inner;
+    }
+    match expression.kind {
+        | ExpressionType::Identifier(name) => Some(name.name),
+        | _ => None,
     }
 }
 
