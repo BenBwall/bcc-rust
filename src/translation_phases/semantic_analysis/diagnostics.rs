@@ -35,20 +35,18 @@ impl Analyzer<'_, '_, '_> {
         result
     }
 
-    /// The highlighted operands at the places a file holds them, for
-    /// Clang's format only: the others draw none.
-    fn highlights_at_file(&mut self) -> [SourceVectors; 2] {
-        let mut highlights = [SourceVectors::default(); 2];
+    /// The highlighted operands, for Clang's format only: the others draw
+    /// none. They keep the places macros wrote them, which the renderer
+    /// draws at the invocation and again in Clang's `expanded from macro`
+    /// note.
+    fn clang_highlights(&self) -> [SourceVectors; 2] {
         if self.context.configuration.diagnostic_format()
             == crate::configuration::DiagnosticFormat::Clang
         {
-            for (highlight, &operand) in highlights.iter_mut().zip(&self.highlights) {
-                if operand.length() != 0 {
-                    *highlight = self.context.file_location(operand);
-                }
-            }
+            self.highlights
+        } else {
+            [SourceVectors::default(); 2]
         }
-        highlights
     }
 
     /// Central emitter for pointer constraints; classification has no severity
@@ -109,7 +107,7 @@ impl Analyzer<'_, '_, '_> {
         let origin = source_vectors;
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
-        let highlights = self.highlights_at_file();
+        let highlights = self.clang_highlights();
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
@@ -166,7 +164,7 @@ impl Analyzer<'_, '_, '_> {
             self.semantic_errors += 1;
             let at = source_vectors;
             let source_vectors = self.context.file_location(source_vectors);
-            let highlights = self.highlights_at_file();
+            let highlights = self.clang_highlights();
             let error = SemanticError {
                 extension_severity: None,
                 kind,

@@ -16,4 +16,13 @@ context-ranges-clang.c:10:9: error: multiplicative operator requires arithmetic 
 context-ranges-clang.c:11:11: warning: ordered comparison between pointer and integer
    11 |   x = s.a < p;
       |       ~~~ ^ ~
-5 errors and 1 warning generated.
+context-ranges-clang.c:15:8: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int'; take the address with & [-Wint-conversion]
+   15 |   int *pointer_name = value;
+      |        ^              ~~~~~
+context-ranges-clang.c:18:39: warning: shift count >= width of type [-Wshift-count-overflow]
+   18 | int shifts(int value) { return (value << 40) / 0; }
+      |                                       ^  ~~
+context-ranges-clang.c:18:46: warning: division by zero is undefined [-Wdivision-by-zero]
+   18 | int shifts(int value) { return (value << 40) / 0; }
+      |                                              ^ ~
+6 errors and 3 warnings generated.

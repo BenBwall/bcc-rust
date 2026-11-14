@@ -27,7 +27,14 @@ use std::{
     path::Path,
 };
 
-use super::Renderer;
+use super::{
+    Diagnostic,
+    Renderer,
+    model::{
+        Label,
+        LabelSource,
+    },
+};
 use crate::{
     configuration::DiagnosticFormat,
     translation_phases::{
@@ -39,6 +46,7 @@ use crate::{
     },
     util::bump::{
         ArenaString,
+        ArenaVec,
         Bump,
     },
 };
@@ -248,11 +256,14 @@ impl Renderer {
     /// GCC's `in expansion of macro 'X'` note at the invocation, or Clang's
     /// `expanded from macro 'X'` at the replacement list. Only the
     /// outermost invocation and the innermost list are known, so a nested
-    /// expansion's other levels are not noted.
+    /// expansion's other levels are not noted. Clang draws the ranges
+    /// `diagnostic` names that the same expansion wrote where its list
+    /// wrote them, beside a caret that is then a point.
     pub(super) fn render_expansion_note(
         &self,
         out: &mut ArenaString<'_>,
         expansion: &MacroExpansion<'_>,
+        diagnostic: &Diagnostic<'_>,
         context: &Context<'_>,
         scratch: &Bump,
     ) {
@@ -276,14 +287,42 @@ impl Renderer {
                 ),
             )
         };
-        let label = super::model::Label {
-            source:  super::model::LabelSource::Segments(
-                scratch.alloc_slice_fill_iter([place.clone()]),
-            ),
+        let mut highlights = ArenaVec::new_in(scratch);
+        let mut highlighted = false;
+        for label in diagnostic
+            .labels
+            .iter()
+            .filter(|label| !gcc && label.is_highlight())
+        {
+            highlighted = true;
+            let Some(source) = label.source.range() else {
+                continue;
+            };
+            if let Some((_, site)) = context.macro_body_expansion(source)
+                && site.source_file_index == expansion.site.source_file_index
+                && site.index == expansion.site.index
+            {
+                highlights.push(Label {
+                    source:  LabelSource::Segments(context.get_source_vectors(source)),
+                    message: None,
+                    primary: false,
+                });
+            }
+        }
+        let mut place = place.clone();
+        if highlighted {
+            place.length = context
+                .source_text(place.source_file_index)
+                .and_then(|text| text.get(place.index as usize..)?.chars().next())
+                .map_or(0, |first| first.len_utf8() as u32)
+                .min(place.length);
+        }
+        let label = Label {
+            source:  LabelSource::Segments(scratch.alloc_slice_fill_iter([place])),
             message: Some(message),
             primary: false,
         };
-        self.render_related_note(out, &label, context, scratch, !gcc);
+        self.render_related_note(out, (&label, &highlights), context, scratch, !gcc);
     }
 }
 

@@ -15,14 +15,19 @@ the function, and one at the name (`-Wmain`, an unused function) at top level.
 match the compilers' line for line but for GCC's range for an unused
 parameter. The other GCC-format snapshots gained these lines where GCC
 prints them. `context-ranges-clang` pins the ranges Clang underlines with
-`~` beside the caret: an initializer's and an assignment's value, and both
+`~` beside the caret: an initializer's and an assignment's value, both
 operands of an invalid binary operator or of a pointer and integer
-comparison; its caret lines match Clang 23's, its messages keep bcc's
-words for the operator errors. `context-macros-gcc` and
+comparison, and the count or divisor of a shift or division warning. The
+caret of such a diagnostic is then a point, not an underlined token
+(`int *pointer_name = value;` -> `^              ~~~~~`). Its caret lines
+match Clang 23's; its messages keep bcc's words for the operator errors,
+and it prints no fix-it lines (`&`). `context-macros-gcc` and
 `context-macros-clang` pin the notes about a token a macro's body wrote:
 GCC reports the diagnostic in the body and adds `in expansion of macro
 'X'` at the invocation, Clang reports it at the invocation and adds
-`expanded from macro 'X'` at the body, a continued definition included. A
+`expanded from macro 'X'` at the body, a continued definition included,
+where Clang draws the ranges the diagnostic names that the expansion wrote,
+on the lines next to its caret. A
 macro a header defines (`context-headers/macro.h`) gets GCC's include stack
 of the header under the function line of its invocation. A warning a
 system header's macro wrote stays at the user's invocation under GCC's

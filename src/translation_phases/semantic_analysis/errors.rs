@@ -39,8 +39,8 @@ pub(crate) struct SemanticError {
     pub(crate) source_vectors:     SourceVectors,
     pub(crate) name:               Option<StringCacheId>,
     pub(crate) previous:           Option<SourceVectors>,
-    /// The operands Clang underlines with `~` beside the caret, empty when
-    /// there are fewer.
+    /// The operands Clang underlines with `~` beside the caret, where a
+    /// macro wrote them if one did; empty when there are fewer.
     pub(crate) highlights:         [SourceVectors; 2],
     /// The range reported, before it was moved to a place in a file: where
     /// a macro's body wrote it, which GCC reports and Clang notes, and the

@@ -6,5 +6,5 @@ context-functions-clang.c:8:8: error: incompatible integer to pointer conversion
       |        ^   ~
 context-functions-clang.c:11:6: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
    11 | int *file_scope = 3;
-      |      ^~~~~~~~~~   ~
+      |      ^            ~
 3 errors generated.

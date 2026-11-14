@@ -204,15 +204,24 @@ impl Renderer {
         {
             Self::push_label_marks(label, context, &mut marks);
         }
+        // A diagnostic that names ranges of its own gets Clang's caret
+        // alone at its place, with no `~` over the token there unless a
+        // range covers it: `int *name = 1;` -> `^      ~`.
+        let highlighted =
+            format == DiagnosticFormat::Clang && diagnostic.labels.iter().any(Label::is_highlight);
+        if highlighted {
+            let mut first = true;
+            marks.retain(|mark| !mark.primary || std::mem::take(&mut first));
+            if let Some(mark) = marks.iter_mut().find(|mark| mark.primary) {
+                let first_char = context
+                    .source_text(mark.file)
+                    .and_then(|text| text.get(mark.start..)?.chars().next())
+                    .map_or(0, char::len_utf8);
+                mark.end = mark.end.min(mark.start + first_char);
+            }
+        }
         if compiler_snippet {
-            let mut caret_lines = ArenaVec::new_in(scratch);
-            caret_lines.extend(
-                marks
-                    .iter()
-                    .filter(|mark| mark.primary)
-                    .map(|mark| (mark.file, mark.line)),
-            );
-            marks.retain(|mark| mark.primary || caret_lines.contains(&(mark.file, mark.line)));
+            Self::retain_caret_block(&mut marks, scratch);
             for mark in &mut marks {
                 mark.label = None;
             }
@@ -302,14 +311,14 @@ impl Renderer {
         }
         if compiler_snippet {
             if let Some(expansion) = &expansion {
-                self.render_expansion_note(&mut out, expansion, context, scratch);
+                self.render_expansion_note(&mut out, expansion, diagnostic, context, scratch);
             }
             for label in diagnostic
                 .labels
                 .iter()
                 .filter(|label| !label.primary && label.message.is_some())
             {
-                self.render_related_note(&mut out, label, context, scratch, true);
+                self.render_related_note(&mut out, (label, &[]), context, scratch, true);
             }
             return out.into_str();
         }
@@ -345,11 +354,12 @@ impl Renderer {
     /// a `note:` of its own, at the place's reported location, over its source
     /// lines when there are any to quote.
     /// GCC's macro notes have no context lines of their own
-    /// (`with_context`), being part of the diagnostic they follow.
+    /// (`with_context`), being part of the diagnostic they follow. Clang
+    /// underlines `highlights` with `~` on the place's lines.
     pub(super) fn render_related_note(
         &self,
         out: &mut ArenaString<'_>,
-        label: &Label<'_>,
+        (label, highlights): (&Label<'_>, &[Label<'_>]),
         context: &Context<'_>,
         scratch: &Bump,
         with_context: bool,
@@ -387,6 +397,10 @@ impl Renderer {
             mark.primary = true;
             mark.label = None;
         }
+        for highlight in highlights {
+            Self::push_label_marks(highlight, context, &mut marks);
+        }
+        Self::retain_caret_block(&mut marks, scratch);
         let mut files = ArenaVec::new_in(scratch);
         for mark in &marks {
             if !files.contains(&mark.file) {
@@ -617,7 +631,16 @@ impl Renderer {
     ) {
         let mut label_text = label.message;
         let first = marks.len();
-        for vector in label.source.vectors(context) {
+        // Clang draws an operand a macro wrote at the invocation.
+        let vectors = match label.source {
+            | LabelSource::Range(source) if label.is_highlight() =>
+                context.macro_body_expansion(source).map_or_else(
+                    || context.get_source_vectors(source),
+                    |(_, site)| std::slice::from_ref(site),
+                ),
+            | source => source.vectors(context),
+        };
+        for vector in vectors {
             let file = vector.source_file_index;
             let Some(text) = context.source_text(file) else {
                 continue;
@@ -653,8 +676,6 @@ impl Renderer {
         }
     }
 
-    /// Returns the 1-based physical line containing `offset` and the byte
-    /// range of that line, excluding its terminator.
     /// The column a location prints: GCC counts display columns, its
     /// `-fdiagnostics-column-unit=display` default since GCC 11, in which a
     /// tab moves to the next tab stop and a character is one column however
@@ -682,6 +703,38 @@ impl Renderer {
         })
     }
 
+    /// Keeps the marks on the caret's lines and on the lines joined to them
+    /// by lines that hold marks: Clang widens its snippet over the ranges
+    /// next to the caret (`TextDiagnostic::emitSnippetAndCaret`), and GCC's
+    /// format draws only the primary range.
+    fn retain_caret_block(marks: &mut ArenaVec<'_, Mark<'_>>, scratch: &Bump) {
+        let mut shown = ArenaVec::new_in(scratch);
+        shown.extend(
+            marks
+                .iter()
+                .filter(|mark| mark.primary)
+                .map(|mark| (mark.file, mark.line)),
+        );
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for mark in marks.iter() {
+                let at = (mark.file, mark.line);
+                if !shown.contains(&at)
+                    && shown
+                        .iter()
+                        .any(|&(file, line)| file == mark.file && line.abs_diff(mark.line) == 1)
+                {
+                    shown.push(at);
+                    grew = true;
+                }
+            }
+        }
+        marks.retain(|mark| shown.contains(&(mark.file, mark.line)));
+    }
+
+    /// Returns the 1-based physical line containing `offset` and the byte
+    /// range of that line, excluding its terminator.
     fn locate(starts: &[usize], text: &str, offset: usize) -> (usize, usize, usize) {
         let line = starts.partition_point(|&start| start <= offset);
         let start = starts[line - 1];

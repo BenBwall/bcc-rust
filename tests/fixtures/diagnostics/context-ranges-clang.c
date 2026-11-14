@@ -11,3 +11,8 @@ int f(int y, int *p, long *lp) {
   x = s.a < p;
   return x + *q;
 }
+int *long_names(int value) {
+  int *pointer_name = value;
+  return pointer_name;
+}
+int shifts(int value) { return (value << 40) / 0; }

@@ -237,6 +237,13 @@ pub(super) struct Label<'d> {
     pub(super) primary: bool,
 }
 
+impl Label<'_> {
+    /// Whether this is a range Clang underlines beside the caret.
+    pub(super) const fn is_highlight(&self) -> bool {
+        !self.primary && self.message.is_none()
+    }
+}
+
 /// Where a label points: a provenance range, or explicit segments when only
 /// part of a range is relevant.
 #[derive(Debug, Clone, Copy)]
