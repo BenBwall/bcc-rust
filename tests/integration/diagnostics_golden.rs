@@ -84,20 +84,28 @@ mod tests {
         portable.into_bytes()
     }
 
-    /// The length of the file name a GCC or Clang location (`file:1:2:`) or
-    /// context line (`file: In function 'f':`) begins with, or 0.
+    /// The length of the file name a GCC or Clang location (`file:1:2:`),
+    /// context line (`file: In function 'f':`) or clang-cl location
+    /// (`file(1,2):`, `file(1):`) begins with, or 0.
     fn location_file_end(line: &str) -> usize {
-        let Some(end) = line.find(':') else {
-            return 0;
+        let colon = line.find(':').filter(|&end| {
+            let rest = &line[end..];
+            rest[1..].starts_with(|c: char| c.is_ascii_digit())
+                || rest.starts_with(": In function '")
+                || rest.starts_with(": At top level:")
+        });
+        let parenthesis = || {
+            let end = line.find('(')?;
+            let (numbers, _) = line[end + 1..].split_once("):")?;
+            let mut parts = numbers.split(',');
+            let located = parts.next().is_some_and(|line| !line.is_empty())
+                && numbers.chars().all(|c| c.is_ascii_digit() || c == ',')
+                && parts.count() <= 1;
+            located.then_some(end)
         };
-        let rest = &line[end..];
-        let located = rest[1..].starts_with(|c: char| c.is_ascii_digit())
-            || rest.starts_with(": In function '")
-            || rest.starts_with(": At top level:");
-        if end > 0 && located && !line[..end].contains(' ') {
-            end
-        } else {
-            0
+        match colon.or_else(parenthesis) {
+            | Some(end) if end > 0 && !line[..end].contains(' ') => end,
+            | _ => 0,
         }
     }
 
@@ -114,6 +122,14 @@ mod tests {
             ),
             b"In file included from ./d/a.h:2,\n                 from m.c:1:\n./d/b.h: In \
               function 'f':\n./d/b.h:3:4: error: '\\n' x:1\n    3 | \"\\n\"\n"
+        );
+        assert_eq!(
+            portable_locations(
+                b"In file included from m.c:1:\n.\\d\\b.h(3,4): error: a\\b(1):\n.\\d\\b.h(3): \
+                  note: x\nf(x): a\\b\n"
+            ),
+            b"In file included from m.c:1:\n./d/b.h(3,4): error: a\\b(1):\n./d/b.h(3): note: \
+              x\nf(x): a\\b\n"
         );
     }
 

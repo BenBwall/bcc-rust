@@ -13,7 +13,9 @@ diagnostic just past a definition's name, in its parameters or body, is in
 the function, and one at the name (`-Wmain`, an unused function) at top level.
 `context-functions-clang` shows that Clang names no function. Both outputs
 match the compilers' line for line but for GCC's range for an unused
-parameter. The other GCC-format snapshots gained these lines where GCC
+parameter. `context-includes-clang-cl` matches clang-cl 23 exactly: Clang's
+include stacks, which keep `file:line`, and macro notes, with each
+diagnostic at `cl`'s `file(line,col):` and no function lines. The other GCC-format snapshots gained these lines where GCC
 prints them. `context-ranges-clang` pins the ranges Clang underlines with
 `~` beside the caret: an initializer's and an assignment's value, both
 operands of an invalid binary operator or of a pointer and integer
@@ -144,7 +146,7 @@ Run `cargo test --test integration diagnostics_golden`. Use `BLESS=1 cargo test 
 
 Snapshots record current behavior, including defects. The guard test rejects panics, internal representations, and raw NUL bytes in any output, so a crash or control-byte leak cannot be blessed into a passing snapshot. Fix the compiler instead of normalizing such output.
 
-`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`; `system-headers/pointer-macros.h` is the system header of `sema-pointer-system-header.c`, and `system-headers/record-macros.h` of `sema-missing-fields-system-gcc.c`. `context-headers/` holds the headers of `context-includes-{gcc,clang}.c` and `context-macros-{gcc,clang}.c`. The header files are included by C fixtures, not invoked independently.
+`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`; `system-headers/pointer-macros.h` is the system header of `sema-pointer-system-header.c`, and `system-headers/record-macros.h` of `sema-missing-fields-system-gcc.c`. `context-headers/` holds the headers of `context-includes-{gcc,clang,clang-cl}.c` and `context-macros-{gcc,clang}.c`. The header files are included by C fixtures, not invoked independently.
 
 ## Coverage
 

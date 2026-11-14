@@ -1,0 +1,32 @@
+In file included from context-includes-clang-cl.c:3:
+./context-headers/outer.h(1,6): error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    1 | int *outer_before = 1;
+      |      ^              ~
+In file included from context-includes-clang-cl.c:3:
+In file included from ./context-headers/outer.h:2:
+./context-headers/inner.h(1,6): error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    1 | int *inner = 2;
+      |      ^       ~
+In file included from context-includes-clang-cl.c:3:
+./context-headers/outer.h(3,6): error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    3 | int *outer_after = 3;
+      |      ^             ~
+In file included from context-includes-clang-cl.c:4:
+In file included from context-headers/angle-outer.h:1:
+context-headers/angle-inner.h(1,6): error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    1 | int *angle_inner = 4;
+      |      ^             ~
+In file included from context-includes-clang-cl.c:5:
+./context-headers/function.h(1,41): error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    1 | static int header_function(void) { int *p = 6; return *p; }
+      |                                         ^   ~
+context-includes-clang-cl.c(8,8): error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    8 |   int *p = 7;
+      |        ^   ~
+context-includes-clang-cl.c(9,15): warning: shift count >= width of type [-Wshift-count-overflow]
+    9 |   return *p + HEADER_SHIFT + header_function();
+      |               ^~~~~~~~~~~~
+./context-headers/macro.h(1,25): note: expanded from macro 'HEADER_SHIFT'
+    1 | #define HEADER_SHIFT (1 << 40)
+      |                         ^  ~~
+1 warning and 6 errors generated.
