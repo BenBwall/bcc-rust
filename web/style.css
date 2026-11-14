@@ -140,7 +140,7 @@
     --cell: #f6f5f0;
     --accent-ink: #b33a0b;
     --flow-ink: #1d4fb8;
-    --danger: #b3261e;
+    --danger: #a3221b;
     --knob-blue: #2f6fde;
     --knob-ochre: #e8a33d;
     --knob-grey: #9a9a94;
@@ -295,7 +295,7 @@
   .reading-map { padding: 22px 24px 20px; display: flex; flex-direction: column; gap: 10px; }
   .map-caption, .module-caption, .deck-caption {
     font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3);
-    padding-bottom: 5px; border-bottom: 1px solid var(--ink);
+    padding-bottom: 5px; border-bottom: 1px solid var(--ink); text-wrap: balance;
   }
   .map-caption b, .module-caption b, .deck-caption b { color: var(--ink); font-weight: 700; }
   .map-screen { position: relative; background: var(--screen); color: var(--screen-ink); padding: 0; overflow-x: auto; }
@@ -352,6 +352,14 @@
 
   /* Lessons: a timetable. */
   .lessons { padding: 40px 40px 0; }
+  /* Each part of the timetable is captioned like a figure: a numbered
+     line over a rule, with what its lessons share beside it. */
+  .lesson-part { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 0 24px; padding-top: 26px; }
+  .lesson-part:first-of-type { padding-top: 18px; }
+  .lesson-part-title { font-size: 10.5px; font-weight: 400; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); padding-bottom: 6px; }
+  .lesson-part-title b { color: var(--ink); font-weight: 700; }
+  .lesson-part-summary { color: var(--ink-3); font-size: 12px; padding-bottom: 6px; }
+  .lesson-part > .lesson-list { grid-column: 1 / -1; border-top: 1px solid var(--ink); }
   .lesson-list { display: grid; grid-template-columns: minmax(0, 1fr); counter-reset: lesson; }
   .lesson-list li { border-bottom: 1px solid var(--seam); }
   .lesson-card {
@@ -667,6 +675,8 @@
   .cell-pointers { color: var(--flow-ink); margin-left: 5px; font-weight: 700; }
   .cell[data-access="write"], .cell[data-access="create"] { background: var(--accent); color: #3a1406; }
   .cell[data-access="write"] .cell-value, .cell[data-access="create"] .cell-value { color: var(--on-accent); }
+  /* A floating cell's bytes take the lit cell's dark ink too. */
+  .cell[data-access="write"] .cell-raw, .cell[data-access="create"] .cell-raw { color: inherit; }
   .cell[data-access="write"] .cell-pointers { color: #0d2a6b; }
   .cell[data-access="read"] { box-shadow: inset 0 -4px 0 var(--flow-ink); }
   .cell[data-access="designate"], .cell[data-access="address"] { outline: 2px dashed var(--ink); outline-offset: -5px; }
@@ -722,7 +732,9 @@
   .flow-separator { color: var(--ink-3); margin-right: 10px; }
 
   .return-callout { margin-top: 14px; padding: 8px 12px; background: var(--ink); color: var(--device); font-size: 12px; letter-spacing: .04em; }
-  .return-callout strong { font-size: 18px; color: var(--accent); margin-left: 6px; }
+  /* The status sits on a vermilion chip: vermilion text on the inverted
+     plate falls below AA in either theme. */
+  .return-callout strong { font-size: 18px; margin-left: 6px; padding: 0 6px; background: var(--accent); color: var(--on-accent); }
   .fault-callout { margin-top: 14px; padding: 10px 12px; border: 2px solid var(--danger); background: var(--danger-soft); }
   .fault-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--danger); }
   .fault-message { margin-top: 2px; color: var(--ink); font: italic 400 19px/1.3 var(--font-serif); }
@@ -774,16 +786,20 @@
   .narration-terms-label { font-weight: 700; }
 
   /* Why it matters: a marginal note set off by a rule. */
+  /* A floating value's bits, drawn as the value flow's chips are: a
+     caption like the note's other headings, then one chip per field, the
+     sign in vermilion and the exponent in blue. */
   .bits { margin: 14px 0 0; }
-  .bits figcaption { color: var(--ink-2); font-size: 13px; }
-  .bits-row { display: flex; flex-wrap: wrap; gap: 2px; margin: 6px 0 0; }
-  .bits-field { display: flex; flex-direction: column; min-width: 0; }
-  .bits-field code { font-size: 12px; letter-spacing: .5px; padding: 2px 4px; overflow-wrap: anywhere; word-break: break-all; border: 1px solid var(--ink-3); }
-  .bits-field.is-fraction { flex: 1 1 14ch; }
-  .bits-name { color: var(--ink-2); font-size: 11px; }
-  .bits-field.is-sign code { border-color: var(--accent); }
-  .bits-field.is-exponent code { border-color: var(--flow-ink); }
-  .bits-meaning { margin: 6px 0 0; font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+  .bits figcaption { color: var(--ink-3); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; }
+  .bits figcaption code { color: var(--ink); font-weight: 700; letter-spacing: 0; text-transform: none; }
+  .bits-row { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 6px 0 0; }
+  .bits-field { display: flex; flex: none; flex-direction: column; gap: 2px; }
+  .bits-field code { font: 700 12.5px/1.35 var(--font-mono); letter-spacing: .5px; padding: 3px 7px; overflow-wrap: anywhere; word-break: break-all; border: 1.5px solid var(--ink); background: var(--cell); color: var(--ink); }
+  .bits-field.is-fraction { flex: 1 1 14ch; min-width: 0; }
+  .bits-name { color: var(--ink-3); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+  .bits-field.is-sign code { box-shadow: inset 0 -3px 0 var(--accent); }
+  .bits-field.is-exponent code { box-shadow: inset 0 -3px 0 var(--flow-ink); }
+  .bits-meaning { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
   .cell-raw { font-size: 10px; letter-spacing: .3px; color: var(--ink-2); white-space: nowrap; font-family: var(--font-mono); }
   .narration-note { margin-top: 14px; padding: 2px 0 2px 14px; border-left: 3px solid var(--ink); }
   .narration-note h3 { margin-bottom: 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink); }
@@ -859,6 +875,9 @@
   .output-byte { color: var(--screen-dim); border: 1px solid var(--screen-faint); padding: 0 2px; margin: 0 1px; font-size: 11px; }
   .output-new .output-byte { color: var(--on-accent); border-color: currentColor; }
   .narration-stage { margin: 12px 0 0; }
+  /* Its label is a sentence: on a phone it wraps rather than run off the
+     card. */
+  .narration-stage .button { height: auto; min-height: 36px; max-width: 100%; padding-block: 8px; white-space: normal; text-align: left; line-height: 1.4; }
 
   /* Table 1: the datasheet. */
   .sheet-scroll { overflow-x: auto; }
@@ -1353,6 +1372,8 @@
     .lessons, .about, .glossary { padding-inline: 18px; }
     .lessons { padding-top: 28px; }
     .notice { margin-inline: 18px; }
+    .lesson-part { grid-template-columns: minmax(0, 1fr); }
+    .lesson-part-title { padding-bottom: 2px; }
     .lesson-card { grid-template-columns: 40px minmax(0, 1fr); gap: 2px 12px; padding: 11px 8px 11px 0; }
     /* The number, and a UB mark under it, span the title and the summary,
        so the mark never pushes the summary down a line. */

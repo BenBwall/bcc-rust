@@ -124,16 +124,18 @@ pub(in crate::abstract_machine) fn floating_constant(
     result(event, operand)
 }
 
-/// The first digits of an exact decimal, with an ellipsis when it goes on.
+/// The first digits of an exact decimal, as code, with an ellipsis when it
+/// goes on.
 fn lead_text(exact: &str) -> String {
+    // Set as code, so the digits line up and wrap as one long number.
     if exact.len() <= LEAD_DIGITS {
-        return String::from(exact);
+        return format!("`{exact}`");
     }
     let cut = exact
         .char_indices()
         .nth(LEAD_DIGITS - 1)
         .map_or(exact.len(), |(at, _)| at);
-    format!("{}…", &exact[..cut])
+    format!("`{}…`", &exact[..cut])
 }
 
 fn precision(format: Floating) -> u32 {
@@ -428,10 +430,10 @@ impl Machine {
             );
             (
                 format!(
-                    "The exact {word} {}is no {name}, so it rounds to the nearest one: {shown}.",
+                    "No {name} holds the exact {word}{}, so it rounds to the nearest one: {shown}.",
                     exact
                         .as_deref()
-                        .map_or_else(String::new, |exact| format!("{} ", lead_text(exact)))
+                        .map_or_else(String::new, |exact| format!(" {}", lead_text(exact)))
                 ),
                 format!(
                     "Both operands are {}, so the machine computes in {name}, as IEEE 754 does: \

@@ -1,7 +1,11 @@
 # How C runs: the bcc site
 
 An interactive introduction to how C programs run and how compilers translate
-them. Visitors pick a lesson (a small C program) and see it three ways:
+them. Visitors pick a lesson (a small C program) and see it three ways. The
+lessons (Table 1) come in four parts, read in order: objects and control,
+types and conversions, memory and undefined behavior, and inside the
+compiler; each part is captioned with what its lessons share
+(`demos::Part`).
 
 - **Abstract machine.** Step through the program one evaluation at a time.
   Each step leads with one plain sentence on what happened and why C says
@@ -143,8 +147,12 @@ times that, and a longer run scrolls, the tape moving under a playhead that
 stays in the middle of the screen. Calls are grouped by function and depth
 on the call stack, so a loop's repeated calls share one set of lanes; a group
 with no call at the playhead folds to one row of call bars, and its label
-opens it. The static objects' group comes first and never folds: its rule
-runs from the first of them to the end of the run.
+opens it. The static objects' group comes first, and its rule runs from the
+first of them to the end of the run. It stays open, except in a program
+whose only static objects are its string literals' arrays (one that
+prints): there it starts folded, so the literals' lanes do not push the
+program's own objects and the note down the screen, and its label, which
+counts the literals, opens it.
 
 The page has light and dark themes (the device in daylight and under low
 light; its screens stay black in both) and works down to phone width. At
@@ -380,15 +388,12 @@ reimplements none):
   the editor counts them; where `#line` says otherwise, the card shows that
   too. In the source, invocations are underlined with their expansion on
   hover, skipped lines are hatched, and conditionals carry a kept or
-  skipped mark. The browser build has no host headers: `#include` finds only
-  bcc's embedded freestanding headers (`<limits.h>`, `<stdint.h>`,
-  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found,
-  and the card and the stop explanation point to the WebAssembly view, whose
-  target has bcc's own C library. The pipeline does not borrow that
-  library's headers: they describe bcc's WASI runtime, not an x86-64 C
-  library, and the pipeline's stages are what the native `bcc-rust` prints
-  (`tests/integration/explorer.rs` compares them, and the lessons' LLVM IR
-  comes from the native compiler).
+  skipped mark. The browser has no host headers: `#include` finds the
+  headers bcc brings, its freestanding ones (`<limits.h>`, `<stdint.h>`,
+  `<stddef.h>`, `<stdbool.h>`, …) and those of its own small C library
+  (`<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<ctype.h>`, `<math.h>`), on
+  x86-64 as on wasm32. A header outside that set is reported as not found,
+  and the stop explanation sends it to the command-line bcc.
 - **Tokens (phases 5-7)** is the `--tokens` listing of a second, ordinary
   preprocessing run.
 - **Syntax tree** and **Semantic types** (phase 7) are `--syntax-tree` and
@@ -420,11 +425,11 @@ The lesson "Hello, world: printf and strings" (`demos/hello.c`), second in
 the list, is the first program most programmers write: `#include
 <stdio.h>`, `puts`, a `char name[] = "Ada";` and `printf("%s has %d
 letters\n", name, len)`, with a loop that counts letters through a
-prototype declared before `main`. In the pipeline view it stops at the
-`#include`, as any program that includes `<stdio.h>` does there (see the
-Preprocessor stage above); its LLVM IR is precomputed by the native compiler,
-which finds the host's headers. Its Clang module is a WASI command linked
-with wasi-libc (see the WebAssembly view).
+prototype declared before `main`. In the pipeline view it compiles like any
+other lesson, `<stdio.h>` coming from bcc's own C library; its LLVM IR is
+precomputed by the native compiler, which finds the host's headers. Its
+Clang module is a WASI command linked with wasi-libc (see the WebAssembly
+view).
 
 The lesson "Names for values: #define, const and casts"
 (`demos/constants.c`), third in the list, follows it with what a first week
@@ -445,8 +450,8 @@ unsigned before it compares, and shifts `1u` into the top bit and out
 again, printing each result with `%u`, `%zu` and `%d`. Like the printf
 lesson it includes `<stdio.h>`.
 
-The lesson "Floating point: close, not exact" (`demos/floating.c`), after
-the unsigned lesson, averages two ints into a double, which truncates
+The lesson "Floating point: close, not exact" (`demos/floating.c`), which
+ends the part on types and conversions, averages two ints into a double, which truncates
 first, `7 / 2` being int division, until a cast makes the division
 floating; shows `0.1 + 0.2 == 0.3` yielding 0 with the two exact values on
 screen; sums `0.1` ten times into `0.99999999999999989`; truncates
