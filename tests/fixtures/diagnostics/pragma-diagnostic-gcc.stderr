@@ -19,7 +19,7 @@ pragma-diagnostic-gcc.c:38:32: warning: unknown option after `#pragma GCC diagno
 pragma-diagnostic-gcc.c:39:28: warning: unknown escape sequence `\q` [-Wunknown-escape-sequence]
    39 | const char loud_escape[] = "\q";
       |                            ^~~~
-pragma-diagnostic-gcc.c:43:2: error: #warning promoted
+pragma-diagnostic-gcc.c:43:2: error: #warning promoted [-Werror=cpp]
    43 | #warning promoted
       |  ^~~~~~~
 pragma-diagnostic-gcc.c:22:45: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]

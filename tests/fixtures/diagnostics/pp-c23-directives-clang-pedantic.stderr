@@ -1,0 +1,5 @@
+pp-c23-directives-clang-pedantic.c:4:2: error: #warning is a C23 extension [-Werror,-Wpedantic]
+    4 | #warning reached
+      |  ^
+pp-c23-directives-clang-pedantic.c:4:2: warning: reached [-W#warnings]
+1 warning and 1 error generated.

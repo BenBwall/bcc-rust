@@ -1,0 +1,13 @@
+pp-c23-directives-gcc.c:3:2: warning: #warning before C23 is a GCC extension
+    3 | #warning reached
+      |  ^~~~~~~
+pp-c23-directives-gcc.c:3:2: warning: #warning reached [-Wcpp]
+pp-c23-directives-gcc.c:6:2: warning: #elifdef before C23 is a GCC extension
+    6 | #elifdef YES
+      |  ^~~~~~~
+pp-c23-directives-gcc.c:14:13: warning: #elifdef before C23 is a GCC extension
+   14 | #elifdef YES
+      |             ^
+pp-c23-directives-gcc.c:18:2: warning: #elifndef before C23 is a GCC extension
+   18 | #elifndef NO
+      |  ^~~~~~~~

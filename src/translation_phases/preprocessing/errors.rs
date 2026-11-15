@@ -592,6 +592,41 @@ pub(crate) enum PreprocessorErrorType<'tu> {
         error:   bool,
         message: &'tu str,
     },
+    /// A directive C23 adds, written before C23 where the extension policy
+    /// asks for a report, at the severity it gives: `#warning`, which GCC
+    /// and Clang read in every mode, and `#elifdef`, `#elifndef` and
+    /// `#embed`, which GNU modes read. C99 leaves each a non-directive
+    /// (§6.10 paragraph 1, pp. 145-146; PDF pp. 157-158).
+    /// C23: §6.10.2 paragraph 2, p. 166; PDF p. 179; §6.10.4.1 paragraph 7,
+    /// p. 171; PDF p. 184; §6.10.7 paragraph 1, p. 186; PDF p. 199.
+    DirectiveExtension(C23Directive, ErrorSeverity),
+    /// Clang's `-Wc23-extensions` report of `#elifdef`, `#elifndef` or
+    /// `#embed` before C23, a warning by default
+    /// ([`crate::configuration::CompilerConfiguration::reports_c23_directives`]).
+    /// Clang extension: Clang 23, `DiagnosticLexKinds.td`,
+    /// `ext_c23_pp_directive` and `ext_pp_embed_directive`.
+    C23DirectiveExtension(C23Directive),
+}
+
+/// A directive that C23 adds and GCC or Clang read in earlier modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum C23Directive {
+    Warning,
+    Elifdef,
+    Elifndef,
+    Embed,
+}
+
+impl C23Directive {
+    /// The directive's name, without its `#`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            | Self::Warning => "warning",
+            | Self::Elifdef => "elifdef",
+            | Self::Elifndef => "elifndef",
+            | Self::Embed => "embed",
+        }
+    }
 }
 
 /// Owned related locations for Clang's implementation-defined pragma warning.
@@ -1519,6 +1554,18 @@ impl PreprocessorErrorType<'_> {
                 })
                 .label("`#warning` directive")
             },
+            | Self::DirectiveExtension(directive, _) => new(format_in!(
+                arena,
+                "'#{}' is a C23 extension [-Wpedantic]",
+                directive.name()
+            ))
+            .option_suffix(),
+            | Self::C23DirectiveExtension(directive) => new(format_in!(
+                arena,
+                "'#{}' is a C23 extension [-Wc23-extensions]",
+                directive.name()
+            ))
+            .option_suffix(),
             | Self::DeprecatedMacro(deprecation) => {
                 let message = format_in!(
                     arena,
@@ -1567,6 +1614,8 @@ impl PreprocessorErrorType<'_> {
                 | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
                 | Self::MacroRedefinedWithDifferentDefinition(..)
                 | Self::LineDirectiveNumberZero(..)
+                | Self::DirectiveExtension(..)
+                | Self::C23DirectiveExtension(_)
         ) || matches!(
             self,
             Self::LineDirectiveNumberTooLarge(_, ErrorSeverity::Warning)
@@ -1603,6 +1652,7 @@ impl PreprocessorErrorType<'_> {
             | Self::ElseDirectiveWithoutIfDirective => "#else without #if",
             | Self::ElifDirectiveWithoutIfDirective(name) =>
                 format_in!(arena, "#{name} without #if"),
+            | Self::ConditionalArmAfterElse(name) => format_in!(arena, "#{name} after #else"),
             | Self::DuplicateMacroParameter(name) =>
                 format_in!(arena, "duplicate macro parameter name '{name}'"),
             | Self::HashOperatorMustBeFollowedByAMacroArgument(_)
@@ -1654,6 +1704,19 @@ impl ToDiagnostic for PreprocessorError<'_> {
             })
             .at(self.severity(), source);
         diagnostic.fatal |= fatal;
+        // Clang marks only the place of a conditional directive that no
+        // open conditional can take. Clang 23, `DiagnosticLexKinds.td`:
+        // `err_pp_endif_without_if`, `pp_err_else_without_if`,
+        // `pp_err_elif_without_if` and `pp_err_*_after_else`.
+        diagnostic.point |= context.configuration.diagnostic_format()
+            == crate::configuration::DiagnosticFormat::Clang
+            && matches!(
+                self.error_type,
+                PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
+                    | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
+                    | PreprocessorErrorType::ElifDirectiveWithoutIfDirective(_)
+                    | PreprocessorErrorType::ConditionalArmAfterElse(_)
+            );
         if let PreprocessorErrorType::DeprecatedMacro(deprecation) = &self.error_type {
             for expansion in deprecation.expansions {
                 diagnostic = diagnostic.secondary_segments(
@@ -1671,6 +1734,97 @@ impl ToDiagnostic for PreprocessorError<'_> {
 }
 
 impl std::error::Error for PreprocessorError<'_> {}
+
+impl PreprocessorError<'_> {
+    /// Rewords `diagnostic`, whose severity is final, in GCC's or Clang's
+    /// words where its diagnostic format is theirs: the message of a
+    /// `#warning` directive with the option that controls it, and a C23
+    /// directive written before C23. Clang marks a place for each.
+    /// GCC 14, `libcpp/directives.cc`: `do_diagnostic` and `do_elif`;
+    /// Clang 23, `DiagnosticLexKinds.td`: `pp_hash_warning`,
+    /// `ext_pp_warning_directive`, `ext_c23_pp_directive` and
+    /// `ext_pp_embed_directive`.
+    pub(crate) fn reword_for_compiler<'d>(
+        &self,
+        diagnostic: &mut Diagnostic<'d>,
+        context: &Context<'_>,
+        arena: &'d Bump,
+    ) {
+        use crate::configuration::DiagnosticFormat as F;
+        let format = context.configuration.diagnostic_format();
+        if !matches!(format, F::Gcc | F::Clang) {
+            return;
+        }
+        let error = diagnostic.severity == ErrorSeverity::Error;
+        // GCC's `-Werror=X` and Clang's `-Werror,-WX` on a warning made an
+        // error; GCC's pedantic warnings name no option.
+        let option = |name: &str| match (format, error) {
+            | (F::Gcc, true) => format_in!(arena, "-Werror={name}"),
+            | (F::Clang, true) => format_in!(arena, "-Werror,-W{name}"),
+            | _ => format_in!(arena, "-W{name}"),
+        };
+        let (message, suffixed) = match (format, &self.error_type) {
+            | (F::Gcc, PreprocessorErrorType::WarningDirective(message)) => (
+                format_in!(arena, "#warning {} [{}]", message.trim(), option("cpp")),
+                true,
+            ),
+            | (F::Clang, PreprocessorErrorType::WarningDirective(message)) => (
+                format_in!(arena, "{} [{}]", message.trim_start(), option("#warnings")),
+                true,
+            ),
+            | (
+                F::Gcc,
+                PreprocessorErrorType::DirectiveExtension(directive, _)
+                | PreprocessorErrorType::C23DirectiveExtension(directive),
+            ) => {
+                // GCC's pedantic warning names no option: `-pedantic-errors`
+                // makes it an error as it is, and `-Werror` names itself.
+                let message =
+                    format_in!(arena, "#{} before C23 is a GCC extension", directive.name());
+                if error && self.severity() == ErrorSeverity::Warning {
+                    (format_in!(arena, "{message} [-Werror]"), true)
+                } else {
+                    (message, false)
+                }
+            },
+            | (F::Clang, PreprocessorErrorType::DirectiveExtension(directive, _)) => (
+                format_in!(
+                    arena,
+                    "{} [{}]",
+                    clang_directive_words(*directive, arena),
+                    option("pedantic")
+                ),
+                true,
+            ),
+            | (F::Clang, PreprocessorErrorType::C23DirectiveExtension(directive)) => (
+                format_in!(
+                    arena,
+                    "{} [{}]",
+                    clang_directive_words(*directive, arena),
+                    option("c23-extensions")
+                ),
+                true,
+            ),
+            | _ => return,
+        };
+        diagnostic.message = message;
+        diagnostic.option_suffix = suffixed;
+        diagnostic.point |= format == F::Clang;
+    }
+}
+
+/// Clang's words for a C23 directive written before C23.
+fn clang_directive_words(directive: C23Directive, arena: &Bump) -> &str {
+    match directive {
+        | C23Directive::Elifdef | C23Directive::Elifndef => format_in!(
+            arena,
+            "use of a '#{}' directive is a C23 extension",
+            directive.name()
+        ),
+        | C23Directive::Warning | C23Directive::Embed =>
+            format_in!(arena, "#{} is a C23 extension", directive.name()),
+    }
+}
 
 /// A header `#include` cannot find, in the words of the compiler whose
 /// diagnostic format is in use, each of which stops the compilation there:
@@ -1865,7 +2019,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::BackslashInQuotedHeaderName(severity)
             | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion(severity)
             | PreprocessorErrorType::LineDirectiveNumberTooLarge(_, severity)
-            | PreprocessorErrorType::LineDirectiveNumberZero(_, severity) => severity,
+            | PreprocessorErrorType::LineDirectiveNumberZero(_, severity)
+            | PreprocessorErrorType::DirectiveExtension(_, severity) => severity,
             | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy) =>
                 crate::translation_phases::policy_severity(policy, crate::translation_phases::DiagnosticPolicy::Extension)
                     .unwrap_or(ErrorSeverity::Warning),
@@ -1899,6 +2054,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterIfdefDirective(_)
             | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
             | PreprocessorErrorType::WarningDirective(..)
+            | PreprocessorErrorType::C23DirectiveExtension(_)
             | PreprocessorErrorType::DeprecatedMacro(..)
             | PreprocessorErrorType::PragmaMessage { error: false, .. }
             | PreprocessorErrorType::PragmaOnceInNonHeader

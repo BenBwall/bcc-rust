@@ -80,6 +80,26 @@ impl TranslationError<'_> {
         matches!(self.unclassified(), Self::Extension(extension) if extension.suppressed.get())
     }
 
+    /// Whether this diagnostic may fold into another error at its place, or
+    /// take one in ([`crate::diagnostics::DiagnosticReporter`]): only an
+    /// error in the input's syntax does, and a later one there is often the
+    /// same mistake seen again. A warning that `-Werror`, `-pedantic-errors`,
+    /// its group or a pragma made an error, and the report of an extension
+    /// the configuration accepts, are problems of their own, which GCC and
+    /// Clang print beside any error at the same place. Semantic analysis
+    /// reports each mistake once, so its errors at one place are different
+    /// mistakes. A parser error folds as [`ParserError::may_fold`] says.
+    pub(crate) fn may_fold(&self) -> bool {
+        let error = self.unclassified();
+        let kind = match error {
+            | Self::Parsing(error) => error.may_fold(),
+            | Self::Preprocessing(error) => !error.error_type.is_extension(),
+            | Self::Semantic(_) | Self::Extension(_) => false,
+            | _ => true,
+        };
+        kind && error.severity() == ErrorSeverity::Error
+    }
+
     /// A warning-group diagnostic takes its group's configured severity,
     /// which already includes global -Werror and the group's own overrides.
     /// Other warnings from every phase share the global -Werror control.
@@ -111,6 +131,7 @@ impl TranslationError<'_> {
                 | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
                 | P::UnknownPragmaDirective | P::IgnoredPragma(_) => Some(G::UnknownPragmas),
                 | P::WarningDirective(_) => Some(G::Cpp),
+                | P::C23DirectiveExtension(_) => Some(G::C23Extensions),
                 | P::PragmaMessage { error: false, .. } => Some(G::PragmaMessages),
                 | P::StorageOrderPragmaOperand { .. } => Some(G::Pragmas),
                 | P::PragmaDiagnostic(problem) => problem.group(),
@@ -260,6 +281,9 @@ impl ToDiagnostic for TranslationError<'_> {
             | Self::Extension(error) => error.diagnostic_in(context, source, arena),
         };
         diagnostic.severity = self.configured_severity(context);
+        if let Self::Preprocessing(error) = self.unclassified() {
+            error.reword_for_compiler(&mut diagnostic, context, arena);
+        }
         diagnostic
     }
 }

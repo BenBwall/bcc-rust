@@ -609,7 +609,8 @@ native; MSVC-origin rows become native when their flag is enabled. The
 acceptance column describes the gate: `extension` accepts reserved or
 unambiguous syntax in older modes with a policy diagnostic, `native` accepts the
 spelling only where it is native, `GNU earlier` also accepts it in older GNU
-modes, and `MS flag` requires its independent flag. `Trigraphs` is special: it
+modes, `+ Clang` and `+ GCC/Clang` also under those compilers' personalities in
+every mode, and `MS flag` requires its independent flag. `Trigraphs` is special: it
 is accepted only in strict C89 through C17. Every row is implemented with its
 mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 `Y` promises no semantic checks, target support, or code generation.
@@ -624,9 +625,9 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | DigitSeparators | - | - | - | - | - | Y | Y | native | lexer/preprocessor |
 | BitIntSuffixes | - | - | - | - | - | Y | Y | native | lexer/preprocessor |
 | BinaryConstants | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
-| Elifdef | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
-| WarningDirective | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
-| Embed | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| Elifdef | - | - | - | - | - | Y | Y | GNU earlier + Clang | lexer/preprocessor |
+| WarningDirective | - | - | - | - | - | Y | Y | GNU earlier + GCC/Clang | lexer/preprocessor |
+| Embed | - | - | - | - | - | Y | Y | GNU earlier + Clang | lexer/preprocessor |
 | HasInclude | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
 | HasEmbed | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
 | HasCAttribute | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
@@ -1171,7 +1172,26 @@ unreported, as in GCC's and Clang's `-E`.
 C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`,
 `__has_embed`, `__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU
 extensions. `#warning` always emits its message, plus a policy diagnostic when
-its spelling is an extension. `#embed` reads real files as 8-bit resource
+its spelling is an extension. The GCC and Clang personalities read `#warning` in
+strict modes before C23 too, and the Clang personality `#elifdef`, `#elifndef`
+and `#embed`, as GCC 14 and Clang 23 do (GCC 14 has no `#embed`, and its strict
+modes leave `#elifdef` an invalid directive, unread in a skipped group). Under
+`-pedantic` GCC reports "`#warning` before C23 is a GCC extension", and in a
+`gnu` mode `#elifdef` only after a group it took, as an arm of an open
+conditional and after any error there, or where it takes the group, at the end
+of the line; `-Werror` adds `[-Werror]` to these, and `-pedantic-errors` makes
+them errors without it. The other identities with GCC's rules (`cl` and TCC)
+say nothing of an `#elifdef` after a group they took, and report one they take
+at its name. Clang reports "`#warning` is a C23 extension
+[-Wpedantic]", and its `-Wc23-extensions`, on by default, reports every
+`#elifdef` and `#elifndef` it meets, in nested skipped groups too, and `#embed`;
+`-pedantic-errors` makes these errors even after `-Wno-pedantic`, and
+`-Wno-c23-extensions` silences them. Neither reports `__has_include` or
+`__has_c_attribute` in any mode. In the GCC and Clang diagnostic formats these
+reports take the compilers' words, as does `#warning`'s message (`#warning text
+[-Wcpp]`, Clang's `text [-W#warnings]`); bcc's own format keeps `'#warning' is a
+C23 extension [-Wpedantic]`. Clang's message keeps the text as written, where
+bcc writes each run of white space as one space, as GCC does. `#embed` reads real files as 8-bit resource
 elements through the include search paths, and implements `limit`, `prefix`,
 `suffix`, `if_empty`, and their double-underscore aliases. Limits use the
 integer preprocessor evaluator in their own expansion frame, allow conditional
@@ -1352,8 +1372,9 @@ those places from the statement's.
 
 bcc files every extension under `-Wpedantic`, including those each compiler gives
 a group of its own: GCC's `-Wlong-long` and `-Wdeclaration-after-statement`, and
-Clang's `-Wc23-extensions`. A pragma naming `-Wpedantic` therefore reaches these
-in bcc alone. The lexer runs when a file is opened, before any pragma in it, so
+Clang's `-Wc23-extensions` but for its C23 directives, which the Clang
+personality reports under `c23-extensions` (above). A pragma naming
+`-Wpedantic` therefore reaches these in bcc alone. The lexer runs when a file is opened, before any pragma in it, so
 what `-pedantic-errors` decides there (an unterminated quote's wording, say) does
 not follow a pragma.
 
@@ -1368,6 +1389,7 @@ Clang's `fatal` reports `fatal error` and ends the compilation, and GCC's
 
 These warnings gained a group for the pragmas to name, which the command line
 now controls too: `cpp` (`#warnings` in Clang) for `#warning`, Clang's
+`c23-extensions` (also `c2x-extensions`) for its C23 directives, Clang's
 `#pragma-messages` for `#pragma GCC warning`, GCC's `pragmas`, and Clang's
 `extra-tokens`, `deprecated-pragma`, `pragma-once-outside-header`,
 `pragma-system-header-outside-header`, `include-next-outside-header`,

@@ -1,0 +1,10 @@
+pp-c23-directives-strict-gcc.c:4:2: warning: #warning before C23 is a GCC extension
+    4 | #warning reached
+      |  ^~~~~~~
+pp-c23-directives-strict-gcc.c:4:2: warning: #warning reached [-Wcpp]
+pp-c23-directives-strict-gcc.c:7:2: error: invalid preprocessing directive #elifdef
+    7 | #elifdef YES
+      |  ^~~~~~~
+pp-c23-directives-strict-gcc.c:14:2: error: invalid preprocessing directive #embed
+   14 | #embed "pp-c23-directives-strict-gcc.c" limit(1)
+      |  ^~~~~

@@ -1,0 +1,1 @@
+pp-c23-directives-msvc-identity.c(9,2): warning: '#elifdef' is a C23 extension [-Wpedantic]

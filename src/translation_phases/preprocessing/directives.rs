@@ -56,6 +56,7 @@ use super::{
     Expander,
     LiteralUnit,
     errors::{
+        C23Directive,
         PreprocessorError,
         PreprocessorErrorType,
     },
@@ -157,20 +158,27 @@ impl Expander<'_, '_, '_, '_> {
             | "if" => self.parse_if_directive(directive),
             | "ifdef" => self.parse_ifdef_directive(directive),
             | "ifndef" => self.parse_ifndef_directive(directive),
-            | "elif" => self.parse_elif_directive(directive),
+            | "elif" => self.parse_elif_directive(directive, None),
+            // GCC's `gnu` modes report one met after a group they took, where
+            // an older compiler would reject it, though not in a skipped
+            // group (GCC 14, `libcpp/directives.cc`, `do_elif`).
             | name @ ("elifdef" | "elifndef")
                 if self.context.configuration.accepts(Feature::Elifdef) =>
             {
-                self.context.report_extension(
-                    Feature::Elifdef,
-                    if name == "elifdef" {
-                        "#elifdef"
-                    } else {
-                        "#elifndef"
-                    },
-                    directive.source_vectors,
-                );
-                self.parse_elif_directive(directive);
+                let extension = if name == "elifdef" {
+                    C23Directive::Elifdef
+                } else {
+                    C23Directive::Elifndef
+                };
+                let configuration = self.context.configuration;
+                if configuration.reports_elifdef_as_gcc() {
+                    self.parse_elif_directive(directive, Some(extension));
+                } else {
+                    if !configuration.silent_extension(Feature::Elifdef) {
+                        self.report_c23_directive(extension, directive.source_vectors);
+                    }
+                    self.parse_elif_directive(directive, None);
+                }
             },
             | "else" => self.parse_else_directive(directive),
             | "endif" => self.parse_endif_directive(directive),
@@ -238,11 +246,7 @@ impl Expander<'_, '_, '_, '_> {
                     .configuration
                     .accepts(Feature::WarningDirective) =>
             {
-                self.context.report_extension(
-                    Feature::WarningDirective,
-                    "#warning",
-                    directive.source_vectors,
-                );
+                self.report_c23_directive(C23Directive::Warning, directive.source_vectors);
                 self.parse_error_directive(directive);
                 self.resume_at_line_start();
             },
@@ -259,8 +263,20 @@ impl Expander<'_, '_, '_, '_> {
             },
             // GCC and Clang refuse what bcc itself only warns of.
             // C99: §6.10 paragraph 2, p. 145; PDF p. 157 (a non-directive).
+            // GCC names the directive.
             | _ if self.context.configuration.compiler_extensions() => {
-                self.language_error("invalid preprocessing directive", directive.source_vectors);
+                let message = if self.context.configuration.compiler_identity()
+                    == CompilerIdentity::Gcc
+                {
+                    self.context
+                        .diagnostic_format(format_args!("invalid preprocessing directive #{name}"))
+                } else {
+                    "invalid preprocessing directive"
+                };
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::LanguageConstraint(message),
+                    source_vectors: directive.source_vectors,
+                });
                 self.skip_until_newline();
             },
             | _ => {

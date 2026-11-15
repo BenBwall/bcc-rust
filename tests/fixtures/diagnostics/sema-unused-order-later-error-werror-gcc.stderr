@@ -1,4 +1,4 @@
-sema-unused-order-later-error-werror-gcc.c:3:2: error: #warning promoted
+sema-unused-order-later-error-werror-gcc.c:3:2: error: #warning promoted [-Werror=cpp]
     3 | #warning promoted
       |  ^~~~~~~
 sema-unused-order-later-error-werror-gcc.c:5:56: error: expected expression before ';' token

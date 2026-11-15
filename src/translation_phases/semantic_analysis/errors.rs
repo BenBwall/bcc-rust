@@ -1515,6 +1515,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::DeclarationMissingParameterType
                     | crate::configuration::DiagnosticGroup::Pragmas
                     | crate::configuration::DiagnosticGroup::Cpp
+                    | crate::configuration::DiagnosticGroup::C23Extensions
                     | crate::configuration::DiagnosticGroup::PragmaMessages
                     | crate::configuration::DiagnosticGroup::ExtraTokens
                     | crate::configuration::DiagnosticGroup::DeprecatedPragma

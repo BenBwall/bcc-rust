@@ -731,6 +731,11 @@ impl CompilerConfiguration {
         // compilers: GCC's `pedwarn` and Clang's ExtWarn stay so.
         let deny = if group.default() == GroupDefault::Extension {
             self.extension_policy == ExtensionPolicy::Deny
+        } else if group == DiagnosticGroup::C23Extensions {
+            // Clang's `-pedantic-errors` maps every extension warning outside
+            // `-Wpedantic` to an error, which a later `-Wno-pedantic` does
+            // not undo.
+            self.pedantic_errors || self.command_line_pedantic_deny()
         } else {
             self.command_line_pedantic_deny()
         };
@@ -924,6 +929,12 @@ diagnostic_groups! {
     /// `#warning`; GCC's `-Wcpp` and Clang's `-W#warnings`, whose other name
     /// [`DiagnosticGroup::parse`] reads.
     Cpp => Some("cpp"), Warning, false;
+    /// Clang: a C23 directive written before C23, `#elifdef`, `#elifndef`
+    /// or `#embed`, which it reports by default as an extension warning that
+    /// `-pedantic-errors` makes an error; bcc reports it under the Clang
+    /// personality only ([`CompilerConfiguration::reports_c23_directives`]).
+    /// Its old name `c2x-extensions` is read by [`DiagnosticGroup::parse`].
+    C23Extensions => Some("c23-extensions"), Warning, true;
     /// Clang: `#pragma GCC warning`. GCC names no option for it.
     PragmaMessages => Some("#pragma-messages"), Warning, false;
     /// Clang: tokens after a directive is complete.
@@ -1318,8 +1329,10 @@ impl DiagnosticGroup {
     }
 
     pub(crate) fn parse(name: &str) -> Option<Self> {
-        if name == "#warnings" {
-            return Some(Self::Cpp);
+        match name {
+            | "#warnings" => return Some(Self::Cpp),
+            | "c2x-extensions" => return Some(Self::C23Extensions),
+            | _ => {},
         }
         Self::ALL
             .iter()
