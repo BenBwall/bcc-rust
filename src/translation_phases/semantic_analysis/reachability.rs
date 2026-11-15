@@ -83,13 +83,15 @@ use crate::{
 /// A warning waiting for the end of its function.
 #[derive(Clone, Copy)]
 struct DeferredWarning {
-    function: usize,
+    function:   usize,
     /// The identity of the expression whose reachability decides.
-    anchor:   usize,
-    group:    DiagnosticGroup,
-    kind:     SemanticErrorKind,
-    site:     SourceVectors,
-    name:     Option<StringCacheId>,
+    anchor:     usize,
+    group:      DiagnosticGroup,
+    kind:       SemanticErrorKind,
+    site:       SourceVectors,
+    name:       Option<StringCacheId>,
+    /// The ranges Clang underlines beside the caret.
+    highlights: [SourceVectors; 2],
 }
 
 /// What the walk needs that analysis alone knows.
@@ -119,11 +121,15 @@ impl<'s> ReachabilityState<'s> {
 #[derive(Clone, Copy, Default)]
 struct Exits {
     /// Any `return` statement, reached or not, for what GCC's front end asks.
-    any_return:  bool,
+    any_return:   bool,
     /// The first `return` statement the walk reached.
-    live_return: Option<SourceVectors>,
+    live_return:  Option<SourceVectors>,
     /// A call the walk reached does not return.
-    abnormal:    bool,
+    abnormal:     bool,
+    /// Any call, reached or not, to a function that does not return: GCC's
+    /// front end sets `current_function_returns_abnormally` as it builds
+    /// the call, so a statically dead one counts too.
+    any_abnormal: bool,
 }
 
 /// One walk's knowledge, which only grows from pass to pass.
@@ -240,7 +246,38 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             kind,
             site,
             name,
+            highlights: self.highlights,
         });
+    }
+
+    /// [`Self::warn_if_reachable`] for a warning Clang's walk of a full
+    /// expression gives (`AnalyzeImplicitConversions`), which steps through
+    /// `_Generic` and `__builtin_choose_expr` into the operand they select
+    /// (`IgnoreParenImpCasts`) and so checks no other. In a function the
+    /// reachability walk follows the same selections. Outside one, the
+    /// operand `__builtin_choose_expr` does not select is `dead`, as code
+    /// generation skips it, and a warning in a `_Generic` waits for its
+    /// selection ([`Self::hold_warning`]).
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97. GNU extension: GCC manual, "Other
+    /// Builtins".
+    pub(super) fn warn_if_selected(
+        &mut self,
+        anchor: &'tu Expression<'tu>,
+        group: DiagnosticGroup,
+        kind: SemanticErrorKind,
+        site: SourceVectors,
+        name: Option<StringCacheId>,
+    ) {
+        if self.functions.current.is_some() {
+            self.warn_if_reachable(anchor, group, kind, site, name);
+        } else if !self.tainted && !self.functions.dead {
+            self.hold_warning(super::functions::HeldWarning {
+                group,
+                kind,
+                site,
+                name,
+            });
+        }
     }
 
     /// Reports the current function's waiting warnings that are reachable,
@@ -273,13 +310,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             if warning.function != function.id {
                 self.reachability.deferred.push(*warning);
             } else if flow.anchors.get(&warning.anchor).copied().unwrap_or(false) {
-                self.group_diagnostic(
-                    warning.group,
-                    warning.kind,
-                    warning.site,
-                    warning.name,
-                    None,
-                );
+                self.with_highlights(warning.highlights, |analyzer| {
+                    analyzer.group_diagnostic(
+                        warning.group,
+                        warning.kind,
+                        warning.site,
+                        warning.name,
+                        None,
+                    );
+                });
             }
         }
         self.tainted = tainted;
@@ -916,6 +955,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let mut end = self.flow_expression(flow, function_expression, live);
                 for &argument in arguments {
                     end = self.flow_expression(flow, argument, end);
+                }
+                if !end && self.call_does_not_return(function_expression) {
+                    flow.exits.any_abnormal = true;
                 }
                 end && !self.cfg_call_does_not_return(
                     flow,

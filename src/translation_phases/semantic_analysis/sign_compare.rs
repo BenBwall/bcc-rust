@@ -48,6 +48,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         left: &'tu Expression<'tu>,
         right: &'tu Expression<'tu>,
     ) {
+        self.check_type_limits(e, operator, left, right);
         if self.unused.sign_compare
             && matches!(
                 operator,
@@ -119,14 +120,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 site,
             );
         } else {
-            // Clang's `DiagRuntimeBehavior`.
-            self.warn_if_reachable(
-                e,
-                DiagnosticGroup::SignCompare,
-                SemanticErrorKind::SignCompare,
-                site,
-                Some(name),
-            );
+            // Clang's `DiagRuntimeBehavior`; it underlines both operands.
+            let operands = [
+                left.expression.source_vectors,
+                right.expression.source_vectors,
+            ];
+            self.with_highlights(operands, |analyzer| {
+                analyzer.warn_if_reachable(
+                    e,
+                    DiagnosticGroup::SignCompare,
+                    SemanticErrorKind::SignCompare,
+                    site,
+                    Some(name),
+                );
+            });
         }
     }
 

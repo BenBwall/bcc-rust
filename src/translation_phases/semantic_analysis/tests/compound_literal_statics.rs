@@ -11,6 +11,7 @@ use crate::configuration::{
     CStandard,
     CompilerConfiguration,
     CompilerIdentity,
+    DiagnosticGroup,
     ExtensionPolicy,
 };
 
@@ -178,12 +179,25 @@ const SCALARS: &str = r"enum e { A, B };
 /// "initializer element is not constant"; Clang accepts it silently.
 #[test]
 fn scalar_compound_literals_initialize_statics_of_their_type() {
-    assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Allow), (vec![], 0));
-    assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Warn), (vec![], 10));
-    assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Deny), (vec![], 10));
+    // `(char){300}` changes its value, which GCC's `-Woverflow` reports.
+    let overflow = vec![SemanticErrorKind::ValueWarning(DiagnosticGroup::Overflow)];
+    assert_eq!(
+        diagnostics(SCALARS, ExtensionPolicy::Allow),
+        (overflow.clone(), 0)
+    );
+    assert_eq!(
+        diagnostics(SCALARS, ExtensionPolicy::Warn),
+        (overflow.clone(), 10)
+    );
+    assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Deny), (overflow, 10));
     assert_eq!(
         diagnostics_as(SCALARS, CompilerIdentity::Clang, ExtensionPolicy::Deny),
-        (vec![], 0)
+        (
+            vec![SemanticErrorKind::ValueWarning(
+                DiagnosticGroup::ConstantConversion
+            )],
+            0
+        )
     );
     for (source, clang) in [
         // GCC: "initializer element is not constant" for each; Clang reads
@@ -527,15 +541,28 @@ fn gcc_converts_arithmetic_literals_of_other_types_inside_braces() {
     static __bf16 k[1] = { *&(_Float16){0.1} };
     static struct b bits = { (double){2.5} };
     void f(void) { static long l[1] = { (_Bool){2} }; (void)l; }";
+    // `(char){300}` changes its value, which each compiler reports in its
+    // own group.
     for identity in IDENTITIES {
+        let group = if identity == CompilerIdentity::Gcc {
+            DiagnosticGroup::Overflow
+        } else {
+            DiagnosticGroup::ConstantConversion
+        };
         assert_eq!(
             diagnostics_as(source, identity, ExtensionPolicy::Allow).0,
-            [],
+            [SemanticErrorKind::ValueWarning(group)],
             "{identity:?}"
         );
     }
     // One report per literal, and two for `_Float16` before C23.
-    assert_eq!(diagnostics(source, ExtensionPolicy::Warn), (vec![], 9));
+    assert_eq!(
+        diagnostics(source, ExtensionPolicy::Warn),
+        (
+            vec![SemanticErrorKind::ValueWarning(DiagnosticGroup::Overflow)],
+            9
+        )
+    );
     for source in [
         "static double d = (int){3};",
         "void f(int v) { static double a[1] = { (int){v} }; (void)a; }",

@@ -214,6 +214,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             self.state
                 .lexed_files
                 .open(self.context, header_source_index, header_string);
+        self.enter_source_map(
+            header_source_index,
+            directive.source_vectors,
+            (including_file, header.name, header.is_system_header),
+        );
         if self.context.include_entries.is_some() {
             self.record_include_entry(
                 header_source_index,
@@ -303,14 +308,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         let depth = u32::try_from(depth).expect("the include nesting limit is small");
         // Found beside an includer that is itself in, or reached from, the
         // working directory: Clang names that directory `.`.
-        let separator = self.path_separator();
         let includer_path = self.context.get_source_file(includer);
-        let path = self.context.get_source_file(file);
-        let mut buffer = ArenaVec::new_in(self.scratch);
-        let local = !angled
-            && includer_path.parent().is_some_and(|directory| {
-                join_path(&mut buffer, directory, Path::new(name), separator) == path
-            });
+        let local = self.found_beside_includer(file, (includer, name, angled));
         let Some(entries) = &mut self.context.include_entries else {
             return;
         };
@@ -327,6 +326,44 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             here,
             forced,
         });
+    }
+
+    /// Records that the `#include` at `directive` opened `file`, for the
+    /// include stacks GCC and Clang print before a diagnostic in it.
+    #[inline(never)]
+    fn enter_source_map(
+        &mut self,
+        file: u32,
+        directive: SourceVectors,
+        (includer, name, angled): (u32, &str, bool),
+    ) {
+        let directive = (Some(includer) != self.state.command_line_file)
+            .then(|| self.context.get_source_vectors(directive).first())
+            .flatten()
+            .map(|vector| (vector.source_file_index, vector.index, vector.line));
+        // Clang names a header found beside an includer in, or reached
+        // from, the working directory `./a.h`.
+        let here = self.found_beside_includer(file, (includer, name, angled))
+            && (self.context.get_source_file(includer).parent() == Some(Path::new(""))
+                || self.context.source_map.reading_here());
+        self.context.enter_source_file(file, directive, here);
+    }
+
+    /// Whether `file` is the `"…"` header `name` found in the directory of
+    /// `includer`.
+    fn found_beside_includer(
+        &self,
+        file: u32,
+        (includer, name, angled): (u32, &str, bool),
+    ) -> bool {
+        let separator = self.path_separator();
+        let includer_path = self.context.get_source_file(includer);
+        let path = self.context.get_source_file(file);
+        let mut buffer = ArenaVec::new_in(self.scratch);
+        !angled
+            && includer_path.parent().is_some_and(|directory| {
+                join_path(&mut buffer, directory, Path::new(name), separator) == path
+            })
     }
 
     /// Records a header that cannot be found as one to be generated, under

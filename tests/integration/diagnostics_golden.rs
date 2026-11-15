@@ -56,20 +56,57 @@ mod tests {
             .expect("the bcc-rust test binary must run")
     }
 
-    /// A location joined from a search directory uses the host's path
-    /// separator (`system-headers\noisy.h` on Windows). Golden files spell
-    /// location paths with `/` so that they match on every host.
+    /// A location joined from a search directory or an includer's directory
+    /// uses the host's path separator (`system-headers\noisy.h` and
+    /// Clang's `.\context-headers\inner.h` on Windows). Golden files spell
+    /// location paths with `/` so that they match on every host: in bcc's
+    /// `-->` lines, in GCC's and Clang's `In file included from` lines, and
+    /// in the file name before a GCC or Clang location or context line.
+    /// Message text and quoted source keep their backslashes.
     fn portable_locations(stderr: &[u8]) -> Vec<u8> {
         let text = String::from_utf8_lossy(stderr);
         let mut portable = String::with_capacity(text.len());
         for line in text.split_inclusive('\n') {
             if line.trim_start().starts_with("--> ") {
                 portable.push_str(&line.replace('\\', "/"));
+            } else if let Some((lead, rest)) = ["In file included from ", "                 from "]
+                .into_iter()
+                .find_map(|lead| line.strip_prefix(lead).map(|rest| (lead, rest)))
+            {
+                portable.push_str(lead);
+                portable.push_str(&rest.replace('\\', "/"));
             } else {
-                portable.push_str(line);
+                let end = location_file_end(line);
+                portable.push_str(&line[..end].replace('\\', "/"));
+                portable.push_str(&line[end..]);
             }
         }
         portable.into_bytes()
+    }
+
+    /// The length of the file name a GCC or Clang location (`file:1:2:`),
+    /// context line (`file: In function 'f':`) or clang-cl location
+    /// (`file(1,2):`, `file(1):`) begins with, or 0.
+    fn location_file_end(line: &str) -> usize {
+        let colon = line.find(':').filter(|&end| {
+            let rest = &line[end..];
+            rest[1..].starts_with(|c: char| c.is_ascii_digit())
+                || rest.starts_with(": In function '")
+                || rest.starts_with(": At top level:")
+        });
+        let parenthesis = || {
+            let end = line.find('(')?;
+            let (numbers, _) = line[end + 1..].split_once("):")?;
+            let mut parts = numbers.split(',');
+            let located = parts.next().is_some_and(|line| !line.is_empty())
+                && numbers.chars().all(|c| c.is_ascii_digit() || c == ',')
+                && parts.count() <= 1;
+            located.then_some(end)
+        };
+        match colon.or_else(parenthesis) {
+            | Some(end) if end > 0 && !line[..end].contains(' ') => end,
+            | _ => 0,
+        }
     }
 
     #[test]
@@ -77,6 +114,22 @@ mod tests {
         assert_eq!(
             portable_locations(b"error: x\n  --> dir\\file.h:1:2\n   |\nnote: a\\b\n"),
             b"error: x\n  --> dir/file.h:1:2\n   |\nnote: a\\b\n"
+        );
+        assert_eq!(
+            portable_locations(
+                b"In file included from .\\d\\a.h:2,\n                 from m.c:1:\n.\\d\\b.h: \
+                  In function 'f':\n.\\d\\b.h:3:4: error: '\\n' x:1\n    3 | \"\\n\"\n"
+            ),
+            b"In file included from ./d/a.h:2,\n                 from m.c:1:\n./d/b.h: In \
+              function 'f':\n./d/b.h:3:4: error: '\\n' x:1\n    3 | \"\\n\"\n"
+        );
+        assert_eq!(
+            portable_locations(
+                b"In file included from m.c:1:\n.\\d\\b.h(3,4): error: a\\b(1):\n.\\d\\b.h(3): \
+                  note: x\nf(x): a\\b\n"
+            ),
+            b"In file included from m.c:1:\n./d/b.h(3,4): error: a\\b(1):\n./d/b.h(3): note: \
+              x\nf(x): a\\b\n"
         );
     }
 

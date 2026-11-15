@@ -244,7 +244,7 @@ fn visible_linked_types_still_form_composites() {
             assert!(matches!(
                 errors[0],
                 TranslationError::Semantic(SemanticError {
-                    kind: SemanticErrorKind::InvalidArgumentCount,
+                    kind: SemanticErrorKind::TooManyArguments,
                     ..
                 })
             ));

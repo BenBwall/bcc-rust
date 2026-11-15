@@ -112,6 +112,30 @@ fn warning_groups_cover_null_constants_casts_void_and_old_style_calls() {
     }
 }
 
+/// GCC 13.3 and 14 and TCC 0.9.28 check no argument of a call against the
+/// parameters of an old-style definition, which give the call no prototype
+/// (C99 6.5.2.2p6); Clang does, and the test above keeps its diagnostic.
+#[test]
+fn gnu_identities_leave_old_style_calls_unchecked() {
+    let source = "int kr(a, p, d) int a; int *p; double d; {return a + *p + (int)d;} void \
+                  f(unsigned u){kr((void *)1, &u, 3); kr(1.5, 0, 2.5f);}";
+    for identity in [
+        crate::configuration::CompilerIdentity::Gcc,
+        crate::configuration::CompilerIdentity::Tcc,
+    ] {
+        let configuration = CompilerConfiguration::default().with_compiler_identity(identity);
+        with_configuration(source, configuration, |context, unit| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{identity:?}: {:?}",
+                context.take_pending_errors()
+            );
+            assert_eq!(unit.errors, 0);
+        });
+    }
+}
+
 #[test]
 fn nonnull_operands_and_redeclarations_retain_parameter_positions() {
     with_source(

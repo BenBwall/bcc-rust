@@ -40,7 +40,8 @@ use crate::{
 /// into the parser error just before it when no input was consumed between
 /// them, otherwise into a lexing or preprocessing error at that place; a
 /// preprocessing error into the preprocessing error just before it. The
-/// parser and the preprocessor are considered separately.
+/// parser and the preprocessor are considered separately. Semantic errors
+/// never fold.
 ///
 /// Pending diagnostics are built in the translation-unit arena (`'tu`). The
 /// pending list, the folding map, and the locations live in the reporter's
@@ -81,8 +82,12 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
                 .first()
                 .map(|source| (source.source_file_index, source.index)),
         };
+        // Semantic analysis reports each mistake once, so its errors at one
+        // place are different mistakes, as when `-Werror` makes a warning
+        // about a declaration an error beside one about its initializer.
         let (parser, consumed, foldable) = match error {
             | TranslationError::Parsing(error) => (true, error.consumed_tokens, error.may_fold()),
+            | TranslationError::Semantic(_) => (false, 0, false),
             | _ => (false, 0, true),
         };
         let empty_translation_unit =
@@ -90,6 +95,13 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         let target =
             if diagnostic.severity == ErrorSeverity::Error && foldable && !location.is_empty() {
                 self.fold_target(parser.then_some(consumed), empty_translation_unit, location)
+                    // A file read twice puts two mistakes at one place.
+                    .filter(|&index| {
+                        self.pending[index]
+                            .diagnostic
+                            .reading
+                            .is_none_or(|reading| context.same_reading(reading, source))
+                    })
             } else {
                 None
             };
@@ -109,6 +121,8 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             } else {
                 diagnostic
             };
+            let mut diagnostic = diagnostic;
+            diagnostic.reading = diagnostic.reading.or(Some(source));
             if !parser && diagnostic.severity == ErrorSeverity::Error && !location.is_empty() {
                 _ = self.other_errors.insert(location, self.pending.len());
             }
@@ -203,13 +217,18 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         {
             writeln!(out, "compilation terminated.")?;
         }
-        // GCC, MSVC and TCC print no summary.
+        // GCC, MSVC and TCC print no summary, and Clang prints it only with
+        // its snippets (`CompilerInstance::printDiagnosticStats` checks
+        // `ShowCarets`), warnings first.
+        let format = context.configuration.diagnostic_format();
+        let clang = format == crate::configuration::DiagnosticFormat::Clang;
         if matches!(
-            context.configuration.diagnostic_format(),
+            format,
             crate::configuration::DiagnosticFormat::Gcc
                 | crate::configuration::DiagnosticFormat::Msvc { .. }
                 | crate::configuration::DiagnosticFormat::Tcc
-        ) {
+        ) || (clang && !context.configuration.diagnostic_presentation().caret)
+        {
             return Ok(());
         }
         let errors = count_of(self.errors, "error");
@@ -218,6 +237,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             | (0, 0) => Ok(()),
             | (_, 0) => writeln!(out, "{errors} generated."),
             | (0, _) => writeln!(out, "{warnings} generated."),
+            | _ if clang => writeln!(out, "{warnings} and {errors} generated."),
             | _ => writeln!(out, "{errors} and {warnings} generated."),
         }
     }
