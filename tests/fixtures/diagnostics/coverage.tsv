@@ -247,3 +247,4 @@ pp	HashHashAtVaOptBoundary	pp-hash-hash-at-va-opt-boundary.c	rendered
 pp	DeprecatedMacro	sema-atomic-deprecated.c	rendered
 pp	DirectiveExtension	pp-c23-directives-gcc.c	rendered
 pp	C23DirectiveExtension	pp-c23-directives-clang.c	rendered
+pp	ConditionalArmAfterElse	pp-conditional-arms-clang.c	rendered

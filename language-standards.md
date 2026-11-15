@@ -1177,8 +1177,12 @@ strict modes before C23 too, and the Clang personality `#elifdef`, `#elifndef`
 and `#embed`, as GCC 14 and Clang 23 do (GCC 14 has no `#embed`, and its strict
 modes leave `#elifdef` an invalid directive, unread in a skipped group). Under
 `-pedantic` GCC reports "`#warning` before C23 is a GCC extension", and in a
-`gnu` mode `#elifdef` only after a group it took, or where it takes the group,
-at the end of the line. Clang reports "`#warning` is a C23 extension
+`gnu` mode `#elifdef` only after a group it took, as an arm of an open
+conditional and after any error there, or where it takes the group, at the end
+of the line; `-Werror` adds `[-Werror]` to these, and `-pedantic-errors` makes
+them errors without it. The other identities with GCC's rules (`cl` and TCC)
+say nothing of an `#elifdef` after a group they took, and report one they take
+at its name. Clang reports "`#warning` is a C23 extension
 [-Wpedantic]", and its `-Wc23-extensions`, on by default, reports every
 `#elifdef` and `#elifndef` it meets, in nested skipped groups too, and `#embed`;
 `-pedantic-errors` makes these errors even after `-Wno-pedantic`, and

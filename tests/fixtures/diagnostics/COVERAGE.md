@@ -11,6 +11,23 @@ its compiler byte for byte, including `#warning`'s message with `[-Wcpp]` or
 `[-W#warnings]` and the snippet neither repeats for a second diagnostic at the
 same place.
 
+Separate problems at one place (2026-11-15): `pp-c23-directives-clang-werror`
+(`-std=gnu17 -Werror`) pins an extension report that `-Werror` makes an error
+printed beside the structural error in the same directive, an `#elifdef`
+without `#if` and an `#embed` without a resource, as Clang 23 prints both
+rather than folding them; only errors in the input's syntax fold. Clang's
+`#elifdef without #if` matches byte for byte, and `pp-conditional-arms-clang`
+pins the place-only snippet Clang draws for every unmatched conditional arm;
+the `#embed` error keeps bcc's words and range (below).
+`pp-c23-directives-gcc-werror` (`-std=gnu17 -pedantic -Werror`) pins GCC 14's
+`[-Werror]` on its pedantic C23 directive reports, which `-pedantic-errors`
+leaves off, and its report of an `#elifdef` only as an arm of an open
+conditional, after an `after #else` error; GCC's words for the conditional
+errors and its `the conditional began here` note remain bcc's (below).
+`pp-c23-directives-msvc-identity` pins the base behaviour of the `cl` identity
+with a pre-C23 `gnu` dialect: no report after a group it took, and one at the
+name of an arm it takes.
+
 Context lines (2026-11-08): `context-includes-gcc` and `context-includes-clang`
 pin the include stacks GCC 14 and Clang 23 print before a diagnostic in a
 header: headers nested two deep through `"…"` and through `<…>` with `-I`, a
@@ -205,6 +222,8 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | [Unicode identifier recovery](parser-unicode-identifier.stderr) | Review the missing-type and continuation diagnostics for a single malformed declaration together. |
 | [Macro keyword](parser-macro-expanded-keyword.stderr), [macro operand](parser-expected-statement-expression-macro.stderr) | Add useful macro invocation context alongside spelling or recovery locations. |
 | [Conflicting storage classes](parser-storage-class-redefinition.stderr) | Label the earlier `static` as well as the new `extern`. |
+| [GCC's conditional arms](pp-c23-directives-gcc-werror.stderr) | Checked 15 November 2026. GCC writes `#elifdef without #if` and `#elifdef after #else` without backticks, and follows the latter with a line-only `the conditional began here` error at the `#if`, after which it quotes the next diagnostic at the arm again. |
+| [Clang's `#embed` without a resource](pp-c23-directives-clang-werror.stderr) | Checked 15 November 2026. Clang writes `expected "FILENAME" or <FILENAME>` at the end of the directive with a caret only; bcc names the resource and underlines `embed`. |
 
 The prior panic and raw-NUL findings remain protected by the guard test and
 their existing fixtures. Keep those regressions even though the old review's
@@ -248,8 +267,8 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `UnterminatedVaOpt` | rendered | [pp-unterminated-va-opt.c](pp-unterminated-va-opt.c) |
 | `HashHashAtVaOptBoundary` | rendered | [pp-hash-hash-at-va-opt-boundary.c](pp-hash-hash-at-va-opt-boundary.c), [lexpp-c23-constraints.c](lexpp-c23-constraints.c) |
 | `WarningDirective` | rendered | [GNU89 warning message and extension policy](lexpp-gnu89-extensions.c), GCC's and Clang's words in [pp-c23-directives-gcc.c](pp-c23-directives-gcc.c) and [pp-c23-directives-clang.c](pp-c23-directives-clang.c); structured tests cover native C23 warnings and earlier strict rejection |
-| `DirectiveExtension` | rendered | [pp-c23-directives-gcc.c](pp-c23-directives-gcc.c), [pp-c23-directives-strict-gcc.c](pp-c23-directives-strict-gcc.c), [pp-c23-directives-clang-pedantic.c](pp-c23-directives-clang-pedantic.c); bcc's words through the language-mode tests |
-| `C23DirectiveExtension` | rendered | [pp-c23-directives-clang.c](pp-c23-directives-clang.c), [pp-c23-directives-clang-pedantic-errors.c](pp-c23-directives-clang-pedantic-errors.c) |
+| `DirectiveExtension` | rendered | [pp-c23-directives-gcc.c](pp-c23-directives-gcc.c), [pp-c23-directives-gcc-werror.c](pp-c23-directives-gcc-werror.c), [pp-c23-directives-strict-gcc.c](pp-c23-directives-strict-gcc.c), [pp-c23-directives-clang-pedantic.c](pp-c23-directives-clang-pedantic.c), [pp-c23-directives-msvc-identity.c](pp-c23-directives-msvc-identity.c); bcc's words through the language-mode tests |
+| `C23DirectiveExtension` | rendered | [pp-c23-directives-clang.c](pp-c23-directives-clang.c), [pp-c23-directives-clang-pedantic-errors.c](pp-c23-directives-clang-pedantic-errors.c), [pp-c23-directives-clang-werror.c](pp-c23-directives-clang-werror.c) |
 | `InvalidHexadecimalFloatLiteral` | rendered | [pp-invalid-hexadecimal-float-literal.c](pp-invalid-hexadecimal-float-literal.c) |
 | `InvalidDecimalFloatLiteral` | rendered | [pp-invalid-decimal-float-literal.c](pp-invalid-decimal-float-literal.c) |
 | `FloatConstantOutOfRange` | rendered | [pp-float-constant-out-of-range-underflow.c](pp-float-constant-out-of-range-underflow.c), [pp-float-constant-out-of-range.c](pp-float-constant-out-of-range.c) |
@@ -325,9 +344,10 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `NoConditionInIfDirective` | rendered | [pp-no-condition-in-if-directive.c](pp-no-condition-in-if-directive.c) |
 | `NoConditionInElifDirective` | rendered | [pp-no-condition-in-elif-directive.c](pp-no-condition-in-elif-directive.c) |
 | `MoreIfDirectivesThanEndifDirectives` | rendered | [pp-more-if-directives-than-endif-directives.c](pp-more-if-directives-than-endif-directives.c) |
-| `MoreEndifDirectivesThanIfDirectives` | rendered | [pp-more-endif-directives-than-if-directives.c](pp-more-endif-directives-than-if-directives.c) |
-| `ElifDirectiveWithoutIfDirective` | rendered | [pp-elif-directive-without-if-directive.c](pp-elif-directive-without-if-directive.c) |
-| `ElseDirectiveWithoutIfDirective` | rendered | [pp-else-directive-without-if-directive.c](pp-else-directive-without-if-directive.c) |
+| `MoreEndifDirectivesThanIfDirectives` | rendered | [pp-more-endif-directives-than-if-directives.c](pp-more-endif-directives-than-if-directives.c), Clang's in [pp-conditional-arms-clang.c](pp-conditional-arms-clang.c) |
+| `ElifDirectiveWithoutIfDirective` | rendered | [pp-elif-directive-without-if-directive.c](pp-elif-directive-without-if-directive.c), Clang's in [pp-conditional-arms-clang.c](pp-conditional-arms-clang.c) |
+| `ElseDirectiveWithoutIfDirective` | rendered | [pp-else-directive-without-if-directive.c](pp-else-directive-without-if-directive.c), Clang's in [pp-conditional-arms-clang.c](pp-conditional-arms-clang.c) |
+| `ConditionalArmAfterElse` | rendered | Clang's in [pp-conditional-arms-clang.c](pp-conditional-arms-clang.c), GCC's identity in [pp-c23-directives-gcc-werror.c](pp-c23-directives-gcc-werror.c) |
 | `ExpectedIdentifierInIfdefDirective` | rendered | [pp-expected-identifier-in-ifdef-directive.c](pp-expected-identifier-in-ifdef-directive.c) |
 | `ExpectedIdentifierInIfndefDirective` | rendered | [pp-expected-identifier-in-ifndef-directive.c](pp-expected-identifier-in-ifndef-directive.c) |
 | `ExpectedIdentifierInDefineDirective` | rendered | [pp-expected-identifier-in-define-directive.c](pp-expected-identifier-in-define-directive.c) |
