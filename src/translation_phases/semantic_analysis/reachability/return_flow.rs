@@ -5,9 +5,11 @@
 //! graphs, which [`Analyzer::flow_statement`] follows. They differ in a
 //! `switch` that covers its enumeration, which only Clang takes as complete,
 //! and in what GCC's front end says first of a `static` function with no
-//! `return`, which it may not lower at all.
+//! `return`, which it may not lower at all. TCC warns of a reachable end
+//! alone, as its code generator finds it.
 //! GCC: `finish_function` in `c-decl.cc`, `pass_warn_function_return`.
 //! Clang: `CheckFallThroughForBody` in `AnalysisBasedWarnings.cpp`.
+//! TCC: `check_func_return` in `tccgen.c`.
 //! C99: §6.9.1p12, p. 142; PDF p. 154; §5.1.2.2.3p1, p. 13; PDF p. 25.
 
 use super::{
@@ -16,6 +18,7 @@ use super::{
         SemanticErrorKind,
         types::{
             Scalar,
+            TypeId,
             TypeKind,
         },
     },
@@ -83,6 +86,12 @@ impl Analyzer<'_, '_, '_> {
             }
         };
         let end = Context::last_source_vector(body.source_vectors);
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Tcc {
+            if end_reached && !void {
+                self.tcc_return_flow(binding, result, end);
+            }
+            return;
+        }
         if gcc {
             self.gcc_return_flow(binding, noreturn, end_reached, end, &flow);
         } else {
@@ -139,6 +148,28 @@ impl Analyzer<'_, '_, '_> {
                 "control reaches end of non-void function",
             );
         }
+    }
+
+    /// TCC's `check_func_return` (`tccgen.c`), at a closing brace that
+    /// control reaches in a function that returns a value: `main` returning
+    /// `int` returns 0, and any other function draws a warning naming it.
+    /// TCC compiles an `inline` function only if something calls it, and
+    /// then after the rest of the unit, so bcc warns about none.
+    fn tcc_return_flow(&mut self, binding: usize, result: TypeId, end: SourceVectors) {
+        let data = self.bindings[binding];
+        let name = self.context.string_cache.at(data.name.name);
+        let int = matches!(
+            self.types.nodes[result.index],
+            TypeKind::Scalar(Scalar::Int | Scalar::UnsignedInt)
+        );
+        if (name == "main" && int) || self.inline_declared(binding) {
+            return;
+        }
+        let text = crate::diagnostics::format_in!(
+            self.scratch,
+            "function might return no value: '{name}'"
+        );
+        self.return_flow_warning(G::ReturnType, end, text);
     }
 
     fn clang_return_flow(

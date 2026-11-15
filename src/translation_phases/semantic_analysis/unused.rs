@@ -234,7 +234,11 @@ impl<'s> UnusedState<'s> {
                 G::SwitchDefault,
                 G::SwitchOutsideRange,
             ]),
-            return_flow: on(&[G::ReturnType, G::InvalidNoreturn, G::GccNoreturn]),
+            // TCC warns of a reachable end by default, as its code
+            // generator finds it.
+            return_flow: on(&[G::ReturnType, G::InvalidNoreturn, G::GccNoreturn])
+                || (configuration.compiler_identity() == CompilerIdentity::Tcc
+                    && configuration.diagnostic_severity(G::ReturnType).is_some()),
             sign_compare: on(&[G::SignCompare]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,

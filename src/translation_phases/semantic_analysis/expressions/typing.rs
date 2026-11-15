@@ -966,6 +966,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             rt,
             e.operator_source_vectors.unwrap_or(e.source_vectors),
         ) {
+            // TCC converts an integer arm to the pointer as a cast converts
+            // it (`gen_cast` in `tccgen.c`), warning about its width too.
+            if self.context.configuration.compiler_identity()
+                == crate::configuration::CompilerIdentity::Tcc
+            {
+                for (arm, arm_type) in [(left, lt), (right, rt)] {
+                    if self.pointer_target(arm_type).is_none() {
+                        self.pointer_integer_cast_warning(
+                            ty,
+                            arm_type,
+                            arm,
+                            e.operator_source_vectors.unwrap_or(e.source_vectors),
+                        );
+                    }
+                }
+            }
             ty
         } else if matches!(self.types.nodes[lt.index], TypeKind::Tag(_))
             && self
