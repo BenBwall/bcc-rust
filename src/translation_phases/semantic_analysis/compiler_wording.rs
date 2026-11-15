@@ -115,6 +115,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(self.context.string_cache.intern(text))
     }
 
+    /// TCC's text for comparing (`conditional` false) or selecting between
+    /// pointers to incompatible types `left` and `right`, interned, when the
+    /// diagnostic format is TCC's and both types can be spelled
+    /// (`type_incompatibility_warning` in `tccgen.c`, whose comparison
+    /// wording has no space before the parenthesis).
+    /// C99: §6.5.9p2, p. 86; PDF p. 98; §6.5.15p3, p. 90; PDF p. 102.
+    pub(super) fn pointer_mismatch_wording(
+        &mut self,
+        conditional: bool,
+        left: TypeId,
+        right: TypeId,
+    ) -> Option<StringCacheId> {
+        if self.context.configuration.diagnostic_format() != DiagnosticFormat::Tcc {
+            return None;
+        }
+        let left = self.type_spelling(left, false)?;
+        let right = self.type_spelling(right, false)?;
+        let text = if conditional {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "pointer type mismatch in conditional expression ('{left}' and '{right}')"
+            )
+        } else {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "pointer type mismatch in comparison('{left}' and '{right}')"
+            )
+        };
+        Some(self.context.string_cache.intern(text))
+    }
+
     /// The text of a pointer conversion diagnostic in GCC's or Clang's
     /// words, interned, when the diagnostic format is one of theirs and
     /// the context and both types can be put in them.

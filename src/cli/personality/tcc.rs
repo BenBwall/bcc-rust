@@ -681,16 +681,9 @@ impl Parser<'_> {
             },
             | "nostdinc" => state.options.push("--nostdinc".into()),
             | "w" => state.options.push("-w".into()),
-            | "O" => state.options.push(
-                // `-O` and `-Os` are TCC's level 1, which defines only
-                // `__OPTIMIZE__`.
-                match value_text.bytes().next() {
-                    | Some(digit @ b'0'..=b'3') => format!("-O{}", char::from(digit)),
-                    | Some(b'4'..=b'9') => "-O3".into(),
-                    | _ => "-O1".into(),
-                }
-                .into(),
-            ),
+            | "O" => state
+                .options
+                .push(format!("-O{}", tcc_optimization_level(value_text)).into()),
             | "P" => state.line_markers = if value_text.starts_with('1') { 2 } else { 1 },
             | "M" | "MM" => {
                 state.just_dependencies = true;
@@ -1231,6 +1224,27 @@ fn default_output(input: &OsStr, object: bool) -> OsString {
         | Some(dot) if object => format!("{}.o", &text[..dot]).into(),
         | _ => "a.out".into(),
     }
+}
+
+/// bcc's `-O` level for TCC's `-O` with `value` joined: 0.9.27 reads the
+/// level with `atoi` (`TCC_OPTION_O` in `libtcc.c`), so `-O` and `-Os` are
+/// level 0, as is `-O0`, and only a positive level defines `__OPTIMIZE__`
+/// (mob reads `-O` and `-Os` as level 1). bcc's highest level is 3.
+fn tcc_optimization_level(value: &str) -> u8 {
+    // `atoi` skips leading white space and reads an optional sign.
+    let value = value.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
+    if value.starts_with('-') {
+        return 0;
+    }
+    value
+        .strip_prefix('+')
+        .unwrap_or(value)
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0_u8, |level, digit| {
+            level.saturating_mul(10).saturating_add(digit - b'0')
+        })
+        .min(3)
 }
 
 /// `prefix` and `value` as one argument.

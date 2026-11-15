@@ -14,12 +14,14 @@ use super::{
 use crate::{
     configuration::{
         CStandard,
+        CompilerIdentity,
         DiagnosticGroup,
         FeatureOrigin,
         RuleSet,
     },
     translation_phases::{
         SourceVectors,
+        context::Context,
         parsing::{
             declaration_syntax::{
                 Declaration,
@@ -140,6 +142,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// of by default: `int;`, `struct { int x; };`.
     /// C99: §6.7 paragraph 2, p. 97; PDF p. 109.
     pub(super) fn report_empty_declaration(&mut self, d: &'tu Declaration<'tu>) {
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Tcc {
+            self.report_tcc_empty_declaration(d);
+            return;
+        }
         if !self.context.configuration.compiler_extensions()
             || self.old_parameter_mode
             || !d.init_declarators.is_empty()
@@ -166,6 +172,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             group,
             SemanticErrorKind::ExceptionalConstant(group, text),
             d.source_vectors,
+            None,
+            None,
+        );
+    }
+
+    /// TCC's warning of a structure or union with neither a tag nor a
+    /// declarator, a `typedef` among them, at the `;` that ends it (`decl0`
+    /// in `tccgen.c`); TCC refuses `int;` instead, and bcc accepts it
+    /// silently there.
+    /// C99: §6.7 paragraph 2, p. 97; PDF p. 109.
+    fn report_tcc_empty_declaration(&mut self, d: &'tu Declaration<'tu>) {
+        if self.old_parameter_mode
+            || !d.init_declarators.is_empty()
+            || !matches!(d.declaration_specifiers.type_specifiers,
+                TypeSpecifiers::StructOrUnion(record) if record.identifier.is_none())
+        {
+            return;
+        }
+        let group = DiagnosticGroup::GccEmptyDeclaration;
+        let text = self
+            .context
+            .string_cache
+            .intern("unnamed struct/union that defines no instances");
+        self.group_diagnostic(
+            group,
+            SemanticErrorKind::ExceptionalConstant(group, text),
+            Context::last_source_vector(d.source_vectors),
             None,
             None,
         );

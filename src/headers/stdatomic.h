@@ -84,6 +84,17 @@ extern "C" {
 
 /* 7.17.3 Order and consistency */
 
+/* bcc: TCC predefines no memory orders, so under its identity this header
+   defines them in GCC's numbering, as TCC mob's <stdatomic.h> does. */
+#ifndef __ATOMIC_RELAXED
+#define __ATOMIC_RELAXED 0
+#define __ATOMIC_CONSUME 1
+#define __ATOMIC_ACQUIRE 2
+#define __ATOMIC_RELEASE 3
+#define __ATOMIC_ACQ_REL 4
+#define __ATOMIC_SEQ_CST 5
+#endif
+
 typedef enum memory_order {
   memory_order_relaxed = __ATOMIC_RELAXED,
   memory_order_consume = __ATOMIC_CONSUME,

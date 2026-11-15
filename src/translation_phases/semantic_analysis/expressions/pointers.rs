@@ -134,6 +134,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None,
                 );
             });
+            // TCC converts the value as a cast converts it, warning about
+            // the width too.
+            if group == DiagnosticGroup::IntConversion
+                && self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Tcc
+            {
+                self.pointer_integer_cast_warning(target, from, source, diagnostic_site);
+            }
             return true;
         }
         // Clang accepts function/void pointers silently by default and reports
@@ -163,9 +171,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// integer constant expression, and splits its groups by a `void *` and
     /// by an enumeration destination; neither compiler warns for `_Bool`. A
     /// `_BitInt` counts with its width. GCC also withholds a cast spelled in
-    /// a system header's macro. TCC follows GCC; MSVC (whose C4311 and
-    /// C4312 warn for narrower integers) and clang-cl follow Clang
+    /// a system header's macro. MSVC (whose C4311 and C4312 warn for
+    /// narrower integers) and clang-cl follow Clang
     /// ([`crate::configuration::CompilerConfiguration::pointer_cast_rules`]).
+    ///
+    /// TCC (`gen_cast` in `tccgen.c`, 0.9.27 and mob alike) warns for any
+    /// other width either way, an enumeration counting as its integer type
+    /// and a `_Bool` source as a byte (a `_Bool` destination tests the
+    /// pointer instead), unless the operand folds to a constant that is no
+    /// address (`(void *)(1 ? 2 : i)`, `(int)(char *)5`), and never in a
+    /// static object's initializer, which it only folds. It converts an
+    /// assignment's, initializer's, argument's or `return`'s value the same
+    /// way, so [`Self::assignment_conversion_at`] calls this for those too.
     /// C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
     pub(in crate::translation_phases::semantic_analysis) fn pointer_integer_cast_warning(
         &mut self,
@@ -175,10 +192,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         site: SourceVectors,
     ) {
         let pointer_bits = self.types.target.pointer.size * 8;
+        let tcc = self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Tcc;
+        if tcc && self.tcc_static_data() {
+            return;
+        }
         let gcc =
             self.context.configuration.pointer_cast_rules() == crate::configuration::RuleSet::Gcc;
-        // The width of an integer type, and whether it is an enumeration.
-        let integer = |ty: TypeId| -> Option<(u64, bool)> {
+        // The width of an integer type, and whether it is an enumeration. A
+        // `_Bool` counts only as TCC's source.
+        let integer = |ty: TypeId, source: bool| -> Option<(u64, bool)> {
             // Clang's integral types exclude an atomic one, which a cast's
             // value keeps (`(char *)(_Atomic int)i`); GCC drops it.
             if !gcc && matches!(self.types.nodes[ty.index], TypeKind::Atomic(_)) {
@@ -186,7 +209,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             let ty = self.types.non_atomic(ty);
             let enumeration = match self.types.nodes[ty.index] {
-                | TypeKind::Scalar(Scalar::Bool) => return None,
+                | TypeKind::Scalar(Scalar::Bool) if !(tcc && source) => return None,
                 | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
                 | _ => false,
             };
@@ -194,12 +217,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .map(|(bits, _)| (u64::from(bits), enumeration))
         };
         let group = if let Some(to) = self.pointer_target(target)
-            && let Some((bits, enumeration)) = integer(from)
+            && let Some((bits, enumeration)) = integer(from, true)
         {
             // Even an unevaluated operand that is no constant (`1 ? 2 : i`)
             // keeps the cast from being an integer constant expression.
             let ice = operand.ice && self.valid_ice_operands(operand.expression);
-            if gcc {
+            if tcc {
+                (bits != pointer_bits && operand.integer.is_none())
+                    .then_some(DiagnosticGroup::IntToPointerCast)
+            } else if gcc {
                 // GCC folds `__builtin_assoc_barrier` of a constant before it
                 // judges the cast.
                 let constant = ice
@@ -217,9 +243,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None
             }
         } else if let Some(pointee) = self.pointer_target(from)
-            && let Some((bits, enumeration)) = integer(target)
+            && let Some((bits, enumeration)) = integer(target, false)
         {
-            if gcc {
+            if tcc {
+                (bits != pointer_bits && operand.integer.is_none())
+                    .then_some(DiagnosticGroup::PointerToIntCast)
+            } else if gcc {
                 (bits != pointer_bits && !enumeration).then_some(DiagnosticGroup::PointerToIntCast)
             } else if bits < pointer_bits {
                 Some(match (self.void_target(pointee), enumeration) {
@@ -254,6 +283,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
         }
+    }
+
+    /// Whether TCC is reading a static object's initializer (or anything
+    /// else outside a function), whose values it only folds, generating no
+    /// code and so no cast warnings (`STATIC_DATA_WANTED` in `tccgen.c`).
+    /// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137.
+    fn tcc_static_data(&self) -> bool {
+        self.functions.current.is_none()
+            || self.functions.initializer.is_some_and(|binding| {
+                !matches!(
+                    self.bindings[binding].duration,
+                    crate::translation_phases::semantic_analysis::Duration::Automatic
+                )
+            })
     }
 
     /// Whether `expression` is an address constant, possibly inside casts,
@@ -917,7 +960,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     source,
                 );
             } else if !compatible {
-                self.pointer_diagnostic(DiagnosticGroup::CompareDistinctPointerTypes, source);
+                let group = DiagnosticGroup::CompareDistinctPointerTypes;
+                let wording = self.pointer_mismatch_wording(false, lt, rt);
+                self.group_diagnostic(
+                    group,
+                    crate::translation_phases::semantic_analysis::SemanticErrorKind::PointerConstraint(
+                        group,
+                    ),
+                    source,
+                    wording,
+                    None,
+                );
             } else if !ordered_functions {
                 self.context.report_extension_since(
                     "comparison of function or void pointers",
@@ -1000,15 +1053,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             // GCC 14 reports it under `-Wincompatible-pointer-types`, an
             // error from C99.
-            self.pointer_diagnostic(
-                if self.context.configuration.compiler_identity()
-                    == crate::configuration::CompilerIdentity::Gcc
-                {
-                    DiagnosticGroup::GccConditionalPointerMismatch
-                } else {
-                    DiagnosticGroup::PointerTypeMismatch
-                },
+            let group = if self.context.configuration.compiler_identity()
+                == crate::configuration::CompilerIdentity::Gcc
+            {
+                DiagnosticGroup::GccConditionalPointerMismatch
+            } else {
+                DiagnosticGroup::PointerTypeMismatch
+            };
+            let wording = self.pointer_mismatch_wording(true, lt, rt);
+            self.group_diagnostic(
+                group,
+                crate::translation_phases::semantic_analysis::SemanticErrorKind::PointerConstraint(
+                    group,
+                ),
                 source,
+                wording,
+                None,
             );
             let void = self.types.scalar(Scalar::Void);
             return Some(self.types.intern(TypeKind::Pointer(void)));
