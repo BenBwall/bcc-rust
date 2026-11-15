@@ -3,15 +3,19 @@
 //! traced back through its tokens' spellings: an escape sequence stands at
 //! its backslash, and each concatenated token is counted, since GCC places
 //! a diagnostic in the first token and notes one in a later token. A
-//! literal a macro wrote, or one whose spelling cannot be traced, has no
-//! such places, and its diagnostics stay at the literal's expansion.
+//! literal whose spelling cannot be traced has no such places, and its
+//! diagnostics stay at the literal's expansion; GCC keeps a literal a macro
+//! wrote there too, where Clang places each byte a macro wrote at its
+//! token's invocation.
 //! C99: §6.4.5p4-5, pp. 62-63; PDF pp. 74-75 (escape sequences and
 //! concatenation); §5.1.1.2p1 items 5-6, p. 10; PDF p. 22.
 
 use super::super::Analyzer;
 use crate::{
     translation_phases::{
+        Context,
         SourcePosition,
+        SourceVector,
         SourceVectors,
         parsing::syntax::{
             Expression,
@@ -76,6 +80,9 @@ pub(super) struct BytePosition {
     width:            u8,
     /// The token that wrote it, from 0, in a concatenation.
     pub(super) token: u32,
+    /// The first of that token's vectors in the literal's provenance, which
+    /// records whether a macro's replacement list wrote it.
+    vector:           u32,
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -146,7 +153,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let id = narrow_literal(literal)?;
         // The spelling's bytes, each with its place.
         let mut spelled = ArenaVec::new_in(self.scratch);
-        for vector in self.context.get_source_vectors(literal.source_vectors) {
+        for (index, vector) in self
+            .context
+            .get_source_vectors(literal.source_vectors)
+            .iter()
+            .enumerate()
+        {
+            let index = u32::try_from(index).ok()?;
             let text = self
                 .context
                 .source_text(vector.source_file_index)?
@@ -169,6 +182,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         column,
                         width: u8::try_from(width).unwrap_or(1),
                         token: 0,
+                        vector: index,
                     },
                 ));
             }
@@ -177,6 +191,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // between its quotes, an escape sequence at its backslash.
         let mut places = ArenaVec::new_in(self.scratch);
         let mut token = None::<u32>;
+        let mut token_vector = 0;
         let mut inside = false;
         let mut i = 0;
         while i < spelled.len() {
@@ -185,11 +200,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if byte == b'"' {
                     inside = true;
                     token = Some(token.map_or(0, |token| token + 1));
+                    token_vector = place.vector;
                 }
                 i += 1;
                 continue;
             }
             place.token = token.unwrap_or_default();
+            place.vector = token_vector;
             if byte == b'"' {
                 inside = false;
                 i += 1;
@@ -219,34 +236,106 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(positions.leak())
     }
 
-    /// A range from the byte at `first` through the character at `last`,
-    /// or no range when they are in different files or out of order.
-    pub(super) fn byte_span(&mut self, first: BytePosition, last: BytePosition) -> SourceVectors {
-        if first.file != last.file || last.index < first.index {
+    /// A range from the byte at `first` through the character at `last` of
+    /// `literal`, or no range when its ends are in different files or out of
+    /// order. As Clang's `mapDiagnosticRanges` moves each end of a range out
+    /// of the macro expansions the other end is not in, an end a macro
+    /// produced becomes that end of its invocation, unless both ends are in
+    /// arguments of the same invocation: in `FMT " %s"`, a specification of
+    /// `FMT` is drawn at `FMT`, and `%s` stays in place. An end on a later
+    /// line than the start is kept as its own vector, so the range is drawn
+    /// down to that line. Only the outermost invocation is recorded, so a
+    /// macro invoked in an argument is drawn as the outer invocation.
+    /// C99: §6.4.5p4, p. 62; PDF p. 74; §6.10.3p10, p. 152; PDF p. 164.
+    pub(super) fn byte_span(
+        &mut self,
+        literal: &'tu Expression<'tu>,
+        first: BytePosition,
+        last: BytePosition,
+    ) -> SourceVectors {
+        let token = |position: BytePosition| {
+            Context::source_vector_at(literal.source_vectors, position.vector)
+        };
+        let (first_token, last_token) = (token(first), token(last));
+        let first_site = self.context.invocation_span(first_token);
+        let last_site = self.context.invocation_span(last_token);
+        let in_arguments = first_site.is_some()
+            && first_site == last_site
+            && !self.context.written_by_macro_body(first_token)
+            && !self.context.written_by_macro_body(last_token);
+        let begin = match first_site {
+            | Some((start, _)) if !in_arguments => start.clone(),
+            | _ => first.vector(),
+        };
+        let end = match last_site {
+            | Some((_, end)) if !in_arguments => end.clone(),
+            | _ => last.vector(),
+        };
+        if begin.source_file_index != end.source_file_index || end.end() <= begin.index as usize {
             return SourceVectors::default();
         }
-        let length = last.index + u32::from(last.width.max(1)) - first.index;
-        self.context.create_retained_source_vectors(
-            SourcePosition {
-                index:  first.index as usize,
-                line:   first.line,
-                column: first.column,
-            },
-            first.file,
-            length as usize,
-        )
+        let position = |vector: &SourceVector| SourcePosition {
+            index:  vector.index as usize,
+            line:   vector.line,
+            column: vector.column,
+        };
+        if begin.line == end.line {
+            return self.context.create_retained_source_vectors(
+                position(&begin),
+                begin.source_file_index,
+                end.end() - begin.index as usize,
+            );
+        }
+        let begin = self.context.create_retained_source_vectors(
+            position(&begin),
+            begin.source_file_index,
+            begin.length as usize,
+        );
+        let end = self.context.create_retained_source_vectors(
+            position(&end),
+            end.source_file_index,
+            end.length as usize,
+        );
+        self.context.merge_vectors(begin, end)
+    }
+
+    /// The token of `literal` that wrote the byte at `position`, when a
+    /// macro's replacement list wrote it.
+    pub(super) fn macro_token(
+        &self,
+        literal: &'tu Expression<'tu>,
+        position: BytePosition,
+    ) -> Option<SourceVectors> {
+        let token = Context::source_vector_at(literal.source_vectors, position.vector);
+        (token.length() != 0 && self.context.written_by_macro_body(token)).then_some(token)
     }
 
     /// A location for the byte at `position`, one character wide.
     pub(super) fn byte_location(&mut self, position: BytePosition) -> SourceVectors {
         self.context.create_retained_source_vectors(
-            SourcePosition {
-                index:  position.index as usize,
-                line:   position.line,
-                column: position.column,
-            },
+            position.source_position(),
             position.file,
             usize::from(position.width),
+        )
+    }
+}
+
+impl BytePosition {
+    /// Where the byte is, as a source position.
+    const fn source_position(self) -> SourcePosition {
+        SourcePosition {
+            index:  self.index as usize,
+            line:   self.line,
+            column: self.column,
+        }
+    }
+
+    /// The character at the byte, as a vector.
+    fn vector(self) -> SourceVector {
+        SourceVector::new(
+            self.source_position(),
+            self.file,
+            usize::from(self.width.max(1)),
         )
     }
 }

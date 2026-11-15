@@ -2257,40 +2257,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The bytes `start..end` of the string as Clang's `getSpecifierRange`
     /// gives them: from the place of the first byte to just past the place
-    /// of the last, or no range when the range is empty or the places cannot
-    /// be told. A string a macro's list wrote is a range of the list, which
-    /// Clang draws as its invocation.
+    /// of the last, or no range when the range is empty. A byte a macro's
+    /// replacement list wrote is placed at its token, which Clang draws as
+    /// the invocation; a string whose places cannot be told is drawn whole
+    /// when a macro wrote it, as Clang draws it at the invocation.
     fn clang_byte_range(&mut self, leaf: &Leaf<'tu>, start: usize, end: usize) -> SourceVectors {
-        // The string, which is drawn at the invocation.
-        if leaf.spelled == Spelled::MacroBody {
-            return leaf.literal.source_vectors;
-        }
         if end <= start {
             return SourceVectors::default();
         }
-        let Some(positions) = self.byte_positions(leaf.literal) else {
-            return SourceVectors::default();
-        };
-        match (
-            positions.get(leaf.offset + start),
-            positions.get(leaf.offset + end - 1),
-        ) {
-            | (Some(&first), Some(&last)) => self.byte_span(first, last),
+        let positions = self.byte_positions(leaf.literal);
+        match positions.map(|positions| {
+            (
+                positions.get(leaf.offset + start),
+                positions.get(leaf.offset + end - 1),
+            )
+        }) {
+            | Some((Some(&first), Some(&last))) => self.byte_span(leaf.literal, first, last),
+            | _ if leaf.spelled == Spelled::MacroBody => leaf.literal.source_vectors,
             | _ => SourceVectors::default(),
         }
     }
 
-    /// Where Clang places the byte `offset` of the string: there, unless a
-    /// macro wrote the string or its places cannot be told.
+    /// Where Clang places the byte `offset` of the string: there, at its
+    /// token when a macro's replacement list wrote it, or at the string when
+    /// its places cannot be told.
     fn clang_byte(&mut self, leaf: &Leaf<'tu>, offset: usize) -> SourceVectors {
-        if leaf.spelled == Spelled::MacroBody {
-            return leaf.literal.source_vectors;
-        }
         match self
             .byte_positions(leaf.literal)
             .and_then(|positions| positions.get(leaf.offset + offset).copied())
         {
-            | Some(position) => self.byte_location(position),
+            | Some(position) => self
+                .macro_token(leaf.literal, position)
+                .unwrap_or_else(|| self.byte_location(position)),
             | None => leaf.literal.source_vectors,
         }
     }

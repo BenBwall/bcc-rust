@@ -1,0 +1,120 @@
+sema-format-concat-ranges-clang.c:10:23: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   10 |     printf(FMT " %s", l, a);
+      |            ~~~        ^
+sema-format-concat-ranges-clang.c:10:26: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   10 |     printf(FMT " %s", l, a);
+      |                  ~~      ^
+sema-format-concat-ranges-clang.c:11:23: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   11 |     printf("%s " FMT, a, l);
+      |             ~~        ^
+sema-format-concat-ranges-clang.c:11:26: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   11 |     printf("%s " FMT, a, l);
+      |                  ~~~     ^
+sema-format-concat-ranges-clang.c:12:32: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   12 |     printf("%s " FMT " %s", s, l, a);
+      |                  ~~~           ^
+sema-format-concat-ranges-clang.c:12:35: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   12 |     printf("%s " FMT " %s", s, l, a);
+      |                        ~~         ^
+sema-format-concat-ranges-clang.c:13:27: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   13 |     printf(FMT " %s" FMT, l, a, l);
+      |            ~~~            ^
+sema-format-concat-ranges-clang.c:13:30: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   13 |     printf(FMT " %s" FMT, l, a, l);
+      |                  ~~          ^
+sema-format-concat-ranges-clang.c:13:33: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   13 |     printf(FMT " %s" FMT, l, a, l);
+      |                      ~~~        ^
+sema-format-concat-ranges-clang.c:14:25: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   14 |     printf(OUTER " %s", l, a);
+      |            ~~~~~        ^
+sema-format-concat-ranges-clang.c:14:28: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   14 |     printf(OUTER " %s", l, a);
+      |                    ~~      ^
+sema-format-concat-ranges-clang.c:15:25: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   15 |     printf("%s " OUTER, a, l);
+      |             ~~          ^
+sema-format-concat-ranges-clang.c:15:28: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   15 |     printf("%s " OUTER, a, l);
+      |                  ~~~~~     ^
+sema-format-concat-ranges-clang.c:16:23: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   16 |     printf(TWO " %d", l, a, l);
+      |            ~~~        ^
+sema-format-concat-ranges-clang.c:16:26: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   16 |     printf(TWO " %d", l, a, l);
+      |            ~~~           ^
+sema-format-concat-ranges-clang.c:16:29: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   16 |     printf(TWO " %d", l, a, l);
+      |                  ~~         ^
+sema-format-concat-ranges-clang.c:17:24: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   17 |     printf(BODY " %d", a, l, l);
+      |            ~~~~        ^
+sema-format-concat-ranges-clang.c:17:27: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   17 |     printf(BODY " %d", a, l, l);
+      |            ~~~~           ^
+sema-format-concat-ranges-clang.c:17:30: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   17 |     printf(BODY " %d", a, l, l);
+      |                   ~~         ^
+sema-format-concat-ranges-clang.c:18:19: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   18 |     printf("%" D, l);
+      |             ~~~~  ^
+sema-format-concat-ranges-clang.c:19:21: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   19 |     printf(PCT "d", l);
+      |            ~~~~~~   ^
+sema-format-concat-ranges-clang.c:20:19: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   20 |     printf(PCT D, l);
+      |            ~~~~~  ^
+sema-format-concat-ranges-clang.c:21:25: warning: format specifies type 'long' but the argument has type 'int' [-Wformat]
+   21 |     printf("%" "l" "d", a);
+      |             ~~~~~~~~~   ^
+sema-format-concat-ranges-clang.c:22:19: warning: invalid conversion specifier 'y' [-Wformat-invalid-specifier]
+   22 |     printf(FMT " %y", a);
+      |                  ~^
+sema-format-concat-ranges-clang.c:23:14: warning: invalid conversion specifier 'y' [-Wformat-invalid-specifier]
+   23 |     printf("%y " FMT, a);
+      |             ~^
+sema-format-concat-ranges-clang.c:27:10: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   26 |     printf("%"
+      |             ~~
+   27 |     "d", l);
+      |     ~~   ^
+sema-format-concat-ranges-clang.c:30:10: warning: format specifies type 'long' but the argument has type 'int' [-Wformat]
+   28 |     printf("%"
+      |             ~~
+   29 |     "l"
+      |     ~~~
+   30 |     "d", a);
+      |     ~~   ^
+sema-format-concat-ranges-clang.c:33:14: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   31 |     printf("%5"
+      |             ~~~
+   32 |       ".2"
+      |       ~~~~
+   33 |         "s", a);
+      |         ~~   ^
+sema-format-concat-ranges-clang.c:35:8: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   34 |     printf("%"
+      |             ~~
+   35 |     D, l);
+      |     ~  ^
+sema-format-concat-ranges-clang.c:37:10: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   36 |     printf(PCT
+      |            ~~~
+   37 |     "d", l);
+      |     ~~   ^
+sema-format-concat-ranges-clang.c:39:10: warning: format specifies type 'long' but the argument has type 'int' [-Wformat]
+   38 |     printf("%" "l"
+      |             ~~~~~~
+   39 |     "d", a);
+      |     ~~   ^
+sema-format-concat-ranges-clang.c:41:6: warning: invalid conversion specifier 'y' [-Wformat-invalid-specifier]
+   40 |     printf("%"
+      |             ~~
+   41 |     "y", l);
+      |     ~^
+sema-format-concat-ranges-clang.c:43:7: warning: field width should have type 'int', but argument has type 'long' [-Wformat]
+   42 |     printf("%-"
+      |             ~~~
+   43 |     "*d", l, a);
+      |     ~~^   ~
+33 warnings generated.
