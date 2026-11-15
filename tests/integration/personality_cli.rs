@@ -12041,27 +12041,31 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         ] {
             directory.write("h.c", &format!("#include <{header}>\nint x;\n"));
             for standard in ["-std=gnu99", "-std=c11", "-std=c23"] {
-                let mut args = vec![linux, standard, "-ffreestanding", "-fsyntax-only", "h.c"];
-                let output = directory.bcc("--compiler-identity=tcc", &args);
-                assert_eq!(stderr(&output), "", "{header} {standard}");
-                succeeds(&output);
-                if hosted {
-                    args.remove(2);
+                for freestanding in [true, false] {
+                    if !freestanding && !hosted {
+                        continue;
+                    }
+                    let mode = if freestanding {
+                        "-ffreestanding"
+                    } else {
+                        "-fhosted"
+                    };
+                    let args = [linux, standard, mode, "-fsyntax-only", "h.c"];
                     let output = directory.bcc("--compiler-identity=tcc", &args);
-                    assert_eq!(stderr(&output), "", "{header} {standard} hosted");
+                    assert_eq!(stderr(&output), "", "{header} {standard} {mode}");
                     succeeds(&output);
                 }
             }
         }
         directory.write("types.c", TCC_STDINT_TYPES);
-        let mut args = vec![linux, "-std=c11", "-ffreestanding", "types.c", "-c"];
+        let freestanding = [linux, "-std=c11", "-ffreestanding", "types.c", "-c"];
         for identity in ["--compiler-identity=tcc", "--compiler-identity=gcc"] {
-            let output = directory.bcc(identity, &args);
+            let output = directory.bcc(identity, &freestanding);
             assert_eq!(stderr(&output), "", "{identity}");
             succeeds(&output);
         }
         if hosted {
-            args.remove(2);
+            let args = [linux, "-std=c11", "types.c", "-c"];
             succeeds(&directory.bcc("--compiler-identity=tcc", &args));
         }
     }
