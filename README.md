@@ -372,7 +372,7 @@ describes this combination and why matching LLVM versions matters.
 Under this combination, code generation can introduce calls to
 `compiler_builtins` functions after LTO has already discarded
 `rust_eh_personality`, which their unwind tables reference. Signed 128-bit
-division and `f128` arithmetic are examples. The linker would then fail with
+division and binary128 `fma`, `fmod` and `sqrt` are examples. The linker would then fail with
 `undefined symbol: rust_eh_personality`. The Windows GNU and Linux flags in
 [`.cargo/config.toml`](.cargo/config.toml) therefore force those objects in
 before LTO, and
