@@ -162,6 +162,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             external_declaration_count: 0,
             limits,
             resource_limit_reported: false,
+            compound_closed: true,
         }
     }
 

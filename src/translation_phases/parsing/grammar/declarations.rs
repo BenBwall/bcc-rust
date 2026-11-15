@@ -624,6 +624,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 body,
                 source_vectors: source_vectors.unwrap_or_default(),
                 recovered,
+                closed: self.compound_closed,
             });
             self.scopes.restore_depth(entry_scope_depth);
             let closed = self.label_scopes.exit();
@@ -785,6 +786,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     || head.recovered
                     || head.declaration_specifiers.implicit_int);
             if token.is_none() || head_is_doubtful {
+                self.compound_closed = token.is_some();
                 let body_source = self.missing_syntax_source();
                 return Some(self.alloc_syntax(Statement {
                     kind:           StatementType::Compound {

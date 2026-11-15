@@ -37,12 +37,10 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         let target = context.configuration.layout();
         let pack_alignments = super::packing::states(context, scratch);
         let pragmas = context.has_diagnostic_pragmas();
-        let errors_before =
-            if configuration.compiler_identity() == crate::configuration::CompilerIdentity::Gcc {
-                context.default_error_count()
-            } else {
-                0
-            };
+        let prior_error = (configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Gcc)
+            .then(|| context.first_default_error())
+            .flatten();
         let mut analyzer = Self {
             references: ArenaVec::new_in(tu),
             #[cfg(test)]
@@ -128,7 +126,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             functions: functions::State::new(scratch),
             va_list_type: None,
             statements: statements::State::new(scratch),
-            unused: super::unused::UnusedState::new(scratch, configuration, pragmas, errors_before),
+            unused: super::unused::UnusedState::new(scratch, configuration, pragmas, prior_error),
             reachability: super::reachability::ReachabilityState::new(scratch),
             control: super::facts::builder::Builder::new(scratch),
             function_extensions: super::FunctionExtensions::new(tu),

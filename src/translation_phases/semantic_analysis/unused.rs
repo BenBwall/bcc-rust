@@ -47,6 +47,8 @@ use crate::{
         RuleSet,
     },
     translation_phases::{
+        Context,
+        ReadingPosition,
         SourceVectors,
         parsing::{
             ExtendedType,
@@ -172,11 +174,15 @@ pub(super) struct UnusedState<'s> {
     /// Where each scope that can hold a variable ends, kept only under GCC's
     /// rules: see [`Analyzer::note_scope_end`].
     scope_ends: Option<ArenaMap<'s, usize, SourceVectors>>,
-    /// GCC's errors so far, which leave out the warnings `-Werror` makes
-    /// errors: those before semantic analysis, and the semantic ones a
-    /// warning group reports (other semantic errors count in
-    /// `Analyzer::hard_errors`).
+    /// GCC's semantic errors so far that a warning group reports, which
+    /// leave out the warnings `-Werror` makes errors (other semantic errors
+    /// count in `Analyzer::hard_errors`).
     pub(super) gcc_errors: usize,
+    /// Where GCC's first error before semantic analysis was read: GCC counts
+    /// it once it has read that far.
+    prior_error: Option<ReadingPosition>,
+    /// Where the function GCC finished last ended.
+    function_end: Option<ReadingPosition>,
     /// The functions being analyzed under GCC's rules, innermost last.
     gcc_functions: ArenaVec<'s, GccFunction>,
     /// The typedefs the left blocks of those functions declared, which GCC
@@ -205,13 +211,13 @@ struct GccFunction {
 impl<'s> UnusedState<'s> {
     /// `pragmas` says a diagnostic pragma may turn on what the command line
     /// leaves off, so that only the report can tell.
-    /// `errors_before` counts the errors GCC counts that come before
-    /// semantic analysis.
+    /// `prior_error` is where the first error GCC counts that comes before
+    /// semantic analysis was read.
     pub(super) fn new(
         scratch: &'s Bump,
         configuration: CompilerConfiguration,
         pragmas: bool,
-        errors_before: usize,
+        prior_error: Option<ReadingPosition>,
     ) -> Self {
         let on = |groups: &[G]| {
             !matches!(
@@ -277,7 +283,9 @@ impl<'s> UnusedState<'s> {
             unused_tags: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             scope_ends: (tracking && configuration.compiler_identity() == CompilerIdentity::Gcc)
                 .then(|| ArenaMap::with_hasher_in(FxBuildHasher, scratch)),
-            gcc_errors: errors_before,
+            gcc_errors: 0,
+            prior_error,
+            function_end: None,
             gcc_functions: ArenaVec::new_in(scratch),
             local_typedefs: ArenaVec::new_in(scratch),
             late_return_flow: ArenaVec::new_in(scratch),
@@ -906,9 +914,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .and_then(|ends| ends.get(&scope))
             .copied();
         end.map_or(ReportOrder::AtSite, |end| {
-            ReportOrder::After(self.context.file_location(
-                crate::translation_phases::context::Context::last_source_vector(end),
-            ))
+            ReportOrder::After(self.context.file_location(Context::last_source_vector(end)))
         })
     }
 
@@ -932,11 +938,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match self.functions.current {
             | Some(function)
                 if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc =>
-                ReportOrder::After(self.context.file_location(
-                    crate::translation_phases::context::Context::last_source_vector(
-                        function.syntax.body.source_vectors,
-                    ),
-                )),
+                ReportOrder::After(self.context.file_location(Context::last_source_vector(
+                    function.syntax.body.source_vectors,
+                ))),
             | _ => ReportOrder::AtSite,
         }
     }
@@ -1005,7 +1009,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // `maybe_warn_unused_local_typedefs` warns only while `errorcount`
         // equals the count it last warned at, which starts at zero.
         let typedefs = record.typedefs;
-        if self.hard_errors == 0 && self.unused.gcc_errors == 0 {
+        if typedefs < self.unused.local_typedefs.len()
+            && self.hard_errors == 0
+            && self.unused.gcc_errors == 0
+            && !self.prior_error_read()
+        {
             self.unused.local_typedefs[typedefs..].sort_unstable_by_key(|&(binding, _)| binding);
             for i in typedefs..self.unused.local_typedefs.len() {
                 let (binding, name) = self.unused.local_typedefs[i];
@@ -1016,6 +1024,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for entry in &parameters {
             self.report_unused_parameter(entry.binding, entry.name, false);
         }
+    }
+
+    /// Whether GCC has counted an error from before semantic analysis by the
+    /// end of the current function: one read at or before its closing brace,
+    /// which GCC has read and no further, or any when the input ends in it.
+    /// GCC: `c_parser_declaration_or_fndef` in `c-parser.cc`, which calls
+    /// `finish_function` once `c_parser_compound_statement` has consumed the
+    /// closing brace, before it reads the next token.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    fn prior_error_read(&mut self) -> bool {
+        let Some(first) = self.unused.prior_error else {
+            return false;
+        };
+        let Some(function) = self.functions.current else {
+            return true;
+        };
+        if !function.syntax.closed {
+            return true;
+        }
+        let close = Context::last_source_vector(function.syntax.body.source_vectors);
+        if close.length() == 0 {
+            return true;
+        }
+        let vector = self.context.file_vector(close);
+        let end = self.context.reading_position(
+            close,
+            vector.source_file_index,
+            vector.index,
+            self.unused.function_end,
+        );
+        if end.is_some() {
+            self.unused.function_end = end;
+        }
+        end.is_none_or(|end| first <= end)
     }
 
     /// Reports the parameter `binding` if it is only set (`set_only`) or if
@@ -1175,9 +1217,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .scope_ends
             .as_ref()
             .and_then(|ends| ends.get(&scope))
-            .map_or(otherwise, |&end| {
-                crate::translation_phases::context::Context::last_source_vector(end)
-            })
+            .map_or(otherwise, |&end| Context::last_source_vector(end))
     }
 
     /// The scope a label belongs to, for [`Self::scope_end_or`]: the current

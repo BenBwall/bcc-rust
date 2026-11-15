@@ -1242,7 +1242,11 @@ latest binding first; an ordinary label is bound in the function's outermost
 block where it is first named. The end of a function (`finish_function`) then
 reports `no return statement`, the parameters only set, the function's local
 typedefs while no error that `-Werror` did not make has been reported, and the
-unused parameters. After the unit come the undefined internal functions, the
+unused parameters. GCC counts an error once it has read it: a preprocessor or
+parser error counts from the end of each function that it is read at or before
+the closing brace of, by where it was read (so an error in a header counts where
+the header is included), and an error at the end of the input counts in a
+function it leaves open. After the unit come the undefined internal functions, the
 middle end's `control reaches end` (not under `-fsyntax-only`), and the
 internal objects and functions nothing uses, in the reverse of the order GCC's
 symbol table gained them: an object at its first declaration, a function at its

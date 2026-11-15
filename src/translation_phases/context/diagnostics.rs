@@ -11,6 +11,8 @@ use crate::{
     translation_phases::{
         ErrorSeverity,
         GetSeverity,
+        GetSourceVectors,
+        ReadingPosition,
         TranslationError,
         initial_processing::InitialProcessorError,
         parsing::ParserError,
@@ -21,6 +23,7 @@ use crate::{
             SourceVectors,
         },
     },
+    util::bump::ArenaQueue,
 };
 
 impl<'tu> Context<'tu> {
@@ -215,18 +218,73 @@ impl<'tu> Context<'tu> {
                 .count()
     }
 
-    /// The queued errors that are errors by default rather than warnings the
-    /// settings made errors: GCC's `errorcount`, which leaves out what
-    /// `-Werror` promotes (`DK_WERROR` in GCC's `diagnostic.cc`).
-    pub(crate) fn default_error_count(&self) -> usize {
-        self.pending_errors
-            .iter()
-            .filter(|error| {
-                !error.is_suppressed()
-                    && error.configured_severity(self) == ErrorSeverity::Error
-                    && error.unclassified().severity() == ErrorSeverity::Error
-            })
-            .count()
+    /// Where the first queued error that is an error by default, rather than
+    /// a warning the settings made one, was read: GCC's `errorcount` counts
+    /// these, leaving out what `-Werror` promotes (`DK_WERROR` in GCC's
+    /// `diagnostic.cc`), once it reads that far. A parser error at no place
+    /// is taken to be at the end of the input, and any other error at no
+    /// place to come first.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) fn first_default_error(&mut self) -> Option<ReadingPosition> {
+        let tu = self.tu_arena();
+        let errors = std::mem::replace(&mut self.pending_errors, ArenaQueue::new_in(tu));
+        let mut first = None;
+        // A parser error's tokens say which reading of a file read twice it
+        // is in. Otherwise the errors of each phase come in reading order,
+        // which tells the readings apart, but the parser's come after all the
+        // others, so each phase keeps its own place.
+        let mut last = [None; 2];
+        for error in errors.iter() {
+            if error.is_suppressed()
+                || error.configured_severity(self) != ErrorSeverity::Error
+                || error.unclassified().severity() != ErrorSeverity::Error
+            {
+                continue;
+            }
+            let (place, tokens, phase, unplaced) = match error.unclassified() {
+                | TranslationError::Parsing(error) => (
+                    error.ordering_location,
+                    error.source_vectors,
+                    1,
+                    (u32::MAX, u32::MAX),
+                ),
+                | error => {
+                    let source = error.source_vectors(self);
+                    let place = self
+                        .get_source_vectors(source)
+                        .first()
+                        .map(|vector| (vector.source_file_index, vector.index));
+                    (place, SourceVectors::default(), 0, (0, 0))
+                },
+            };
+            let position = place.and_then(|(file, offset)| {
+                self.reading_position(tokens, file, offset, last[phase])
+            });
+            if position.is_some() {
+                last[phase] = position;
+            }
+            let position = position.unwrap_or(unplaced);
+            first = Some(first.map_or(position, |first: ReadingPosition| first.min(position)));
+        }
+        self.pending_errors = errors;
+        first
+    }
+
+    /// Where byte `offset` of the file behind `file` was read: in the reading
+    /// of parser tokens `tokens` when they hold it, and otherwise in the
+    /// first reading after `last` when the file was read more than once.
+    pub(crate) fn reading_position(
+        &self,
+        tokens: SourceVectors,
+        file: u32,
+        offset: u32,
+        last: Option<ReadingPosition>,
+    ) -> Option<ReadingPosition> {
+        let file = self.physical_source_file(file);
+        let segment = self
+            .reading_segment(tokens, file, offset)
+            .or_else(|| self.source_map.segment_at(file, offset, last))?;
+        Some((segment, offset))
     }
 
     pub(crate) fn pending_error_count(&self) -> usize {

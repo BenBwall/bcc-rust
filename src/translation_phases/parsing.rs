@@ -379,6 +379,10 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     external_declaration_count: usize,
     limits: ParserLimits,
     resource_limit_reported: bool,
+    /// Whether the compound statement parsed last reached its `}` rather
+    /// than the end of the input, which a function definition records.
+    /// C99: §6.8.2 paragraph 1, p. 132; PDF p. 144.
+    compound_closed: bool,
 }
 
 // Tests

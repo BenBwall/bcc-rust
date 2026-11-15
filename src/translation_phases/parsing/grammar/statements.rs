@@ -1079,11 +1079,13 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None),
                     None,
                 );
+                self.compound_closed = false;
                 break;
             };
             if is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace) {
                 sources.push(token.source_vectors);
                 self.consume_token();
+                self.compound_closed = true;
                 break;
             }
             // C99 §6.8.1p1: `identifier :` begins a labeled statement even
