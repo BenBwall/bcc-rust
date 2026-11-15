@@ -66,11 +66,20 @@ impl Expander<'_, '_, '_, '_> {
     ///
     /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161. The skipped `#elif`'s
     /// expression is not evaluated.
-    pub(super) fn parse_elif_directive(&mut self, directive: PreprocessorToken) {
+    ///
+    /// GCC reports an `#elifdef` or `#elifndef` its `gnu` modes read before
+    /// C23, `gcc_extension`, only as an arm of an open conditional, after
+    /// any error in its place (GCC 14, `libcpp/directives.cc`, `do_elif`).
+    pub(super) fn parse_elif_directive(
+        &mut self,
+        directive: PreprocessorToken,
+        gcc_extension: Option<C23Directive>,
+    ) {
         let name = conditional_directive_name(self.context, directive);
         self.skip_remaining_groups(
             directive,
             PreprocessorErrorType::ElifDirectiveWithoutIfDirective(name),
+            gcc_extension,
         );
     }
 
@@ -82,6 +91,7 @@ impl Expander<'_, '_, '_, '_> {
         self.skip_remaining_groups(
             directive,
             PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
+            None,
         );
     }
 
@@ -246,17 +256,19 @@ impl Expander<'_, '_, '_, '_> {
                     self.context.set_ignore_tokenizer_errors(false);
                     // GCC's `gnu` modes report it only where taking the group
                     // tells it from an older compiler's skipping it, at the
-                    // end of the line it has read.
-                    let silent = self
-                        .context
-                        .configuration
-                        .silent_extension(Feature::Elifdef);
+                    // end of the line it has read; the other identities with
+                    // its rules, at its name.
+                    let configuration = self.context.configuration;
+                    let silent = configuration.silent_extension(Feature::Elifdef);
                     if !clang && !silent {
                         self.report_c23_directive(directive, name.source_vectors);
                     }
                     let (taken, end) = self.eval_macro_test(directive.name());
                     if taken && silent {
-                        self.report_c23_directive(directive, end.unwrap_or(name.source_vectors));
+                        let at = end
+                            .filter(|_| configuration.reports_elifdef_as_gcc())
+                            .unwrap_or(name.source_vectors);
+                        self.report_c23_directive(directive, at);
                     }
                     if self.tracing() {
                         self.trace_condition(name.source_vectors, taken, true);
@@ -383,6 +395,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         &mut self,
         directive: PreprocessorToken,
         unmatched_error: PreprocessorErrorType<'tu>,
+        gcc_extension: Option<C23Directive>,
     ) {
         if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
             self.context.preprocessor_error(PreprocessorError {
@@ -394,6 +407,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         }
         let is_else = self.context.string_cache.at(directive.contents) == "else";
         _ = self.check_conditional_arm(directive, is_else);
+        if let Some(extension) = gcc_extension {
+            self.report_c23_directive(extension, directive.source_vectors);
+        }
         if self.tracing() {
             self.trace_condition(directive.source_vectors, false, false);
         }

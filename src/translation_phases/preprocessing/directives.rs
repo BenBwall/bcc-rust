@@ -158,22 +158,27 @@ impl Expander<'_, '_, '_, '_> {
             | "if" => self.parse_if_directive(directive),
             | "ifdef" => self.parse_ifdef_directive(directive),
             | "ifndef" => self.parse_ifndef_directive(directive),
-            | "elif" => self.parse_elif_directive(directive),
+            | "elif" => self.parse_elif_directive(directive, None),
             // GCC's `gnu` modes report one met after a group they took, where
             // an older compiler would reject it, though not in a skipped
             // group (GCC 14, `libcpp/directives.cc`, `do_elif`).
             | name @ ("elifdef" | "elifndef")
                 if self.context.configuration.accepts(Feature::Elifdef) =>
             {
-                self.report_c23_directive(
-                    if name == "elifdef" {
-                        C23Directive::Elifdef
-                    } else {
-                        C23Directive::Elifndef
-                    },
-                    directive.source_vectors,
-                );
-                self.parse_elif_directive(directive);
+                let extension = if name == "elifdef" {
+                    C23Directive::Elifdef
+                } else {
+                    C23Directive::Elifndef
+                };
+                let configuration = self.context.configuration;
+                if configuration.reports_elifdef_as_gcc() {
+                    self.parse_elif_directive(directive, Some(extension));
+                } else {
+                    if !configuration.silent_extension(Feature::Elifdef) {
+                        self.report_c23_directive(extension, directive.source_vectors);
+                    }
+                    self.parse_elif_directive(directive, None);
+                }
             },
             | "else" => self.parse_else_directive(directive),
             | "endif" => self.parse_endif_directive(directive),

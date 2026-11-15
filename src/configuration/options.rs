@@ -961,6 +961,16 @@ impl CompilerConfiguration {
         }
     }
 
+    /// Whether GCC's own reports of `#elifdef` and `#elifndef` before C23
+    /// apply where [`Self::silent_extension`] silences them in its `gnu`
+    /// modes: one met after a group GCC took, and one it takes in a skipped
+    /// group, at the end of its line. The other identities with GCC's rules
+    /// keep the silence and report only an arm they take, at its name.
+    /// GCC 14, `libcpp/directives.cc`, `do_elif`.
+    pub(crate) const fn reports_elifdef_as_gcc(self) -> bool {
+        self.compiler_extensions && matches!(self.identity, super::CompilerIdentity::Gcc)
+    }
+
     /// Whether Clang's `-Wc23-extensions`, a warning by default, reports a
     /// C23 directive written before C23 (`#elifdef`, `#elifndef` and
     /// `#embed`), in place of the extension policy. Clang's `-pedantic`
