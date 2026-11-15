@@ -13,8 +13,11 @@
 //! value. Measured against GCC 14: `!a & (int)(b != 0)`, `!a &
 //! (int)(_Bool)(b ? 0 : 1)`, `!a & (unsigned)(b ? !a : 0)` and `!a &
 //! (int)(long)(b || a)` pass, while `!a & (int)(b ? 0 : 1)`, `!a &
-//! (int)(_Bool)(double)(b || a)`, `!a & (0, b != 0)` and `!a & !(b ? 1 : 0)`
-//! are reported.
+//! (int)(_Bool)(double)(b || a)`, `!a & (0, b != 0)`, `!a & !(b ? 1 : 0)`,
+//! `!a & (int)(b ? (unsigned)(b || a) : 0)` and `!a & (int)(_Bool)(b ? p :
+//! q)` are reported. Arithmetic other than negation stays opaque, so the
+//! folding of `x + 0` and similar identities under a narrowing conversion
+//! is not modeled.
 //! C99: §6.5.4 paragraph 4, p. 81; PDF p. 93; §6.3.1.2 paragraph 1, p. 43;
 //! PDF p. 55.
 
@@ -71,6 +74,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     info.category,
                     ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
                 ),
+                source: Some(e),
             },
             ty,
             effects: self.has_side_effects(e),
@@ -164,11 +168,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
-    fn gcc(&self) -> Gcc<'s, 'tu> {
+    fn gcc(&self) -> Gcc<'_, '_, 's, 'tu> {
         Gcc {
-            scratch: self.scratch,
-            int:     self.gcc_scalar(Scalar::Int),
-            long:    self.gcc_scalar(Scalar::Long),
+            analyzer:  self,
+            scratch:   self.scratch,
+            inhibited: self.evaluation_inhibited(),
+            int:       self.gcc_scalar(Scalar::Int),
+            long:      self.gcc_scalar(Scalar::Long),
         }
     }
 
@@ -261,8 +267,12 @@ enum Code<'s, 'tu> {
     /// `C_MAYBE_CONST_EXPR` marking an expression whose operands are all
     /// integer constants: `C_MAYBE_CONST_EXPR_INT_OPERANDS`.
     IntegerOperands(&'s Node<'s, 'tu>),
-    /// Anything else, and whether it designates an object.
-    Value { lvalue: bool },
+    /// Anything else, whether it designates an object, and the expression
+    /// it stands for, which `operand_equal_p` compares.
+    Value {
+        lvalue: bool,
+        source: Option<&'tu Expression<'tu>>,
+    },
 }
 
 impl Code<'_, '_> {
@@ -363,13 +373,17 @@ enum Class {
 }
 
 /// The front end's builders and the folder, with the types they use.
-struct Gcc<'s, 'tu> {
-    scratch: &'s Bump,
-    int:     GccType<'tu>,
-    long:    GccType<'tu>,
+struct Gcc<'g, 'a, 's, 'tu> {
+    /// What `operand_equal_p` asks of the expressions behind two values.
+    analyzer:  &'g Analyzer<'a, 'tu, 's>,
+    scratch:   &'s Bump,
+    /// `c_inhibit_evaluation_warnings`: the expression is not evaluated.
+    inhibited: bool,
+    int:       GccType<'tu>,
+    long:      GccType<'tu>,
 }
 
-impl<'s, 'tu> Gcc<'s, 'tu> {
+impl<'s, 'tu> Gcc<'_, '_, 's, 'tu> {
     fn alloc(&self, node: Node<'s, 'tu>) -> &'s Node<'s, 'tu> {
         self.scratch.alloc(node)
     }
@@ -538,7 +552,10 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
 
     /// `build_conditional_expr`: the condition compared with zero, both arms
     /// promoted and converted to the result type, and nothing folded unless
-    /// the result is an integer constant.
+    /// the result is an integer constant. Where the expression is evaluated,
+    /// arithmetic arms of different types whose signedness differs, with an
+    /// unsigned result, are folded for `-Wsign-compare` and kept from
+    /// further folding.
     fn conditional(
         &self,
         condition: Node<'s, 'tu>,
@@ -551,15 +568,30 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
             && int_const_operands(then)
             && int_const_operands(otherwise);
         let condition = remove_maybe_const(condition);
-        if ty.class == Class::Other || ty.class == Class::Pointer {
+        if ty.class == Class::Other {
             return Node {
-                code: Code::Value { lvalue: false },
+                code: Code::Value {
+                    lvalue: false,
+                    source: None,
+                },
                 ty,
                 effects: condition.effects || then.effects || otherwise.effects,
             };
         }
-        let then = self.convert(ty, self.default_conversion(remove_maybe_const(then)));
-        let otherwise = self.convert(ty, self.default_conversion(remove_maybe_const(otherwise)));
+        let signedness_differs = then.ty.unsigned != otherwise.ty.unsigned;
+        let mut promoted =
+            [then, otherwise].map(|n| self.default_conversion(remove_maybe_const(n)));
+        let arithmetic = |n: Node<'s, 'tu>| matches!(n.ty.class, Class::Integer | Class::Floating);
+        if !self.inhibited
+            && signedness_differs
+            && ty.integral()
+            && ty.unsigned
+            && promoted.iter().all(|&n| arithmetic(n))
+            && !promoted[0].ty.same(promoted[1].ty)
+        {
+            promoted = promoted.map(|n| self.sign_compare_operand(n));
+        }
+        let [then, otherwise] = promoted.map(|n| self.convert(ty, n));
         if int_operands
             && let Code::Integer(c) = condition.code
             && matches!(
@@ -574,6 +606,83 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
             self.note_integer_operands(ret)
         } else {
             ret
+        }
+    }
+
+    /// An arm of `build_conditional_expr`'s `-Wsign-compare` check:
+    /// `c_fully_fold`, then `c_wrap_maybe_const` around anything but a
+    /// constant whose operands may be constant, which no fold looks into.
+    fn sign_compare_operand(&self, arm: Node<'s, 'tu>) -> Node<'s, 'tu> {
+        let mut maybe_const = true;
+        let folded = self.fully_fold(arm, &mut maybe_const);
+        if maybe_const && matches!(folded.code, Code::Integer(_)) {
+            return folded;
+        }
+        Node {
+            code: Code::Value {
+                lvalue: false,
+                source: None,
+            },
+            ..strip_type_nops(folded)
+        }
+    }
+
+    /// `c_fully_fold`: each operand folded, then the expression. A comma
+    /// clears `maybe_const`, since it cannot occur in a constant expression.
+    fn fully_fold(&self, node: Node<'s, 'tu>, maybe_const: &mut bool) -> Node<'s, 'tu> {
+        let ty = node.ty;
+        match node.code {
+            | Code::IntegerOperands(inner) => self.fully_fold(*inner, maybe_const),
+            | Code::Convert(conversion, operand) =>
+                self.fold_build1(conversion, ty, self.fully_fold(*operand, maybe_const)),
+            | Code::Not(operand) => self.invert_truthvalue(self.fully_fold(*operand, maybe_const)),
+            | Code::Negate(operand) => Node {
+                code: Code::Negate(self.alloc(self.fully_fold(*operand, maybe_const))),
+                ..node
+            },
+            | Code::Comparison {
+                code,
+                pointers: Some(&(left, right)),
+                ..
+            } => {
+                let (left, right) = (
+                    self.fully_fold(left, maybe_const),
+                    self.fully_fold(right, maybe_const),
+                );
+                self.fold(Node {
+                    ty,
+                    ..self.comparison(code, ty, left, right)
+                })
+            },
+            | Code::Logical { or, left, right } => {
+                let (left, right) = (
+                    self.fully_fold(*left, maybe_const),
+                    self.fully_fold(*right, maybe_const),
+                );
+                self.fold(self.logical_node(or, ty, left, right))
+            },
+            | Code::Conditional {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let condition = self.fully_fold(*condition, maybe_const);
+                let then = self.fully_fold(*then, maybe_const);
+                let otherwise = self.fully_fold(*otherwise, maybe_const);
+                self.fold_cond(ty, condition, then, otherwise)
+            },
+            | Code::Compound { left, right } => {
+                *maybe_const = false;
+                let (left, right) = (
+                    self.fully_fold(*left, maybe_const),
+                    self.fully_fold(*right, maybe_const),
+                );
+                self.fold(self.compound_node(left, right))
+            },
+            | Code::Integer(_)
+            | Code::Real { .. }
+            | Code::Comparison { .. }
+            | Code::Value { .. } => node,
         }
     }
 
@@ -610,7 +719,7 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
     }
 
     fn non_lvalue(&self, node: Node<'s, 'tu>) -> Node<'s, 'tu> {
-        if matches!(node.code, Code::Value { lvalue: true }) {
+        if matches!(node.code, Code::Value { lvalue: true, .. }) {
             self.build1(Conversion::NonLvalue, node.ty, node)
         } else {
             node
@@ -641,7 +750,10 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
             | Class::Floating => self.fold(self.convert_to_real(ty, e)),
             | Class::Pointer => self.fold(self.convert_to_pointer(ty, e)),
             | Class::Other => Node {
-                code: Code::Value { lvalue: false },
+                code: Code::Value {
+                    lvalue: false,
+                    source: None,
+                },
                 ty,
                 effects: e.effects,
             },
@@ -759,7 +871,10 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
             },
             | Class::Floating => self.build1(Conversion::FixTrunc, ty, expr),
             | Class::Other => Node {
-                code: Code::Value { lvalue: false },
+                code: Code::Value {
+                    lvalue: false,
+                    source: None,
+                },
                 ty,
                 effects: expr.effects,
             },
@@ -781,7 +896,10 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
                 self.fold_build1(Conversion::Convert, ty, expr)
             },
             | _ => Node {
-                code: Code::Value { lvalue: false },
+                code: Code::Value {
+                    lvalue: false,
+                    source: None,
+                },
                 ty,
                 effects: expr.effects,
             },
@@ -800,7 +918,10 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
             | Class::Floating => self.build1(Conversion::Nop, ty, expr),
             | Class::Integer | Class::Boolean => self.build1(Conversion::Float, ty, expr),
             | _ => Node {
-                code: Code::Value { lvalue: false },
+                code: Code::Value {
+                    lvalue: false,
+                    source: None,
+                },
                 ty,
                 effects: expr.effects,
             },
@@ -959,7 +1080,7 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
             | _ => {},
         }
         match conversion {
-            | Conversion::NonLvalue => (!matches!(op0.code, Code::Value { lvalue: true }))
+            | Conversion::NonLvalue => (!matches!(op0.code, Code::Value { lvalue: true, .. }))
                 .then(|| self.fold_convert(ty, op0)),
             | _ => match op0.code {
                 | Code::Comparison { .. } if ty.class == Class::Boolean => Some(Node { ty, ..op0 }),
@@ -1042,7 +1163,10 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
                 | _ => self.fold_build1(Conversion::Float, ty, arg),
             },
             | Class::Other => Node {
-                code: Code::Value { lvalue: false },
+                code: Code::Value {
+                    lvalue: false,
+                    source: None,
+                },
                 ty,
                 effects: arg.effects,
             },
@@ -1119,6 +1243,67 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
         })
     }
 
+    /// `operand_equal_p` with `types_match`, for operands without side
+    /// effects.
+    fn operand_equal(&self, first: Node<'s, 'tu>, second: Node<'s, 'tu>) -> bool {
+        if first.effects || second.effects || !first.ty.same(second.ty) {
+            return false;
+        }
+        let same = |x: &Node<'s, 'tu>, y: &Node<'s, 'tu>| self.operand_equal(*x, *y);
+        match (first.code, second.code) {
+            | (Code::Integer(x), Code::Integer(y)) => x == y,
+            | (Code::Convert(kind, x), Code::Convert(other_kind, y)) =>
+                kind == other_kind && same(x, y),
+            | (Code::Not(x), Code::Not(y))
+            | (Code::Negate(x), Code::Negate(y))
+            | (Code::IntegerOperands(x), Code::IntegerOperands(y)) => same(x, y),
+            | (
+                Code::Comparison {
+                    code,
+                    pointers: Some((left, right)),
+                    ..
+                },
+                Code::Comparison {
+                    code: other_code,
+                    pointers: Some((other_left, other_right)),
+                    ..
+                },
+            ) => code == other_code && same(left, other_left) && same(right, other_right),
+            | (
+                Code::Logical { or, left, right },
+                Code::Logical {
+                    or: other_or,
+                    left: other_left,
+                    right: other_right,
+                },
+            ) => or == other_or && same(left, other_left) && same(right, other_right),
+            | (
+                Code::Conditional {
+                    condition,
+                    then,
+                    otherwise,
+                },
+                Code::Conditional {
+                    condition: other_condition,
+                    then: other_then,
+                    otherwise: other_otherwise,
+                },
+            ) =>
+                same(condition, other_condition)
+                    && same(then, other_then)
+                    && same(otherwise, other_otherwise),
+            | (
+                Code::Value {
+                    source: Some(x), ..
+                },
+                Code::Value {
+                    source: Some(y), ..
+                },
+            ) => self.analyzer.same_operand(x, y),
+            | _ => false,
+        }
+    }
+
     fn fold_cond(
         &self,
         ty: GccType<'tu>,
@@ -1144,6 +1329,10 @@ impl<'s, 'tu> Gcc<'s, 'tu> {
         let (arg0, arg1) = (strip_nops(op0), strip_nops(op1));
         if let Code::Integer(v) = arg0.code {
             return Some(if v == 0 { op2 } else { op1 });
+        }
+        // `match.pd`: `A ? B : B` is `B`.
+        if !op0.effects && self.operand_equal(op1, op2) {
+            return Some(op1);
         }
         let (zero, one) = (
             |n: Node<'s, 'tu>| matches!(n.code, Code::Integer(0)),
@@ -1222,7 +1411,7 @@ fn const_unop<'s, 'tu>(
             Some(integer(ty, v)),
         | (Class::Integer | Class::Boolean, Code::Real { truncated, .. })
             if conversion == Conversion::FixTrunc =>
-            truncated.map(|v| integer(ty, v)),
+            truncated.map(|v| integer(ty, saturate(ty, v))),
         | (Class::Floating, Code::Integer(v)) => Some(constant(ty, v)),
         | (Class::Floating, Code::Real { .. }) => Some(Node { ty, ..arg }),
         | _ => None,
@@ -1317,8 +1506,8 @@ fn swaps(op1: Node<'_, '_>, op2: Node<'_, '_>) -> bool {
     if tree_constant(a) {
         return true;
     }
-    !matches!(b.code, Code::Value { lvalue: true })
-        && matches!(a.code, Code::Value { lvalue: true })
+    !matches!(b.code, Code::Value { lvalue: true, .. })
+        && matches!(a.code, Code::Value { lvalue: true, .. })
 }
 
 /// Whether `match.pd` folds `(last)(inter) x`, with `x` of type `inside`, to
@@ -1362,6 +1551,21 @@ fn drops_middle(inside: GccType<'_>, inter: GccType<'_>, last: GccType<'_>) -> O
     }
     // A truncation of a widening.
     (ii && mi && fi && f <= i && m >= i).then_some(false)
+}
+
+/// `fold_convert_const_int_from_real`: a truncated floating value outside
+/// the range of `ty` becomes its nearest bound.
+fn saturate(ty: GccType<'_>, value: i128) -> i128 {
+    if ty.class == Class::Boolean || ty.bits == 0 || ty.bits > 128 {
+        return value;
+    }
+    let (min, max) = match (ty.unsigned, ty.bits) {
+        | (true, 127..) => (0, i128::MAX),
+        | (true, bits) => (0, (1 << bits) - 1),
+        | (false, 128) => (i128::MIN, i128::MAX),
+        | (false, bits) => (-(1 << (bits - 1)), (1 << (bits - 1)) - 1),
+    };
+    value.clamp(min, max)
 }
 
 /// `value` as an integer of type `ty`.
