@@ -1237,7 +1237,7 @@ condition:
 | `assignment makes pointer from integer without a cast`, `... integer from pointer ...`, `assignment from incompatible pointer type`, `assignment discards qualifiers from pointer target type` | any assignment-like conversion |
 | `pointer/integer mismatch in comparison`, `... in conditional expression` | a pointer against an integer |
 | `pointer type mismatch in comparison('int *' and 'char *')`, `... in conditional expression ('int *' and 'char *')` | incompatible pointers, with bcc's spelling of the types |
-| `function might return no value: 'f'` | control reaches the end of a function that returns a value, other than `int main` or an `inline` function |
+| `function might return no value: 'f'` | control reaches the end of a function that returns a value, other than an `inline` function or a `main` returning TCC's `VT_INT`: `int`, `unsigned int`, an enumeration TCC represents as one of those, or a 32-bit `long` |
 | `unnamed struct/union that defines no instances` | a structure or union with no tag and no declarator, a `typedef` among them, at the line of its `;` |
 | `assignment of read-only location`, `void function returns a value`, `'return' with no value`, `implicit declaration of function 'f'`, `empty case range`, `initializer-string for array is too long` | as worded |
 

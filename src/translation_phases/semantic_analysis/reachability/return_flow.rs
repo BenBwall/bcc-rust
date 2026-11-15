@@ -18,6 +18,7 @@ use super::{
         SemanticErrorKind,
         types::{
             Scalar,
+            TagKind,
             TypeId,
             TypeKind,
         },
@@ -152,16 +153,30 @@ impl Analyzer<'_, '_, '_> {
 
     /// TCC's `check_func_return` (`tccgen.c`), at a closing brace that
     /// control reaches in a function that returns a value: `main` returning
-    /// `int` returns 0, and any other function draws a warning naming it.
-    /// TCC compiles an `inline` function only if something calls it, and
-    /// then after the rest of the unit, so bcc warns about none.
+    /// TCC's basic type `VT_INT` returns 0, and any other function draws a
+    /// warning naming it. `VT_INT` is every 32-bit integer type of `int`'s
+    /// rank or above: `int` and `unsigned int`, an enumeration TCC
+    /// represents as one of those, and a 32-bit `long` (`VT_LONG` in
+    /// `tcc.h`). TCC compiles an `inline` function only if something calls
+    /// it, and then after the rest of the unit, so bcc warns about none.
     fn tcc_return_flow(&mut self, binding: usize, result: TypeId, end: SourceVectors) {
         let data = self.bindings[binding];
         let name = self.context.string_cache.at(data.name.name);
-        let int = matches!(
-            self.types.nodes[result.index],
-            TypeKind::Scalar(Scalar::Int | Scalar::UnsignedInt)
-        );
+        let scalar = match self.types.nodes[result.index] {
+            | TypeKind::Scalar(scalar) => Some(scalar),
+            | TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum =>
+                Some(self.types.tags[id].compatible.get()),
+            | _ => None,
+        };
+        let int = scalar.is_some_and(|scalar| match scalar {
+            | Scalar::Int | Scalar::UnsignedInt => true,
+            | Scalar::Long | Scalar::UnsignedLong => self
+                .types
+                .target
+                .integer(scalar)
+                .is_some_and(|(bits, _)| bits == 32),
+            | _ => false,
+        });
         if (name == "main" && int) || self.inline_declared(binding) {
             return;
         }

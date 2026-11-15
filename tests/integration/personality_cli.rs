@@ -11989,6 +11989,34 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         );
     }
 
+    /// TCC 0.9.27 returns 0 from a `main` whose result has its basic type
+    /// `VT_INT`, an enumeration it represents as `int` or `unsigned int`
+    /// among them, and warns of any other `main` whose end control reaches,
+    /// as Ubuntu's TCC does for each of these.
+    #[test]
+    fn tcc_main_returns_zero_only_from_an_int() {
+        let directory = Directory::new();
+        for (source, warns) in [
+            ("enum E { A }; enum E main(void) { }", false),
+            ("enum E { A = -1 }; enum E main(void) { }", false),
+            ("enum E { A = 0xffffffffu }; enum E main(void) { }", false),
+            ("unsigned main(void) { }", false),
+            ("enum E { A = 0x100000000 }; enum E main(void) { }", true),
+            ("short main(void) { }", true),
+            ("_Bool main(void) { }", true),
+        ] {
+            directory.write("m.c", &format!("{source}\n"));
+            let output = directory.bcc("--tcc-mode", &["-c", "m.c"]);
+            succeeds(&output);
+            let expected = if warns {
+                "m.c:1: warning: function might return no value: 'main'\n"
+            } else {
+                ""
+            };
+            assert_eq!(stderr(&output), expected, "{source}");
+        }
+    }
+
     /// bcc's resource headers compile under the TCC identity on x86-64
     /// Linux, which predefines TCC's macros rather than the target's:
     /// freestanding, `<stdint.h>` spells its types out ([`TCC_STDINT_TYPES`]),
