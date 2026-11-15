@@ -479,8 +479,7 @@ fn object(
         frame_id:  object.frame_id,
         function:  functions
             .get(&object.frame_id)
-            .map(|name| (*name).to_owned())
-            .unwrap_or_default(),
+            .map_or_default(|name| (*name).to_owned()),
         scope:     object.function.clone(),
         parameter: object.parameter,
         literal:   object.literal,
@@ -705,10 +704,9 @@ fn value(
                     .map(|(index, member)| {
                         let declared = layout.and_then(|layout| layout.members.get(index));
                         MemberValue {
-                            name:    declared.map(|member| member.name.clone()).unwrap_or_default(),
+                            name:    declared.map_or_default(|member| member.name.clone()),
                             ty:      declared
-                                .map(|member| member.r#type.clone())
-                                .unwrap_or_default(),
+                                .map_or_default(|member| member.r#type.clone()),
                             offset:  declared.map_or(0, |member| member.offset),
                             size:    declared.map_or(0, |member| member.size),
                             padding: declared.map_or(0, |member| member.padding),

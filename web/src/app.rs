@@ -1162,8 +1162,7 @@ impl State {
             self.compilation.with(|compilation| {
                 compilation
                     .as_ref()
-                    .map(|compilation| source_marks(stage, compilation))
-                    .unwrap_or_default()
+                    .map_or_default(|compilation| source_marks(stage, compilation))
             })
         } else {
             Vec::new()
@@ -1315,12 +1314,11 @@ fn links_memo(
         compilation.with(|compilation| {
             compilation
                 .as_ref()
-                .map(|compilation| {
+                .map_or_default(|compilation| {
                     source.with(|source| {
                         crate::pipeline::links(stage, compilation, source, headers)
                     })
                 })
-                .unwrap_or_default()
         })
     })
 }
@@ -1332,8 +1330,7 @@ fn compilation_of(compiled: &Compiled, text: &str, level: bool) -> Option<Compil
     let llvm = lesson.and_then(|stem| crate::pipeline::precomputed_llvm(stem, level));
     let llvm_lines = lesson
         .filter(|_| llvm.is_some())
-        .map(|stem| crate::pipeline::precomputed_llvm_lines(stem, level))
-        .unwrap_or_default();
+        .map_or_default(|stem| crate::pipeline::precomputed_llvm_lines(stem, level));
     let live = lookup(compiled, text, level).and_then(|result| result.as_ref().ok().cloned());
     match (live, llvm) {
         | (Some(live), llvm) => Some(Compilation {
@@ -1766,7 +1763,7 @@ fn SiteError(state: State) -> impl IntoView {
         move || {
             state
                 .error
-                .with(|error| error.as_ref().map(read).unwrap_or_default())
+                .with(|error| error.as_ref().map_or_default(read))
         }
     };
     view! {
@@ -1911,7 +1908,7 @@ fn Toolbar(state: State) -> impl IntoView {
                 <span class="step-counter">
                     <span class="step-counter-label">"Step "</span>
                     <strong>{move || state.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong>
-                    <span class="step-counter-total">{move || state.history.with(|history| history.last().map(|last| format!(" / {}", last.step)).unwrap_or_default())}</span>
+                    <span class="step-counter-total">{move || state.history.with(|history| history.last().map_or_default(|last| format!(" / {}", last.step)))}</span>
                 </span>
             </div>
             <wasm::WasmTransport state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />

@@ -7,9 +7,10 @@ target = "host-tuple"
 # linker then fetches their objects, whose unwind tables still reference it,
 # and the link fails. Forcing those objects in before LTO keeps the
 # personality alive. The list is every function defined by a pinned
-# compiler_builtins object that references `rust_eh_personality`: signed
-# 128-bit division, 128-bit float arithmetic and `lgamma`. Recheck it when the
-# toolchain changes: run `llvm-nm -u` over the rlib's members.
+# compiler_builtins object that references `rust_eh_personality` (Rust
+# 1.100.0, x86_64-pc-windows-gnu): signed 128-bit division, 128-bit float
+# `fma`, `fmod` and `sqrt`, and `lgamma`. Recheck it when the toolchain
+# changes: run `llvm-nm -u` over the rlib's members.
 # tests/integration/late_builtins.rs fails to link if the list stops covering
 # division.
 #
@@ -30,11 +31,9 @@ rustflags = [
     "-C", "link-arg=--undefined=__divti3",
     "-C", "link-arg=--undefined=__modti3",
     "-C", "link-arg=--undefined=__divmodti4",
-    "-C", "link-arg=--undefined=__addtf3",
-    "-C", "link-arg=--undefined=__subtf3",
-    "-C", "link-arg=--undefined=__multf3",
-    "-C", "link-arg=--undefined=__divtf3",
+    "-C", "link-arg=--undefined=fmaf128",
     "-C", "link-arg=--undefined=fmodf128",
+    "-C", "link-arg=--undefined=sqrtf128",
     "-C", "link-arg=--undefined=lgamma_r",
     "-C", "link-arg=--undefined=lgammaf_r",
 ]
@@ -63,7 +62,6 @@ rustflags = [
     "-C", "link-arg=-flto=full",
     # The same late compiler_builtins calls as on Windows GNU.
     "-C", "link-arg=-Wl,--undefined=__divti3,--undefined=__modti3,--undefined=__divmodti4",
-    "-C", "link-arg=-Wl,--undefined=__addtf3,--undefined=__subtf3,--undefined=__multf3",
-    "-C", "link-arg=-Wl,--undefined=__divtf3,--undefined=fmodf128",
+    "-C", "link-arg=-Wl,--undefined=fmaf128,--undefined=fmodf128,--undefined=sqrtf128",
     "-C", "link-arg=-Wl,--undefined=lgamma_r,--undefined=lgammaf_r",
 ]

@@ -1423,7 +1423,7 @@ pub(crate) trait Backend {
 
 ### LLVM back end
 
-The backend constructs LLVM 23.1.1 modules directly through `llvm-sys` 231.0.1
+The backend constructs LLVM 23.1.5 modules directly through `llvm-sys` 231.0.1
 and the scoped wrappers in `src/backend/llvm/api.rs`. LLVM verifies the module
 before optimization; the new pass manager runs the requested default pipeline,
 then the target machine emits an object (or assembly) into an LLVM-owned memory

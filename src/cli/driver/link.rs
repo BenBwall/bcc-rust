@@ -121,9 +121,7 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                     let names = rule_names(args, output, base.as_deref());
                     dependencies::request_at(args, Some(assembly.path), false, names)?
                 };
-                let rules = request
-                    .map(|rules| rules.clang_arguments(args, false))
-                    .unwrap_or_default();
+                let rules = request.map_or_default(|rules| rules.clang_arguments(args, false));
                 status = combine(status, assemble(args, assembly, object.path(), &rules));
             },
             | _ => {

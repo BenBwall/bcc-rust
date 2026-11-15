@@ -3,10 +3,6 @@
     reason = "We don't have a doc string here because it's obvious what our benchmarking module \
               does."
 )]
-#![expect(
-    unused_crate_dependencies,
-    reason = "We have a bunch of dependencies that are not used in our benchmarking module."
-)]
 
 use bcc_rust::BenchmarkInput;
 use criterion::{

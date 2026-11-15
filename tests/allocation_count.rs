@@ -34,10 +34,6 @@
 //! Building this target with the feature also rebuilds the `bcc-rust`
 //! binary with it, so [`command_line`] checks that the binary is still the
 //! command-line compiler rather than a benchmark loop.
-#![expect(
-    unused_crate_dependencies,
-    reason = "This test binary uses only the measurement API."
-)]
 
 #[cfg(test)]
 #[path = "support/native.rs"]

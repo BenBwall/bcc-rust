@@ -1329,8 +1329,7 @@ fn search_directories(target: Target) -> String {
             .output()
             .ok()
             .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-            .unwrap_or_default()
+            .map_or_default(|output| String::from_utf8_lossy(&output.stdout).into_owned())
     };
     let libraries = query("-print-search-dirs");
     if let Some(list) = libraries

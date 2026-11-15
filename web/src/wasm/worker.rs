@@ -1227,8 +1227,7 @@ int main(int argc, char **argv) {
                 snapshot
                     .frames
                     .first()
-                    .map(|frame| frame.name.clone())
-                    .unwrap_or_default()
+                    .map_or_default(|frame| frame.name.clone())
             };
             assert_eq!(innermost(&at_main), "main", "{}", demo.name);
             // 512 before startup kept its arguments out of the heap.

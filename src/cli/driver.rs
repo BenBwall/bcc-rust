@@ -195,8 +195,7 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                         }
                     };
                     let rules = dependencies::request_at(args, Some(assembly.path), only, names)?
-                        .map(|rules| rules.clang_arguments(args, only))
-                        .unwrap_or_default();
+                        .map_or_default(|rules| rules.clang_arguments(args, only));
                     let text = if only { None } else { output };
                     status = combine(status, preprocess_assembly(args, assembly, text, &rules));
                     continue;
@@ -245,8 +244,7 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                             };
                             let rules =
                                 dependencies::request_at(args, Some(assembly.path), false, names)?
-                                    .map(|rules| rules.clang_arguments(args, false))
-                                    .unwrap_or_default();
+                                    .map_or_default(|rules| rules.clang_arguments(args, false));
                             status = combine(status, assemble(args, assembly, &object, &rules));
                         },
                     | Input::C(source) => {

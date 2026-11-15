@@ -154,8 +154,7 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
         preprocessing: output
             .preprocessing
             .as_ref()
-            .map(|trace| preprocessing(trace, &columns))
-            .unwrap_or_default(),
+            .map_or_default(|trace| preprocessing(trace, &columns)),
         code_bytes: output
             .machine_code
             .iter()

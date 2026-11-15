@@ -9,11 +9,6 @@
 //! counting global allocator and needs `--features benchmarking-internals`
 //! for its measurements.
 
-#![expect(
-    unused_crate_dependencies,
-    reason = "Integration tests inherit package dependencies but exercise the compiled binary."
-)]
-
 #[path = "../support/native.rs"]
 mod native;
 

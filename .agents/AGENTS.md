@@ -18,7 +18,7 @@ cargo clippy --all-targets --features benchmarking-internals -- -D warnings
 git diff --check
 ```
 
-`rust-toolchain.toml` pins Rust 1.99.0, which is also the minimum version in
+`rust-toolchain.toml` pins Rust 1.100.0, which is also the minimum version in
 `Cargo.toml`. Follow the source-built native toolchain setup in
 [`../README.md`](../README.md#prerequisites).
 

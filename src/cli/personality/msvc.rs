@@ -1048,8 +1048,7 @@ impl State {
                 } else if let Some(variable) = option.strip_prefix("external:env:") {
                     // The directories in VARIABLE are system directories.
                     for directory in std::env::var_os(variable)
-                        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-                        .unwrap_or_default()
+                        .map_or_default(|value| std::env::split_paths(&value).collect::<Vec<_>>())
                     {
                         if !directory.as_os_str().is_empty() {
                             self.bcc.push("-isystem".into());

@@ -289,8 +289,7 @@ impl Choice {
     pub fn offered(&self) -> Vec<Compiler> {
         self.modules
             .as_ref()
-            .map(|(_, modules)| modules.offered())
-            .unwrap_or_default()
+            .map_or_default(|(_, modules)| modules.offered())
     }
 
     /// Why bcc's module for the loaded source cannot be stepped.
@@ -886,8 +885,7 @@ impl WasmState {
                 program
                     .as_ref()
                     .and_then(|program| program.source_for(linked))
-                    .map(|line| vec![Decoration::line(line, "link-line")])
-                    .unwrap_or_default()
+                    .map_or_default(|line| vec![Decoration::line(line, "link-line")])
             })
         } else {
             Vec::new()
@@ -939,14 +937,13 @@ impl WasmState {
             self.program.with(|program| {
                 program
                     .as_ref()
-                    .map(|program| {
+                    .map_or_default(|program| {
                         program
                             .wat_lines_for(linked)
                             .into_iter()
                             .map(|line| Decoration::line(line, "link-line"))
                             .collect()
                     })
-                    .unwrap_or_default()
             })
         } else {
             Vec::new()

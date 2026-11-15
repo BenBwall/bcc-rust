@@ -137,7 +137,7 @@ without a personality as well:
 | Default mode | `gnu17` | `gnu17` | `c17` | `c17` | `gnu99` | `gnu17` |
 | Microsoft extensions | off | off | all (`-fms-extensions`) | all | off | off |
 | `__GNUC__` | 14.2.0 | 4.2.1 | undefined | undefined | undefined | 4.2.1 |
-| `__clang__`, `__llvm__` | undefined | 23.1.1 | undefined | 23.1.1 | undefined | 23.1.1 |
+| `__clang__`, `__llvm__` | undefined | 23.1.5 | undefined | 23.1.5 | undefined | 23.1.5 |
 | Other identity | `__VERSION__ "14.2.0"`, execution charset names, `__GCC_IEC_559` | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | |
 | `_Float32` ... `_Float128` | keywords, distinct types | identifiers | identifiers | identifiers | identifiers | identifiers (`-ffloatn-types`) |
 | `_Float16`, `__bf16` | types, GCC's `__FLT16_*__` and `__BFLT16_*__` | types, Clang's `__FLT16_*__` | identifiers | types | identifiers | types |
@@ -727,8 +727,8 @@ its includers' directories with `./` (`./a.h`, `./sub/../b.h`); `-MM -MG`
 lists a missing `<...>` header too; and `-MG` without `-M` or `-MM` is
 `clang: error: option '-MG' requires '-M' or '-MM'`.
 
-**Identity.** bcc's default: the pinned Clang 23.1.1 and the GCC 4.2.1 Clang
-claims. `--version` prints `clang version 23.1.1 (bcc 0.1.0, ...)` with the
+**Identity.** bcc's default: the pinned Clang 23.1.5 and the GCC 4.2.1 Clang
+claims. `--version` prints `clang version 23.1.5 (bcc 0.1.0, ...)` with the
 target, thread model and installed directory, as Clang does.
 
 ## MSVC `cl.exe`

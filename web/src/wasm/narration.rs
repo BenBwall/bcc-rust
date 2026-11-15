@@ -33,15 +33,14 @@ pub fn narrate(session: &Session) -> WasmNarration {
         .pc
         .and_then(|pc| program.wat.line_of(event.func, pc))
         .and_then(|line| program.wat.text.lines().nth(line - 1))
-        .map(|text| {
+        .map_or_default(|text| {
             text.trim()
                 .split("  ;;")
                 .next()
                 .unwrap_or_default()
                 .trim()
                 .to_owned()
-        })
-        .unwrap_or_default();
+        });
     let context = Context {
         session,
         machine,
@@ -558,12 +557,10 @@ impl Context<'_> {
             .map_or_else(|| "?".to_owned(), |value| format!("`{value}`"));
         let a = popped
             .first()
-            .map(|value| format!("`{value}`"))
-            .unwrap_or_default();
+            .map_or_default(|value| format!("`{value}`"));
         let b = popped
             .get(1)
-            .map(|value| format!("`{value}`"))
-            .unwrap_or_default();
+            .map_or_default(|value| format!("`{value}`"));
         let comparison = |symbol: &str, signed: &str| {
             let truth = if matches!(pushed.first(), Some(Value::I32(1))) {
                 "yes"

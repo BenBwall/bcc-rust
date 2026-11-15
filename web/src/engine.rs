@@ -367,8 +367,7 @@ impl Inner {
             event.prevent_default();
             let message = event
                 .dyn_ref::<ErrorEvent>()
-                .map(ErrorEvent::message)
-                .unwrap_or_default();
+                .map_or_default(ErrorEvent::message);
             if message.is_empty() {
                 format!(
                     "{}. Serve the built site over HTTP.",
