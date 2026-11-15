@@ -105,7 +105,11 @@ impl Analyzer<'_, '_, '_> {
                 flow.exits.live_return
             };
             if let Some(site) = site {
-                self.return_flow_warning(G::GccNoreturn, site, "'noreturn' function does return");
+                self.late_return_flow_warning(
+                    G::GccNoreturn,
+                    site,
+                    "'noreturn' function does return",
+                );
             }
             return;
         }
@@ -133,7 +137,7 @@ impl Analyzer<'_, '_, '_> {
         }
         let exempt = main && self.context.configuration.standard() as u8 >= CStandard::C99 as u8;
         if end_reached && !exempt {
-            self.return_flow_warning(
+            self.late_return_flow_warning(
                 G::ReturnType,
                 end,
                 "control reaches end of non-void function",

@@ -28,6 +28,7 @@ use super::{
     BindingKind,
     Integer,
     Linkage,
+    ReportOrder,
     ScopeKind,
     SemanticErrorKind,
     ValueCategory,
@@ -169,18 +170,48 @@ pub(super) struct UnusedState<'s> {
     /// Clang's definition inherits.
     unused_tags: ArenaMap<'s, usize, bool>,
     /// Where each scope that can hold a variable ends, kept only under GCC's
-    /// rules in a unit with diagnostic pragmas: see
-    /// [`Analyzer::note_scope_end`].
+    /// rules: see [`Analyzer::note_scope_end`].
     scope_ends: Option<ArenaMap<'s, usize, SourceVectors>>,
+    /// GCC's errors so far, which leave out the warnings `-Werror` makes
+    /// errors: those before semantic analysis, and the semantic ones a
+    /// warning group reports (other semantic errors count in
+    /// `Analyzer::hard_errors`).
+    pub(super) gcc_errors: usize,
+    /// The functions being analyzed under GCC's rules, innermost last.
+    gcc_functions: ArenaVec<'s, GccFunction>,
+    /// The typedefs the left blocks of those functions declared, which GCC
+    /// reports at the end of the function.
+    local_typedefs: ArenaVec<'s, (usize, Identifier)>,
+    /// What GCC's middle end says of reaching a function's end, which it
+    /// reports once the unit is parsed: the group, the place and the words.
+    late_return_flow: ArenaVec<'s, (G, SourceVectors, &'static str)>,
+    /// The binding that defines each internal function, where GCC's symbol
+    /// table gains the function.
+    function_symbols: ArenaMap<'s, StringCacheId, usize>,
+}
+
+/// Where a function's state begins in what [`UnusedState`] keeps for GCC.
+#[derive(Clone, Copy)]
+struct GccFunction {
+    /// The scope of its parameters and body.
+    scope:    usize,
+    /// Its labels, and those of the functions it nests, from here on in the
+    /// analyzer's labels.
+    labels:   usize,
+    /// Its typedefs from here on in [`UnusedState::local_typedefs`].
+    typedefs: usize,
 }
 
 impl<'s> UnusedState<'s> {
     /// `pragmas` says a diagnostic pragma may turn on what the command line
     /// leaves off, so that only the report can tell.
+    /// `errors_before` counts the errors GCC counts that come before
+    /// semantic analysis.
     pub(super) fn new(
         scratch: &'s Bump,
         configuration: CompilerConfiguration,
         pragmas: bool,
+        errors_before: usize,
     ) -> Self {
         let on = |groups: &[G]| {
             !matches!(
@@ -244,8 +275,13 @@ impl<'s> UnusedState<'s> {
             statement_expression_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             separators: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             unused_tags: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            scope_ends: (pragmas && configuration.compiler_identity() == CompilerIdentity::Gcc)
+            scope_ends: (tracking && configuration.compiler_identity() == CompilerIdentity::Gcc)
                 .then(|| ArenaMap::with_hasher_in(FxBuildHasher, scratch)),
+            gcc_errors: errors_before,
+            gcc_functions: ArenaVec::new_in(scratch),
+            local_typedefs: ArenaVec::new_in(scratch),
+            late_return_flow: ArenaVec::new_in(scratch),
+            function_symbols: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 
@@ -784,6 +820,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.scope == 0 || self.scopes[self.scope].kind == ScopeKind::Prototype {
             return;
         }
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+            let order = self.scope_order(self.scope);
+            self.with_report_order(order, Self::pop_scope_as_gcc);
+            return;
+        }
         let trapped = self.context.configuration.compiler_identity().rules() == RuleSet::Clang
             && self.hard_errors != self.scope_hard_errors[self.scope];
         let mut next = self.scope_entries[self.scope].head.get();
@@ -795,6 +836,193 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 self.report_unused_variable(entry.binding, entry.name);
             }
+        }
+    }
+
+    /// GCC's `pop_scope`, which walks the scope's bindings from the latest
+    /// back: it reports each variable, and each label the scope holds, in the
+    /// reverse of the order they were bound in. A label is bound where it is
+    /// first named, and an ordinary one in the function's outermost block.
+    /// Parameters and typedefs wait for the end of the function, and a
+    /// typedef outside one is never reported.
+    /// GCC: `pop_scope` in `c-decl.cc`; `bind`, which links a binding before
+    /// the scope's others.
+    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
+    fn pop_scope_as_gcc(&mut self) {
+        let scope = self.scope;
+        let function = self.functions.current.map(|function| function.id);
+        // The labels only a function's scope holds, latest first.
+        let mut labels = match self.unused.gcc_functions.last() {
+            | Some(record) if record.scope == scope => self.label_count(),
+            | _ => 0,
+        };
+        let first_label = self
+            .unused
+            .gcc_functions
+            .last()
+            .map_or(0, |record| record.labels);
+        let mut next = self.scope_entries[scope].head.get();
+        loop {
+            // A label first named when `bound` entries had been installed
+            // was bound before the entry installed at that index.
+            let label = (labels > first_label).then(|| labels - 1);
+            let label_first = match (next, label) {
+                | (Some(link), Some(label)) => self.label_binding(label) > link.value,
+                | (None, Some(_)) => true,
+                | (_, None) => false,
+            };
+            if label_first {
+                labels -= 1;
+                if let Some(function) = function {
+                    self.report_unused_function_label(labels, function);
+                }
+                continue;
+            }
+            let Some(link) = next else {
+                break;
+            };
+            next = link.next;
+            let entry = self.entries[link.value];
+            match entry.namespace {
+                | Namespace::Ordinary => match self.bindings[entry.binding].kind {
+                    | BindingKind::Object => self.report_unused_variable(entry.binding, entry.name),
+                    | BindingKind::Typedef if !self.unused.gcc_functions.is_empty() =>
+                        self.unused.local_typedefs.push((entry.binding, entry.name)),
+                    | _ => {},
+                },
+                | Namespace::Label => self.report_label_if_unused(entry.binding),
+                | _ => {},
+            }
+        }
+    }
+
+    /// Where GCC's reports on leaving `scope` fall among the others: at its
+    /// closing brace.
+    fn scope_order(&mut self, scope: usize) -> ReportOrder {
+        let end = self
+            .unused
+            .scope_ends
+            .as_ref()
+            .and_then(|ends| ends.get(&scope))
+            .copied();
+        end.map_or(ReportOrder::AtSite, |end| {
+            ReportOrder::After(self.context.file_location(
+                crate::translation_phases::context::Context::last_source_vector(end),
+            ))
+        })
+    }
+
+    /// Begins GCC's state for the function whose scope was just entered.
+    pub(super) fn begin_function_reports(&mut self) {
+        if self.unused.tracking
+            && self.context.configuration.compiler_identity() == CompilerIdentity::Gcc
+        {
+            let record = GccFunction {
+                scope:    self.scope,
+                labels:   self.label_count(),
+                typedefs: self.unused.local_typedefs.len(),
+            };
+            self.unused.gcc_functions.push(record);
+        }
+    }
+
+    /// Where GCC's reports at the end of the current function fall among the
+    /// others: at its closing brace.
+    pub(super) fn function_end_order(&mut self) -> ReportOrder {
+        match self.functions.current {
+            | Some(function)
+                if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc =>
+                ReportOrder::After(self.context.file_location(
+                    crate::translation_phases::context::Context::last_source_vector(
+                        function.syntax.body.source_vectors,
+                    ),
+                )),
+            | _ => ReportOrder::AtSite,
+        }
+    }
+
+    /// Holds a warning about a function's end that GCC's middle end gives,
+    /// which lowers the unit's functions once it is parsed, and not under
+    /// `-fsyntax-only`.
+    /// GCC: `pass_warn_function_return` in `tree-cfg.cc`; `compile_file` in
+    /// `toplev.cc`.
+    pub(super) fn late_return_flow_warning(
+        &mut self,
+        group: G,
+        site: SourceVectors,
+        text: &'static str,
+    ) {
+        if !self.context.configuration.syntax_only() {
+            self.unused.late_return_flow.push((group, site, text));
+        }
+    }
+
+    /// Reports the warnings [`Self::late_return_flow_warning`] held, in the
+    /// order of their functions.
+    pub(super) fn report_late_return_flow(&mut self) {
+        for i in 0..self.unused.late_return_flow.len() {
+            let (group, site, text) = self.unused.late_return_flow[i];
+            self.return_flow_warning(group, site, text);
+        }
+    }
+
+    /// Notes the definition of an internal function at `binding`.
+    pub(super) fn note_function_symbol(&mut self, binding: usize) {
+        let data = self.bindings[binding];
+        if self.unused.tracking && data.linkage == Linkage::Internal {
+            _ = self.unused.function_symbols.insert(data.name.name, binding);
+        }
+    }
+
+    /// What GCC's `finish_function` reports once it has left the function's
+    /// scope and said whether it has a `return`: the parameters only set, in
+    /// their order, the typedefs its blocks declared and nothing named, in
+    /// theirs, unless an error has been reported, and then the parameters
+    /// nothing named.
+    /// GCC: `finish_function` in `c-decl.cc`;
+    /// `maybe_warn_unused_local_typedefs` and `do_warn_unused_parameter` in
+    /// `c-warn.cc`.
+    /// C99: §6.9.1p9, p. 142; PDF p. 154; §6.7.7, p. 123; PDF p. 135.
+    pub(super) fn report_unused_at_function_end(&mut self) {
+        let Some(record) = self.unused.gcc_functions.pop() else {
+            return;
+        };
+        let mut parameters = ArenaVec::new_in(self.scratch);
+        let mut next = self.scope_entries[record.scope].head.get();
+        while let Some(link) = next {
+            next = link.next;
+            let entry = self.entries[link.value];
+            if entry.namespace == Namespace::Ordinary
+                && self.bindings[entry.binding].kind == BindingKind::Parameter
+            {
+                parameters.push(entry);
+            }
+        }
+        parameters.reverse();
+        for entry in &parameters {
+            self.report_unused_parameter(entry.binding, entry.name, true);
+        }
+        // `maybe_warn_unused_local_typedefs` warns only while `errorcount`
+        // equals the count it last warned at, which starts at zero.
+        let typedefs = record.typedefs;
+        if self.hard_errors == 0 && self.unused.gcc_errors == 0 {
+            self.unused.local_typedefs[typedefs..].sort_unstable_by_key(|&(binding, _)| binding);
+            for i in typedefs..self.unused.local_typedefs.len() {
+                let (binding, name) = self.unused.local_typedefs[i];
+                self.report_unused_typedef(binding, name);
+            }
+        }
+        self.unused.local_typedefs.truncate(typedefs);
+        for entry in &parameters {
+            self.report_unused_parameter(entry.binding, entry.name, false);
+        }
+    }
+
+    /// Reports the parameter `binding` if it is only set (`set_only`) or if
+    /// nothing names it.
+    fn report_unused_parameter(&mut self, binding: usize, name: Identifier, set_only: bool) {
+        if self.unused.variable(binding).referenced == set_only {
+            self.report_unused_variable(binding, name);
         }
     }
 
@@ -983,11 +1211,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Reports file-scope objects with internal linkage: GCC at the last
-    /// declaration, Clang at the first.
+    /// declaration, Clang at the first. GCC reports them among the defined
+    /// internal functions in `functions` (the latest declaration, the name and
+    /// the definition), in the reverse of the order its symbol table gained
+    /// them: an object at its first declaration and a function at its
+    /// definition.
+    /// GCC: `check_global_declaration`, which `analyze_functions` calls for
+    /// each symbol, in `cgraphunit.cc`; `symtab_node::register_symbol` in
+    /// `symtab.cc`.
     /// C99: §6.2.2p3, p. 30; PDF p. 42.
-    pub(super) fn report_unused_file_scope(&mut self) {
+    pub(super) fn report_unused_file_scope(
+        &mut self,
+        functions: &[(usize, Identifier, SourceVectors)],
+    ) {
         let gcc = self.context.configuration.compiler_identity() == CompilerIdentity::Gcc;
-        let mut sites: ArenaMap<'_, StringCacheId, usize> =
+        let mut sites: ArenaMap<'_, StringCacheId, (usize, usize)> =
             ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut next = self.scope_entries[0].head.get();
         while let Some(link) = next {
@@ -1000,17 +1238,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if data.kind != BindingKind::Object || data.linkage != Linkage::Internal {
                 continue;
             }
-            let site = sites.entry(entry.name.name).or_insert(entry.binding);
+            let (first, site) = sites
+                .entry(entry.name.name)
+                .or_insert((entry.binding, entry.binding));
+            *first = (*first).min(entry.binding);
             *site = if gcc {
                 (*site).max(entry.binding)
             } else {
                 (*site).min(entry.binding)
             };
         }
-        let mut objects = ArenaVec::new_in(self.scratch);
-        objects.extend(sites.values().copied());
-        objects.sort_unstable();
-        for binding in objects {
+        // Each object's or function's place in GCC's symbol table, its own
+        // place, and for a function its name and definition.
+        let mut symbols = ArenaVec::new_in(self.scratch);
+        symbols.extend(sites.values().map(|&(first, site)| (first, site, None)));
+        if gcc {
+            symbols.extend(functions.iter().map(|&(latest, name, definition)| {
+                let defined = self
+                    .unused
+                    .function_symbols
+                    .get(&name.name)
+                    .copied()
+                    .unwrap_or(latest);
+                (defined, latest, Some((name, definition)))
+            }));
+            symbols.sort_unstable_by_key(|&(symbol, ..)| std::cmp::Reverse(symbol));
+        } else {
+            symbols.sort_unstable_by_key(|&(_, site, _)| site);
+        }
+        for (_, binding, function) in symbols {
+            if let Some((name, definition)) = function {
+                self.report_unused_function(name, definition);
+                continue;
+            }
             let data = self.bindings[binding];
             let usage = self
                 .unused

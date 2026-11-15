@@ -24,6 +24,7 @@ use crate::{
         SourceVectors,
         TranslationError,
         preprocessing::PreprocessorErrorType,
+        semantic_analysis::ReportOrder,
     },
     util::bump::{
         ArenaMap,
@@ -78,9 +79,19 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             | TranslationError::Parsing(error) => error.ordering_location,
             // Preprocessing errors may still point into a macro definition.
             | _ if diagnostic.severity != ErrorSeverity::Warning => None,
-            | _ => location
-                .first()
-                .map(|source| (source.source_file_index, source.index)),
+            | _ => match report_order(error) {
+                | ReportOrder::AtSite => location
+                    .first()
+                    .map(|source| (source.source_file_index, source.index)),
+                | ReportOrder::After(token) => context
+                    .get_source_vectors(token)
+                    .first()
+                    .map(|source| (source.source_file_index, source.index)),
+                // Last in its file's run, which ends the diagnostics.
+                | ReportOrder::UnitEnd => location
+                    .first()
+                    .map(|source| (source.source_file_index, u32::MAX)),
+            },
         };
         // Semantic analysis reports each mistake once, so its errors at one
         // place are different mistakes, as when `-Werror` makes a warning
@@ -320,6 +331,16 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             warnings: 0,
             fatal_reported: false,
         }
+    }
+}
+
+/// Where a diagnostic falls among the others: some of GCC's semantic warnings
+/// come after the place they name.
+fn report_order(error: &TranslationError<'_>) -> ReportOrder {
+    match error {
+        | TranslationError::Semantic(error) => error.order,
+        | TranslationError::Classified(classified) => report_order(classified.error),
+        | _ => ReportOrder::AtSite,
     }
 }
 

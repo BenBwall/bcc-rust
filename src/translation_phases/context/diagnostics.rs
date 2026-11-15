@@ -215,6 +215,20 @@ impl<'tu> Context<'tu> {
                 .count()
     }
 
+    /// The queued errors that are errors by default rather than warnings the
+    /// settings made errors: GCC's `errorcount`, which leaves out what
+    /// `-Werror` promotes (`DK_WERROR` in GCC's `diagnostic.cc`).
+    pub(crate) fn default_error_count(&self) -> usize {
+        self.pending_errors
+            .iter()
+            .filter(|error| {
+                !error.is_suppressed()
+                    && error.configured_severity(self) == ErrorSeverity::Error
+                    && error.unclassified().severity() == ErrorSeverity::Error
+            })
+            .count()
+    }
+
     pub(crate) fn pending_error_count(&self) -> usize {
         if self.pending_errors.is_empty() {
             return 0;

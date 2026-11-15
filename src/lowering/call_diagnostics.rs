@@ -129,6 +129,7 @@ impl CallDiagnostic {
                     previous:           Some(self.declaration),
                     highlights:         Default::default(),
                     origin:             SourceVectors::default(),
+                    order:              crate::translation_phases::semantic_analysis::ReportOrder::AtSite,
                 },
             ),
         );

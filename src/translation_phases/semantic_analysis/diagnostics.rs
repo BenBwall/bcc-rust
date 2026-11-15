@@ -9,6 +9,7 @@ use super::{
     Analyzer,
     SemanticError,
     SemanticErrorKind,
+    errors::ReportOrder,
 };
 use crate::{
     translation_phases::{
@@ -32,6 +33,19 @@ impl Analyzer<'_, '_, '_> {
         let outer = std::mem::replace(&mut self.highlights, operands);
         let result = report(self);
         self.highlights = outer;
+        result
+    }
+
+    /// Runs `report` with what it reports placed `order` among the other
+    /// diagnostics, for a warning GCC reports after the place it names.
+    pub(super) fn with_report_order<R>(
+        &mut self,
+        order: ReportOrder,
+        report: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let outer = std::mem::replace(&mut self.report_order, order);
+        let result = report(self);
+        self.report_order = outer;
         result
     }
 
@@ -111,6 +125,10 @@ impl Analyzer<'_, '_, '_> {
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
+        // GCC counts an error by default, not a warning `-Werror` made one.
+        if group.default_severity() == crate::translation_phases::ErrorSeverity::Error {
+            self.unused.gcc_errors += errors;
+        }
         self.context.classified_group_error(
             group,
             settings_at,
@@ -122,6 +140,7 @@ impl Analyzer<'_, '_, '_> {
                 previous,
                 highlights,
                 origin,
+                order: self.report_order,
             }),
         );
     }
@@ -173,6 +192,7 @@ impl Analyzer<'_, '_, '_> {
                 previous,
                 highlights,
                 origin: at,
+                order: self.report_order,
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
             let hard = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
@@ -198,15 +218,19 @@ impl Analyzer<'_, '_, '_> {
         if !self.tainted {
             let semantic_errors = &mut self.semantic_errors;
             let error_diagnostics = &mut self.error_diagnostics;
+            let gcc_errors = &mut self.unused.gcc_errors;
+            let order = self.report_order;
             self.context.report_extension_diagnostic(
                 feature,
                 baseline,
                 source_vectors,
                 |severity| {
-                    *semantic_errors +=
+                    let errors =
                         usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
-                    *error_diagnostics +=
-                        usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+                    *semantic_errors += errors;
+                    *error_diagnostics += errors;
+                    // `-pedantic-errors` makes GCC's pedantic warnings errors.
+                    *gcc_errors += errors;
                     TranslationError::Semantic(SemanticError {
                         extension_severity: Some(severity),
                         kind,
@@ -215,6 +239,7 @@ impl Analyzer<'_, '_, '_> {
                         previous: None,
                         highlights: [SourceVectors::default(); 2],
                         origin: SourceVectors::default(),
+                        order,
                     })
                 },
             );
