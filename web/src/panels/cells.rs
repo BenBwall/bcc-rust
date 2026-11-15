@@ -379,6 +379,23 @@ fn glyph(character: &str) -> String {
     }
 }
 
+/// A cell's value as it shows: a pointer into a string literal names it by
+/// the start of its spelling, as the tape's lanes do, and keeps the index
+/// (`→"\xff\xff\x…"[31]`), so a literal of escapes leaves the cell narrow
+/// enough for a phone. Its label keeps the whole spelling.
+fn pointer_text(text: &str) -> String {
+    let (Some(spelling), Some(end)) = (text.strip_prefix("→\""), text.rfind('"')) else {
+        return text.to_owned();
+    };
+    let Some(body) = end.checked_sub("→\"".len()).and_then(|end| spelling.get(..end)) else {
+        return text.to_owned();
+    };
+    format!("→\"{}{}", shorten(body, POINTER_LITERAL), &text[end..])
+}
+
+/// The most characters of a literal's spelling a pointer's cell shows.
+const POINTER_LITERAL: usize = 11;
+
 /// `"%zu bytes…"` cut to `limit` characters, as the tape cuts a long value.
 fn shorten(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
@@ -483,7 +500,7 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                                 style=format!("--bytes: {bytes}")
                             >
                                 <span class="cell-type" aria-hidden="true">{ty}<span class="cell-bytes">{format!("{bytes}B")}</span></span>
-                                <b class="cell-value" aria-hidden="true">{text.unwrap_or_else(|| "?".to_owned())}</b>
+                                <b class="cell-value" aria-hidden="true">{text.as_deref().map_or_else(|| "?".to_owned(), pointer_text)}</b>
                                 {raw.map(|raw| view! { <span class="cell-raw" aria-hidden="true">{raw}</span> })}
                                 <span class="cell-name" aria-hidden="true">{name}<span class="cell-pointers">{marks}</span></span>
                             </li>
@@ -923,6 +940,18 @@ mod tests {
             let start = html[..button].rfind("<button").expect("a button");
             assert!(html[start..button].contains(expanded), "{}", &html[start..button]);
         }
+    }
+
+    #[test]
+    fn a_pointer_into_a_literal_shows_the_start_of_its_spelling() {
+        let escapes = format!("→\"{}\"[31]", "\\xff".repeat(32));
+        assert_eq!(pointer_text(&escapes), "→\"\\xff\\xff\\x…\"[31]");
+        assert_eq!(pointer_text("→\"Ada\""), "→\"Ada\"");
+        assert_eq!(pointer_text("→\"\\\"quoted\\\" and more\"[2]"), "→\"\\\"quoted\\\"…\"[2]");
+        // An opening quote with no closing one is left as it is.
+        assert_eq!(pointer_text("→\""), "→\"");
+        assert_eq!(pointer_text("→values[1]"), "→values[1]");
+        assert_eq!(pointer_text("null"), "null");
     }
 
     #[test]
