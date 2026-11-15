@@ -109,3 +109,25 @@ int folded_conversions(int a, int b, _Bool t, double d, double e) {
     r += !a & !(_Bool)(b ? !a : 0);
     return r;
 }
+
+/* GCC folds and then seals off conditional arms whose signedness differs
+   when the result is unsigned and evaluated, merges equal arms, saturates a
+   floating constant converted to an integer, and distributes a truth value
+   into the arms of a pointer conditional. */
+int kept_conditionals(int a, int b, void *p, void *q) {
+    int r = !a & (int)(b ? (unsigned __int128)(b || a) : 0);
+    r += !a & (int)(b ? 0 : (unsigned __int128)(b || a));
+    r += !a & (int)(b ? (unsigned)(_Bool)a : 0);
+    r += !a & (int)(b ? (long)(b || a) : 0);
+    r += !a & (int)(b ? (unsigned)(b && 0) : 0);
+    r += 0 && (!a & (int)(b ? (unsigned)(b || a) : 0));
+    r += !a & (int)(_Bool)(b ? p : q);
+    r += !a & (int)(_Bool)(b ? p : 0);
+    r += !a & (int)(_Bool)(b ? p : (char *)p);
+    r += !a & (int)(long)(b ? p : q);
+    r += !a & (int)((b ? p : q) != 0);
+    r += !a & !(b ? p : q);
+    r += !a & (int)(_Bool)(long double)(b ? a : a);
+    r += !a & (int)(unsigned)(b ? (double)(b != a) : -1);
+    return r;
+}
