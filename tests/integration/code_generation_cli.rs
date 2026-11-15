@@ -177,6 +177,41 @@ int main(void) {
         }
     }
 
+    /// An element of a string literal at a constant index within it, its
+    /// null included, is an arithmetic constant that GCC 13.3 and 14 and
+    /// Clang 23 both fold into a static initializer; one past the end, or a
+    /// dereference of the literal for GCC, is refused as theirs. TCC's
+    /// `tests/tcctest.c` initializes `str_ag3` and `str_x` so.
+    #[test]
+    fn string_literal_elements_fold_into_static_initializers() {
+        let source = "char a[] = { \"ab\"[1], 0 };\nchar b[2] = { \"xy\" \"z\"[2], 0 };\nint c = \
+                      \"abc\"[0];\nint e = 2[\"xyz\"];\nchar n = \"ab\"[2];\nsigned char hi = \
+                      \"\\xe9\"[0];\nunsigned short w = L\"wide\"[1];\nconst char *p = \
+                      &\"abc\"[1];\nint main(void) { return (a[0] == 'b') + (b[0] == 'z') * 2 + \
+                      (c == 'a') * 4 + (e == 'z') * 8 + (n == 0) * 16 + (hi == -23) * 32 + (w == \
+                      'i') * 64 + (p[0] == 'b') * 128 - 200; }\n";
+        for identity in ["--compiler-identity=gcc", "--compiler-identity=clang"] {
+            let result = bcc(source, &["-ffreestanding", identity, "--interpret"]);
+            assert_eq!(
+                result.status.code(),
+                Some(55),
+                "{identity}: {}",
+                text(&result.stderr)
+            );
+        }
+        for refused in ["char past = \"ab\"[3];\n", "int star = *\"q\";\n"] {
+            let result = bcc(
+                refused,
+                &["-ffreestanding", "--compiler-identity=gcc", "-fsyntax-only"],
+            );
+            assert!(
+                text(&result.stderr).contains("static-storage initializer requires a constant"),
+                "{refused}: {}",
+                text(&result.stderr)
+            );
+        }
+    }
+
     /// `-ffloatn-types` makes `_Float32`, `_Float64` and `_Float32x`
     /// distinct types that compute in binary32 and binary64, with their
     /// constant suffixes and GCC's infinity builtins (C23 Annex H).
