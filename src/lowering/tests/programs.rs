@@ -42,6 +42,13 @@ int main(void) { int a[3][3]; return f(3,a[0])!=4 || g(3,a)!=16 || old(3,a[0])!=
         expected: 0,
     },
     Program {
+        name:     "vla_static_pointer",
+        source:   "static int f(int h, int w) { int arr[2][h][w]; static int (*p)[h][w];
+ arr[1][h-1][w-1] = 40; p = &arr[1]; return p[0][h-1][w-1] + (int)sizeof *p; }
+int main(void) { return f(3,4)!=88 || f(2,5)!=80; }",
+        expected: 0,
+    },
+    Program {
         name:     "sum_to_ten",
         source:   "int main(void) { int s = 0; for (int i = 1; i <= 10; i++) s += i; return s; }",
         expected: 55,
