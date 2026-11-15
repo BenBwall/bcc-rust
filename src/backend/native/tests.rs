@@ -4,6 +4,7 @@
 mod allocation;
 mod debug_info;
 mod end_to_end;
+mod frame;
 mod inline_asm;
 mod listing;
 mod machine_entry;
