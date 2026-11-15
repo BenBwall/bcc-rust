@@ -1613,6 +1613,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         {
             return false;
         }
+        // GCC's fold decides `i && 0` and `(1, 7)` (`gcc_folding.rs`).
+        if let Some(constant) = self.gcc_constant_query(operand) {
+            return constant;
+        }
         // Nested queries are integer constant expressions, including under
         // arithmetic, casts and selected wrappers. Their semantic value is
         // available here even when control evaluation deliberately stays
