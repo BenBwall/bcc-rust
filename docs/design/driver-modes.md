@@ -1242,8 +1242,9 @@ condition:
 | `assignment of read-only location`, `void function returns a value`, `'return' with no value`, `implicit declaration of function 'f'`, `empty case range`, `initializer-string for array is too long` | as worded |
 
 TCC's cast warning (`gen_cast`) differs from GCC's: it counts an
-enumeration as its integer type (`(enum E)p`), passes over an operand that
-folds to a constant that is no address (`(void *)(1 ? 2 : i)`,
+enumeration as its integer type (`(enum E)p`) and a `_Bool` source as a
+byte (`(void *)b`; a `_Bool` destination tests the pointer), passes over an
+operand that folds to a constant that is no address (`(void *)(1 ? 2 : i)`,
 `(int)(char *)5`, but not `(int)&g`), never warns in a static object's
 initializer, which it only folds, and warns of the conversions an
 assignment, an initializer, a prototyped argument, a `return` or an integer

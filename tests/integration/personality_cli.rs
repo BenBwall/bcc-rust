@@ -11967,7 +11967,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
     /// them (`mob` too, but for line 3, which it words `useless type
     /// defines no instances`), with TCC's cast warning on every conversion
     /// between a pointer and an integer of another width it converts as a
-    /// cast, a constant one aside.
+    /// cast, a constant one aside, and a `_Bool` source among them.
     #[test]
     fn tcc_warnings_read_as_tcc_gives_them() {
         if !cfg!(target_os = "linux") {
@@ -12145,6 +12145,9 @@ int main(void) {
         return 2;
     switch (i) { case 5 ... 1: break; }
 }
+void *b1(_Bool x) { return (void *)x; }
+void *b2(_Bool x) { return x; }
+_Bool b3(void *p) { return (_Bool)p; }
 ";
 
     /// Ubuntu's TCC 0.9.27 compiling [`TCC_WARNINGS_SOURCE`].
@@ -12169,6 +12172,9 @@ warn.c:26: warning: assignment discards qualifiers from pointer target type
 warn.c:27: warning: pointer type mismatch in comparison('int *' and 'char *')
 warn.c:29: warning: pointer/integer mismatch in comparison
 warn.c:31: warning: empty case range
+warn.c:33: warning: cast between pointer and integer of different size
+warn.c:34: warning: assignment makes pointer from integer without a cast
+warn.c:34: warning: cast between pointer and integer of different size
 ";
 
     /// `tcc -ar` runs the bundled archiver with the rest of the command

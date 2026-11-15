@@ -176,12 +176,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// ([`crate::configuration::CompilerConfiguration::pointer_cast_rules`]).
     ///
     /// TCC (`gen_cast` in `tccgen.c`, 0.9.27 and mob alike) warns for any
-    /// other width either way, an enumeration counting as its integer type,
-    /// unless the operand folds to a constant that is no address (`(void
-    /// *)(1 ? 2 : i)`, `(int)(char *)5`), and never in a static object's
-    /// initializer, which it only folds. It converts an assignment's,
-    /// initializer's, argument's or `return`'s value the same way, so
-    /// [`Self::assignment_conversion_at`] calls this for those too.
+    /// other width either way, an enumeration counting as its integer type
+    /// and a `_Bool` source as a byte (a `_Bool` destination tests the
+    /// pointer instead), unless the operand folds to a constant that is no
+    /// address (`(void *)(1 ? 2 : i)`, `(int)(char *)5`), and never in a
+    /// static object's initializer, which it only folds. It converts an
+    /// assignment's, initializer's, argument's or `return`'s value the same
+    /// way, so [`Self::assignment_conversion_at`] calls this for those too.
     /// C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
     pub(in crate::translation_phases::semantic_analysis) fn pointer_integer_cast_warning(
         &mut self,
@@ -198,8 +199,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let gcc =
             self.context.configuration.pointer_cast_rules() == crate::configuration::RuleSet::Gcc;
-        // The width of an integer type, and whether it is an enumeration.
-        let integer = |ty: TypeId| -> Option<(u64, bool)> {
+        // The width of an integer type, and whether it is an enumeration. A
+        // `_Bool` counts only as TCC's source.
+        let integer = |ty: TypeId, source: bool| -> Option<(u64, bool)> {
             // Clang's integral types exclude an atomic one, which a cast's
             // value keeps (`(char *)(_Atomic int)i`); GCC drops it.
             if !gcc && matches!(self.types.nodes[ty.index], TypeKind::Atomic(_)) {
@@ -207,7 +209,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             let ty = self.types.non_atomic(ty);
             let enumeration = match self.types.nodes[ty.index] {
-                | TypeKind::Scalar(Scalar::Bool) => return None,
+                | TypeKind::Scalar(Scalar::Bool) if !(tcc && source) => return None,
                 | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
                 | _ => false,
             };
@@ -215,7 +217,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .map(|(bits, _)| (u64::from(bits), enumeration))
         };
         let group = if let Some(to) = self.pointer_target(target)
-            && let Some((bits, enumeration)) = integer(from)
+            && let Some((bits, enumeration)) = integer(from, true)
         {
             // Even an unevaluated operand that is no constant (`1 ? 2 : i`)
             // keeps the cast from being an integer constant expression.
@@ -241,7 +243,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None
             }
         } else if let Some(pointee) = self.pointer_target(from)
-            && let Some((bits, enumeration)) = integer(target)
+            && let Some((bits, enumeration)) = integer(target, false)
         {
             if tcc {
                 (bits != pointer_bits && operand.integer.is_none())
