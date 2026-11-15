@@ -19,6 +19,7 @@ use crate::{
         preprocessing::PreprocessorError,
         preprocessor_tokenizer::PreprocessorTokenizerError,
         provenance::{
+            SourceArena,
             SourceVector,
             SourceVectors,
         },
@@ -63,7 +64,25 @@ impl<'tu> Context<'tu> {
         {
             return;
         }
+        self.record_reading(source);
         self.classified_error(source, error);
+    }
+
+    /// Records the stretch of source being read as the preprocessor queues
+    /// a diagnostic about `source`, which says which reading of a file read
+    /// more than once it is in when no parser token's order can (see
+    /// [`Self::reading_segment`]). A range in the preprocessor's arena was
+    /// formed while that stretch was read; the parser's ranges say where
+    /// they were read themselves.
+    pub(crate) fn record_reading(&mut self, source: SourceVectors) {
+        if source.length() != 0
+            && SourceArena::decode(source).0 == SourceArena::Preprocessor
+            && let Some(segment) = self.source_map.reading()
+        {
+            _ = self.error_readings[SourceArena::Preprocessor as usize]
+                .entry(source)
+                .or_insert(segment);
+        }
     }
 
     /// A preprocessor diagnostic of `-Wpedantic` that its caller gave the
@@ -76,6 +95,7 @@ impl<'tu> Context<'tu> {
             error.error_type.is_extension(),
             error.source_vectors,
         ) {
+            self.record_reading(error.source_vectors);
             self.classified_extension(error.source_vectors, TranslationError::Preprocessing(error));
         }
     }
@@ -230,7 +250,8 @@ impl<'tu> Context<'tu> {
         let errors = std::mem::replace(&mut self.pending_errors, ArenaQueue::new_in(tu));
         let mut first = None;
         // A parser error's tokens say which reading of a file read twice it
-        // is in. Otherwise the errors of each phase come in reading order,
+        // is in, and so does the reading the preprocessor recorded for its
+        // own. Otherwise the errors of each phase come in reading order,
         // which tells the readings apart, but the parser's come after all the
         // others, so each phase keeps its own place.
         let mut last = [None; 2];
@@ -241,7 +262,7 @@ impl<'tu> Context<'tu> {
             {
                 continue;
             }
-            let (place, tokens, phase, unplaced) = match error.unclassified() {
+            let (place, reading, phase, unplaced) = match error.unclassified() {
                 | TranslationError::Parsing(error) => (
                     error.ordering_location,
                     error.source_vectors,
@@ -254,11 +275,11 @@ impl<'tu> Context<'tu> {
                         .get_source_vectors(source)
                         .first()
                         .map(|vector| (vector.source_file_index, vector.index));
-                    (place, SourceVectors::default(), 0, (0, 0))
+                    (place, source, 0, (0, 0))
                 },
             };
             let position = place.and_then(|(file, offset)| {
-                self.reading_position(tokens, file, offset, last[phase])
+                self.reading_position(reading, file, offset, last[phase])
             });
             if position.is_some() {
                 last[phase] = position;
@@ -271,18 +292,19 @@ impl<'tu> Context<'tu> {
     }
 
     /// Where byte `offset` of the file behind `file` was read: in the reading
-    /// of parser tokens `tokens` when they hold it, and otherwise in the
-    /// first reading after `last` when the file was read more than once.
+    /// of `reading`, parser tokens or a recorded preprocessing diagnostic's
+    /// range, when it holds it, and otherwise in the first reading after
+    /// `last` when the file was read more than once.
     pub(crate) fn reading_position(
         &self,
-        tokens: SourceVectors,
+        reading: SourceVectors,
         file: u32,
         offset: u32,
         last: Option<ReadingPosition>,
     ) -> Option<ReadingPosition> {
         let file = self.physical_source_file(file);
         let segment = self
-            .reading_segment(tokens, file, offset)
+            .reading_segment(reading, file, offset)
             .or_else(|| self.source_map.segment_at(file, offset, last))?;
         Some((segment, offset))
     }

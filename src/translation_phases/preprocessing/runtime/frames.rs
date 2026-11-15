@@ -70,10 +70,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             ..
         }) = frame
         {
-            self.context.leave_source_file(physical_source_file_index);
             // File-local openings are owned copies, so their provenance
             // survives preprocessor-arena compaction. Macro frame pops
-            // leave conditional state untouched.
+            // leave conditional state untouched. They are reported in the
+            // reading of the file that ends, before its includer resumes.
             let base = conditional_base.min(self.state.open_conditionals.len());
             for vectors in self.state.open_conditionals.split_off(base) {
                 let source_vectors = self.context.push_source_vectors(vectors.source);
@@ -82,6 +82,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     source_vectors,
                 });
             }
+            self.context.leave_source_file(physical_source_file_index);
         }
         if let Some(last) = self.tokenizer_stack.last() {
             self.tokenizer = last.tokenizer.clone();

@@ -61,11 +61,24 @@ impl Context<'_> {
             std::mem::replace(&mut self.pending_errors, ArenaQueue::new_in(self.tu));
         for error in pending_errors.iter_mut_from(self.relocated_errors) {
             error.for_each_source_vectors_mut(&mut |source_vectors| {
-                *source_vectors = self.retain_preprocessor_range(*source_vectors);
+                let retained = self.retain_preprocessor_range(*source_vectors);
+                // The reading recorded for a diagnostic follows its range.
+                if let Some(&segment) =
+                    self.error_readings[SourceArena::Preprocessor as usize].get(source_vectors)
+                {
+                    _ = self.error_readings[SourceArena::Retained as usize]
+                        .entry(retained)
+                        .or_insert(segment);
+                }
+                *source_vectors = retained;
             });
         }
         self.relocated_errors = pending_errors.len();
         self.pending_errors = pending_errors;
+        let readings = &mut self.error_readings[SourceArena::Preprocessor as usize];
+        if !readings.is_empty() {
+            readings.clear();
+        }
         self.source_vectors.0.clear();
         self.expansion_sites[SourceArena::Preprocessor as usize].clear();
         self.expansion_starts[SourceArena::Preprocessor as usize].clear();

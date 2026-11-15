@@ -49,43 +49,42 @@ impl Context<'_> {
     }
 
     /// The stretch of source that `source`, a diagnostic's range, was read
-    /// in when it is a parser token's, whose order says which reading of a
-    /// file read twice it is, and when that stretch holds `offset` of
-    /// physical file `file`, where the diagnostic points.
+    /// in when that stretch holds `offset` of physical file `file`, where the
+    /// diagnostic points: a parser token's, whose order says which reading
+    /// of a file read twice it is, or the one the preprocessor was reading
+    /// when it queued a diagnostic about `source`.
     pub(crate) fn reading_segment(
         &self,
         source: SourceVectors,
         file: u32,
         offset: u32,
     ) -> Option<u32> {
-        if source.length() == 0 {
-            return None;
-        }
-        let (arena, start) = SourceArena::decode(source);
-        if arena != SourceArena::ParserTokens {
-            return None;
-        }
-        self.source_map
-            .segment_of_token(start)
+        self.segment_read_in(source)
             .filter(|&segment| self.source_map.holds(segment, file, offset))
     }
 
-    /// Whether two diagnostic ranges can be one mistake: not when they are
-    /// parser tokens read in different readings of a file.
+    /// Whether two diagnostic ranges can be one mistake: not when they were
+    /// read in different readings of a file.
     pub(crate) fn same_reading(&self, left: SourceVectors, right: SourceVectors) -> bool {
-        let segment = |source: SourceVectors| {
-            if source.length() == 0 {
-                return None;
-            }
-            let (arena, start) = SourceArena::decode(source);
-            (arena == SourceArena::ParserTokens)
-                .then(|| self.source_map.segment_of_token(start))
-                .flatten()
+        let opening = |source| {
+            self.segment_read_in(source)
                 .map(|segment| self.source_map.opening_of(segment).0)
         };
-        match (segment(left), segment(right)) {
+        match (opening(left), opening(right)) {
             | (Some(left), Some(right)) => left == right,
             | _ => true,
+        }
+    }
+
+    /// The stretch `source` was read in, as [`Self::reading_segment`] finds
+    /// it, wherever it points.
+    fn segment_read_in(&self, source: SourceVectors) -> Option<u32> {
+        if source.length() == 0 {
+            return None;
+        }
+        match SourceArena::decode(source) {
+            | (SourceArena::ParserTokens, start) => self.source_map.segment_of_token(start),
+            | (arena, _) => self.error_readings[arena as usize].get(&source).copied(),
         }
     }
 
@@ -178,6 +177,11 @@ impl<'tu> SourceMap<'tu> {
             .or_else(|| (hint..self.segments.len()).find(holds))
             .or_else(|| (0..hint).rev().find(holds))
             .map(|index| u32::try_from(index).expect("segments are counted in u32"))
+    }
+
+    /// The stretch being read now, the last to begin.
+    pub(crate) fn reading(&self) -> Option<u32> {
+        u32::try_from(self.segments.len().checked_sub(1)?).ok()
     }
 
     /// The stretch the parser token whose first vector is `token` was read
