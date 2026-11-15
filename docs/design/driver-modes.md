@@ -1159,8 +1159,9 @@ bcc's own `<stdatomic.h>` defines the `__ATOMIC_*` memory orders itself
 when they are not predefined, as `mob`'s `<stdatomic.h>` does, and bcc's
 freestanding `<stdint.h>` spells out the LP64 types and limits that the
 other identities' `__INT8_TYPE__` family names, as TCC's `<stddef.h>`
-spells out its exact-width types, with glibc's 64-bit `int_fast16_t` and
-`int_fast32_t`. bcc keeps these besides, each for a reason:
+spells out its exact-width types, with the target C library's
+`int_fast16_t` and `int_fast32_t` (glibc's 64-bit `long`, musl's 32-bit
+`int`). bcc keeps these besides, each for a reason:
 
 | Macros | Why bcc keeps them |
 | --- | --- |
@@ -1169,6 +1170,7 @@ spells out its exact-width types, with glibc's 64-bit `int_fast16_t` and
 | `__REDIRECT_NTHNL` | `mob`'s definition (`tccdefs.h`): glibc 2.34 and later use it without checking, so `<glob.h>` with `_FILE_OFFSET_BITS=64` fails under 0.9.27 (`identifier expected`) |
 | `__FLT_*`, `__DBL_*` and `__LDBL_*` characteristics (`MANT_DIG`, `DIG`, `MIN_EXP`, `MIN_10_EXP`, `MAX_EXP`, `MAX_10_EXP`, `MAX`, `MIN`, `EPSILON`, `DENORM_MIN`, `HAS_DENORM`, `DECIMAL_DIG`, `NORM_MAX`) and `__FLT_RADIX__` | bcc's `<float.h>` reads them; TCC's spells the values out |
 | `__SCHAR_MAX__`, `__SHRT_MAX__` | bcc's `<limits.h>` reads them; TCC has no `<limits.h>` and takes glibc's |
+| `__INT_FAST16_TYPE__`, `__INT_FAST16_MAX__`, `__UINT_FAST16_TYPE__`, `__UINT_FAST16_MAX__` and their `FAST32` counterparts | bcc's freestanding `<stdint.h>` reads them for `int_fast16_t`, `int_fast32_t` and their limits, which glibc gives 64 bits and musl 32; TCC takes the C library's `<stdint.h>`, so they come from GCC's listing for the target (Clang's listing names `short` for `int_fast16_t` with either library) |
 | `__GCC_ATOMIC_*_LOCK_FREE` | bcc's `<stdatomic.h>` reads them for `ATOMIC_*_LOCK_FREE`; 0.9.27 has no `<stdatomic.h>` and `mob`'s defines no lock-free macros |
 | `__STDC_EMBED_EMPTY__`, `__STDC_EMBED_FOUND__`, `__STDC_EMBED_NOT_FOUND__` | they come with `#embed`, which the personality accepts as GCC accepts it in `gnu99` (see the table below) |
 

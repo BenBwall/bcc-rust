@@ -1250,8 +1250,11 @@ fn write_bcc_macros(out: &mut impl Write) {
 /// (`<glob.h>` with a 64-bit `off_t`), where 0.9.27 fails; and the target
 /// macros that bcc's own `<float.h>`, `<limits.h>` and `<stdatomic.h>`
 /// read ([`tcc_header_macro`]), where TCC's `<float.h>` spells the values
-/// out and TCC has neither of the others.
-/// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
+/// out and TCC has neither of the others; and the C library's fast-type
+/// macros, from GCC's listing for the target, which bcc's freestanding
+/// `<stdint.h>` reads ([`tcc_fast_type_macro`]).
+/// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173; §7.18.1.3, pp. 256-257;
+/// PDF pp. 268-269.
 fn tcc_linux_macros<'a>(
     arena: &'a Bump,
     definitions: &str,
@@ -1308,6 +1311,17 @@ fn tcc_linux_macros<'a>(
             out.push_str(line);
         }
     }
+    let gcc = configuration
+        .target()
+        .gcc_predefined_macros(configuration.gnu_extensions());
+    for line in gcc.unwrap_or_default().split_inclusive('\n') {
+        let name = line
+            .strip_prefix("#define ")
+            .and_then(|definition| definition.split(' ').next());
+        if name.is_some_and(tcc_fast_type_macro) {
+            out.push_str(line);
+        }
+    }
     out.into_str()
 }
 
@@ -1344,6 +1358,27 @@ fn tcc_header_macro(name: &str) -> bool {
     floating
         || matches!(name, "__FLT_RADIX__" | "__SCHAR_MAX__" | "__SHRT_MAX__")
         || (name.starts_with("__GCC_ATOMIC_") && name.ends_with("_LOCK_FREE"))
+}
+
+/// Whether `name` is one of the `int_fast16_t` and `int_fast32_t` macros
+/// that bcc's freestanding `<stdint.h>` reads under the TCC identity on
+/// Linux, where TCC takes these types from the C library's `<stdint.h>`.
+/// [`tcc_linux_macros`] takes them from GCC's target listing, which names
+/// the C library's types (`long` in glibc, `int` in musl), where Clang's
+/// names `short` and `int` for both.
+/// C99: §7.18.1.3, pp. 256-257; PDF pp. 268-269.
+fn tcc_fast_type_macro(name: &str) -> bool {
+    matches!(
+        name,
+        "__INT_FAST16_TYPE__"
+            | "__INT_FAST16_MAX__"
+            | "__UINT_FAST16_TYPE__"
+            | "__UINT_FAST16_MAX__"
+            | "__INT_FAST32_TYPE__"
+            | "__INT_FAST32_MAX__"
+            | "__UINT_FAST32_TYPE__"
+            | "__UINT_FAST32_MAX__"
+    )
 }
 
 /// GCC's report of the floating-point semantics in effect, as

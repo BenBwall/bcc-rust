@@ -14,8 +14,11 @@
 /* bcc: TCC 0.9.27 predefines none of the target's type macros, which only
    the TCC identity on x86-64 Linux leaves out, so there this header spells
    the LP64 types out from those TCC does predefine, as TCC's own <stddef.h>
-   spells out its exact-width types. They are the types glibc's <stdint.h>
-   gives TCC hosted, which GCC's macros name too. */
+   spells out its exact-width types. They are the types the C library's
+   <stdint.h> gives TCC hosted, which GCC's macros name too. The libraries
+   differ only in int_fast16_t and int_fast32_t (glibc's long, musl's int),
+   so those come from the fast-type macros of GCC's listing for the target,
+   which the identity keeps for this header. */
 typedef signed char int8_t;
 #define INT8_MAX 127
 #define INT8_MIN (-INT8_MAX - 1)
@@ -61,16 +64,16 @@ typedef int8_t int_fast8_t;
 #define INT_FAST8_MIN INT8_MIN
 typedef uint8_t uint_fast8_t;
 #define UINT_FAST8_MAX UINT8_MAX
-typedef int64_t int_fast16_t;
-#define INT_FAST16_MAX INT64_MAX
-#define INT_FAST16_MIN INT64_MIN
-typedef uint64_t uint_fast16_t;
-#define UINT_FAST16_MAX UINT64_MAX
-typedef int64_t int_fast32_t;
-#define INT_FAST32_MAX INT64_MAX
-#define INT_FAST32_MIN INT64_MIN
-typedef uint64_t uint_fast32_t;
-#define UINT_FAST32_MAX UINT64_MAX
+typedef __INT_FAST16_TYPE__ int_fast16_t;
+#define INT_FAST16_MAX __INT_FAST16_MAX__
+#define INT_FAST16_MIN (-INT_FAST16_MAX - 1)
+typedef __UINT_FAST16_TYPE__ uint_fast16_t;
+#define UINT_FAST16_MAX __UINT_FAST16_MAX__
+typedef __INT_FAST32_TYPE__ int_fast32_t;
+#define INT_FAST32_MAX __INT_FAST32_MAX__
+#define INT_FAST32_MIN (-INT_FAST32_MAX - 1)
+typedef __UINT_FAST32_TYPE__ uint_fast32_t;
+#define UINT_FAST32_MAX __UINT_FAST32_MAX__
 typedef int64_t int_fast64_t;
 #define INT_FAST64_MAX INT64_MAX
 #define INT_FAST64_MIN INT64_MIN

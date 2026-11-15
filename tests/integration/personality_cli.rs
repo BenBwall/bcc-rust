@@ -11866,7 +11866,18 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             || name.starts_with("__STDC_EMBED_")
             || matches!(
                 name,
-                "__REDIRECT_NTHNL" | "__FLT_RADIX__" | "__SCHAR_MAX__" | "__SHRT_MAX__"
+                "__REDIRECT_NTHNL"
+                    | "__FLT_RADIX__"
+                    | "__SCHAR_MAX__"
+                    | "__SHRT_MAX__"
+                    | "__INT_FAST16_TYPE__"
+                    | "__INT_FAST16_MAX__"
+                    | "__UINT_FAST16_TYPE__"
+                    | "__UINT_FAST16_MAX__"
+                    | "__INT_FAST32_TYPE__"
+                    | "__INT_FAST32_MAX__"
+                    | "__UINT_FAST32_TYPE__"
+                    | "__UINT_FAST32_MAX__"
             )
     }
 
@@ -12019,7 +12030,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
 
     /// bcc's resource headers compile under the TCC identity on x86-64
     /// Linux, which predefines TCC's macros rather than the target's:
-    /// freestanding, `<stdint.h>` spells its types out ([`TCC_STDINT_TYPES`]),
+    /// freestanding, `<stdint.h>` spells its types out ([`tcc_stdint_probe`]),
     /// and hosted, it takes glibc's.
     #[test]
     fn tcc_identity_compiles_the_resource_headers() {
@@ -12057,28 +12068,163 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
                 }
             }
         }
-        directory.write("types.c", TCC_STDINT_TYPES);
+        directory.write("types.c", &tcc_stdint_probe(&TCC_STDINT_TARGETS[0]));
         let freestanding = [linux, "-std=c11", "-ffreestanding", "types.c", "-c"];
-        for identity in ["--compiler-identity=tcc", "--compiler-identity=gcc"] {
-            let output = directory.bcc(identity, &freestanding);
-            assert_eq!(stderr(&output), "", "{identity}");
-            succeeds(&output);
-        }
+        let output = directory.bcc("--compiler-identity=gcc", &freestanding);
+        assert_eq!(stderr(&output), "");
+        succeeds(&output);
         if hosted {
             let args = [linux, "-std=c11", "types.c", "-c"];
             succeeds(&directory.bcc("--compiler-identity=tcc", &args));
         }
     }
 
-    /// Checks the type and value of each `<stdint.h>` definition on x86-64
-    /// Linux, as glibc's `<stdint.h>` and GCC's macros give them, with
-    /// `<stdatomic.h>`'s use of them.
-    const TCC_STDINT_TYPES: &str = "#include <stdint.h>
+    /// Under the TCC identity, freestanding `<stdint.h>` gives each target's
+    /// types the widths and limits of the C library TCC takes them from
+    /// there ([`tcc_stdint_probe`]). On Linux, where TCC predefines none of
+    /// the target's type macros, these are glibc's and musl's `<stdint.h>`,
+    /// which differ only in `int_fast16_t` and `int_fast32_t`; on Windows,
+    /// whose macros the identity keeps, TCC's own `win32/include/stdint.h`
+    /// (LLP64, with 16-bit `wchar_t` and `wint_t`).
+    #[test]
+    fn tcc_stdint_gives_each_target_its_library_widths_and_limits() {
+        let directory = Directory::new();
+        for target in &TCC_STDINT_TARGETS {
+            directory.write("types.c", &tcc_stdint_probe(target));
+            let triple = format!("--target={}", target.triple);
+            let args = [&triple, "-std=c11", "-ffreestanding", "-c", "types.c"];
+            let output = directory.bcc("--compiler-identity=tcc", &args);
+            assert_eq!(stderr(&output), "", "{}", target.triple);
+            succeeds(&output);
+        }
+    }
+
+    /// One target's `<stdint.h>` under the TCC identity: the widths of the
+    /// types that vary between targets, and on Linux the C type each
+    /// typedef names in the C library's header.
+    struct TccStdintTarget {
+        triple:       &'static str,
+        /// `int_fast16_t`, `int_fast32_t`, `wchar_t` and `wint_t`.
+        fast16_bits:  u32,
+        fast32_bits:  u32,
+        wchar_bits:   u32,
+        wchar_signed: bool,
+        wint_bits:    u32,
+        /// The types of `int_fast16_t` and `int_fast32_t` on Linux, whose
+        /// other typedefs name the same types in glibc and musl.
+        linux_fast:   Option<&'static str>,
+    }
+
+    const TCC_STDINT_TARGETS: [TccStdintTarget; 4] = [
+        // glibc's `<stdint.h>` (`bits/stdint-least.h` and `stdint.h`).
+        TccStdintTarget {
+            triple:       "x86_64-unknown-linux-gnu",
+            fast16_bits:  64,
+            fast32_bits:  64,
+            wchar_bits:   32,
+            wchar_signed: true,
+            wint_bits:    32,
+            linux_fast:   Some("long"),
+        },
+        // musl's `arch/x86_64/bits/stdint.h`.
+        TccStdintTarget {
+            triple:       "x86_64-unknown-linux-musl",
+            fast16_bits:  32,
+            fast32_bits:  32,
+            wchar_bits:   32,
+            wchar_signed: true,
+            wint_bits:    32,
+            linux_fast:   Some("int"),
+        },
+        // TCC 0.9.27's `win32/include/stdint.h`.
+        TccStdintTarget {
+            triple:       "x86_64-pc-windows-msvc",
+            fast16_bits:  16,
+            fast32_bits:  32,
+            wchar_bits:   16,
+            wchar_signed: false,
+            wint_bits:    16,
+            linux_fast:   None,
+        },
+        TccStdintTarget {
+            triple:       "x86_64-w64-windows-gnu",
+            fast16_bits:  16,
+            fast32_bits:  32,
+            wchar_bits:   16,
+            wchar_signed: false,
+            wint_bits:    16,
+            linux_fast:   None,
+        },
+    ];
+
+    /// A translation unit that asserts the width and signedness of every
+    /// `<stdint.h>` type of `target`, the value of every limit macro (with
+    /// the type the corresponding type promotes to) and of the constant
+    /// macros, and on Linux the C type of each typedef, then uses
+    /// `<stdatomic.h>`, which reads `<stdint.h>`.
+    fn tcc_stdint_probe(target: &TccStdintTarget) -> String {
+        let linux = target.linux_fast.map_or_else(String::new, |fast| {
+            format!("#define FAST {fast}\n#define UFAST unsigned {fast}\n{TCC_STDINT_LINUX_TYPES}")
+        });
+        format!(
+            "#define F16 {}\n#define F32 {}\n#define WCHAR_BITS {}\n#define WCHAR_SIGNED \
+             {}\n#define WINT_BITS {}\n{TCC_STDINT_PROBE}{linux}",
+            target.fast16_bits,
+            target.fast32_bits,
+            target.wchar_bits,
+            u8::from(target.wchar_signed),
+            target.wint_bits,
+        )
+    }
+
+    /// The target-independent part of [`tcc_stdint_probe`]. `S` and `U`
+    /// assert a signed or unsigned type's width and its limits, which C99
+    /// §7.18.2 paragraph 2 gives the type the type promotes to, and `C` a
+    /// constant macro given its type's maximum.
+    const TCC_STDINT_PROBE: &str = "#include <stddef.h>
+#include <stdint.h>
 #include <stdatomic.h>
+#define BITS(T, N, SIGNED) _Static_assert(sizeof(T) * 8 == (N) && ((T)-1 < 0) == (SIGNED), #T)
+#define P(E, T, U) _Generic(+(T)0, U: _Generic((E), U: 1, default: 0), default: 0)
+#define PROMOTED(E, T) (P(E, T, int) || P(E, T, unsigned) || P(E, T, long) \\
+    || P(E, T, unsigned long) || P(E, T, long long) || P(E, T, unsigned long long))
+#define MAXOF(T) ((T)-1 < 0 ? (T)(18446744073709551615ULL >> (65 - 8 * sizeof(T))) : (T)-1)
+#define MINOF(T) ((T)-1 < 0 ? -MAXOF(T) - 1 : 0)
+#define LIMIT(E, T, V) _Static_assert(PROMOTED(E, T) && (E) == (V), #E)
+#define S(T, N, NAME) BITS(T, N, 1); LIMIT(NAME##_MIN, T, MINOF(T)); LIMIT(NAME##_MAX, T, MAXOF(T))
+#define U(T, N, NAME) BITS(T, N, 0); LIMIT(NAME##_MAX, T, MAXOF(T))
+#define C(M, T, V) _Static_assert(PROMOTED(M(V), T) && M(V) == MAXOF(T), #M)
+S(int8_t, 8, INT8); U(uint8_t, 8, UINT8); S(int16_t, 16, INT16); U(uint16_t, 16, UINT16);
+S(int32_t, 32, INT32); U(uint32_t, 32, UINT32); S(int64_t, 64, INT64); U(uint64_t, 64, UINT64);
+S(int_least8_t, 8, INT_LEAST8); U(uint_least8_t, 8, UINT_LEAST8);
+S(int_least16_t, 16, INT_LEAST16); U(uint_least16_t, 16, UINT_LEAST16);
+S(int_least32_t, 32, INT_LEAST32); U(uint_least32_t, 32, UINT_LEAST32);
+S(int_least64_t, 64, INT_LEAST64); U(uint_least64_t, 64, UINT_LEAST64);
+S(int_fast8_t, 8, INT_FAST8); U(uint_fast8_t, 8, UINT_FAST8);
+S(int_fast16_t, F16, INT_FAST16); U(uint_fast16_t, F16, UINT_FAST16);
+S(int_fast32_t, F32, INT_FAST32); U(uint_fast32_t, F32, UINT_FAST32);
+S(int_fast64_t, 64, INT_FAST64); U(uint_fast64_t, 64, UINT_FAST64);
+S(intptr_t, 64, INTPTR); U(uintptr_t, 64, UINTPTR);
+S(intmax_t, 64, INTMAX); U(uintmax_t, 64, UINTMAX);
+S(ptrdiff_t, 64, PTRDIFF); U(size_t, 64, SIZE);
+LIMIT(SIG_ATOMIC_MIN, int, MINOF(int)); LIMIT(SIG_ATOMIC_MAX, int, MAXOF(int));
+BITS(wchar_t, WCHAR_BITS, WCHAR_SIGNED);
+LIMIT(WCHAR_MIN, wchar_t, MINOF(wchar_t)); LIMIT(WCHAR_MAX, wchar_t, MAXOF(wchar_t));
+BITS(__WINT_TYPE__, WINT_BITS, 0);
+LIMIT(WINT_MIN, __WINT_TYPE__, 0); LIMIT(WINT_MAX, __WINT_TYPE__, MAXOF(__WINT_TYPE__));
+C(INT8_C, int_least8_t, 127); C(INT16_C, int_least16_t, 32767);
+C(INT32_C, int_least32_t, 2147483647); C(INT64_C, int_least64_t, 9223372036854775807);
+C(UINT8_C, uint_least8_t, 255); C(UINT16_C, uint_least16_t, 65535);
+C(UINT32_C, uint_least32_t, 4294967295); C(UINT64_C, uint_least64_t, 18446744073709551615);
+C(INTMAX_C, intmax_t, 9223372036854775807); C(UINTMAX_C, uintmax_t, 18446744073709551615);
+atomic_int counter;
+int bump(void) { atomic_fetch_add(&counter, 2); return atomic_load(&counter); }
+";
+
+    /// The C type each typedef of glibc's and musl's x86-64 `<stdint.h>`
+    /// names, `FAST` being `int_fast16_t`'s and `int_fast32_t`'s.
+    const TCC_STDINT_LINUX_TYPES: &str = "
 #define SAME(T, U) _Static_assert(_Generic((T *)0, U *: 1, default: 0), #T)
-#define IS(E, U, V) _Static_assert(_Generic((E), U: 1, default: 0) && (E) == (V), #E)
-#define S64 (-9223372036854775807L - 1)
-#define U64 18446744073709551615UL
 SAME(int8_t, signed char); SAME(uint8_t, unsigned char);
 SAME(int16_t, short); SAME(uint16_t, unsigned short);
 SAME(int32_t, int); SAME(uint32_t, unsigned);
@@ -12088,33 +12234,11 @@ SAME(int_least16_t, short); SAME(uint_least16_t, unsigned short);
 SAME(int_least32_t, int); SAME(uint_least32_t, unsigned);
 SAME(int_least64_t, long); SAME(uint_least64_t, unsigned long);
 SAME(int_fast8_t, signed char); SAME(uint_fast8_t, unsigned char);
-SAME(int_fast16_t, long); SAME(uint_fast16_t, unsigned long);
-SAME(int_fast32_t, long); SAME(uint_fast32_t, unsigned long);
+SAME(int_fast16_t, FAST); SAME(uint_fast16_t, UFAST);
+SAME(int_fast32_t, FAST); SAME(uint_fast32_t, UFAST);
 SAME(int_fast64_t, long); SAME(uint_fast64_t, unsigned long);
 SAME(intptr_t, long); SAME(uintptr_t, unsigned long);
 SAME(intmax_t, long); SAME(uintmax_t, unsigned long);
-IS(INT8_MIN, int, -128); IS(INT8_MAX, int, 127); IS(UINT8_MAX, int, 255);
-IS(INT16_MIN, int, -32768); IS(INT16_MAX, int, 32767); IS(UINT16_MAX, int, 65535);
-IS(INT32_MIN, int, -2147483647 - 1); IS(INT32_MAX, int, 2147483647);
-IS(UINT32_MAX, unsigned, 4294967295U);
-IS(INT64_MIN, long, S64); IS(INT64_MAX, long, -(S64 + 1)); IS(UINT64_MAX, unsigned long, U64);
-IS(INT_LEAST8_MIN, int, -128); IS(UINT_LEAST16_MAX, int, 65535);
-IS(INT_LEAST32_MAX, int, 2147483647); IS(INT_LEAST64_MIN, long, S64);
-IS(INT_FAST8_MAX, int, 127); IS(INT_FAST16_MIN, long, S64);
-IS(INT_FAST32_MAX, long, -(S64 + 1)); IS(UINT_FAST32_MAX, unsigned long, U64);
-IS(INTPTR_MIN, long, S64); IS(UINTPTR_MAX, unsigned long, U64);
-IS(INTMAX_MAX, long, -(S64 + 1)); IS(UINTMAX_MAX, unsigned long, U64);
-IS(PTRDIFF_MIN, long, S64); IS(PTRDIFF_MAX, long, -(S64 + 1));
-IS(SIG_ATOMIC_MIN, int, -2147483647 - 1); IS(SIG_ATOMIC_MAX, int, 2147483647);
-IS(WCHAR_MIN, int, -2147483647 - 1); IS(WCHAR_MAX, int, 2147483647);
-IS(WINT_MIN, unsigned, 0U); IS(WINT_MAX, unsigned, 4294967295U);
-IS(SIZE_MAX, unsigned long, U64);
-IS(INT8_C(1), int, 1); IS(INT16_C(1), int, 1); IS(INT32_C(1), int, 1);
-IS(INT64_C(1), long, 1); IS(UINT8_C(1), int, 1); IS(UINT16_C(1), int, 1);
-IS(UINT32_C(1), unsigned, 1); IS(UINT64_C(1), unsigned long, 1);
-IS(INTMAX_C(1), long, 1); IS(UINTMAX_C(1), unsigned long, 1);
-atomic_int counter;
-int bump(void) { atomic_fetch_add(&counter, 2); return atomic_load(&counter); }
 ";
 
     const TCC_WARNINGS_SOURCE: &str = "int g;
