@@ -513,6 +513,36 @@ wraps: beside the heading when it fits, else on its own lines under it.
 [`recent-unsigned-390-dark`](screenshots/visual-pass-3/recent-unsigned-390-dark-before.png)
 ([after](screenshots/visual-pass-3/recent-unsigned-390-dark-after.png)).
 
+### 4. Escapes and the string keys
+
+**Fixed after review.** A string cell's words broke after 16 bytes. That
+bounds a word of letters (about 125 px) but not a word of escapes: 16
+`\xff` made a word 448 px wide, more than a phone's 318 px row, so the
+bytes at the end of each line were clipped. The reviewer's 33-byte
+literal lost 10 of them at 390 px. A word now ends before it is 16
+columns wide. An escape counts a column for each character of its
+spelling, and the boxed null character counts three. A word also wraps
+within itself if a row is narrower still. A pointer into such a literal
+showed the literal's whole spelling, a cell 1,085 px wide. It now shows
+the start of the spelling, as the tape's lanes do
+(`→"\xff\xff\x…"[0]`).
+
+The `BYTES` and `TEXT` keys redraw the strip, and that left the focus on
+the page's body. Now the focus moves to the key that replaces the one
+pressed, and a status region announces that the string opened into its
+byte cells or folded back.
+
+A probe ran eight programs to their end at eleven sizes from 320 to
+1440 px. The programs were built from escapes and from runs with no
+spaces: 32 `\xff` as a literal and as an array, 32 `\377`, 20 `\n\t`,
+mixed escapes, 24 `\0`, 120 letters with no space, and the reviewer's
+mixed string. Before the fix, 29 of the 402 bytes the steps used were
+off screen at 390 px, and 43 at 320 px. After it, none were off screen at
+any size. The tallest string cell was 150 px at 390 px, and 240 px at
+320 px (the 120 letters). Enter, Space and a click each left the focus on
+the replacement key, at 390 and 1440 px in both themes. The table above
+was measured again after these fixes and did not change.
+
 ### Left for later
 
 - **Other wide arrays still scroll.** No lesson has an array of another type
