@@ -286,7 +286,8 @@ fn lay_out_added_blocks<'a>(
 #[derive(Clone, Copy)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "Shared-library code, returns-twice calls, source notes and frame pointers are independent options."
+    reason = "Shared-library code, returns-twice calls, source notes and frame pointers are \
+              independent options."
 )]
 pub(crate) struct SelectOptions {
     /// Whether the code is for a shared library (ELF `-fpic` or `-fPIC`),
