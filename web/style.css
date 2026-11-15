@@ -1543,15 +1543,15 @@
     .clause { grid-template-columns: minmax(0, 1fr); }
     .glossary-entry { grid-template-columns: minmax(0, 1fr); }
     .flow-chip { font-size: 12px; padding: 2px 7px; }
-    /* The cells wrap: each call's run under its name, onto as many rows as
-       it needs, so every cell a step used is on screen without scrolling
-       sideways. Each cell draws its own seam, so a short row ends on the
-       panel, not on ink. */
-    .cells { flex-direction: column; align-items: flex-start; width: auto; overflow-x: visible; background: none; }
-    .cell-frame { align-self: stretch; min-width: 0; }
-    .cell-run { flex: 1 1 auto; flex-wrap: wrap; min-width: 0; }
-    .cell, .cell-frame-name { box-shadow: 0 0 0 1px var(--ink); }
-    .cell[data-access="read"] { box-shadow: inset 0 -4px 0 var(--flow-ink), 0 0 0 1px var(--ink); }
+    /* Each call's cells are a row of their own under its name, scrolled
+       to the cells the step used (Cells in src/panels/cells.rs), so a step
+       that uses objects of two calls shows both. A row is as wide as its
+       cells, up to the screen. */
+    .cells { flex-direction: column; align-items: flex-start; width: auto; overflow-x: visible; padding: 0; background: none; }
+    .cell-frame { max-width: 100%; padding: 1px; background: var(--ink); }
+    .cell-frame + .cell-frame, .cells > .cell { margin-top: -1px; }
+    .cell-run { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+    .cells > .cell { border: 1px solid var(--ink); }
   }
   /* Short windows (a phone held sideways, a zoomed laptop): the header
      scrolls away and the chrome shrinks, so that beside the note the sticky

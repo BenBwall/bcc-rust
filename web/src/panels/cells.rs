@@ -12,7 +12,9 @@
 //! the null character boxed as a byte of its own, over an index ruler, the
 //! bytes the step used marked in place. It wraps onto more rows before it
 //! outgrows a phone's strip, so every byte a step uses is in view with the
-//! rest of the string, and a key opens it into its byte cells.
+//! rest of the string, and a key opens it into its byte cells. On a phone
+//! each call's cells are a row of their own, which follows the cells the
+//! step used as the strip does on a wide screen.
 
 use leptos::{
     html,
@@ -35,9 +37,9 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     // name, kept from step to step.
     let opened = RwSignal::new(Vec::<(usize, String)>::new());
     // The strip is drawn anew at each step, at its start. Where it is wider
-    // than the window, bring the cells the step used into the middle, or,
-    // when they are wider than the window too, the first of them to its
-    // left edge.
+    // than the window (or, on a phone, where a call's row is), bring the
+    // cells the step used into the middle, or, when they are wider than the
+    // window too, the first of them to its left edge.
     let section = NodeRef::<html::Section>::new();
     Effect::new(move || {
         snapshot.track();
@@ -45,37 +47,14 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
         let Some(section) = section.get() else {
             return;
         };
-        let Ok(Some(strip)) = section.query_selector(".cells") else {
+        let Ok(rows) = section.query_selector_all(".cells, .cell-run") else {
             return;
         };
-        if strip.scroll_width() <= strip.client_width() {
-            return;
+        for index in 0..rows.length() {
+            if let Some(row) = element(rows.item(index)) {
+                follow(&row);
+            }
         }
-        let Ok(lit) = strip.query_selector_all("[data-access]") else {
-            return;
-        };
-        let mut span: Option<(f64, f64)> = None;
-        for index in 0..lit.length() {
-            let Some(cell) = lit
-                .item(index)
-                .and_then(|node| wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(node).ok())
-            else {
-                continue;
-            };
-            let cell = cell.get_bounding_client_rect();
-            span = Some(span.map_or((cell.left(), cell.right()), |(left, right)| {
-                (left.min(cell.left()), right.max(cell.right()))
-            }));
-        }
-        let Some((left, right)) = span else {
-            return;
-        };
-        let offset = left - strip.get_bounding_client_rect().left();
-        let room = f64::from(strip.client_width());
-        let left = f64::from(strip.scroll_left()) + offset - ((room - (right - left)) / 2.0).max(8.0);
-        let options = web_sys::ScrollToOptions::new();
-        options.set_left(left.max(0.0));
-        strip.scroll_to_with_scroll_to_options(&options);
     });
     view! {
         <section class="head-cells" aria-labelledby="cells-title" node_ref=section>
@@ -89,6 +68,40 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
             })}
         </section>
     }
+}
+
+/// Scrolls `row` sideways so the cells under it that the step used are in
+/// view, when it is too narrow to show all of its cells.
+fn follow(row: &web_sys::Element) {
+    if row.scroll_width() <= row.client_width() {
+        return;
+    }
+    let Ok(lit) = row.query_selector_all("[data-access]") else {
+        return;
+    };
+    let mut span: Option<(f64, f64)> = None;
+    for index in 0..lit.length() {
+        let Some(cell) = element(lit.item(index)) else {
+            continue;
+        };
+        let cell = cell.get_bounding_client_rect();
+        span = Some(span.map_or((cell.left(), cell.right()), |(left, right)| {
+            (left.min(cell.left()), right.max(cell.right()))
+        }));
+    }
+    let Some((left, right)) = span else {
+        return;
+    };
+    let offset = left - row.get_bounding_client_rect().left();
+    let room = f64::from(row.client_width());
+    let left = f64::from(row.scroll_left()) + offset - ((room - (right - left)) / 2.0).max(8.0);
+    let options = web_sys::ScrollToOptions::new();
+    options.set_left(left.max(0.0));
+    row.scroll_to_with_scroll_to_options(&options);
+}
+
+fn element(node: Option<web_sys::Node>) -> Option<web_sys::Element> {
+    wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(node?).ok()
 }
 
 /// One cell of the strip: a scalar, or the padding after a member.

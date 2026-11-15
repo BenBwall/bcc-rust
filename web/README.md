@@ -39,8 +39,9 @@ compiler; each part is captioned with what its lessons share
   over an index ruler, the null character boxed as a byte of its own, the
   bytes the step used marked in place, wrapping between words before it
   outgrows a phone; its key opens it into byte cells named by index. On a
-  phone the cells wrap onto rows, each call's under its name, so every cell
-  a step uses is on screen. A structure
+  phone each call's cells are a row of their own under its name, scrolled to
+  the cells the step used, so a step that uses objects of two calls shows
+  both. A structure
   is drawn as its members: one cell per member under the head, with a
   hatched cell for each run of padding bcc's x86-64 layout leaves, and a row
   per member in the datasheet with its byte offsets. A program that writes
