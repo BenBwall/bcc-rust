@@ -30,8 +30,8 @@ runs:
         # After the image's tools: Strawberry's bin also holds a CMake and a
         # Ninja, which must not replace the image's.
         "PATH=$env:PATH;$mingw\bin" >> $env:GITHUB_ENV
-        "RUSTUP_TOOLCHAIN=1.99.0-x86_64-pc-windows-gnu" >> $env:GITHUB_ENV
-        rustup toolchain install 1.99.0-x86_64-pc-windows-gnu --profile minimal --component clippy,llvm-tools
+        "RUSTUP_TOOLCHAIN=1.100.0-x86_64-pc-windows-gnu" >> $env:GITHUB_ENV
+        rustup toolchain install 1.100.0-x86_64-pc-windows-gnu --profile minimal --component clippy,llvm-tools
         if ($LASTEXITCODE -ne 0) { throw 'rustup failed' }
     - name: Show the toolchains
       shell: pwsh

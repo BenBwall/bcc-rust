@@ -2,10 +2,6 @@
     missing_docs,
     reason = "We don't have a doc string here because it's obvious what our main module does."
 )]
-#![expect(
-    unused_crate_dependencies,
-    reason = "We have a bunch of dependencies that are not used in our main module."
-)]
 use std::{
     io::Write as _,
     process::ExitCode,

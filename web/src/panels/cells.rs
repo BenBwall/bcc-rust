@@ -487,8 +487,8 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                         let description = format!(
                             "{name}, {ty}, {bytes} byte{plural}: {}{}{}",
                             text.as_deref().unwrap_or("indeterminate"),
-                            raw.as_deref().map(|raw| format!(", stored as the bytes {raw}")).unwrap_or_default(),
-                            kind.as_deref().map(|kind| format!(", {}", verb(kind))).unwrap_or_default()
+                            raw.as_deref().map_or_default(|raw| format!(", stored as the bytes {raw}")),
+                            kind.as_deref().map_or_default(|kind| format!(", {}", verb(kind)))
                         );
                         view! {
                             <li

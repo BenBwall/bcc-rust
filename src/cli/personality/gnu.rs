@@ -2122,8 +2122,7 @@ impl State<'_> {
             | Query::Sysroot => self
                 .sysroot
                 .as_deref()
-                .map(|sysroot| format!("{}\n", sysroot.to_string_lossy()))
-                .unwrap_or_default(),
+                .map_or_default(|sysroot| format!("{}\n", sysroot.to_string_lossy())),
         }
     }
 
@@ -2134,15 +2133,13 @@ impl State<'_> {
         let directory_of = |file: &str| {
             Path::new(file)
                 .parent()
-                .map(|directory| directory.to_string_lossy().into_owned())
-                .unwrap_or_default()
+                .map_or_default(|directory| directory.to_string_lossy().into_owned())
         };
         let install = (personality == Personality::Gcc).then(|| {
             let directory = std::env::current_exe()
                 .ok()
                 .and_then(|program| program.parent().map(Path::to_path_buf))
-                .map(|directory| directory.to_string_lossy().into_owned())
-                .unwrap_or_default();
+                .map_or_default(|directory| directory.to_string_lossy().into_owned());
             format!("install: {directory}/\n")
         });
         let libgcc = self.library_file("libgcc.a", target);

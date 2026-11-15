@@ -2,7 +2,7 @@
 name = "bcc-wasm-stepper"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.99.0"
+rust-version = "1.100.0"
 description = "A steppable WebAssembly interpreter for the bcc site's WebAssembly view"
 license-file = "../../LICENSE"
 publish = false

@@ -1,21 +1,22 @@
 //! Combines explicit include directories, environment paths, and resource
 //! header settings into the ordered header search.
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "Startup builds clang's options as `OsString`s."
+)]
+use std::ffi::OsString;
+#[expect(
+    clippy::disallowed_types,
+    reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."
+)]
+use std::path::PathBuf;
 use std::{
     env::{
         split_paths,
         var_os,
     },
     path::Path,
-};
-#[expect(
-    clippy::disallowed_types,
-    reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`. \
-              Startup builds clang's options as `OsString`s."
-)]
-use std::{
-    ffi::OsString,
-    path::PathBuf,
 };
 
 use clap::Args;

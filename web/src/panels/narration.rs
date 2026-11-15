@@ -142,10 +142,10 @@ pub fn Narration(
                 "Program finished: main returned "<strong>{move || returned.get().unwrap_or_default()}</strong>
             </p>
             <div class="fault-callout" hidden=move || diagnostic.with(Option::is_none)>
-                <p class="fault-kind">{move || diagnostic.with(|d| d.as_ref().map(crate::snapshot::Diagnostic::kind_label).unwrap_or_default())}</p>
+                <p class="fault-kind">{move || diagnostic.with(|d| d.as_ref().map_or_default(crate::snapshot::Diagnostic::kind_label))}</p>
                 <p class="fault-message">{move || diagnostic.with(|d| d.as_ref().map(|d| super::rich_text(&sentence_case(&d.message))))}</p>
                 <p class="fault-note" hidden=move || diagnostic.with(|d| d.as_ref().is_none_or(|d| d.note.is_empty()))>
-                    {move || diagnostic.with(|d| d.as_ref().map(|d| d.note.clone()).unwrap_or_default())}
+                    {move || diagnostic.with(|d| d.as_ref().map_or_default(|d| d.note.clone()))}
                 </p>
             </div>
             <Clauses event />
@@ -184,8 +184,7 @@ fn Bits(event: Memo<Option<StepEvent>>) -> impl IntoView {
                 encoding.exponent,
                 encoding
                     .integer_bit
-                    .map(|bit| format!("integer bit {}, ", u8::from(bit)))
-                    .unwrap_or_default(),
+                    .map_or_default(|bit| format!("integer bit {}, ", u8::from(bit))),
                 encoding.fraction,
             );
             view! {
@@ -318,7 +317,7 @@ fn Clauses(event: Memo<Option<StepEvent>>) -> impl IntoView {
     view! {
         <ul class="clauses" aria-label="C standard rules applied" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.clauses.is_empty()))>
             {move || event.with(|event| {
-                by_clause(event.as_ref().map(|event| event.clauses.clone()).unwrap_or_default())
+                by_clause(event.as_ref().map_or_default(|event| event.clauses.clone()))
                     .into_iter()
                     .map(|group| {
                         let title = group[0].title.clone();
@@ -398,8 +397,7 @@ fn Glosses(event: Memo<Option<StepEvent>>) -> impl IntoView {
             {move || event.with(|event| {
                 event
                     .as_ref()
-                    .map(|event| event.clauses.clone())
-                    .unwrap_or_default()
+                    .map_or_default(|event| event.clauses.clone())
                     .into_iter()
                     .map(|clause| view! {
                         <dt>{format!("§{}", clause.id)}</dt>
@@ -792,8 +790,7 @@ fn chip(part: &FlowPart) -> AnyView {
     let colour = part
         .object
         .as_deref()
-        .map(palette::class)
-        .unwrap_or_default();
+        .map_or_default(palette::class);
     let role = part.role.clone();
     let text = part.text.clone();
     let ty = part.ty.clone();

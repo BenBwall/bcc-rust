@@ -195,7 +195,7 @@ assembly, the machine-code listing and the WebAssembly text format.
 
 ## Build
 
-Use the repository's pinned Rust 1.99.0 toolchain, plus Node.js 22 and npm.
+Use the repository's pinned Rust 1.100.0 toolchain, plus Node.js 22 and npm.
 Install the Wasm standard library and Trunk once:
 
 ```sh

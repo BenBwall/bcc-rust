@@ -1,11 +1,6 @@
 //! Reports OS peak memory use for each pipeline stage. Each sample runs in a
 //! separate process because OS peak counters cannot be reset.
 
-#![expect(
-    unused_crate_dependencies,
-    reason = "The memory benchmark uses only the benchmark API and OS counters."
-)]
-
 #[cfg(windows)]
 use std::mem::size_of;
 use std::{

@@ -326,7 +326,7 @@ function. The UCRT's `corecrt.h` uses
 `_Static_assert` for `_STATIC_ASSERT` and wraps itself in `#pragma clang
 diagnostic`, which bcc ignores.
 
-Reserved target-description macros follow the pinned LLVM 23.1.1 Clang for the
+Reserved target-description macros follow the pinned LLVM 23.1.5 Clang for the
 selected `--target` triple. The default remains `x86_64-unknown-linux-gnu`;
 `x86_64-unknown-linux-musl`, `x86_64-w64-windows-gnu` (aliases
 `x86_64-w64-mingw32` and `x86_64-pc-windows-gnu`) and

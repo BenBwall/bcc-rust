@@ -1,10 +1,6 @@
 //! Opt-in whole-compilation worker with lowering-only timing and differential
 //! IR inspection. Every prepared compiler object stays inside the worker.
 #![expect(
-    unused_crate_dependencies,
-    reason = "The study uses the library's benchmark API."
-)]
-#![expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
     reason = "The harness owns inputs and output outside the compiler interval."

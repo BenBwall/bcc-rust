@@ -1,9 +1,5 @@
 //! Portable native-stack reservation probe, independent of parser/LLVM linking.
 #![expect(
-    unused_crate_dependencies,
-    reason = "This standalone probe exercises only the worker stack implementation."
-)]
-#![expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
     reason = "The experiment owns arguments and output outside the compiler."

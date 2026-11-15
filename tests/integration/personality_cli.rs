@@ -7225,7 +7225,7 @@ mod tests {
             "14.2.0\n"
         );
         let clang = stdout(&directory.bcc("--clang-mode", &["--version"]));
-        assert!(clang.starts_with("clang version 23.1.1 (bcc "), "{clang}");
+        assert!(clang.starts_with("clang version 23.1.5 (bcc "), "{clang}");
         let tcc = stdout(&directory.bcc("--tcc-mode", &["-v"]));
         assert!(tcc.starts_with("tcc version 0.9.27 "), "{tcc}");
         assert!(tcc.contains("bcc"), "{tcc}");
@@ -7272,7 +7272,7 @@ mod tests {
                 stderr(&clang_cl)
             };
             assert!(
-                text.starts_with("clang version 23.1.1 (bcc ")
+                text.starts_with("clang version 23.1.5 (bcc ")
                     && text.contains("\nTarget: x86_64-pc-windows-msvc\n"),
                 "{arguments:?}: {text}"
             );
@@ -7677,7 +7677,7 @@ mod tests {
         for (name, expected) in [
             ("gcc", "gcc (bcc "),
             ("x86_64-linux-gnu-gcc-14", "x86_64-linux-gnu-gcc-14 (bcc "),
-            ("clang", "clang version 23.1.1 (bcc "),
+            ("clang", "clang version 23.1.5 (bcc "),
         ] {
             let link = directory.path(name);
             std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bcc-rust"), &link).unwrap();
@@ -13511,14 +13511,13 @@ warn.c:34: warning: cast between pointer and integer of different size
                 .args(["-s", "-j", ".drectve"])
                 .arg(object)
                 .output()
-                .map(|output| {
+                .map_or_default(|output| {
                     stdout(&output)
                         .lines()
                         .filter(|line| line.starts_with(' '))
                         .map(|line| line.get(43..).unwrap_or(""))
                         .collect()
                 })
-                .unwrap_or_default()
         };
         for (target, expected) in [
             (
@@ -13565,8 +13564,7 @@ warn.c:34: warning: cast between pointer and integer of different size
                     let line = stdout(&listing)
                         .lines()
                         .find(|line| line.ends_with(&format!(" {name}")))
-                        .map(str::to_owned)
-                        .unwrap_or_default();
+                        .map_or_default(str::to_owned);
                     let expected = match (name, size) {
                         | ("s2", "") => "0x0000000000000002",
                         | ("c3", "") => "0x0000000000000003",
