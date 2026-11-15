@@ -12,6 +12,7 @@
 use std::{
     fmt::Write as _,
     ops::ControlFlow,
+    path::Path,
 };
 
 use super::{
@@ -24,11 +25,15 @@ use super::{
     TokenizerFrameType,
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        CompilerIdentity,
+        Feature,
+    },
     translation_phases::{
         Context,
         GetPosition,
         GetSourceFileIndex,
+        STDIN_NAME,
         SourcePosition,
         SourceVector,
         TranslationPhase,
@@ -102,7 +107,8 @@ impl<'tu> Preprocessor<'tu, '_> {
     /// built-in macros, those with a constant value are listed with it, as
     /// GCC and Clang list them; `__FILE__`, `__LINE__`, `__DATE__`, `__TIME__`,
     /// `__TIMESTAMP__`, `__COUNTER__`, `_Pragma` and the `__has_*` queries are
-    /// not.
+    /// not; nor is `__BASE_FILE__`, except under the TCC identity, as TCC
+    /// lists it.
     pub(crate) fn macro_listing_in<'a>(
         &mut self,
         context: &mut Context<'_>,
@@ -116,6 +122,22 @@ impl<'tu> Preprocessor<'tu, '_> {
             _ = write!(line, "#define {spelling}");
             let tokenizer = match definition {
                 | MacroDefinition::BuiltIn => {
+                    // TCC defines `__BASE_FILE__` as an ordinary macro
+                    // naming the main file, `-` for standard input, and
+                    // lists it so (`preprocess_start` in `tccpp.c`).
+                    if spelling == "__BASE_FILE__"
+                        && context.configuration.compiler_identity() == CompilerIdentity::Tcc
+                    {
+                        let file = context.get_source_file(0);
+                        let file = if file == Path::new(STDIN_NAME) {
+                            Path::new("-")
+                        } else {
+                            file
+                        };
+                        _ = write!(line, " \"{}\"", file.display());
+                        lines.push(line.into_str());
+                        continue;
+                    }
                     let Some(value) = builtin_value(context, spelling) else {
                         continue;
                     };

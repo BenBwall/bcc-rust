@@ -996,7 +996,8 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
 /// every mode, `__PIC__`, `__pic__`, `__PIE__` and `__pie__` follow the
 /// relocation model, and `__BITINT_MAXWIDTH__` the identity's widest
 /// `_BitInt`. They are ordinary macros, so `#undef` works as in
-/// Clang.
+/// Clang. The TCC identity on Linux claims TCC's own set instead
+/// ([`tcc_linux_macros`]).
 ///
 /// C99: further predefined macro names begin with `__` or `_` and an
 /// uppercase letter, §6.10.8 paragraph 4, p. 161; PDF p. 173; reserved
@@ -1006,8 +1007,16 @@ pub(super) fn with_identity_macros<'a>(
     definitions: &str,
     configuration: CompilerConfiguration,
 ) -> &'a str {
-    let mut out = ArenaString::new_in(arena);
     let identity = configuration.compiler_identity();
+    if identity == CompilerIdentity::Tcc
+        && matches!(
+            configuration.target(),
+            crate::target::Target::LinuxGnu | crate::target::Target::LinuxMusl
+        )
+    {
+        return tcc_linux_macros(arena, definitions, configuration);
+    }
+    let mut out = ArenaString::new_in(arena);
     // The frozen Clang tables describe `_Float16` as Clang does; GCC spells
     // its constants to 36 digits, and MSVC and TCC have no such type.
     // GCC defines none of Clang's own macros, which the Clang tables the
@@ -1037,15 +1046,7 @@ pub(super) fn with_identity_macros<'a>(
             configuration.target().write_half_float_macros(&mut out);
         }
     }
-    _ = write!(
-        out,
-        "#define __bcc__ 1\n#define __bcc_major__ {}\n#define __bcc_minor__ {}\n#define \
-         __bcc_patchlevel__ {}\n#define __bcc_version__ \"{}\"\n",
-        env!("CARGO_PKG_VERSION_MAJOR"),
-        env!("CARGO_PKG_VERSION_MINOR"),
-        env!("CARGO_PKG_VERSION_PATCH"),
-        env!("CARGO_PKG_VERSION"),
-    );
+    write_bcc_macros(&mut out);
     if identity == CompilerIdentity::Gcc {
         out.push_str(
             "#define __GNUC__ 14\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n",
@@ -1216,6 +1217,168 @@ pub(super) fn with_identity_macros<'a>(
         out.push_str("#undef __declspec\n#define __declspec __declspec\n");
     }
     out.into_str()
+}
+
+/// `__bcc__` and bcc's version, which every identity defines, as Clang and
+/// GCC define their own vendor macros under each other's flags.
+fn write_bcc_macros(out: &mut impl Write) {
+    _ = write!(
+        out,
+        "#define __bcc__ 1\n#define __bcc_major__ {}\n#define __bcc_minor__ {}\n#define \
+         __bcc_patchlevel__ {}\n#define __bcc_version__ \"{}\"\n",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
+        env!("CARGO_PKG_VERSION_PATCH"),
+        env!("CARGO_PKG_VERSION"),
+    );
+}
+
+/// The macros TCC 0.9.27 predefines for x86-64 Linux, which the TCC
+/// identity claims there in place of the target's and the GNU ones, in
+/// TCC's spellings: `tcc_new` and `tcc_set_output_type` in `libtcc.c` of
+/// the 0.9.27 that Debian and Ubuntu ship (0.9.27+git20200814.62c30a4a,
+/// which prints `tcc version 0.9.27`). `-funsigned-char` adds
+/// `__CHAR_UNSIGNED__`; `-std=c11` adds C11's macros for the features TCC
+/// lacks and its 16- and 32-bit character literals; and a positive `-O`
+/// level `__OPTIMIZE__`. `__STDC__`, `__STDC_VERSION__`, `__STDC_HOSTED__`
+/// and `__BASE_FILE__` are the preprocessor's built-ins.
+///
+/// Besides these, as `docs/design/driver-modes.md` lists: bcc's own
+/// `__bcc__` family, as in every identity; `__BITINT_MAXWIDTH__` in C23;
+/// TCC mob's `__REDIRECT_NTHNL`
+/// (`tccdefs.h`), which glibc 2.34 and later use without checking
+/// (`<glob.h>` with a 64-bit `off_t`), where 0.9.27 fails; and the target
+/// macros that bcc's own `<float.h>`, `<limits.h>` and `<stdatomic.h>`
+/// read ([`tcc_header_macro`]), where TCC's `<float.h>` spells the values
+/// out and TCC has neither of the others; and the C library's fast-type
+/// macros, from GCC's listing for the target, which bcc's freestanding
+/// `<stdint.h>` reads ([`tcc_fast_type_macro`]).
+/// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173; §7.18.1.3, pp. 256-257;
+/// PDF pp. 268-269.
+fn tcc_linux_macros<'a>(
+    arena: &'a Bump,
+    definitions: &str,
+    configuration: CompilerConfiguration,
+) -> &'a str {
+    let mut out = ArenaString::new_in(arena);
+    out.push_str(concat!(
+        "#define __TINYC__ 927\n",
+        "#define __x86_64__ 1\n",
+        "#define __unix__ 1\n#define __unix 1\n#define unix 1\n",
+        "#define __linux__ 1\n#define __linux 1\n",
+        "#define __SIZE_TYPE__ unsigned long\n#define __PTRDIFF_TYPE__ long\n",
+        "#define __LP64__ 1\n#define __SIZEOF_POINTER__ 8\n",
+        "#define __WCHAR_TYPE__ int\n#define __WINT_TYPE__ unsigned int\n",
+        "#define __REDIRECT(name, proto, alias) name proto __asm__ (#alias)\n",
+        "#define __REDIRECT_NTH(name, proto, alias) name proto __asm__ (#alias) __THROW\n",
+        "#define __REDIRECT_NTHNL(name, proto, alias) name proto __asm__ (#alias) __THROWNL\n",
+        "#define __builtin_extract_return_addr(x) x\n",
+        "#define __SIZEOF_LONG__ 8\n#define __LONG_MAX__ 0x7fffffffffffffffL\n",
+        "#define __SIZEOF_INT__ 4\n#define __SIZEOF_LONG_LONG__ 8\n",
+        "#define __CHAR_BIT__ 8\n",
+        "#define __ORDER_LITTLE_ENDIAN__ 1234\n#define __ORDER_BIG_ENDIAN__ 4321\n",
+        "#define __BYTE_ORDER__ __ORDER_LITTLE_ENDIAN__\n",
+        "#define __INT_MAX__ 0x7fffffff\n#define __LONG_LONG_MAX__ 0x7fffffffffffffffLL\n",
+    ));
+    if !configuration.layout().char_signed {
+        out.push_str("#define __CHAR_UNSIGNED__ 1\n");
+    }
+    if configuration.standard() as u8 >= crate::configuration::CStandard::C11 as u8 {
+        out.push_str(concat!(
+            "#define __STDC_NO_ATOMICS__ 1\n#define __STDC_NO_COMPLEX__ 1\n",
+            "#define __STDC_NO_THREADS__ 1\n",
+            "#define __STDC_UTF_16__ 1\n#define __STDC_UTF_32__ 1\n",
+        ));
+    }
+    if configuration.optimization().0 {
+        out.push_str("#define __OPTIMIZE__ 1\n");
+    }
+    write_bcc_macros(&mut out);
+    // bcc's `<limits.h>` names the widest `_BitInt` from C23, which only
+    // bcc's own driver selects for this identity.
+    if configuration.standard() as u8 >= crate::configuration::CStandard::C23 as u8 {
+        _ = writeln!(
+            out,
+            "#define __BITINT_MAXWIDTH__ {}",
+            configuration.bit_int_max_width()
+        );
+    }
+    for line in definitions.split_inclusive('\n') {
+        let name = line
+            .strip_prefix("#define ")
+            .and_then(|definition| definition.split([' ', '(', '\n']).next());
+        if name.is_some_and(tcc_header_macro) {
+            out.push_str(line);
+        }
+    }
+    let gcc = configuration
+        .target()
+        .gcc_predefined_macros(configuration.gnu_extensions());
+    for line in gcc.unwrap_or_default().split_inclusive('\n') {
+        let name = line
+            .strip_prefix("#define ")
+            .and_then(|definition| definition.split(' ').next());
+        if name.is_some_and(tcc_fast_type_macro) {
+            out.push_str(line);
+        }
+    }
+    out.into_str()
+}
+
+/// Whether the target macro `name` is one that bcc's own headers read
+/// under the TCC identity: `<float.h>`'s characteristics of the three
+/// standard floating types, `<limits.h>`'s `signed char` and `short`
+/// limits, and `<stdatomic.h>`'s lock-free macros. bcc's `<stdatomic.h>`
+/// spells the memory orders out when they are not predefined, as mob's
+/// does.
+/// C99: §5.2.4.2.1, pp. 21-23; PDF pp. 33-35; §5.2.4.2.2, pp. 23-27;
+/// PDF pp. 35-39. C11: §7.17.1 paragraph 3, p. 273; PDF p. 291.
+fn tcc_header_macro(name: &str) -> bool {
+    let floating = ["__FLT_", "__DBL_", "__LDBL_"]
+        .iter()
+        .find_map(|prefix| name.strip_prefix(prefix))
+        .is_some_and(|characteristic| {
+            matches!(
+                characteristic,
+                "MANT_DIG__"
+                    | "DIG__"
+                    | "MIN_EXP__"
+                    | "MIN_10_EXP__"
+                    | "MAX_EXP__"
+                    | "MAX_10_EXP__"
+                    | "MAX__"
+                    | "MIN__"
+                    | "EPSILON__"
+                    | "DENORM_MIN__"
+                    | "HAS_DENORM__"
+                    | "DECIMAL_DIG__"
+                    | "NORM_MAX__"
+            )
+        });
+    floating
+        || matches!(name, "__FLT_RADIX__" | "__SCHAR_MAX__" | "__SHRT_MAX__")
+        || (name.starts_with("__GCC_ATOMIC_") && name.ends_with("_LOCK_FREE"))
+}
+
+/// Whether `name` is one of the `int_fast16_t` and `int_fast32_t` macros
+/// that bcc's freestanding `<stdint.h>` reads under the TCC identity on
+/// Linux, where TCC takes these types from the C library's `<stdint.h>`.
+/// [`tcc_linux_macros`] takes them from GCC's target listing, which names
+/// the C library's types (`long` in glibc, `int` in musl), where Clang's
+/// names `short` and `int` for both.
+/// C99: §7.18.1.3, pp. 256-257; PDF pp. 268-269.
+fn tcc_fast_type_macro(name: &str) -> bool {
+    matches!(
+        name,
+        "__INT_FAST16_TYPE__"
+            | "__INT_FAST16_MAX__"
+            | "__UINT_FAST16_TYPE__"
+            | "__UINT_FAST16_MAX__"
+            | "__INT_FAST32_TYPE__"
+            | "__INT_FAST32_MAX__"
+            | "__UINT_FAST32_TYPE__"
+            | "__UINT_FAST32_MAX__"
+    )
 }
 
 /// GCC's report of the floating-point semantics in effect, as
@@ -1407,11 +1570,12 @@ fn clang_only_macro(name: &str) -> bool {
 /// here. MSVC 19.33 (`cl.exe`)
 /// defines neither GNU nor Clang macros, `_MSVC_TRADITIONAL` as 0 for bcc's
 /// conforming preprocessor (MSVC's `/Zc:preprocessor`) and `_MT` for the
-/// default static runtime; clang-cl keeps the Clang macros. TCC 0.9.27
-/// defines `__TINYC__`, no GNU or Clang macros, none for the `__int128` and
-/// `__float128` it lacks, and neither `linux` nor `__NO_INLINE__`; its
-/// caller adds glibc's `__REDIRECT` family. The target's definitions, such as
-/// `__x86_64__`, stay, as clang-cl keeps them.
+/// default static runtime; clang-cl keeps the Clang macros. On the targets
+/// other than Linux, whose TCC set [`tcc_linux_macros`] writes whole, TCC
+/// 0.9.27 defines `__TINYC__`, no GNU or Clang macros, none for the
+/// `__int128` and `__float128` it lacks, and neither `linux` nor
+/// `__NO_INLINE__`. The target's definitions, such as `__x86_64__`, stay,
+/// as clang-cl keeps them.
 /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173; extension to §4
 /// paragraph 6, p. 7; PDF p. 19.
 fn identity_claim(identity: CompilerIdentity) -> &'static str {
