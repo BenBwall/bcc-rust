@@ -232,12 +232,9 @@ fn converted_constants_keep_only_their_types_value() {
          0.0q), dbl = (1 ? (1LL << 62) + 1 : 0.0) == (1 ? 1LL << 62 : 0.0); unsigned __int128 w = \
          1 ? N + 1 : 0.0q;",
         |context, unit| {
-            assert_eq!(
-                context.pending_error_count(),
-                0,
-                "{:?}",
-                context.take_pending_errors()
-            );
+            // Clang warns about the two arms that round; `w`'s arm converts
+            // to an integer type.
+            assert_eq!(int_float_warnings(context), 2);
             for info in unit.expressions {
                 let floating = matches!(
                     unit.types.nodes[info.ty.index],

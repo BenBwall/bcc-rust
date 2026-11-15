@@ -476,3 +476,75 @@ fn explicit_no_permissive_makes_gcc_c89_permerrors_errors() {
         Some(Error)
     );
 }
+
+/// Clang's options for `-Wconversion`, `-Wimplicit-int-float-conversion`
+/// and `-Wimplicit-const-int-float-conversion` apply in order, a parent's to
+/// each group it holds, so the later of a parent's and a child's option
+/// wins (probed with Clang 23).
+#[test]
+fn clang_conversion_options_apply_in_order_to_their_children() {
+    use DiagnosticGroup::{
+        ConstantConversion,
+        Conversion,
+        ImplicitConstIntFloatConversion as Child,
+        ImplicitIntFloatConversion as Parent,
+    };
+    use WarningOption::{
+        Enable,
+        Error as Werror,
+    };
+
+    use crate::translation_phases::ErrorSeverity::{
+        Error,
+        Warning,
+    };
+    let severity = |group, options: &[(DiagnosticGroup, WarningOption)]| {
+        options
+            .iter()
+            .fold(
+                CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                    .with_compiler_identity(CompilerIdentity::Clang),
+                |configuration, &(group, option)| configuration.with_warning_option(group, option),
+            )
+            .diagnostic_severity(group)
+    };
+    for (case, (options, expected)) in [
+        (&[][..], Some(Warning)),
+        (
+            &[(Child, Enable(false)), (Parent, Werror(true))][..],
+            Some(Error),
+        ),
+        (&[(Parent, Werror(true)), (Child, Enable(false))][..], None),
+        (
+            &[(Child, Enable(false)), (Parent, Enable(true))][..],
+            Some(Warning),
+        ),
+        (
+            &[(Child, Enable(false)), (Conversion, Werror(true))][..],
+            Some(Error),
+        ),
+        (
+            &[(Conversion, Enable(true)), (Parent, Enable(false))][..],
+            None,
+        ),
+        (
+            &[(Conversion, Enable(false)), (Child, Enable(true))][..],
+            Some(Warning),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(severity(Child, options), expected, "case {case}");
+    }
+    assert_eq!(
+        severity(
+            ConstantConversion,
+            &[
+                (ConstantConversion, Enable(false)),
+                (Conversion, Enable(true))
+            ]
+        ),
+        Some(Warning)
+    );
+}

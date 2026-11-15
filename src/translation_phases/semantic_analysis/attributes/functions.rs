@@ -78,9 +78,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         self.enter_reference_context(None);
+        // A condition runs only when a call is checked, so Clang gives no
+        // warning about the code inside it.
+        self.work.push(Work::Unevaluated(false));
         for &expression in operands.iter().rev() {
             self.work.push(Work::Expression(expression));
         }
+        self.work.push(Work::Unevaluated(true));
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn function_contract(

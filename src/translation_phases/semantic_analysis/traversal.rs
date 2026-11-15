@@ -230,10 +230,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // known until they are all typed; warnings about evaluation
                 // err toward silence in any of them.
                 self.work
-                    .push(Work::FunctionWork(FunctionWork::RestoreSkippedOperand(
+                    .push(Work::FunctionWork(FunctionWork::LeaveGeneric(
                         self.functions.skipped_operand,
                     )));
                 self.functions.skipped_operand = true;
+                self.functions.generic_selections += 1;
                 // Marks around each operand let the selection skip the
                 // references code generation does not emit.
                 for association in g.associations.iter().rev() {

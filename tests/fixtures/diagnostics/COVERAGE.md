@@ -773,6 +773,7 @@ pinned by the `.args` sidecars.
 | `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c), [cleanup use](sema3-internal-cleanup.c) |
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
+| `ValueWarning` | [GCC](sema-value-warnings-gcc.c), [Clang](sema-value-warnings-clang.c), [Clang int to float](sema-int-float-clang.c), through GNU `?:` and `__extension__` ([Clang](sema-int-float-gnu-clang.c)); constant conversions in code that does not run, in the operands `_Generic` and `__builtin_choose_expr` do not select (in file-scope and static initializers too), in conditional operands and from 128-bit values: [GCC](sema-constant-conversion-gcc.c), [Clang](sema-constant-conversion-clang.c) |
 | `TypeLimits` | [GCC](sema-type-limits-gcc.c), [Clang](sema-type-limits-clang.c) |
 | `ShadowOrBody` | Shadowing: [GCC](sema-shadow-gcc.c), [Clang](sema-shadow-clang.c); by declaration kind: [GCC](sema-shadow-kinds-gcc.c), [Clang](sema-shadow-kinds-clang.c); of a system header's declarations: [GCC](sema-shadow-system-gcc.c), [Clang](sema-shadow-system-clang.c); empty bodies: [GCC](sema-empty-body-gcc.c), [Clang](sema-empty-body-clang.c); multiline headers and empty macros: [Clang](sema-empty-body-lines-clang.c) |
 | `Parentheses` | [GCC](sema-parentheses-gcc.c), [Clang](sema-parentheses-clang.c) |

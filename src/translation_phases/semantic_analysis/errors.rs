@@ -126,6 +126,8 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
     /// The words are the diagnostic's name.
+    /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
+    ValueWarning(crate::configuration::DiagnosticGroup),
     /// C99: §6.5.8p6, p. 86; PDF p. 98.
     TypeLimits(crate::configuration::DiagnosticGroup),
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
@@ -1183,6 +1185,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::ValueWarning(_) => "this value is not what it seems",
             | Self::TypeLimits(_) => "the types decide this comparison",
             | Self::ShadowOrBody(_) => "this may not be what it looks like",
             | Self::Parentheses(_) => "this may not group as written",
@@ -1401,6 +1404,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
                     | crate::configuration::DiagnosticGroup::ConstantPromotion
                     | crate::configuration::DiagnosticGroup::ConstantConversion
+                    | crate::configuration::DiagnosticGroup::ImplicitConstIntFloatConversion
+                    | crate::configuration::DiagnosticGroup::ImplicitIntFloatConversion
                     | crate::configuration::DiagnosticGroup::Overflow
                     | crate::configuration::DiagnosticGroup::IntegerOverflow
                     | crate::configuration::DiagnosticGroup::ShiftCountOverflow
@@ -1418,6 +1423,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::ReturnLocalAddr
+                    | crate::configuration::DiagnosticGroup::ReturnStackAddress
                     | crate::configuration::DiagnosticGroup::TypeLimits
                     | crate::configuration::DiagnosticGroup::TautologicalConstantCompare
                     | crate::configuration::DiagnosticGroup::TautologicalConstantOutOfRangeCompare
@@ -1874,6 +1881,26 @@ impl SemanticErrorKind {
                 "star array bound is not permitted in a function definition",
                 "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
                  restricted to prototype scope",
+            ),
+            | Self::ValueWarning(
+                crate::configuration::DiagnosticGroup::ReturnLocalAddr
+                | crate::configuration::DiagnosticGroup::ReturnStackAddress,
+            ) => (
+                "returned address of a local",
+                "C99 §6.2.4p2: an automatic object's lifetime ends with its block, so the \
+                 returned pointer is indeterminate",
+            ),
+            | Self::ValueWarning(
+                crate::configuration::DiagnosticGroup::ImplicitConstIntFloatConversion,
+            ) => (
+                "constant rounded by conversion to a floating type",
+                "C99 §6.3.1.4p2: an integer the floating type cannot represent exactly becomes \
+                 a nearby value it can",
+            ),
+            | Self::ValueWarning(_) => (
+                "constant changed by conversion",
+                "C99 §6.3.1.3p3: converting a value the new type cannot represent gives an \
+                 implementation-defined result",
             ),
             | Self::TypeLimits(_) => (
                 "comparison decided by type",
@@ -2830,6 +2857,7 @@ impl SemanticErrorKind {
         use crate::configuration::DiagnosticGroup as G;
         match self {
             | Self::PointerConstraint(group)
+            | Self::ValueWarning(group)
             | Self::TypeLimits(group)
             | Self::ShadowOrBody(group)
             | Self::Parentheses(group)
@@ -3255,6 +3283,7 @@ impl ToDiagnostic for SemanticError {
             self.kind,
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
+                | SemanticErrorKind::ValueWarning(_)
                 | SemanticErrorKind::TypeLimits(_)
                 | SemanticErrorKind::ShadowOrBody(_)
                 | SemanticErrorKind::Parentheses(_)
