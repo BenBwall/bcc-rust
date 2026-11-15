@@ -702,7 +702,9 @@
     display: flex; flex-wrap: wrap; row-gap: 3px; max-width: min(60ch, calc(100vw - 72px));
     color: var(--ink); font: 400 13px/1 var(--font-mono);
   }
-  .string-word { display: flex; }
+  /* A word is at most 16 columns wide (words in src/panels/cells.rs), and
+     wraps within itself should a row be narrower still. */
+  .string-word { display: flex; flex-wrap: wrap; }
   .string-byte { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 1ch; padding-bottom: 10px; }
   .string-char { height: 17px; line-height: 16px; white-space: pre; border-bottom: 1px solid var(--ink-3); }
   /* The ruler: a tick at each byte's start, a longer one with the index at

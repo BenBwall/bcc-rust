@@ -248,17 +248,25 @@ fn text(object: &Object) -> Option<Vec<Option<String>>> {
         .collect()
 }
 
-/// How many bytes each word of a string holds, a space ending its word, so
-/// a string that wraps breaks between words; a word wraps after
-/// [`WORD`] bytes.
+/// How many bytes each word of a string holds, so a string that wraps
+/// breaks between words: a space ends its word, and a word ends before it
+/// would be wider than [`WORD`] columns. An escape is as wide as its
+/// spelling (`\xff` four columns), so a word of escapes is no wider than
+/// one of letters, and a phone's row holds it.
 fn words(glyphs: &[Option<String>]) -> Vec<usize> {
     let mut words = Vec::new();
-    let mut length = 0;
+    let (mut length, mut width) = (0, 0);
     for glyph in glyphs {
-        length += 1;
-        if glyph.as_deref() == Some(" ") || length == WORD {
+        let columns = columns(glyph.as_deref());
+        if length > 0 && width + columns > WORD {
             words.push(length);
-            length = 0;
+            (length, width) = (0, 0);
+        }
+        length += 1;
+        width += columns;
+        if glyph.as_deref() == Some(" ") {
+            words.push(length);
+            (length, width) = (0, 0);
         }
     }
     if length > 0 {
@@ -267,8 +275,20 @@ fn words(glyphs: &[Option<String>]) -> Vec<usize> {
     words
 }
 
-/// The most bytes a string's row keeps together before it may wrap.
+/// The most columns of characters a string's row keeps together before it
+/// may wrap: about 125 px, under half a phone's row.
 const WORD: usize = 16;
+
+/// How many columns of characters a byte's glyph takes: one per character
+/// of its spelling, and one more for the box around the null character.
+/// An escape is set smaller than a letter, so this errs wide.
+fn columns(glyph: Option<&str>) -> usize {
+    match glyph {
+        | None => 1,
+        | Some("\\0") => 3,
+        | Some(glyph) => glyph.chars().count().max(1),
+    }
+}
 
 /// A character constant's spelling as it stands in a string: `'A'` is `A`,
 /// `'\''` is `'`, `'\n'` stays `\n`.
@@ -727,6 +747,43 @@ mod tests {
         assert_eq!(words(&glyphs), [3, 2, 2, 3, 4]);
         let long = vec![Some("x".to_owned()); WORD + 3];
         assert_eq!(words(&long), [WORD, 3]);
+    }
+
+    #[test]
+    fn a_word_of_escapes_is_no_wider_than_a_word_of_letters() {
+        // 32 `\xff` bytes and the null character: a word of 16 such bytes
+        // was 448 px, wider than a phone's 318 px row.
+        let escapes: Vec<Option<String>> = std::iter::repeat_n(Some("\\xff".to_owned()), 32)
+            .chain([Some("\\0".to_owned())])
+            .collect();
+        assert_eq!(words(&escapes), [4, 4, 4, 4, 4, 4, 4, 4, 1]);
+        // Octal escapes, short escapes and letters mixed with no space.
+        let mixed: Vec<Option<String>> = ["\\377", "\\n", "\\t", "a", "\\x80", "b", "\\r", "\\\\"]
+            .into_iter()
+            .cycle()
+            .take(40)
+            .map(|glyph| Some(glyph.to_owned()))
+            .collect();
+        let mut start = 0;
+        for length in words(&mixed) {
+            let width: usize = mixed[start..start + length]
+                .iter()
+                .map(|glyph| columns(glyph.as_deref()))
+                .sum();
+            assert!(width <= WORD, "a word of {width} columns");
+            start += length;
+        }
+        assert_eq!(start, mixed.len());
+        // The null character's box takes a column more than its spelling.
+        assert_eq!(columns(Some("\\0")), 3);
+        assert_eq!(columns(Some("\\377")), 4);
+        assert_eq!(columns(None), 1);
+    }
+
+    #[test]
+    fn a_long_run_without_spaces_wraps_every_word_width() {
+        let run = vec![Some("w".to_owned()); 3 * WORD + 5];
+        assert_eq!(words(&run), [WORD, WORD, WORD, 5]);
     }
 
     #[test]
