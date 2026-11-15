@@ -353,6 +353,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         (offset.ice || offset.folding.exceptional()) && offset.integer.is_some()
     }
 
+    /// The operand of a subscript `left[right]` that is not `pointer`: the
+    /// index, which C99 lets either operand be. C99: §6.5.2.1 paragraph 2,
+    /// p. 70; PDF p. 82.
+    fn subscript_index<'a>(
+        pointer: ExpressionInfo<'a>,
+        [left, right]: [ExpressionInfo<'a>; 2],
+    ) -> ExpressionInfo<'a> {
+        if std::ptr::eq(pointer.expression, left.expression) {
+            right
+        } else {
+            left
+        }
+    }
+
     /// C99: §6.5.5-§6.5.17, pp. 82-94; PDF pp. 94-106.
     pub(super) fn type_binary(
         &mut self,
@@ -495,12 +509,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     self.object_category(target)
                 };
-                info.static_address = self.address_value(pointer)
-                    && if std::ptr::eq(pointer.expression, left.expression) {
-                        Self::folded_offset(right)
-                    } else {
-                        Self::folded_offset(left)
-                    };
+                let index = Self::subscript_index(pointer, [left, right]);
+                info.static_address = self.address_value(pointer) && Self::folded_offset(index);
                 // Array decay retains the designated register object, which
                 // GCC subscripts; reading a register pointer does not
                 // transfer its storage. Clang reported the decay of a
@@ -512,7 +522,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && matches!(self.types.nodes[pointer.ty.index], TypeKind::Array(..))
                     && (gcc_subscript
                         || !matches!(pointer.expression.kind, ExpressionType::Identifier(_)));
-                self.fold_string_element(&mut info, pointer, [left, right]);
+                self.fold_string_element(&mut info, pointer, index);
             },
             | B::Multiplication | B::Division | B::Modulo => {
                 if !(self.arithmetic(lt) && self.arithmetic(rt))
@@ -3107,8 +3117,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Gives the element `info` of a string literal, one of the operands
-    /// `left` and `right`, subscripted by an integer constant within it, its
+    /// Gives the element `info` of a string literal `pointer`, subscripted
+    /// by `index`, an integer constant within it, its
     /// terminating null included, the value that element holds: an arithmetic
     /// constant, which GCC and Clang both fold in a static initializer (`char c
     /// = "ab"[1];`), and no integer constant expression (§6.6p6), so an
@@ -3121,13 +3131,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         info: &mut ExpressionInfo<'tu>,
         pointer: ExpressionInfo<'tu>,
-        [left, right]: [ExpressionInfo<'tu>; 2],
+        index: ExpressionInfo<'tu>,
     ) {
-        let index = if std::ptr::eq(pointer.expression, left.expression) {
-            right
-        } else {
-            left
-        };
         let mut literal = pointer.expression;
         while let ExpressionType::Parenthesized { expression } = literal.kind {
             literal = expression;
