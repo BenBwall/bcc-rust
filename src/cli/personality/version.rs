@@ -15,7 +15,7 @@ use crate::target::Target;
 pub(super) const GCC_VERSION: &str = "14.2.0";
 /// The pinned Clang's version, which the target tables' `__clang_major__`
 /// and its relatives give.
-pub(super) const CLANG_VERSION: &str = "23.1.1";
+pub(super) const CLANG_VERSION: &str = "23.1.5";
 /// The `cl.exe` version `_MSC_VER` 1933 and `_MSC_FULL_VER` 193300000
 /// give.
 pub(super) const MSVC_VERSION: &str = "19.33.0";

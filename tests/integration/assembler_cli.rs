@@ -334,7 +334,7 @@ mod tests {
         );
         assert!(answered.status.success(), "{}", stderr(&answered));
         assert!(
-            stdout(&answered).starts_with("clang version 23.1.1 "),
+            stdout(&answered).starts_with("clang version 23.1.5 "),
             "{}",
             stdout(&answered)
         );

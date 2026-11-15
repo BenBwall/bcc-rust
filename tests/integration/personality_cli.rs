@@ -7225,7 +7225,7 @@ mod tests {
             "14.2.0\n"
         );
         let clang = stdout(&directory.bcc("--clang-mode", &["--version"]));
-        assert!(clang.starts_with("clang version 23.1.1 (bcc "), "{clang}");
+        assert!(clang.starts_with("clang version 23.1.5 (bcc "), "{clang}");
         let tcc = stdout(&directory.bcc("--tcc-mode", &["-v"]));
         assert!(tcc.starts_with("tcc version 0.9.27 "), "{tcc}");
         assert!(tcc.contains("bcc"), "{tcc}");
@@ -7272,7 +7272,7 @@ mod tests {
                 stderr(&clang_cl)
             };
             assert!(
-                text.starts_with("clang version 23.1.1 (bcc ")
+                text.starts_with("clang version 23.1.5 (bcc ")
                     && text.contains("\nTarget: x86_64-pc-windows-msvc\n"),
                 "{arguments:?}: {text}"
             );
@@ -7677,7 +7677,7 @@ mod tests {
         for (name, expected) in [
             ("gcc", "gcc (bcc "),
             ("x86_64-linux-gnu-gcc-14", "x86_64-linux-gnu-gcc-14 (bcc "),
-            ("clang", "clang version 23.1.1 (bcc "),
+            ("clang", "clang version 23.1.5 (bcc "),
         ] {
             let link = directory.path(name);
             std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bcc-rust"), &link).unwrap();

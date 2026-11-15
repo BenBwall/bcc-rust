@@ -2,8 +2,9 @@
 
 use crate::target::Target;
 
-/// The `target datalayout` string the pinned clang 23.1.1 writes for an empty
-/// C file with `--target=<triple> -S -emit-llvm`, recorded on 2026-10-11.
+/// The `target datalayout` string the pinned clang writes for an empty C file
+/// with `--target=<triple> -S -emit-llvm`, recorded from 23.1.1 on 2026-10-11
+/// and unchanged in 23.1.5.
 /// Only the symbol mangling differs: ELF (`m:e`) on Linux and COFF (`m:w`) on
 /// Windows. Every target is little-endian with 64-bit pointers, 128-bit
 /// aligned `i128` and `x86_fp80`, and a 16-byte stack alignment.
