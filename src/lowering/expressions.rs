@@ -420,6 +420,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         source,
                     ));
                 }
+                self.check_builtin_features(expression)?;
                 if self.schedule_vector_call(expression)? || self.schedule_builtin(expression)? {
                     return Ok(());
                 }
@@ -2465,6 +2466,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             *item = self.settle(*item);
         }
         let direct = self.resolved_direct_callee(call, source)?;
+        if let Some(binding) = direct {
+            self.check_inlined_features(binding, source)?;
+        }
         if let Some(binding) = direct
             && let [argument] = items[..]
         {
@@ -2592,10 +2596,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .record
             .binding
             .is_some_and(|binding| self.unit.target_vector_abi(binding));
+        // A caller whose own vectors move to other registers is refused even
+        // for bcc's own callee (`target_features.rs`).
         if direct.is_none_or(|binding| {
             self.unit.sema.bindings[binding].linkage
                 != crate::translation_phases::semantic_analysis::Linkage::Internal
-        }) {
+        }) || self
+            .record
+            .binding
+            .is_some_and(|binding| self.unit.moves_vector_registers(binding))
+        {
             self.unit
                 .check_foreign_vectors(
                     items[..fixed].iter().map(|item| item.ty),

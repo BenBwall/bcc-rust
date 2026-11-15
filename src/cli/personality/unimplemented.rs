@@ -9,8 +9,8 @@
 //! program does not depend on are ignored with a warning, so the build goes
 //! on and says what it lacks. Every other known option is refused, so that
 //! no layout, ABI or language rule silently differs from what the command
-//! line asked for. A `-m` option is judged for the target: `-mms-bitfields`
-//! is what a Windows target does and a layout change on Linux. Asking for a
+//! line asked for. A `-m` option is judged for the target: `-mabi=ms` is
+//! what a Windows target does and an ABI change on Linux. Asking for a
 //! newer processor than `target/x86_features.rs` models (`-march=haswell`,
 //! `-mavx512f`) warns, since baseline x86-64 code is correct on it, unless
 //! lowering finds a vector whose convention it would change.
@@ -770,14 +770,6 @@ fn abi(option: &str, target: Target) -> Option<Treatment> {
         })
     };
     match option {
-        | "-mms-bitfields" => follows(
-            windows,
-            "bit-fields follow the System V layout on this target",
-        ),
-        | "-mno-ms-bitfields" => follows(
-            !windows,
-            "bit-fields follow the Microsoft layout on this target",
-        ),
         | "-mlong-double-80" | "-m128bit-long-double" =>
             follows(!msvc, "long double is 64 bits wide on the MSVC target"),
         | "-mlong-double-64" => follows(msvc, "long double is the 80-bit x87 type on this target"),
@@ -1028,7 +1020,6 @@ mod tests {
             "-mcmodel=kernel",
             "-mlong-double-64",
             "-mregparm=3",
-            "-mms-bitfields",
             "-mabi=ms",
         ] {
             assert!(matches!(linux(refused), Treatment::Reject(_)), "{refused}");
@@ -1065,7 +1056,6 @@ mod tests {
             "-mtls-dialect=gnu2",
             "-mno-omit-leaf-frame-pointer",
             "-mlong-double-80",
-            "-mno-ms-bitfields",
             "-mabi=sysv",
         ] {
             assert_eq!(linux(ignored), Treatment::Ignore, "{ignored}");
@@ -1091,8 +1081,6 @@ mod tests {
     #[test]
     fn machine_options_follow_the_target() {
         for (option, linux, mingw, msvc) in [
-            ("-mms-bitfields", false, true, true),
-            ("-mno-ms-bitfields", true, false, false),
             ("-mlong-double-80", true, true, false),
             ("-mlong-double-64", false, false, true),
             ("-mno-red-zone", false, true, true),

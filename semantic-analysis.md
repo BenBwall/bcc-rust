@@ -196,7 +196,12 @@ define the union, on a structure or enumeration, on an object, function,
 parameter or member, and among the specifiers of a declaration that declares
 only a tag.
 Windows records use Microsoft's bit-field layout on both MinGW and MSVC,
-matching Clang's MinGW default `-mms-bitfields`. Consecutive nonzero fields share
+matching Clang's MinGW default `-mms-bitfields`. A record that names
+neither `ms_struct` nor `gcc_struct` takes the layout `-m[no-]ms-bitfields`
+gives, or, under the TCC identity, the one `#pragma comment(option, "...")`
+sets where its definition ends (`pragma_comment.rs`, carried by token
+ordinal as `#pragma pack` is); TCC's Microsoft layout follows TCC's own
+algorithm (see `language-standards.md`). Consecutive nonzero fields share
 an entire reserved storage unit only when their base-type sizes match and they
 fit. A zero-width field affects layout only immediately after a nonzero
 bit-field, where it ends that field's whole unit (see "Record layout
@@ -992,6 +997,23 @@ lowering straight to the chosen label when collection succeeded, so unselected
 case labels, also those after the selected `break`, are never lowered; only a
 tentative `default` keeps the case labels after its `break`, since a later case
 may still replace it. An `if` with an elided arm lowers only its selected arm.
+Under GCC's rules (GCC, TinyCC and MSVC identities) a condition with side
+effects that GCC's front end folds also decides what it guards
+(`emission/gcc_folding.rs`): `fold` turns `X && 0` into `(X, 0)` and `X || 1`
+into `(X, 1)`, through commas, `!` and nested logical operands, so
+`d() && 0 && u()` and `if (d() && 0) r();` omit `u` and `r` at `-O0`, as GCC
+does, while `d` is still called. The decided left operand becomes the logical
+operator's retained branch operand, and an `if` whose arm it elides keeps its
+condition in a retained set that lowering evaluates for its effects before the
+selected arm. Arithmetic folds such as `X * 0`, and comparisons and casts of
+a folded operand, stay unfolded. A `?:`, loop or `switch` condition such a fold
+decides is not modeled either: lowering's constant branches still drop the
+dead code, but an internal function referenced only there is still emitted.
+The same fold answers `__builtin_constant_p` under GCC's rules before the
+shared evaluator: a side-effect-free `i && 0`, `i * 0` or `i && 0 ? i : 34`
+is a constant, and an evaluated comma, as in `(1, 7)`, is none, since GCC's C
+front end keeps it as a `COMPOUND_EXPR`; other GCC folds (`i - i`) are left to
+the evaluator.
 Every lowering consumer of a conditional or logical operator, as a value, as a
 branch condition or in an effects-only recipe, reads the same operand elision
 facts before ordinary constant shortcuts. The common operand of GNU `x ?: y`
@@ -2569,6 +2591,11 @@ pass lives in `attributes.rs` and `attributes/`:
   function alignment merge into `EntityAttributes` keyed by `EntityId`; the
   correspondence retains the linked-name entity map so lowering can find a
   binding's entity (`SemanticTranslationUnit::entity_attributes`).
+  An x86 `target` attribute is read over the command line's features into
+  `EntityAttributes::target` (`attributes/function_target.rs`), merged over
+  the declarations as the selected compiler merges them: Clang's first per
+  declaration, inherited, another text refused as multiversioning; GCC's
+  every one per declaration, the latest declaration's replacing.
 - **Completion.** `finish_attributes` runs after translation-unit definitions
   are final: alias requests resolve through chains to a definition by C name
   (`SymbolFacts::aliases`), with target, kind, cycle and type checks; alias

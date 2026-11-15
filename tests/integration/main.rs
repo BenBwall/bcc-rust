@@ -17,6 +17,7 @@
 #[path = "../support/native.rs"]
 mod native;
 
+mod assembler_cli;
 mod atomic_compound;
 mod bench_corpus;
 mod binary128;
@@ -46,9 +47,11 @@ mod llvm_build_cache;
 mod local_statics;
 mod math_builtins_cli;
 mod mingw_target_macros;
+mod ms_bitfields;
 mod msvc;
 mod native_runner;
 mod native_section_parity;
+mod native_shared_libraries;
 mod nested_functions;
 mod optimization_cli;
 mod overloadable;
@@ -63,6 +66,7 @@ mod static_function_designators;
 mod static_relocations;
 mod stdbit;
 mod survey_wrong_code;
+mod target_attribute;
 mod target_resource_headers;
 mod target_selection;
 mod thread_local_linkage_cli;

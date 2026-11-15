@@ -34,8 +34,8 @@ implements; everything else is the plan.
    construct and the function. Refusals are counted by the surveys; wrong code
    is a bug.
 
-Non-goals for now: debug information (DWARF line tables and CodeView), position
-independent shared libraries, other architectures, instruction scheduling, and
+Non-goals for now: CodeView debug information for Windows, other
+architectures, instruction scheduling, and
 importing LLVM-optimized IR back into bcc IR (so "LLVM optimizer + native code
 generator" is not an arm).
 
@@ -176,6 +176,12 @@ more than 1 GiB in one signature, whose offsets and copy lengths would leave
 then refuses a frame whose combined outgoing arguments, spills, locals and
 incoming stack parameters would still need offsets beyond 32-bit
 displacements.
+
+A function's x86 `target` features (`Function::target`, from GCC's and Clang's
+`target` attribute) are not refused: they only permit instructions, and the
+baseline code this back end writes for such a function runs on every processor
+that has them. Lowering has refused what they would change otherwise
+(`middle-end.md`, "x86 `target` attributes").
 
 ### Legalization
 
@@ -538,7 +544,9 @@ nothing recurses.
 Allocation order: caller-saved registers first (no save cost) — `%rax %rcx
 %rdx %rsi %rdi %r8 %r9` on System V, `%rax %rcx %rdx %r8 %r9` on Win64 — then
 callee-saved `%rbx %r12 %r13 %r14 %r15 %rbp` (plus `%rsi %rdi` on Win64).
-The frame pointer is omitted, so `%rbp` is allocatable. SSE registers go
+The frame pointer is omitted, so `%rbp` is allocatable, except in a function
+that keeps one (a moving stack, or every function under
+`-fno-omit-frame-pointer`; see "Frame layout"). SSE registers go
 `%xmm0`-`%xmm13`; on Win64 `%xmm6` and up are callee-saved and saved by the
 frame when written. x87 values are never allocated (see "Legalization").
 
@@ -612,12 +620,28 @@ The size `N` subtracted after the pushes makes `entry_rsp - 8·pushes - N`
 Microsoft "x64 stack usage": "The stack will always be maintained 16-byte
 aligned, except within the prolog"). Every call is made at that alignment.
 
+- **Slot sharing.** Objects never in use at once share frame space, as
+  LLVM's `StackColoring` and `StackSlotColoring` passes share it. A spilled
+  register takes the first spill slot none of whose registers is live in
+  any of its ranges, holes left open (`regalloc/resolve.rs`). Two IR stack
+  slots share an offset when both are reached only through `load`s,
+  `store`s, atomics, `copy` and `fill` of addresses derived by `ptr_add`,
+  `subobject` and `select`, and their lifetimes are disjoint: the
+  instructions that access a slot, and those after which it is live, that
+  is, reached by an access and able to reach a read without passing a write
+  of the whole slot (`frame/sharing.rs`). The IR has no lifetime markers, so
+  a slot whose address escapes keeps its own offset for the whole function,
+  which covers the block its object lives in (C99 §6.2.4p5). A function
+  that calls one that returns twice shares neither kind: a value live across
+  `setjmp` may be dead on the path to the `longjmp` that resumes it. In
+  CPython 3.12's `_PyEval_EvalFrameDefault`, one function with a case per
+  opcode, sharing takes the frame from 5448 bytes to 344 (LLVM's: 328).
 - **System V red zone.** A leaf function may use the 128 bytes below `%rsp`
   without moving it (psABI §3.2.2). A function whose frame below the pushes
   is at most 128 bytes keeps it there, laid out as above but addressed
   `size` bytes lower from the unmoved `%rsp`, with no `sub`/`add` and no
   CFA change after the pushes, provided it makes no call (libcalls such as
-  `memmove` included), has no dynamic allocation or frame pointer, names
+  `memmove` included), has no dynamic allocation, names
   `%rsp` in no instruction (`stack_save`), has no `va_start` save area and
   no slot aligned above 16. Win64 has no red zone ("x64 ABI conventions":
   memory below `%rsp` is volatile), so its frames always move `%rsp`.
@@ -640,6 +664,20 @@ aligned, except within the prolog"). Every call is made at that alignment.
   $align-1`, `and $-align`, into a register every use goes through. The frame,
   its unwind information and `%rbp` stay as they are; stack arguments aligned
   above 16, which need the caller's stack realigned, are still refused.
+- **Frame pointers** (2026-11-08). A function whose stack moves keeps one,
+  and so does every function but a naked one under
+  `-fno-omit-frame-pointer` (GCC manual, "Optimize Options"), which reaches
+  the native back end as `Hardening::keep_frame_pointer`. On System V it is
+  GCC's and Clang's: `pushq %rbp; movq %rsp, %rbp` first
+  (`.cfi_def_cfa_register %rbp`), then the other pushes and the
+  allocation, so `%rbp` points at the caller's `%rbp` with the return
+  address above it and the frames form the chain `__builtin_frame_address`
+  and `__builtin_return_address` above level 0 walk. The epilogue pops `%rbp`
+  last and only then moves the CFA back to `%rsp + 8`. A fixed-size frame is
+  still addressed from `%rsp` (a leaf's still in the red zone); a moving one
+  from `%rbp` at negative offsets, and its epilogue starts with `lea
+  -8·pushes(%rbp), %rsp` over the other pushes. Win64 keeps its own form, as
+  below; the command line passes the option on Linux targets only.
 
 **Prologue and epilogue**:
 
@@ -770,11 +808,12 @@ GCC's `__builtin_setjmp` (`sjlj_setjmp`) saves no register at all:
 words 0 and 2 of the buffer and jumps to the resume address in word 1
 (LLVM's `EH_SjLj_SetJmp` and `EH_SjLj_LongJmp`). `MInst::SjljSetjmp`
 therefore clobbers every register but `%rsp`, and `%rbp` unless it
-addresses the frame: nothing lives in a register across it, the prologue
+holds a frame pointer: nothing lives in a register across it, the prologue
 saves every callee-saved register, and the same coalescing rule keeps each
-value live across it in its own spill slot. At the resume label a frame
+value live across it in its own spill slot. A System V frame pointer is the
+frame address the jump restores; at the resume label a Win64 frame
 addressed from `%rbp` derives `%rbp` from the frame address it arrives
-with, a fixed distance above the frame's base.
+with.
 
 ### Atomic operations
 
@@ -870,14 +909,25 @@ Sections and symbols per format:
 | named section | `.section name,"ax"`/`"aw"`/`"a",@progbits` | `.section name,"xr"`/`"dw"`/`"dr"` |
 | visibility | `.hidden sym`, `.protected sym` | — |
 | constructors, destructors | `.init_array[.prio]`, `.fini_array[.prio]` | MinGW `.ctors[.65535-prio]`, `.dtors[...]`; MSVC `.CRT$XC*`, `.CRT$XT*` |
-| defined data reference | `sym(%rip)` (`R_X86_64_PC32`) | `sym(%rip)` (`IMAGE_REL_AMD64_REL32`) |
+| defined data reference | `sym(%rip)` (`R_X86_64_PC32`); with `-fpic`, `movq sym@GOTPCREL(%rip), %r` unless internal, hidden or protected | `sym(%rip)` (`IMAGE_REL_AMD64_REL32`) |
 | undefined data reference | `movq sym@GOTPCREL(%rip), %r` (`GOTPCRELX`) | MinGW: `movq .refptr.sym(%rip), %r` through a `.refptr.sym` stub, as Clang emits it, but `sym(%rip)` for hidden or protected data; MSVC: `sym(%rip)` |
-| direct call | `call f` / `call f@PLT` if undefined (`PLT32`) | `call f` (`REL32`; import thunks for DLL functions) |
-| function address | `leaq f(%rip)` / `movq f@GOTPCREL(%rip)` if undefined | `leaq f(%rip)` |
+| direct call | `call f` / `call f@PLT` if undefined or, with `-fpic`, preemptible (`PLT32`) | `call f` (`REL32`; import thunks for DLL functions) |
+| function address | `leaq f(%rip)` / `movq f@GOTPCREL(%rip)` if undefined or, with `-fpic`, preemptible | `leaq f(%rip)` |
 | non-executable stack | `.section .note.GNU-stack,"",@progbits` | — |
 
 Clang's default executables on Linux are position-independent, which is why
-undefined data and function addresses go through the GOT. On Windows GNU,
+undefined data and function addresses go through the GOT. Shared-library code
+(`-fpic`, `-fPIC`) goes through the GOT and PLT for every symbol another
+module may preempt: one with default visibility, even when this module
+defines it (`binds_locally` in `native.rs`). Its thread-locals use
+general-dynamic (`data16; leaq sym@TLSGD(%rip), %rdi; data16; data16; rex64;
+call __tls_get_addr@PLT`) or, for internal, hidden and protected
+definitions, local-dynamic (`leaq sym@TLSLD(%rip), %rdi; call
+__tls_get_addr@PLT; leaq sym@DTPOFF(%rax)`), modelled as calls that clobber
+the caller-saved registers. Static initializers holding addresses are
+`R_X86_64_64` relocations, which the linker turns into dynamic relocations;
+read-only ones go in `.data.rel.ro`, so a library has no text relocations.
+`-fpie`/`-fPIE` is the executable model already described. On Windows GNU,
 `main` begins with `call __main` (MinGW's constructor runner), as Clang and
 GCC emit it.
 
@@ -891,7 +941,8 @@ assembler. It has three parts behind the same MIR-after-allocation input:
 2. **Unwind generation** from the frame layout, as described above.
 3. **ELF and COFF writers**: sections (`.text`, `.data`, `.rodata`/`.rdata`,
    `.bss`, `.eh_frame` with `.rela.eh_frame`, or `.pdata`/`.xdata`), the symbol
-   and string tables, and relocations (`R_X86_64_PC32`/`PLT32`/`GOTPCRELX`/`64`;
+   and string tables, and relocations (`R_X86_64_PC32`/`PLT32`/`GOTPCRELX`/`64`,
+   and the TLS `TPOFF32`/`GOTTPOFF`/`TLSGD`/`TLSLD`/`DTPOFF32`;
    `IMAGE_REL_AMD64_REL32`/`ADDR64`/`ADDR32NB`). The output still links with
    bundled LLD.
 
@@ -904,10 +955,23 @@ assembly text to LLVM MC as module-level inline assembly through LLVM-C
 (`LLVMSetModuleInlineAsm2` on an empty module, then the existing object
 emission), which removes the clang process for `-c` but not the dependency.
 
-Debug information is a non-goal for now. When it comes, DWARF line tables
-(`.loc` directives in text first) on ELF and CodeView `.cv_loc` on COFF need
-only an IR-instruction-to-source map from lowering; variable locations need
-the allocator's `Allocation` per instruction range.
+`-g` on ELF writes DWARF 5 (`native/debug_info.rs`). Selection already maps
+each machine instruction to the IR instruction it came from for the explorer,
+and lowering maps that to a source position, so the emitter writes a `.loc`
+before each instruction whose position changes, and labels where a function
+and each run of one scope's code begin and end. After the globals it writes
+the entries (`DW_TAG_compile_unit`, the types, globals, subprograms, lexical
+blocks bounded by their runs, and variables) as data directives in
+`.debug_info` and `.debug_abbrev`, with `.debug_rnglists` for a block of
+several runs. The frame base is `DW_OP_call_frame_cfa`, which the `.cfi_*`
+directives already define however `%rsp` moves, and a variable in a stack
+slot is at `DW_OP_fbreg`, its slot's offset from that address, which holds for
+the whole function. A variable kept in registers has no location (the
+allocator's per-range locations are not followed), so at `-O1` and above most
+read as optimized out. The direct encoder turns `.file` and `.loc` into
+`.debug_line` and `.debug_line_str` as MC does (`object/line_table.rs`), byte
+for byte, which the object tests check on every test program. COFF gets
+neither DWARF nor CodeView: the command line warns that it ignores `-g` there.
 
 ## Source layout
 
@@ -923,8 +987,9 @@ Following [CONTRIBUTING.md](../../CONTRIBUTING.md#source-layout):
 | `native/regalloc.rs` | the allocator's entry and `Allocation`, with `regalloc/edges.rs` (critical edges, jump threading, loop rotation), `regalloc/liveness.rs` (liveness, dead code, intervals, fixed ranges), `regalloc/intervals.rs`, `regalloc/coalesce.rs`, `regalloc/scan.rs` (the split-interval scan), `regalloc/resolve.rs` (pieces and moves), `regalloc/rewrite.rs` (physical rewrite and parallel moves), `regalloc/checker.rs` (the symbolic checker) and `regalloc/peephole.rs` (`lea` combining) |
 | `native/frame.rs` | frame layout, prologue and epilogue |
 | `native/emit.rs` | AT&T text: instructions, functions, globals, symbols |
+| `native/debug_info.rs`, `native/debug_info/` | DWARF 5 for `-g` on ELF: `.loc` rows and `.file` names (`lines.rs`), the entries (`description.rs`) and their encoding and abbreviations (`entries.rs`) |
 | `native/driver.rs` | the choice of object writer, assembly or direct object output, and bundled clang linking |
-| `native/object.rs`, `native/object/` | private listing parser, x86 encoder and relaxation, ELF64 writer, DWARF CFI records; the COFF writer and its unwind tables in `object/coff.rs` and `object/coff/` |
+| `native/object.rs`, `native/object/` | private listing parser, x86 encoder and relaxation, ELF64 writer, DWARF CFI records, the DWARF line table (`object/line_table.rs`); the COFF writer and its unwind tables in `object/coff.rs` and `object/coff/` |
 | `native/tests.rs`, `native/tests/` | selection, allocation and end-to-end tests |
 
 Arenas: the module's `'ir` arena outlives the back end; each function is
@@ -985,7 +1050,7 @@ Sizes are estimated Rust lines including tests.
 | 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `i128` register pairs and division libcalls; `f80` through x87 memory sequences and `f128` libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 | done |
 | 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | done, with the red zone and loop alignment added after stage 5 (#85); B1/A1 1.05× on native Linux (from 1.42×), 1.03× with those two in a pinned run; checker clean on every test and on the whole torture corpus (1,890 sources, debug builds, no checker failure) |
 | 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 | done: direct COFF objects are the Windows default and ran in native Windows CI; direct ELF objects stay opt-in (`--native-object`) |
-| 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | open |
+| 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | DWARF 5 on ELF done, with variables at `-O0` and types; gdb 15 steps through the test programs and reads their locals; CodeView open |
 
 ## Implementation status
 
@@ -1116,10 +1181,11 @@ Implemented in the priority order of the stage 1 refusals:
   `uadd_overflow` and `umul_overflow`, the `__divti3` family (register pairs
   on System V; pointers to 16-byte copies and an `%xmm0` result on Win64), and
   Win64's `registers(i128)` results through `movups` of `%xmm0`.
-- **Dynamic stack** (`isel/stack.rs`): such functions keep `%rbp = %rsp`
-  after the allocation, address the fixed frame from it, allocate right above
-  the outgoing argument area, probe new pages on Windows, and end with the
-  frame-pointer epilogue `lea size(%rbp), %rsp`.
+- **Dynamic stack** (`isel/stack.rs`): such functions keep a frame pointer,
+  address the fixed frame from it, allocate right above the outgoing
+  argument area, and probe new pages on Windows. On Win64 `%rbp = %rsp`
+  after the allocation and the epilogue starts with `lea size(%rbp), %rsp`;
+  on System V `%rbp` links the frame as "Frame pointers" describes.
 - **Two peepholes**: a multiply by a power of two is a shift, and `zext` of a
   narrow load reuses the load's zero-extended register.
 
@@ -1201,7 +1267,8 @@ compiled, not refused:
   landing blocks for labeled blocks with parameters (see "Block parameters
   become parallel copies").
 - **Thread-local globals**: ELF local-exec for definitions and initial-exec
-  for declarations through `%fs:0`; Windows through `_tls_index` and the
+  for declarations through `%fs:0` (in a shared library, general-dynamic and
+  local-dynamic through `__tls_get_addr`); Windows through `_tls_index` and the
   TEB's `ThreadLocalStoragePointer`; `.tdata`/`.tbss` and `.tls$`.
 - **Symbol attributes** (`weak`, aliases, `section`, `used`, visibility,
   function alignment, constructors and destructors with priorities) as the

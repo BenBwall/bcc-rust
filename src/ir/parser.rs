@@ -82,9 +82,12 @@ use super::{
     types::Type,
     verifier::Profile,
 };
-use crate::util::bump::{
-    ArenaVec,
-    Bump,
+use crate::{
+    target::CodeFeatures,
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 /// Parses a module from its textual form into `arena`.
@@ -158,6 +161,7 @@ fn declare_items<'t>(
                 module.function_mut(func).no_instrument = header.no_instrument;
                 module.function_mut(func).no_sanitize = header.no_sanitize;
                 module.function_mut(func).entry = header.entry;
+                module.function_mut(func).target = header.target;
                 if let Some(external) = header.inline_copy_of {
                     module.set_inline_copy_of(func, external.text_name(scratch)?);
                 }
@@ -543,8 +547,8 @@ fn parse_relocation_target<'t>(
 
 /// `function @name(params) [-> ty] linkage [align N] [returns_twice]
 /// [noinline | alwaysinline] [inline_copy_of @name]
-/// [interrupt | preserve_registers | naked]` and its symbol attributes, up to
-/// the body.
+/// [interrupt | preserve_registers | naked] [target "+f,-g,arch=cpu,tune=cpu"]`
+/// and its symbol attributes, up to the body.
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
     scratch: &'s Bump,
@@ -590,6 +594,11 @@ fn parse_function_header<'t, 's>(
             .is_some_and(|keyword| cursor.eat(TokenKind::Ident(keyword)))
     })
     .unwrap_or_default();
+    let target = if cursor.eat(TokenKind::Ident("target")) {
+        Some(parse_code_features(cursor)?)
+    } else {
+        None
+    };
     let attributes = WrittenAttributes::parse(cursor)?;
     Ok(FunctionHeader {
         name,
@@ -603,8 +612,26 @@ fn parse_function_header<'t, 's>(
         no_sanitize,
         inline_copy_of,
         entry,
+        target,
         attributes,
     })
+}
+
+/// A function's x86 features: `+feature` and `-feature` for those on and
+/// explicitly off, then `arch=` and `tune=` processors, parted by commas.
+fn parse_code_features<'t>(cursor: &mut Cursor<'_, 't>) -> Result<CodeFeatures, ParseError<'t>> {
+    let (token, text) = cursor.string()?;
+    let mut target = CodeFeatures::default();
+    for part in text.split(',').filter(|part| !part.is_empty()) {
+        let known = ["+", "-", "arch=", "tune="].into_iter().any(|sign| {
+            part.strip_prefix(sign)
+                .is_some_and(|name| target.add_part(sign, name))
+        });
+        if !known {
+            return Err(token.expected("x86 features and processors"));
+        }
+    }
+    Ok(target)
 }
 
 struct FunctionHeader<'t, 's> {
@@ -619,6 +646,7 @@ struct FunctionHeader<'t, 's> {
     no_sanitize:        super::NoSanitize,
     inline_copy_of:     Option<Token<'t>>,
     entry:              EntryConvention,
+    target:             Option<CodeFeatures>,
     attributes:         WrittenAttributes<'t>,
 }
 

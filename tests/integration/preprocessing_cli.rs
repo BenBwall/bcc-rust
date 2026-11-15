@@ -430,4 +430,93 @@ mod tests {
             text(&missing)
         );
     }
+
+    /// A header name macros write is glued from its tokens' spellings: a
+    /// pp-number as written, and white space as each compiler keeps it.
+    /// GCC 13.3 keeps only white space written next to the token after it,
+    /// TCC 0.9.28 none, Clang 23 every white space. TCC also reads on until
+    /// the joined text ends with `>`. Measured with each compiler's
+    /// missing-header message.
+    #[test]
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "The test formats its own sources and expected messages."
+    )]
+    fn expanded_header_names_keep_white_space_as_each_compiler_does() {
+        let definitions =
+            "#define funnyname 42test.h\n#define incdir tests/\n#define INC(n) <tests/n.h>\n";
+        let rows = [
+            (
+                "INC(42test)",
+                "tests/42test.h",
+                "tests/42test.h",
+                "tests/42test.h",
+            ),
+            (
+                "< incdir funnyname >",
+                "tests/42test.h",
+                "tests/42test.h",
+                " tests/ 42test.h ",
+            ),
+            (
+                "<incdir/**/funnyname>",
+                "tests/42test.h",
+                "tests/42test.h",
+                "tests/ 42test.h",
+            ),
+            ("< incdir x.h >", "tests/ x.h", "tests/x.h", " tests/ x.h "),
+            ("< tests/x.h >", " tests/x.h", "tests/x.h", " tests/x.h "),
+            ("<tests / x.h>", "tests / x.h", "tests/x.h", "tests / x.h"),
+        ];
+        for (operand, gcc, tcc, clang) in rows {
+            for (personality, expected) in [
+                ("--gcc-mode", format!(" {gcc}: No such file or directory")),
+                ("--tcc-mode", format!("include file '{tcc}' not found")),
+                ("--clang-mode", format!("'{clang}' file not found")),
+            ] {
+                let source = format!("{definitions}#define H {operand}\n#include H\n");
+                let output = syntax_check(personality, &source);
+                assert!(
+                    text(&output).contains(&expected),
+                    "{personality} {operand}: {}",
+                    text(&output)
+                );
+            }
+        }
+        // TCC 0.9.28 drops white space beside an empty replacement too, and
+        // ends the name only at a token whose spelling ends with `>`: `>>`
+        // keeps one `>`, and `>=` continues the name.
+        for (operand, tcc) in [
+            ("< EMPTY tests/x.h EMPTY >", "tests/x.h"),
+            ("<tests/a>>", "tests/a>"),
+            ("<tests/a>=b>", "tests/a>=b"),
+        ] {
+            let source = format!("#define EMPTY\n#define H {operand}\n#include H\n");
+            let output = syntax_check("--tcc-mode", &source);
+            let expected = format!("include file '{tcc}' not found");
+            assert!(
+                text(&output).contains(&expected),
+                "--tcc-mode {operand}: {}",
+                text(&output)
+            );
+        }
+    }
+
+    /// Checks `source`, read from standard input, under `personality`.
+    fn syntax_check(personality: &str, source: &str) -> Output {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args([personality, "-fsyntax-only", "-x", "c", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(source.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
 }

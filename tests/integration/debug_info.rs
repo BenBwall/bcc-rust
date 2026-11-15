@@ -28,6 +28,23 @@ mod tests {
 
     const LINUX: &str = "--target=x86_64-unknown-linux-gnu";
 
+    /// The back ends that write DWARF for Linux, as a personality's command
+    /// line selects them: LLVM, and the native back end with its listing
+    /// assembled by the bundled clang or its object encoded directly.
+    const BACK_ENDS: [&[&str]; 3] = [
+        &[],
+        &["-Xbcc", "--backend=native", "-Xbcc", "--no-native-object"],
+        &["-Xbcc", "--backend=native", "-Xbcc", "--native-object"],
+    ];
+
+    /// `args` after the options that select `back_end`.
+    fn with<'a>(back_end: &[&'a str], args: &[&'a str]) -> Vec<&'a str> {
+        let mut all = vec![args[0]];
+        all.extend_from_slice(back_end);
+        all.extend_from_slice(&args[1..]);
+        all
+    }
+
     /// A header's function, a macro of two lines used on one, `#line` moving
     /// code to another file, and a loop calling all of them.
     const PROGRAM: &str = "\
@@ -151,39 +168,49 @@ static int helper(int x)
     #[test]
     fn without_g_or_with_g0_the_object_has_no_debug_section() {
         let directory = Directory::new();
-        for flags in [&[][..], &["-g0"], &["-g", "-g0"], &["-gdwarf-4", "-g0"]] {
-            let mut args = vec!["--gcc-mode", LINUX, "-c", "a.c", "-o", "a.o"];
-            args.extend_from_slice(flags);
-            drop(directory.built(&args));
-            assert!(!holds(&directory.path("a.o"), b".debug_"), "{flags:?}");
+        for back_end in BACK_ENDS {
+            for flags in [&[][..], &["-g0"], &["-g", "-g0"], &["-gdwarf-4", "-g0"]] {
+                let mut args = with(back_end, &["--gcc-mode", LINUX, "-c", "a.c", "-o", "a.o"]);
+                args.extend_from_slice(flags);
+                drop(directory.built(&args));
+                assert!(
+                    !holds(&directory.path("a.o"), b".debug_"),
+                    "{back_end:?} {flags:?}"
+                );
+            }
         }
     }
 
     #[test]
     fn the_compile_unit_is_honest_about_its_producer_and_language() {
         let directory = Directory::new();
-        drop(directory.built(&[
-            "--gcc-mode",
-            LINUX,
-            "-g",
-            "-std=c99",
-            "-c",
-            "a.c",
-            "-o",
-            "a.o",
-        ]));
-        let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "a.o") else {
-            return;
-        };
-        assert!(
-            info.contains(concat!("bcc-rust ", env!("CARGO_PKG_VERSION"))),
-            "{info}"
-        );
-        assert!(info.contains("(ANSI C99)"), "{info}");
-        assert!(info.contains("a.c"), "{info}");
-        assert!(info.contains("Version:       5"), "{info}");
-        for function in ["helper", "add", "moved", "main"] {
-            assert!(info.contains(function), "{function}: {info}");
+        for back_end in BACK_ENDS {
+            drop(directory.built(&with(
+                back_end,
+                &[
+                    "--gcc-mode",
+                    LINUX,
+                    "-g",
+                    "-std=c99",
+                    "-c",
+                    "a.c",
+                    "-o",
+                    "a.o",
+                ],
+            )));
+            let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "a.o") else {
+                return;
+            };
+            assert!(
+                info.contains(concat!("bcc-rust ", env!("CARGO_PKG_VERSION"))),
+                "{back_end:?}: {info}"
+            );
+            assert!(info.contains("(ANSI C99)"), "{back_end:?}: {info}");
+            assert!(info.contains("a.c"), "{back_end:?}: {info}");
+            assert!(info.contains("Version:       5"), "{back_end:?}: {info}");
+            for function in ["helper", "add", "moved", "main"] {
+                assert!(info.contains(function), "{back_end:?} {function}: {info}");
+            }
         }
     }
 
@@ -192,19 +219,25 @@ static int helper(int x)
     #[test]
     fn the_line_table_follows_logical_positions() {
         let directory = Directory::new();
-        for level in ["-O0", "-O2"] {
-            drop(directory.built(&["--gcc-mode", LINUX, "-g", level, "-c", "a.c", "-o", "a.o"]));
-            let Some(table) = directory.tool("readelf", &["--debug-dump=decodedline"], "a.o")
-            else {
-                return;
-            };
-            let rows = rows(&table);
-            let has = |file: &str, line| rows.iter().any(|row| row.0 == file && row.1 == line);
-            assert!(has("other.c", 102), "{level}: {table}");
-            assert!(has("inc.h", 3), "{level}: {table}");
-            // The macro's use, not its definition's lines 2 and 3.
-            assert!(has("a.c", 8), "{level}: {table}");
-            assert!(!has("a.c", 2) && !has("a.c", 3), "{level}: {table}");
+        for back_end in BACK_ENDS {
+            for level in ["-O0", "-O2"] {
+                let args = with(
+                    back_end,
+                    &["--gcc-mode", LINUX, "-g", level, "-c", "a.c", "-o", "a.o"],
+                );
+                drop(directory.built(&args));
+                let Some(table) = directory.tool("readelf", &["--debug-dump=decodedline"], "a.o")
+                else {
+                    return;
+                };
+                let rows = rows(&table);
+                let has = |file: &str, line| rows.iter().any(|row| row.0 == file && row.1 == line);
+                assert!(has("other.c", 102), "{args:?}: {table}");
+                assert!(has("inc.h", 3), "{args:?}: {table}");
+                // The macro's use, not its definition's lines 2 and 3.
+                assert!(has("a.c", 8), "{args:?}: {table}");
+                assert!(!has("a.c", 2) && !has("a.c", 3), "{args:?}: {table}");
+            }
         }
     }
 
@@ -214,26 +247,41 @@ static int helper(int x)
     #[test]
     fn addr2line_finds_the_function_file_and_line() {
         let directory = Directory::new();
-        for (level, expected) in [
-            (
-                "-O0",
-                &[
-                    ("add", "a.c", 6),
-                    ("moved", "other.c", 101),
-                    ("main", "a.c", 20),
-                ][..],
-            ),
-            // Without a prologue the entry is the first statement, as with
-            // Clang.
-            ("-O2", &[("add", "a.c", 8), ("moved", "other.c", 102)]),
-        ] {
-            drop(directory.built(&["--gcc-mode", "-g", level, "a.c", "-o", "a"]));
+        for (back_end, (level, expected)) in BACK_ENDS.into_iter().flat_map(|back_end| {
+            [
+                (
+                    "-O0",
+                    &[
+                        ("add", "a.c", 6),
+                        ("moved", "other.c", 101),
+                        ("main", "a.c", 20),
+                    ][..],
+                ),
+                // Without a prologue the entry is the first statement, as
+                // with Clang. LLVM folds both additions of `add` into one
+                // `lea` on line 8, where the native back end adds on each
+                // line.
+                (
+                    "-O2",
+                    if back_end.is_empty() {
+                        &[("add", "a.c", 8), ("moved", "other.c", 102)]
+                    } else {
+                        &[("add", "a.c", 7), ("moved", "other.c", 102)]
+                    },
+                ),
+            ]
+            .map(|case| (back_end, case))
+        }) {
+            drop(directory.built(&with(
+                back_end,
+                &["--gcc-mode", "-g", level, "a.c", "-o", "a"],
+            )));
             assert!(
                 Command::new(directory.path("a"))
                     .status()
                     .unwrap()
                     .success(),
-                "{level}"
+                "{back_end:?} {level}"
             );
             let Some(symbols) = directory.tool("nm", &[], "a") else {
                 return;
@@ -250,11 +298,11 @@ static int helper(int x)
                     return;
                 };
                 let mut found = found.lines();
-                assert_eq!(found.next(), Some(function), "{level}");
+                assert_eq!(found.next(), Some(function), "{back_end:?} {level}");
                 let place = found.next().unwrap();
                 assert!(
                     place.ends_with(&format!("{file}:{line}")),
-                    "{level} {function}: {place}"
+                    "{back_end:?} {level} {function}: {place}"
                 );
             }
         }
@@ -272,19 +320,29 @@ static int helper(int x)
         assert!(info.contains("DW_TAG_inlined_subroutine"), "{info}");
     }
 
-    /// `-g` must not change code generation at any level.
+    /// `-g` must not change code generation at any level, in any back end.
     #[test]
     fn the_machine_code_is_the_same_with_and_without_g() {
         let directory = Directory::new();
         std::fs::write(directory.path("code.c"), CODE).unwrap();
-        for level in ["-O0", "-O1", "-O2", "-O3", "-Os", "-Og"] {
-            drop(directory.built(&["--gcc-mode", level, "-c", "code.c", "-o", "same.o"]));
-            let Some(plain) = directory.tool("objdump", &["-d"], "same.o") else {
-                return;
-            };
-            drop(directory.built(&["--gcc-mode", level, "-g", "-c", "code.c", "-o", "same.o"]));
-            let debug = directory.tool("objdump", &["-d"], "same.o").unwrap();
-            assert_eq!(plain, debug, "{level}");
+        for back_end in BACK_ENDS {
+            for level in ["-O0", "-O1", "-O2", "-O3", "-Os", "-Og"] {
+                let plain = with(
+                    back_end,
+                    &["--gcc-mode", level, "-c", "code.c", "-o", "same.o"],
+                );
+                drop(directory.built(&plain));
+                let Some(plain) = directory.tool("objdump", &["-d"], "same.o") else {
+                    return;
+                };
+                let args = with(
+                    back_end,
+                    &["--gcc-mode", level, "-g", "-c", "code.c", "-o", "same.o"],
+                );
+                drop(directory.built(&args));
+                let debug = directory.tool("objdump", &["-d"], "same.o").unwrap();
+                assert_eq!(plain, debug, "{args:?}");
+            }
         }
     }
 
@@ -348,6 +406,60 @@ long use(int n)
         }
     }
 
+    /// The native back end writes DWARF 5 whatever version is asked for, and
+    /// says so.
+    #[test]
+    fn the_native_back_end_writes_dwarf_5() {
+        let directory = Directory::new();
+        let args = [
+            "--gcc-mode",
+            "-Xbcc",
+            "--backend=native",
+            LINUX,
+            "-gdwarf-4",
+            "-c",
+        ];
+        let stderr = directory.built(&[&args[..], &["a.c", "-o", "a.o"]].concat());
+        assert!(
+            stderr.contains("writes DWARF 5; ignoring -gdwarf-4"),
+            "{stderr}"
+        );
+        let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "a.o") else {
+            return;
+        };
+        assert!(
+            info.lines().any(|line| line.trim() == "Version:       5"),
+            "{info}"
+        );
+    }
+
+    /// `llvm-dwarfdump --verify`, where it is installed, accepts the objects
+    /// and programs of every back end, at `-O0`, `-O2` and through bcc's
+    /// optimizer.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_debug_information_verifies() {
+        let directory = Directory::new();
+        std::fs::write(directory.path("data.c"), DATA).unwrap();
+        for back_end in BACK_ENDS {
+            for levels in [&["-O0"][..], &["-O2"], &["-O2", "-Xbcc", "--opt=bcc"]] {
+                for (output, link) in [("data.o", &["-c"][..]), ("data", &[])] {
+                    let mut args = with(back_end, &["--gcc-mode", "-g", "data.c", "-o", output]);
+                    args.extend_from_slice(levels);
+                    args.extend_from_slice(link);
+                    drop(directory.built(&args));
+                    let Some(verified) = directory.tool("llvm-dwarfdump", &["--verify"], output)
+                    else {
+                        let found = Command::new("llvm-dwarfdump").arg("--version").output();
+                        assert!(found.is_err(), "{args:?}: llvm-dwarfdump --verify failed");
+                        return;
+                    };
+                    assert!(verified.contains("No errors."), "{args:?}: {verified}");
+                }
+            }
+        }
+    }
+
     /// `CodeView` for an MSVC target unless DWARF is asked for, and DWARF for
     /// MinGW, as with Clang. Not run on Windows here; the bytes are the
     /// object's whatever the host.
@@ -379,9 +491,18 @@ long use(int n)
     fn the_back_ends_without_debug_information_say_so_or_stay_quiet() {
         let directory = Directory::new();
         std::fs::write(directory.path("t.c"), "int main(void) { return 3; }\n").unwrap();
-        let stderr = directory.built(&["-g", "--backend=native", LINUX, "-c", "t.c", "-o", "t.o"]);
-        assert!(stderr.contains("writes no debug information"), "{stderr}");
+        // The native back end writes no CodeView, and no DWARF in COFF.
+        let windows = "--target=x86_64-w64-windows-gnu";
+        let stderr =
+            directory.built(&["-g", "--backend=native", windows, "-c", "t.c", "-o", "t.o"]);
+        assert!(
+            stderr.contains("writes no debug information for Windows targets"),
+            "{stderr}"
+        );
         assert!(!holds(&directory.path("t.o"), b".debug_info"));
+        let stderr = directory.built(&["-g", "--backend=native", LINUX, "-c", "t.c", "-o", "t.o"]);
+        assert!(stderr.is_empty(), "{stderr}");
+        assert!(holds(&directory.path("t.o"), b".debug_info"));
         let stderr = directory.built(&["--target=wasm32-wasip1", "-g", "t.c", "-o", "t.wasm"]);
         assert!(stderr.contains("writes no debug information"), "{stderr}");
         let run = directory.bcc(&["-g", "--interpret", "t.c"]);
@@ -464,10 +585,21 @@ int main(void)
     fn variables_and_types_read_back() {
         let directory = Directory::new();
         std::fs::write(directory.path("data.c"), DATA).unwrap();
-        drop(directory.built(&["--gcc-mode", LINUX, "-g", "-c", "data.c", "-o", "data.o"]));
-        let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
-            return;
-        };
+        for back_end in BACK_ENDS {
+            let args = with(
+                back_end,
+                &["--gcc-mode", LINUX, "-g", "-c", "data.c", "-o", "data.o"],
+            );
+            drop(directory.built(&args));
+            let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
+                return;
+            };
+            read_back(&info, &args);
+        }
+    }
+
+    /// The tags and names `readelf` shows in the entries of `DATA`.
+    fn read_back(info: &str, args: &[&str]) {
         for tag in [
             "DW_TAG_variable",
             "DW_TAG_formal_parameter",
@@ -484,12 +616,12 @@ int main(void)
             "DW_TAG_volatile_type",
             "DW_AT_bit_size",
         ] {
-            assert!(info.contains(tag), "{tag}: {info}");
+            assert!(info.contains(tag), "{args:?} {tag}: {info}");
         }
         for name in [
             "pts", "total2", "counter", "my_size", "point_t", "GREEN", "table",
         ] {
-            assert!(info.contains(name), "{name}: {info}");
+            assert!(info.contains(name), "{args:?} {name}: {info}");
         }
     }
 
@@ -498,16 +630,25 @@ int main(void)
     fn level_one_describes_no_data() {
         let directory = Directory::new();
         std::fs::write(directory.path("data.c"), DATA).unwrap();
-        drop(directory.built(&["--gcc-mode", LINUX, "-g1", "-c", "data.c", "-o", "data.o"]));
-        let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
-            return;
-        };
-        assert!(!info.contains("DW_TAG_variable"), "{info}");
-        assert!(!info.contains("DW_TAG_base_type"), "{info}");
-        let table = directory
-            .tool("readelf", &["--debug-dump=decodedline"], "data.o")
-            .unwrap();
-        assert!(rows(&table).iter().any(|row| row.0 == "data.c"), "{table}");
+        for back_end in BACK_ENDS {
+            let args = with(
+                back_end,
+                &["--gcc-mode", LINUX, "-g1", "-c", "data.c", "-o", "data.o"],
+            );
+            drop(directory.built(&args));
+            let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
+                return;
+            };
+            assert!(!info.contains("DW_TAG_variable"), "{args:?}: {info}");
+            assert!(!info.contains("DW_TAG_base_type"), "{args:?}: {info}");
+            let table = directory
+                .tool("readelf", &["--debug-dump=decodedline"], "data.o")
+                .unwrap();
+            assert!(
+                rows(&table).iter().any(|row| row.0 == "data.c"),
+                "{args:?}: {table}"
+            );
+        }
     }
 
     /// At `-O0` locals live in memory with or without `-g`, as GCC and Clang
@@ -516,26 +657,44 @@ int main(void)
     #[test]
     fn unoptimized_locals_have_their_lines() {
         let directory = Directory::new();
-        drop(directory.built(&["--gcc-mode", LINUX, "-g", "-c", "a.c", "-o", "a.o"]));
-        let Some(table) = directory.tool("readelf", &["--debug-dump=decodedline"], "a.o") else {
-            return;
-        };
-        let rows = rows(&table);
-        // `int s = 0;` in `main`, which is on line 21 of the logical file.
-        assert!(
-            rows.iter().any(|row| row.0 == "a.c" && row.1 == 21),
-            "{table}"
-        );
-        assert!(rows.iter().all(|row| row.1 != 0), "{table}");
+        for back_end in BACK_ENDS {
+            let args = with(
+                back_end,
+                &["--gcc-mode", LINUX, "-g", "-c", "a.c", "-o", "a.o"],
+            );
+            drop(directory.built(&args));
+            let Some(table) = directory.tool("readelf", &["--debug-dump=decodedline"], "a.o")
+            else {
+                return;
+            };
+            let rows = rows(&table);
+            // `int s = 0;` in `main`, which is on line 21 of the logical file.
+            assert!(
+                rows.iter().any(|row| row.0 == "a.c" && row.1 == 21),
+                "{args:?}: {table}"
+            );
+            assert!(rows.iter().all(|row| row.1 != 0), "{args:?}: {table}");
+        }
     }
 
-    /// The session the brief asks for, with `gdb`, where one can run a program.
+    /// The session the brief asks for, with `gdb`, where one can run a program,
+    /// for each back end.
     #[cfg(target_os = "linux")]
     #[test]
     fn gdb_shows_the_program() {
         let directory = Directory::new();
         std::fs::write(directory.path("data.c"), DATA).unwrap();
-        drop(directory.built(&["--gcc-mode", "-g", "data.c", "-o", "data"]));
+        for back_end in BACK_ENDS {
+            gdb_session(&directory, back_end);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn gdb_session(directory: &Directory, back_end: &[&str]) {
+        drop(directory.built(&with(
+            back_end,
+            &["--gcc-mode", "-g", "data.c", "-o", "data"],
+        )));
         assert!(
             Command::new(directory.path("data"))
                 .status()
@@ -607,7 +766,7 @@ int main(void)
             "main () at data.c:37",
             "Value returned is ",
         ] {
-            assert!(text.contains(expected), "{expected}: {text}");
+            assert!(text.contains(expected), "{back_end:?} {expected}: {text}");
         }
     }
 
@@ -618,21 +777,27 @@ int main(void)
     fn optimized_programs_keep_their_variables_described() {
         let directory = Directory::new();
         std::fs::write(directory.path("data.c"), DATA).unwrap();
-        drop(directory.built(&[
-            "--gcc-mode",
-            LINUX,
-            "-g",
-            "-O2",
-            "-c",
-            "data.c",
-            "-o",
-            "data.o",
-        ]));
-        let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
-            return;
-        };
-        for name in ["total2", "my_size", "point_t"] {
-            assert!(info.contains(name), "{name}: {info}");
+        for back_end in BACK_ENDS {
+            let args = with(
+                back_end,
+                &[
+                    "--gcc-mode",
+                    LINUX,
+                    "-g",
+                    "-O2",
+                    "-c",
+                    "data.c",
+                    "-o",
+                    "data.o",
+                ],
+            );
+            drop(directory.built(&args));
+            let Some(info) = directory.tool("readelf", &["--debug-dump=info"], "data.o") else {
+                return;
+            };
+            for name in ["total2", "my_size", "point_t"] {
+                assert!(info.contains(name), "{args:?} {name}: {info}");
+            }
         }
     }
 

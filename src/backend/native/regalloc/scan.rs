@@ -65,7 +65,7 @@ pub(super) struct Scan<'s, 'a> {
     pub(super) intervals: ArenaVec<'a, Interval<'a>>,
     fixed:                &'s FixedRanges<'a>,
     conv:                 CallConv,
-    /// Whether `%rbp` addresses the frame and is not allocatable.
+    /// Whether `%rbp` holds a frame pointer and is not allocatable.
     frame_pointer:        bool,
     /// For each representative register, a register it is copied to or
     /// from; the hint is that register's latest location.

@@ -225,7 +225,7 @@ fn foreign_vector_conventions_are_refused() {
         assert!(lowered.is_ok(), "{source}: {lowered:?}");
     };
     for compiler in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
-        let foreign = "ignores changes how it travels";
+        let foreign = "ignores, changes how it travels";
         let definition = "V f(V a) { return a; }";
         refused(definition, compiler, &["-mavx512f"], foreign);
         refused(definition, compiler, &["-march=haswell"], foreign);
@@ -271,6 +271,17 @@ fn foreign_vector_conventions_are_refused() {
         let local = "__attribute__((target(\"avx2\"))) static V f(V a) { return a; } V *g(V *p) { \
                      *p = f(*p); return p; }";
         accepted(local, compiler, &[]);
+        // Turning AVX off moves a static function's vectors out of the YMM
+        // registers bcc's own calls pass them in.
+        let narrowed = "__attribute__((target(\"no-avx\"))) static V f(V a) { return a; } V *g(V \
+                        *p) { *p = f(*p); return p; }";
+        refused(
+            narrowed,
+            compiler,
+            &["-mavx2"],
+            "turns AVX off or AVX-512 on",
+        );
+        accepted(narrowed, compiler, &[]);
         let escaping =
             "__attribute__((target(\"avx2\"))) static V f(V a) { return a; } V (*p)(V) = f;";
         refused(escaping, compiler, &[], foreign);
@@ -302,7 +313,7 @@ fn foreign_vector_conventions_are_refused() {
     }
     // XSAVE: AVX needs it in GCC only.
     let definition = "V f(V a) { return a; }";
-    let foreign = "ignores changes how it travels";
+    let foreign = "ignores, changes how it travels";
     refused(
         definition,
         CompilerIdentity::Clang,

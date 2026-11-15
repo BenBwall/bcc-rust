@@ -3,6 +3,8 @@
 
 use super::{
     assembly,
+    assembly_with,
+    framed_assembly,
     function_text,
     refusal,
     with_allocation,
@@ -17,7 +19,12 @@ use crate::{
         Width,
     },
     ir::Entity,
-    target::Target,
+    target::{
+        CodeOptions,
+        Relocation,
+        Target,
+        TlsModel,
+    },
 };
 
 const ADD: &str = "abi lowered
@@ -673,18 +680,24 @@ block0(v0: ptr):
             "{target:?}: {g}"
         );
     }
-    // A frame whose `%rsp` moves is addressed from `%rbp`; the resume
-    // label restores it from the frame address `%rbp` arrives with.
+    // A frame whose `%rsp` moves is addressed from `%rbp`. On System V
+    // `%rbp` links the frame and is the frame address the jump restores; on
+    // Win64 the resume label derives it from that address.
     let dynamic = ir.replace(
         "    v6 = sjlj_setjmp v0",
         "    v9 = dyn_alloca.i64 v1, align 16\n    v6 = sjlj_setjmp v9",
     );
-    let text = assembly(&dynamic, Target::LinuxGnu);
-    let f = function_text(&text, "f");
-    let label = f.find(".LSJ0:\n").expect(f);
-    let fixup = &f[label..];
-    assert!(fixup.starts_with(".LSJ0:\n\tleaq\t-"), "{f}");
-    assert!(fixup.contains("(%rbp), %rbp\n\tmovl\t$1, %eax"), "{f}");
+    for (target, resume) in [
+        (Target::LinuxGnu, ".LSJ0:\n\tmovl\t$1, %eax"),
+        (
+            Target::WindowsGnu,
+            ".LSJ0:\n\tleaq\t0(%rbp), %rbp\n\tmovl\t$1, %eax",
+        ),
+    ] {
+        let text = assembly(&dynamic, target);
+        let f = function_text(&text, "f");
+        assert!(f.contains(resume), "{target:?}: {f}");
+    }
 }
 
 /// Nothing is coalesced across a `__builtin_setjmp` either: a second
@@ -1047,6 +1060,134 @@ block0(v0: i64):
     assert!(f.contains("subq\t$16, %rsp\n"), "{f}");
 }
 
+/// Six values live across a call: with `%rbp` free, one of them takes it.
+const SIX_ACROSS_A_CALL: &str = "abi lowered
+function @g(ptr) external
+function @f(i64, i64, i64, i64, i64, i64) -> i64 external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64, v1: i64, v2: i64, v3: i64, v4: i64, v5: i64):
+    v6 = stack_addr slot0
+    store.i64 v0, v6, align 8
+    call @g(v6)
+    v7 = iadd.i64 v0, v1
+    v8 = iadd.i64 v7, v2
+    v9 = iadd.i64 v8, v3
+    v10 = iadd.i64 v9, v4
+    v11 = iadd.i64 v10, v5
+    return v11
+}
+";
+
+/// `-fno-omit-frame-pointer` on System V: `%rbp` is pushed first and set
+/// to its own slot, so it holds the caller's frame pointer as GCC's and
+/// Clang's prologues leave it, the CFA is addressed from it, and no value
+/// takes it. GCC manual, "Optimize Options", `-fomit-frame-pointer`.
+#[test]
+fn kept_frame_pointers_link_each_frame_to_its_caller() {
+    let plain = assembly(SIX_ACROSS_A_CALL, Target::LinuxGnu);
+    assert!(
+        function_text(&plain, "f").matches("%rbp").count() > 3,
+        "%rbp is allocatable without a frame pointer:\n{plain}"
+    );
+    let text = framed_assembly(SIX_ACROSS_A_CALL, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.starts_with(
+            "\nf:\n\t.cfi_startproc\n\tpushq\t%rbp\n\t.cfi_def_cfa_offset 16\n\t.cfi_offset %rbp, \
+             -16\n\tmovq\t%rsp, %rbp\n\t.cfi_def_cfa_register %rbp\n\tpushq\t%rbx\n\t.cfi_offset \
+             %rbx, -24\n"
+        ),
+        "{f}"
+    );
+    // Pushed, described, set, popped: nothing else names it.
+    assert_eq!(f.matches("%rbp").count(), 5, "{f}");
+    assert_eq!(f.matches(".cfi_def_cfa_offset").count(), 1, "{f}");
+    assert!(
+        f.contains("\tpopq\t%rbx\n\tpopq\t%rbp\n\t.cfi_def_cfa %rsp, 8\n\tretq\n"),
+        "{f}"
+    );
+}
+
+/// A leaf keeps its frame pointer and its frame in the red zone below
+/// `%rsp`, as GCC's leaves do; the frame address is `%rbp` itself.
+#[test]
+fn a_kept_frame_pointer_leaves_a_leaf_in_the_red_zone() {
+    let text = framed_assembly(
+        "abi lowered
+function @f(i64) -> ptr external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64):
+    v1 = stack_addr slot0
+    store.i64 volatile v0, v1, align 8
+    v2 = frame_address
+    return v2
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert!(f.contains("\tpushq\t%rbp\n"), "{f}");
+    assert!(f.contains("\tmovq\t%rsp, %rbp\n"), "{f}");
+    assert!(!f.contains("subq"), "{f}");
+    assert!(f.contains(", -8(%rsp)\n"), "{f}");
+    assert!(f.contains("\tleaq\t0(%rsp), %rax\n"), "{f}");
+}
+
+/// A moving stack addresses its fixed frame below the linked `%rbp`: the
+/// frame address is `%rbp`, the return address the word above it, and the
+/// epilogue finds the other pushes from it.
+#[test]
+fn a_moving_stack_addresses_its_frame_below_the_linked_frame_pointer() {
+    let ir = "abi lowered
+function @g(ptr, ptr, ptr) external
+function @f(i64) external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64):
+    v1 = dyn_alloca.i64 v0, align 16
+    v2 = stack_addr slot0
+    store.i64 v0, v2, align 8
+    v3 = frame_address
+    v4 = return_address
+    call @g(v1, v3, v4)
+    v5 = load.i64 v2, align 8
+    call @g(v1, v2, v1)
+    return
+}
+";
+    for text in [
+        assembly(ir, Target::LinuxGnu),
+        framed_assembly(ir, Target::LinuxGnu),
+    ] {
+        let f = function_text(&text, "f");
+        assert!(
+            f.starts_with("\nf:\n\t.cfi_startproc\n\tpushq\t%rbp\n\t.cfi_def_cfa_offset 16\n"),
+            "{f}"
+        );
+        assert!(f.contains("\tleaq\t0(%rbp), %rsi\n"), "{f}");
+        assert!(f.contains("\tmovq\t8(%rbp), %rdx\n"), "{f}");
+        assert!(f.contains(", -"), "the slot lies below %rbp:\n{f}");
+        assert!(
+            f.contains(
+                "\tleaq\t-8(%rbp), %rsp\n\tpopq\t%rbx\n\tpopq\t%rbp\n\t.cfi_def_cfa %rsp, 8\n"
+            ),
+            "{f}"
+        );
+    }
+}
+
+/// Win64 keeps its own frame pointer, the establisher frame its unwind
+/// information names, under `-fno-omit-frame-pointer` too.
+#[test]
+fn win64_kept_frame_pointers_name_the_establisher_frame() {
+    let text = framed_assembly(SIX_ACROSS_A_CALL, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("\tmovq\t%rsp, %rbp\n\t.seh_setframe %rbp, 0\n\t.seh_endprologue\n"),
+        "{f}"
+    );
+    assert!(f.contains("(%rbp), %rsp\n"), "{f}");
+}
+
 #[test]
 fn int128_values_use_register_pairs() {
     let ir = "abi lowered
@@ -1101,6 +1242,136 @@ fn elf_thread_locals_use_local_exec_for_definitions_and_initial_exec_otherwise()
         "{text}"
     );
     assert!(text.contains(".section\t.tbss,\"awT\",@nobits"), "{text}");
+}
+
+/// `-fPIC` code options with the `-ftls-model` `tls_model`.
+fn pic(tls_model: TlsModel) -> CodeOptions {
+    CodeOptions {
+        relocation: Relocation::parse("-fPIC"),
+        tls_model,
+        ..CodeOptions::default()
+    }
+}
+
+#[test]
+fn shared_library_thread_locals_call_tls_get_addr() {
+    let text = assembly_with(
+        THREAD_LOCALS,
+        Target::LinuxGnu,
+        pic(TlsModel::GlobalDynamic),
+    );
+    let f = function_text(&text, "f");
+    // The exported definition and the declaration may be another module's:
+    // general-dynamic, padded to the bytes the linker rewrites.
+    for symbol in ["seed", "shared"] {
+        let lea = format!("\tdata16\n\tleaq\t{symbol}@TLSGD(%rip), %rdi\n");
+        let sequence = format!("{lea}\tdata16\n\tdata16\n\trex64\n\tcallq\t__tls_get_addr@PLT\n");
+        assert!(f.contains(&sequence), "{sequence}\n{f}");
+    }
+    // The internal one is the module's own: local-dynamic.
+    assert!(
+        f.contains("\tleaq\tzeroed@TLSLD(%rip), %rdi\n\tcallq\t__tls_get_addr@PLT\n"),
+        "{f}"
+    );
+    assert!(f.contains("leaq\tzeroed@DTPOFF(%"), "{f}");
+    assert!(!f.contains("%fs:0"), "{f}");
+    // A static model named by `-ftls-model` wins, as in GCC and Clang.
+    let initial = assembly_with(THREAD_LOCALS, Target::LinuxGnu, pic(TlsModel::InitialExec));
+    let f = function_text(&initial, "f");
+    assert_eq!(f.matches("@GOTTPOFF(%rip), %").count(), 3, "{f}");
+    assert!(!f.contains("__tls_get_addr"), "{f}");
+    // A local-dynamic request reaches a preemptible symbol general-dynamic.
+    let local = assembly_with(THREAD_LOCALS, Target::LinuxGnu, pic(TlsModel::LocalDynamic));
+    let f = function_text(&local, "f");
+    assert!(f.contains("seed@TLSGD(%rip)"), "{f}");
+    assert!(f.contains("zeroed@TLSLD(%rip)"), "{f}");
+}
+
+/// Definitions of each linkage and visibility, a declaration, and calls
+/// and address uses of each.
+const PREEMPTION: &str = "abi lowered
+global @exported external size 4, align 4 = bytes \"01000000\"
+global @internal internal size 4, align 4 = bytes \"02000000\"
+global @hidden external size 4, align 4 hidden = bytes \"03000000\"
+global @protected external size 4, align 4 protected = bytes \"04000000\"
+global @weak weak size 4, align 4 = bytes \"05000000\"
+global @declared external size 4, align 4
+function @exported_fn() external {
+block0:
+    return
+}
+function @internal_fn() internal noinline {
+block0:
+    return
+}
+function @hidden_fn() external hidden {
+block0:
+    return
+}
+function @declared_fn() external
+function @f() -> ptr external {
+block0:
+    v0 = global_addr @exported
+    v1 = load.i32 v0, align 4
+    v2 = global_addr @internal
+    store.i32 v1, v2, align 4
+    v3 = global_addr @hidden
+    store.i32 v1, v3, align 4
+    v4 = global_addr @protected
+    store.i32 v1, v4, align 4
+    v5 = global_addr @weak
+    store.i32 v1, v5, align 4
+    v6 = global_addr @declared
+    store.i32 v1, v6, align 4
+    call @exported_fn()
+    call @internal_fn()
+    call @hidden_fn()
+    call @declared_fn()
+    v7 = func_addr @exported_fn
+    store.ptr v7, v2, align 8
+    v8 = func_addr @hidden_fn
+    return v8
+}
+";
+
+#[test]
+fn shared_library_code_reaches_preemptible_symbols_through_the_got_and_plt() {
+    let text = assembly_with(PREEMPTION, Target::LinuxGnu, pic(TlsModel::GlobalDynamic));
+    let f = function_text(&text, "f");
+    for line in [
+        "movq\texported@GOTPCREL(%rip), %",
+        "movq\tweak@GOTPCREL(%rip), %",
+        "movq\tdeclared@GOTPCREL(%rip), %",
+        "internal(%rip)",
+        "hidden(%rip)",
+        "protected(%rip)",
+        "callq\texported_fn@PLT\n",
+        "callq\tinternal_fn\n",
+        "callq\thidden_fn\n",
+        "callq\tdeclared_fn@PLT\n",
+        "movq\texported_fn@GOTPCREL(%rip), %",
+        "leaq\thidden_fn(%rip), %",
+    ] {
+        assert!(f.contains(line), "{line}\n{f}");
+    }
+    for line in [
+        "\texported(%rip)",
+        "\tweak(%rip)",
+        "internal@GOTPCREL",
+        "hidden@GOTPCREL",
+        "protected@GOTPCREL",
+    ] {
+        assert!(!f.contains(line), "{line}\n{f}");
+    }
+    // An executable's definitions come first in symbol lookup, so the
+    // default position-independent executable reaches every definition
+    // directly and only the declarations through the GOT and PLT.
+    let executable = assembly(PREEMPTION, Target::LinuxGnu);
+    let f = function_text(&executable, "f");
+    assert_eq!(f.matches("@GOTPCREL(%rip)").count(), 1, "{f}");
+    assert!(f.contains("declared@GOTPCREL(%rip)"), "{f}");
+    assert!(f.contains("callq\texported_fn\n"), "{f}");
+    assert!(f.contains("callq\tdeclared_fn@PLT\n"), "{f}");
 }
 
 #[test]

@@ -39,9 +39,11 @@ use crate::{
 pub(super) fn run(
     draft: &mut Draft<'_, '_>,
     module: &Module<'_>,
+    caller: FuncId,
     graph: &CallGraph<'_>,
     report: &mut OptimizationReport,
 ) -> bool {
+    let caller_target = module.function(caller).target;
     let original_size = live_size(draft);
     let cap = original_size
         .saturating_add(original_size.max(256))
@@ -68,6 +70,20 @@ pub(super) fn run(
         // forbid expansion. GNU extension: GCC manual, "Common Function
         // Attributes", weak, noinline, noipa.
         if function.linkage == crate::ir::Linkage::Weak || function.inlining == InlineControl::Never
+        {
+            continue;
+        }
+        // A callee may use instructions its x86 `target` allows the caller's
+        // code not to; LLVM's inliner keeps such a call too
+        // (`areInlineCompatible`), except for `always_inline`, whose calls
+        // lowering has checked. Without a `target`, each has the command
+        // line's features. GNU extension: GCC manual, "x86 Function
+        // Attributes", `target`.
+        if function.inlining != InlineControl::Always
+            && function.target != caller_target
+            && !caller_target
+                .zip(function.target)
+                .is_some_and(|(caller, callee)| caller.includes(&callee))
         {
             continue;
         }

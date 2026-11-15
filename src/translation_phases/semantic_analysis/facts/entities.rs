@@ -616,6 +616,18 @@ pub(in crate::translation_phases::semantic_analysis) struct PendingSymbolRequest
     source: SourceVectors,
 }
 
+impl PendingSymbolRequest<'_> {
+    /// Whether the request labels a declarator of the identifier `name`.
+    pub(in crate::translation_phases::semantic_analysis) fn names(
+        &self,
+        name: StringCacheId,
+    ) -> bool {
+        self.declarator
+            .identifier()
+            .is_some_and(|identifier| identifier.name == name)
+    }
+}
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Checks the register a `register` automatic object's assembler label
     /// names, as GCC or Clang does: a GNU local register variable.

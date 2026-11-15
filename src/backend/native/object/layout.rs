@@ -141,7 +141,7 @@ impl<'a> Object<'a> {
                         2
                     }
                 },
-                | Kind::Cfi(..) => 0,
+                | Kind::Cfi(..) | Kind::Loc(_) | Kind::SectionChange => 0,
             };
             section.size = section
                 .size
@@ -170,8 +170,7 @@ impl<'a> Object<'a> {
                         return Err(Error("string in a NOBITS section"));
                     }
                     let start = usize::try_from(offset).map_err(|_| Error("section too large"))?;
-                    self.sections[section].data[start..start + bytes.len()]
-                        .copy_from_slice(bytes.as_bytes());
+                    self.sections[section].data[start..start + bytes.len()].copy_from_slice(bytes);
                 },
                 | Kind::Code(code) => {
                     if self.sections[section].kind == 8 {
@@ -319,7 +318,7 @@ impl<'a> Object<'a> {
             if symbol.binding == 0 && symbol.section.is_some() && matches!(kind, 9 | 41 | 42) {
                 return Err(Error("unsupported GOT reference to local symbol"));
             }
-            if matches!(kind, 22 | 23) {
+            if matches!(kind, 19..=23) {
                 self.symbols[id].kind = 6;
             }
             if let Some(base) = expression.subtract {

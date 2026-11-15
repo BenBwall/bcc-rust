@@ -53,7 +53,9 @@
 //!   walks braced initializers; `assembly.rs` lowers GNU `asm` statements;
 //!   `vla.rs` evaluates saved array extents and runs the cleanups of the
 //!   regions an exit leaves: dynamic stack restores, and GNU cleanup calls from
-//!   `cleanup.rs`.
+//!   `cleanup.rs`; `target_features.rs` refuses what an x86 `target` attribute
+//!   asks that bcc cannot compile, and calls both compilers refuse across
+//!   features.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `debug_locations.rs` and `debug_types.rs` what `-g` records beside it;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
@@ -96,6 +98,7 @@ mod recursive;
 mod sanitizer;
 mod saturation;
 mod statements;
+mod target_features;
 mod vectors;
 mod vla;
 mod wide_bit_int;
@@ -296,6 +299,10 @@ fn lower_unit<'tu, 'ir>(
                 unit.module.function(func).name,
                 sema.bindings[binding].name.source_vectors,
             ));
+            if let Err(error) = unit.check_function_target(binding) {
+                errors.push(error);
+                continue;
+            }
         }
         if let Err(error) =
             FunctionLowerer::lower(&mut unit, record.0, func, None, scratch, options)

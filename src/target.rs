@@ -19,6 +19,8 @@
 //!   `interchange_floats.rs`.
 //! - Relocation and thread-local storage models: `code_options.rs`.
 //! - Shared ELF named-section classification: `sections.rs`.
+//! - x86 features of `-m` options, `-march=` and `target` attributes, with
+//!   their measured table: `x86_features.rs`.
 //!
 //! C99: implementation-defined representations, §6.2.5, pp. 33-37;
 //! PDF pp. 45-49. Record layout: §6.7.2.1 paragraphs 10-11, p. 102;
@@ -67,10 +69,13 @@ pub(crate) use model::{
     TargetLayout,
 };
 pub(crate) use x86_features::{
+    CodeFeatures,
     Cpu,
+    FunctionTarget,
     UNKNOWN_VECTOR_ABI,
     X86Features,
     is_feature_option,
+    target_attribute_faults,
 };
 
 impl Target {

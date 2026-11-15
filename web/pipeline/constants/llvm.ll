@@ -5,7 +5,7 @@ target triple = "x86_64-unknown-linux-gnu"
 
 @.str = internal constant [15 x i8] c"total is %.3d\0A\00", align 1
 
-define i32 @main() {
+define i32 @main() #0 {
 block0:
   br label %block1
 
@@ -30,6 +30,8 @@ block4:                                           ; preds = %block1
 }
 
 declare i32 @printf(ptr noundef, ...)
+
+attributes #0 = { "frame-pointer"="all" }
 
 !llvm.module.flags = !{!0, !1}
 

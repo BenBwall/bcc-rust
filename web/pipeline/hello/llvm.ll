@@ -7,7 +7,7 @@ target triple = "x86_64-unknown-linux-gnu"
 @.str.1 = internal constant [4 x i8] c"Ada\00", align 1
 @.str.2 = internal constant [19 x i8] c"%s has %d letters\0A\00", align 1
 
-define i32 @main() {
+define i32 @main() #0 {
 block0:
   %slot0 = alloca [4 x i8], align 1
   %v1 = call i32 @puts(ptr noundef @.str)
@@ -17,7 +17,7 @@ block0:
   ret i32 0
 }
 
-define i32 @length(ptr noundef %v0) {
+define i32 @length(ptr noundef %v0) #0 {
 block0:
   br label %block1
 
@@ -43,9 +43,10 @@ declare i32 @puts(ptr noundef)
 declare i32 @printf(ptr noundef, ...)
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.memcpy.p0.p0.i64(ptr noalias writeonly captures(none), ptr noalias readonly captures(none), i64, i1 immarg) #0
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias writeonly captures(none), ptr noalias readonly captures(none), i64, i1 immarg) #1
 
-attributes #0 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
+attributes #0 = { "frame-pointer"="all" }
+attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
 
 !llvm.module.flags = !{!0, !1}
 

@@ -112,6 +112,12 @@ without a personality as well:
   personalities map `-fwrapv`, `cl /ZpN` and `cl /Zc:trigraphs` onto, and
   `-f[no-]trapv`, `-f[no-]signaling-nans`, `-f[no-]common`, `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow` and
   `-f[no-]delete-null-pointer-checks`;
+- `-mms-bitfields` and `-mno-ms-bitfields`, which lay out every record that
+  names neither `ms_struct` nor `gcc_struct` in Microsoft's or System V's
+  bit-field layout, as GCC 14 and Clang 23 do on every target; under Clang's
+  rules `-mno-ms-bitfields` on an MSVC target makes each record Clang's
+  "Itanium-compatible layout" error, in the Clang and clang-cl personalities
+  alike;
 - `-v` (the header search and each command the driver runs, quoted as
   Clang quotes them), `-H` (the include tree), `-MG` (with `-M` or `-MM`,
   missing headers taken to be generated), and `--show-includes` (`cl
@@ -310,8 +316,11 @@ previous `-march=`'s, and an explicit option outranks them wherever it stands:
 Random combinations of these options defined the same feature macros as GCC 13, GCC
 14's cc1 and Clang 23.
 
-Intrinsics compile without them, because bcc's headers compute on any x86-64, and a
-`target` attribute changes nothing about a function's code.
+Intrinsics compile without them, because bcc's headers compute on any x86-64, except
+those whose header function carries a `target` attribute (AVX, AVX2, AES, POPCNT),
+which need the feature in the calling function, as in both compilers. A function's
+`target` attribute gives its own code its features (`language-standards.md`, "Attribute
+status").
 
 These options apply only to x86-64. On a WebAssembly target `--clang-mode` refuses
 them as Clang does, with `unsupported option '-mavx2' for target
@@ -330,8 +339,10 @@ can reach and calls of them:
   change how it travels (`-mavx512f`, `-march=haswell`, `-march=x86-64-v4`), or, for
   64 bytes, under `-march=native` on an AVX-512 processor.
 - The same in a function with a `target` attribute that changes AVX, or a call from
-  one: GCC passes YMM there, Clang refuses mismatched calls, and bcc ignores the
-  attribute.
+  one: GCC passes YMM there and Clang refuses mismatched calls, while bcc keeps the
+  command line's convention for every function. A `static` function whose attribute
+  turns AVX off or AVX-512 on under the command line's AVX is refused too, since LLVM
+  would pass its vectors in other registers than bcc's calls do.
 - Under `--gcc-mode`, a variadic function's named 32-byte vector, which GCC passes in
   YMM0 and LLVM only on the stack. `--clang-mode` keeps Clang's stack.
 - `--backend=native` refuses any YMM signature, since it writes no AVX instructions.
@@ -376,6 +387,12 @@ there is an undefined symbol.
 file, so a run writes `gmon.out` for `gprof`, and `no_instrument_function` keeps a
 function out. `-p` still warns.
 
+`-fno-omit-frame-pointer` on Linux keeps a frame pointer in every function on
+both back ends, and `-fomit-frame-pointer` drops it. As in GCC, which turns
+`-fomit-frame-pointer` on from `-O1`, an unoptimized compilation (one without
+`__OPTIMIZE__`) keeps them by default; see
+[middle-end.md](../../middle-end.md#outer-frame-addresses-2026-11-08).
+
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
@@ -389,13 +406,13 @@ to the options TCC itself implements; see [TCC](#tcc).
   itself is [implemented](#debug-information)), reports and dumps, build mechanics (`-pipe`,
   `-save-temps`, `-flto`, `-fuse-ld=`), optimizations
   the compiler is permitted but not required to make (`-funroll-loops`,
-  `-fomit-frame-pointer`, `-fstrict-aliasing`), code generation tuning (`-mtune=`, `-falign-*`,
+  `-fstrict-aliasing`), code generation tuning (`-mtune=`, `-falign-*`,
   `-mtls-dialect=`), what bcc always does (`-fno-strict-aliasing`: bcc
   emits no type-based alias information;
   `-ffp-contract=off`: bcc forms no fused operations; `-fexcess-precision=`:
   x86-64 has none; `-mno-avx`: bcc uses only the baseline instruction set;
   `-march=x86-64`), the
-  target's own ABI choices (`-mms-bitfields` for a Windows target,
+  target's own ABI choices (`-mabi=ms` for a Windows target,
   `-mlong-double-80` for Linux; `-m` options are judged for the target,
   after the whole command line is read), options that only change
   which programs are accepted (`-fallow-parameterless-variadic-functions`),
@@ -414,9 +431,8 @@ to the options TCC itself implements; see [TCC](#tcc).
   differently from how those options pass it (see above).
 - **Refused**, with the compiler's kind of error, for everything else:
   options that change layout or the ABI away from the target's
-  (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on
-  Linux, `-mno-ms-bitfields` on Windows, `-mregparm=`, `-mlong-double-64`
-  outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
+  (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mabi=ms` on
+  Linux, `-mregparm=`, `-mlong-double-64` outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
   `-mgeneral-regs-only` except as below; `cl /arch:AVX2`, which also changes
   macros),
   language rules bcc does not follow (`-fsemantic-interposition`,
@@ -568,7 +584,8 @@ options it implements, so the personality passes them through: `-c -S -E -o
 -fgnu89-inline -ffreestanding -ftls-model= -H -MG`. `-Wp,` is split and
 read as preprocessor options (Fedora's `-Wp,-D_FORTIFY_SOURCE=2`). `-s`,
 `-T`, `-u`, `-z` and `-e` become linker options. `-Wa,` and `-Xassembler`
-reach bcc's assembly inputs. `-save-temps` and `-save-temps=cwd|obj` keep
+reach bcc's assembly inputs, which the system's `as` assembles as with GCC
+(see [The assembler](#the-assembler)). `-save-temps` and `-save-temps=cwd|obj` keep
 each C source's `.i` and `.s`, named after the output (`o/x.i` for `-c g.c -o
 o/x.o`, `o/p.v1-g.i` and `o/p.v1-g.o` for a program `o/p.v1`), and
 `-save-temps=cwd` leaves the directory out. bcc writes them after the program
@@ -576,7 +593,8 @@ compiles, from separate runs that read the saved `.i`, and never over the
 command's own output. So a failed compile leaves none, where GCC keeps the
 `.i`; a source read from standard input saves nothing; and `-fsyntax-only`
 writes nothing, where GCC and Clang write the `.i`.
-`-pipe` and `--param` have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
+`-pipe` and `--param` have no effect; `-specs=` warns that it has none, and `-B`
+that it finds only the assembler. `-Ofast` is
 refused: it implies `-ffast-math`, which defines `__FAST_MATH__` and links
 `crtfastmath`, which bcc does not do.
 
@@ -1088,7 +1106,8 @@ reject.
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MD,FILE`, `-MF`, `-MP` | the same, with `-MT` and `-MF` naming the rule and file after TCC's output (`a.out`, `a.d` for a link of one source) |
 | `-funsigned-char`, `-fsigned-char`, `-f[no-]common`, `-f[no-]gnu89-inline`, `-f[no-]dollars-in-identifiers` | the same |
 | `-f[no-]ms-extensions` | `-f[no-]ms-anonymous-structs`: TCC's flag allows only anonymous `struct` and `union` members, and is on by default |
-| `-fleading-underscore`, `-ftest-coverage`, `-mno-sse`, `-mms-bitfields` on Linux, `-m32` | refused, as the GCC personality refuses them |
+| `-mms-bitfields`, `-mno-ms-bitfields`, and the same in `#pragma comment(option, "...")` from there on | the same, in TCC's own Microsoft layout ([TCC's test suite rules](../../language-standards.md#tccs-test-suite-rules-2026-11-07)); the pragma's other options are refused, except a char signedness already in effect |
+| `-fleading-underscore`, `-ftest-coverage`, `-mno-sse`, `-m32` | refused, as the GCC personality refuses them |
 | `-freverse-funcargs` | ignored with a warning: C leaves the order unspecified |
 | `-g`, `-gN`, `-gdwarf[-N]` | [debug information](#debug-information), as for GCC |
 | `-fasynchronous-unwind-tables`, `-msse`, `-m64`, `-gstabs` and other `-g*`, `-B` | ignored |
@@ -1297,8 +1316,82 @@ comparison ([Checked against `cl.exe` on
 Windows](#checked-against-clexe-on-windows)) covers the driver, the
 runtime and the ABI, not these rules.
 
+## The assembler
+
+GCC's driver hands every `.s` and `.S` input to the system assembler, `as`
+(GCC manual, "Overall Options"), with the `-Wa,` and `-Xassembler` options
+(GCC manual, "Assembler Options"); it finds `as` through the `-B` prefixes,
+then `COMPILER_PATH`, its own installation directories and `PATH` (GCC
+manual, "Directory Options"; `gcc -print-prog-name=as`). Clang assembles
+with its integrated assembler unless `-fno-integrated-as` is given; that
+assembler refuses the GNU options it lacks (`clang: error: unsupported
+argument '-v' to option '-Wa,'`), answers `-Wa,--version` with Clang's own
+banner, and refuses GNU-only syntax such as Solaris section flags. Build
+systems probe for the difference. OpenSSL's perlasm (`x86_64-xlate.pl`) runs
+`$CC -Wa,-v -c -o /dev/null -x assembler /dev/null` and looks for `GNU
+assembler version`, then for `clang` in `$CC --version`; when neither
+answers it writes `.section .note.gnu.property, #alloc`, which Clang's
+assembler rejects (`expected string`), and the AVX code paths of its
+`*-x86_64.pl` scripts, which run the same probe, stay off.
+
+bcc's driver assembles an assembly input with the bundled clang, and
+`--assembler=integrated|system|auto` chooses the assembler that clang uses:
+
+| Mode | Assembler | Without an `as` |
+| --- | --- | --- |
+| `--gcc-mode` (`gcc`, `cc`, `c89`, `c99`) | `auto`: the system's `as`, run by clang under `-fno-integrated-as` with the assembler options | the integrated assembler, after a note (`gcc: note: no system assembler ...`), once per command |
+| `--clang-mode`, bcc's own command line | `integrated`, or `system` under `-fno-integrated-as` (the last of `-f[no-]integrated-as` wins) | `system`: an error (`cannot assemble ...: no system assembler ... in the -B prefixes, COMPILER_PATH or PATH`) |
+| `--tcc-mode` | `integrated`; TCC ignores `-Wa,` options, warning only under `-Wunsupported`, and bcc does the same | — |
+| `--msvc-mode`, `--clang-cl-mode` | `integrated` | — |
+
+bcc looks for `as` as each `-B` prefix followed by `as` (a prefix that is a
+directory gets its separator), then in each `COMPILER_PATH` directory, then
+on `PATH`, and hands clang the prefix that found it (`-B/usr/bin/`), so `-v`
+prints the clang command with `-fno-integrated-as` and that prefix. It looks
+only on an x86-64 Linux host compiling for Linux (glibc or musl), whose `as`
+writes those objects; elsewhere, Windows among them, `auto` is the integrated
+assembler with the note. The WebAssembly site runs no driver.
+
+The probe therefore answers as each compiler does on x86-64 Linux:
+
+| Command | GCC 13.3 | Clang 23.1.1 | TCC 0.9.28rc | bcc |
+| --- | --- | --- | --- | --- |
+| `-Wa,-v -c -o /dev/null -x assembler /dev/null` | `GNU assembler version 2.42 ...`, status 0 | `unsupported argument '-v' to option '-Wa,'`, status 1 | nothing, status 0 | each mode as its compiler (`--gcc-mode` through the host's `as`) |
+| `-Wa,--version ...` | `as --version` | Clang's banner | nothing | each mode as its compiler |
+| `--version` | `gcc ...` | `clang version ...` | `tcc version ...` | each mode names its compiler, so perlasm finds `clang` only under `--clang-mode` |
+
+So OpenSSL's perlasm writes GNU syntax for `--gcc-mode`, which GNU `as`
+assembles, and for `--clang-mode`, whose integrated assembler takes it. Under
+`--tcc-mode` it writes the Solaris flags, which the integrated assembler
+refuses, as TCC's own assembler does (`string constant expected`).
+
+**Decision.** The system assembler, not a translation of its options for the
+integrated one. Answering `-Wa,-v` with a GNU banner from the integrated
+assembler would claim an assembler that did not run, and accepting every
+GNU-only option and directive would mean reimplementing GNU `as` in front of
+LLVM's; running `as` gives GCC's behaviour exactly, including the options bcc
+does not know about (`-adhln=FILE`, `--generate-missing-build-notes`,
+`-mrelax-relocations=no`) and the errors GNU `as` gives for those it does not
+know. Assembling through the bundled clang keeps the `.S` preprocessing and
+`-g` mapping in one place.
+
+bcc's own objects keep coming from its back ends, which write them without an
+assembler. Assembling them with `as` costs little: bcc's `-S` output for
+OpenSSL's `x509_vfy.c` (8,229 lines) and `s3_lib.c` assembles in about 5 ms
+with GNU as 2.42 and 10 ms with the integrated assembler, against 0.9 s for
+`--gcc-mode -O2 -c`. But that text is LLVM 23's dialect: it aligns every
+function with `.prefalign`, which GNU as 2.42 rejects (`unknown pseudo-op`),
+so the round trip would break every compile. A `-Wa,` option given with a C
+source therefore still draws `assembler option '...' is not applied to C
+sources, which bcc assembles itself` (except `--noexecstack`, which bcc's
+objects already satisfy).
+
 ## Decisions
 
+- **Run the assembler GCC runs.** Under `--gcc-mode` assembly inputs go to the
+  system's `as`, so the assembler options, probes and directives behave as
+  with GCC, and bcc never claims an assembler that did not run (see [The
+  assembler](#the-assembler)).
 - **Translate, don't reimplement.** A personality produces bcc command lines,
   so the semantics of each option live in one place, and the personalities
   stay small tables of spellings. The few driver features they need (several
@@ -1431,7 +1524,9 @@ Besides those above:
   step is a bcc command line that bcc runs in process, named by the path
   of the running bcc, then, under `-v`, the bundled clang's assembly and
   link commands. There is no `cc1`, `as` or `collect2` line and no
-  `COLLECT_GCC_OPTIONS`; GCC's `-###` quotes the words with characters
+  `COLLECT_GCC_OPTIONS` (an assembly input's `as` runs under the clang
+  command, which shows `-fno-integrated-as`), and GCC's `-v` also passes
+  `-v` to `as`, which prints its version, where bcc's does not; GCC's `-###` quotes the words with characters
   other than letters, digits, `_`, `/`, `-` and `.`, and its `-v` none, as
   GCC does. The header search lists every configured directory, without the
   embedded resource headers, which are no directory on disk.

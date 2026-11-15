@@ -244,6 +244,9 @@ fn default_output_base(args: &Cli, source: &Path) -> Option<PathBuf> {
 /// and returns the status. Clang reads the `-x` language the input was
 /// given under, the assembler options, and, when the C preprocessor runs
 /// first, the `-D`, `-U` and `-include` options and the header search.
+/// With the system assembler `--assembler` selects, clang preprocesses the
+/// input and runs that `as` with the assembler options, as GCC's driver
+/// does (GCC manual, "Assembler Options").
 #[expect(
     clippy::disallowed_types,
     reason = "The clang options are startup strings beside clap's arguments."
@@ -254,8 +257,17 @@ pub(super) fn assemble(
     object: &Path,
     rules: &[OsString],
 ) -> i32 {
+    let Ok(system) = super::assembler::select(args, assembly.path) else {
+        return FAILURE_STATUS;
+    };
     let mut options = assembler_arguments(args, assembly);
     options.extend_from_slice(rules);
+    if let Some(prefix) = system {
+        options.push("-fno-integrated-as".into());
+        let mut prefix_option = OsString::from("-B");
+        prefix_option.push(prefix);
+        options.push(prefix_option);
+    }
     let assembled = Toolchain::bundled(args.target).and_then(|toolchain| {
         toolchain
             .with_sysroot(args.search.sysroot())
