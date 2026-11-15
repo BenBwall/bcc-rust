@@ -1776,10 +1776,17 @@ impl PreprocessorError<'_> {
                 F::Gcc,
                 PreprocessorErrorType::DirectiveExtension(directive, _)
                 | PreprocessorErrorType::C23DirectiveExtension(directive),
-            ) => (
-                format_in!(arena, "#{} before C23 is a GCC extension", directive.name()),
-                false,
-            ),
+            ) => {
+                // GCC's pedantic warning names no option: `-pedantic-errors`
+                // makes it an error as it is, and `-Werror` names itself.
+                let message =
+                    format_in!(arena, "#{} before C23 is a GCC extension", directive.name());
+                if error && self.severity() == ErrorSeverity::Warning {
+                    (format_in!(arena, "{message} [-Werror]"), true)
+                } else {
+                    (message, false)
+                }
+            },
             | (F::Clang, PreprocessorErrorType::DirectiveExtension(directive, _)) => (
                 format_in!(
                     arena,

@@ -1,0 +1,17 @@
+pp-c23-directives-gcc-werror.c:4:2: error: #warning before C23 is a GCC extension [-Werror]
+    4 | #warning reached
+      |  ^~~~~~~
+pp-c23-directives-gcc-werror.c:4:2: error: #warning reached [-Werror=cpp]
+pp-c23-directives-gcc-werror.c:5:2: error: `#elifdef` without `#if`
+    5 | #elifdef NONE
+      |  ^~~~~~~
+pp-c23-directives-gcc-werror.c:8:2: error: #elifdef before C23 is a GCC extension [-Werror]
+    8 | #elifdef YES
+      |  ^~~~~~~
+pp-c23-directives-gcc-werror.c:11:13: error: #elifndef before C23 is a GCC extension [-Werror]
+   11 | #elifndef NO
+      |             ^
+pp-c23-directives-gcc-werror.c:16:2: error: `#elifdef` after `#else`
+   16 | #elifdef YES
+      |  ^~~~~~~
+pp-c23-directives-gcc-werror.c:16:2: error: #elifdef before C23 is a GCC extension [-Werror]
