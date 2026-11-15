@@ -9,7 +9,10 @@
 //!
 //! - **Folding.** One evaluator stands for Clang's
 //!   `ConstantFoldsToSimpleInteger`, which decides every condition the flag
-//!   folds: `if`, `switch`, scalar `?:`, `&&` and `||` (`folding.rs`).
+//!   folds: `if`, `switch`, scalar `?:`, `&&` and `||` (`folding.rs`). Under
+//!   GCC's rules a condition with side effects that GCC's front end folds, such
+//!   as `d() && 0`, also decides the code it guards and the right operand of
+//!   `&&` and `||`, while it still runs (`gcc_folding.rs`).
 //! - **Folded switches.** A switch whose condition folds emits only the
 //!   statements `CollectStatementsForCase` gathers from the selected label
 //!   (`switches.rs`), with the labels and breaks each statement holds,
@@ -28,7 +31,7 @@
 //! is not.
 //!
 //! Read [`State`], then `switches.rs`, `insertion.rs`, `noreturn.rs`,
-//! `folding.rs` and `labels.rs`.
+//! `folding.rs`, `gcc_folding.rs` and `labels.rs`.
 //!
 //! C99: §6.8.4.2 paragraphs 4-5, p. 134; PDF p. 146 (switch selection);
 //! §6.8.6.3 paragraph 2, p. 138; PDF p. 150 (break); §6.8.3 paragraph 2,
@@ -41,6 +44,7 @@
 // Rules
 mod branches;
 mod folding;
+mod gcc_folding;
 mod initializers;
 mod insertion;
 mod noreturn;

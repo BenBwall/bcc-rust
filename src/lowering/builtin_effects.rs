@@ -75,6 +75,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 // An elided operand is not lowered here either: only the
                 // live arm's effects remain, without the folded condition.
                 match self.folded(expression)? {
+                    // Under GCC's rules the condition of `d() && 0 && X`
+                    // decides it and still runs.
+                    | Some(super::expressions::Folded::Live(live))
+                        if std::ptr::eq(syntax(condition)?, live) =>
+                        self.tasks
+                            .push(Task::BuiltinEffects(live, EffectContext::Value)),
                     | Some(super::expressions::Folded::Live(live)) =>
                         for effect in [then, otherwise].into_iter().flatten() {
                             let arm = syntax(effect.expression)?;

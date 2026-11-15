@@ -1089,4 +1089,35 @@ mod tests {
             assert!(text.contains(&format!("`LOUD_{name}`")), "{name}: {text}");
         }
     }
+
+    /// A call through `<alloca.h>`'s declaration expands in a hosted GNU
+    /// mode, as GCC 13 and Clang 23 expand it, until `-fno-builtin`,
+    /// `-fno-builtin-alloca`, `-ffreestanding` or a strict ISO mode makes
+    /// `alloca` an ordinary function again.
+    #[test]
+    fn declared_alloca_follows_the_builtin_options() {
+        let directory = scratch("declared-alloca");
+        let source = directory.join("alloca.c");
+        write(
+            &source,
+            "void *alloca(__SIZE_TYPE__);\nvoid g(void *);\nvoid f(void) { g(alloca(7)); }\n",
+        );
+        let source = source.to_str().unwrap();
+        for (flags, expands) in [
+            (&["-std=gnu99"][..], true),
+            (&["-std=gnu17"], true),
+            (&["-std=c99"], false),
+            (&["-std=gnu99", "-fno-builtin"], false),
+            (&["-std=gnu99", "-fno-builtin-alloca"], false),
+            (&["-std=gnu99", "-ffreestanding"], false),
+        ] {
+            let mut args = vec![source, "--emit=ir"];
+            args.extend_from_slice(flags);
+            let output = bcc(&args);
+            clean(&output);
+            let ir = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(ir.contains("dyn_alloca"), expands, "{flags:?}\n{ir}");
+            assert_eq!(ir.contains("call @alloca"), !expands, "{flags:?}\n{ir}");
+        }
+    }
 }
