@@ -11732,7 +11732,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             );
             assert_eq!(
                 defines(&tcc, "__REDIRECT(name,proto,alias)").as_deref(),
-                unix.then_some("name proto __asm__(#alias)"),
+                unix.then_some("name proto __asm__ (#alias)"),
                 "{target}"
             );
             assert_eq!(
@@ -11808,6 +11808,238 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         }
     }
 
+    /// What Ubuntu's TCC 0.9.27 (0.9.27+git20200814.62c30a4a) lists for
+    /// `tcc -E -dM empty.c` on x86-64 Linux, but its `__builtin_offsetof`
+    /// macro, which bcc has as a builtin.
+    const TCC_PREDEFINED: &str = "#define __BASE_FILE__ \"empty.c\"
+#define __builtin_extract_return_addr(x) x
+#define __BYTE_ORDER__ __ORDER_LITTLE_ENDIAN__
+#define __CHAR_BIT__ 8
+#define __INT_MAX__ 0x7fffffff
+#define __linux 1
+#define __linux__ 1
+#define __LONG_LONG_MAX__ 0x7fffffffffffffffLL
+#define __LONG_MAX__ 0x7fffffffffffffffL
+#define __LP64__ 1
+#define __ORDER_BIG_ENDIAN__ 4321
+#define __ORDER_LITTLE_ENDIAN__ 1234
+#define __PTRDIFF_TYPE__ long
+#define __REDIRECT(name,proto,alias) name proto __asm__ (#alias)
+#define __REDIRECT_NTH(name,proto,alias) name proto __asm__ (#alias) __THROW
+#define __SIZEOF_INT__ 4
+#define __SIZEOF_LONG__ 8
+#define __SIZEOF_LONG_LONG__ 8
+#define __SIZEOF_POINTER__ 8
+#define __SIZE_TYPE__ unsigned long
+#define __STDC__ 1
+#define __STDC_HOSTED__ 1
+#define __STDC_VERSION__ 199901L
+#define __TINYC__ 927
+#define __unix 1
+#define __unix__ 1
+#define unix 1
+#define __WCHAR_TYPE__ int
+#define __WINT_TYPE__ unsigned int
+#define __x86_64__ 1
+";
+
+    /// Whether `line` of a `-dM` listing defines a macro the TCC identity
+    /// keeps beside TCC's own on Linux (`driver-modes.md`, "TCC").
+    fn tcc_kept_macro(line: &str) -> bool {
+        let name = line
+            .strip_prefix("#define ")
+            .and_then(|definition| definition.split([' ', '(']).next())
+            .unwrap_or("");
+        let floating = ["__FLT_", "__DBL_", "__LDBL_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix));
+        name.starts_with("__bcc")
+            || floating
+            || (name.starts_with("__GCC_ATOMIC_") && name.ends_with("_LOCK_FREE"))
+            || name.starts_with("__STDC_EMBED_")
+            || matches!(
+                name,
+                "__REDIRECT_NTHNL" | "__FLT_RADIX__" | "__SCHAR_MAX__" | "__SHRT_MAX__"
+            )
+    }
+
+    /// The lines of `listing` that are not in `base`, sorted.
+    fn added_lines<'a>(listing: &'a str, base: &str) -> Vec<&'a str> {
+        let mut added: Vec<&str> = listing
+            .lines()
+            .filter(|line| !base.lines().any(|old| old == *line))
+            .collect();
+        added.sort_unstable();
+        added
+    }
+
+    /// On Linux the TCC identity predefines what TCC 0.9.27 predefines, in
+    /// TCC's spellings, and besides only bcc's own macros and those bcc's
+    /// headers read; TCC's options add what they add in TCC (each
+    /// expectation is a real TCC's `-dM` output).
+    #[test]
+    fn tcc_predefines_what_tcc_predefines() {
+        let listing = macros_with(
+            "",
+            &[
+                "--compiler-identity=tcc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-std=gnu99",
+            ],
+        );
+        let mut own: Vec<&str> = listing
+            .lines()
+            .filter(|line| !tcc_kept_macro(line))
+            .collect();
+        own.sort_unstable();
+        let mut expected: Vec<&str> = TCC_PREDEFINED.lines().collect();
+        expected.sort_unstable();
+        assert_eq!(own, expected, "{listing}");
+        for name in [
+            "__ATOMIC_SEQ_CST",
+            "__GNUC__",
+            "__clang__",
+            "__SSE2__",
+            "__ELF__",
+            "__PIC__",
+            "__STDC_MB_MIGHT_NEQ_WC__",
+            "__FLT_HAS_INFINITY__",
+            "__CLANG_ATOMIC_INT_LOCK_FREE",
+        ] {
+            assert_eq!(defines(&listing, name), None, "{name}");
+        }
+        for name in [
+            "__bcc__",
+            "__REDIRECT_NTHNL(name,proto,alias)",
+            "__FLT_MAX__",
+            "__LDBL_DECIMAL_DIG__",
+            "__SHRT_MAX__",
+            "__GCC_ATOMIC_INT_LOCK_FREE",
+        ] {
+            assert!(defines(&listing, name).is_some(), "{name}");
+        }
+        // The personality maps TCC's options onto the host's target.
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let base = macros("--tcc-mode");
+        for (option, added) in [
+            (
+                "-std=c11",
+                &[
+                    "#define __STDC_NO_ATOMICS__ 1",
+                    "#define __STDC_NO_COMPLEX__ 1",
+                    "#define __STDC_NO_THREADS__ 1",
+                    "#define __STDC_UTF_16__ 1",
+                    "#define __STDC_UTF_32__ 1",
+                    "#define __STDC_VERSION__ 201112L",
+                ][..],
+            ),
+            ("-funsigned-char", &["#define __CHAR_UNSIGNED__ 1"]),
+            ("-O2", &["#define __OPTIMIZE__ 1"]),
+            ("-O", &[]),
+            ("-Os", &[]),
+            ("-pthread", &["#define _REENTRANT 1"]),
+        ] {
+            let listing = macros_with("--tcc-mode", &[option]);
+            assert_eq!(added_lines(&listing, &base), added, "{option}");
+        }
+        // bcc's <stdatomic.h> defines the memory orders TCC leaves out, as
+        // TCC mob's does.
+        let directory = Directory::new();
+        directory.write(
+            "atomic.c",
+            "#include <stdatomic.h>\nint main(void) { atomic_int a = 1; atomic_fetch_add(&a, \
+             2); return atomic_load_explicit(&a, memory_order_seq_cst) + __ATOMIC_SEQ_CST; }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-run", "atomic.c"]);
+        assert_eq!(output.status.code(), Some(8), "{}", stderr(&output));
+    }
+
+    /// The warnings TCC gives by default read as Ubuntu's TCC 0.9.27 gives
+    /// them (`mob` too, but for line 3, which it words `useless type
+    /// defines no instances`), with TCC's cast warning on every conversion
+    /// between a pointer and an integer of another width it converts as a
+    /// cast, a constant one aside.
+    #[test]
+    fn tcc_warnings_read_as_tcc_gives_them() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write("warn.c", TCC_WARNINGS_SOURCE);
+        let output = directory.bcc("--tcc-mode", &["-c", "warn.c"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), TCC_WARNINGS);
+        // TCC folds a static object's initializer without warning of its
+        // casts; the error is bcc's.
+        directory.write("static.c", "int g;\nshort s = (short)&g;\n");
+        let output = directory.bcc("--tcc-mode", &["-c", "static.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "static.c:2: error: static-storage initializer requires a constant expression\n"
+        );
+    }
+
+    const TCC_WARNINGS_SOURCE: &str = "int g;
+enum E { A };
+struct { int a; };
+void take(short);
+int r1(char *p) { return p; }
+long r2(char *p) { return p; }
+int f1(int x) { if (x) return 1; }
+static inline int f2(int x) { if (x) return 1; }
+int f3(int x) { for (;;) if (x) return 1; }
+int main(void) {
+    char *p = 5;
+    int x = \"s\";
+    int i = 1;
+    long l = 2;
+    enum E e = (enum E)p;
+    int a = (int)&g;
+    void *v = (void *)(1 ? 2 : i);
+    int b = (int)(char *)5;
+    int c = (int)(long)p;
+    short s = p;
+    take(p);
+    p = i ? p : i;
+    p = i ? p : l;
+    int *q = &i;
+    const int *r = q;
+    q = r;
+    if (q == p)
+        return 1;
+    if (p == i)
+        return 2;
+    switch (i) { case 5 ... 1: break; }
+}
+";
+
+    /// Ubuntu's TCC 0.9.27 compiling [`TCC_WARNINGS_SOURCE`].
+    const TCC_WARNINGS: &str = "warn.c:3: warning: unnamed struct/union that defines no instances
+warn.c:5: warning: assignment makes integer from pointer without a cast
+warn.c:5: warning: cast between pointer and integer of different size
+warn.c:6: warning: assignment makes integer from pointer without a cast
+warn.c:7: warning: function might return no value: 'f1'
+warn.c:11: warning: assignment makes pointer from integer without a cast
+warn.c:12: warning: assignment makes integer from pointer without a cast
+warn.c:12: warning: cast between pointer and integer of different size
+warn.c:15: warning: cast between pointer and integer of different size
+warn.c:16: warning: cast between pointer and integer of different size
+warn.c:20: warning: assignment makes integer from pointer without a cast
+warn.c:20: warning: cast between pointer and integer of different size
+warn.c:21: warning: assignment makes integer from pointer without a cast
+warn.c:21: warning: cast between pointer and integer of different size
+warn.c:22: warning: pointer/integer mismatch in conditional expression
+warn.c:22: warning: cast between pointer and integer of different size
+warn.c:23: warning: pointer/integer mismatch in conditional expression
+warn.c:26: warning: assignment discards qualifiers from pointer target type
+warn.c:27: warning: pointer type mismatch in comparison('int *' and 'char *')
+warn.c:29: warning: pointer/integer mismatch in comparison
+warn.c:31: warning: empty case range
+";
+
     /// `tcc -ar` runs the bundled archiver with the rest of the command
     /// line, as TCC runs its own.
     #[test]
@@ -11870,6 +12102,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             ),
             ("lib.c", "int libval(void) { return 42; }\n"),
             ("args.txt", "-c hello.c -o fromfile.o\n"),
+            ("warn.c", TCC_WARNINGS_SOURCE),
         ];
         let cases: &[&[&str]] = &[
             &["-c"],
@@ -11923,6 +12156,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             &["@args.txt"],
             &["-Wp,-DFOO=5", "-E", "-P", "macros.c"],
             &["-I", "-c", "-c", "hello.c"],
+            &["-c", "warn.c"],
         ];
         let run = |program: &std::ffi::OsStr, mode: Option<&str>, args: &[&str]| {
             let directory = Directory::new();
@@ -11969,6 +12203,73 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
                 failures.push(format!(
                     "tcc {}:\n  tcc: {expected:?}\n  bcc: {actual:?}",
                     args.join(" ")
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// [`tcc_parity_with_a_real_tcc`] for the predefined macros: the TCC
+    /// that `BCC_TCC` names lists what the personality lists, but the
+    /// macros bcc keeps beside TCC's ([`tcc_kept_macro`]) and TCC's
+    /// `__builtin_offsetof`, under each option that changes them. TCC's
+    /// listing replays its definitions in order, an `#undef` among them.
+    #[test]
+    fn tcc_parity_with_a_real_tcc_predefined_macros() {
+        let Some(tcc) = std::env::var_os("BCC_TCC") else {
+            eprintln!("skipping: BCC_TCC names no tcc binary");
+            return;
+        };
+        let directory = Directory::new();
+        directory.write("empty.c", "");
+        let mut failures = Vec::new();
+        for options in [
+            &[][..],
+            &["-std=c11"],
+            &["-funsigned-char"],
+            &["-O2"],
+            &["-O"],
+            &["-Os"],
+            &["-pthread"],
+        ] {
+            let output = Command::new(&tcc)
+                .args(options)
+                .args(["-E", "-dM", "empty.c"])
+                .current_dir(&directory.0)
+                .output()
+                .unwrap();
+            succeeds(&output);
+            let mut expected: Vec<String> = Vec::new();
+            for line in stdout(&output).lines() {
+                let name = |line: &str| {
+                    line.split_once(' ')
+                        .map_or("", |(_, rest)| rest)
+                        .split([' ', '('])
+                        .next()
+                        .unwrap_or("")
+                        .to_owned()
+                };
+                let defined = name(line);
+                expected.retain(|old| name(old) != defined);
+                if line.starts_with("#define ") && defined != "__builtin_offsetof" {
+                    expected.push(line.to_owned());
+                }
+            }
+            expected.sort_unstable();
+            let mut args = options.to_vec();
+            args.extend(["-E", "-dM", "empty.c"]);
+            let output = directory.bcc("--tcc-mode", &args);
+            succeeds(&output);
+            let listing = stdout(&output);
+            let mut actual: Vec<&str> = listing
+                .lines()
+                .filter(|line| !tcc_kept_macro(line))
+                .collect();
+            actual.sort_unstable();
+            if actual != expected {
+                failures.push(format!(
+                    "tcc {}:\n  tcc: {expected:?}\n  bcc: {actual:?}",
+                    options.join(" ")
                 ));
             }
         }
