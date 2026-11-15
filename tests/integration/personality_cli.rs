@@ -8222,16 +8222,26 @@ mod tests {
     }
 
     /// Reaching the end of a function, under the options each compiler has for
-    /// it. Each row was measured against GCC 14.2 and Clang 23.1.
+    /// it. Each row was measured against GCC 14.2 and Clang 23.1. GCC's middle
+    /// end gives the warning, so only a compilation reports it, not
+    /// `-fsyntax-only`.
     #[test]
     fn gnu_return_type_warnings_follow_their_options() {
         let directory = Directory::new();
         directory.write("a.c", "int f(int x) { if (x) return 1; }\n");
+        let compile = |mode: &str| {
+            if mode == "--gcc-mode" {
+                ["-c", "-o", "a.o"].as_slice()
+            } else {
+                ["-fsyntax-only"].as_slice()
+            }
+        };
         let warns = |mode: &str, args: &[&str]| {
             let args: Vec<&str> = args
                 .iter()
+                .chain(compile(mode))
                 .copied()
-                .chain(["-fsyntax-only", "a.c"])
+                .chain(["a.c"])
                 .collect();
             let output = directory.bcc(mode, &args);
             succeeds(&output);
@@ -8248,6 +8258,9 @@ mod tests {
         ] {
             assert_eq!(warns(mode, args), expected, "{mode} {args:?}");
         }
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "a.c"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
         // Clang's analysis stops at the unit's first error, where GCC's goes
         // on.
         directory.write(
@@ -8258,17 +8271,18 @@ mod tests {
         let text = stderr(&output);
         assert!(text.contains("e.c:1:"), "{text}");
         assert!(!text.contains("e.c:3:"), "{text}");
-        let output = directory.bcc("--gcc-mode", &["-Wall", "-fsyntax-only", "e.c"]);
+        let output = directory.bcc("--gcc-mode", &["-Wall", "-c", "-o", "e.o", "e.c"]);
         let text = stderr(&output);
         assert!(text.contains("e.c:1:"), "{text}");
         // `main` falls off its end with a value from C99 on, and GCC holds a
         // hosted one to C89 too.
         directory.write("m.c", "int main(void) { }\n");
+        let gcc = ["-Wall", "-std=c89", "-c", "-o", "m.o", "m.c"];
+        assert!(stderr(&directory.bcc("--gcc-mode", &gcc)).contains("control reaches"));
         let args = ["-Wall", "-std=c89", "-fsyntax-only", "m.c"];
-        assert!(stderr(&directory.bcc("--gcc-mode", &args)).contains("control reaches"));
         assert_eq!(stderr(&directory.bcc("--clang-mode", &args)), "");
-        let args = ["-Wall", "-std=c99", "-fsyntax-only", "m.c"];
-        assert_eq!(stderr(&directory.bcc("--gcc-mode", &args)), "");
+        let gcc = ["-Wall", "-std=c99", "-c", "-o", "m.o", "m.c"];
+        assert_eq!(stderr(&directory.bcc("--gcc-mode", &gcc)), "");
         let args = ["-ffreestanding", "-fsyntax-only", "m.c"];
         assert!(stderr(&directory.bcc("--clang-mode", &args)).contains("does not return"));
     }
