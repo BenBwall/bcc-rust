@@ -1,0 +1,11 @@
+sema-unused-order-werror-gcc.c: In function 'first':
+sema-unused-order-werror-gcc.c:5:9: error: unused variable 'x' [-Werror=unused-variable]
+    5 |     int x;
+      |         ^
+sema-unused-order-werror-gcc.c:4:17: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    4 |     typedef int T;
+      |                 ^
+sema-unused-order-werror-gcc.c: In function 'second':
+sema-unused-order-werror-gcc.c:9:17: warning: typedef 'U' locally defined but not used [-Wunused-local-typedefs]
+    9 |     typedef int U;
+      |                 ^

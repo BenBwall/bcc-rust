@@ -1229,10 +1229,24 @@ set in Clang. `-Wall` and `-Wunused` hold these groups; `-Wextra` holds the
 parameter groups, in GCC only together with `-Wunused`. A discarded value warns
 by default in Clang alone. Scope exit reports variables and the end of the
 translation unit reports file-scope objects and functions. With every group that
-needs them off no uses are recorded. `-Wunused-local-typedefs` is accepted and
-reports nothing, as are `const`/`pure` calls under `-Wunused-value`,
-`-Wunused-result`, and a value in a statement expression's last statement,
-which Clang reads.
+needs them off no uses are recorded. `-Wunused-local-typedefs` reports a
+typedef a block declares and nothing names. `const`/`pure` calls under
+`-Wunused-value`, `-Wunused-result`, and a value in a statement expression's last
+statement, which Clang reads, report nothing.
+
+Clang reports these in source order. The GCC identity reports them when GCC
+does, and a semantic diagnostic's `ReportOrder` places it there for the
+reporter, which otherwise sorts each file's warnings by location. Leaving a
+block (`pop_scope`) reports its variables and labels at its closing brace,
+latest binding first; an ordinary label is bound in the function's outermost
+block where it is first named. The end of a function (`finish_function`) then
+reports `no return statement`, the parameters only set, the function's local
+typedefs while no error that `-Werror` did not make has been reported, and the
+unused parameters. After the unit come the undefined internal functions, the
+middle end's `control reaches end` (not under `-fsyntax-only`), and the
+internal objects and functions nothing uses, in the reverse of the order GCC's
+symbol table gained them: an object at its first declaration, a function at its
+definition.
 
 An attribute's identifier arguments count as references, so a `cleanup` or
 `malloc` function is used; a string names its target for `ifunc` and, in GCC,

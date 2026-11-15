@@ -1,0 +1,14 @@
+sema-unused-order-syntax-only-gcc.c: In function 'block':
+sema-unused-order-syntax-only-gcc.c:18:14: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+   18 |     return a < u;
+      |              ^
+sema-unused-order-syntax-only-gcc.c:17:9: warning: unused variable 'k' [-Wunused-variable]
+   17 |     int k;
+      |         ^
+sema-unused-order-syntax-only-gcc.c: At top level:
+sema-unused-order-syntax-only-gcc.c:5:13: warning: 'never_defined' declared 'static' but never defined [-Wunused-function]
+    5 | static void never_defined(void);
+      |             ^~~~~~~~~~~~~
+sema-unused-order-syntax-only-gcc.c:15:13: warning: 'also_never_defined' declared 'static' but never defined [-Wunused-function]
+   15 | static void also_never_defined(void);
+      |             ^~~~~~~~~~~~~~~~~~

@@ -1,0 +1,70 @@
+sema-unused-order-gcc.c: In function 'blocks':
+sema-unused-order-gcc.c:8:15: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+    8 |         if (a < u)
+      |               ^
+sema-unused-order-gcc.c:7:13: warning: unused variable 'inner' [-Wunused-variable]
+    7 |         int inner;
+      |             ^~~~~
+sema-unused-order-gcc.c:11:11: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+   11 |     if (a > u)
+      |           ^
+sema-unused-order-gcc.c:14:13: warning: unused variable 'in_loop' [-Wunused-variable]
+   14 |         int in_loop;
+      |             ^~~~~~~
+sema-unused-order-gcc.c:16:9: warning: variable 'set' set but not used [-Wunused-but-set-variable]
+   16 |     int set;
+      |         ^~~
+sema-unused-order-gcc.c:5:16: warning: unused variable 'second' [-Wunused-variable]
+    5 |     int first, second;
+      |                ^~~~~~
+sema-unused-order-gcc.c:5:9: warning: unused variable 'first' [-Wunused-variable]
+    5 |     int first, second;
+      |         ^~~~~
+sema-unused-order-gcc.c:4:9: warning: unused variable 'outer' [-Wunused-variable]
+    4 |     int outer;
+      |         ^~~~~
+sema-unused-order-gcc.c: In function 'labels':
+sema-unused-order-gcc.c:29:13: warning: unused variable 'y' [-Wunused-variable]
+   29 |         int y;
+      |             ^
+sema-unused-order-gcc.c:30:5: warning: label 'local' defined but not used [-Wunused-label]
+   30 |     local:
+      |     ^~~~~
+sema-unused-order-gcc.c:36:14: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+   36 |     return a < u;
+      |              ^
+sema-unused-order-gcc.c:32:5: warning: label 'nested' defined but not used [-Wunused-label]
+   32 |     nested:
+      |     ^~~~~~
+sema-unused-order-gcc.c:26:1: warning: label 'first' defined but not used [-Wunused-label]
+   26 | first:
+      | ^~~~~
+sema-unused-order-gcc.c:25:9: warning: unused variable 'x' [-Wunused-variable]
+   25 |     int x;
+      |         ^
+sema-unused-order-gcc.c:35:1: warning: label 'declared' defined but not used [-Wunused-label]
+   35 | declared:
+      | ^~~~~~~~
+sema-unused-order-gcc.c: In function 'statement_expression':
+sema-unused-order-gcc.c:41:25: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+   41 |     int x = ({ int y; a < u; });
+      |                         ^
+sema-unused-order-gcc.c:41:20: warning: unused variable 'y' [-Wunused-variable]
+   41 |     int x = ({ int y; a < u; });
+      |                    ^
+sema-unused-order-gcc.c: In function 'parameters':
+sema-unused-order-gcc.c:51:13: warning: unused variable 'z' [-Wunused-variable]
+   51 |         int z;
+      |             ^
+sema-unused-order-gcc.c:47:27: warning: parameter 'only_set' set but not used [-Wunused-but-set-parameter]
+   47 | static int parameters(int only_set, int unused, int read) {
+      |                           ^~~~~~~~
+sema-unused-order-gcc.c:48:17: warning: typedef 'Outer' locally defined but not used [-Wunused-local-typedefs]
+   48 |     typedef int Outer;
+      |                 ^~~~~
+sema-unused-order-gcc.c:50:21: warning: typedef 'Inner' locally defined but not used [-Wunused-local-typedefs]
+   50 |         typedef int Inner;
+      |                     ^~~~~
+sema-unused-order-gcc.c:47:41: warning: unused parameter 'unused' [-Wunused-parameter]
+   47 | static int parameters(int only_set, int unused, int read) {
+      |                                         ^~~~~~
