@@ -87,6 +87,13 @@ impl Selector<'_, '_, '_> {
         if clobbered.contains(PReg::Rsp) || clobbered.contains(PReg::Rbp) {
             return Err(Construct::InlineAsm("a clobbered %rsp or %rbp"));
         }
+        // The native back end keeps no x87 register stack to place them on.
+        if operands
+            .iter()
+            .any(|operand| matches!(operand.constraint, AsmConstraint::X87(_)))
+        {
+            return Err(Construct::InlineAsm("x87 stack operands (`t`, `u` or `f`)"));
+        }
         // The registers no operand may take, and those outputs and inputs
         // hold.
         let reserved = clobbered
@@ -148,8 +155,10 @@ impl Selector<'_, '_, '_> {
                     continue,
                 // The address of a memory operand.
                 | AsmConstraint::Memory => (RegClass::Gpr, AsmConstraint::ANY_GENERAL),
-                | AsmConstraint::Tied(_) | AsmConstraint::Immediate | AsmConstraint::Flag(_) =>
-                    continue,
+                | AsmConstraint::Tied(_)
+                | AsmConstraint::Immediate
+                | AsmConstraint::Flag(_)
+                | AsmConstraint::X87(_) => continue,
             };
             let order = match class {
                 | RegClass::Gpr => self.conv.allocation,
