@@ -1,0 +1,46 @@
+sema-int-float-gnu-clang.c:1:31: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+    1 | float f1(int a) { return a ?: 16777217; }
+      |                               ^~~~~~~~
+sema-int-float-gnu-clang.c:2:45: warning: implicit conversion from 'int' to 'float' changes value from 16777217 to 16777216 [-Wimplicit-const-int-float-conversion]
+    2 | float f2(int a) { return __extension__ (a ? 16777217 : 1.0); }
+      |                                             ^~~~~~~~
+sema-int-float-gnu-clang.c:3:44: warning: implicit conversion from 'int' to 'float' changes value from 16777219 to 16777220 [-Wimplicit-const-int-float-conversion]
+    3 | float f3(int a) { return a ? __extension__ 16777219 : 0; }
+      |                                            ^~~~~~~~
+sema-int-float-gnu-clang.c:4:25: warning: implicit conversion from 'int' to 'float' changes value from 16777221 to 16777220 [-Wimplicit-const-int-float-conversion]
+    4 | float f4(void) { return 16777221 ?: 0; }
+      |                         ^~~~~~~~
+sema-int-float-gnu-clang.c:5:30: warning: implicit conversion from 'int' to 'float' changes value from 16777223 to 16777224 [-Wimplicit-const-int-float-conversion]
+    5 | float f5(void) { return 0 ?: 16777223; }
+      |                              ^~~~~~~~
+sema-int-float-gnu-clang.c:7:47: warning: implicit conversion from 'int' to 'float' changes value from 16777227 to 16777228 [-Wimplicit-const-int-float-conversion]
+    7 | float f7(int a) { return _Generic(0, int: a ? 16777227 : 0); }
+      |                                               ^~~~~~~~
+sema-int-float-gnu-clang.c:8:55: warning: implicit conversion from 'int' to 'float' changes value from 16777229 to 16777228 [-Wimplicit-const-int-float-conversion]
+    8 | float f8(int a) { return __builtin_choose_expr(1, a ? 16777229 : 0, 0); }
+      |                                                       ^~~~~~~~
+sema-int-float-gnu-clang.c:9:43: warning: implicit conversion from 'int' to 'float' changes value from 16777231 to 16777232 [-Wimplicit-const-int-float-conversion]
+    9 | float f9(int a, int b) { return a ?: (b ? 16777231 : 0); }
+      |                                           ^~~~~~~~
+sema-int-float-gnu-clang.c:10:33: warning: implicit conversion from 'int' to 'float' changes value from 16777233 to 16777232 [-Wimplicit-const-int-float-conversion]
+   10 | float f10(int a) { return (a ?: 16777233); }
+      |                                 ^~~~~~~~
+sema-int-float-gnu-clang.c:11:47: warning: implicit conversion from 'int' to 'float' changes value from 16777235 to 16777236 [-Wimplicit-const-int-float-conversion]
+   11 | float f11(int a) { return __extension__ (a ?: 16777235); }
+      |                                               ^~~~~~~~
+sema-int-float-gnu-clang.c:12:33: warning: implicit conversion from 'long' to 'double' changes value from 9007199254740993 to 9007199254740992 [-Wimplicit-const-int-float-conversion]
+   12 | double f12(int a) { return a ?: 9007199254740993; }
+      |                                 ^~~~~~~~~~~~~~~~
+sema-int-float-gnu-clang.c:14:46: warning: implicit conversion from 'int' to 'float' changes value from 16777239 to 16777240 [-Wimplicit-const-int-float-conversion]
+   14 | float f14(float x, int a) { return x + (a ?: 16777239); }
+      |                                              ^~~~~~~~
+sema-int-float-gnu-clang.c:15:54: warning: implicit conversion from 'int' to 'float' changes value from 16777241 to 16777240 [-Wimplicit-const-int-float-conversion]
+   15 | float f15(float x, int a) { return x + __extension__ 16777241; }
+      |                                                      ^~~~~~~~
+sema-int-float-gnu-clang.c:16:17: warning: implicit conversion from 'int' to 'float' changes value from 16777243 to 16777244 [-Wimplicit-const-int-float-conversion]
+   16 | float g1 = 0 ?: 16777243;
+      |                 ^~~~~~~~
+sema-int-float-gnu-clang.c:17:26: warning: implicit conversion from 'int' to 'float' changes value from 16777245 to 16777244 [-Wimplicit-const-int-float-conversion]
+   17 | float g2 = __extension__ 16777245;
+      |                          ^~~~~~~~
+15 warnings generated.

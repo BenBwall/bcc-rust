@@ -3188,7 +3188,8 @@ struct EmissionMark {
 /// A warning in a generic selection being analyzed, reported once the
 /// outermost selection is typed if it is in the associations selected: one
 /// outside a function that Clang gives only in the selected operand
-/// ([`Analyzer::warn_if_selected`]).
+/// ([`Analyzer::warn_if_selected`]), and Clang's integer-to-floating warning
+/// anywhere ([`Analyzer::check_int_float_constant`]).
 /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
 #[derive(Clone, Copy)]
 pub(super) struct HeldWarning {
