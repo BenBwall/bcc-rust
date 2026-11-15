@@ -14,6 +14,7 @@ use std::{
 use super::{
     Expander,
     errors::{
+        C23Directive,
         PreprocessorError,
         PreprocessorErrorType,
     },
@@ -33,6 +34,7 @@ use crate::{
     },
     translation_phases::{
         Context,
+        DiagnosticPolicy,
         SourceVector,
         SourceVectors,
         TranslationPhase,
@@ -275,12 +277,40 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         Some(self.integer_pp_token(value, token.source_vectors))
     }
 
+    /// Reports `directive`, a directive C23 adds, read before C23: Clang's
+    /// personality reports `#elifdef`, `#elifndef` and `#embed` under its
+    /// `-Wc23-extensions`, a warning by default; otherwise the extension
+    /// policy decides, as it does for `#warning` everywhere. The caller has
+    /// accepted the directive. C23: §6.10.2 paragraph 2, p. 166; PDF p. 179;
+    /// §6.10.4.1 paragraph 7, p. 171; PDF p. 184; §6.10.7 paragraph 1,
+    /// p. 186; PDF p. 199.
+    pub(super) fn report_c23_directive(&mut self, directive: C23Directive, source: SourceVectors) {
+        if directive != C23Directive::Warning && self.context.configuration.reports_c23_directives()
+        {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::C23DirectiveExtension(directive),
+                source_vectors: source,
+            });
+            return;
+        }
+        let feature = match directive {
+            | C23Directive::Warning => Feature::WarningDirective,
+            | C23Directive::Elifdef | C23Directive::Elifndef => Feature::Elifdef,
+            | C23Directive::Embed => Feature::Embed,
+        };
+        self.context.preprocessor_extension(
+            feature,
+            DiagnosticPolicy::Extension,
+            source,
+            |severity| PreprocessorErrorType::DirectiveExtension(directive, severity),
+        );
+    }
+
     /// Replaces resource inclusion with ordinary integer preprocessing tokens.
     /// C23: §6.10.4.1p7, p. 171; PDF p. 184, and §6.10.4.2p4,
     /// p. 174; PDF p. 187.
     pub(super) fn parse_embed_directive(&mut self, directive: PreprocessorToken) {
-        self.context
-            .report_extension(Feature::Embed, "#embed", directive.source_vectors);
+        self.report_c23_directive(C23Directive::Embed, directive.source_vectors);
         let mut tokens = ArenaVec::new_in(self.scratch);
         _ = self.collect_written_resource(&mut tokens);
         let query_expansion = std::mem::replace(&mut self.query_expansion, QueryExpansion::Defer);

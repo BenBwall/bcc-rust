@@ -16,6 +16,7 @@ use std::{
 use super::{
     Expander,
     errors::{
+        C23Directive,
         PreprocessorError,
         PreprocessorErrorType,
     },
@@ -27,6 +28,7 @@ use crate::{
         Context,
         GetSourceFileIndex,
         SourceVector,
+        SourceVectors,
         TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -228,6 +230,13 @@ impl Expander<'_, '_, '_, '_> {
                     if innermost && self.context.configuration.accepts(Feature::Elifdef) =>
                 {
                     let valid = self.check_conditional_arm(name, false);
+                    let directive = c23_conditional(self.context, name);
+                    // Clang reports each one it meets, in a skipped group
+                    // too.
+                    let clang = self.context.configuration.reports_c23_directives();
+                    if clang {
+                        self.report_c23_directive(directive, name.source_vectors);
+                    }
                     if !valid || mode == SkipMode::ToEndif {
                         if valid {
                             self.trace_unevaluated_arm(name, file, &mut after, until);
@@ -235,34 +244,19 @@ impl Expander<'_, '_, '_, '_> {
                         continue 'lines;
                     }
                     self.context.set_ignore_tokenizer_errors(false);
-                    let directive = conditional_directive_name(self.context, name);
-                    self.context.report_extension(
-                        Feature::Elifdef,
-                        if directive == "elifdef" {
-                            "#elifdef"
-                        } else {
-                            "#elifndef"
-                        },
-                        name.source_vectors,
-                    );
-                    let taken = self.eval_macro_test(directive);
                     // GCC's `gnu` modes report it only where taking the group
-                    // tells it from an older compiler's skipping it.
-                    if taken
-                        && self
-                            .context
-                            .configuration
-                            .silent_extension(Feature::Elifdef)
-                    {
-                        self.context.report_extension_since(
-                            if directive == "elifdef" {
-                                "#elifdef"
-                            } else {
-                                "#elifndef"
-                            },
-                            Feature::Elifdef.origin(),
-                            name.source_vectors,
-                        );
+                    // tells it from an older compiler's skipping it, at the
+                    // end of the line it has read.
+                    let silent = self
+                        .context
+                        .configuration
+                        .silent_extension(Feature::Elifdef);
+                    if !clang && !silent {
+                        self.report_c23_directive(directive, name.source_vectors);
+                    }
+                    let (taken, end) = self.eval_macro_test(directive.name());
+                    if taken && silent {
+                        self.report_c23_directive(directive, end.unwrap_or(name.source_vectors));
                     }
                     if self.tracing() {
                         self.trace_condition(name.source_vectors, taken, true);
@@ -275,6 +269,13 @@ impl Expander<'_, '_, '_, '_> {
                     }
                     after = (until.unwrap_or(after.0), false);
                     self.context.set_ignore_tokenizer_errors(true);
+                },
+                // Clang reports one in a nested skipped group too.
+                // Clang extension: Clang 23, `Lexer`'s
+                // `SkipExcludedConditionalBlock`.
+                | "elifdef" | "elifndef" if self.context.configuration.reports_c23_directives() => {
+                    let directive = c23_conditional(self.context, name);
+                    self.report_c23_directive(directive, name.source_vectors);
                 },
                 | "else" if innermost => {
                     let valid = self.check_conditional_arm(name, true);
@@ -451,7 +452,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             self.context,
             directive,
         ));
-        let taken = self.eval_macro_test(name);
+        let (taken, _) = self.eval_macro_test(name);
         if self.tracing() {
             self.trace_condition(directive.source_vectors, taken, true);
         }
@@ -464,13 +465,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
 
     /// Reads the macro name that `#ifdef`, `#ifndef`, `#elifdef`, or
     /// `#elifndef` (named by `directive`) tests, and returns whether the
-    /// test holds.
+    /// test holds and the new-line that ends the directive, where GCC
+    /// reports a pedantic `#elifdef`.
     ///
     /// C99: §6.10.1p5, pp. 148-149; PDF pp. 160-161. C23: §6.10.2p16,
     /// p. 168; PDF p. 181: elifdef tests a macro name directly. Clang's
     /// implementation-defined deprecation pragma also checks these uses
     /// (C99 §6.10.6p1, p. 159; PDF p. 171).
-    fn eval_macro_test(&mut self, directive: &'static str) -> bool {
+    fn eval_macro_test(&mut self, directive: &'static str) -> (bool, Option<SourceVectors>) {
         let wants_defined = matches!(directive, "ifdef" | "elifdef");
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
@@ -497,32 +499,34 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             if !self.current_is_newline {
                 self.skip_until_newline();
             }
-            return false;
+            return (false, None);
         };
         self.warn_deprecated_macro(name);
-        if self
-            .expect_token_from_previous_phase::<true>(
-                |_, t| t.kind == PreprocessorTokenType::Newline,
-                |_, t| {
-                    ControlFlow::Break(PreprocessorError {
-                        error_type:     if wants_defined {
-                            PreprocessorErrorType::ExtraTokensAfterIfdefDirective(directive)
-                        } else {
-                            PreprocessorErrorType::ExtraTokensAfterIfndefDirective(directive)
-                        },
-                        source_vectors: t.source_vectors,
-                    })
-                },
-                "parsing conditional directive",
-            )
-            .is_none()
-        {
+        let end = self.expect_token_from_previous_phase::<true>(
+            |_, t| t.kind == PreprocessorTokenType::Newline,
+            |_, t| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     if wants_defined {
+                        PreprocessorErrorType::ExtraTokensAfterIfdefDirective(directive)
+                    } else {
+                        PreprocessorErrorType::ExtraTokensAfterIfndefDirective(directive)
+                    },
+                    source_vectors: t.source_vectors,
+                })
+            },
+            "parsing conditional directive",
+        );
+        if end.is_none() {
             self.skip_until_newline();
         }
-        self.state
+        let defined = self
+            .state
             .macro_definitions
-            .contains_key(&name.identifier_id(self.context))
-            == wants_defined
+            .contains_key(&name.identifier_id(self.context));
+        (
+            defined == wants_defined,
+            end.map(|token| token.source_vectors),
+        )
     }
 }
 
@@ -532,6 +536,15 @@ impl<'pp> ConditionalGroup<'pp> {
             source:   context.copy_source_vectors_in(directive.source_vectors, pp),
             saw_else: false,
         }
+    }
+}
+
+/// Which of `#elifdef` and `#elifndef` `directive` names.
+fn c23_conditional(context: &Context<'_>, directive: PreprocessorToken) -> C23Directive {
+    if conditional_directive_name(context, directive) == "elifdef" {
+        C23Directive::Elifdef
+    } else {
+        C23Directive::Elifndef
     }
 }
 

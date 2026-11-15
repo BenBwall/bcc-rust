@@ -683,7 +683,10 @@ fn elifdef_diagnostics_name_their_directive() {
         "#if 0\n#elifndef A\n#endif\n",
         CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn).with_gnu_extensions(true),
     );
-    assert_eq!(errors, ["Warning: '#elifndef' is a C23 extension"]);
+    assert_eq!(
+        errors,
+        ["Warning: '#elifndef' is a C23 extension [-Wpedantic]"]
+    );
 }
 
 /// `#warning` is reported like `#error`: its message is trimmed and the
@@ -981,5 +984,137 @@ fn embed_and_va_opt_constraints_have_specific_diagnostics() {
     assert_eq!(
         errors,
         ["Error: `__VA_OPT__` is not available in this mode"]
+    );
+}
+
+/// The configuration of a compiler personality: its identity and language
+/// rules (`--compiler-extensions`).
+fn personality(
+    identity: crate::configuration::CompilerIdentity,
+    standard: CStandard,
+    policy: ExtensionPolicy,
+) -> CompilerConfiguration {
+    CompilerConfiguration::new(standard, policy)
+        .with_compiler_identity(identity)
+        .with_compiler_extensions(true)
+}
+
+/// GCC and Clang read `#warning` in strict modes before C23 too, a
+/// `-pedantic` extension there, and still print its message; plain bcc and
+/// `cl` leave it a non-directive (C99 §6.10p1). C23 §6.10.7p1.
+#[test]
+fn gcc_and_clang_read_warning_in_strict_modes() {
+    use crate::configuration::CompilerIdentity as I;
+    for identity in [I::Gcc, I::Clang] {
+        for (policy, expected) in [
+            (ExtensionPolicy::Allow, &["Warning: #warning message"][..]),
+            (
+                ExtensionPolicy::Warn,
+                &[
+                    "Warning: '#warning' is a C23 extension [-Wpedantic]",
+                    "Warning: #warning message",
+                ],
+            ),
+            (
+                ExtensionPolicy::Deny,
+                &[
+                    "Error: '#warning' is a C23 extension [-Wpedantic]",
+                    "Warning: #warning message",
+                ],
+            ),
+        ] {
+            let (tokens, errors) = observe(
+                "#warning message\nafter\n",
+                personality(identity, CStandard::C17, policy),
+            );
+            assert_eq!(texts(&tokens), "after", "{identity:?} {policy:?}");
+            assert_eq!(errors, expected, "{identity:?} {policy:?}");
+        }
+    }
+    let (_, errors) = observe(
+        "#warning message\n",
+        personality(I::Msvc, CStandard::C17, ExtensionPolicy::Allow),
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|error| !error.contains("#warning message")),
+        "{errors:?}"
+    );
+}
+
+/// Clang's `-Wc23-extensions`, a warning by default, reports every
+/// `#elifdef` and `#elifndef` before C23, in skipped and nested skipped
+/// groups too, and `#embed`; `-Wno-c23-extensions` silences it.
+#[test]
+fn clang_reports_each_c23_directive_by_default() {
+    use crate::configuration::{
+        CompilerIdentity as I,
+        DiagnosticGroup,
+        WarningOption,
+    };
+    let source = "#define YES\n#if 1\n#elifdef YES\n#endif\n#if 0\n#if 1\n#elifndef \
+                  YES\n#endif\n#elifdef YES\ntaken\n#endif\n";
+    let (tokens, errors) = observe(
+        source,
+        personality(I::Clang, CStandard::C17, ExtensionPolicy::Allow),
+    );
+    assert_eq!(texts(&tokens), "taken");
+    assert_eq!(
+        errors,
+        [
+            "Warning: '#elifdef' is a C23 extension [-Wc23-extensions]",
+            "Warning: '#elifndef' is a C23 extension [-Wc23-extensions]",
+            "Warning: '#elifdef' is a C23 extension [-Wc23-extensions]",
+        ]
+    );
+    let quiet = personality(I::Clang, CStandard::C17, ExtensionPolicy::Warn)
+        .with_warning_option(DiagnosticGroup::C23Extensions, WarningOption::Enable(false));
+    let (tokens, errors) = observe(source, quiet);
+    assert_eq!(texts(&tokens), "taken");
+    assert!(errors.is_empty(), "{errors:?}");
+    for standard in [CStandard::C23, CStandard::C2y] {
+        let (_, errors) = observe(
+            source,
+            personality(I::Clang, standard, ExtensionPolicy::Warn),
+        );
+        assert!(errors.is_empty(), "{standard:?}: {errors:?}");
+    }
+    // GCC's `gnu` modes report only an arm met after a taken group and one
+    // they take in a skipped group; strict GCC skips them unread.
+    let (_, errors) = observe(
+        source,
+        personality(I::Gcc, CStandard::C17, ExtensionPolicy::Warn).with_gnu_extensions(true),
+    );
+    assert_eq!(
+        errors,
+        [
+            "Warning: '#elifdef' is a C23 extension [-Wpedantic]",
+            "Warning: '#elifdef' is a C23 extension [-Wpedantic]",
+        ]
+    );
+}
+
+/// Clang's `-pedantic-errors` makes its `-Wc23-extensions` warnings errors,
+/// which a later `-Wno-pedantic` leaves so, unlike its `-Wpedantic` ones.
+#[test]
+fn pedantic_errors_outlast_no_pedantic_for_c23_extensions() {
+    use crate::configuration::{
+        CompilerIdentity as I,
+        DiagnosticGroup,
+    };
+    let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+        .with_compiler_identity(I::Clang)
+        .with_compiler_extensions(true)
+        .with_pedantic_errors()
+        .with_pedantic(false);
+    assert_eq!(
+        configuration.diagnostic_severity(DiagnosticGroup::C23Extensions),
+        Some(ErrorSeverity::Error)
+    );
+    assert_eq!(configuration.extension_policy(), ExtensionPolicy::Allow);
+    assert_eq!(
+        DiagnosticGroup::parse("c2x-extensions"),
+        Some(DiagnosticGroup::C23Extensions)
     );
 }

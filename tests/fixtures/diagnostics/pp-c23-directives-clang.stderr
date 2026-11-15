@@ -1,0 +1,16 @@
+pp-c23-directives-clang.c:4:2: warning: reached [-W#warnings]
+    4 | #warning reached
+      |  ^
+pp-c23-directives-clang.c:7:2: warning: use of a '#elifdef' directive is a C23 extension [-Wc23-extensions]
+    7 | #elifdef YES
+      |  ^
+pp-c23-directives-clang.c:11:2: warning: use of a '#elifndef' directive is a C23 extension [-Wc23-extensions]
+   11 | #elifndef YES
+      |  ^
+pp-c23-directives-clang.c:13:2: warning: use of a '#elifdef' directive is a C23 extension [-Wc23-extensions]
+   13 | #elifdef YES
+      |  ^
+pp-c23-directives-clang.c:17:2: warning: #embed is a C23 extension [-Wc23-extensions]
+   17 | #embed "pp-c23-directives-clang.c" limit(1)
+      |  ^
+5 warnings generated.

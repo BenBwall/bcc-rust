@@ -67,7 +67,19 @@ impl CompilerConfiguration {
                                 self.identity,
                                 super::CompilerIdentity::Clang | super::CompilerIdentity::ClangCl
                             )),
-                | Feature::WarningDirective | Feature::Inline => native || self.gnu,
+                // GCC and Clang read `#warning` in every mode, which C99
+                // leaves a non-directive (§6.10p1).
+                | Feature::WarningDirective =>
+                    native
+                        || self.gnu
+                        || (self.compiler_extensions
+                            && matches!(
+                                self.identity,
+                                super::CompilerIdentity::Gcc
+                                    | super::CompilerIdentity::Clang
+                                    | super::CompilerIdentity::ClangCl
+                            )),
+                | Feature::Inline => native || self.gnu,
                 | Feature::Trigraphs => match self.trigraphs {
                     | Some(enabled) => enabled,
                     | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
@@ -899,9 +911,10 @@ impl CompilerConfiguration {
     /// GCC's and Clang's `-std=c99` selects a language rather than turning off
     /// what that language leaves free, so a conforming program means the same
     /// and these extensions stay: the feature tests, a `void` expression in a
-    /// `return`, binary constants, case ranges and `__VA_OPT__`, and under
-    /// Clang `//` comments in C89 and `#embed`. Each is still an extension
-    /// under `-pedantic`. Set this after the compiler identity, which it reads.
+    /// `return`, binary constants, case ranges, `__VA_OPT__` and `#warning`,
+    /// and under Clang `//` comments in C89, `#elifdef` and `#embed`. Each is
+    /// still an extension under `-pedantic`. Set this after the compiler
+    /// identity, which it reads.
     pub(crate) const fn with_compiler_extensions(mut self, enabled: bool) -> Self {
         self.compiler_extensions = enabled;
         self.derive_features()
@@ -946,6 +959,18 @@ impl CompilerConfiguration {
             | Feature::LineComments => !gcc && self.gnu,
             | _ => false,
         }
+    }
+
+    /// Whether Clang's `-Wc23-extensions`, a warning by default, reports a
+    /// C23 directive written before C23 (`#elifdef`, `#elifndef` and
+    /// `#embed`), in place of the extension policy. Clang's `-pedantic`
+    /// adds nothing to it; its `#warning` is a `-Wpedantic` extension.
+    /// Clang 23, `DiagnosticLexKinds.td`: `ext_c23_pp_directive` and
+    /// `ext_pp_embed_directive`.
+    pub(crate) const fn reports_c23_directives(self) -> bool {
+        self.compiler_extensions
+            && matches!(self.identity.rules(), super::RuleSet::Clang)
+            && (self.standard as u8) < CStandard::C23 as u8
     }
 
     /// The origin to report a keyword's `feature` under, unless the compiler

@@ -111,6 +111,7 @@ impl TranslationError<'_> {
                 | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
                 | P::UnknownPragmaDirective | P::IgnoredPragma(_) => Some(G::UnknownPragmas),
                 | P::WarningDirective(_) => Some(G::Cpp),
+                | P::C23DirectiveExtension(_) => Some(G::C23Extensions),
                 | P::PragmaMessage { error: false, .. } => Some(G::PragmaMessages),
                 | P::StorageOrderPragmaOperand { .. } => Some(G::Pragmas),
                 | P::PragmaDiagnostic(problem) => problem.group(),
@@ -260,6 +261,9 @@ impl ToDiagnostic for TranslationError<'_> {
             | Self::Extension(error) => error.diagnostic_in(context, source, arena),
         };
         diagnostic.severity = self.configured_severity(context);
+        if let Self::Preprocessing(error) = self.unclassified() {
+            error.reword_for_compiler(&mut diagnostic, context, arena);
+        }
         diagnostic
     }
 }
