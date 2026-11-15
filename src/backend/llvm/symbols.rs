@@ -409,9 +409,11 @@ fn machine_entry<'id>(api: &Session<'id>, function: Val<'id>, data: &crate::ir::
 /// where they differ from the target machine's, as Clang gives every
 /// function: those of its x86 `target` attribute, which name every feature
 /// the function has and those it turns off, for LLVM reads them in place of
-/// the machine's; then no x87 or SSE code under `-mgeneral-regs-only`, and
-/// `uiret` for a handler under `-muintr`. GNU extension: GCC manual, "x86
-/// Function Attributes", `target` and `interrupt`.
+/// the machine's, an empty list too (`arch=x86-64` under `-march=x86-64-v3`
+/// leaves none, and must not inherit the machine's AVX); then no x87 or SSE
+/// code under `-mgeneral-regs-only`, and `uiret` for a handler under
+/// `-muintr`. GNU extension: GCC manual, "x86 Function Attributes", `target`
+/// and `interrupt`.
 fn code_features<'id>(
     api: &Session<'id>,
     function: Val<'id>,
@@ -441,7 +443,7 @@ fn code_features<'id>(
     if data.entry == EntryConvention::Interrupt && module.user_interrupts() {
         push_feature(&mut features, "+uintr");
     }
-    if !features.is_empty() {
+    if data.target.is_some() || !features.is_empty() {
         api.string_attribute(function, "target-features", &features);
     }
 }

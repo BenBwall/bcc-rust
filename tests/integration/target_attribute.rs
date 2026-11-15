@@ -397,6 +397,52 @@ mod tests {
         assert!(String::from_utf8_lossy(&output.stdout).contains("shrx"));
     }
 
+    /// A function's `arch=` sets its processor's features in place of the
+    /// command line's, where a baseline processor leaves none: GCC 14 drops
+    /// even `-mavx`, Clang 23 keeps it, and `tune=` alone keeps everything.
+    /// Measured on whether each compiler's `-O2 -S` code for `f` holds a
+    /// VEX instruction.
+    #[test]
+    fn a_baseline_arch_drops_the_command_line_avx() {
+        let rows: [(&str, &[&str], &str, bool); 10] = [
+            ("gcc", &["-march=x86-64-v3"], "arch=x86-64", false),
+            ("gcc", &["-mavx"], "arch=x86-64", false),
+            ("gcc", &["-march=x86-64-v3"], "arch=x86-64-v2", false),
+            ("gcc", &["-march=x86-64-v3"], "arch=k8", false),
+            (
+                "gcc",
+                &["-march=x86-64-v3"],
+                "arch=x86-64,tune=haswell",
+                false,
+            ),
+            ("gcc", &["-march=x86-64-v3"], "tune=haswell", true),
+            ("gcc", &["-march=x86-64-v3"], "arch=x86-64,avx", true),
+            ("clang", &["-march=x86-64-v3"], "arch=x86-64", false),
+            ("clang", &["-mavx"], "arch=x86-64", true),
+            ("clang", &["-march=x86-64-v3"], "tune=generic", true),
+        ];
+        for (identity, options, text, avx) in rows {
+            let program = format!(
+                "__attribute__((target(\"{text}\"), noinline)) void f(float *a, float *b) {{ for \
+                 (int i = 0; i < 1024; i++) a[i] += b[i]; }}\n"
+            );
+            let identity = format!("--compiler-identity={identity}");
+            let args = [&[&identity[..], "-O2", "-S", "-o", "-"][..], options].concat();
+            let output = bcc(&args, &program);
+            assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+            let assembly = String::from_utf8_lossy(&output.stdout);
+            let body = assembly
+                .split_once("\nf:")
+                .and_then(|(_, rest)| rest.split_once(".Lfunc_end"))
+                .map_or_else(|| panic!("no f in\n{assembly}"), |(body, _)| body);
+            let vex = body.lines().any(|line| {
+                let line = line.trim_start();
+                line.starts_with('v') && line.as_bytes().get(1).is_some_and(u8::is_ascii_lowercase)
+            });
+            assert_eq!(vex, avx, "{args:?} {text}:\n{body}");
+        }
+    }
+
     #[test]
     fn redeclarations_merge_as_each_compiler_does() {
         // Both: a definition without the attribute keeps an earlier one's.
