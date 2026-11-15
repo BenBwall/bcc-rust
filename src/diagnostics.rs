@@ -90,11 +90,14 @@ pub(crate) struct Renderer {
     context_lines: std::cell::Cell<context_lines::ContextLines>,
     /// The openings whose `#include` GCC's format has written.
     included_seen: std::cell::RefCell<crate::util::region_bit_set::RegionBitSet>,
-    /// The file, byte, length and reading segment of the range the last
-    /// diagnostic in GCC's or Clang's format was reported at, whose source
-    /// neither quotes again for the next one there.
-    last_place:    std::cell::Cell<Option<(u32, u32, u32, Option<u32>)>>,
+    /// Where the last diagnostic in GCC's or Clang's format was reported,
+    /// whose source neither quotes again for the next one there.
+    last_place:    std::cell::Cell<Option<Place>>,
 }
+
+/// Where a diagnostic was reported: a range's file, first byte and length,
+/// and the reading segment it lies in.
+type Place = (u32, u32, u32, Option<u32>);
 
 // Tests
 #[cfg(test)]

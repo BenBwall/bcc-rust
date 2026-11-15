@@ -1793,7 +1793,7 @@ impl PreprocessorError<'_> {
 }
 
 /// Clang's words for a C23 directive written before C23.
-fn clang_directive_words<'d>(directive: C23Directive, arena: &'d Bump) -> &'d str {
+fn clang_directive_words(directive: C23Directive, arena: &Bump) -> &str {
     match directive {
         | C23Directive::Elifdef | C23Directive::Elifndef => format_in!(
             arena,
