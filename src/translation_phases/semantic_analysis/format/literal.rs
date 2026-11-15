@@ -219,6 +219,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(positions.leak())
     }
 
+    /// A range from the byte at `first` through the character at `last`,
+    /// or no range when they are in different files or out of order.
+    pub(super) fn byte_span(&mut self, first: BytePosition, last: BytePosition) -> SourceVectors {
+        if first.file != last.file || last.index < first.index {
+            return SourceVectors::default();
+        }
+        let length = last.index + u32::from(last.width.max(1)) - first.index;
+        self.context.create_retained_source_vectors(
+            SourcePosition {
+                index:  first.index as usize,
+                line:   first.line,
+                column: first.column,
+            },
+            first.file,
+            length as usize,
+        )
+    }
+
     /// A location for the byte at `position`, one character wide.
     pub(super) fn byte_location(&mut self, position: BytePosition) -> SourceVectors {
         self.context.create_retained_source_vectors(

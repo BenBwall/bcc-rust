@@ -64,7 +64,9 @@ enum Found {
 enum Uncovered {
     Unknown,
     AllCovered,
-    First(usize),
+    /// The argument's index, and the string literal that leaves it
+    /// uncovered, which Clang underlines.
+    First(usize, SourceVectors),
 }
 
 /// A length modifier (`LengthModifier::Kind`).
@@ -244,16 +246,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn clang_check_format(&mut self, call: &FormatCall<'_, 'tu>) {
         let mut uncovered = Uncovered::Unknown;
         let found = self.clang_format_expression(call, call.format, true, 0, &mut uncovered, 0);
-        if let Uncovered::First(index) = uncovered
+        if let Uncovered::First(index, string) = uncovered
             && let Some(&argument) = call.data().get(index)
         {
-            self.format_warning(
-                call.call.source_vectors,
-                G::FormatExtraArgs,
-                "data argument not used by format string",
-                argument.source_vectors,
-                None,
-            );
+            // `UncoveredArgHandler::Diagnose` underlines the string.
+            self.with_highlights([string, SourceVectors::default()], |analyzer| {
+                analyzer.format_warning(
+                    call.call.source_vectors,
+                    G::FormatExtraArgs,
+                    "data argument not used by format string",
+                    argument.source_vectors,
+                    None,
+                );
+            });
         }
         if found != Found::NotALiteral {
             return;
@@ -676,7 +681,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     &leaf,
                     G::Format,
                     "format string is not null-terminated",
-                    leaf.literal.source_vectors,
+                    (leaf.literal.source_vectors, call.format.source_vectors),
                 );
                 return;
             }
@@ -688,7 +693,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 &leaf,
                 G::FormatZeroLength,
                 "format string is empty",
-                leaf.literal.source_vectors,
+                (leaf.literal.source_vectors, call.format.source_vectors),
             );
             return;
         }
@@ -720,10 +725,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match (first, *uncovered) {
             | (_, Uncovered::AllCovered) => {},
             | (None, _) => *uncovered = Uncovered::AllCovered,
-            | (Some(index), Uncovered::Unknown) => *uncovered = Uncovered::First(index),
-            | (Some(index), Uncovered::First(old)) =>
+            | (Some(index), Uncovered::Unknown) =>
+                *uncovered = Uncovered::First(index, reading.leaf.literal.source_vectors),
+            | (Some(index), Uncovered::First(old, _)) =>
                 if index > old {
-                    *uncovered = Uncovered::First(index);
+                    *uncovered = Uncovered::First(index, reading.leaf.literal.source_vectors);
                 },
         }
     }
@@ -778,12 +784,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while *i < end {
             let c = bytes[*i];
             if c == 0 {
-                self.clang_string_warning(
-                    r,
-                    G::Format,
-                    "format string contains '\\0' within the string body",
-                    *i,
-                );
+                self.clang_null_warning(r, *i);
                 *i = end;
                 return Parsed::Stop;
             }
@@ -797,7 +798,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Parsed::Nothing;
         };
         let incomplete = |analyzer: &mut Self, r: &Reading<'_, 'tu>| {
-            analyzer.clang_string_warning(r, G::Format, "incomplete format specifier", start);
+            analyzer.clang_string_warning(
+                r,
+                G::Format,
+                "incomplete format specifier",
+                start,
+                (start, end),
+            );
             Parsed::Stop
         };
         if *i == end {
@@ -891,12 +898,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return incomplete(self, r);
         }
         if bytes[*i] == 0 {
-            self.clang_string_warning(
-                r,
-                G::Format,
-                "format string contains '\\0' within the string body",
-                *i,
-            );
+            self.clang_null_warning(r, *i);
             return Parsed::Stop;
         }
         // The conversion specifier.
@@ -961,6 +963,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     G::Format,
                     "position arguments in format strings start counting at 1 (not 0)",
                     start,
+                    (start, j + 1),
                 );
                 return Some(true);
             }
@@ -1014,14 +1017,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 "invalid position specified for field width"
             };
-            analyzer.clang_string_warning(r, G::Format, words, star);
+            analyzer.clang_string_warning(r, G::Format, words, star, (star, j));
             None
         };
         if length == 0 {
             return invalid(self);
         }
         if j == bytes.len() {
-            self.clang_string_warning(r, G::Format, "incomplete format specifier", start);
+            self.clang_string_warning(
+                r,
+                G::Format,
+                "incomplete format specifier",
+                start,
+                (start, j),
+            );
             return None;
         }
         if bytes[j] != b'$' {
@@ -1033,6 +1042,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 G::Format,
                 "position arguments in format strings start counting at 1 (not 0)",
                 star,
+                (star, j + 1),
             );
             return None;
         }
@@ -1159,7 +1169,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             "invalid conversion specifier '{}'",
             out.as_str()
         );
-        self.clang_string_warning(r, G::FormatInvalidSpecifier, words, spec.position);
+        self.clang_string_warning(
+            r,
+            G::FormatInvalidSpecifier,
+            words,
+            spec.position,
+            (spec.start, invalid_specifier_end(r.bytes, spec)),
+        );
         keep_going
     }
 
@@ -1176,11 +1192,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     G::Format,
                     "cannot mix positional and non-positional arguments in format string",
                     spec.position,
+                    (spec.start, spec.end),
                 );
                 return false;
             }
         }
-        if !self.clang_star(r, spec.width, false) || !self.clang_star(r, spec.precision, true) {
+        if !self.clang_star(r, &spec, spec.width, false)
+            || !self.clang_star(r, &spec, spec.precision, true)
+        {
             return false;
         }
         if !spec.conversion.consumes() {
@@ -1195,10 +1214,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let letter = spec.letter as char;
         // Widths and precisions that mean nothing here.
         if spec.conversion == Conversion::Written && spec.width != Amount::NotSpecified {
-            self.clang_amount_warning(r, spec.width, "field width", letter);
+            self.clang_amount_warning(r, &spec, spec.width, "field width", letter);
         }
         if spec.precision != Amount::NotSpecified && !valid_precision(spec.conversion) {
-            self.clang_amount_warning(r, spec.precision, "precision", letter);
+            self.clang_amount_warning(r, &spec, spec.precision, "precision", letter);
         }
         // Flags.
         let flags: [Flag; 6] = [
@@ -1225,7 +1244,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     "flag '{flag}' results in undefined behavior with '{letter}' conversion \
                      specifier"
                 );
-                self.clang_string_warning(r, G::Format, words, at);
+                self.clang_string_warning(r, G::Format, words, at, (spec.start, spec.end));
             }
         }
         if let (Some(space), Some(_)) = (spec.space, spec.plus) {
@@ -1234,6 +1253,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 G::Format,
                 "flag ' ' is ignored when flag '+' is present",
                 space,
+                (spec.start, spec.end),
             );
         }
         if let (Some(zeros), Some(_)) = (spec.zeros, spec.left) {
@@ -1242,6 +1262,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 G::Format,
                 "flag '0' is ignored when flag '-' is present",
                 zeros,
+                (spec.start, spec.end),
             );
         }
         if !valid_length(spec.length, spec.conversion, false, r.msvcrt) {
@@ -1266,7 +1287,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Checks a `*` width or precision's argument (`HandleAmount`);
     /// whether the reading goes on.
-    fn clang_star(&mut self, r: &mut Reading<'_, 'tu>, amount: Amount, precision: bool) -> bool {
+    fn clang_star(
+        &mut self,
+        r: &mut Reading<'_, 'tu>,
+        spec: &Spec,
+        amount: Amount,
+        precision: bool,
+    ) -> bool {
         let Amount::Argument { index, start } = amount else {
             return true;
         };
@@ -1280,7 +1307,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.scratch,
                 "'{star}' specified field {what} is missing a matching 'int' argument"
             );
-            self.clang_string_warning(r, G::Format, words, start);
+            self.clang_string_warning(r, G::Format, words, start, (spec.start, spec.end));
             return false;
         };
         r.covered[index] = true;
@@ -1296,7 +1323,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.scratch,
                 "field {what} should have type 'int', but argument has type {spelling}"
             );
-            self.clang_string_warning(r, G::Format, words, start);
+            // The argument too, which `HandleAmount` streams.
+            let leaf = r.leaf;
+            let place = self.clang_byte(&leaf, start);
+            let range = self.clang_byte_range(&leaf, spec.start, spec.end);
+            self.clang_string_warning_about(
+                r.call,
+                &leaf,
+                (G::Format, words),
+                (place, [range, argument.source_vectors]),
+            );
             return false;
         }
         true
@@ -1322,7 +1358,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             G::FormatInsufficientArgs
         };
-        self.clang_string_warning(r, group, words, spec.position);
+        self.clang_string_warning(r, group, words, spec.position, (spec.start, spec.end));
         false
     }
 
@@ -1348,7 +1384,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let leaf = r.leaf;
             let note = (!leaf.in_call)
                 .then(|| (FormatNote::DefinedHere, self.clang_byte(&leaf, spec.start)));
-            self.format_warning(r.call.call.source_vectors, G::Format, words, site, note);
+            // The specification, or where it is not the call's, the format
+            // argument (`EmitFormatDiagnostic`).
+            let range = if leaf.in_call {
+                self.clang_byte_range(&leaf, spec.start, spec.end)
+            } else {
+                r.call.format.source_vectors
+            };
+            self.with_highlights([range, SourceVectors::default()], |analyzer| {
+                analyzer.format_warning(r.call.call.source_vectors, G::Format, words, site, note);
+            });
             return;
         }
         // A parameter's argument has the parameter's type, not promoted.
@@ -1437,7 +1482,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 "type"
             }
         );
-        self.clang_argument_warning(r, group, argument, spec.start, words);
+        self.clang_argument_warning(r, group, argument, spec, words);
     }
 
     /// Where Clang reports an argument known to be a truth value: one of
@@ -1482,12 +1527,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while *i < end {
             let c = bytes[*i];
             if c == 0 {
-                self.clang_string_warning(
-                    r,
-                    G::Format,
-                    "format string contains '\\0' within the string body",
-                    *i,
-                );
+                self.clang_null_warning(r, *i);
                 *i = end;
                 return Parsed::Stop;
             }
@@ -1501,7 +1541,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Parsed::Nothing;
         };
         let incomplete = |analyzer: &mut Self, r: &Reading<'_, 'tu>| {
-            analyzer.clang_string_warning(r, G::Format, "incomplete format specifier", start);
+            analyzer.clang_string_warning(
+                r,
+                G::Format,
+                "incomplete format specifier",
+                start,
+                (start, end),
+            );
             Parsed::Stop
         };
         if *i == end {
@@ -1560,12 +1606,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return incomplete(self, r);
         }
         if bytes[*i] == 0 {
-            self.clang_string_warning(
-                r,
-                G::Format,
-                "format string contains '\\0' within the string body",
-                *i,
-            );
+            self.clang_null_warning(r, *i);
             return Parsed::Stop;
         }
         spec.position = *i;
@@ -1592,12 +1633,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // `ParseScanList`.
             let list = *i - 1;
             let incomplete_list = |analyzer: &mut Self, r: &Reading<'_, 'tu>, at: usize| {
-                let _ = list;
                 analyzer.clang_string_warning(
                     r,
                     G::Format,
                     "no closing ']' for '%[' in scanf format string",
                     at,
+                    (list, at),
                 );
                 Parsed::Stop
             };
@@ -1655,19 +1696,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     G::Format,
                     "cannot mix positional and non-positional arguments in format string",
                     spec.position,
+                    (spec.start, spec.end),
                 );
                 return false;
             }
         }
         if let Amount::Constant {
-            value: 0, start, ..
+            value: 0,
+            start,
+            length,
         } = spec.width
         {
+            // Only the width (`HandleScanfSpecifier`).
             self.clang_string_warning(
                 r,
                 G::Format,
                 "zero field width in scanf format string is unused",
                 start,
+                (start, start + length),
             );
         }
         if !consumes {
@@ -1717,7 +1763,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.scratch,
             "format specifies type {wanted} but the argument has type {spelling}"
         );
-        self.clang_argument_warning(r, group, argument, spec.start, words);
+        self.clang_argument_warning(r, group, argument, &spec, words);
         true
     }
 
@@ -1746,16 +1792,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         if corrects && r.leaf.in_call {
             let place = self.clang_byte(&r.leaf, spec.length_at);
-            self.format_warning(
-                r.call.call.source_vectors,
-                G::Format,
-                words,
-                place,
-                Some((FormatNote::UseLongLong, place)),
-            );
+            let range = self.clang_byte_range(&r.leaf, spec.start, spec.end);
+            self.with_highlights([range, SourceVectors::default()], |analyzer| {
+                analyzer.format_warning(
+                    r.call.call.source_vectors,
+                    G::Format,
+                    words,
+                    place,
+                    Some((FormatNote::UseLongLong, place)),
+                );
+            });
             return;
         }
-        self.clang_string_warning(r, G::Format, words, spec.length_at);
+        self.clang_string_warning(r, G::Format, words, spec.length_at, (spec.start, spec.end));
     }
 
     /// Reports a width or precision a conversion does not take
@@ -1763,6 +1812,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn clang_amount_warning(
         &mut self,
         r: &Reading<'_, 'tu>,
+        spec: &Spec,
         amount: Amount,
         what: &str,
         letter: char,
@@ -1775,7 +1825,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.scratch,
             "{what} used with '{letter}' conversion specifier, resulting in undefined behavior"
         );
-        self.clang_string_warning(r, G::Format, words, at);
+        self.clang_string_warning(r, G::Format, words, at, (spec.start, spec.end));
     }
 
     /// The type of a printf argument after the default argument
@@ -2101,23 +2151,68 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Reports `words` about the byte `offset` of the string, as Clang's
-    /// `EmitFormatDiagnostic` with a string location places it.
-    fn clang_string_warning(&mut self, r: &Reading<'_, 'tu>, group: G, words: &str, offset: usize) {
+    /// `EmitFormatDiagnostic` with a string location places it, with the
+    /// bytes `range` of the string, Clang's `getSpecifierRange`, which it
+    /// underlines: most often the whole specification.
+    fn clang_string_warning(
+        &mut self,
+        r: &Reading<'_, 'tu>,
+        group: G,
+        words: &str,
+        offset: usize,
+        range: (usize, usize),
+    ) {
         let leaf = r.leaf;
         let place = self.clang_byte(&leaf, offset);
-        self.clang_string_warning_at(r.call, &leaf, group, words, place);
+        let range = self.clang_byte_range(&leaf, range.0, range.1);
+        self.clang_string_warning_at(r.call, &leaf, group, words, (place, range));
     }
 
+    /// Reports a null character at the byte `offset` of the string, with
+    /// the format argument underlined (`HandleNullChar`).
+    fn clang_null_warning(&mut self, r: &Reading<'_, 'tu>, offset: usize) {
+        let leaf = r.leaf;
+        let place = self.clang_byte(&leaf, offset);
+        self.clang_string_warning_at(
+            r.call,
+            &leaf,
+            G::Format,
+            "format string contains '\\0' within the string body",
+            (place, r.call.format.source_vectors),
+        );
+    }
+
+    /// Reports `words` at `place` in the string, with `range` underlined
+    /// when the string is the call's: elsewhere, Clang reports at the
+    /// format argument with only its own range, and notes the string.
     fn clang_string_warning_at(
         &mut self,
         call: &FormatCall<'_, 'tu>,
         leaf: &Leaf<'tu>,
         group: G,
         words: &str,
-        place: SourceVectors,
+        (place, range): (SourceVectors, SourceVectors),
+    ) {
+        self.clang_string_warning_about(
+            call,
+            leaf,
+            (group, words),
+            (place, [range, SourceVectors::default()]),
+        );
+    }
+
+    /// [`Self::clang_string_warning_at`] with two `ranges`.
+    fn clang_string_warning_about(
+        &mut self,
+        call: &FormatCall<'_, 'tu>,
+        leaf: &Leaf<'tu>,
+        (group, words): (G, &str),
+        (place, ranges): (SourceVectors, [SourceVectors; 2]),
     ) {
         if leaf.in_call {
-            self.format_warning(call.call.source_vectors, group, words, place, None);
+            self.with_highlights(ranges, |analyzer| {
+                analyzer.format_warning(call.call.source_vectors, group, words, place, None);
+            });
         } else {
             self.format_warning(
                 call.call.source_vectors,
@@ -2130,25 +2225,59 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Reports `words` about a data argument, noting the specification
-    /// that begins at `start` when the string is not the call's.
+    /// `spec` when the string is not the call's. Clang underlines the
+    /// argument and the specification, or the format argument where the
+    /// string is not the call's (`checkFormatExpr`, `EmitFormatDiagnostic`).
     fn clang_argument_warning(
         &mut self,
         r: &Reading<'_, 'tu>,
         group: G,
         argument: &'tu Expression<'tu>,
-        start: usize,
+        spec: &Spec,
         words: &str,
     ) {
         let leaf = r.leaf;
         let note =
-            (!leaf.in_call).then(|| (FormatNote::DefinedHere, self.clang_byte(&leaf, start)));
-        self.format_warning(
-            r.call.call.source_vectors,
-            group,
-            words,
-            argument.source_vectors,
-            note,
-        );
+            (!leaf.in_call).then(|| (FormatNote::DefinedHere, self.clang_byte(&leaf, spec.start)));
+        let range = if leaf.in_call {
+            self.clang_byte_range(&leaf, spec.start, spec.end)
+        } else {
+            r.call.format.source_vectors
+        };
+        self.with_highlights([range, argument.source_vectors], |analyzer| {
+            analyzer.format_warning(
+                r.call.call.source_vectors,
+                group,
+                words,
+                argument.source_vectors,
+                note,
+            );
+        });
+    }
+
+    /// The bytes `start..end` of the string as Clang's `getSpecifierRange`
+    /// gives them: from the place of the first byte to just past the place
+    /// of the last, or no range when the range is empty or the places cannot
+    /// be told. A string a macro's list wrote is a range of the list, which
+    /// Clang draws as its invocation.
+    fn clang_byte_range(&mut self, leaf: &Leaf<'tu>, start: usize, end: usize) -> SourceVectors {
+        // The string, which is drawn at the invocation.
+        if leaf.spelled == Spelled::MacroBody {
+            return leaf.literal.source_vectors;
+        }
+        if end <= start {
+            return SourceVectors::default();
+        }
+        let Some(positions) = self.byte_positions(leaf.literal) else {
+            return SourceVectors::default();
+        };
+        match (
+            positions.get(leaf.offset + start),
+            positions.get(leaf.offset + end - 1),
+        ) {
+            | (Some(&first), Some(&last)) => self.byte_span(first, last),
+            | _ => SourceVectors::default(),
+        }
     }
 
     /// Where Clang places the byte `offset` of the string: there, unless a
@@ -2204,6 +2333,28 @@ fn amount_digits(bytes: &[u8], at: usize) -> (u32, usize, usize) {
 
 /// The end of the UTF-8 sequence beginning at `at`, as
 /// `ParseUTF8InvalidSpecifier` takes an invalid specifier's length.
+/// Where Clang's range for an invalid specification ends: past its
+/// conversion character, or past the UTF-8 sequence whose leading byte
+/// follows the `%`, when the string holds the whole sequence. Clang asks
+/// of the byte after the `%` even when flags come between
+/// (`ParseUTF8InvalidSpecifier`, which counts by `getNumBytesForUTF8`).
+fn invalid_specifier_end(bytes: &[u8], spec: &Spec) -> usize {
+    let after = spec.start + 1;
+    let length = match bytes.get(after) {
+        | Some(0xFC..) => 6,
+        | Some(0xF8..) => 5,
+        | Some(0xF0..) => 4,
+        | Some(0xE0..) => 3,
+        | Some(0xC0..) => 2,
+        | _ => 1,
+    };
+    if length > 1 && after + length <= bytes.len() {
+        after + length
+    } else {
+        spec.position + 1
+    }
+}
+
 fn utf8_end(bytes: &[u8], at: usize) -> usize {
     let length = match bytes[at] {
         | 0xF0.. => 4,
