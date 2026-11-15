@@ -127,6 +127,82 @@ int main(void) {
 }",
     ),
     (
+        // Padding and members never stored hold poison bytes, which must not
+        // poison the members the program wrote (C99 §6.2.6.1p6), whatever
+        // the aggregate's size and alignment.
+        "generic_padding",
+        r"
+struct Middle { char a; int b; };
+struct Tail { int b; char a; };
+struct Short { char a; short b; };
+struct Field { unsigned f : 3; };
+struct Nested { struct { char a; } s; short b; };
+struct Pair { int a, b; };
+union Overlay { char c; int i; };
+int main(void) {
+    _Alignas(8) struct Middle mp, mq, mo;
+    mp.a=1; mp.b=42; mq.a=2; mq.b=3;
+    __atomic_store(&mq,&mp,5); if(mq.a!=1 || mq.b!=42) return 1;
+    __atomic_load(&mq,&mo,5); if(mo.a!=1 || mo.b!=42) return 2;
+    mp.a=4; mp.b=5;
+    __atomic_exchange(&mq,&mp,&mo,5); if(mq.a!=4 || mq.b!=5 || mo.a!=1 || mo.b!=42) return 3;
+    _Alignas(8) struct Tail tp, tq, to;
+    tp.a=6; tp.b=7; tq.a=8; tq.b=9;
+    __atomic_exchange(&tq,&tp,&to,5); if(tq.a!=6 || tq.b!=7 || to.a!=8 || to.b!=9) return 4;
+    _Alignas(4) struct Short sp, sq;
+    sp.a=10; sp.b=11;
+    __atomic_store(&sq,&sp,0); __atomic_load(&sq,&sp,0); if(sp.a!=10 || sp.b!=11) return 5;
+    struct Field fp, fq;
+    fp.f=5;
+    __atomic_store(&fq,&fp,5); if(fq.f!=5) return 6;
+    _Alignas(4) struct Nested np, nq, no;
+    np.s.a=12; np.b=13;
+    __atomic_exchange(&nq,&np,&no,5); if(nq.s.a!=12 || nq.b!=13) return 7;
+    _Alignas(8) struct Pair pp, pq;
+    pp.a=14;
+    __atomic_store(&pq,&pp,5); if(pq.a!=14) return 8;
+    union Overlay up, uq;
+    up.c=15;
+    __atomic_load(&up,&uq,5); if(uq.c!=15) return 9;
+    _Bool bp=1, bq=0, bo=0;
+    __atomic_exchange(&bq,&bp,&bo,5); if(!bq || bo) return 10;
+    long double lp=1.5L, lq=0, lo=0;
+    __atomic_exchange(&lq,&lp,&lo,5); if(lq!=1.5L || lo!=0) return 11;
+    __atomic_load(&lq,&lo,5); if(lo!=1.5L) return 12;
+    return 0;
+}",
+    ),
+    (
+        // GCC compares the contents of the two objects, padding included.
+        "generic_padding_compare",
+        r"
+struct Middle { char a; int b; };
+int main(void) {
+    _Alignas(8) struct Middle object, expected, desired;
+    /* The comparison takes the padding: equal members with other padding
+       bytes fail and copy the object, padding included, to expected. */
+    __builtin_memset(&object,0x11,sizeof object);
+    __builtin_memset(&expected,0x22,sizeof expected);
+    object.a=1; object.b=2; expected.a=1; expected.b=2;
+    desired.a=3; desired.b=4;
+    if(__atomic_compare_exchange(&object,&expected,&desired,0,5,5)) return 1;
+    if(object.a!=1 || object.b!=2 || __builtin_memcmp(&object,&expected,sizeof object)) return 2;
+    if(!__atomic_compare_exchange(&object,&expected,&desired,0,5,5)) return 3;
+    if(object.a!=3 || object.b!=4) return 4;
+    /* Different members fail whatever the padding. */
+    expected.a=9;
+    if(__atomic_compare_exchange(&object,&expected,&desired,0,5,5)) return 5;
+    if(expected.a!=3 || expected.b!=4) return 6;
+    /* Padding never written: either outcome is allowed, not a trap. */
+    _Alignas(8) struct Middle p, e, d;
+    p.a=5; p.b=6; e.a=5; e.b=6; d.a=7; d.b=8;
+    if(__atomic_compare_exchange(&p,&e,&d,0,5,5)) {
+        if(p.a!=7 || p.b!=8) return 7;
+    } else if(e.a!=5 || e.b!=6 || p.a!=5 || p.b!=6) return 8;
+    return 0;
+}",
+    ),
+    (
         "generic_buffers",
         r"
 struct Small { char a[3]; };

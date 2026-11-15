@@ -156,15 +156,31 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         };
         // GCC and Clang expand the generic `__atomic_load`, `__atomic_store`,
         // `__atomic_exchange` and `__atomic_compare_exchange` inline for an
-        // aligned object of 1, 2, 4 or 8 bytes, whatever its type, and call
-        // libatomic for other sizes (GCC manual, "__atomic Builtins"). An
-        // under-aligned object keeps the library call, as Clang's does.
+        // aligned object of 1, 2, 4 or 8 bytes and call libatomic for other
+        // sizes (GCC manual, "__atomic Builtins"). An under-aligned object
+        // keeps the library call, as Clang's does.
+        //
+        // An array, structure, union or vector keeps the byte operations at
+        // every size. Its padding, and a member never stored, hold bytes the
+        // program never wrote, which read as poison, and an integer read
+        // of them is poison as a whole (`middle-end.md`, "Undefined
+        // behaviour"). The object's scalar load, the old value of an exchange
+        // and the value a compare-exchange observes would then take its
+        // defined members with them, and no freeze afterwards brings them
+        // back. Yet such an object's value is never a trap representation, so
+        // copying it must keep them; the byte operations move each byte on
+        // its own, and a compare-exchange compares "the contents" of the two
+        // objects, padding included, as stored (GCC manual, "__atomic
+        // Builtins").
+        // C99: §6.2.6.1 paragraph 6, p. 38; PDF p. 50.
+        let aggregate = matches!(self.repr(value_type, source)?, types::Repr::Aggregate);
         let inline_generic = builtin.generic
+            && !aggregate
             && matches!(layout.size, 1 | 2 | 4 | 8)
             && self.repr(value_type, source)?.value_type() != Some(Type::F80)
             && self.place_alignment(address, types::align(layout)).bytes() >= layout.size;
         if builtin.generic && !inline_generic
-            || !builtin.generic && matches!(self.repr(value_type, source)?, types::Repr::Aggregate)
+            || aggregate
             || !matches!(layout.size, 1 | 2 | 4 | 8 | 16)
         {
             return self.finish_atomic_buffer(e, instance, builtin, items, object, order);

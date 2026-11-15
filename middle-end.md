@@ -968,7 +968,12 @@ expected buffer only on failure; weak operations may use a strong instruction.
 Pointer fetch offsets follow each family: C11 scales by the element size, while
 GNU and legacy sync offsets are bytes. Signed fetch arithmetic wraps.
 
-LLVM emits real atomic instructions and fences. Generic buffers and large
+LLVM emits real atomic instructions and fences. A generic `__atomic_*` call on
+a scalar of 1, 2, 4 or 8 bytes aligned to its size moves the value through the
+caller's buffers into one scalar instruction, as GCC and Clang expand it. An
+array, structure, union or vector keeps the byte operations at every size: its
+padding and unstored members are poison bytes, which a scalar read of the
+object would spread to the members it holds. Generic buffers and large
 objects call the platform `libatomic` ABI; executable linking adds `-latomic`
 for buffer, 128-bit or under-aligned atomic operations. Objects using those paths
 require the same runtime at final link. Windows native execution of these paths
