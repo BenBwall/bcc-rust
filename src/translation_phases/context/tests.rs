@@ -527,3 +527,42 @@ fn highlights_cover_the_invocations_their_ends_come_from() {
     let copied = context.merge_vectors(plain_before, Context::last_source_vector(copied));
     assert_eq!(context.highlight_vectors(copied, &scratch), [before, end]);
 }
+
+/// A concatenated string literal is one phase-6 token over several vectors.
+/// Each keeps the invocation of the token it came from once the token is
+/// retained, so a format specification a macro wrote in the middle of
+/// `"%s " FMT " %s"` is drawn as `FMT`.
+#[test]
+fn retained_tokens_keep_the_invocation_of_every_vector() {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 3,
+        length,
+        ..SourceVector::default()
+    };
+    // `#define FMT "%d"` on line 1; `"%s " FMT " %s"` on line 3.
+    let (first, site, last) = (at(30, 5), at(36, 3), at(40, 5));
+    let in_definition = SourceVector {
+        index: 12,
+        length: 4,
+        ..SourceVector::default()
+    };
+    let first = context.push_source_vectors(std::slice::from_ref(&first));
+    let written = context.push_source_vectors(std::slice::from_ref(&in_definition));
+    context.record_expansion_start(written, site.clone(), site.clone());
+    let last = context.push_source_vectors(std::slice::from_ref(&last));
+    let literal = context.merge_vector_list(&[first, written, last]);
+    let literal = context.retain_token_source(literal);
+    context.compact_preprocessor_vectors();
+    let span = |context: &Context<'_>, index| {
+        context
+            .invocation_span(Context::source_vector_at(literal, index))
+            .map(|(start, end)| (start.clone(), end.clone()))
+    };
+    assert_eq!(span(&context, 0), None);
+    assert_eq!(span(&context, 1), Some((site.clone(), site)));
+    assert_eq!(span(&context, 2), None);
+    assert_eq!(Context::source_vector_at(literal, 3).length(), 0);
+}

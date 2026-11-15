@@ -211,9 +211,17 @@ impl Context<'_> {
             self.record_retained_pragma_copy(end - source.length(), source);
         }
         // The invocations of the first and last tokens, which say where a
-        // range a macro wrote begins and ends in the file.
+        // range a macro wrote begins and ends in the file. A phase-6 token
+        // keeps those of all its vectors: each token of a concatenated string
+        // literal places what a macro wrote in it.
         if source.length() != 0 {
             self.copy_expansion_start(target, (arena, start), end - source.length());
+        }
+        if target == SourceArena::ParserTokens {
+            for offset in 1..source.length().saturating_sub(1) {
+                let to = end - source.length() + offset;
+                self.copy_expansion_start(target, (arena, start + offset), to);
+            }
         }
         if source.length() > 1 {
             self.copy_expansion_start(target, (arena, start + source.length() - 1), end - 1);
@@ -409,6 +417,16 @@ impl Context<'_> {
         arena.encode(start, start + 1)
     }
 
+    /// The vector `index` of `source` as a range, or an empty range when
+    /// `source` has no such vector.
+    pub(crate) fn source_vector_at(source: SourceVectors, index: u32) -> SourceVectors {
+        if index >= source.length() {
+            return SourceVectors::default();
+        }
+        let (arena, start) = SourceArena::decode(source);
+        arena.encode(start + index, start + index + 1)
+    }
+
     /// The last vector of `source`, which belongs to its last token. An empty
     /// range stays empty.
     pub(crate) fn last_source_vector(source: SourceVectors) -> SourceVectors {
@@ -466,6 +484,23 @@ impl Context<'_> {
         let (arena, start) = SourceArena::decode(source);
         let sites = &self.expansion_starts[arena as usize];
         sites.spans.get(sites.get(start)? as usize)
+    }
+
+    /// Where the outermost macro invocation that produced the first token of
+    /// `source` begins and ends, when one did, from its replacement list or
+    /// an argument: its name, and its name or the `)` after its arguments.
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
+    pub(crate) fn invocation_span(
+        &self,
+        source: SourceVectors,
+    ) -> Option<(&SourceVector, &SourceVector)> {
+        if source.length() == 0 {
+            return None;
+        }
+        Some((
+            self.outermost_invocation(source)?,
+            self.outermost_invocation_end(source)?,
+        ))
     }
 
     /// The places Clang underlines for the range `source` beside a caret
