@@ -694,22 +694,24 @@
      boxed as the byte it is. It wraps before it outgrows the strip, so a
      phone shows all of it; the bytes the step used are marked in place, as
      whole cells are. */
-  .cell.is-string { gap: 3px; }
-  .cell.is-string .cell-type, .cell.is-string-head .cell-type { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  /* It keeps a scalar cell's height: 13 px of type, 17 of characters, 10
+     of ruler and 12 of name. */
+  .cell.is-string .cell-type, .cell.is-string-head .cell-type { display: flex; align-items: center; justify-content: space-between; gap: 10px; line-height: 13px; }
+  .cell.is-string .cell-name { line-height: 12px; }
   .string-bytes {
-    display: flex; flex-wrap: wrap; row-gap: 3px; max-width: min(60ch, calc(100vw - 104px));
+    display: flex; flex-wrap: wrap; row-gap: 3px; max-width: min(60ch, calc(100vw - 72px));
     color: var(--ink); font: 400 13px/1 var(--font-mono);
   }
   .string-word { display: flex; }
-  .string-byte { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 1ch; padding-bottom: 11px; }
-  .string-char { height: 19px; line-height: 19px; white-space: pre; border-bottom: 1px solid var(--ink-3); }
+  .string-byte { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 1ch; padding-bottom: 10px; }
+  .string-char { height: 17px; line-height: 16px; white-space: pre; border-bottom: 1px solid var(--ink-3); }
   /* The ruler: a tick at each byte's start, a longer one with the index at
      every eighth. */
-  .string-byte::before { content: ""; position: absolute; left: 0; top: 19px; width: 1px; height: 3px; background: var(--ink-3); }
-  .string-byte.is-ruled::before { height: 7px; }
-  .string-index { position: absolute; left: 3px; top: 21px; font-size: 9px; line-height: 9px; color: var(--ink-3); white-space: nowrap; }
+  .string-byte::before { content: ""; position: absolute; left: 0; top: 17px; width: 1px; height: 3px; background: var(--ink-3); }
+  .string-byte.is-ruled::before { height: 6px; }
+  .string-index { position: absolute; left: 3px; top: 19px; font-size: 8.5px; line-height: 8.5px; color: var(--ink-3); white-space: nowrap; }
   .string-byte.is-escape .string-char { font-size: 10.5px; color: var(--ink-2); }
-  .string-byte.is-null .string-char { margin-left: 2px; padding: 0 2px; height: 17px; line-height: 15px; margin-top: 1px; border: 1px solid currentColor; font-size: 10.5px; }
+  .string-byte.is-null .string-char { margin: 1px 0 0 2px; padding: 0 2px; height: 16px; line-height: 14px; border: 1px solid currentColor; font-size: 10.5px; }
   .string-byte.is-indeterminate .string-char { width: 1ch; background: repeating-linear-gradient(45deg, var(--ink-3) 0 1px, transparent 1px 5px); }
   .string-byte.is-pointed .string-char { box-shadow: inset 0 2px 0 var(--flow-ink); }
   /* Bytes the step used, where it did not use the whole string. */
@@ -726,9 +728,12 @@
   /* The key that opens a string into its byte cells, and folds them back. */
   .cell-open {
     flex: none; padding: 1px 5px; border: 1px solid currentColor; background: transparent; color: inherit;
-    font: 700 9px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+    font: 700 9px/9px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
   }
-  .cell-open:hover { color: var(--accent-ink); }
+  /* A target of 24 px or more, around a key drawn smaller. */
+  .cell-open { position: relative; }
+  .cell-open::after { content: ""; position: absolute; inset: -6px -4px; }
+  .cell-open:hover { text-decoration: underline; text-underline-offset: 2px; }
   .cell-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .cell.is-string-head { min-width: 0; align-items: flex-start; }
 
@@ -1538,6 +1543,15 @@
     .clause { grid-template-columns: minmax(0, 1fr); }
     .glossary-entry { grid-template-columns: minmax(0, 1fr); }
     .flow-chip { font-size: 12px; padding: 2px 7px; }
+    /* The cells wrap: each call's run under its name, onto as many rows as
+       it needs, so every cell a step used is on screen without scrolling
+       sideways. Each cell draws its own seam, so a short row ends on the
+       panel, not on ink. */
+    .cells { flex-direction: column; align-items: flex-start; width: auto; overflow-x: visible; background: none; }
+    .cell-frame { align-self: stretch; min-width: 0; }
+    .cell-run { flex: 1 1 auto; flex-wrap: wrap; min-width: 0; }
+    .cell, .cell-frame-name { box-shadow: 0 0 0 1px var(--ink); }
+    .cell[data-access="read"] { box-shadow: inset 0 -4px 0 var(--flow-ink), 0 0 0 1px var(--ink); }
   }
   /* Short windows (a phone held sideways, a zoomed laptop): the header
      scrolls away and the chrome shrinks, so that beside the note the sticky
