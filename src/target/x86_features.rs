@@ -236,6 +236,7 @@ impl X86Features {
             tune:              None,
             baseline_off:      0,
             general_regs_only: false,
+            x87_math:          false,
         };
         target.read(text);
         target
@@ -397,6 +398,9 @@ pub(crate) struct FunctionTarget {
     /// The attribute asks for general registers only, which bcc does not
     /// compile either.
     general_regs_only: bool,
+    /// GCC's last `fpmath=` asks for floating arithmetic in x87 registers,
+    /// with their excess range and precision, which bcc does not compile.
+    x87_math:          bool,
 }
 
 impl FunctionTarget {
@@ -419,6 +423,10 @@ impl FunctionTarget {
                 }
             } else if name == "general-regs-only" {
                 self.general_regs_only = !negated;
+            } else if let Some(value) = name.strip_prefix("fpmath=") {
+                // GCC reads `no-fpmath=` as `fpmath=`; Clang ignores an
+                // attribute with any `fpmath=`.
+                self.x87_math = !clang && value != "sse";
             } else if let Some(at) = BASELINE.iter().position(|&baseline| baseline == name) {
                 self.baseline(at, negated);
             } else {
@@ -481,6 +489,17 @@ impl FunctionTarget {
     /// may use, or asks for general registers only.
     pub(crate) const fn refused(&self) -> bool {
         self.baseline_off != 0 || self.general_regs_only
+    }
+
+    /// Whether the attribute asks GCC for floating arithmetic in x87
+    /// registers (`fpmath=387`, `sse+387` or `both`), which bcc refuses
+    /// rather than compute with SSE's narrower intermediate results. GNU
+    /// extension: GCC manual, "x86 Function Attributes", `fpmath=`, and
+    /// "x86 Options", `-mfpmath`. C99: §5.2.4.2.2 paragraph 8, pp. 24-25;
+    /// PDF pp. 36-37, lets an implementation evaluate floating operations to
+    /// a wider range and precision (`FLT_EVAL_METHOD`), as x87 registers do.
+    pub(crate) const fn x87_math(&self) -> bool {
+        self.x87_math
     }
 
     /// What the back ends read.

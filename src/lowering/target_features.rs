@@ -71,6 +71,12 @@ impl Unit<'_, '_, '_> {
                 source,
             ));
         }
+        if target.x87_math() {
+            return Err(LoweringError::unsupported(
+                Construct::Attribute(UnsupportedAttribute::TargetX87Math),
+                source,
+            ));
+        }
         // Another object can reach an external function, whose refusal
         // `check_foreign_vectors` gives.
         if self.sema.bindings[binding].linkage == Linkage::Internal

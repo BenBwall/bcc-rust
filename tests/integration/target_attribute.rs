@@ -443,6 +443,54 @@ mod tests {
         }
     }
 
+    /// GCC computes in x87 registers under `fpmath=387`, with their excess
+    /// precision: GCC 14 makes `f(1e16, 1.0)` 1, where SSE arithmetic makes
+    /// it 0. bcc refuses the function rather than compute otherwise; Clang
+    /// ignores the attribute with a warning, and bcc follows it.
+    #[test]
+    fn x87_arithmetic_is_refused_rather_than_miscompiled() {
+        let function = |text: &str| {
+            format!(
+                "__attribute__((target(\"{text}\"))) double f(double a, double b) {{ return (a + \
+                 b) - a; }}\n"
+            )
+        };
+        for text in [
+            "fpmath=387",
+            "fpmath=both",
+            "no-fpmath=387",
+            "avx2,fpmath=sse+387",
+        ] {
+            let output = bcc(
+                &["--compiler-identity=gcc", "-c", "-o", "/dev/null"],
+                &function(text),
+            );
+            assert!(!output.status.success(), "{text}");
+            assert!(
+                stderr(&output).contains("asks for x87 floating-point arithmetic"),
+                "{text}: {}",
+                stderr(&output)
+            );
+        }
+        for text in ["fpmath=sse", "fpmath=387,fpmath=sse"] {
+            let output = bcc(
+                &["--compiler-identity=gcc", "-c", "-o", "/dev/null"],
+                &function(text),
+            );
+            assert!(output.status.success(), "{text}: {}", stderr(&output));
+        }
+        let output = bcc(
+            &["--compiler-identity=clang", "-c", "-o", "/dev/null"],
+            &function("fpmath=387"),
+        );
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("unsupported 'fpmath=' in the 'target' attribute string"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     #[test]
     fn redeclarations_merge_as_each_compiler_does() {
         // Both: a definition without the attribute keeps an earlier one's.

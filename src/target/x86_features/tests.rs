@@ -228,6 +228,31 @@ fn baseline_features_cannot_be_turned_off() {
     );
 }
 
+/// GCC computes in x87 registers under `fpmath=387`, `sse+387` and `both`,
+/// and reads `no-fpmath=` as `fpmath=`; the last one counts. Clang ignores
+/// an attribute with `fpmath=`. Measured with GCC 14's `-S` output.
+#[test]
+fn x87_arithmetic_is_refused() {
+    let gcc = command_line(&[], false);
+    for text in [
+        "fpmath=387",
+        "fpmath=sse+387",
+        "fpmath=387+sse",
+        "fpmath=both",
+        "no-fpmath=387",
+    ] {
+        assert!(gcc.target_attribute(text).x87_math(), "{text}");
+    }
+    for text in ["fpmath=sse", "fpmath=387,fpmath=sse", "arch=x86-64,avx2"] {
+        assert!(!gcc.target_attribute(text).x87_math(), "{text}");
+    }
+    assert!(
+        !command_line(&[], true)
+            .target_attribute("fpmath=387")
+            .x87_math()
+    );
+}
+
 #[test]
 fn inlining_needs_every_feature_of_the_callee() {
     let plain = command_line(&[], true).target_attribute("");

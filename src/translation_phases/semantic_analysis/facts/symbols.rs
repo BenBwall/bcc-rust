@@ -338,6 +338,10 @@ pub(crate) enum UnsupportedAttribute {
     /// x86 `target` turning off x87, MMX, FXSR, SSE or SSE2, or asking for
     /// general registers only: code bcc writes for every function needs them.
     TargetBaseline,
+    /// GCC's x86 `target("fpmath=387")`, `sse+387` or `both`: floating
+    /// arithmetic in x87 registers, whose excess precision bcc's SSE code
+    /// would not give.
+    TargetX87Math,
 }
 
 impl UnsupportedAttribute {
@@ -357,6 +361,9 @@ impl UnsupportedAttribute {
             | Self::TargetBaseline =>
                 "a `target` attribute that turns off x87, MMX, FXSR, SSE or SSE2, or asks for \
                  general registers only",
+            | Self::TargetX87Math =>
+                "a `target` attribute whose `fpmath=` asks for x87 floating-point arithmetic, with \
+                 its excess precision",
         }
     }
 }
