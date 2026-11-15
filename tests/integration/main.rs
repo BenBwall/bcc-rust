@@ -17,6 +17,7 @@
 #[path = "../support/native.rs"]
 mod native;
 
+mod assembler_cli;
 mod atomic_compound;
 mod bench_corpus;
 mod binary128;

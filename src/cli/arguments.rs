@@ -117,6 +117,10 @@ pub(super) fn normalize_language_arguments(
             normalized.push(format!("--language={language}").into());
         } else if text.starts_with("-Wa,") {
             normalized.push(format!("--assembler-option={text}").into());
+        } else if text == "-fintegrated-as" {
+            normalized.push("--assembler=integrated".into());
+        } else if text == "-fno-integrated-as" {
+            normalized.push("--assembler=system".into());
         } else if text == "-Xassembler" {
             normalized.push("--assembler-option=-Xassembler".into());
             if let Some(operand) = arguments.next() {
