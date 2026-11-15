@@ -196,7 +196,12 @@ define the union, on a structure or enumeration, on an object, function,
 parameter or member, and among the specifiers of a declaration that declares
 only a tag.
 Windows records use Microsoft's bit-field layout on both MinGW and MSVC,
-matching Clang's MinGW default `-mms-bitfields`. Consecutive nonzero fields share
+matching Clang's MinGW default `-mms-bitfields`. A record that names
+neither `ms_struct` nor `gcc_struct` takes the layout `-m[no-]ms-bitfields`
+gives, or, under the TCC identity, the one `#pragma comment(option, "...")`
+sets where its definition ends (`pragma_comment.rs`, carried by token
+ordinal as `#pragma pack` is); TCC's Microsoft layout follows TCC's own
+algorithm (see `language-standards.md`). Consecutive nonzero fields share
 an entire reserved storage unit only when their base-type sizes match and they
 fit. A zero-width field affects layout only immediately after a nonzero
 bit-field, where it ends that field's whole unit (see "Record layout
