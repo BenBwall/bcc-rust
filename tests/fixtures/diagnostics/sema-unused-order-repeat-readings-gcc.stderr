@@ -1,0 +1,16 @@
+In file included from sema-unused-order-repeat-readings-gcc.c:4:
+context-headers/every-reading.h:1:2: error: #error every reading
+    1 | #error every reading
+      |  ^~~~~
+In file included from sema-unused-order-repeat-readings-gcc.c:6:
+context-headers/every-reading.h:1:2: error: #error every reading
+    1 | #error every reading
+      |  ^~~~~
+In file included from sema-unused-order-repeat-readings-gcc.c:8:
+context-headers/every-reading.h:1:2: error: #error every reading
+    1 | #error every reading
+      |  ^~~~~
+sema-unused-order-repeat-readings-gcc.c: In function 'first':
+sema-unused-order-repeat-readings-gcc.c:3:32: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    3 | void first(void) { typedef int T; }
+      |                                ^

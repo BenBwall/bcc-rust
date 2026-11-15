@@ -1,0 +1,24 @@
+In file included from sema-unused-order-repeat-warning-gcc.c:5:
+context-headers/every-warning.h:1:2: error: #warning every reading
+    1 | #warning every reading
+      |  ^~~~~~~
+In file included from sema-unused-order-repeat-warning-gcc.c:7:
+context-headers/every-warning.h:1:2: error: #warning every reading
+    1 | #warning every reading
+      |  ^~~~~~~
+In file included from sema-unused-order-repeat-warning-gcc.c:9:
+context-headers/every-warning.h:1:2: error: #warning every reading
+    1 | #warning every reading
+      |  ^~~~~~~
+sema-unused-order-repeat-warning-gcc.c: In function 'first':
+sema-unused-order-repeat-warning-gcc.c:4:32: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    4 | void first(void) { typedef int T; }
+      |                                ^
+sema-unused-order-repeat-warning-gcc.c: In function 'second':
+sema-unused-order-repeat-warning-gcc.c:6:33: warning: typedef 'U' locally defined but not used [-Wunused-local-typedefs]
+    6 | void second(void) { typedef int U; }
+      |                                 ^
+sema-unused-order-repeat-warning-gcc.c: In function 'third':
+sema-unused-order-repeat-warning-gcc.c:8:32: warning: typedef 'V' locally defined but not used [-Wunused-local-typedefs]
+    8 | void third(void) { typedef int V; }
+      |                                ^

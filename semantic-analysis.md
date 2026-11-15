@@ -1245,7 +1245,8 @@ typedefs while no error that `-Werror` did not make has been reported, and the
 unused parameters. GCC counts an error once it has read it: a preprocessor or
 parser error counts from the end of each function that it is read at or before
 the closing brace of, by where it was read (so an error in a header counts where
-the header is included), and an error at the end of the input counts in a
+the header is included, and in a header read more than once, at the inclusion
+whose reading the preprocessor reported it in), and an error at the end of the input counts in a
 function it leaves open. After the unit come the undefined internal functions, the
 middle end's `control reaches end` (not under `-fsyntax-only`), and the
 internal objects and functions nothing uses, in the reverse of the order GCC's

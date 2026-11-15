@@ -1,0 +1,14 @@
+In file included from context-headers/repeat-outer.h:1,
+                 from sema-unused-order-nested-repeat-gcc.c:3:
+context-headers/repeat-inner.h:4:2: warning: #warning first reading
+    4 | #warning first reading
+      |  ^~~~~~~
+In file included from context-headers/repeat-outer.h:1,
+                 from sema-unused-order-nested-repeat-gcc.c:6:
+context-headers/repeat-inner.h:2:2: error: #error second reading
+    2 | #error second reading
+      |  ^~~~~
+sema-unused-order-nested-repeat-gcc.c: In function 'first':
+sema-unused-order-nested-repeat-gcc.c:4:32: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    4 | void first(void) { typedef int T; }
+      |                                ^
