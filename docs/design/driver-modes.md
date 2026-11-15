@@ -1156,8 +1156,11 @@ given, which makes them errors again in both.
 `_REENTRANT`. There is no GNU or Clang macro, no `__ATOMIC_*`, `__SSE2__`,
 `__ELF__`, `__PIC__`, `__SIZEOF_INT128__` or `__STDC_MB_MIGHT_NEQ_WC__`.
 bcc's own `<stdatomic.h>` defines the `__ATOMIC_*` memory orders itself
-when they are not predefined, as `mob`'s `<stdatomic.h>` does. bcc keeps
-these besides, each for a reason:
+when they are not predefined, as `mob`'s `<stdatomic.h>` does, and bcc's
+freestanding `<stdint.h>` spells out the LP64 types and limits that the
+other identities' `__INT8_TYPE__` family names, as TCC's `<stddef.h>`
+spells out its exact-width types, with glibc's 64-bit `int_fast16_t` and
+`int_fast32_t`. bcc keeps these besides, each for a reason:
 
 | Macros | Why bcc keeps them |
 | --- | --- |

@@ -11989,6 +11989,102 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         );
     }
 
+    /// bcc's resource headers compile under the TCC identity on x86-64
+    /// Linux, which predefines TCC's macros rather than the target's:
+    /// freestanding, `<stdint.h>` spells its types out ([`TCC_STDINT_TYPES`]),
+    /// and hosted, it takes glibc's.
+    #[test]
+    fn tcc_identity_compiles_the_resource_headers() {
+        let directory = Directory::new();
+        let linux = "--target=x86_64-unknown-linux-gnu";
+        let hosted = cfg!(all(target_os = "linux", target_env = "gnu"));
+        for header in [
+            "float.h",
+            "iso646.h",
+            "limits.h",
+            "stdalign.h",
+            "stdarg.h",
+            "stdatomic.h",
+            "stdbit.h",
+            "stdbool.h",
+            "stddef.h",
+            "stdint.h",
+            "stdnoreturn.h",
+        ] {
+            directory.write("h.c", &format!("#include <{header}>\nint x;\n"));
+            for standard in ["-std=gnu99", "-std=c11", "-std=c23"] {
+                let mut args = vec![linux, standard, "-ffreestanding", "-fsyntax-only", "h.c"];
+                let output = directory.bcc("--compiler-identity=tcc", &args);
+                assert_eq!(stderr(&output), "", "{header} {standard}");
+                succeeds(&output);
+                if hosted {
+                    args.remove(2);
+                    let output = directory.bcc("--compiler-identity=tcc", &args);
+                    assert_eq!(stderr(&output), "", "{header} {standard} hosted");
+                    succeeds(&output);
+                }
+            }
+        }
+        directory.write("types.c", TCC_STDINT_TYPES);
+        let mut args = vec![linux, "-std=c11", "-ffreestanding", "types.c", "-c"];
+        for identity in ["--compiler-identity=tcc", "--compiler-identity=gcc"] {
+            let output = directory.bcc(identity, &args);
+            assert_eq!(stderr(&output), "", "{identity}");
+            succeeds(&output);
+        }
+        if hosted {
+            args.remove(2);
+            succeeds(&directory.bcc("--compiler-identity=tcc", &args));
+        }
+    }
+
+    /// Checks the type and value of each `<stdint.h>` definition on x86-64
+    /// Linux, as glibc's `<stdint.h>` and GCC's macros give them, with
+    /// `<stdatomic.h>`'s use of them.
+    const TCC_STDINT_TYPES: &str = "#include <stdint.h>
+#include <stdatomic.h>
+#define SAME(T, U) _Static_assert(_Generic((T *)0, U *: 1, default: 0), #T)
+#define IS(E, U, V) _Static_assert(_Generic((E), U: 1, default: 0) && (E) == (V), #E)
+#define S64 (-9223372036854775807L - 1)
+#define U64 18446744073709551615UL
+SAME(int8_t, signed char); SAME(uint8_t, unsigned char);
+SAME(int16_t, short); SAME(uint16_t, unsigned short);
+SAME(int32_t, int); SAME(uint32_t, unsigned);
+SAME(int64_t, long); SAME(uint64_t, unsigned long);
+SAME(int_least8_t, signed char); SAME(uint_least8_t, unsigned char);
+SAME(int_least16_t, short); SAME(uint_least16_t, unsigned short);
+SAME(int_least32_t, int); SAME(uint_least32_t, unsigned);
+SAME(int_least64_t, long); SAME(uint_least64_t, unsigned long);
+SAME(int_fast8_t, signed char); SAME(uint_fast8_t, unsigned char);
+SAME(int_fast16_t, long); SAME(uint_fast16_t, unsigned long);
+SAME(int_fast32_t, long); SAME(uint_fast32_t, unsigned long);
+SAME(int_fast64_t, long); SAME(uint_fast64_t, unsigned long);
+SAME(intptr_t, long); SAME(uintptr_t, unsigned long);
+SAME(intmax_t, long); SAME(uintmax_t, unsigned long);
+IS(INT8_MIN, int, -128); IS(INT8_MAX, int, 127); IS(UINT8_MAX, int, 255);
+IS(INT16_MIN, int, -32768); IS(INT16_MAX, int, 32767); IS(UINT16_MAX, int, 65535);
+IS(INT32_MIN, int, -2147483647 - 1); IS(INT32_MAX, int, 2147483647);
+IS(UINT32_MAX, unsigned, 4294967295U);
+IS(INT64_MIN, long, S64); IS(INT64_MAX, long, -(S64 + 1)); IS(UINT64_MAX, unsigned long, U64);
+IS(INT_LEAST8_MIN, int, -128); IS(UINT_LEAST16_MAX, int, 65535);
+IS(INT_LEAST32_MAX, int, 2147483647); IS(INT_LEAST64_MIN, long, S64);
+IS(INT_FAST8_MAX, int, 127); IS(INT_FAST16_MIN, long, S64);
+IS(INT_FAST32_MAX, long, -(S64 + 1)); IS(UINT_FAST32_MAX, unsigned long, U64);
+IS(INTPTR_MIN, long, S64); IS(UINTPTR_MAX, unsigned long, U64);
+IS(INTMAX_MAX, long, -(S64 + 1)); IS(UINTMAX_MAX, unsigned long, U64);
+IS(PTRDIFF_MIN, long, S64); IS(PTRDIFF_MAX, long, -(S64 + 1));
+IS(SIG_ATOMIC_MIN, int, -2147483647 - 1); IS(SIG_ATOMIC_MAX, int, 2147483647);
+IS(WCHAR_MIN, int, -2147483647 - 1); IS(WCHAR_MAX, int, 2147483647);
+IS(WINT_MIN, unsigned, 0U); IS(WINT_MAX, unsigned, 4294967295U);
+IS(SIZE_MAX, unsigned long, U64);
+IS(INT8_C(1), int, 1); IS(INT16_C(1), int, 1); IS(INT32_C(1), int, 1);
+IS(INT64_C(1), long, 1); IS(UINT8_C(1), int, 1); IS(UINT16_C(1), int, 1);
+IS(UINT32_C(1), unsigned, 1); IS(UINT64_C(1), unsigned long, 1);
+IS(INTMAX_C(1), long, 1); IS(UINTMAX_C(1), unsigned long, 1);
+atomic_int counter;
+int bump(void) { atomic_fetch_add(&counter, 2); return atomic_load(&counter); }
+";
+
     const TCC_WARNINGS_SOURCE: &str = "int g;
 enum E { A };
 struct { int a; };
