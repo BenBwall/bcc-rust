@@ -22,6 +22,9 @@ use crate::{
 pub(super) struct ExpansionSites<'tu> {
     pub(super) entries: SegmentedVec<'tu, (u32, u32)>,
     pub(super) ends:    SegmentedVec<'tu, SourceVector>,
+    /// For the table of invocation starts, where each invocation in `ends`
+    /// ends, by the same index; the table of endpoints leaves it empty.
+    pub(super) spans:   SegmentedVec<'tu, SourceVector>,
 }
 
 impl<'tu> ExpansionSites<'tu> {
@@ -67,6 +70,20 @@ impl<'tu> ExpansionSites<'tu> {
         id
     }
 
+    /// [`Self::site_id`] for an invocation that begins at `site` and ends at
+    /// `end`, for the table of invocation starts.
+    pub(super) fn span_id(&mut self, site: SourceVector, end: SourceVector) -> u32 {
+        if self.ends.last() == Some(&site) && self.spans.last() == Some(&end) {
+            return u32::try_from(self.ends.len() - 1)
+                .expect("macro expansion site index exceeds u32::MAX");
+        }
+        let id =
+            u32::try_from(self.ends.len()).expect("macro expansion site index exceeds u32::MAX");
+        self.ends.push(site);
+        self.spans.push(end);
+        id
+    }
+
     pub(super) fn discard_before(&mut self, end: u32) {
         let count = self.entries.partition_point(|&(key, _)| key < end);
         // Compact geometrically for full-batch input; renumbering the whole
@@ -77,21 +94,27 @@ impl<'tu> ExpansionSites<'tu> {
         self.entries.discard_front(count);
         let Some(first_id) = self.entries.iter().map(|&(_, id)| id).min() else {
             self.ends.clear();
+            self.spans.clear();
             return;
         };
         self.ends.discard_front(first_id as usize);
+        if !self.spans.is_empty() {
+            self.spans.discard_front(first_id as usize);
+        }
         self.entries.for_each_mut(|(_, id)| *id -= first_id);
     }
 
     pub(super) fn clear(&mut self) {
         self.entries.clear();
         self.ends.clear();
+        self.spans.clear();
     }
 
     pub(super) fn new_in(tu: &'tu Bump) -> Self {
         Self {
             entries: SegmentedVec::new_in(tu),
             ends:    SegmentedVec::new_in(tu),
+            spans:   SegmentedVec::new_in(tu),
         }
     }
 }

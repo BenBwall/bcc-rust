@@ -210,16 +210,13 @@ impl Context<'_> {
         {
             self.record_retained_pragma_copy(end - source.length(), source);
         }
-        if source.length() != 0
-            && let Some(site) = self.expansion_starts[arena as usize].get(start)
-        {
-            let site = if arena == target {
-                site
-            } else {
-                let location = self.expansion_starts[arena as usize].ends[site as usize].clone();
-                self.expansion_starts[target as usize].site_id(location)
-            };
-            self.expansion_starts[target as usize].insert(end - source.length(), site);
+        // The invocations of the first and last tokens, which say where a
+        // range a macro wrote begins and ends in the file.
+        if source.length() != 0 {
+            self.copy_expansion_start(target, (arena, start), end - source.length());
+        }
+        if source.length() > 1 {
+            self.copy_expansion_start(target, (arena, start + source.length() - 1), end - 1);
         }
         if source.length() != 0
             && let Some(site) =
@@ -258,6 +255,24 @@ impl Context<'_> {
         target.extend_from_slice(source);
     }
 
+    /// Records for the vector `to` of `target` the invocation recorded for
+    /// the vector `from`, if one is.
+    fn copy_expansion_start(&mut self, target: SourceArena, from: (SourceArena, u32), to: u32) {
+        let (arena, index) = from;
+        let Some(site) = self.expansion_starts[arena as usize].get(index) else {
+            return;
+        };
+        let site = if arena == target {
+            site
+        } else {
+            let sites = &self.expansion_starts[arena as usize];
+            let start = sites.ends[site as usize].clone();
+            let end = sites.spans[site as usize].clone();
+            self.expansion_starts[target as usize].span_id(start, end)
+        };
+        self.expansion_starts[target as usize].insert(to, site);
+    }
+
     pub(crate) fn record_expansion_end(&mut self, source: SourceVectors, site: SourceVector) {
         if source.length() != 0 {
             let (arena, start) = SourceArena::decode(source);
@@ -268,13 +283,18 @@ impl Context<'_> {
     }
 
     /// Records where the outermost macro invocation that produced the
-    /// token `source` begins.
+    /// token `source` begins, at `site`, and ends, at `end`.
     /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
-    pub(crate) fn record_expansion_start(&mut self, source: SourceVectors, site: SourceVector) {
+    pub(crate) fn record_expansion_start(
+        &mut self,
+        source: SourceVectors,
+        site: SourceVector,
+        end: SourceVector,
+    ) {
         if source.length() != 0 {
             let (arena, start) = SourceArena::decode(source);
             let sites = &mut self.expansion_starts[arena as usize];
-            let id = sites.site_id(site);
+            let id = sites.span_id(site, end);
             sites.insert(start, id);
         }
     }
@@ -437,6 +457,78 @@ impl Context<'_> {
         let (arena, start) = SourceArena::decode(source);
         let sites = &self.expansion_starts[arena as usize];
         Some(&sites.ends[sites.get(start)? as usize])
+    }
+
+    /// The last token of the outermost invocation that produced the first
+    /// token of `source`: its name for an object-like macro, and the `)`
+    /// after its arguments for a function-like one.
+    fn outermost_invocation_end(&self, source: SourceVectors) -> Option<&SourceVector> {
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.expansion_starts[arena as usize];
+        sites.spans.get(sites.get(start)? as usize)
+    }
+
+    /// The places Clang underlines for the range `source` beside a caret
+    /// in a file. When a macro's replacement list wrote a token of the
+    /// range, each end of the range that the same invocation produced moves
+    /// out to that end of the invocation, its name or its last token, so
+    /// `Min(a, b)` and `SUM(a, c)` (`a + c`) are underlined whole. Clang's
+    /// `DiagnosticRenderer::mapDiagnosticRanges` follows each end up to the
+    /// expansion both ends share, and takes the expansion range there. The
+    /// file's tokens between the two ends stay; a range within one argument
+    /// stays where the invocation spells it, and a range no replacement
+    /// list wrote comes back as it is. Only the outermost invocation is
+    /// recorded, so a range within a macro invoked in an argument covers
+    /// the outer invocation.
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
+    pub(crate) fn highlight_vectors<'a>(
+        &'a self,
+        source: SourceVectors,
+        scratch: &'a Bump,
+    ) -> &'a [SourceVector] {
+        let vectors = self.get_source_vectors(source);
+        let (Some(first), Some(last)) = (vectors.first(), vectors.last()) else {
+            return vectors;
+        };
+        let (arena, start) = SourceArena::decode(source);
+        let Some(written) = (start..start + source.length())
+            .find_map(|index| self.invocation_site(arena.encode(index, index + 1)))
+        else {
+            return vectors;
+        };
+        // An end a list wrote moves to its own invocation; an argument's, to
+        // the invocation whose list wrote a token of the range.
+        let first_token = Self::first_token_vector(source);
+        let last_token = Self::last_source_vector(source);
+        let produced = |token| {
+            self.invocation_site(token).is_some()
+                || self.outermost_invocation(token) == Some(written)
+        };
+        let begin = if produced(first_token) {
+            self.outermost_invocation(first_token).unwrap_or(first)
+        } else {
+            first
+        };
+        let end = if produced(last_token) {
+            self.outermost_invocation_end(last_token).unwrap_or(last)
+        } else {
+            last
+        };
+        // Clang draws no range whose ends it cannot bring to one file.
+        if begin.source_file_index != end.source_file_index || end.index < begin.index {
+            return &[];
+        }
+        let between = |vector: &&SourceVector| {
+            vector.source_file_index == begin.source_file_index
+                && vector.index > begin.index
+                && vector.index < end.index
+        };
+        scratch.alloc_slice_fill_iter(
+            std::iter::once(begin)
+                .chain(vectors.iter().filter(between))
+                .chain(std::iter::once(end))
+                .cloned(),
+        )
     }
 
     /// Where a source range ends in the user's input, before macro expansion.

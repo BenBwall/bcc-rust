@@ -419,7 +419,7 @@ fn expansion_locations_outlive_compaction_and_follow_copies() {
         ..SourceVector::default()
     };
     let expanded = context.push_source_vectors(std::slice::from_ref(&spelled));
-    context.record_expansion_start(expanded, site.clone());
+    context.record_expansion_start(expanded, site.clone(), site.clone());
     let plain = context.push_source_vectors(std::slice::from_ref(&spelled));
     let token = context.retain_token_source(expanded);
     let plain_token = context.retain_token_source(plain);
@@ -461,9 +461,9 @@ fn file_vectors_keep_arguments_the_invocation_spells() {
         ..SourceVector::default()
     };
     let replaced = context.push_source_vectors(std::slice::from_ref(&in_definition));
-    context.record_expansion_start(replaced, site.clone());
+    context.record_expansion_start(replaced, site.clone(), site.clone());
     let written = context.push_source_vectors(std::slice::from_ref(&argument));
-    context.record_expansion_start(written, site.clone());
+    context.record_expansion_start(written, site.clone(), site.clone());
     let replaced = context.retain_token_source(replaced);
     let written = context.retain_token_source(written);
     context.compact_preprocessor_vectors();
@@ -472,4 +472,55 @@ fn file_vectors_keep_arguments_the_invocation_spells() {
     assert_eq!(context.file_vector(replaced), &site);
     assert_eq!(context.file_vector(written), &argument);
     assert_eq!(context.file_location(written), written);
+}
+
+/// Clang underlines a range whose end a macro's list wrote out to that end
+/// of the whole invocation, `Min(a, b)`, and leaves an argument the
+/// invocation spells, and the file's tokens, where they are. The ends follow
+/// a range copied by a merge.
+#[test]
+fn highlights_cover_the_invocations_their_ends_come_from() {
+    let tu = crate::util::bump::Bump::new();
+    let scratch = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 3,
+        length,
+        ..SourceVector::default()
+    };
+    // `#define Min(x, y) ...` on line 1; `b < Min(a, c) + 1` on line 3.
+    let (before, site, argument, end, after) =
+        (at(30, 1), at(40, 3), at(44, 1), at(49, 1), at(53, 1));
+    let in_definition = SourceVector {
+        length: 1,
+        ..SourceVector::default()
+    };
+    let plain_before = context.push_source_vectors(std::slice::from_ref(&before));
+    let body = context.push_source_vectors(std::slice::from_ref(&in_definition));
+    context.record_expansion_start(body, site.clone(), end.clone());
+    let written = context.push_source_vectors(std::slice::from_ref(&argument));
+    context.record_expansion_start(written, site.clone(), end.clone());
+    let plain = context.push_source_vectors(std::slice::from_ref(&after));
+    let [plain_before, body, written, plain] =
+        [plain_before, body, written, plain].map(|source| context.retain_token_source(source));
+    context.compact_preprocessor_vectors();
+    assert_eq!(
+        context.highlight_vectors(body, &scratch),
+        [site.clone(), end.clone()]
+    );
+    assert_eq!(
+        context.highlight_vectors(written, &scratch),
+        [argument.clone()]
+    );
+    assert_eq!(context.highlight_vectors(plain, &scratch), [after.clone()]);
+    let operand = context.merge_vector_list(&[body, written, plain]);
+    assert_eq!(
+        context.highlight_vectors(operand, &scratch),
+        [site, argument, after]
+    );
+    // Not adjacent, so copied: its last token keeps its invocation.
+    let copied = context.merge_vectors(plain, body);
+    let copied = context.merge_vectors(plain_before, Context::last_source_vector(copied));
+    assert_eq!(context.highlight_vectors(copied, &scratch), [before, end]);
 }

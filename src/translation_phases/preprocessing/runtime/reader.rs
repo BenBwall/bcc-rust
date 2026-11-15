@@ -71,10 +71,10 @@ impl Expander<'_, '_, '_, '_> {
                     // Every token an expansion produces, its arguments'
                     // included, belongs to the outermost invocation, as in
                     // Clang's expansion locations.
-                    if let Some(start) = self.outermost_invocation() {
-                        let start = start.clone();
+                    if let Some((start, end)) = self.outermost_invocation_span() {
+                        let (start, end) = (start.clone(), end.clone());
                         self.context
-                            .record_expansion_start(result.source_vectors, start);
+                            .record_expansion_start(result.source_vectors, start, end);
                     }
                 }
                 return Some(result);

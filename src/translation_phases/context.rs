@@ -206,9 +206,10 @@ pub(crate) struct Context<'tu> {
     literal_values: DedupArena<'tu, &'tu [LiteralUnit], FxBuildHasher>,
     /// Sparse endpoints follow their source arena's lifetime.
     expansion_sites: [ExpansionSites<'tu>; 3],
-    /// Where the outermost macro invocation that produced a token begins,
-    /// keyed by the token's first vector. Unlike the endpoints, these last
-    /// for the whole translation unit, so semantic diagnostics can use them.
+    /// Where the outermost macro invocation that produced a token begins and
+    /// ends, keyed by the token's first vector. Unlike the endpoints, these
+    /// last for the whole translation unit, so semantic diagnostics can use
+    /// them.
     expansion_starts: [ExpansionSites<'tu>; 3],
     ignore_tokenizer_errors: bool,
     /// Phase 4 is skipping a conditional group, whose lines it reads only
