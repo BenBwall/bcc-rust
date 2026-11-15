@@ -242,7 +242,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 missing.len()
             ),
         };
-        self.switch_warning(group, condition.source_vectors, text);
+        self.switch_warning_about(
+            group,
+            condition.source_vectors,
+            text,
+            condition.source_vectors,
+        );
     }
 
     /// Clang's constant condition that no `case` matches, at the condition's
@@ -272,7 +277,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.scratch,
             "no case matching constant switch condition '{value}'"
         );
-        self.switch_warning(G::ConstantSwitchCondition, site, text);
+        self.switch_warning_about(
+            G::ConstantSwitchCondition,
+            site,
+            text,
+            condition.source_vectors,
+        );
     }
 
     /// The enumeration GCC's front end remembers for a condition: that of
@@ -387,14 +397,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     fn switch_warning(&mut self, group: G, site: SourceVectors, text: &str) {
+        self.switch_warning_about(group, site, text, SourceVectors::default());
+    }
+
+    /// [`Self::switch_warning`] with the `range` Clang underlines beside its
+    /// caret, as `warn_missing_case` and `warn_missing_case_for_condition`
+    /// underline the condition in `SemaStmt.cpp`.
+    fn switch_warning_about(
+        &mut self,
+        group: G,
+        site: SourceVectors,
+        text: &str,
+        range: SourceVectors,
+    ) {
         let name = self.context.string_cache.intern(text);
-        self.spelled_group_diagnostic(
-            group,
-            SemanticErrorKind::SwitchCases(group),
-            site,
-            Some(name),
-            site,
-        );
+        self.with_highlights([range, SourceVectors::default()], |analyzer| {
+            analyzer.spelled_group_diagnostic(
+                group,
+                SemanticErrorKind::SwitchCases(group),
+                site,
+                Some(name),
+                site,
+            );
+        });
     }
 }
 
