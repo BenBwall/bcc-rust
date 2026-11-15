@@ -34,7 +34,13 @@ compiler; each part is captioned with what its lessons share
   each string literal, named by its spelling) are created one step each
   before `main` and kept in a group of their own, outside every call. A
   char shows its character beside its value (`65 'A'`), and a char array
-  its characters. A structure
+  its characters. Under the head, a string literal's array, or a char array
+  of more than eight bytes, is one cell: its characters a column per byte
+  over an index ruler, the null character boxed as a byte of its own, the
+  bytes the step used marked in place, wrapping between words before it
+  outgrows a phone; its key opens it into byte cells named by index. On a
+  phone the cells wrap onto rows, each call's under its name, so every cell
+  a step uses is on screen. A structure
   is drawn as its members: one cell per member under the head, with a
   hatched cell for each run of padding bcc's x86-64 layout leaves, and a row
   per member in the datasheet with its byte offsets. A program that writes
