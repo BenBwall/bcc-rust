@@ -79,6 +79,9 @@ pub(crate) struct MFunction<'a> {
     /// `%rbp` when the function takes its frame address, so the caller's
     /// `%rbp` is where a frame pointer would save it.
     pub(crate) first_push:       Option<PReg>,
+    /// Whether `-fno-omit-frame-pointer` keeps a frame pointer in `%rbp`
+    /// although the stack does not move.
+    pub(crate) keep_frame_ptr:   bool,
     /// The targets of each [`MInst::JmpIndirect`], by its `dests` index.
     pub(crate) indirect:         ArenaVec<'a, ArenaVec<'a, MBlock>>,
     /// Each IR block label with the block its address names: the labeled
@@ -112,12 +115,20 @@ impl<'a> MFunction<'a> {
             entry:            EntryConvention::C,
             general_regs:     false,
             first_push:       None,
+            keep_frame_ptr:   false,
             indirect:         ArenaVec::new_in(arena),
             labels:           ArenaVec::new_in(arena),
             indirect_symbols: ArenaVec::new_in(arena),
             asm:              ArenaVec::new_in(arena),
             tracks_sources:   false,
         }
+    }
+
+    /// Whether `%rbp` holds a frame pointer from the prologue to the
+    /// epilogue, so no value may take it: the stack moves, or the options
+    /// keep one.
+    pub(crate) fn frame_pointer(&self) -> bool {
+        self.dynamic || self.keep_frame_ptr
     }
 
     /// Whether the function uses an SSE register or a virtual register of

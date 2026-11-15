@@ -187,6 +187,8 @@ pub(crate) fn select<'a>(
     });
     selector.func.dynamic = uses(&[Opcode::DynAlloca, Opcode::StackRestore]) || over_aligned_byval;
     selector.func.entry = function.entry;
+    selector.func.keep_frame_ptr =
+        options.keep_frame_pointer && function.entry != EntryConvention::Naked;
     selector.func.general_regs = module.general_regs_only();
     // A handler aligns its own stack, which leaves `%rsp` no fixed distance
     // from the processor's frame, and addresses its frame from `%rbp`. Neither
@@ -263,6 +265,9 @@ pub(crate) struct SelectOptions {
     pub(crate) indirect_returns_twice: bool,
     /// Whether to note what each instruction is for ([`InstSource`]).
     pub(crate) track_sources:          bool,
+    /// `-fno-omit-frame-pointer`: every function but a naked one keeps a
+    /// frame pointer. GCC manual, "Optimize Options", `-fomit-frame-pointer`.
+    pub(crate) keep_frame_pointer:     bool,
 }
 
 /// How the selector represents an IR value.

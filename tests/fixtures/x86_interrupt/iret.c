@@ -79,7 +79,9 @@ __attribute__((noinline)) int helper(volatile int *a, int n) {
 }
 
 static void note(struct frame *f) {
-  __asm__ volatile("pushfq\n\tpopq %0" : "=r"(seen_df));
+  /* Past the red zone, where a leaf keeps its locals below %rsp. */
+  __asm__ volatile("leaq -128(%%rsp), %%rsp\n\tpushfq\n\tpopq %0\n\tleaq 128(%%rsp), %%rsp"
+                   : "=r"(seen_df));
   seen_ip = f->ip;
   seen_cs = f->cs;
   seen_sp = f->sp;

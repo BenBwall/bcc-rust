@@ -92,7 +92,8 @@ pub(crate) struct Hardening {
     pub(crate) return_protection:  bool,
     /// `-fstack-clash-protection`: a large frame probes each page.
     pub(crate) stack_clash:        bool,
-    /// `-fno-omit-frame-pointer`: every function keeps a frame pointer.
+    /// `-fno-omit-frame-pointer`, and the default of an unoptimized
+    /// compilation: every function keeps a frame pointer.
     pub(crate) keep_frame_pointer: bool,
     /// `-fsanitize=address`: LLVM's `AddressSanitizer` checks each access.
     pub(crate) sanitize_address:   bool,
@@ -116,6 +117,19 @@ impl Hardening {
         undefined:          super::sanitizers::UndefinedSanitizer::NONE,
         profile:            false,
     };
+
+    /// What a compilation for `target` has before its options: on Linux,
+    /// the only targets with these checks, an unoptimized one keeps frame
+    /// pointers, as GCC's `-O0` and Clang's do, since GCC turns
+    /// `-fomit-frame-pointer` on from `-O1` (GCC manual, "Optimize
+    /// Options").
+    pub(crate) const fn initial(target: Target, optimized: bool) -> Self {
+        Self {
+            keep_frame_pointer: !optimized
+                && matches!(target, Target::LinuxGnu | Target::LinuxMusl),
+            ..Self::NONE
+        }
+    }
 
     /// What makes the bundled clang link the run-time support these need: a
     /// sanitizer's library, or the profiling startup file.

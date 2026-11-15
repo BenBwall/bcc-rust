@@ -579,6 +579,20 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         self.frames.last().expect("a frame is executing")
     }
 
+    /// Whether `address` lies in the two words at a frame address
+    /// (`frame_address`) of an active frame, where a machine frame keeps its
+    /// caller's frame address and its return address.
+    pub(super) fn frame_record(&self, address: RuntimeValue) -> bool {
+        let RuntimeValue::Ptr(pointer) = address else {
+            return false;
+        };
+        pointer.provenance.is_none()
+            && self
+                .frames
+                .iter()
+                .any(|frame| pointer.address.wrapping_sub(frame.start) < 16)
+    }
+
     /// The body of the defined function `func`.
     pub(super) fn body(&self, func: FuncId) -> &'m Body<'ir> {
         let module = self.module;

@@ -7,7 +7,7 @@ target triple = "x86_64-unknown-linux-gnu"
 @origin = global [8 x i8] c"\01\00\00\00\02\00\00\00", align 4
 @moved.total = internal global [4 x i8] zeroinitializer, align 4
 
-define i64 @moved(i64 %v15, i32 noundef %v2) {
+define i64 @moved(i64 %v15, i32 noundef %v2) #0 {
 block0:
   %slot0 = alloca [8 x i8], align 8
   %v0 = alloca [16 x i8], align 8
@@ -28,7 +28,7 @@ block0:
   ret i64 %inst18.ret
 }
 
-define i32 @main() {
+define i32 @main() #0 {
 block0:
   %slot0 = alloca [8 x i8], align 4
   %slot1 = alloca [8 x i8], align 4
@@ -89,16 +89,17 @@ block0:
 }
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.memcpy.p0.p0.i64(ptr noalias writeonly captures(none), ptr noalias readonly captures(none), i64, i1 immarg) #0
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias writeonly captures(none), ptr noalias readonly captures(none), i64, i1 immarg) #1
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.memmove.p0.p0.i64(ptr writeonly captures(none), ptr readonly captures(none), i64, i1 immarg) #0
+declare void @llvm.memmove.p0.p0.i64(ptr writeonly captures(none), ptr readonly captures(none), i64, i1 immarg) #1
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: write)
-declare void @llvm.memset.p0.i64(ptr writeonly captures(none), i8, i64, i1 immarg) #1
+declare void @llvm.memset.p0.i64(ptr writeonly captures(none), i8, i64, i1 immarg) #2
 
-attributes #0 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
-attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: write) }
+attributes #0 = { "frame-pointer"="all" }
+attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
+attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: write) }
 
 !llvm.module.flags = !{!0, !1}
 
