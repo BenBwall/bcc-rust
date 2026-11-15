@@ -233,8 +233,7 @@ impl Compilation {
             .find(|diagnostic| diagnostic.severity == "error")?;
         let at = error
             .range
-            .map(|range| format!(" on line {}", range.line))
-            .unwrap_or_default();
+            .map_or_default(|range| format!(" on line {}", range.line));
         let message = &error.message;
         let (phase, explanation) = match error.stage.as_str() {
             | "middle-end" => (

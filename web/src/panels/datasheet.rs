@@ -90,7 +90,7 @@ pub fn Datasheet(
                                             </th>
                                             <td>{object.ty.clone()}<span class="sheet-bytes" title="its size in bytes on x86-64">{format!("{} B", object.size)}</span></td>
                                             <td>{place}</td>
-                                            <td>{born.get(&object.id).map(ToString::to_string).unwrap_or_default()}</td>
+                                            <td>{born.get(&object.id).map_or_default(ToString::to_string)}</td>
                                             <td class="sheet-value">{value}</td>
                                         </tr>
                                     };

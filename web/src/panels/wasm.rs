@@ -45,7 +45,7 @@ pub fn WasmView(
                 <p class="wasm-unavailable-title">"No WebAssembly module for this program"</p>
                 <p>{move || wasm.unavailable.get().unwrap_or_default()}</p>
                 <pre class="wasm-diagnostic" class:is-prose=move || problem().is_some_and(|problem| problem.prose) hidden=move || problem().is_none()>
-                    {move || problem().map(|problem| problem.detail).unwrap_or_default()}
+                    {move || problem().map_or_default(|problem| problem.detail)}
                 </pre>
                 <button type="button" class="button small" hidden=move || !retry() disabled=move || wasm.locked_tracked() on:click=move |_| on_choose.run(Compiler::Bcc)>
                     "Compile again"
@@ -96,8 +96,7 @@ fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
         wasm.program.with(|program| {
             program
                 .as_ref()
-                .map(|program| program.command.clone())
-                .unwrap_or_default()
+                .map_or_default(|program| program.command.clone())
         })
     };
     let choice = move |option: Compiler| {
@@ -149,8 +148,8 @@ fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
                 ))}
             </p>
             <div class="wasm-fallback" hidden=move || problem().is_none()>
-                <p>{move || problem().map(|problem| problem.headline).unwrap_or_default()}</p>
-                <pre class="wasm-diagnostic" class:is-prose=move || problem().is_some_and(|problem| problem.prose)>{move || problem().map(|problem| problem.detail).unwrap_or_default()}</pre>
+                <p>{move || problem().map_or_default(|problem| problem.headline)}</p>
+                <pre class="wasm-diagnostic" class:is-prose=move || problem().is_some_and(|problem| problem.prose)>{move || problem().map_or_default(|problem| problem.detail)}</pre>
                 <p>"You are stepping Clang's module instead."</p>
                 <button type="button" class="button small" hidden=move || !problem().is_some_and(|problem| problem.retry) disabled=move || wasm.locked_tracked() on:click=move |_| on_choose.run(Compiler::Bcc)>
                     "Compile again with bcc"
@@ -169,7 +168,7 @@ fn Narration(wasm: WasmState, on_jump: Callback<u64>) -> impl IntoView {
             .with(|current| current.as_ref().map(|current| current.narration.clone()))
     });
     let field = move |read: fn(&crate::wasm::WasmNarration) -> String| {
-        move || narration.with(|narration| narration.as_ref().map(read).unwrap_or_default())
+        move || narration.with(|narration| narration.as_ref().map_or_default(read))
     };
     let category = move || {
         narration.with(|narration| {
@@ -242,7 +241,7 @@ fn Narration(wasm: WasmState, on_jump: Callback<u64>) -> impl IntoView {
         <article class="card narration wasm-narration" data-category=category aria-labelledby="wasm-narration-title">
             <div class="narration-meta">
                 <span class="category-badge">{field(|narration| narration.label.clone())}</span>
-                <span class="narration-step">{move || step().map(|step| format!("Instruction {step}")).unwrap_or_default()}</span>
+                <span class="narration-step">{move || step().map_or_default(|step| format!("Instruction {step}"))}</span>
                 <code class="wasm-instruction" hidden=move || narration.with(|n| n.as_ref().is_none_or(|n| n.instruction.is_empty()))>
                     {field(|narration| narration.instruction.clone())}
                 </code>
@@ -251,7 +250,7 @@ fn Narration(wasm: WasmState, on_jump: Callback<u64>) -> impl IntoView {
                     <span class="breakpoint-dot" aria-hidden="true"></span>"Breakpoint"
                 </span>
                 <span class="wasm-chip" hidden=move || source().is_none()>
-                    {move || source().map(|line| format!("C line {line}")).unwrap_or_default()}
+                    {move || source().map_or_default(|line| format!("C line {line}"))}
                 </span>
             </div>
             <h2 id="wasm-narration-title" class="narration-title">
@@ -278,8 +277,7 @@ fn Narration(wasm: WasmState, on_jump: Callback<u64>) -> impl IntoView {
                 {move || narration.with(|narration| {
                     narration
                         .as_ref()
-                        .map(|narration| narration.concepts.clone())
-                        .unwrap_or_default()
+                        .map_or_default(|narration| narration.concepts.clone())
                         .into_iter()
                         .map(|concept| view! {
                             <li class="clause">
@@ -321,8 +319,7 @@ pub fn WasmListing(
         wasm.program.with(|program| {
             program
                 .as_ref()
-                .map(|program| program.wat.clone())
-                .unwrap_or_default()
+                .map_or_default(|program| program.wat.clone())
         })
     });
     let linked_source = move || pointing.line(Side::Source);
@@ -351,16 +348,14 @@ pub fn WasmListing(
         wasm.program.with(|program| {
             program
                 .as_ref()
-                .map(|program| program.command.clone())
-                .unwrap_or_default()
+                .map_or_default(|program| program.command.clone())
         })
     };
     let unresolved = move || {
         wasm.program.with(|program| {
             program
                 .as_ref()
-                .map(|program| program.unresolved.join(", "))
-                .unwrap_or_default()
+                .map_or_default(|program| program.unresolved.join(", "))
         })
     };
     let has_lines = move || {

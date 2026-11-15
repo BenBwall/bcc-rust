@@ -101,12 +101,11 @@ pub fn PipelineView(
             compilation.with(|compilation| {
                 compilation
                     .as_ref()
-                    .map(|compilation| {
+                    .map_or_default(|compilation| {
                         source.with(|source| {
                             crate::pipeline::links(stage.get(), compilation, source, headers.get())
                         })
                     })
-                    .unwrap_or_default()
             })
         })
     };

@@ -25,8 +25,7 @@ pub fn LinearMemory(wasm: WasmState) -> impl IntoView {
         view.with(|view| {
             let windows = view
                 .as_ref()
-                .map(|view| view.windows.as_slice())
-                .unwrap_or_default();
+                .map_or_default(|view| view.windows.as_slice());
             // Follow an access as it happens; otherwise keep the choice.
             if windows.iter().any(|window| window.key == wanted) {
                 wanted
@@ -49,8 +48,7 @@ pub fn LinearMemory(wasm: WasmState) -> impl IntoView {
                 <div class="opt-toggle" role="tablist" aria-label="Memory region">
                     {move || view.with(|view| {
                         view.as_ref()
-                            .map(|view| view.windows.clone())
-                            .unwrap_or_default()
+                            .map_or_default(|view| view.windows.clone())
                             .into_iter()
                             .map(|window| {
                                 let name = key(&window.key);

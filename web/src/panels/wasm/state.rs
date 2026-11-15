@@ -67,8 +67,7 @@ pub fn Locals(wasm: WasmState) -> impl IntoView {
         snapshot
             .frames
             .first()
-            .map(|frame| frame.name.clone())
-            .unwrap_or_default()
+            .map_or_default(|frame| frame.name.clone())
     });
     view! {
         <section class="card wasm-card locals-card" aria-labelledby="locals-title">
