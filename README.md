@@ -221,7 +221,7 @@ compiler's conventions, the mapping, and every deviation.
 
 ## Prerequisites
 
-- Rust 1.99.0, pinned in [`rust-toolchain.toml`](rust-toolchain.toml) and declared
+- Rust 1.100.0, pinned in [`rust-toolchain.toml`](rust-toolchain.toml) and declared
   as the minimum supported version in [`Cargo.toml`](Cargo.toml).
 - Clippy and Rust's `llvm-tools` component, both selected automatically by
   `rust-toolchain.toml`.
@@ -240,13 +240,13 @@ compiler's conventions, the mapping, and every deviation.
   installation. For MSVC, the Visual Studio C headers and SDK are required.
 - On Linux, the target's static C runtime development libraries. Instead of
   building LLVM, a Linux host can use LLVM's official prebuilt release of the
-  same version (`LLVM-23.1.1-Linux-X64` from the `llvmorg-23.1.1` GitHub
-  release). Unpack it, point `target/llvm` at it, and write `23.1.1` to its
+  same version (`LLVM-23.1.5-Linux-X64` from the `llvmorg-23.1.5` GitHub
+  release). Unpack it, point `target/llvm` at it, and write `23.1.5` to its
   `.installed-version`; the build then skips compiling LLVM and still checks
   every tool's version. If the release's `ld.lld` cannot load its ICU
-  libraries, as on Ubuntu 26.04, replace it with a link to the pinned
+  libraries (23.1.1's could not on Ubuntu 26.04; 23.1.5's links none), replace it with a link to the pinned
   toolchain's `lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld`, which is
-  LLD 23.1.1 from the same LLVM revision as rustc. The build uses only
+  LLD 23.1.5 from the same LLVM revision as rustc. The build uses only
   `clang`, `llvm-ar`, `ld.lld`, `libclang`, and Clang's resource headers from
   the release. LLVM-C additionally uses its static LLVM libraries and
   `llvm-config`; distributions without them need the source library build.
@@ -258,8 +258,8 @@ compiler's conventions, the mapping, and every deviation.
 ## Source submodules
 
 [`vendor/rust`](vendor/rust) is a shallow, filtered submodule pinned to the
-same commit as Rust 1.99.0 (`b940084d7eb6a299eb4bfeb8e34901bc051e7ac4`). Its
-LLVM submodule pins `1b9c0d5ff9bbe7634aead059efe6b11a7eeba145` (LLVM 23.1.1).
+same commit as Rust 1.100.0 (`0ef1bc386059596dada8fb65b50425aab2ea637a`). Its
+LLVM submodule pins `0a5579eb649d3634a9c30ac873300cc2944fa070` (LLVM 23.1.5).
 Git pins both source revisions; the native build checks that Clang, libclang,
 and the archiver report the same LLVM version as rustc.
 Upgrading Rust requires updating the Rust submodule to the new compiler's
@@ -276,7 +276,7 @@ Git stores sparse-checkout settings locally, so prepare a fresh checkout with
 these PowerShell commands:
 
 ```powershell
-git clone --filter=blob:none --no-checkout --depth 1 --branch 1.99.0 https://github.com/rust-lang/rust.git vendor/rust
+git clone --filter=blob:none --no-checkout --depth 1 --branch 1.100.0 https://github.com/rust-lang/rust.git vendor/rust
 Get-Content build_support/rust.sparse | git -C vendor/rust sparse-checkout set --no-cone --stdin
 git submodule update --init --checkout vendor/rust
 git -C vendor/rust submodule init src/llvm-project
@@ -522,7 +522,7 @@ of the compiler host and language-extension flags. Compiler identity is a
 separate contract that follows Clang: every language mode, including strict
 ISO modes, claims GCC 4.2.1 (`__GNUC__` `4`), with `__GNUC_GNU_INLINE__`
 before C99 and `__GNUC_STDC_INLINE__` from C99 on. `__STRICT_ANSI__` is
-defined only in strict modes. Every mode also claims the pinned Clang 23.1.1
+defined only in strict modes. Every mode also claims the pinned Clang 23.1.5
 (`__clang__`, `__clang_major__` `23`, `__clang_version__`), so headers take
 their Clang paths. On the MSVC target, `-fms-extensions` claims MSVC 19.33
 (`_MSC_VER` `1933`), as Clang does; other targets never claim MSVC,
