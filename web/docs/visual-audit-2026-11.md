@@ -420,10 +420,10 @@ each.
 | Bytes a step used that are off screen (of 1,350) | 442 | 0 | 500 | 0 |
 | Notes with a byte they used off screen | 24 | 0 | 25 | 0 |
 | Worst note: bytes on screen | 2 of 42 | 42 of 42 | 1 of 42 | 42 of 42 |
-| Widest cells' row, scrolled | 25,934 px | 2,240 px | 25,934 px | AFTER_390_WIDE |
-| Cells' height, median and tallest | 64, 87 px | 64, 87 px | 64, 87 px | AFTER_390_HEIGHT |
-| Notes whose lead ends below the fold (y > 900) | 0 | 0 | | |
-| Lowest lead bottom | 894 | 894 | | |
+| Widest cells' row, scrolled | 25,934 px | 2,240 px | 25,934 px | a row per call |
+| Cells' height, median and tallest | 64, 87 px | 64, 87 px | 64, 87 px | 142, 411 px |
+| Notes whose lead ends below the fold (y > 900) | 0 | 0 | – | – |
+| Lowest lead bottom | 894 | 894 | – | – |
 
 The light and dark runs measured the same in every row. The 24 notes were
 the creation and every printf or puts of the string literals in the hello,
@@ -492,8 +492,10 @@ screen, and each row scrolls on its own to the cells the step used, so
 both show. A first version wrapped every cell onto as many rows as it
 needed; it showed every byte too, but the cells grew to a median of 253 px
 and up to 673 px (the floating lesson's six literals and eight objects), so
-the cells now grow by a row per active call instead. A recursion reads as
-the stack it is, one row per frame.
+the cells now grow by a row per active call instead: a median of 142 px,
+the floating lesson's tallest 204 px, and the tallest of all 411 px, where
+the recursion lesson has five calls active and reads as the stack it is,
+one row per frame.
 [`printf-hello-390-light`](screenshots/visual-pass-3/printf-hello-390-light-before.png)
 ([after](screenshots/visual-pass-3/printf-hello-390-light-after.png)),
 [`printf-hello-1440-dark`](screenshots/visual-pass-3/printf-hello-1440-dark-before.png)
