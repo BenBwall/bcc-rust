@@ -50,6 +50,10 @@ use crate::util::bump::{
     Bump,
 };
 
+/// The name `DW_AT_producer` gives: this compiler, whatever personality's
+/// options it was given, and not one of the compilers it is compatible with.
+pub(crate) const PRODUCER: &str = concat!("bcc-rust ", env!("CARGO_PKG_VERSION"));
+
 /// A module's debug information; see the module docs.
 #[derive(Debug)]
 pub(crate) struct DebugInfo<'ir> {
@@ -447,6 +451,11 @@ impl<'ir> DebugInfo<'ir> {
         file
     }
 
+    /// The name of `file`, if the module has it.
+    pub(crate) fn file_name(&self, file: DebugFile) -> Option<&'ir str> {
+        self.files.get(file).copied()
+    }
+
     /// Every file with its name, in the order they were added.
     pub(crate) fn files(&self) -> impl Iterator<Item = (DebugFile, &'ir str)> + '_ {
         self.files.iter().map(|(file, &name)| (file, name))
@@ -496,6 +505,11 @@ impl<'ir> DebugInfo<'ir> {
     /// Every described type, in the order they were added.
     pub(crate) fn types(&self) -> impl Iterator<Item = (DebugType, &DebugTypeData<'ir>)> {
         self.types.iter()
+    }
+
+    /// The data of `ty`, if the module has it.
+    pub(crate) fn type_data(&self, ty: DebugType) -> Option<&DebugTypeData<'ir>> {
+        self.types.get(ty)
     }
 
     /// How many types the module describes.

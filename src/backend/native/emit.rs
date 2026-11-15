@@ -50,6 +50,7 @@ use std::{
 };
 
 use super::{
+    debug_info::DebugWriter,
     frame::Frame,
     imported,
     mir::{
@@ -134,6 +135,8 @@ pub(crate) struct Emitter<'o, 'm, 'ir> {
     resume_uid:        u32,
     /// What each listing line of a function is for, when asked.
     recorder:          Option<ListingRecorder<'o>>,
+    /// The debug information `-g` asks for.
+    debug:             Option<DebugWriter<'o, 'm, 'ir>>,
 }
 
 /// One line of a listing that a function's code wrote.
@@ -185,6 +188,20 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             asm_uid: 0,
             resume_uid: 0,
             recorder: None,
+            debug: None,
+        }
+    }
+
+    /// Writes the debug information `debug` describes with the code.
+    pub(crate) fn describe(&mut self, debug: DebugWriter<'o, 'm, 'ir>) {
+        self.debug = Some(debug);
+    }
+
+    /// The debug information's sections, after everything else.
+    pub(crate) fn debug_sections(&mut self) -> fmt::Result {
+        match &mut self.debug {
+            | Some(debug) => debug.finish(self.out),
+            | None => Ok(()),
         }
     }
 
@@ -245,6 +262,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
         }
         writeln!(self.out, "\t.text")?;
+        if let Some(debug) = &mut self.debug {
+            debug.header(self.out)?;
+        }
         // File-scope assembly follows verbatim, in source order and before
         // every function and object as Clang places it, then AT&T syntax
         // again. GNU extension: GCC manual, "Basic Asm".
@@ -301,6 +321,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.p2align\t{align}, 0x90")?;
             writeln!(self.out, "\t.type\t{name},@function")?;
             writeln!(self.out, "{name}:")?;
+            if let Some(debug) = &mut self.debug {
+                let in_text = function.attributes.section.is_none() && !function.linkage.comdat();
+                debug.begin_function(self.out, id, in_text)?;
+            }
             // A handler has no caller to unwind to.
             if function.entry != EntryConvention::Interrupt {
                 writeln!(self.out, "\t.cfi_startproc")?;
@@ -314,6 +338,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         }
         if !self.elf {
             self.stubs.extend(func.indirect_symbols.iter().copied());
+        }
+        if let Some(debug) = &mut self.debug {
+            debug.prologue(self.out, !frame.writes_prologue())?;
         }
         let from = self.written();
         if function.entry == EntryConvention::Interrupt {
@@ -338,6 +365,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 "each instruction keeps its source"
             );
             for (position, inst) in block.insts.iter().enumerate() {
+                if let Some(debug) = &mut self.debug {
+                    let source = block.sources.get(position).copied();
+                    debug.instruction(self.out, id, source, index > 0 && position == 0)?;
+                }
                 let from = self.written();
                 if let MInst::InlineAsm { index, .. } = *inst {
                     self.inline_asm(&func.asm[index as usize], id, frame)?;
@@ -352,6 +383,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         if self.elf {
             if function.entry != EntryConvention::Interrupt {
                 writeln!(self.out, "\t.cfi_endproc")?;
+            }
+            if let Some(debug) = &mut self.debug {
+                debug.end_function(self.out, id, frame)?;
             }
             writeln!(self.out, "\t.size\t{name}, .-{name}")?;
         } else {
@@ -1713,7 +1747,7 @@ pub(crate) struct SectionError<'m> {
 
 /// A symbol name, quoted unless it is a plain identifier.
 #[derive(Clone, Copy)]
-struct Name<'a>(&'a str);
+pub(super) struct Name<'a>(pub(super) &'a str);
 
 impl Name<'_> {
     /// Whether the assembler takes the name unquoted.

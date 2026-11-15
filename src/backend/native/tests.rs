@@ -2,6 +2,7 @@
 //! and end-to-end runs of C programs compared with the interpreter.
 
 mod allocation;
+mod debug_info;
 mod end_to_end;
 mod inline_asm;
 mod listing;

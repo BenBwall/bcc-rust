@@ -93,6 +93,7 @@ pub(crate) use debug_info::{
     DeclaredVariable,
     GlobalVariable,
     LexicalBlock,
+    PRODUCER,
     Scope,
     SourceLocation,
     Subprogram,
