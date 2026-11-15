@@ -32,7 +32,10 @@ use super::{
     },
 };
 use crate::{
-    configuration::DiagnosticGroup as G,
+    configuration::{
+        DiagnosticFormat,
+        DiagnosticGroup as G,
+    },
     diagnostics::format_in,
     translation_phases::{
         SourceVectors,
@@ -2280,14 +2283,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Where Clang places the byte `offset` of the string: there, at its
     /// token when a macro's replacement list wrote it, or at the string when
-    /// its places cannot be told.
+    /// its places cannot be told. Only Clang's own format draws each token
+    /// a macro wrote at its invocation; the other renderers keep a string a
+    /// macro wrote at the string, and a byte at its spelling.
     fn clang_byte(&mut self, leaf: &Leaf<'tu>, offset: usize) -> SourceVectors {
+        let per_token = self.context.configuration.diagnostic_format() == DiagnosticFormat::Clang;
+        if !per_token && leaf.spelled == Spelled::MacroBody {
+            return leaf.literal.source_vectors;
+        }
         match self
             .byte_positions(leaf.literal)
             .and_then(|positions| positions.get(leaf.offset + offset).copied())
         {
-            | Some(position) => self
-                .macro_token(leaf.literal, position)
+            | Some(position) => per_token
+                .then(|| self.macro_token(leaf.literal, position))
+                .flatten()
                 .unwrap_or_else(|| self.byte_location(position)),
             | None => leaf.literal.source_vectors,
         }
