@@ -36,6 +36,14 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     // The strings the reader opened into their byte cells, by object and
     // name, kept from step to step.
     let opened = RwSignal::new(Vec::<(usize, String)>::new());
+    // The string whose key the reader just pressed: the key is drawn anew
+    // with the strip, so the focus moves to its counterpart, and the change
+    // is said aloud.
+    let toggle = Toggle {
+        opened,
+        focus: StoredValue::new(None),
+        announcement: RwSignal::new(String::new()),
+    };
     // The strip is drawn anew at each step, at its start. Where it is wider
     // than the window (or, on a phone, where a call's row is), bring the
     // cells the step used into the middle, or, when they are wider than the
@@ -55,14 +63,19 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                 follow(&row);
             }
         }
+        if let Some(key) = toggle.focus.get_value() {
+            toggle.focus.set_value(None);
+            refocus(&section, &key);
+        }
     });
     view! {
         <section class="head-cells" aria-labelledby="cells-title" node_ref=section>
             <h2 class="module-caption" id="cells-title">
                 <b>"Under the head"</b>" the objects at the playhead, by call"
             </h2>
+            <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{toggle.announcement}</p>
             {move || snapshot.with(|snapshot| match snapshot {
-                | Some(snapshot) if !snapshot.objects.is_empty() => strip(snapshot, opened).into_any(),
+                | Some(snapshot) if !snapshot.objects.is_empty() => strip(snapshot, toggle).into_any(),
                 | Some(_) => view! { <p class="cells-empty">"No objects yet. Each declaration that runs puts one on the tape."</p> }.into_any(),
                 | None => view! { <p class="cells-empty">"The objects of the run appear here as cells, under the playhead."</p> }.into_any(),
             })}
@@ -104,6 +117,66 @@ fn element(node: Option<web_sys::Node>) -> Option<web_sys::Element> {
     wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(node?).ok()
 }
 
+/// What a string's `BYTES` and `TEXT` keys change: which strings are open,
+/// where the focus goes once the strip is drawn again, and what a screen
+/// reader hears.
+#[derive(Clone, Copy)]
+struct Toggle {
+    opened:       RwSignal<Vec<(usize, String)>>,
+    /// The [`string_key`] of the key to focus after the strip is redrawn.
+    focus:        StoredValue<Option<String>>,
+    announcement: RwSignal<String>,
+}
+
+impl Toggle {
+    /// Opens the string `key` into its `count` byte cells, or folds it back.
+    fn set(self, key: &(usize, String), open: bool, count: usize) {
+        self.opened.update(|opened| {
+            opened.retain(|known| known != key);
+            if open {
+                opened.push(key.clone());
+            }
+        });
+        self.focus.set_value(Some(string_key(key)));
+        self.announcement.set(toggle_announcement(&key.1, open, count));
+    }
+}
+
+/// What the string's keys carry as `data-string`: the object's id and
+/// name, the same on the `BYTES` key and on the `TEXT` key that replaces it.
+fn string_key((id, name): &(usize, String)) -> String {
+    format!("{id}:{name}")
+}
+
+/// What a screen reader says when the string `name` opens or folds.
+fn toggle_announcement(name: &str, open: bool, count: usize) -> String {
+    let name = shorten(name, 24);
+    if open {
+        format!("{name} opened into its {count} byte cells")
+    } else {
+        format!("{name} shown as one cell of its characters")
+    }
+}
+
+/// Moves the focus to the string key under `section` whose `data-string`
+/// is `key`, as a press of the key it replaced left it.
+fn refocus(section: &web_sys::Element, key: &str) {
+    let Ok(keys) = section.query_selector_all(".cell-open") else {
+        return;
+    };
+    for index in 0..keys.length() {
+        let Some(button) = element(keys.item(index)) else {
+            continue;
+        };
+        if button.get_attribute("data-string").as_deref() == Some(key) {
+            if let Ok(button) = wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(button) {
+                _ = button.focus();
+            }
+            return;
+        }
+    }
+}
+
 /// One cell of the strip: a scalar, or the padding after a member.
 enum Part {
     Cell {
@@ -130,7 +203,9 @@ enum Part {
     },
     /// The key before an opened string's byte cells that folds them back.
     TextHead {
-        ty: String,
+        ty:    String,
+        /// How many bytes it opened into.
+        count: usize,
     },
 }
 
@@ -152,7 +227,8 @@ fn parts(object: &Object, open: bool) -> Vec<Part> {
             }];
         }
         parts.push(Part::TextHead {
-            ty: object.ty.clone(),
+            ty:    object.ty.clone(),
+            count: glyphs.len(),
         });
         // A literal's bytes are named by their index alone: its spelling
         // heads the run, and would make every cell as wide as the string.
@@ -314,7 +390,8 @@ fn shorten(text: &str, limit: usize) -> String {
 }
 
 #[expect(clippy::too_many_lines, reason = "One block per kind of cell.")]
-fn strip(snapshot: &Snapshot, opened: RwSignal<Vec<(usize, String)>>) -> impl IntoView {
+fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
+    let opened = toggle.opened;
     let access = |object: usize, cell: Option<usize>| {
         snapshot
             .event
@@ -487,8 +564,9 @@ fn strip(snapshot: &Snapshot, opened: RwSignal<Vec<(usize, String)>>) -> impl In
                                         class="cell-open"
                                         aria-expanded="false"
                                         aria-label=label
+                                        data-string=string_key(&key)
                                         title="Show each byte as a cell of its own"
-                                        on:click=move |_| opened.update(|opened| opened.push(key.clone()))
+                                        on:click=move |_| toggle.set(&key, true, count)
                                     >
                                         "bytes"
                                     </button>
@@ -499,7 +577,7 @@ fn strip(snapshot: &Snapshot, opened: RwSignal<Vec<(usize, String)>>) -> impl In
                         }
                         .into_any()
                     },
-                    | Part::TextHead { ty } => {
+                    | Part::TextHead { ty, count } => {
                         let key = (object.id, object.name.clone());
                         let label = format!("Show {} as one cell of its characters", shorten(&object.name, 24));
                         view! {
@@ -513,8 +591,9 @@ fn strip(snapshot: &Snapshot, opened: RwSignal<Vec<(usize, String)>>) -> impl In
                                     class="cell-open"
                                     aria-expanded="true"
                                     aria-label=label
+                                    data-string=string_key(&key)
                                     title="Show the string as one cell again"
-                                    on:click=move |_| opened.update(|opened| opened.retain(|open| *open != key))
+                                    on:click=move |_| toggle.set(&key, false, count)
                                 >
                                     "text"
                                 </button>
@@ -667,6 +746,11 @@ mod tests {
 
     /// The objects at the end of a lesson's run.
     fn objects(key: &str) -> Vec<Object> {
+        last(key).objects
+    }
+
+    /// The snapshot at the end of a lesson's run.
+    fn last(key: &str) -> Snapshot {
         let mut machine = Machine::default();
         let snapshot = |answer| match answer {
             | Ok(Answer::Snapshot(snapshot)) => *snapshot,
@@ -677,7 +761,7 @@ mod tests {
         while last.can_step() {
             last = snapshot(machine.run(Command::Step));
         }
-        last.objects
+        last
     }
 
     fn named<'a>(objects: &'a [Object], prefix: &str) -> &'a Object {
@@ -784,6 +868,61 @@ mod tests {
     fn a_long_run_without_spaces_wraps_every_word_width() {
         let run = vec![Some("w".to_owned()); 3 * WORD + 5];
         assert_eq!(words(&run), [WORD, WORD, WORD, 5]);
+    }
+
+    #[test]
+    fn a_string_key_moves_the_focus_to_its_counterpart_and_says_so() {
+        Owner::new().with(|| {
+            let toggle = Toggle {
+                opened:       RwSignal::new(Vec::new()),
+                focus:        StoredValue::new(None),
+                announcement: RwSignal::new(String::new()),
+            };
+            let key = (7, "s".to_owned());
+            toggle.set(&key, true, 33);
+            assert_eq!(toggle.opened.get_untracked(), [key.clone()]);
+            assert_eq!(toggle.focus.get_value().as_deref(), Some("7:s"));
+            assert_eq!(toggle.announcement.get_untracked(), "s opened into its 33 byte cells");
+            // Pressed twice before a redraw, the string stays open once.
+            toggle.set(&key, true, 33);
+            assert_eq!(toggle.opened.get_untracked().len(), 1);
+            toggle.focus.set_value(None);
+            toggle.set(&key, false, 33);
+            assert!(toggle.opened.get_untracked().is_empty());
+            assert_eq!(toggle.focus.get_value().as_deref(), Some("7:s"));
+            assert_eq!(toggle.announcement.get_untracked(), "s shown as one cell of its characters");
+        });
+    }
+
+    /// Both keys of a string carry its key, so the focus can find the one
+    /// that replaces the other, and each says whether the string is open.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn the_bytes_and_text_keys_carry_the_same_string_key() {
+        let snapshot = last("unsigned");
+        let format = named(&snapshot.objects, "\"2u").clone();
+        let render = |open: bool| {
+            Owner::new().with(|| {
+                let toggle = Toggle {
+                    opened:       RwSignal::new(if open {
+                        vec![(format.id, format.name.clone())]
+                    } else {
+                        Vec::new()
+                    }),
+                    focus:        StoredValue::new(None),
+                    announcement: RwSignal::new(String::new()),
+                };
+                strip(&snapshot, toggle).to_html()
+            })
+        };
+        let marker = format!("data-string=\"{}:", format.id);
+        for (open, expanded) in [(false, "aria-expanded=\"false\""), (true, "aria-expanded=\"true\"")] {
+            let html = render(open);
+            assert_eq!(html.matches(&marker).count(), 1, "{html}");
+            let button = html.find(&marker).expect("the key");
+            let start = html[..button].rfind("<button").expect("a button");
+            assert!(html[start..button].contains(expanded), "{}", &html[start..button]);
+        }
     }
 
     #[test]
