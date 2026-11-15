@@ -617,8 +617,12 @@ impl CompilerConfiguration {
                     DiagnosticGroup::FormatSecurity | DiagnosticGroup::FormatNonliteral
                 ) =>
                 self.warning_options[DiagnosticGroup::Format2 as usize].enabled() == Some(true),
+            // TCC warns of a reachable end of a function that returns a
+            // value too (`check_func_return` in `tccgen.c`).
             | None if group.default() == GroupDefault::ClangWarning =>
-                self.identity.rules() == super::RuleSet::Clang,
+                self.identity.rules() == super::RuleSet::Clang
+                    || (group == DiagnosticGroup::ReturnType
+                        && self.identity == super::CompilerIdentity::Tcc),
             | None if matches!(
                 group,
                 DiagnosticGroup::UnusedParameter | DiagnosticGroup::UnusedButSetParameter

@@ -1,0 +1,8 @@
+In file included from sema-unused-order-header-error-gcc.c:4:
+unused-order-error.h:1:19: error: expected expression before ';' token
+    1 | int from_header = ;
+      |                   ^
+sema-unused-order-header-error-gcc.c: In function 'first':
+sema-unused-order-header-error-gcc.c:3:32: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    3 | void first(void) { typedef int T; }
+      |                                ^

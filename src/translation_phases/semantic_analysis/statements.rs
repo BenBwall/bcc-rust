@@ -499,6 +499,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 local: true,
                 function: self.functions.current.map_or(usize::MAX, |f| f.id),
                 scope: self.label_scope(true),
+                bound: self.entries.len(),
                 name,
                 definition: None,
                 used: None,
@@ -528,6 +529,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             local: false,
             function,
             scope: self.label_scope(false),
+            bound: self.entries.len(),
             name,
             definition: None,
             used: None,
@@ -609,6 +611,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         id
     }
 
+    /// The number of labels the unit has named so far.
+    pub(super) fn label_count(&self) -> usize {
+        self.statements.labels.len()
+    }
+
+    /// The scope entries installed before the label at `index` was first
+    /// named.
+    pub(super) fn label_binding(&self, index: usize) -> usize {
+        self.statements.labels[index].bound
+    }
+
+    /// Reports the label at `index` if it is an ordinary label of `function`
+    /// that it defines and never jumps to.
+    pub(super) fn report_unused_function_label(&mut self, index: usize, function: usize) {
+        let label = self.statements.labels[index];
+        if label.function == function && !label.local {
+            self.report_label_if_unused(index);
+        }
+    }
+
+    /// Reports the label at `index` if it is defined and nothing jumps to it
+    /// or takes its address.
+    pub(super) fn report_label_if_unused(&mut self, index: usize) {
+        let label = self.statements.labels[index];
+        if label.used.is_none()
+            && !label.exempt
+            && let Some(definition) = label.definition
+        {
+            self.report_unused_label(definition, label.local.then_some(label.name), label.scope);
+        }
+    }
+
     pub(super) fn control_jump(&mut self, statement: &'tu Statement<'tu>, is_continue: bool) {
         if let Some(&(owner, nearest_loop)) = self.control.targets.last() {
             let (target, destination) = if is_continue {
@@ -638,6 +672,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
     pub(super) fn finish_labels(&mut self) {
+        let gcc = self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Gcc;
         for i in 0..self.statements.labels.len() {
             let label = self.statements.labels[i];
             if label.definition.is_none()
@@ -654,7 +690,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None,
                 );
             }
-            if label.used.is_none()
+            // GCC reports these as it leaves their scope.
+            if !gcc
+                && label.used.is_none()
                 && !label.exempt
                 && let Some(definition) = label.definition
             {
@@ -1224,6 +1262,9 @@ struct Label {
     function:   usize,
     /// The scope it belongs to, as far as GCC's warning about it cares.
     scope:      usize,
+    /// The scope entries installed before it was first named, which places
+    /// GCC's binding of it among theirs.
+    bound:      usize,
     name:       Identifier,
     definition: Option<Identifier>,
     used:       Option<Identifier>,

@@ -282,12 +282,15 @@ const PREDEFINED_MACRO_NAMES: [&str; 14] = [
 
 /// Whether the compiler being mimicked has predefined `name`. GCC and Clang
 /// have every extension here; Microsoft's list has only `__TIMESTAMP__` and
-/// TCC has none of these three. Microsoft Learn, "Predefined macros".
+/// TCC has none of these three. Microsoft Learn, "Predefined macros". TCC
+/// also leaves out the optional `__STDC_MB_MIGHT_NEQ_WC__` (`tcc_new` in
+/// TCC 0.9.27's `libtcc.c`).
 fn identity_defines(identity: CompilerIdentity, name: &str) -> bool {
     match name {
         | "__FILE_NAME__" | "__INCLUDE_LEVEL__" =>
             !matches!(identity, CompilerIdentity::Msvc | CompilerIdentity::Tcc),
-        | "__TIMESTAMP__" => !matches!(identity, CompilerIdentity::Tcc),
+        | "__TIMESTAMP__" | "__STDC_MB_MIGHT_NEQ_WC__" =>
+            !matches!(identity, CompilerIdentity::Tcc),
         | _ => true,
     }
 }

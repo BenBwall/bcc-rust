@@ -1,0 +1,32 @@
+sema-unused-order-errors-gcc.c: In function 'ends_with_error':
+sema-unused-order-errors-gcc.c:7:15: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+    7 |         if (a < u)
+      |               ^
+sema-unused-order-errors-gcc.c:6:13: warning: unused variable 'y' [-Wunused-variable]
+    6 |         int y;
+      |             ^
+sema-unused-order-errors-gcc.c:10:14: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   10 |     int *z = a;
+      |              ^
+sema-unused-order-errors-gcc.c:12:14: error: invalid use of undefined type 'struct s'
+   12 |     int n = p->member;
+      |              ^~
+sema-unused-order-errors-gcc.c:13:14: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+   13 |     return a < u;
+      |              ^
+sema-unused-order-errors-gcc.c:12:9: warning: unused variable 'n' [-Wunused-variable]
+   12 |     int n = p->member;
+      |         ^
+sema-unused-order-errors-gcc.c:10:10: warning: unused variable 'z' [-Wunused-variable]
+   10 |     int *z = a;
+      |          ^
+sema-unused-order-errors-gcc.c:4:9: warning: unused variable 'x' [-Wunused-variable]
+    4 |     int x;
+      |         ^
+sema-unused-order-errors-gcc.c: In function 'later':
+sema-unused-order-errors-gcc.c:21:14: warning: comparison of integer expressions of different signedness: 'int' and 'unsigned int' [-Wsign-compare]
+   21 |     return a < u;
+      |              ^
+sema-unused-order-errors-gcc.c:20:9: warning: unused variable 'w' [-Wunused-variable]
+   20 |     int w;
+      |         ^

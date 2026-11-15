@@ -215,6 +215,14 @@ pub(crate) struct Context<'tu> {
     /// for conditional directives (C99 §6.10.1p6).
     pub(crate) skipping_group: bool,
     pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
+    /// The stretch of source the preprocessor was reading when it queued a
+    /// diagnostic, by the diagnostic's range in each source arena: which
+    /// reading of a file read more than once the diagnostic is in. Like the
+    /// ranges, they follow their arena's lifetime.
+    error_readings: [ArenaMap<'tu, SourceVectors, u32>; 3],
+    /// How many leading pending errors have had their reading recorded in
+    /// `error_readings`.
+    recorded_errors: usize,
     suppressed_errors: usize,
     /// Error-severity diagnostics already taken from `pending_errors`.
     drained_errors: usize,

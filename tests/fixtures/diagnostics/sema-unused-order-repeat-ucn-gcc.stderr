@@ -1,0 +1,8 @@
+In file included from sema-unused-order-repeat-ucn-gcc.c:7:
+context-headers/repeat-ucn.h:2:26: error: `\u` escape needs exactly four hexadecimal digits
+    2 | const char *repeat_ucn = "\uZZZZ";
+      |                          ^~~~~~~~
+sema-unused-order-repeat-ucn-gcc.c: In function 'first':
+sema-unused-order-repeat-ucn-gcc.c:5:32: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    5 | void first(void) { typedef int T; }
+      |                                ^

@@ -599,6 +599,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 previous: Some(message.source),
                 highlights: Default::default(),
                 origin: crate::translation_phases::SourceVectors::default(),
+                order: super::super::ReportOrder::AtSite,
             }),
         ]);
     }

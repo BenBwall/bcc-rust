@@ -283,6 +283,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.control.targets.len(),
         )));
         self.enter(ScopeKind::Function);
+        self.begin_function_reports();
         self.functions.sizeof = None;
         self.statements.loops = 0;
         self.statements.switch = None;
@@ -507,7 +508,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match work {
             | FunctionWork::Finish(previous, loops, switch, sizeof, targets) => {
                 self.report_reachable_warnings();
-                self.check_return_flow();
+                let order = self.function_end_order();
+                self.with_report_order(order, |analyzer| {
+                    analyzer.check_return_flow();
+                    analyzer.report_unused_at_function_end();
+                });
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());
@@ -1082,6 +1087,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let clang_after_error = self.context.configuration.compiler_identity().rules()
             == crate::configuration::RuleSet::Clang
             && self.context.error_count() != 0;
+        let gcc = self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Gcc;
+        // GCC reports what follows once it has parsed the unit: undefined
+        // functions as `c_parse_final_cleanups` meets them, then the ends of
+        // functions its middle end reaches, then what nothing used.
+        let order = if gcc {
+            super::ReportOrder::UnitEnd
+        } else {
+            super::ReportOrder::AtSite
+        };
+        let outer_order = std::mem::replace(&mut self.report_order, order);
+        let mut defined = ArenaVec::new_in(self.scratch);
         for entity in entities {
             let b = self.bindings[entity.latest];
             if unit_end_reports
@@ -1089,7 +1106,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && b.linkage == Linkage::Internal
                 && b.kind == BindingKind::Function
             {
-                self.report_unused_function(b.name, definition);
+                if gcc {
+                    defined.push((entity.latest, b.name, definition));
+                } else {
+                    self.report_unused_function(b.name, definition);
+                }
             }
             // An alias's or an `ifunc`'s definition is its target's.
             if !clang_after_error
@@ -1149,9 +1170,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+        self.report_late_return_flow();
         if unit_end_reports {
-            self.report_unused_file_scope();
+            self.report_unused_file_scope(&defined);
         }
+        self.report_order = outer_order;
         for i in 0..self.definitions.len() {
             let definition = self.definitions[i];
             if matches!(
@@ -2038,6 +2061,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.tainted {
             return;
         }
+        self.note_function_symbol(index);
         let b = self.bindings[index];
         if b.linkage == Linkage::None {
             self.definitions.push(Definition {

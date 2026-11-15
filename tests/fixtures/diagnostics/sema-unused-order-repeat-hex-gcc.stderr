@@ -1,0 +1,8 @@
+In file included from sema-unused-order-repeat-hex-gcc.c:7:
+context-headers/repeat-hex.h:2:26: error: hexadecimal escape sequence is not a valid character
+    2 | const char *repeat_hex = "\x";
+      |                          ^~~~
+sema-unused-order-repeat-hex-gcc.c: In function 'first':
+sema-unused-order-repeat-hex-gcc.c:5:32: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    5 | void first(void) { typedef int T; }
+      |                                ^

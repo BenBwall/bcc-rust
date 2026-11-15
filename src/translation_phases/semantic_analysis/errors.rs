@@ -46,6 +46,24 @@ pub(crate) struct SemanticError {
     /// a macro's body wrote it, which GCC reports and Clang notes, and the
     /// order of its tokens. Empty when it is `source_vectors`.
     pub(crate) origin:             SourceVectors,
+    /// Where it falls among the other diagnostics.
+    pub(crate) order:              ReportOrder,
+}
+
+/// Where a diagnostic falls among the others, which the reporter prints in
+/// source order: GCC reports some warnings later than the place they name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ReportOrder {
+    /// At the place it names.
+    #[default]
+    AtSite,
+    /// At this token, the closing brace of the scope GCC reports it on
+    /// leaving (`pop_scope` and `finish_function` in `c-decl.cc`).
+    After(SourceVectors),
+    /// After the whole unit, which GCC reports once it has parsed
+    /// (`c_parse_final_cleanups` in `c-decl.cc`, `analyze_functions` in
+    /// `cgraphunit.cc`).
+    UnitEnd,
 }
 
 /// What an excess initializer element lies beyond, as GCC and Clang word it.
@@ -3163,8 +3181,8 @@ impl SemanticError {
     }
 
     /// TCC's own words for the diagnostics its users meet most, in TCC's
-    /// diagnostic format (TCC mob, `tccgen.c` and `tccpp.c`); other
-    /// diagnostics keep bcc's.
+    /// diagnostic format (TCC mob, `tccgen.c` and `tccpp.c`; the warnings
+    /// read the same in 0.9.27); other diagnostics keep bcc's.
     fn tcc_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
         if context.configuration.diagnostic_format() != crate::configuration::DiagnosticFormat::Tcc
         {
@@ -3200,14 +3218,45 @@ impl SemanticError {
                 ),
                 _,
             ) => "assignment from incompatible pointer type",
-            // Worded by `Analyzer::member_wording`, `void_value_wording`
-            // and, with the conversion's direction, `conversion_wording`.
+            | (
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::PointerQualifiers,
+                ),
+                _,
+            ) => "assignment discards qualifiers from pointer target type",
+            | (
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::PointerToIntCast
+                    | crate::configuration::DiagnosticGroup::IntToPointerCast,
+                ),
+                _,
+            ) => "cast between pointer and integer of different size",
+            | (
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::ConditionalTypeMismatch,
+                ),
+                _,
+            ) => "pointer/integer mismatch in conditional expression",
+            | (
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::PointerIntegerCompare
+                    | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare,
+                ),
+                _,
+            ) => "pointer/integer mismatch in comparison",
+            | (SemanticErrorKind::EmptyCaseRange, _) => "empty case range",
+            | (SemanticErrorKind::ExcessString, _) => "initializer-string for array is too long",
+            // Worded by `Analyzer::member_wording`, `void_value_wording`,
+            // `pointer_mismatch_wording` and, with the conversion's
+            // direction, `conversion_wording`.
             | (
                 SemanticErrorKind::InvalidMemberAccess
                 | SemanticErrorKind::IncompleteMemberAccess
                 | SemanticErrorKind::VoidValueUsed
                 | SemanticErrorKind::PointerConstraint(
-                    crate::configuration::DiagnosticGroup::IntConversion,
+                    crate::configuration::DiagnosticGroup::IntConversion
+                    | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes
+                    | crate::configuration::DiagnosticGroup::PointerTypeMismatch,
                 ),
                 Some(words),
             ) => arena.alloc_str(words),

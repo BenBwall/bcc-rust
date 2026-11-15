@@ -1028,13 +1028,20 @@ D9002, and `--` is an unknown option too.
 
 ## TCC
 
-The personality was compared with two real TCCs on x86-64 Linux (glibc
-2.43): TinyCC built from the `mob` branch (`tcc version 0.9.28rc
-2026-10-16 mob@e23dabed`) and Ubuntu's `tcc` 0.9.27+git20200814.62c30a4a,
-which prints `tcc version 0.9.27`. bcc claims the 0.9.27 release
-(`__TINYC__ 927`, `-dumpversion`), and reads the options `mob` added
-where they only extend 0.9.27's command line: `-dumpmachine`, `-M`, `-MM`,
-`-MMD`, `-MP`, `-std=gnu11`, `-run --` and `-rstdin`. The opt-in test
+The personality was compared with three real TCCs on x86-64 Linux:
+TinyCC built from the `mob` branch (`tcc version 0.9.28rc 2026-10-16
+mob@e23dabed`), Ubuntu's `tcc` 0.9.27+git20200814.62c30a4a, which prints
+`tcc version 0.9.27`, and the `release_0_9_27` tag built from source
+(without its bounds checker, which no longer builds against glibc). bcc
+claims 0.9.27 (`__TINYC__ 927`, `-dumpversion`), and its reference is
+Ubuntu's build: Debian and Ubuntu ship that snapshot as 0.9.27, the CI
+compares against it, and 0.9.28 has never been released. The snapshot's
+predefined macros are the tag's with 12 GCC-style ones (`__CHAR_BIT__`,
+`__INT_MAX__`, `__SIZEOF_INT__`...) and a `__builtin_offsetof` macro
+added; `mob`'s `tccdefs.h` adds 13 more (`__amd64__`, `__has_attribute`,
+`_Nonnull`...). bcc reads the options `mob` added where they only extend
+0.9.27's command line: `-dumpmachine`, `-M`, `-MM`, `-MMD`, `-MP`,
+`-std=gnu11`, `-run --` and `-rstdin`. The opt-in test
 `tcc_parity_with_a_real_tcc` in `tests/integration/personality_cli.rs`
 repeats the comparison when `BCC_TCC` names a `tcc` binary, which the Linux
 CI job does with Ubuntu's.
@@ -1099,7 +1106,7 @@ reject.
 | `-r` | `-no-pie -nostdlib -Wl,-r`: one relocatable object from every input |
 | `-run` | a build in a temporary directory, then the program |
 | `-std=c11`, `-std=gnu11` | `-std=gnu11`; any other `-std=` leaves `gnu99`, as TCC sets `__STDC_VERSION__` only for those two (0.9.27 only for `c11`) |
-| `-O`, `-Os`, `-O1`... | `-O1`, or `-ON` for a digit (TCC defines only `__OPTIMIZE__`) |
+| `-ON` | `-ON`, at most `-O3`: 0.9.27 reads the level with `atoi`, so `-O` and `-Os` are level 0 (`mob`: 1), and a positive level defines only `__OPTIMIZE__` |
 | `-xc`, `-xa`, `-xn` (first letter) | `-x c`, `-x assembler-with-cpp`, `-x none`; another is `tcc: warning: unsupported language 'X'`; `-xb` is refused |
 | `-P`, `-P1`, `-dM` (with `-E`) | `-P`; `-P1` keeps GNU line markers; `-dM` |
 | `-dD` | `-dM`, with `tcc: warning: '-dD' is treated as '-dM'` |
@@ -1136,23 +1143,47 @@ cast`). The personality passes `-Wno-error=int-conversion`,
 `-Wno-error=incompatible-function-pointer-types`, unless `-Werror` is
 given, which makes them errors again in both.
 
-**Identity.** `__TINYC__ 927` (TCC 0.9.27), no GNU or Clang macro, and
-`__STDC_VERSION__ 199901L` by default (`201112L` with `-std=c11`). Like
-both TCCs it defines glibc's `__REDIRECT`, `__REDIRECT_NTH` and
-`__REDIRECT_NTHNL` (`mob`'s spelling), which glibc's `<sys/cdefs.h>` defines
-only for GCC, so glibc renames functions with assembler labels (`fscanf`
-as `__isoc99_fscanf`) as it does under TCC; and it defines neither
-`__SIZEOF_INT128__`, `__SIZEOF_FLOAT128__` nor `__FLOAT128__` (TCC has no
-`__int128` or `__float128`), nor `linux` or `__NO_INLINE__`, which neither
-TCC defines. `-dM` lists bcc's target macros besides, which TCC lacks
-(`__ATOMIC_*`, `__FLT_*`, `__GCC_ATOMIC_*`, `__SSE2__`, `__ELF__`,
-`__PIC__`...): bcc's own `<float.h>`, `<stdint.h>` and `<stdatomic.h>`
-read them, where TCC's headers spell the values out. Types keep Clang's
-spelling (`__SIZE_TYPE__ long unsigned int` for TCC's `unsigned long`,
-`__INT_MAX__ 2147483647` for `0x7fffffff`). TCC's diagnostics are
-`file:line: error: message`, one line each with no notes, and TCC stops at
-the first error, so bcc prints the warnings before the first error and
-that error alone in this format.
+**Identity.** On Linux, `-dM` lists TCC 0.9.27's predefined macros
+(`tcc_new` and `tcc_set_output_type` in `libtcc.c`) in TCC's spellings
+(`__SIZE_TYPE__ unsigned long`, `__INT_MAX__ 0x7fffffff`): `__TINYC__ 927`,
+`__STDC_VERSION__ 199901L`, `__x86_64__`, `unix` and the `__unix`,
+`__linux` forms (not `linux`), the type and size macros, glibc's
+`__REDIRECT` and `__REDIRECT_NTH`, `__builtin_extract_return_addr` and
+`__BASE_FILE__`; `-funsigned-char` adds `__CHAR_UNSIGNED__`, `-std=c11`
+`__STDC_VERSION__ 201112L` with `__STDC_NO_ATOMICS__`,
+`__STDC_NO_COMPLEX__`, `__STDC_NO_THREADS__`, `__STDC_UTF_16__` and
+`__STDC_UTF_32__`, `-O1` and higher `__OPTIMIZE__`, and `-pthread`
+`_REENTRANT`. There is no GNU or Clang macro, no `__ATOMIC_*`, `__SSE2__`,
+`__ELF__`, `__PIC__`, `__SIZEOF_INT128__` or `__STDC_MB_MIGHT_NEQ_WC__`.
+bcc's own `<stdatomic.h>` defines the `__ATOMIC_*` memory orders itself
+when they are not predefined, as `mob`'s `<stdatomic.h>` does, and bcc's
+freestanding `<stdint.h>` spells out the LP64 types and limits that the
+other identities' `__INT8_TYPE__` family names, as TCC's `<stddef.h>`
+spells out its exact-width types, with the target C library's
+`int_fast16_t` and `int_fast32_t` (glibc's 64-bit `long`, musl's 32-bit
+`int`). bcc keeps these besides, each for a reason:
+
+| Macros | Why bcc keeps them |
+| --- | --- |
+| `__bcc__`, `__bcc_major__`, `__bcc_minor__`, `__bcc_patchlevel__`, `__bcc_version__` | bcc's vendor macros, defined under every identity as the GCC and Clang modes define them; bcc's `<tgmath.h>` reads `__bcc__` |
+| `__BITINT_MAXWIDTH__`, in C23 alone | bcc's `<limits.h>` reads it for `BITINT_MAXWIDTH`; only bcc's own driver (`--compiler-identity=tcc -std=c23`) selects C23 for this identity |
+| `__REDIRECT_NTHNL` | `mob`'s definition (`tccdefs.h`): glibc 2.34 and later use it without checking, so `<glob.h>` with `_FILE_OFFSET_BITS=64` fails under 0.9.27 (`identifier expected`) |
+| `__FLT_*`, `__DBL_*` and `__LDBL_*` characteristics (`MANT_DIG`, `DIG`, `MIN_EXP`, `MIN_10_EXP`, `MAX_EXP`, `MAX_10_EXP`, `MAX`, `MIN`, `EPSILON`, `DENORM_MIN`, `HAS_DENORM`, `DECIMAL_DIG`, `NORM_MAX`) and `__FLT_RADIX__` | bcc's `<float.h>` reads them; TCC's spells the values out |
+| `__SCHAR_MAX__`, `__SHRT_MAX__` | bcc's `<limits.h>` reads them; TCC has no `<limits.h>` and takes glibc's |
+| `__INT_FAST16_TYPE__`, `__INT_FAST16_MAX__`, `__UINT_FAST16_TYPE__`, `__UINT_FAST16_MAX__` and their `FAST32` counterparts | bcc's freestanding `<stdint.h>` reads them for `int_fast16_t`, `int_fast32_t` and their limits, which glibc gives 64 bits and musl 32; TCC takes the C library's `<stdint.h>`, so they come from GCC's listing for the target (Clang's listing names `short` for `int_fast16_t` with either library) |
+| `__GCC_ATOMIC_*_LOCK_FREE` | bcc's `<stdatomic.h>` reads them for `ATOMIC_*_LOCK_FREE`; 0.9.27 has no `<stdatomic.h>` and `mob`'s defines no lock-free macros |
+| `__STDC_EMBED_EMPTY__`, `__STDC_EMBED_FOUND__`, `__STDC_EMBED_NOT_FOUND__` | they come with `#embed`, which the personality accepts as GCC accepts it in `gnu99` (see the table below) |
+
+TCC's `__builtin_offsetof` macro is not defined: bcc's builtin of that name
+gives the same value as a constant expression. The `__has_include`,
+`__has_attribute`, `__has_builtin`, `__has_feature` and `__has_c_attribute`
+queries stay defined to `#ifdef`, as `-dM` lists none of them, where 0.9.27
+has none (bcc's own headers use `__has_include_next`). On the other
+targets (Windows and WebAssembly) the identity keeps the target's macros
+without the GNU and Clang ones. TCC's
+diagnostics are `file:line: error: message`, one line each with no notes,
+and TCC stops at the first error, so bcc prints the warnings before the
+first error and that error alone in this format.
 
 **Language.** 107 probes of TCC's documented extensions and quirks, run
 with `-run` under both TCCs and the personality, agree in what is accepted
@@ -1179,9 +1210,9 @@ and what runs, except where noted:
 | Plain C99 `inline` definition with no external one | a local function (`nm`: `t f`), so the program links | GCC's rule: no external definition, `undefined symbol: f` at link time |
 | Assignment to a `const` object, `return 1;` in a `void` function | warnings (`assignment of read-only location`, `void function returns a value`) | same |
 | Implicit function declaration | `warning: implicit declaration of function 'foo'` | same |
-| Missing `return` in a non-`void` function | `warning: function might return no value: 'f'` | no diagnostic |
+| Missing `return` in a non-`void` function | `warning: function might return no value: 'f'`, except in `int main` and in an `inline` function nothing calls | same, from bcc's control-flow analysis; see [warnings](#tccs-warnings) |
 
-Diagnostics keep bcc's wording. The common ones read:
+Errors keep bcc's wording. The common ones read:
 
 | Error | TCC (`mob`; 0.9.27 quotes the token with `"`) | bcc |
 | --- | --- | --- |
@@ -1195,6 +1226,59 @@ Diagnostics keep bcc's wording. The common ones read:
 | `break` | `cannot break` | `break is outside an iteration or switch statement` |
 | `goto` | `label 'nowhere' used but not defined` | `goto target label is not defined: `nowhere`` |
 | link | `tcc: error: unresolved reference to 'f'` (0.9.27: `undefined symbol 'f'`) | `tcc: error: cannot build `a.out`: clang failed` and `ld.lld: error: undefined symbol: f` |
+
+### TCC's warnings
+
+The warnings `tccgen.c` gives by default (its `tcc_warning` calls) read in
+TCC's words, which 0.9.27 and `mob` share, wherever bcc reports the same
+condition:
+
+| TCC's warning | Where |
+| --- | --- |
+| `cast between pointer and integer of different size` | a cast, or an assignment's, initializer's, argument's, `return`'s or `?:` arm's conversion, between a pointer and an integer of another width (below) |
+| `assignment makes pointer from integer without a cast`, `... integer from pointer ...`, `assignment from incompatible pointer type`, `assignment discards qualifiers from pointer target type` | any assignment-like conversion |
+| `pointer/integer mismatch in comparison`, `... in conditional expression` | a pointer against an integer |
+| `pointer type mismatch in comparison('int *' and 'char *')`, `... in conditional expression ('int *' and 'char *')` | incompatible pointers, with bcc's spelling of the types |
+| `function might return no value: 'f'` | control reaches the end of a function that returns a value, other than an `inline` function or a `main` returning TCC's `VT_INT`: `int`, `unsigned int`, an enumeration TCC represents as one of those, or a 32-bit `long` |
+| `unnamed struct/union that defines no instances` | a structure or union with no tag and no declarator, a `typedef` among them, at the line of its `;` |
+| `assignment of read-only location`, `void function returns a value`, `'return' with no value`, `implicit declaration of function 'f'`, `empty case range`, `initializer-string for array is too long` | as worded |
+
+TCC's cast warning (`gen_cast`) differs from GCC's: it counts an
+enumeration as its integer type (`(enum E)p`) and a `_Bool` source as a
+byte (`(void *)b`; a `_Bool` destination tests the pointer), passes over an
+operand that folds to a constant that is no address (`(void *)(1 ? 2 : i)`,
+`(int)(char *)5`, but not `(int)&g`), never warns in a static object's
+initializer, which it only folds, and warns of the conversions an
+assignment, an initializer, a prototyped argument, a `return` or an integer
+arm of `?:` makes as well as of casts: `int x = "s";` draws both
+`assignment makes integer from pointer without a cast` and the cast
+warning.
+
+These still differ from TCC 0.9.27:
+
+- Linkage conflicts (`int f(void); static int f(void) {...}`, `int x;
+  static int x;`) are errors, where TCC warns `static storage ignored for
+  redefinition of 'f'` or `storage mismatch for redefinition of 'x'`; an
+  unsupported `__mode__`, a too large integer constant and a `section`
+  attribute on a `typedef` are errors too, where TCC warns or says nothing.
+- `typedef struct { int a; };` is a syntax error and `int;` passes
+  silently, where TCC warns and refuses respectively.
+- bcc knows that `exit`, `abort` and `longjmp` do not return, so a function
+  ending in a call of one draws no `function might return no value`; TCC
+  sees glibc's declarations with their attributes removed and warns. TCC
+  also warns of an `inline` function that a call makes it compile, after
+  the rest of the unit (0.9.27 names line 0), and of a `return` only
+  inside a statement expression; bcc does not.
+- 0.9.27 warns `deprecated use of label at end of compound statement`
+  (`mob` does not); bcc accepts the label silently, as C23 does.
+- When several warnings fall on one line, bcc may print them in another
+  order (`return c ? p : q;` in a function returning `int`).
+- `tccpp.c`'s warnings keep bcc's words: `macro `A` redefined
+  differently` for `A redefined`, ``unknown escape sequence `\q` `` for
+  `unknown escape sequence: '\q'`, ``unknown preprocessing directive
+  `#foo` `` for `Ignoring unknown preprocessing directive #foo`; 0.9.27's
+  `multi-character character constant` has no counterpart (`mob` dropped
+  it too).
 
 Of the repository's `tests/fixtures/programs`, those both TCCs compile
 (the `long double`, `<math.h>`, `scanf`, `stdio`, wide-stream, POSIX
@@ -1296,17 +1380,19 @@ helper calls one of them rather than matching on identities:
 | Compound literals in static initializers fold and go unreported (`folds_compound_literals`, #170) | GCC, TCC, MSVC | Clang, clang-cl |
 | `_Float16` evaluates in `float` (`half_in_float`, #163) | GCC (TCC and MSVC have no `_Float16`) | Clang, clang-cl |
 | `_BitInt` widths, array compound literals, out-of-range floating conversions (`bit_int_rules`, `array_literal_rules`, `float_conversion_rules`, #174) | GCC, TCC, MSVC | Clang, clang-cl |
-| Pointer/integer cast warnings (`pointer_cast_rules`, #174; `cl`'s C4311 and C4312 warn only for a narrower integer) | GCC, TCC | Clang, clang-cl, MSVC (`ms_compatible_rules`) |
+| Pointer/integer cast warnings (`pointer_cast_rules`, #174; `cl`'s C4311 and C4312 warn only for a narrower integer; TCC has its own rule, [TCC's warnings](#tccs-warnings)) | GCC, TCC | Clang, clang-cl, MSVC (`ms_compatible_rules`) |
 | `-MG` lists a missing `<...>` header under `-MM`; `-H` and `/showIncludes` name a header reached from the working directory `./a.h` (the driver) | GCC, TCC, MSVC | Clang, clang-cl |
 
 A rule that compares with `CompilerIdentity::Gcc` alone is equivalent where
 the feature it governs exists only under GCC's identity among those that
 follow GCC's rules (the `_Float16` pedantic reports in the lexer and
-parser). TCC was surveyed for these rules later (both TCCs of the
-[TCC](#tcc) section): its pointer/integer cast warnings fall on exactly the
-casts GCC 15 warns about (`cast between pointer and integer of different
-size` for `(void *)int`, `(void *)short`, `(int)p` and `(char)p`, none for
-`(void *)5` or `(unsigned long long)p`), and it folds compound literals in
+parser). TCC was surveyed for these rules later (the TCCs of the
+[TCC](#tcc) section): its pointer/integer cast warnings fall on the casts
+GCC 15 warns about (`cast between pointer and integer of different size`
+for `(void *)int`, `(void *)short`, `(int)p` and `(char)p`, none for
+`(void *)5` or `(unsigned long long)p`) but follow TCC's own rule in the
+rest, which the personality applies ([TCC's warnings](#tccs-warnings)),
+and it folds compound literals in
 static initializers as GCC does; it has no `_Float16` or `_BitInt` and
 rejects array compound literals and out-of-range floating conversions in
 static initializers (`initializer element is not constant`), so GCC's

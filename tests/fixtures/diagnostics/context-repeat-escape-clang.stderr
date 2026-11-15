@@ -1,0 +1,13 @@
+In file included from context-repeat-escape-clang.c:3:
+./context-headers/every-escape.h:1:5: error: hexadecimal escape sequence is not a valid character
+    1 | #if '\x'
+      |     ^~~~
+In file included from context-repeat-escape-clang.c:4:
+./context-headers/every-escape.h:1:5: error: hexadecimal escape sequence is not a valid character
+    1 | #if '\x'
+      |     ^~~~
+In file included from context-repeat-escape-clang.c:5:
+./context-headers/every-escape.h:1:5: error: hexadecimal escape sequence is not a valid character
+    1 | #if '\x'
+      |     ^~~~
+3 errors generated.
