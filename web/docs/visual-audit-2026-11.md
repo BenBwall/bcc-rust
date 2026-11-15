@@ -388,6 +388,8 @@ wraps between directories.
 
 ### Left for later
 
+Part 3 below fixes both.
+
 - **A wide object's cells run past the cells' row.** When a step creates or
   reads a string literal or an array of more bytes than the row shows, the
   row starts at its first lit byte and the
@@ -397,3 +399,156 @@ wraps between directories.
 - **The phone's "Earlier steps" strip clips long titles** with an ellipsis
   ("#include <stdio.h>: declare printf, puts…"), as designed; the full
   title is in the note above it.
+
+## Part 3: wide objects under the head (2026-11)
+
+The two items Part 2 left were fixed on `agent/site-wide-objects`. The
+script is Part 2's, with one measure added: at every step it takes each
+byte the step created, read, wrote or designated (a lit scalar cell, or one
+lit byte of a string cell) and counts it on screen when all of it lies
+inside the cells' scrolled row and the window. At 1440x900 it measures with
+the workbench at the top of the window, as Part 2 did. At 390x844, where the
+note comes before the deck and the cells follow it, it measures with the
+cells scrolled to the middle of the window, so there it asks whether the
+row shows those bytes, not whether they share the first screen with the
+note. It ran every lesson at all four configurations on `main`'s build
+(before) and on this branch's (after): 1,279 notes, 1,350 bytes used, in
+each.
+
+| Measure, all 1,279 notes of the 14 lessons | 1440 before | 1440 after | 390 before | 390 after |
+| --- | ---: | ---: | ---: | ---: |
+| Bytes a step used that are off screen (of 1,350) | 442 | 0 | 500 | 0 |
+| Notes with a byte they used off screen | 24 | 0 | 25 | 0 |
+| Worst note: bytes on screen | 2 of 42 | 42 of 42 | 1 of 42 | 42 of 42 |
+| Widest cells' row, scrolled | 25,934 px | 2,240 px | 25,934 px | a row per call |
+| Cells' height, median and tallest | 64, 87 px | 64, 87 px | 64, 87 px | 142, 411 px |
+| Notes whose lead ends below the fold (y > 900) | 0 | 0 | – | – |
+| Lowest lead bottom | 894 | 894 | – | – |
+
+The light and dark runs measured the same in every row. The 24 notes were
+the creation and every printf or puts of the string literals in the hello,
+`#define`, unsigned and floating lessons (4, 2, 6 and 12 notes); on a phone
+one more, `values` of the unsigned lesson being created, whose third cell
+was off the right edge. Every lesson still steps to its end with a title
+and a lead sentence at every step in all four configurations, no page
+logged an error, and the step counts are those of Part 1 (197, 86, 97, 78,
+34, 183, 37, 230, 140, 134, 20, 6, 23 and 0).
+
+The screenshots are in
+[`screenshots/visual-pass-3/`](screenshots/visual-pass-3/), named as in
+part 1.
+
+### 1. A string is one cell of its characters
+
+**Fixed.** Each of a literal's bytes was a cell of its own, 44 px or more
+wide and named by the whole literal (`"%zu bytes, sum %u, -1 < 1u is %d,
+%u, %u\n"[2]`), so each was as wide as the spelling: the unsigned lesson's
+three literals, 83 bytes, made its row 21,634 px wide, and the strip
+scrolled to the first byte the step used. Of
+the three ways to fix it, the one wide cell reads best: a string is text,
+and the program wrote it as text. A string literal's array, or a char array
+of more than eight bytes, is now one cell with the scalar cells' grammar
+and height: its type and size above; its characters, a column per byte,
+over an index ruler (a tick per byte, its index every eighth byte); and its
+name below. The null character is boxed, a byte of its own, and so is
+counted in the ruler and in `char[42] 42B`. The cell is lit as a scalar
+cell is when the step uses the whole string (created, or read by printf);
+a step that uses some of its bytes marks only those, in place (the decay
+of a literal to a pointer outlines its first byte). The row breaks between
+words before the cell outgrows a phone, so the 42-byte format is one line
+at 1440 px and two at 390 px. A key in the cell's corner opens it into its
+byte cells, named by index (`[2]`), with a key cell in front that folds
+them back; the choice holds from step to step. A char array of up to eight
+bytes keeps its byte cells: the hello lesson's `name` (`"Ada"`) is read one
+byte at a time by `length()`, and its four cells show each value with its
+character.
+
+Wrapping every object's bytes onto rows (the brief's second way) would
+have made the 42-byte format six rows of byte cells on a phone, and a row
+that scrolls to the lit bytes (the third) still shows a string through a
+slot. The strip also now scrolls to every cell the step used, not only the
+first: in the middle when they fit, else the first of them at the left.
+[`literal-unsigned-1440-light`](screenshots/visual-pass-3/literal-unsigned-1440-light-before.png)
+([after](screenshots/visual-pass-3/literal-unsigned-1440-light-after.png)),
+[`literal-floating-1440-light`](screenshots/visual-pass-3/literal-floating-1440-light-before.png)
+([after](screenshots/visual-pass-3/literal-floating-1440-light-after.png)),
+[`printf-unsigned-1440-dark`](screenshots/visual-pass-3/printf-unsigned-1440-dark-before.png)
+([after](screenshots/visual-pass-3/printf-unsigned-1440-dark-after.png)),
+[`decay-hello-1440-light`](screenshots/visual-pass-3/decay-hello-1440-light-before.png)
+([after](screenshots/visual-pass-3/decay-hello-1440-light-after.png)),
+[`open-unsigned-1440-light`](screenshots/visual-pass-3/open-unsigned-1440-light-before.png)
+([after, opened](screenshots/visual-pass-3/open-unsigned-1440-light-after.png)),
+[`literal-unsigned-390-dark`](screenshots/visual-pass-3/literal-unsigned-390-dark-before.png)
+([after](screenshots/visual-pass-3/literal-unsigned-390-dark-after.png)).
+
+### 2. A phone gives each call a row
+
+**Fixed.** With strings as one cell, one kind of step still lost bytes on
+a phone: one that uses objects of two calls. printf in the hello lesson
+reads `name` in `main()` and its format in static storage, which do not
+fit together in a strip 366 px wide. Below 600 px each call's cells are
+now a row of their own under its name, as wide as its cells up to the
+screen, and each row scrolls on its own to the cells the step used, so
+both show. A first version wrapped every cell onto as many rows as it
+needed; it showed every byte too, but the cells grew to a median of 253 px
+and up to 673 px (the floating lesson's six literals and eight objects), so
+the cells now grow by a row per active call instead: a median of 142 px,
+the floating lesson's tallest 204 px, and the tallest of all 411 px, where
+the recursion lesson has five calls active and reads as the stack it is,
+one row per frame.
+[`printf-hello-390-light`](screenshots/visual-pass-3/printf-hello-390-light-before.png)
+([after](screenshots/visual-pass-3/printf-hello-390-light-after.png)),
+[`printf-hello-1440-dark`](screenshots/visual-pass-3/printf-hello-1440-dark-before.png)
+([after](screenshots/visual-pass-3/printf-hello-1440-dark-after.png)),
+[`printf-unsigned-390-dark`](screenshots/visual-pass-3/printf-unsigned-390-dark-before.png)
+([after](screenshots/visual-pass-3/printf-unsigned-390-dark-after.png)).
+
+### 3. Earlier steps keep their titles
+
+**Fixed.** The folded "Earlier steps" strip and its list cut a long title
+with an ellipsis ("#include <stdio.h>: declare printf, puts…"). A title now
+wraps: beside the heading when it fits, else on its own lines under it.
+[`recent-hello-390-light`](screenshots/visual-pass-3/recent-hello-390-light-before.png)
+([after](screenshots/visual-pass-3/recent-hello-390-light-after.png)),
+[`recent-unsigned-390-dark`](screenshots/visual-pass-3/recent-unsigned-390-dark-before.png)
+([after](screenshots/visual-pass-3/recent-unsigned-390-dark-after.png)).
+
+### 4. Escapes and the string keys
+
+**Fixed after review.** A string cell's words broke after 16 bytes. That
+bounds a word of letters (about 125 px) but not a word of escapes: 16
+`\xff` made a word 448 px wide, more than a phone's 318 px row, so the
+bytes at the end of each line were clipped. The reviewer's 33-byte
+literal lost 10 of them at 390 px. A word now ends before it is 16
+columns wide. An escape counts a column for each character of its
+spelling, and the boxed null character counts three. A word also wraps
+within itself if a row is narrower still. A pointer into such a literal
+showed the literal's whole spelling, a cell 1,085 px wide. It now shows
+the start of the spelling, as the tape's lanes do
+(`→"\xff\xff\x…"[0]`).
+
+The `BYTES` and `TEXT` keys redraw the strip, and that left the focus on
+the page's body. Now the focus moves to the key that replaces the one
+pressed, and a status region announces that the string opened into its
+byte cells or folded back.
+
+A probe ran eight programs to their end at eleven sizes from 320 to
+1440 px. The programs were built from escapes and from runs with no
+spaces: 32 `\xff` as a literal and as an array, 32 `\377`, 20 `\n\t`,
+mixed escapes, 24 `\0`, 120 letters with no space, and the reviewer's
+mixed string. Before the fix, 29 of the 402 bytes the steps used were
+off screen at 390 px, and 43 at 320 px. After it, none were off screen at
+any size. The tallest string cell was 150 px at 390 px, and 240 px at
+320 px (the 120 letters). Enter, Space and a click each left the focus on
+the replacement key, at 390 and 1440 px in both themes. The table above
+was measured again after these fixes and did not change.
+
+### Left for later
+
+- **Other wide arrays still scroll.** No lesson has an array of another type
+  wider than the window, but a program in the workbench can (`int a[100]`):
+  a step that creates it lights more cells than the row shows. The same
+  folding (one cell of its values, opened on demand) would fit it.
+- **A char array inside a structure** keeps its byte cells.
+- **The tape and Table 1** still show a literal's value as `{'%','z',…}`,
+  cut with an ellipsis; they could spell it as the string cell does.
