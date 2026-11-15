@@ -233,6 +233,26 @@ fn macro_operands_combine_token_spellings() {
     );
 }
 
+/// A pp-number in an angle operand a macro writes is spelled as written, as
+/// `tcctest.c` from TCC needs for `#include INC(42test)`.
+#[test]
+fn macro_angle_operands_spell_pp_numbers_as_written() {
+    let headers = TempDir::new("header-names");
+    headers.write(Path::new("tests/42test.h"), "numbered\n");
+    headers.write(Path::new("tests/7.h"), "seven\n");
+    with_preprocess_directories(
+        &headers,
+        "#define INC(name) <tests/name.h>\n#include INC(42test)\n#define SEVEN \
+         <tests/7.h>\n#include SEVEN\n",
+        ExtensionPolicy::Allow,
+        SharedVec::from(vec![headers.path().to_path_buf()]),
+        |outcome| {
+            assert!(outcome.errors.is_empty(), "{:#?}", outcome.errors);
+            assert_eq!(outcome.identifiers, ["numbered", "seven"]);
+        },
+    );
+}
+
 #[test]
 fn skipped_include_lines_are_ordinary_tokens() {
     let headers = TempDir::new("header-names");
