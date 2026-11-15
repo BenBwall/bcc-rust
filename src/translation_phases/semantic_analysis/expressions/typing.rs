@@ -46,6 +46,7 @@ use crate::{
             Linkage,
             SemanticErrorKind,
             Work,
+            compiler_wording::VoidUse,
             integer::Integer,
             scopes::Namespace,
             types::{
@@ -62,6 +63,7 @@ use crate::{
             ArenaMap,
             ArenaVec,
         },
+        string_cache::StringCacheId,
     },
 };
 
@@ -408,6 +410,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 e.operator_source_vectors.unwrap_or(e.source_vectors),
                 super::super::compiler_wording::ConversionSite::Assignment,
             ) {
+                if self.void_value(right.ty) {
+                    return self.void_value_used(e, VoidUse::Assignment, left.ty);
+                }
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
             if compound.is_none() {
@@ -517,11 +522,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return self
                         .invalid_expression(e, SemanticErrorKind::InvalidArithmeticOperands);
                 }
-                info.ty = self.common_arithmetic(left, right, lt, rt);
+                info.ty = self.checked_common_arithmetic(left, right, lt, rt);
             },
             | B::Addition | B::Subtraction =>
                 if self.arithmetic(lt) && self.arithmetic(rt) {
-                    info.ty = self.common_arithmetic(left, right, lt, rt);
+                    info.ty = self.checked_common_arithmetic(left, right, lt, rt);
                 } else if let Some(target) = self.pointer_target(lt) {
                     if !self.pointer_arithmetic_target(target) {
                         return self
@@ -642,7 +647,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.real(lt) && self.real(rt)
                 };
                 if arithmetic {
-                    arithmetic_operands = Some(self.common_arithmetic(left, right, lt, rt));
+                    arithmetic_operands = Some(self.checked_common_arithmetic(left, right, lt, rt));
                 } else {
                     let null_pair = equality
                         && ((self.nullptr_type(lt) && self.null_pointer_constant(right))
@@ -1063,21 +1068,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
         };
-        if prototype
-            && (arguments.len() < parameters.len()
-                || (!variadic && arguments.len() != parameters.len()))
-        {
-            self.error(
-                SemanticErrorKind::InvalidArgumentCount,
-                e.source_vectors,
-                None,
-                None,
-            );
-        }
-        let mut failed = prototype
-            && (arguments.len() < parameters.len()
-                || (!variadic && arguments.len() != parameters.len()));
-        let mut unmodeled = self.types.unmodeled_type(result);
         // GCC names the called function in its words.
         let callee_name = function
             .binding
@@ -1088,6 +1078,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )
             })
             .map(|binding| self.bindings[binding].name.name);
+        // C99 §6.5.2.2p2: a prototype fixes the number of arguments; GCC and
+        // TCC say which way a call misses it.
+        if prototype && arguments.len() < parameters.len() {
+            self.error(
+                SemanticErrorKind::TooFewArguments,
+                e.source_vectors,
+                callee_name,
+                None,
+            );
+        } else if prototype && !variadic && arguments.len() > parameters.len() {
+            self.error(
+                SemanticErrorKind::TooManyArguments,
+                e.source_vectors,
+                callee_name,
+                None,
+            );
+        }
+        let mut failed = prototype
+            && (arguments.len() < parameters.len()
+                || (!variadic && arguments.len() != parameters.len()));
+        let mut unmodeled = self.types.unmodeled_type(result);
         for (index, &argument) in arguments.iter().enumerate() {
             let info = self.expression_info(argument);
             unmodeled = unmodeled.or(self.types.unmodeled_type(info.ty));
@@ -1114,10 +1125,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 self.convert(argument, parameter, ConversionKind::Assignment);
             } else {
-                if let Some(&parameter) = parameters.get(index) {
-                    // A visible old-style definition supplies parameter types
-                    // for diagnostics, while calls still use default
-                    // promotions.
+                // A visible old-style definition supplies parameter types
+                // for Clang's diagnostics, while calls still use default
+                // promotions. No constraint applies (C99 6.5.2.2p6 makes a
+                // mismatch undefined), and GCC and TCC check nothing.
+                if let Some(&parameter) = parameters.get(index)
+                    && !matches!(
+                        self.context.configuration.compiler_identity(),
+                        crate::configuration::CompilerIdentity::Gcc
+                            | crate::configuration::CompilerIdentity::Tcc
+                    )
+                {
                     _ = self.assignment_conversion(parameter, info);
                 }
                 let ty = self.converted(info);
@@ -1250,7 +1268,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
         };
         let Some(&index) = self.member_indices.get(&(id, member.name)) else {
-            return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
+            return self.missing_member(e, ty, id, member.name);
         };
         let Some(field) = self.types.tags[id].fields.get().get(index).copied() else {
             return Self::expression_result(e, self.types.unknown());
@@ -1468,6 +1486,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && self.arithmetic(target)
                     && self.integer_type(target).is_none()))
         {
+            if self.void_value(from) {
+                return self.void_value_used(e, VoidUse::Cast, target);
+            }
             return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
         }
         let nullptr_cast = if self.nullptr_type(target) {
@@ -1909,7 +1930,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Checks recursive const membership when classifying modifiable lvalues.
     /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
-    fn contains_const(&mut self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn contains_const(
+        &mut self,
+        ty: TypeId,
+    ) -> bool {
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push((ty, false));
         while let Some((current, ready)) = pending.pop() {
@@ -3184,6 +3208,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// A member access whose record lacks the member, or is incomplete
+    /// and has no members yet, worded as the diagnostic format's compiler
+    /// words it.
+    /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
+    #[cold]
+    #[inline(never)]
+    fn missing_member(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        record: TypeId,
+        tag: usize,
+        member: StringCacheId,
+    ) -> ExpressionInfo<'tu> {
+        let incomplete = !self.types.tags[tag].complete.get();
+        let kind = if incomplete {
+            SemanticErrorKind::IncompleteMemberAccess
+        } else {
+            SemanticErrorKind::InvalidMemberAccess
+        };
+        if !e.recovered {
+            let words = self.member_wording(record, tag, member, incomplete);
+            self.error(
+                kind,
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+                words,
+                None,
+            );
+        }
+        Self::expression_result(e, self.types.unknown())
+    }
+
+    /// An expression that uses the value of a void expression, which has
+    /// none, worded as the diagnostic format's compiler words it.
+    /// C99: §6.3.2.2p1, p. 46; PDF p. 58.
+    #[cold]
+    #[inline(never)]
+    fn void_value_used(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        use_: VoidUse,
+        target: TypeId,
+    ) -> ExpressionInfo<'tu> {
+        if !e.recovered {
+            let words = self.void_value_wording(use_, target);
+            self.error(
+                SemanticErrorKind::VoidValueUsed,
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+                words,
+                None,
+            );
+        }
+        Self::expression_result(e, self.types.unknown())
+    }
+
     #[cold]
     #[inline(never)]
     pub(in crate::translation_phases::semantic_analysis) fn invalid_expression(
@@ -3192,12 +3270,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         kind: SemanticErrorKind,
     ) -> ExpressionInfo<'tu> {
         if !e.recovered {
-            self.error(
-                kind,
-                e.operator_source_vectors.unwrap_or(e.source_vectors),
-                None,
-                None,
-            );
+            // Clang underlines the operands beside the operator's caret.
+            let operands = match e.kind {
+                | ExpressionType::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } => [
+                    left_expression.source_vectors,
+                    right_expression.source_vectors,
+                ],
+                | ExpressionType::Unary {
+                    operand_expression, ..
+                } if e.operator_source_vectors.is_some() => [
+                    operand_expression.source_vectors,
+                    crate::translation_phases::SourceVectors::default(),
+                ],
+                | _ => [crate::translation_phases::SourceVectors::default(); 2],
+            };
+            self.with_highlights(operands, |analyzer| {
+                analyzer.error(
+                    kind,
+                    e.operator_source_vectors.unwrap_or(e.source_vectors),
+                    None,
+                    None,
+                );
+            });
         }
         Self::expression_result(e, self.types.unknown())
     }

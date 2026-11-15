@@ -601,6 +601,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreElided(elided) => self.functions.elided = elided,
             | FunctionWork::RestoreSkippedOperand(skipped) =>
                 self.functions.skipped_operand = skipped,
+            | FunctionWork::LeaveGeneric(skipped) => {
+                self.functions.skipped_operand = skipped;
+                self.functions.generic_selections -= 1;
+            },
             // GCC takes only a constant expression for decided.
             | FunctionWork::DecidedOperand(left, live) => {
                 let constant = self.context.configuration.compiler_identity()
@@ -755,6 +759,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     references:  self.functions.uses.len(),
                     definitions: self.definitions.len(),
                     orphan:      self.functions.emission.orphan,
+                    held:        self.functions.held_warnings.len(),
                 };
                 let scratch = self.scratch;
                 let marks = self
@@ -2315,10 +2320,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         if marks.len() != 2 * generic.associations.len() + 2 {
+            self.settle_held_warnings(marks.first().map(|mark| mark.held), None);
             return;
         }
         let mut ranges = ArenaVec::new_in(self.scratch);
         ranges.push((marks[0], marks[1]));
+        let mut kept = None;
         for (index, association) in generic.associations.iter().enumerate() {
             if selected.is_none_or(|selected| !std::ptr::eq(selected, association.expression)) {
                 ranges.push((marks[2 + 2 * index], marks[3 + 2 * index]));
@@ -2326,8 +2333,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Code generation continues in the block the selected
                 // association ends in.
                 self.functions.emission.orphan = marks[3 + 2 * index].orphan;
+                kept = Some(marks[2 + 2 * index].held..marks[3 + 2 * index].held);
             }
         }
+        self.settle_held_warnings(Some(marks[0].held), kept);
         for (start, end) in ranges {
             self.elide_references(start.references..end.references);
             for definition in &mut self.definitions[start.definitions..end.definitions] {
@@ -2336,6 +2345,63 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+    }
+
+    /// Forgets the boundaries of a generic selection that typing gave up
+    /// on, with the warnings held in it.
+    pub(super) fn forget_generic(&mut self, generic: &'tu GenericSelection<'tu>) {
+        let start = self
+            .functions
+            .generic_marks
+            .remove(&std::ptr::from_ref(generic).addr())
+            .and_then(|marks| marks.first().map(|mark| mark.held));
+        self.settle_held_warnings(start, None);
+    }
+
+    /// Reports `warning` now, or, in a generic selection being analyzed,
+    /// once the outermost selection is typed if it is in the associations
+    /// selected ([`Self::settle_held_warnings`]).
+    pub(super) fn hold_warning(&mut self, warning: HeldWarning) {
+        if self.functions.generic_selections == 0 {
+            self.report_held_warning(warning);
+        } else {
+            self.functions.held_warnings.push(warning);
+        }
+    }
+
+    /// Keeps, of the warnings held since `start`, only those in `kept`, the
+    /// selected association's, and reports every held one once no generic
+    /// selection is open, as Clang checks only the selected association
+    /// ([`Self::warn_if_selected`]).
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+    fn settle_held_warnings(&mut self, start: Option<usize>, kept: Option<std::ops::Range<usize>>) {
+        if let Some(start) = start {
+            let kept = kept.unwrap_or(start..start);
+            let held = &mut self.functions.held_warnings;
+            held.copy_within(kept.clone(), start);
+            held.truncate(start + kept.len());
+        }
+        if self.functions.generic_selections != 0 || self.functions.held_warnings.is_empty() {
+            return;
+        }
+        let held = self.scratch.alloc_slice_copy(&self.functions.held_warnings);
+        self.functions.held_warnings.clear();
+        // Each warning was taken only where nothing recovered around it.
+        let tainted = std::mem::replace(&mut self.tainted, false);
+        for &warning in &*held {
+            self.report_held_warning(warning);
+        }
+        self.tainted = tainted;
+    }
+
+    fn report_held_warning(&mut self, warning: HeldWarning) {
+        self.group_diagnostic(
+            warning.group,
+            warning.kind,
+            warning.site,
+            warning.name,
+            None,
+        );
     }
 
     /// Pushes the work that enters operand `arm` of `condition`, taken when
@@ -2367,19 +2433,81 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.3.4p2, p. 80; PDF p. 92; §6.5.13p4, p. 89; PDF p. 101;
     /// §6.5.14p4, p. 89; PDF p. 101; §6.5.15p4, p. 90; PDF p. 102.
     pub(super) fn evaluation_inhibited(&self) -> bool {
-        if self.functions.sizeof.is_some() || self.functions.skipped_operand {
+        self.functions.skipped_operand || self.unevaluated_context(true)
+    }
+
+    /// [`Self::evaluation_inhibited`] for a warning that follows the
+    /// association a `_Generic` selects, and that both compilers give in a
+    /// `__builtin_constant_p` operand, which they fold: GCC warns in the
+    /// matching and the `default` association, silencing the others as
+    /// `sizeof` does ([`Self::unmatched_association`]), and Clang's
+    /// control-flow graph reaches only the selected one
+    /// ([`super::reachability`]).
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+    pub(super) fn selected_evaluation_inhibited(&self) -> bool {
+        let skipped = if self.functions.generic_selections == 0 {
+            self.functions.skipped_operand
+        } else {
+            self.inhibited_evaluations != 0
+        };
+        skipped || self.unevaluated_context(false)
+    }
+
+    /// Whether the expression being analyzed is in an operand of `sizeof`,
+    /// `typeof` or `_Alignof`, a `_Generic`'s controlling operand, an
+    /// operand a constant condition leaves unevaluated, or, with
+    /// `constant_queries`, a `__builtin_constant_p` operand.
+    fn unevaluated_context(&self, constant_queries: bool) -> bool {
+        if self.functions.sizeof.is_some() {
             return true;
         }
         let mut next = self.functions.reference_context;
         while let Some(index) = next {
             let context = self.functions.reference_contexts[index];
-            if matches!(
-                context.kind,
-                ReferenceContextKind::Typeof(_)
-                    | ReferenceContextKind::Unevaluated
-                    | ReferenceContextKind::ConstantQuery { .. }
-                    | ReferenceContextKind::ConditionalArm { .. }
-            ) {
+            if match context.kind {
+                | ReferenceContextKind::Typeof(_)
+                | ReferenceContextKind::Unevaluated
+                | ReferenceContextKind::ConditionalArm { .. } => true,
+                | ReferenceContextKind::ConstantQuery { .. } => constant_queries,
+                | _ => false,
+            } {
+                return true;
+            }
+            next = context.parent;
+        }
+        false
+    }
+
+    /// Whether the expression being analyzed is an operand of `sizeof`,
+    /// `typeof` or `_Alignof`, which Clang does not analyze at all.
+    /// C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    pub(super) fn unevaluated_operand(&self) -> bool {
+        self.functions.sizeof.is_some()
+            || self.in_reference_context(|kind| {
+                matches!(
+                    kind,
+                    ReferenceContextKind::Typeof(_) | ReferenceContextKind::Unevaluated
+                )
+            })
+    }
+
+    /// Whether the expression being analyzed is an operand of a `_Generic`, or
+    /// of a `&&`, `||` or `?:` that a constant decides: Clang analyzes it,
+    /// but drops its warnings about what runs.
+    /// C99: §6.5.13p4, p. 89; PDF p. 101; §6.5.14p4, p. 89; PDF p. 101;
+    /// §6.5.15p4, p. 90; PDF p. 102.
+    pub(super) fn skipped_operand(&self) -> bool {
+        self.functions.skipped_operand
+            || self.in_reference_context(|kind| {
+                matches!(kind, ReferenceContextKind::ConditionalArm { .. })
+            })
+    }
+
+    fn in_reference_context(&self, test: impl Fn(ReferenceContextKind<'tu>) -> bool) -> bool {
+        let mut next = self.functions.reference_context;
+        while let Some(index) = next {
+            let context = self.functions.reference_contexts[index];
+            if test(context.kind) {
                 return true;
             }
             next = context.parent;
@@ -2849,6 +2977,9 @@ pub(super) enum FunctionWork<'tu> {
     /// Restores whole-statement/operand omission, including declarations.
     RestoreElided(bool),
     RestoreSkippedOperand(bool),
+    /// Leaves a `_Generic`'s associations, restoring
+    /// [`State::skipped_operand`].
+    LeaveGeneric(bool),
     /// The left operand of a `&&` (`true`) or `||` (`false`) is analyzed.
     DecidedOperand(&'tu Expression<'tu>, bool),
     /// Restores which weak names apply to the code being analyzed
@@ -3050,6 +3181,22 @@ struct EmissionMark {
     references:  usize,
     definitions: usize,
     orphan:      Option<usize>,
+    /// The number of held warnings ([`HeldWarning`]).
+    held:        usize,
+}
+
+/// A warning in a generic selection being analyzed, reported once the
+/// outermost selection is typed if it is in the associations selected: one
+/// outside a function that Clang gives only in the selected operand
+/// ([`Analyzer::warn_if_selected`]), and Clang's integer-to-floating warning
+/// anywhere ([`Analyzer::check_int_float_constant`]).
+/// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+#[derive(Clone, Copy)]
+pub(super) struct HeldWarning {
+    pub(super) group: crate::configuration::DiagnosticGroup,
+    pub(super) kind:  SemanticErrorKind,
+    pub(super) site:  SourceVectors,
+    pub(super) name:  Option<StringCacheId>,
 }
 
 /// A break's evaluation context settles after an enclosing sizeof/typeof
@@ -3162,6 +3309,8 @@ pub(super) struct State<'tu, 's> {
     /// may be: the right operand of a `&&` or `||` that its left operand
     /// decides, or part of a `_Generic`.
     pub(super) skipped_operand: bool,
+    /// The `_Generic` selections whose associations are being analyzed.
+    pub(super) generic_selections: u32,
     /// A whole statement or operand is omitted, including its declarations:
     /// an untaken arm, an unselected switch region, or a non-simple statement
     /// without labels while `dead`. Simple declarations and compounds still
@@ -3198,6 +3347,8 @@ pub(super) struct State<'tu, 's> {
     /// operand and of each association's expression, with the emission
     /// model's block state at each boundary.
     generic_marks: ArenaMap<'s, usize, ArenaVec<'s, EmissionMark>>,
+    /// The warnings held while a generic selection is analyzed.
+    held_warnings: ArenaVec<'s, HeldWarning>,
     definition_contexts: ArenaVec<'s, DefinitionContext>,
     pub(super) optional_local_bindings: ArenaMap<'s, usize, ()>,
     condition_uses: ArenaMap<'s, usize, ConditionUses>,
@@ -3227,6 +3378,7 @@ impl<'s> State<'_, 's> {
             sizeof_contexts: ArenaVec::new_in(scratch),
             sizeof: None,
             skipped_operand: false,
+            generic_selections: 0,
             dead: false,
             elided: false,
             unvisited: false,
@@ -3239,6 +3391,7 @@ impl<'s> State<'_, 's> {
             inline_objects: ArenaVec::new_in(scratch),
             outside: [None; 2],
             generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            held_warnings: ArenaVec::new_in(scratch),
             definition_contexts: ArenaVec::new_in(scratch),
             optional_local_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             condition_uses: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

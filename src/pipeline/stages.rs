@@ -4,11 +4,13 @@
 use std::path::Path;
 
 use crate::{
+    configuration::DiagnosticFormat,
     headers::HeaderSearch,
     translation_phases::{
         Context,
         TranslationError,
         parsing::{
+            ExternalDeclaration,
             ParsedTranslationUnit,
             Parser,
             PreprocessedTranslationUnit,
@@ -100,5 +102,48 @@ pub(crate) fn parse_with_arena<'tu>(
     context: &mut Context<'tu>,
     parse: &Bump,
 ) -> ParsedTranslationUnit<'tu> {
-    Parser::from_preprocessed(preprocessed, context, parse).parse_translation_unit()
+    let unit = Parser::from_preprocessed(preprocessed, context, parse).parse_translation_unit();
+    record_function_spans(context, &unit);
+    unit
+}
+
+/// Records where each function definition is, from just past its name
+/// through its closing brace, for the `In function 'f':` line GCC prints
+/// before the first diagnostic in it (GCC manual, "Diagnostic Message
+/// Formatting Options"). GCC's other diagnostics about the declarator, such
+/// as `-Wmain`'s or an unused function's, come at top level.
+/// C99: function definitions, §6.9.1 paragraph 1, p. 141; PDF p. 153.
+fn record_function_spans(context: &mut Context<'_>, unit: &ParsedTranslationUnit<'_>) {
+    if context.configuration.diagnostic_format() != DiagnosticFormat::Gcc {
+        return;
+    }
+    let mut last = None;
+    for root in unit.external_declarations() {
+        let (ExternalDeclaration::FunctionDefinition(definition)
+        | ExternalDeclaration::RecoveredFunctionDefinition(definition)) = root
+        else {
+            continue;
+        };
+        let Some(identifier) = definition.declarator.identifier() else {
+            continue;
+        };
+        let body = definition.body.source_vectors;
+        if identifier.source_vectors.length() == 0 || body.length() == 0 {
+            continue;
+        }
+        let place = |context: &Context<'_>, vector: &crate::translation_phases::SourceVector| {
+            (
+                context.physical_source_file(vector.source_file_index),
+                vector.index,
+            )
+        };
+        let name_at = place(context, context.file_vector(identifier.source_vectors));
+        let close = place(
+            context,
+            context.file_vector(Context::last_source_vector(body)),
+        );
+        context
+            .source_map
+            .record_function(identifier.name, name_at, close, &mut last);
+    }
 }

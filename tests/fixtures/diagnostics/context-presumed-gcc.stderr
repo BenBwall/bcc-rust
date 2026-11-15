@@ -1,0 +1,9 @@
+In file included from context-presumed-gcc.c:3:
+/generated/source.c: In function 'absolute':
+/generated/source.c:40:31: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+virtual.h: In function 'relative':
+virtual.h:7:31: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+context-presumed-gcc.c: At top level:
+context-presumed-gcc.c:4:16: error: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+    4 | int *in_main = 3;
+      |                ^

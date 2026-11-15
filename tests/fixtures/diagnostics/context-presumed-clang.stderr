@@ -1,0 +1,7 @@
+In file included from context-presumed-clang.c:3:
+/generated/source.c:40:27: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+virtual.h:7:27: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+context-presumed-clang.c:4:6: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    4 | int *in_main = 3;
+      |      ^         ~
+3 errors generated.

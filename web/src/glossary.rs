@@ -30,7 +30,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 26] = [
+pub static TERMS: [Term; 47] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -42,6 +42,46 @@ pub static TERMS: [Term; 26] = [
         page:       25,
     },
     Term {
+        id:         "translation-phase",
+        name:       "Translation phase",
+        phrases:    &["translation phases", "translation phase"],
+        definition: "One of the eight steps that turn a source file into a program, before it \
+                     runs: phase 4 executes directives and expands macros, phase 6 joins adjacent \
+                     string literals, phase 7 compiles.",
+        clause:     "5.1.1.2",
+        page:       21,
+    },
+    Term {
+        id:         "macro",
+        name:       "Macro",
+        phrases:    &["macros", "macro"],
+        definition: "A name #define gives to a replacement list. The preprocessor replaces each \
+                     later use of the name before the program is compiled, so a macro has no type \
+                     and no storage.",
+        clause:     "6.10.3p9",
+        page:       164,
+    },
+    Term {
+        id:         "header",
+        name:       "Header",
+        phrases:    &["headers", "header"],
+        definition: "A set of declarations the C library provides, such as <stdio.h>. #include \
+                     pastes it into the program in translation phase 4, so the program can call \
+                     the functions it declares; the functions' code is in the library itself.",
+        clause:     "7.1.2p1",
+        page:       177,
+    },
+    Term {
+        id:         "conversion-specification",
+        name:       "Conversion specification",
+        phrases:    &["conversion specifications", "conversion specification"],
+        definition: "A directive in printf's format that starts with %, such as %d or %.3f: it \
+                     takes the next argument, turns it into text as its letter says, and writes \
+                     that text in its place.",
+        clause:     "7.19.6.1p4",
+        page:       287,
+    },
+    Term {
         id:         "object",
         name:       "Object",
         phrases:    &["objects", "object"],
@@ -51,12 +91,41 @@ pub static TERMS: [Term; 26] = [
         page:       17,
     },
     Term {
+        id:         "string-literal",
+        name:       "String literal",
+        phrases:    &["string literals", "string literal"],
+        definition: "Characters between double quotes, such as \"Ada\". Each becomes an unnamed \
+                     char array of static storage duration, one element longer than the \
+                     characters for the null character at its end, which the program must not \
+                     modify.",
+        clause:     "6.4.5p5",
+        page:       74,
+    },
+    Term {
+        id:         "null-character",
+        name:       "Null character",
+        phrases:    &["null character"],
+        definition: "The char whose bits are all 0, written '\\0'. It ends a string: printf, puts \
+                     and the other library functions read characters until they reach it.",
+        clause:     "5.2.1p2",
+        page:       29,
+    },
+    Term {
         id:         "lvalue-conversion",
         name:       "Lvalue conversion",
         phrases:    &["lvalue conversion"],
         definition: "Reading the value stored in the object an lvalue designates. It happens \
                      whenever an lvalue is used for its value rather than as a place.",
         clause:     "6.3.2.1p2",
+        page:       58,
+    },
+    Term {
+        id:         "modifiable-lvalue",
+        name:       "Modifiable lvalue",
+        phrases:    &["modifiable lvalue"],
+        definition: "An lvalue the program may store into: not an array and not const-qualified. \
+                     The left side of = and the operand of ++ must be one.",
+        clause:     "6.3.2.1p1",
         page:       58,
     },
     Term {
@@ -101,12 +170,21 @@ pub static TERMS: [Term; 26] = [
         page:       143,
     },
     Term {
+        id:         "compound-assignment",
+        name:       "Compound assignment",
+        phrases:    &["compound assignments", "compound assignment"],
+        definition: "An assignment such as x += y, which means x = x + (y), except that x is \
+                     evaluated only once.",
+        clause:     "6.5.16.2p3",
+        page:       105,
+    },
+    Term {
         id:         "static-storage",
         name:       "Static storage duration",
         phrases:    &["static storage duration", "static storage"],
-        definition: "How long objects declared outside every function, or with static, last: \
-                     the whole run of the program. They are initialized once, before main is \
-                     called, to their constant initializer or to zero.",
+        definition: "How long objects declared outside every function, or with static, last: the \
+                     whole run of the program. They are initialized once, before main is called, \
+                     to their constant initializer or to zero.",
         clause:     "6.2.4p3",
         page:       44,
     },
@@ -219,10 +297,126 @@ pub static TERMS: [Term; 26] = [
         id:         "usual-arithmetic-conversions",
         name:       "Usual arithmetic conversions",
         phrases:    &["usual arithmetic conversions"],
-        definition: "The rule that converts both operands of an arithmetic operator to one common \
-                     type before computing. Two ints need no conversion.",
+        definition: "The rule that converts both operands of an arithmetic operator or a \
+                     comparison to one common type before computing: the lower-ranked operand \
+                     converts, and a signed one converts to unsigned when the unsigned type ranks \
+                     at least as high, so -1 < 1u is false. Two ints need no conversion.",
         clause:     "6.3.1.8p1",
         page:       56,
+    },
+    Term {
+        id:         "integer-conversion-rank",
+        name:       "Integer conversion rank",
+        phrases:    &["integer conversion rank", "rank"],
+        definition: "The order of the integer types that the conversions use: char, short, int, \
+                     long and long long, from lowest to highest. An unsigned type has the rank of \
+                     its signed one.",
+        clause:     "6.3.1.1p1",
+        page:       54,
+    },
+    Term {
+        id:         "unsigned-type",
+        name:       "Unsigned type",
+        phrases:    &["unsigned types", "unsigned type"],
+        definition: "An integer type written with unsigned, the same size as its signed type, \
+                     that holds only values from 0 up: unsigned int holds 0 to 4294967295 on \
+                     x86-64. Its arithmetic never overflows.",
+        clause:     "6.2.5p6",
+        page:       45,
+    },
+    Term {
+        id:         "modulo-reduction",
+        name:       "Reduction modulo 2^N",
+        phrases:    &["reduced modulo", "reduces it modulo", "reduces the value modulo"],
+        definition: "What an unsigned type does with a value it cannot hold: it adds or subtracts \
+                     2^N, one more than its largest value, until the value fits, so -1 becomes \
+                     the largest value. This is defined, unlike signed overflow.",
+        clause:     "6.2.5p9",
+        page:       46,
+    },
+    Term {
+        id:         "size-t",
+        name:       "size_t",
+        phrases:    &["size_t"],
+        definition: "The unsigned integer type of sizeof's result, defined by <stddef.h> and \
+                     <stdio.h>: unsigned long on x86-64. printf prints it with %zu.",
+        clause:     "7.17p2",
+        page:       266,
+    },
+    Term {
+        id:         "floating-type",
+        name:       "Floating type",
+        phrases:    &["real floating types", "floating types", "floating type"],
+        definition: "A type that holds numbers with a fraction, approximately: float, double and \
+                     long double, each holding every value of the one before. On x86-64 they are \
+                     IEEE 754 binary32 and binary64 and the x87 80-bit extended format.",
+        clause:     "6.2.5p10",
+        page:       46,
+    },
+    Term {
+        id:         "significand",
+        name:       "Significand",
+        phrases:    &["significand"],
+        definition: "The digits of a floating value, a binary fraction such as 1.1001100… that \
+                     the exponent scales by a power of two. Its width, 53 bits for a double, is \
+                     the type's precision; a value that needs more bits is rounded.",
+        clause:     "5.2.4.2.2p2",
+        page:       35,
+    },
+    Term {
+        id:         "round-to-nearest",
+        name:       "Rounding to nearest",
+        phrases:    &[
+            "rounds to the nearest",
+            "rounded to the nearest",
+            "rounding",
+        ],
+        definition: "What a floating operation does with an exact result its type cannot hold: it \
+                     takes the nearest value the type has, and of two equally near the one whose \
+                     last bit is 0. Every program starts in this mode.",
+        clause:     "F.7.3p1",
+        page:       461,
+    },
+    Term {
+        id:         "truncation",
+        name:       "Truncation toward zero",
+        phrases:    &["truncating toward zero", "truncates toward zero"],
+        definition: "What converting a floating value to an integer does: it drops the fraction, \
+                     so 2.99 becomes 2 and -2.99 becomes -2. If what is left does not fit in the \
+                     integer type, the behavior is undefined.",
+        clause:     "6.3.1.4p1",
+        page:       55,
+    },
+    Term {
+        id:         "nan",
+        name:       "NaN",
+        phrases:    &["not a number", "a NaN"],
+        definition: "Not a Number: the value a floating operation gives when it has no meaningful \
+                     result, such as 0.0 / 0.0. A NaN compares unequal to everything, itself \
+                     included, and spreads through arithmetic.",
+        clause:     "5.2.4.2.2p3",
+        page:       35,
+    },
+    Term {
+        id:         "infinity",
+        name:       "Infinity",
+        phrases:    &["an infinity", "infinity"],
+        definition: "A floating value beyond every finite one, written inf by printf: the result \
+                     of dividing a nonzero value by zero, or of a result too large for its type, \
+                     under Annex F.",
+        clause:     "5.2.4.2.2p3",
+        page:       35,
+    },
+    Term {
+        id:         "annex-f",
+        name:       "Annex F",
+        phrases:    &["Annex F", "IEC 60559", "IEEE 754"],
+        definition: "The part of the C standard that binds the floating types and operators to \
+                     IEEE 754 (IEC 60559). An implementation that defines __STDC_IEC_559__, as \
+                     bcc does, follows it: division by zero gives an infinity or a NaN instead of \
+                     being undefined.",
+        clause:     "F.1p1",
+        page:       456,
     },
     Term {
         id:         "array-decay",
@@ -259,6 +453,24 @@ pub static TERMS: [Term; 26] = [
                      pointer type gives one.",
         clause:     "6.3.2.3p3",
         page:       59,
+    },
+    Term {
+        id:         "cast",
+        name:       "Cast",
+        phrases:    &["casts", "cast"],
+        definition: "A parenthesized type name before an expression, such as (char)300, which \
+                     converts the expression's value to that type.",
+        clause:     "6.5.4p4",
+        page:       93,
+    },
+    Term {
+        id:         "constraint",
+        name:       "Constraint",
+        phrases:    &["constraints", "constraint"],
+        definition: "A rule the compiler must check: a program that breaks one, such as assigning \
+                     to a const object, gets a diagnostic and does not compile.",
+        clause:     "3.8",
+        page:       17,
     },
     Term {
         id:         "undefined-behavior",

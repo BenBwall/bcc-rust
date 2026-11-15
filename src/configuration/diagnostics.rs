@@ -21,8 +21,9 @@ pub(crate) enum PragmaClass {
 /// How diagnostics are printed, which `--diagnostic-format` and the driver
 /// personalities select: bcc's annotated snippets, Clang's and GCC's
 /// `file:line:col: error: message` lines with the snippet (Clang adds the
-/// error and warning counts), MSVC's `file(line,col): error: message`, or
-/// TCC's `file:line: error: message`.
+/// warning and error counts), MSVC's `file(line,col): error: message`, or
+/// TCC's `file:line: error: message`. clang-cl writes Clang's format with
+/// `cl`'s locations ([`DiagnosticPresentation::msvc_locations`]).
 /// The wording and the snippets are bcc's in every format, except for the
 /// diagnostics TCC's users meet most and the C type-safety diagnostics GCC 14
 /// and Clang make errors, which the TCC, GCC and Clang formats word as
@@ -36,8 +37,7 @@ pub(crate) enum DiagnosticFormat {
     Clang,
     Gcc,
     /// `cl.exe`'s location format, with the column for `/diagnostics:column`
-    /// (the default here, as clang-cl writes it) and the snippet for
-    /// `/diagnostics:caret`.
+    /// and the snippet for `/diagnostics:caret`.
     Msvc {
         column: bool,
         caret:  bool,
@@ -67,27 +67,31 @@ pub(crate) enum DiagnosticColor {
 pub(crate) struct DiagnosticPresentation {
     /// The quoted source and its caret: `-f[no-]diagnostics-show-caret`,
     /// `-f[no-]caret-diagnostics`.
-    pub(crate) caret:        bool,
+    pub(crate) caret:          bool,
     /// The column after the line: `-f[no-]show-column`.
-    pub(crate) column:       bool,
+    pub(crate) column:         bool,
     /// The line numbers beside quoted source:
     /// `-f[no-]diagnostics-show-line-numbers`.
-    pub(crate) line_numbers: bool,
+    pub(crate) line_numbers:   bool,
     /// The `[-Wname]` after a message: `-f[no-]diagnostics-show-option`.
-    pub(crate) option_names: bool,
+    pub(crate) option_names:   bool,
     /// What an option says about color: `-fdiagnostics-color=`,
     /// `-f[no-]color-diagnostics`.
-    pub(crate) color:        DiagnosticColor,
+    pub(crate) color:          DiagnosticColor,
+    /// Locations in `cl`'s `file(line,col):` form, as Clang's
+    /// `-fdiagnostics-format=msvc` writes them for clang-cl.
+    pub(crate) msvc_locations: bool,
 }
 
 impl Default for DiagnosticPresentation {
     fn default() -> Self {
         Self {
-            caret:        true,
-            column:       true,
-            line_numbers: true,
-            option_names: true,
-            color:        DiagnosticColor::Unset,
+            caret:          true,
+            column:         true,
+            line_numbers:   true,
+            option_names:   true,
+            color:          DiagnosticColor::Unset,
+            msvc_locations: false,
         }
     }
 }
@@ -125,7 +129,7 @@ impl CompilerConfiguration {
 
     /// Whether diagnostics take `cl`'s codes and words where bcc models
     /// them: the `cl` identity writing one of `cl`'s formats. clang-cl
-    /// writes Clang's words in the same formats.
+    /// writes Clang's format, words and all, with `cl`'s locations.
     pub(crate) fn msvc_wording(self) -> bool {
         self.identity == super::CompilerIdentity::Msvc
             && matches!(self.diagnostic_format, DiagnosticFormat::Msvc { .. })
@@ -194,6 +198,12 @@ impl CompilerConfiguration {
                 &[DiagnosticGroup::UnusedButSetGlobal],
             | DiagnosticGroup::UnusedValue if clang => &[DiagnosticGroup::UnusedComparison],
             | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
+            // GCC's and Clang's `-Wattributes` hold the attributes they
+            // drop, known or not.
+            | DiagnosticGroup::GccAttributes => &[
+                DiagnosticGroup::IgnoredAttributes,
+                DiagnosticGroup::UnknownAttributes,
+            ],
             | DiagnosticGroup::Parentheses if clang => DiagnosticGroup::CLANG_PARENTHESES,
             | DiagnosticGroup::Parentheses => &[DiagnosticGroup::DanglingElse],
             | DiagnosticGroup::Format if clang => DiagnosticGroup::CLANG_FORMAT,
@@ -207,6 +217,17 @@ impl CompilerConfiguration {
                 &[DiagnosticGroup::MissingFormatAttribute],
             | DiagnosticGroup::DivByZero => &[DiagnosticGroup::DivisionByZero],
             | DiagnosticGroup::ShiftOverflow => &[DiagnosticGroup::GccShiftOverflow],
+            // Clang's `-Wconversion` holds these groups; GCC's holds none of
+            // them, so its options leave them alone.
+            | DiagnosticGroup::Conversion if clang => DiagnosticGroup::CLANG_CONVERSION,
+            | DiagnosticGroup::ImplicitIntFloatConversion =>
+                &[DiagnosticGroup::ImplicitConstIntFloatConversion],
+            | DiagnosticGroup::TypeLimits if clang => &[
+                DiagnosticGroup::TautologicalUnsignedZeroCompare,
+                DiagnosticGroup::TautologicalTypeLimitCompare,
+            ],
+            | DiagnosticGroup::TautologicalConstantCompare =>
+                &[DiagnosticGroup::TautologicalConstantOutOfRangeCompare],
             | DiagnosticGroup::Shadow => &[
                 DiagnosticGroup::ShadowLocal,
                 DiagnosticGroup::ShadowCompatibleLocal,
@@ -345,6 +366,9 @@ impl CompilerConfiguration {
             DiagnosticGroup::EmptyBody,
         ] {
             self.warning_options[group as usize].apply_all(enabled);
+        }
+        if self.identity.rules() != super::RuleSet::Clang {
+            self.warning_options[DiagnosticGroup::TypeLimits as usize].apply_all(enabled);
         }
         if self.identity.rules() == super::RuleSet::Clang {
             for group in [
@@ -575,16 +599,7 @@ impl CompilerConfiguration {
     /// default errors, just as Clang does.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 permits warning diagnostics.
     pub(crate) fn diagnostic_severity(self, group: DiagnosticGroup) -> Option<ErrorSeverity> {
-        let mut option = self.warning_options[group as usize];
-        // Clang's `-Wconversion` holds these groups; a child without an
-        // option of its own takes the parent's. GCC's `-Wconversion` holds
-        // none of Clang's groups, so its options leave them alone.
-        if option == WarningSettings::DEFAULT
-            && group.converts()
-            && self.float_conversion_rules() == super::RuleSet::Clang
-        {
-            option = self.warning_options[DiagnosticGroup::Conversion as usize];
-        }
+        let option = self.warning_options[group as usize];
         let permerror =
             (group.default() == GroupDefault::Permerror).then(|| self.permerror_default(group));
         let enabled = match permerror {
@@ -963,6 +978,13 @@ diagnostic_groups! {
     ConstantPromotion => Some("constant-promotion"), Ignored, false;
     /// An integer constant whose implicit conversion changes its value.
     ConstantConversion => Some("constant-conversion"), Warning, false;
+    /// Clang: an integer constant whose implicit conversion to a floating
+    /// type changes its value.
+    ImplicitConstIntFloatConversion => Some("implicit-const-int-float-conversion"), ClangWarning, false;
+    /// Clang's parent of [`Self::ImplicitConstIntFloatConversion`], under
+    /// `-Wconversion`. Its own warning about converting a variable is not
+    /// implemented.
+    ImplicitIntFloatConversion => Some("implicit-int-float-conversion"), Ignored, false;
     /// An element beyond the object it initializes, or a string literal
     /// longer than its array, null character aside: a warning by default that `-pedantic-errors` makes
     /// an error, as in GCC (a pedantic warning without an option) and Clang.
@@ -1021,6 +1043,23 @@ diagnostic_groups! {
     SignCompare => Some("sign-compare"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
+    /// GCC's words for a function returning its own automatic object's
+    /// address.
+    ReturnLocalAddr => Some("return-local-addr"), Warning, false;
+    /// Clang's.
+    ReturnStackAddress => Some("return-stack-address"), Warning, false;
+    /// A comparison the operands' types decide. `-Wextra` holds it in GCC;
+    /// in Clang it holds the unsigned-zero and type-limit groups.
+    TypeLimits => Some("type-limits"), Ignored, false;
+    /// Clang's, on by default: holds the out-of-range group.
+    TautologicalConstantCompare => Some("tautological-constant-compare"), ClangWarning, false;
+    /// Clang's constant outside the operand type's range, on by default.
+    TautologicalConstantOutOfRangeCompare =>
+        Some("tautological-constant-out-of-range-compare"), ClangWarning, false;
+    /// Clang's unsigned operand compared with zero.
+    TautologicalUnsignedZeroCompare => Some("tautological-unsigned-zero-compare"), Ignored, false;
+    /// Clang's constant at the limit of the operand type's range.
+    TautologicalTypeLimitCompare => Some("tautological-type-limit-compare"), Ignored, false;
     /// A declaration that hides another one in an enclosing scope.
     Shadow => Some("shadow"), Ignored, false;
     /// GCC's `-Wshadow=local`: one that hides a local declaration.
@@ -1178,6 +1217,18 @@ enum GroupDefault {
 }
 
 impl DiagnosticGroup {
+    /// The groups Clang's `-Wconversion` holds, which each of its options
+    /// sets in turn, so that a later option outranks an earlier one whether
+    /// it names the parent or the child.
+    const CLANG_CONVERSION: &[Self] = &[
+        Self::NullConversion,
+        Self::NonLiteralNullConversion,
+        Self::PointerBoolConversion,
+        Self::ConstantConversion,
+        Self::LiteralConversion,
+        Self::ImplicitConstIntFloatConversion,
+        Self::ImplicitIntFloatConversion,
+    ];
     /// What Clang's `-Wformat` holds.
     const CLANG_FORMAT: &[Self] = &[
         Self::FormatExtraArgs,
@@ -1226,6 +1277,7 @@ impl DiagnosticGroup {
     /// them.
     const UNDER_EXTRA: &[Self] = &[
         Self::SignCompare,
+        Self::TypeLimits,
         Self::EmptyBody,
         Self::MissingFieldInitializers,
         Self::UnusedParameter,
@@ -1246,18 +1298,6 @@ impl DiagnosticGroup {
         Self::UnusedLocalTypedef,
     ];
 
-    /// Whether Clang's `-Wconversion` holds this group.
-    const fn converts(self) -> bool {
-        matches!(
-            self,
-            Self::NullConversion
-                | Self::NonLiteralNullConversion
-                | Self::PointerBoolConversion
-                | Self::ConstantConversion
-                | Self::LiteralConversion
-        )
-    }
-
     /// Whether only GCC has the group, so that Clang reports its option as
     /// unknown.
     pub(crate) const fn gcc_only(self) -> bool {
@@ -1265,6 +1305,7 @@ impl DiagnosticGroup {
             self,
             Self::Normalized
                 | Self::PedanticNormalized
+                | Self::ReturnLocalAddr
                 | Self::ShadowLocal
                 | Self::ShadowCompatibleLocal
                 | Self::FormatContainsNul
@@ -1391,6 +1432,7 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitInt
                 | DiagnosticGroup::SignCompare
                 | DiagnosticGroup::MissingFieldInitializers
+                | DiagnosticGroup::TypeLimits
                 | DiagnosticGroup::EmptyBody
                 | DiagnosticGroup::Parentheses
                 | DiagnosticGroup::DanglingElse

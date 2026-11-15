@@ -226,11 +226,11 @@ fn prototype_variadic_and_unprototyped_calls() {
     );
     rejects(
         "int f(int); void g(void) {f();}",
-        SemanticErrorKind::InvalidArgumentCount,
+        SemanticErrorKind::TooFewArguments,
     );
     rejects(
         "int f(int); void g(void) {f(1,2);}",
-        SemanticErrorKind::InvalidArgumentCount,
+        SemanticErrorKind::TooManyArguments,
     );
     rejects(
         "int f(int *); void g(void) {f(1);}",
@@ -638,7 +638,8 @@ fn mixed_floating_operands_round_before_arithmetic() {
     with_source(
         "int comparison=16777217==16777216.0f; float addition=16777217+1.0f;",
         |context, unit| {
-            assert_eq!(context.pending_error_count(), 0);
+            // Clang warns that each `16777217` becomes 16777216.
+            assert_eq!(int_float_warnings(context), 2);
             let comparison = unit
                 .expressions
                 .iter()
@@ -854,7 +855,7 @@ fn explicit_library_declaration_keeps_the_user_type() {
         crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),
         |context, _| {
             assert!(context.take_pending_errors().iter().any(|e|
-            matches!(e, TranslationError::Semantic(e) if e.kind == SemanticErrorKind::InvalidArgumentCount)));
+            matches!(e, TranslationError::Semantic(e) if e.kind == SemanticErrorKind::TooFewArguments)));
         },
     );
 }
