@@ -13,10 +13,6 @@
 //! The repository's Cargo configuration builds for an explicit host target,
 //! so the artifact sits under `target/<host-triple>/`.
 #![expect(
-    unused_crate_dependencies,
-    reason = "The workload uses the library's benchmark API and coz."
-)]
-#![expect(
     clippy::disallowed_methods,
     reason = "The harness reads its iteration count outside the measured workload."
 )]
