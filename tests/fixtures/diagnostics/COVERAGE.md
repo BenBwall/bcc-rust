@@ -1,5 +1,16 @@
 # Diagnostic golden corpus
 
+C23 directives before C23 (2026-11-15): `pp-c23-directives-gcc` (`-std=gnu17
+-pedantic`) and `pp-c23-directives-strict-gcc` (`-std=c17 -pedantic`) pin GCC
+14's reports of `#warning`, `#elifdef` and `#elifndef` and its invalid `#embed`;
+`pp-c23-directives-clang` (`-std=gnu17`), `-clang-pedantic` (`-std=c17
+-pedantic-errors -Wno-c23-extensions`) and `-clang-pedantic-errors` (`-std=c17
+-pedantic-errors -Wno-pedantic`) pin Clang 23's default `-Wc23-extensions`
+warnings, its `-Wpedantic` `#warning` and the options' severities. Each matches
+its compiler byte for byte, including `#warning`'s message with `[-Wcpp]` or
+`[-W#warnings]` and the snippet neither repeats for a second diagnostic at the
+same place.
+
 Context lines (2026-11-08): `context-includes-gcc` and `context-includes-clang`
 pin the include stacks GCC 14 and Clang 23 print before a diagnostic in a
 header: headers nested two deep through `"…"` and through `<…>` with `-I`, a
@@ -231,7 +242,9 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `NestedVaOpt` | rendered | [pp-nested-va-opt.c](pp-nested-va-opt.c) |
 | `UnterminatedVaOpt` | rendered | [pp-unterminated-va-opt.c](pp-unterminated-va-opt.c) |
 | `HashHashAtVaOptBoundary` | rendered | [pp-hash-hash-at-va-opt-boundary.c](pp-hash-hash-at-va-opt-boundary.c), [lexpp-c23-constraints.c](lexpp-c23-constraints.c) |
-| `WarningDirective` | rendered | [GNU89 warning message and extension policy](lexpp-gnu89-extensions.c); structured tests cover native C23 warnings and earlier strict rejection |
+| `WarningDirective` | rendered | [GNU89 warning message and extension policy](lexpp-gnu89-extensions.c), GCC's and Clang's words in [pp-c23-directives-gcc.c](pp-c23-directives-gcc.c) and [pp-c23-directives-clang.c](pp-c23-directives-clang.c); structured tests cover native C23 warnings and earlier strict rejection |
+| `DirectiveExtension` | rendered | [pp-c23-directives-gcc.c](pp-c23-directives-gcc.c), [pp-c23-directives-strict-gcc.c](pp-c23-directives-strict-gcc.c), [pp-c23-directives-clang-pedantic.c](pp-c23-directives-clang-pedantic.c); bcc's words through the language-mode tests |
+| `C23DirectiveExtension` | rendered | [pp-c23-directives-clang.c](pp-c23-directives-clang.c), [pp-c23-directives-clang-pedantic-errors.c](pp-c23-directives-clang-pedantic-errors.c) |
 | `InvalidHexadecimalFloatLiteral` | rendered | [pp-invalid-hexadecimal-float-literal.c](pp-invalid-hexadecimal-float-literal.c) |
 | `InvalidDecimalFloatLiteral` | rendered | [pp-invalid-decimal-float-literal.c](pp-invalid-decimal-float-literal.c) |
 | `FloatConstantOutOfRange` | rendered | [pp-float-constant-out-of-range-underflow.c](pp-float-constant-out-of-range-underflow.c), [pp-float-constant-out-of-range.c](pp-float-constant-out-of-range.c) |
