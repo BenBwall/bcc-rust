@@ -46,6 +46,7 @@ mod literals;
 
 use std::path::Path;
 
+pub(crate) use expansion_sites::ArgumentSubstitution;
 use expansion_sites::ExpansionSites;
 use rustc_hash::FxBuildHasher;
 pub(crate) use source_files::{

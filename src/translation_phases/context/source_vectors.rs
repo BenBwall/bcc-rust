@@ -7,6 +7,7 @@
 //! PDF p. 23. This module preserves locations rather than checking grammar.
 
 use super::{
+    ArgumentSubstitution,
     Context,
     merge_anchors::MergeAnchors,
 };
@@ -276,7 +277,8 @@ impl Context<'_> {
             let sites = &self.expansion_starts[arena as usize];
             let start = sites.ends[site as usize].clone();
             let end = sites.spans[site as usize].clone();
-            self.expansion_starts[target as usize].span_id(start, end)
+            let argument = sites.arguments[site as usize];
+            self.expansion_starts[target as usize].span_id(start, end, argument)
         };
         self.expansion_starts[target as usize].insert(to, site);
     }
@@ -291,18 +293,21 @@ impl Context<'_> {
     }
 
     /// Records where the outermost macro invocation that produced the
-    /// token `source` begins, at `site`, and ends, at `end`.
-    /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
+    /// token `source` begins, at `site`, and ends, at `end`, and the
+    /// argument substitution that produced it, when one did.
+    /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22; §6.10.3.1
+    /// paragraph 1, p. 153; PDF p. 165.
     pub(crate) fn record_expansion_start(
         &mut self,
         source: SourceVectors,
         site: SourceVector,
         end: SourceVector,
+        argument: Option<ArgumentSubstitution>,
     ) {
         if source.length() != 0 {
             let (arena, start) = SourceArena::decode(source);
             let sites = &mut self.expansion_starts[arena as usize];
-            let id = sites.span_id(site, end);
+            let id = sites.span_id(site, end, argument);
             sites.insert(start, id);
         }
     }
@@ -503,6 +508,23 @@ impl Context<'_> {
         ))
     }
 
+    /// The argument substitution that produced the first token of `source`
+    /// within its outermost invocation, when the token came from an
+    /// argument rather than a replacement list or the file. Two tokens
+    /// with the same substitution are in one argument expansion.
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+    pub(crate) fn argument_substitution(
+        &self,
+        source: SourceVectors,
+    ) -> Option<ArgumentSubstitution> {
+        if source.length() == 0 {
+            return None;
+        }
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.expansion_starts[arena as usize];
+        *sites.arguments.get(sites.get(start)? as usize)?
+    }
+
     /// The places Clang underlines for the range `source` beside a caret
     /// in a file. When a macro's replacement list wrote a token of the
     /// range, each end of the range that the same invocation produced moves
@@ -511,8 +533,10 @@ impl Context<'_> {
     /// `DiagnosticRenderer::mapDiagnosticRanges` follows each end up to the
     /// expansion both ends share, and takes the expansion range there. The
     /// file's tokens between the two ends stay; a range within one argument
-    /// stays where the invocation spells it, and a range no replacement
-    /// list wrote comes back as it is. Only the outermost invocation is
+    /// stays where the invocation spells it, while one whose ends two
+    /// substitutions of arguments produced, as in `TWICE("%")` (`a a`),
+    /// covers the invocation; and a range no replacement list wrote comes
+    /// back as it is. Only the outermost invocation is
     /// recorded, so a range within a macro invoked in an argument covers
     /// the outer invocation.
     /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
@@ -526,15 +550,16 @@ impl Context<'_> {
             return vectors;
         };
         let (arena, start) = SourceArena::decode(source);
+        let first_token = Self::first_token_vector(source);
+        let last_token = Self::last_source_vector(source);
         let Some(written) = (start..start + source.length())
             .find_map(|index| self.invocation_site(arena.encode(index, index + 1)))
+            .or_else(|| self.separate_arguments(first_token, last_token))
         else {
             return vectors;
         };
         // An end a list wrote moves to its own invocation; an argument's, to
         // the invocation whose list wrote a token of the range.
-        let first_token = Self::first_token_vector(source);
-        let last_token = Self::last_source_vector(source);
         let produced = |token| {
             self.invocation_site(token).is_some()
                 || self.outermost_invocation(token) == Some(written)
@@ -564,6 +589,25 @@ impl Context<'_> {
                 .chain(std::iter::once(end))
                 .cloned(),
         )
+    }
+
+    /// The outermost invocation that produced the tokens `first` and `last`
+    /// from two substitutions of its arguments, which are separate
+    /// expansions for Clang; `None` when they share one, or another
+    /// invocation or none produced either.
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+    fn separate_arguments(
+        &self,
+        first: SourceVectors,
+        last: SourceVectors,
+    ) -> Option<&SourceVector> {
+        let (first_argument, last_argument) = (
+            self.argument_substitution(first)?,
+            self.argument_substitution(last)?,
+        );
+        let site = self.invocation_span(first)?;
+        (first_argument != last_argument && self.invocation_span(last) == Some(site))
+            .then_some(site.0)
     }
 
     /// Where a source range ends in the user's input, before macro expansion.

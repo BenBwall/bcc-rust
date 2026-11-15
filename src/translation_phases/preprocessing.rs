@@ -109,6 +109,7 @@ pub(crate) use token_conversion::bit_precise_magnitude;
 
 use crate::{
     translation_phases::{
+        ArgumentSubstitution,
         Context,
         GetSourceFileIndex,
         SourcePosition,
@@ -516,6 +517,9 @@ struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     source_segment_limit:  usize,
     /// Frames pushed since the expansion arena was last reset.
     pushed_frames:         usize,
+    /// The number the next argument substitution takes. Argument frames
+    /// end with their expansion, so numbering restarts with each expander.
+    next_substitution:     ArgumentSubstitution,
     /// For each `(` that collecting a macro call shared from a replay and
     /// saw closed there, keyed by its address, how many tokens later its
     /// `)` is. A call nested in that argument then skips the group rather

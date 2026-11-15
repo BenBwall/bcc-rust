@@ -23,6 +23,7 @@ use super::{
 };
 use crate::{
     translation_phases::{
+        ArgumentSubstitution,
         Context,
         TranslationError,
         preprocessing::macro_expansion::SpacingState,
@@ -85,6 +86,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             source_segment_limit,
             spacing,
             pushed_frames: 0,
+            next_substitution: ArgumentSubstitution::FIRST,
             paren_ends: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         }
     }

@@ -958,7 +958,7 @@ impl<'x> MacroCallCursor<'x> {
                 self.index.map_or(0, |index| index + 1) - self.base,
                 TokenizerFrame {
                     frame_type: TokenizerFrameType::Rescan {
-                        argument: false,
+                        argument: None,
                         end:      self.pending_end,
                     },
                     tokenizer,

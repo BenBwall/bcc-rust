@@ -73,8 +73,13 @@ impl Expander<'_, '_, '_, '_> {
                     // Clang's expansion locations.
                     if let Some((start, end)) = self.outermost_invocation_span() {
                         let (start, end) = (start.clone(), end.clone());
-                        self.context
-                            .record_expansion_start(result.source_vectors, start, end);
+                        let argument = self.current_substitution();
+                        self.context.record_expansion_start(
+                            result.source_vectors,
+                            start,
+                            end,
+                            argument,
+                        );
                     }
                 }
                 return Some(result);
@@ -234,7 +239,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 );
                                 self.push_tokenizer_frame(TokenizerFrame {
                                     frame_type: TokenizerFrameType::Rescan {
-                                        argument: false,
+                                        argument: None,
                                         end:      TokenSpacing::NONE,
                                     },
                                     tokenizer,

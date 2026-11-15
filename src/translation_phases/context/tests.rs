@@ -4,6 +4,7 @@
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 
 use super::{
+    ArgumentSubstitution,
     Context,
     segmented_vec::SegmentedVec,
 };
@@ -419,7 +420,7 @@ fn expansion_locations_outlive_compaction_and_follow_copies() {
         ..SourceVector::default()
     };
     let expanded = context.push_source_vectors(std::slice::from_ref(&spelled));
-    context.record_expansion_start(expanded, site.clone(), site.clone());
+    context.record_expansion_start(expanded, site.clone(), site.clone(), None);
     let plain = context.push_source_vectors(std::slice::from_ref(&spelled));
     let token = context.retain_token_source(expanded);
     let plain_token = context.retain_token_source(plain);
@@ -461,9 +462,9 @@ fn file_vectors_keep_arguments_the_invocation_spells() {
         ..SourceVector::default()
     };
     let replaced = context.push_source_vectors(std::slice::from_ref(&in_definition));
-    context.record_expansion_start(replaced, site.clone(), site.clone());
+    context.record_expansion_start(replaced, site.clone(), site.clone(), None);
     let written = context.push_source_vectors(std::slice::from_ref(&argument));
-    context.record_expansion_start(written, site.clone(), site.clone());
+    context.record_expansion_start(written, site.clone(), site.clone(), None);
     let replaced = context.retain_token_source(replaced);
     let written = context.retain_token_source(written);
     context.compact_preprocessor_vectors();
@@ -498,9 +499,9 @@ fn highlights_cover_the_invocations_their_ends_come_from() {
     };
     let plain_before = context.push_source_vectors(std::slice::from_ref(&before));
     let body = context.push_source_vectors(std::slice::from_ref(&in_definition));
-    context.record_expansion_start(body, site.clone(), end.clone());
+    context.record_expansion_start(body, site.clone(), end.clone(), None);
     let written = context.push_source_vectors(std::slice::from_ref(&argument));
-    context.record_expansion_start(written, site.clone(), end.clone());
+    context.record_expansion_start(written, site.clone(), end.clone(), None);
     let plain = context.push_source_vectors(std::slice::from_ref(&after));
     let [plain_before, body, written, plain] =
         [plain_before, body, written, plain].map(|source| context.retain_token_source(source));
@@ -551,7 +552,7 @@ fn retained_tokens_keep_the_invocation_of_every_vector() {
     };
     let first = context.push_source_vectors(std::slice::from_ref(&first));
     let written = context.push_source_vectors(std::slice::from_ref(&in_definition));
-    context.record_expansion_start(written, site.clone(), site.clone());
+    context.record_expansion_start(written, site.clone(), site.clone(), None);
     let last = context.push_source_vectors(std::slice::from_ref(&last));
     let literal = context.merge_vector_list(&[first, written, last]);
     let literal = context.retain_token_source(literal);
@@ -565,4 +566,49 @@ fn retained_tokens_keep_the_invocation_of_every_vector() {
     assert_eq!(span(&context, 1), Some((site.clone(), site)));
     assert_eq!(span(&context, 2), None);
     assert_eq!(Context::source_vector_at(literal, 3).length(), 0);
+}
+
+/// Two tokens one invocation produced from its arguments are in one
+/// argument expansion only when one substitution produced both: Clang
+/// leaves a range within `ID("%" "d")` where the invocation spells it, and
+/// draws one over `JOIN(" ", "d")` (`a b`) as the whole invocation. The
+/// substitutions survive retention and compaction.
+#[test]
+fn highlights_cover_the_invocation_for_two_argument_expansions() {
+    let tu = crate::util::bump::Bump::new();
+    let scratch = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 3,
+        length,
+        ..SourceVector::default()
+    };
+    // `JOIN("%", "d")` on line 3, from its name to its `)`.
+    let (site, first, second, end) = (at(40, 4), at(45, 3), at(50, 3), at(53, 1));
+    let one = ArgumentSubstitution::FIRST;
+    let other = one.next();
+    let mut record = |vector: &SourceVector, argument| {
+        let source = context.push_source_vectors(std::slice::from_ref(vector));
+        context.record_expansion_start(source, site.clone(), end.clone(), Some(argument));
+        source
+    };
+    let tokens = [
+        record(&first, one),
+        record(&second, other),
+        record(&second, one),
+    ];
+    let [first_token, split, same] = tokens.map(|source| context.retain_token_source(source));
+    context.compact_preprocessor_vectors();
+    assert_eq!(context.argument_substitution(first_token), Some(one));
+    assert_eq!(context.argument_substitution(split), Some(other));
+    assert_eq!(context.argument_substitution(same), Some(one));
+    // The arguments between the invocation's ends stay, drawn within it.
+    let split = context.merge_vectors(first_token, split);
+    assert_eq!(
+        context.highlight_vectors(split, &scratch),
+        [site, first.clone(), second.clone(), end]
+    );
+    let same = context.merge_vectors(first_token, same);
+    assert_eq!(context.highlight_vectors(same, &scratch), [first, second]);
 }

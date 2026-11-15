@@ -117,4 +117,31 @@ sema-format-concat-ranges-clang.c:43:7: warning: field width should have type 'i
       |             ~~~
    43 |     "*d", l, a);
       |     ~~^   ~
-33 warnings generated.
+sema-format-concat-ranges-clang.c:49:25: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   49 |     printf(ID("%" "d"), l);
+      |                ~~~~~    ^
+sema-format-concat-ranges-clang.c:50:28: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   50 |     printf(JOIN("%", "d"), l);
+      |            ~~~~~~~~~~~~~~  ^
+sema-format-concat-ranges-clang.c:51:34: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   51 |     printf(JOIN("%" "d", " %s"), l, a);
+      |                  ~~~~~           ^
+sema-format-concat-ranges-clang.c:51:37: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   51 |     printf(JOIN("%" "d", " %s"), l, a);
+      |                            ~~       ^
+sema-format-concat-ranges-clang.c:52:34: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   52 |     printf(JOIN(" %s", "%" "d"), a, l);
+      |                   ~~             ^
+sema-format-concat-ranges-clang.c:52:37: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   52 |     printf(JOIN(" %s", "%" "d"), a, l);
+      |                         ~~~~~       ^
+sema-format-concat-ranges-clang.c:53:34: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   53 |     printf(JOIN("%", "d" " %s"), l, a);
+      |            ~~~~~~~~~~~~~~~~~~~~  ^
+sema-format-concat-ranges-clang.c:53:37: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   53 |     printf(JOIN("%", "d" " %s"), l, a);
+      |                            ~~       ^
+sema-format-concat-ranges-clang.c:54:24: warning: data argument not used by format string [-Wformat-extra-args]
+   54 |     printf(TWICE("%"), l);
+      |            ~~~~~~~~~~  ^
+42 warnings generated.

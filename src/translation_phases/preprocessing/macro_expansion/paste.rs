@@ -587,7 +587,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let tokenizer = TokenSource::replay(self.context, self.scratch, &[result], location);
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan {
-                argument: false,
+                argument: None,
                 end:      TokenSpacing::END,
             },
             tokenizer,

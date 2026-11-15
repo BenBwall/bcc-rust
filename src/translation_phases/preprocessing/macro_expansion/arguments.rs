@@ -14,6 +14,7 @@ use std::{
 
 use crate::{
     translation_phases::{
+        ArgumentSubstitution,
         Context,
         SourceVectors,
         TranslationPhase,
@@ -82,13 +83,47 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .tokens
             .clone();
         let end = self.pad_substitution(argument);
+        let substitution = self.new_substitution();
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan {
-                argument: true,
+                argument: Some(substitution),
                 end,
             },
             tokenizer,
         });
+    }
+
+    /// Numbers a new substitution of an argument for its parameter.
+    fn new_substitution(&mut self) -> ArgumentSubstitution {
+        let substitution = self.next_substitution;
+        self.next_substitution = substitution.next();
+        substitution
+    }
+
+    /// The substitution whose tokens are being read, when the token just
+    /// read came from an argument rather than a replacement list or the
+    /// file: the innermost argument frame, unless a replacement list lies
+    /// above it.
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+    pub(in crate::translation_phases::preprocessing) fn current_substitution(
+        &self,
+    ) -> Option<ArgumentSubstitution> {
+        for frame in self.tokenizer_stack.iter().rev() {
+            match frame.frame_type {
+                | TokenizerFrameType::Rescan {
+                    argument: Some(substitution),
+                    ..
+                }
+                | TokenizerFrameType::FunctionLikeMacroArgument {
+                    substitution: Some(substitution),
+                    ..
+                } => return Some(substitution),
+                | TokenizerFrameType::Rescan { argument: None, .. }
+                | TokenizerFrameType::DeferredQuery => {},
+                | _ => return None,
+            }
+        }
+        None
     }
 
     pub(in crate::translation_phases::preprocessing) fn get_arguments(
@@ -213,6 +248,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     released:            false,
                     operand:             false,
                     end:                 TokenSpacing::NONE,
+                    substitution:        Some(self.new_substitution()),
                 },
                 tokenizer:  arg.tokenizer.clone(),
             };
@@ -378,6 +414,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 released: false,
                 operand: false,
                 end: TokenSpacing::NONE,
+                substitution: None,
             },
             tokenizer:  argument.tokenizer.clone(),
         });

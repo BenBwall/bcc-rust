@@ -241,12 +241,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// order. As Clang's `mapDiagnosticRanges` moves each end of a range out
     /// of the macro expansions the other end is not in, an end a macro
     /// produced becomes that end of its invocation, unless both ends are in
-    /// arguments of the same invocation: in `FMT " %s"`, a specification of
-    /// `FMT` is drawn at `FMT`, and `%s` stays in place. An end on a later
-    /// line than the start is kept as its own vector, so the range is drawn
-    /// down to that line. Only the outermost invocation is recorded, so a
-    /// macro invoked in an argument is drawn as the outer invocation.
-    /// C99: §6.4.5p4, p. 62; PDF p. 74; §6.10.3p10, p. 152; PDF p. 164.
+    /// one substitution of an argument: in `FMT " %s"`, a specification of
+    /// `FMT` is drawn at `FMT`, and `%s` stays in place; `%d` stays in place
+    /// in `ID("%" "d")`, but `JOIN("%", "d")` is drawn whole, as its two
+    /// arguments are separate expansions. An end on a later line than the
+    /// start is kept as its own vector, so the range is drawn down to that
+    /// line. Only the outermost invocation is recorded, so a macro invoked
+    /// in an argument is drawn as the outer invocation, and the arguments of
+    /// such an inner macro, replayed through the outer argument's one
+    /// substitution, count as one expansion.
+    /// C99: §6.4.5p4, p. 62; PDF p. 74; §6.10.3p10, p. 152; PDF p. 164;
+    /// §6.10.3.1p1, p. 153; PDF p. 165.
     pub(super) fn byte_span(
         &mut self,
         literal: &'tu Expression<'tu>,
@@ -259,16 +264,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let (first_token, last_token) = (token(first), token(last));
         let first_site = self.context.invocation_span(first_token);
         let last_site = self.context.invocation_span(last_token);
-        let in_arguments = first_site.is_some()
+        let first_argument = self.context.argument_substitution(first_token);
+        let in_argument = first_site.is_some()
             && first_site == last_site
+            && first_argument.is_some()
+            && first_argument == self.context.argument_substitution(last_token)
             && !self.context.written_by_macro_body(first_token)
             && !self.context.written_by_macro_body(last_token);
         let begin = match first_site {
-            | Some((start, _)) if !in_arguments => start.clone(),
+            | Some((start, _)) if !in_argument => start.clone(),
             | _ => first.vector(),
         };
         let end = match last_site {
-            | Some((_, end)) if !in_arguments => end.clone(),
+            | Some((_, end)) if !in_argument => end.clone(),
             | _ => last.vector(),
         };
         if begin.source_file_index != end.source_file_index || end.end() <= begin.index as usize {

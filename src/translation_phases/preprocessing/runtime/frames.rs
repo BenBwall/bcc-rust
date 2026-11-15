@@ -23,6 +23,7 @@ use super::super::{
 };
 use crate::{
     translation_phases::{
+        ArgumentSubstitution,
         SourceVector,
         TextEvent,
         TextEventKind,
@@ -122,10 +123,10 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
     /// builtin query or `#embed`, or a macro-replaced argument substituted
     /// for its parameter.
     Rescan {
-        /// Whether the tokens are a substituted argument.
+        /// The substitution, when the tokens are a substituted argument.
         ///
         /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
-        argument: bool,
+        argument: Option<ArgumentSubstitution>,
         /// The padding its end brings, for a text of phase 4.
         end:      TokenSpacing,
     },
@@ -196,6 +197,10 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         operand:             bool,
         /// The padding its end brings, for a text of phase 4.
         end:                 TokenSpacing,
+        /// The substitution of a `##` operand read in place, whose tokens
+        /// besides the pasted ones are output as they are; `None` for an
+        /// argument read to be prescanned or replaced.
+        substitution:        Option<ArgumentSubstitution>,
     },
 }
 

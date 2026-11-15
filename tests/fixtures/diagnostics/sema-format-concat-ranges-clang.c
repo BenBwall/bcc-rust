@@ -42,3 +42,14 @@ void g(long l, int a) {
     printf("%-"
     "*d", l, a);
 }
+#define ID(x) x
+#define JOIN(a, b) a b
+#define TWICE(a) a a
+void h(long l, int a) {
+    printf(ID("%" "d"), l);
+    printf(JOIN("%", "d"), l);
+    printf(JOIN("%" "d", " %s"), l, a);
+    printf(JOIN(" %s", "%" "d"), a, l);
+    printf(JOIN("%", "d" " %s"), l, a);
+    printf(TWICE("%"), l);
+}
