@@ -4747,9 +4747,16 @@ mod tests {
                 "int x = 1; int x = 2;",
                 "e.c:1: error: redefinition of 'x'\n",
             ),
+            // `long long` is as wide as a pointer on every target, where
+            // `long` is narrower on Windows.
             (
-                "int main(void){ int i; long l = &i; return 0; }",
+                "int main(void){ int i; long long l = &i; return 0; }",
                 "e.c:1: warning: assignment makes integer from pointer without a cast\n",
+            ),
+            (
+                "int main(void){ int i; int n = &i; return 0; }",
+                "e.c:1: warning: assignment makes integer from pointer without a cast\ne.c:1: \
+                 warning: cast between pointer and integer of different size\n",
             ),
             (
                 "int main(void){ int *p = 5; return 0; }",
