@@ -1158,7 +1158,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// GCC's `operand_equal_p`, for operands without side effects.
-    fn same_operand(&self, a: &'tu Expression<'tu>, b: &'tu Expression<'tu>) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn same_operand(
+        &self,
+        a: &'tu Expression<'tu>,
+        b: &'tu Expression<'tu>,
+    ) -> bool {
         let (a, b) = (self.without_value_casts(a), self.without_value_casts(b));
         let (left, right) = (self.expression_info(a), self.expression_info(b));
         // Reading either again is another effect, which `operand_equal_p` does
