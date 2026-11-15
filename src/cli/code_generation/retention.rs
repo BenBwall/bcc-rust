@@ -139,13 +139,6 @@ pub(super) fn prepare<'ir>(
                         FAILURE_STATUS,
                     ));
                 }
-                if options.output_kind() == OutputKind::SharedLibrary {
-                    return Err(message(
-                        arena,
-                        format_args!("error: {}", native::NativeError::SharedLibraryCode),
-                        FAILURE_STATUS,
-                    ));
-                }
                 let writer =
                     native::object_writer(module, target, options.requested_object_writer())
                         .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;

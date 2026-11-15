@@ -234,9 +234,6 @@ fn encode_object(
     runtime: Runtime,
     refused: impl FnOnce(super::object::Error) -> io::Result<()>,
 ) -> io::Result<()> {
-    if kind == OutputKind::SharedLibrary {
-        return Err(io::Error::other(NativeError::SharedLibraryCode));
-    }
     let arena = Bump::new();
     let encoded = match target {
         | Target::LinuxGnu | Target::LinuxMusl | Target::Wasm32Unknown | Target::Wasm32Wasi =>

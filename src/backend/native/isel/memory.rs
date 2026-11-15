@@ -9,13 +9,19 @@
 //! position-independent; on COFF a weak declaration, whose address may be
 //! null, through a `.refptr` stub holding its address, as Clang does.
 //!
+//! On ELF a shared library's (`-fpic`) code also reaches a definition
+//! through its GOT entry unless it [`binds_locally`]: another module may
+//! preempt a default-visibility symbol.
+//!
 //! A thread-local global's address is computed where `global_addr` names
-//! it, with the sequences Clang emits for an executable, the only code the
-//! back end generates. ELF uses the thread pointer at `%fs:0` and the
-//! local-exec model (`sym@TPOFF`) for globals the module defines, or for
-//! every global with `-ftls-model=local-exec`, and the initial-exec model
-//! (`sym@GOTTPOFF`) for the rest (Drepper, "ELF Handling For Thread-Local
-//! Storage", §4.3.6 and §4.3.5). Windows
+//! it, with the sequences Clang emits. An ELF executable uses the thread
+//! pointer at `%fs:0` and the local-exec model (`sym@TPOFF`) for globals
+//! the module defines, or for every global with `-ftls-model=local-exec`,
+//! and the initial-exec model (`sym@GOTTPOFF`) for the rest (Drepper, "ELF
+//! Handling For Thread-Local Storage", §4.3.6 and §4.3.5). A shared library
+//! calls `__tls_get_addr`: local-dynamic (`sym@TLSLD`, then `sym@DTPOFF`)
+//! for a symbol that binds locally, general-dynamic (`sym@TLSGD`) for the
+//! rest ([`Selector::elf_tls_model`]). Windows
 //! indexes the TEB's `ThreadLocalStoragePointer` (`%gs:0x58`) with the
 //! image's `_tls_index` and adds the symbol's offset in the `.tls` section
 //! (`sym@SECREL32`; Microsoft Learn, "PE Format", "The .tls Section").
@@ -38,11 +44,13 @@ use super::{
 };
 use crate::{
     backend::native::{
+        binds_locally,
         defines,
         mir::{
             AluOp,
             Base,
             Callee,
+            DynamicTls,
             FrameObject,
             Index,
             MBlock,
@@ -53,6 +61,7 @@ use crate::{
             Reg,
             ShiftOp,
             SymbolRef,
+            TlsOffset,
             Width,
         },
         support::Construct,
@@ -117,36 +126,87 @@ impl Selector<'_, '_, '_> {
                 dst,
                 base: block,
                 symbol,
-            });
-        } else if self.tls_model == TlsModel::LocalExec
-            || defines(self.module, Symbol::Global(global))
-        {
-            let pointer = self.vreg();
-            self.emit(MInst::ThreadPointer { dst: pointer });
-            self.emit(MInst::TlsLea {
-                dst,
-                base: pointer,
-                symbol,
+                offset: TlsOffset::Thread,
             });
         } else {
-            self.emit(MInst::ThreadPointer { dst });
-            self.emit(MInst::Alu {
-                op: AluOp::Add,
-                width: Width::B64,
-                dst,
-                src: Operand::Mem(Mem::new(Base::GotTpoff(symbol), 0)),
-            });
+            match self.elf_tls_model(global) {
+                | TlsModel::LocalExec => {
+                    let pointer = self.vreg();
+                    self.emit(MInst::ThreadPointer { dst: pointer });
+                    self.emit(MInst::TlsLea {
+                        dst,
+                        base: pointer,
+                        symbol,
+                        offset: TlsOffset::Thread,
+                    });
+                },
+                | TlsModel::InitialExec => {
+                    self.emit(MInst::ThreadPointer { dst });
+                    self.emit(MInst::Alu {
+                        op: AluOp::Add,
+                        width: Width::B64,
+                        dst,
+                        src: Operand::Mem(Mem::new(Base::GotTpoff(symbol), 0)),
+                    });
+                },
+                | TlsModel::GlobalDynamic => {
+                    let model = DynamicTls::General;
+                    self.call_sequence(Callee::TlsGetAddr { symbol, model }, &[], false);
+                    self.copy(dst, Reg::Phys(PReg::Rax));
+                },
+                | TlsModel::LocalDynamic => {
+                    let model = DynamicTls::Local;
+                    self.call_sequence(Callee::TlsGetAddr { symbol, model }, &[], false);
+                    let block = self.vreg();
+                    self.copy(block, Reg::Phys(PReg::Rax));
+                    self.emit(MInst::TlsLea {
+                        dst,
+                        base: block,
+                        symbol,
+                        offset: TlsOffset::Module,
+                    });
+                },
+            }
         }
     }
 
-    /// Whether `symbol` can be addressed RIP-relative: on ELF only if the
-    /// module defines it, on COFF unless its address is loaded from a
+    /// The ELF TLS model of an access to the thread-local `global`. An
+    /// executable reaches its own definitions, and with
+    /// `-ftls-model=local-exec` every symbol, at a link-time offset from the
+    /// thread pointer, and the rest through the GOT entry holding their
+    /// offset (initial-exec), as Clang's executables do. A shared library
+    /// uses the dynamic models, which find a module's block wherever the
+    /// dynamic linker put it, even for a library `dlopen` loads: local-dynamic
+    /// for a symbol that [`binds_locally`], general-dynamic for the rest,
+    /// unless `-ftls-model` asks for initial-exec or local-exec. As in GCC,
+    /// a local-dynamic request reaches a preemptible symbol general-dynamic.
+    /// Drepper, "ELF Handling For Thread-Local Storage", §4.1-§4.4.
+    fn elf_tls_model(&self, global: GlobalId) -> TlsModel {
+        let symbol = Symbol::Global(global);
+        if !self.pic {
+            return if self.tls_model == TlsModel::LocalExec || defines(self.module, symbol) {
+                TlsModel::LocalExec
+            } else {
+                TlsModel::InitialExec
+            };
+        }
+        match self.tls_model {
+            | TlsModel::LocalExec | TlsModel::InitialExec => self.tls_model,
+            | TlsModel::GlobalDynamic | TlsModel::LocalDynamic
+                if binds_locally(self.module, symbol, true) =>
+                TlsModel::LocalDynamic,
+            | TlsModel::GlobalDynamic | TlsModel::LocalDynamic => TlsModel::GlobalDynamic,
+        }
+    }
+
+    /// Whether `symbol` can be addressed RIP-relative: on ELF if it
+    /// [`binds_locally`], on COFF unless its address is loaded from a
     /// `.refptr` stub ([`through_stub`]).
     pub(in crate::backend::native) fn direct(&self, symbol: Symbol) -> bool {
         if matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc) {
             return !through_stub(self.module, self.target, symbol);
         }
-        defines(self.module, symbol)
+        binds_locally(self.module, symbol, self.pic)
     }
 
     /// `dst ← base + disp` for a constant address.
