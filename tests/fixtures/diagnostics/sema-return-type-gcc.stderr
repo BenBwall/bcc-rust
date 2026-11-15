@@ -23,8 +23,6 @@ sema-return-type-gcc.c:27:5: warning: function declared 'noreturn' has a 'return
    27 |     return;
       |     ^~~~~~~
 sema-return-type-gcc.c:27:5: warning: 'noreturn' function does return
-   27 |     return;
-      |     ^~~~~~~
 sema-return-type-gcc.c: In function 'after_break':
 sema-return-type-gcc.c:40:63: warning: control reaches end of non-void function [-Wreturn-type]
    40 | static int after_break(int x) { while (x) { break; halts(); } }

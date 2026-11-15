@@ -196,6 +196,25 @@ impl Renderer {
             message: None,
             primary: true,
         });
+        // A diagnostic at the place of the one before it, in the same
+        // reading of its file, quotes no source: in GCC's format when it
+        // has the same range, and in Clang's when it has no range at all,
+        // only a place (GCC's `diagnostic_context::maybe_show_locus`, Clang's
+        // `TextDiagnostic::emitSnippetAndCaret`). A token a macro wrote has
+        // a place of its own in each expansion.
+        let place = location.filter(|_| expansion.is_none()).map(|vector| {
+            (
+                vector.source_file_index,
+                vector.index,
+                vector.length,
+                segment,
+            )
+        });
+        let repeated = compiler_snippet
+            && place.is_some()
+            && self.last_place.replace(place) == place
+            && (format == DiagnosticFormat::Gcc
+                || diagnostic.point && !diagnostic.labels.iter().any(Label::is_highlight));
         let mut marks = ArenaVec::new_in(scratch);
         for label in diagnostic
             .labels
@@ -203,6 +222,7 @@ impl Renderer {
             .filter(drawn)
             .filter(|label| spelled.is_none() || !label.primary)
             .chain(spelled.as_ref().filter(|_| presentation.caret))
+            .filter(|_| !repeated)
         {
             Self::push_label_marks(label, context, &mut marks);
         }
@@ -841,6 +861,7 @@ impl Renderer {
             scratch: Bump::new(),
             context_lines: std::cell::Cell::default(),
             included_seen: std::cell::RefCell::new(crate::util::region_bit_set::RegionBitSet::new()),
+            last_place: std::cell::Cell::new(None),
         }
     }
 }

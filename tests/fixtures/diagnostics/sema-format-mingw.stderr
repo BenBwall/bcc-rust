@@ -81,8 +81,6 @@ sema-format-mingw.c:20:11: warning: zero width in ms_scanf format [-Wformat=]
    20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
       |           ^~~~~~~~~~~~~~~~~~~~~
 sema-format-mingw.c:20:11: warning: too many arguments for format [-Wformat-extra-args]
-   20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
-      |           ^~~~~~~~~~~~~~~~~~~~~
 sema-format-mingw.c:20:23: warning: unknown conversion type character 'm' in format [-Wformat=]
    20 |     scanf("%0d %I64d %ms %Ld\n", ip, llp, &s, llp);
       |                       ^
