@@ -121,8 +121,8 @@ enum Part {
     },
 }
 
-/// A char array of more bytes than this is one wide cell: nine char cells
-/// no longer fit a phone's strip beside the call's name.
+/// A char array of up to this many bytes keeps a cell per byte, as the
+/// hello lesson's `name` does; a longer one reads as its text, one cell.
 const BYTE_CELLS: usize = 8;
 
 /// The cells of `object`: one per scalar, in memory order, with a padding
@@ -143,7 +143,7 @@ fn parts(object: &Object, open: bool) -> Vec<Part> {
         });
         // A literal's bytes are named by their index alone: its spelling
         // heads the run, and would make every cell as wide as the string.
-        let name = if literal(object) { "" } else { &object.name };
+        let name = if object.literal { "" } else { &object.name };
         collect(&object.value, name, &ty, object.size, &mut 0, &mut parts);
         return parts;
     }
@@ -217,7 +217,7 @@ fn text(object: &Object) -> Option<Vec<Option<String>>> {
     let element = element.trim_start_matches("const ").trim_start_matches("volatile ");
     if !matches!(element, "char" | "signed char" | "unsigned char")
         || object.size != elements.len()
-        || !(literal(object) || elements.len() > BYTE_CELLS)
+        || !(object.literal || elements.len() > BYTE_CELLS)
     {
         return None;
     }
@@ -256,11 +256,6 @@ fn words(glyphs: &[Option<String>]) -> Vec<usize> {
 
 /// The most bytes a string's row keeps together before it may wrap.
 const WORD: usize = 16;
-
-/// Whether `object` is a string literal's array, named by its spelling.
-fn literal(object: &Object) -> bool {
-    object.literal
-}
 
 /// A character constant's spelling as it stands in a string: `'A'` is `A`,
 /// `'\''` is `'`, `'\n'` stays `\n`.
@@ -418,31 +413,34 @@ fn strip(snapshot: &Snapshot, opened: RwSignal<Vec<(usize, String)>>) -> impl In
                         let bytes = words
                             .into_iter()
                             .map(|length| {
-                                let word = bytes.by_ref().take(length).map(|(index, (glyph, kind))| {
-                                let pointed = !pointed(object.id, index).is_empty();
-                                let null = glyph.as_deref() == Some("\\0");
-                                let escape = glyph.as_deref().is_some_and(|glyph| glyph.starts_with('\\'));
-                                let indeterminate = glyph.is_none();
-                                view! {
-                                    <span
-                                        class="string-byte"
-                                        class:is-ruled=index % 8 == 0
-                                        class:is-null=null
-                                        class:is-escape=escape && !null
-                                        class:is-indeterminate=indeterminate
-                                        class:is-pointed=pointed
-                                        data-access=kind
-                                    >
-                                        <span class="string-char">{glyph.unwrap_or_default()}</span>
-                                        {(index % 8 == 0).then(|| view! { <span class="string-index">{index}</span> })}
-                                    </span>
-                                }
-                                })
-                                .collect_view();
+                                let word = bytes
+                                    .by_ref()
+                                    .take(length)
+                                    .map(|(index, (glyph, kind))| {
+                                        let pointed = !pointed(object.id, index).is_empty();
+                                        let null = glyph.as_deref() == Some("\\0");
+                                        let escape = glyph.as_deref().is_some_and(|glyph| glyph.starts_with('\\'));
+                                        let indeterminate = glyph.is_none();
+                                        view! {
+                                            <span
+                                                class="string-byte"
+                                                class:is-ruled=index % 8 == 0
+                                                class:is-null=null
+                                                class:is-escape=escape && !null
+                                                class:is-indeterminate=indeterminate
+                                                class:is-pointed=pointed
+                                                data-access=kind
+                                            >
+                                                <span class="string-char">{glyph.unwrap_or_default()}</span>
+                                                {(index % 8 == 0).then(|| view! { <span class="string-index">{index}</span> })}
+                                            </span>
+                                        }
+                                    })
+                                    .collect_view();
                                 view! { <span class="string-word">{word}</span> }
                             })
                             .collect_view();
-                        let name = if literal(object) { "string literal".to_owned() } else { object.name.clone() };
+                        let name = if object.literal { "string literal".to_owned() } else { object.name.clone() };
                         view! {
                             <li
                                 class=format!("cell is-string {}", palette::class(&object.name))
