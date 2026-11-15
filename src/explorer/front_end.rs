@@ -646,9 +646,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                 result,
                 directive,
             } => {
-                let result = result
-                    .map(|result| self.spell(result).to_owned())
-                    .unwrap_or_default();
+                let result = result.map_or_default(|result| self.spell(result).to_owned());
                 let step = ExplorerExpansionStep {
                     kind:       "builtin".to_owned(),
                     prescan:    *prescan,
@@ -715,9 +713,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                     arguments:  Vec::new(),
                     operands:   [self.spell(*left).to_owned(), self.spell(*right).to_owned()]
                         .into(),
-                    result:     result
-                        .map(|result| self.spell(result).to_owned())
-                        .unwrap_or_default(),
+                    result:     result.map_or_default(|result| self.spell(result).to_owned()),
                 };
                 self.step(expansion, step);
             },

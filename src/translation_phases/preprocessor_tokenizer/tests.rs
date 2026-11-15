@@ -373,8 +373,7 @@ fn preprocess(source: &str, path: &Path, include_directory: Option<&Path>) -> Ve
         crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
     );
     let directories: SharedVec<PathBuf> = include_directory
-        .map(|directory| vec![directory.to_owned()])
-        .unwrap_or_default()
+        .map_or_default(|directory| vec![directory.to_owned()])
         .into();
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(

@@ -13511,14 +13511,13 @@ warn.c:34: warning: cast between pointer and integer of different size
                 .args(["-s", "-j", ".drectve"])
                 .arg(object)
                 .output()
-                .map(|output| {
+                .map_or_default(|output| {
                     stdout(&output)
                         .lines()
                         .filter(|line| line.starts_with(' '))
                         .map(|line| line.get(43..).unwrap_or(""))
                         .collect()
                 })
-                .unwrap_or_default()
         };
         for (target, expected) in [
             (
@@ -13565,8 +13564,7 @@ warn.c:34: warning: cast between pointer and integer of different size
                     let line = stdout(&listing)
                         .lines()
                         .find(|line| line.ends_with(&format!(" {name}")))
-                        .map(str::to_owned)
-                        .unwrap_or_default();
+                        .map_or_default(str::to_owned);
                     let expected = match (name, size) {
                         | ("s2", "") => "0x0000000000000002",
                         | ("c3", "") => "0x0000000000000003",
