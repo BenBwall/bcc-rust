@@ -1244,7 +1244,8 @@ fn write_bcc_macros(out: &mut impl Write) {
 /// and `__BASE_FILE__` are the preprocessor's built-ins.
 ///
 /// Besides these, as `docs/design/driver-modes.md` lists: bcc's own
-/// `__bcc__` family, as in every identity; TCC mob's `__REDIRECT_NTHNL`
+/// `__bcc__` family, as in every identity; `__BITINT_MAXWIDTH__` in C23;
+/// TCC mob's `__REDIRECT_NTHNL`
 /// (`tccdefs.h`), which glibc 2.34 and later use without checking
 /// (`<glob.h>` with a 64-bit `off_t`), where 0.9.27 fails; and the target
 /// macros that bcc's own `<float.h>`, `<limits.h>` and `<stdatomic.h>`
@@ -1290,6 +1291,15 @@ fn tcc_linux_macros<'a>(
         out.push_str("#define __OPTIMIZE__ 1\n");
     }
     write_bcc_macros(&mut out);
+    // bcc's `<limits.h>` names the widest `_BitInt` from C23, which only
+    // bcc's own driver selects for this identity.
+    if configuration.standard() as u8 >= crate::configuration::CStandard::C23 as u8 {
+        _ = writeln!(
+            out,
+            "#define __BITINT_MAXWIDTH__ {}",
+            configuration.bit_int_max_width()
+        );
+    }
     for line in definitions.split_inclusive('\n') {
         let name = line
             .strip_prefix("#define ")

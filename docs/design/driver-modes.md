@@ -1162,6 +1162,7 @@ these besides, each for a reason:
 | Macros | Why bcc keeps them |
 | --- | --- |
 | `__bcc__`, `__bcc_major__`, `__bcc_minor__`, `__bcc_patchlevel__`, `__bcc_version__` | bcc's vendor macros, defined under every identity as the GCC and Clang modes define them; bcc's `<tgmath.h>` reads `__bcc__` |
+| `__BITINT_MAXWIDTH__`, in C23 alone | bcc's `<limits.h>` reads it for `BITINT_MAXWIDTH`; only bcc's own driver (`--compiler-identity=tcc -std=c23`) selects C23 for this identity |
 | `__REDIRECT_NTHNL` | `mob`'s definition (`tccdefs.h`): glibc 2.34 and later use it without checking, so `<glob.h>` with `_FILE_OFFSET_BITS=64` fails under 0.9.27 (`identifier expected`) |
 | `__FLT_*`, `__DBL_*` and `__LDBL_*` characteristics (`MANT_DIG`, `DIG`, `MIN_EXP`, `MIN_10_EXP`, `MAX_EXP`, `MAX_10_EXP`, `MAX`, `MIN`, `EPSILON`, `DENORM_MIN`, `HAS_DENORM`, `DECIMAL_DIG`, `NORM_MAX`) and `__FLT_RADIX__` | bcc's `<float.h>` reads them; TCC's spells the values out |
 | `__SCHAR_MAX__`, `__SHRT_MAX__` | bcc's `<limits.h>` reads them; TCC has no `<limits.h>` and takes glibc's |
