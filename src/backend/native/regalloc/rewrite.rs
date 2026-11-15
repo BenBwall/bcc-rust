@@ -191,7 +191,8 @@ struct Move {
 /// other still reads its destination; when only cycles remain, one source
 /// is saved in the scratch register of its class and read from there.
 /// Spill slots are never in a cycle, since a register's pieces share one
-/// slot and a parallel copy moves each register once.
+/// slot, registers that share a slot are never live at once, and a
+/// parallel copy moves each register once.
 fn parallel_copy(moves: &mut ArenaVec<'_, Move>, out: &mut ArenaVec<'_, MInst>) {
     moves.retain(|copy| copy.dst != copy.src);
     while !moves.is_empty() {

@@ -32,6 +32,7 @@ use crate::{
         },
         regalloc::{
             self,
+            Allocation,
             CheckError,
             ErrorKind,
             INSERTED,
@@ -1229,4 +1230,135 @@ fn the_checker_rejects_a_slot_overwritten_while_a_copy_of_it_lives() {
         ),
         "{error}"
     );
+}
+
+/// A function that loads twenty values at a time from its parameter and
+/// sums them, `phases` times in a row, adding each phase's sum to the
+/// next: only that sum is live from one phase into the next. With
+/// `setjmp`, it calls `@_setjmp` first.
+fn pressure_phases(phases: usize, setjmp: bool) -> String {
+    let mut ir =
+        String::from("abi lowered\nfunction @_setjmp(ptr) -> i32 external returns_twice\n");
+    ir.push_str("function @f(ptr) -> i64 external {\nblock0(v0: ptr):\n");
+    let mut next = 1;
+    let mut value = || {
+        next += 1;
+        next - 1
+    };
+    if setjmp {
+        let result = value();
+        writeln!(ir, "    v{result} = call @_setjmp(v0)").unwrap();
+    }
+    let mut carried = None;
+    for phase in 0..phases {
+        let mut loaded = Vec::new();
+        for index in 0..20 {
+            let (offset, address, load) = (value(), value(), value());
+            writeln!(
+                ir,
+                "    v{offset} = iconst.i64 {}\n    v{address} = ptr_add v0, v{offset}\n    \
+                 v{load} = load.i64 v{address}, align 8",
+                8 * (20 * phase + index),
+            )
+            .unwrap();
+            loaded.push(load);
+        }
+        let mut sum = carried.unwrap_or(loaded[0]);
+        for &load in &loaded[usize::from(carried.is_none())..] {
+            let total = value();
+            writeln!(ir, "    v{total} = iadd.i64 v{sum}, v{load}").unwrap();
+            sum = total;
+        }
+        carried = Some(sum);
+    }
+    writeln!(ir, "    return v{}\n}}", carried.unwrap()).unwrap();
+    ir
+}
+
+/// The spill slot of each spilled representative register.
+fn spill_slots(func: &MFunction<'_>, allocation: &Allocation<'_>) -> Vec<(u32, VReg)> {
+    let mut slots = Vec::new();
+    for index in 0..func.vreg_count() {
+        let vreg = VReg::new(index);
+        if allocation.representative(vreg) != vreg {
+            continue;
+        }
+        let mut spilled = allocation
+            .locations(vreg)
+            .filter_map(|location| match location {
+                | Location::Spill(slot) => Some(slot),
+                | _ => None,
+            });
+        if let Some(slot) = spilled.next() {
+            assert!(
+                spilled.all(|other| other == slot),
+                "a register keeps one spill slot"
+            );
+            slots.push((slot, vreg));
+        }
+    }
+    slots
+}
+
+#[test]
+fn registers_spilled_in_disjoint_phases_share_slots() {
+    let one = pressure_phases(1, false);
+    let three = pressure_phases(3, false);
+    let single = with_allocation(&one, "f", Target::LinuxGnu, |_, func, allocation| {
+        let spilled = spill_slots(func, allocation);
+        assert!(!spilled.is_empty(), "{one}");
+        allocation.spill_slots
+    });
+    with_allocation(&three, "f", Target::LinuxGnu, |_, func, allocation| {
+        let spilled = spill_slots(func, allocation);
+        let slots = u32::try_from(spilled.len()).unwrap();
+        // Every phase spills about as much as the first, but the later ones
+        // take the slots of the phases before them: the frame grows by the
+        // carried sum at most, not by a phase's worth of slots each time.
+        assert!(slots > allocation.spill_slots, "{three}");
+        assert!(
+            allocation.spill_slots <= single + 2,
+            "{} slots for {single}",
+            allocation.spill_slots
+        );
+    });
+    // The rewrite runs the allocation checker in debug builds, which
+    // proves that no register reads a slot another one overwrote.
+    _ = check_corrupted(&three, "f", Target::LinuxGnu, |_, _| {}).unwrap();
+}
+
+#[test]
+fn registers_spilled_at_once_keep_their_own_slots() {
+    // Within one phase, every spilled load is live until the sum reads it,
+    // while the others are.
+    let ir = pressure_phases(1, false);
+    with_allocation(&ir, "f", Target::LinuxGnu, |_, func, allocation| {
+        let spilled = spill_slots(func, allocation);
+        assert!(spilled.len() > 1, "{ir}");
+        let mut slots: Vec<u32> = spilled.iter().map(|&(slot, _)| slot).collect();
+        slots.sort_unstable();
+        slots.dedup();
+        assert_eq!(
+            slots.len(),
+            spilled.len(),
+            "overlapping spills share no slot: {spilled:?}"
+        );
+        assert_eq!(allocation.spill_slots, u32::try_from(slots.len()).unwrap());
+    });
+}
+
+#[test]
+fn functions_that_call_setjmp_share_no_spill_slot() {
+    // A value live across `setjmp` but dead on the path to the `longjmp`
+    // that returns there must keep its slot over that path, which the
+    // allocator cannot see; such a function gives every register its own.
+    let ir = pressure_phases(3, true);
+    with_allocation(&ir, "f", Target::LinuxGnu, |_, func, allocation| {
+        let spilled = spill_slots(func, allocation);
+        assert_eq!(
+            allocation.spill_slots,
+            u32::try_from(spilled.len()).unwrap(),
+            "{ir}"
+        );
+    });
 }

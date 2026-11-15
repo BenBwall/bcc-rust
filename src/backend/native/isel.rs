@@ -54,6 +54,7 @@ mod x87;
 
 use super::{
     conv::CallConv,
+    frame,
     mir::{
         AluOp,
         Base,
@@ -140,6 +141,30 @@ pub(crate) fn select<'a>(
             size:  u32::try_from(size).expect("the support check bounds frames"),
             align: u32::try_from(align).expect("alignments are at most 16 here"),
         });
+    }
+    let homes = frame::share_stack_slots(
+        module,
+        body,
+        &cfg,
+        tree.reverse_post_order(),
+        options.indirect_returns_twice,
+        arena,
+    );
+    // A group's offset holds its largest member at the strictest alignment.
+    for (slot, &home) in homes.iter().enumerate() {
+        if home as usize != slot {
+            let member = selector.func.slots[slot];
+            let group = &mut selector.func.slots[home as usize];
+            group.size = group.size.max(member.size);
+            group.align = group.align.max(member.align);
+        }
+    }
+    if homes
+        .iter()
+        .enumerate()
+        .any(|(slot, &home)| home as usize != slot)
+    {
+        selector.func.slot_homes = homes;
     }
     for &block in tree.reverse_post_order() {
         selector.classify_block(block);
