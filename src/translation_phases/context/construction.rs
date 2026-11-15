@@ -81,6 +81,7 @@ impl<'tu> Context<'tu> {
             skipping_group: false,
             pending_errors: ArenaQueue::new_in(tu),
             error_readings: std::array::from_fn(|_| ArenaMap::with_hasher_in(FxBuildHasher, tu)),
+            recorded_errors: 0,
             suppressed_errors: 0,
             drained_errors: 0,
             relocated_errors: 0,

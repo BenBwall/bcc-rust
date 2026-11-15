@@ -64,25 +64,42 @@ impl<'tu> Context<'tu> {
         {
             return;
         }
-        self.record_reading(source);
         self.classified_error(source, error);
     }
 
-    /// Records the stretch of source being read as the preprocessor queues
-    /// a diagnostic about `source`, which says which reading of a file read
-    /// more than once it is in when no parser token's order can (see
-    /// [`Self::reading_segment`]). A range in the preprocessor's arena was
-    /// formed while that stretch was read; the parser's ranges say where
-    /// they were read themselves.
-    pub(crate) fn record_reading(&mut self, source: SourceVectors) {
-        if source.length() != 0
-            && SourceArena::decode(source).0 == SourceArena::Preprocessor
-            && let Some(segment) = self.source_map.reading()
-        {
-            _ = self.error_readings[SourceArena::Preprocessor as usize]
-                .entry(source)
-                .or_insert(segment);
+    /// Records the stretch of source being read for each diagnostic queued
+    /// since the last call, which says which reading of a file read more
+    /// than once it is in when no parser token's order can (see
+    /// [`Self::reading_segment`]). Every producer queues into
+    /// `pending_errors`, some through a borrow of that queue alone, so the
+    /// queue is read here rather than at each producer: before the stretch
+    /// being read changes, before compaction drops the preprocessor's
+    /// ranges, and before diagnostics leave the queue. A range in the
+    /// preprocessor's arena was formed while that stretch was read; the
+    /// parser's ranges say where they were read themselves.
+    #[inline]
+    pub(super) fn record_readings(&mut self) {
+        if self.recorded_errors < self.pending_errors.len() {
+            self.record_readings_from(self.recorded_errors);
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn record_readings_from(&mut self, first: usize) {
+        if let Some(segment) = self.source_map.reading() {
+            let readings = &mut self.error_readings[SourceArena::Preprocessor as usize];
+            for error in self.pending_errors.iter_mut_from(first) {
+                error.for_each_source_vectors_mut(&mut |source| {
+                    if source.length() != 0
+                        && SourceArena::decode(*source).0 == SourceArena::Preprocessor
+                    {
+                        _ = readings.entry(*source).or_insert(segment);
+                    }
+                });
+            }
+        }
+        self.recorded_errors = self.pending_errors.len();
     }
 
     /// A preprocessor diagnostic of `-Wpedantic` that its caller gave the
@@ -95,7 +112,6 @@ impl<'tu> Context<'tu> {
             error.error_type.is_extension(),
             error.source_vectors,
         ) {
-            self.record_reading(error.source_vectors);
             self.classified_extension(error.source_vectors, TranslationError::Preprocessing(error));
         }
     }
@@ -126,6 +142,7 @@ impl<'tu> Context<'tu> {
         loop {
             let error = self.pending_errors.pop_front()?;
             self.relocated_errors = self.relocated_errors.saturating_sub(1);
+            self.recorded_errors = self.recorded_errors.saturating_sub(1);
             if error.is_suppressed() {
                 self.suppressed_errors -= 1;
             } else {
@@ -211,6 +228,7 @@ impl<'tu> Context<'tu> {
     /// The quoted include extension treats the first quote after a backslash
     /// as the header delimiter, even though phase 3 lexed it as an escape.
     pub(crate) fn withdraw_quoted_header_lexer_error(&mut self, source: &SourceVector) {
+        self.record_readings();
         self.pending_errors.retain(|error| {
             !matches!(error.unclassified(), TranslationError::PreprocessorTokenizining(error) if error.is_unclosed_header_string_at(source))
         });
@@ -218,6 +236,7 @@ impl<'tu> Context<'tu> {
         // Rechecking already-retained ranges during the next compaction is
         // safe.
         self.relocated_errors = 0;
+        self.recorded_errors = self.pending_errors.len();
     }
 
     /// Error-severity diagnostics reported in every phase so far, whether
@@ -373,7 +392,10 @@ impl<'tu> Context<'tu> {
             self.suppressed_errors, 0,
             "pending-error splits happen only before parsing suppresses diagnostics"
         );
+        // The diagnostics split off keep the reading they were queued in.
+        self.record_readings();
         self.relocated_errors = self.relocated_errors.min(keep);
+        self.recorded_errors = keep;
         self.pending_errors.split_off(keep)
     }
 

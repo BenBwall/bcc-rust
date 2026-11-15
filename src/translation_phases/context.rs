@@ -220,6 +220,9 @@ pub(crate) struct Context<'tu> {
     /// reading of a file read more than once the diagnostic is in. Like the
     /// ranges, they follow their arena's lifetime.
     error_readings: [ArenaMap<'tu, SourceVectors, u32>; 3],
+    /// How many leading pending errors have had their reading recorded in
+    /// `error_readings`.
+    recorded_errors: usize,
     suppressed_errors: usize,
     /// Error-severity diagnostics already taken from `pending_errors`.
     drained_errors: usize,

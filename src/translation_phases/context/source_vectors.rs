@@ -54,6 +54,7 @@ impl Context<'_> {
     /// diagnostics can still refer to it. Those ranges move to the retained
     /// arena first, so diagnostics read the same vectors afterwards.
     pub(crate) fn compact_preprocessor_vectors(&mut self) {
+        self.record_readings();
         if self.source_vectors.0.is_empty() {
             return;
         }

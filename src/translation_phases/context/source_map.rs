@@ -38,12 +38,14 @@ impl Context<'_> {
         directive: Option<(u32, u32, u32)>,
         here: bool,
     ) {
+        self.record_readings();
         let tokens = Self::token_count(self.parser_token_vectors.len());
         self.source_map.enter(file, directive, here, tokens);
     }
 
     /// Records that the end of physical file `file` was read.
     pub(crate) fn leave_source_file(&mut self, file: u32) {
+        self.record_readings();
         let tokens = Self::token_count(self.parser_token_vectors.len());
         self.source_map.leave(file, tokens);
     }
