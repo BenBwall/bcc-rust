@@ -1,6 +1,6 @@
 In file included from context-headers/repeat-outer.h:1,
                  from sema-unused-order-nested-repeat-gcc.c:3:
-context-headers/repeat-inner.h:4:2: warning: #warning first reading
+context-headers/repeat-inner.h:4:2: warning: #warning first reading [-Wcpp]
     4 | #warning first reading
       |  ^~~~~~~
 In file included from context-headers/repeat-outer.h:1,

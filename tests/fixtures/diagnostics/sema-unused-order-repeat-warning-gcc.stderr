@@ -1,13 +1,13 @@
 In file included from sema-unused-order-repeat-warning-gcc.c:5:
-context-headers/every-warning.h:1:2: error: #warning every reading
+context-headers/every-warning.h:1:2: error: #warning every reading [-Werror=cpp]
     1 | #warning every reading
       |  ^~~~~~~
 In file included from sema-unused-order-repeat-warning-gcc.c:7:
-context-headers/every-warning.h:1:2: error: #warning every reading
+context-headers/every-warning.h:1:2: error: #warning every reading [-Werror=cpp]
     1 | #warning every reading
       |  ^~~~~~~
 In file included from sema-unused-order-repeat-warning-gcc.c:9:
-context-headers/every-warning.h:1:2: error: #warning every reading
+context-headers/every-warning.h:1:2: error: #warning every reading [-Werror=cpp]
     1 | #warning every reading
       |  ^~~~~~~
 sema-unused-order-repeat-warning-gcc.c: In function 'first':

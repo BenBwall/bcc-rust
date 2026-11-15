@@ -1,8 +1,8 @@
 In file included from context-repeat-readings-clang.c:4:
 In file included from ./context-headers/repeat-outer.h:1:
-./context-headers/repeat-inner.h:4:2: warning: #warning first reading
+./context-headers/repeat-inner.h:4:2: warning: first reading [-W#warnings]
     4 | #warning first reading
-      |  ^~~~~~~
+      |  ^
 In file included from context-repeat-readings-clang.c:6:
 In file included from ./context-headers/repeat-outer.h:1:
 ./context-headers/repeat-inner.h:2:2: error: #error second reading
