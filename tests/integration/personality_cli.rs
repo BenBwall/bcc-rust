@@ -11949,8 +11949,8 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         let directory = Directory::new();
         directory.write(
             "atomic.c",
-            "#include <stdatomic.h>\nint main(void) { atomic_int a = 1; atomic_fetch_add(&a, \
-             2); return atomic_load_explicit(&a, memory_order_seq_cst) + __ATOMIC_SEQ_CST; }\n",
+            "#include <stdatomic.h>\nint main(void) { atomic_int a = 1; atomic_fetch_add(&a, 2); \
+             return atomic_load_explicit(&a, memory_order_seq_cst) + __ATOMIC_SEQ_CST; }\n",
         );
         let output = directory.bcc("--tcc-mode", &["-run", "atomic.c"]);
         assert_eq!(output.status.code(), Some(8), "{}", stderr(&output));
