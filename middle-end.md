@@ -601,10 +601,12 @@ hidden objects, so a library bcc builds can be linked at startup or loaded
 with `dlopen`. `-ftls-model` names the least specific model allowed; a more
 specific implied model wins, as in LLVM. Windows targets use native TLS
 through `_tls_index` and the TEB, as Clang does for both MinGW and MSVC; the
-relocation flags do not change their code. The native back end generates
-executable code only: it uses the same executable models (local-exec for
-declarations too with `-ftls-model=local-exec`) and refuses `-fpic`,
-`-fPIC` and `-shared`.
+relocation flags do not change their code. The native back end uses the same
+executable models (local-exec for declarations too with
+`-ftls-model=local-exec`). In a shared library it uses local-dynamic for
+internal, hidden and protected definitions and general-dynamic for the rest,
+or initial-exec or local-exec when `-ftls-model` names them; as in GCC, a
+local-dynamic request reaches a preemptible symbol general-dynamic.
 
 ### Textual form
 
@@ -1668,7 +1670,8 @@ macro-expansion instruction selector over the post-ABI IR, a machine IR over
 virtual registers, linear-scan register allocation with fixed-register
 ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
 and AT&T assembly, which the bundled clang assembles, or ELF and COFF
-objects it encodes itself; the bundled clang links executables. It compiles
+objects it encodes itself; the bundled clang links executables and, from
+`-fpic` or `-fPIC` code, shared libraries (`-shared`). It compiles
 integer, pointer, `i128`, `f32` and `f64` code, `f80` on the x87 unit,
 `f128` through libgcc's soft-float routines (`isel/quad.rs`), `f16` and
 `bf16` in SSE registers with libgcc's `__extendhfsf2`,
