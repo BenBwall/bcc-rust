@@ -7,8 +7,9 @@
 //!  Win64 home area            CFA .. CFA + 32
 //!  return address             CFA - 8
 //!  callee-saved pushes        8 bytes each (`%rbp` among them with a frame pointer;
-//!                             first, at CFA - 16, when the frame address is taken;
-//!                             on Win64 the frame address is 0(%rsp) instead)
+//!                             first, at CFA - 16, with a System V frame pointer or
+//!                             when the frame address is taken; on Win64 the frame
+//!                             address is 0(%rsp) instead)
 //!  stack slots                each at its alignment (at most 16)
 //!  register save area         System V variadic functions: 176 bytes
 //!  Win64 SSE saves            16 bytes each for `%xmm6`-`%xmm15`
@@ -17,9 +18,16 @@
 //! ```
 //!
 //! A function whose `%rsp` moves at run time (`dyn_alloca`) keeps a frame
-//! pointer: `%rbp` is set to `%rsp` right after the prologue's allocation, so
-//! every fixed object keeps its offset from `%rbp`, while outgoing arguments
-//! stay at the bottom of the current `%rsp`. When the function calls, has a
+//! pointer, and so does every function but a naked one under
+//! `-fno-omit-frame-pointer`. On System V it links the frames as GCC's
+//! does: `%rbp` is pushed first and set to `%rsp` right after that push, so
+//! it points at the caller's `%rbp` with the return address above it, and
+//! `__builtin_frame_address (1)` and its outer levels follow the chain (GCC
+//! manual, "Return Address"). On Win64 `%rbp` is set to `%rsp` right after
+//! the prologue's allocation, the frame its unwind information names. Where
+//! `%rsp` moves, every fixed object keeps its offset from `%rbp`, while
+//! outgoing arguments stay at the bottom of the current `%rsp`; otherwise
+//! the frame is addressed from `%rsp`. When the function calls, has a
 //! 16-byte-aligned object or allocates dynamically, the size subtracted
 //! after the pushes makes `%rsp` a multiple of 16: at entry `%rsp + 8` is one
 //! (psABI §3.2.2; Microsoft Learn, "x64 stack usage").
@@ -90,6 +98,11 @@ pub(crate) const REGISTER_SAVE_BYTES: u32 = 6 * 8 + 8 * 16;
 const MAX_DISPLACEMENT: u64 = 0x7FFF_FFFF;
 
 /// A laid-out frame.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Whether `%rbp` addresses the frame, links it, and whether it is in the red zone or \
+              Win64's are separate facts of the layout, in any combination."
+)]
 pub(crate) struct Frame<'a> {
     /// The callee-saved general registers the prologue pushes, in push
     /// order.
@@ -101,6 +114,11 @@ pub(crate) struct Frame<'a> {
     pub(crate) size:      u32,
     /// Whether `%rbp` addresses the fixed frame.
     pub(crate) rbp_based: bool,
+    /// Whether `%rbp` links the frames, as GCC's frame pointers do: the
+    /// prologue pushes it first and sets it to the slot it was saved in,
+    /// so each frame address holds the caller's, and the return address is
+    /// the word above it.
+    pub(crate) chain:     bool,
     /// The alignment the prologue rounds `%rsp` down to after setting
     /// `%rbp`, for an argument copy aligned above 16 bytes; 0 for none.
     pub(crate) realign:   u32,
@@ -156,17 +174,32 @@ impl<'a> Frame<'a> {
         if func.entry == EntryConvention::Interrupt {
             written = written.with(PReg::Rax);
         }
-        let frame_pointer = func.dynamic;
+        let frame_pointer = func.frame_pointer();
+        // A System V frame pointer links the frames: it addresses the slot
+        // its push saved the caller's in. A handler's addresses its aligned
+        // frame instead, and Win64's the frame its unwind information names.
+        let chain = frame_pointer
+            && conv.kind == ConvKind::SystemV
+            && func.entry != EntryConvention::Interrupt;
+        // Objects are addressed from `%rbp` when `%rsp` moves under them;
+        // a Win64 frame pointer always addresses them, as its unwind
+        // information says.
+        let rbp_based = func.dynamic || (frame_pointer && !chain);
+        let first_push = if chain {
+            Some(PReg::Rbp)
+        } else {
+            func.first_push
+        };
         let mut saved = ArenaVec::new_in(arena);
         let mut xmm = ArenaVec::new_in(arena);
         // The frame address is where a frame pointer saves the caller's
         // `%rbp`, so that register is pushed first.
-        if let Some(register) = func.first_push {
+        if let Some(register) = first_push {
             saved.push(register);
         }
         for register in PReg::ALL {
             let save = preserved.contains(register)
-                && func.first_push != Some(register)
+                && first_push != Some(register)
                 && (written.contains(register) || (frame_pointer && register == PReg::Rbp));
             match (save, register.class()) {
                 | (true, RegClass::Gpr) => saved.push(register),
@@ -230,7 +263,7 @@ impl<'a> Frame<'a> {
             && size > 0
             && size <= u64::from(conv.red_zone)
             && !func.calls
-            && !frame_pointer
+            && !rbp_based
             && !func.register_save
             && func.slot_align <= 16
             && saved_xmm.is_empty()
@@ -245,7 +278,8 @@ impl<'a> Frame<'a> {
             saved,
             saved_xmm: saved_xmm_offsets,
             size: narrow(size),
-            rbp_based: frame_pointer,
+            rbp_based,
+            chain,
             realign: if func.outgoing_align > 16 {
                 u32::try_from(func.outgoing_align).unwrap_or(4096)
             } else {
@@ -288,8 +322,21 @@ impl<'a> Frame<'a> {
             | FrameObject::FrameAddress if self.win64 => 0,
             | FrameObject::FrameAddress => self.home - 16,
         };
-        let base = if self.rbp_based { PReg::Rbp } else { PReg::Rsp };
-        (base, i64::from(offset) - i64::from(self.allocated_below()))
+        if self.rbp_based {
+            (PReg::Rbp, i64::from(offset) - i64::from(self.rbp_offset()))
+        } else {
+            (
+                PReg::Rsp,
+                i64::from(offset) - i64::from(self.allocated_below()),
+            )
+        }
+    }
+
+    /// The distance from `%rsp` after the prologue (before the red zone's
+    /// adjustment) up to where `%rbp` points: the caller's saved `%rbp` in
+    /// a linked frame, otherwise none, since `%rbp` copies `%rsp` there.
+    pub(crate) fn rbp_offset(&self) -> u32 {
+        if self.chain { self.home - 16 } else { 0 }
     }
 
     /// The bytes of the frame below `%rsp` as the function runs: the frame's

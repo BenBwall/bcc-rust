@@ -12,12 +12,15 @@
 //! A Windows frame of 4096 bytes or more probes its pages through
 //! `___chkstk_ms` (MinGW) or `__chkstk` (MSVC) before moving `%rsp`
 //! ("x64 stack usage"), as Clang does. Win64's callee-saved SSE registers
-//! are saved with `movaps` after the allocation (`.seh_savexmm`). A function
-//! whose stack moves sets `%rbp` to `%rsp` after the allocation
-//! (`.cfi_def_cfa_register`, `.seh_setframe %rbp, 0`) and its epilogue
-//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form. A
-//! System V leaf frame in the red zone (`frame.rs`) needs neither the `sub`
-//! nor the `add`, and its CFA stays where the pushes left it.
+//! are saved with `movaps` after the allocation (`.seh_savexmm`). A Win64
+//! function whose stack moves sets `%rbp` to `%rsp` after the allocation
+//! (`.seh_setframe %rbp, 0`) and its epilogue starts with `lea size(%rbp),
+//! %rsp`, the frame-pointer epilogue form. A System V frame pointer is set
+//! right after its push, first (`.cfi_def_cfa_register %rbp`), and the CFA
+//! returns to `%rsp` only when the epilogue pops it, as in GCC's and Clang's
+//! epilogues. A System V leaf frame in the red zone (`frame.rs`) needs
+//! neither the `sub` nor the `add`, and its CFA stays where the pushes left
+//! it.
 //!
 //! Each function's read-only constants follow it in `.rodata` (`.rdata` on
 //! COFF), 16 bytes each so that `xorps` may read them.
@@ -528,11 +531,14 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     fn prologue(&mut self, frame: &Frame<'_>) -> fmt::Result {
         let size = frame.allocation();
         let mut cfa = 8;
-        for &register in &frame.saved {
+        for (index, &register) in frame.saved.iter().enumerate() {
             writeln!(self.out, "\tpushq\t%{}", register.name(Width::B64))?;
             cfa += 8;
             if self.elf {
-                writeln!(self.out, "\t.cfi_def_cfa_offset {cfa}")?;
+                // Once `%rbp` links the frame, the CFA is 16 bytes above it.
+                if !(frame.chain && index > 0) {
+                    writeln!(self.out, "\t.cfi_def_cfa_offset {cfa}")?;
+                }
                 writeln!(
                     self.out,
                     "\t.cfi_offset %{}, -{cfa}",
@@ -540,6 +546,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 )?;
             } else {
                 writeln!(self.out, "\t.seh_pushreg %{}", register.name(Width::B64))?;
+            }
+            if frame.chain && index == 0 {
+                writeln!(self.out, "\tmovq\t%rsp, %rbp")?;
+                writeln!(self.out, "\t.cfi_def_cfa_register %rbp")?;
             }
         }
         if size > 0 {
@@ -555,10 +565,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             } else {
                 writeln!(self.out, "\tsubq\t${size}, %rsp")?;
             }
-            if self.elf {
-                writeln!(self.out, "\t.cfi_def_cfa_offset {}", frame.cfa_offset())?;
-            } else {
+            if !self.elf {
                 writeln!(self.out, "\t.seh_stackalloc {size}")?;
+            } else if !frame.chain {
+                writeln!(self.out, "\t.cfi_def_cfa_offset {}", frame.cfa_offset())?;
             }
         }
         for &(register, offset) in &frame.saved_xmm {
@@ -568,7 +578,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(self.out, "\t.seh_savexmm %{name}, {offset}")?;
             }
         }
-        if frame.rbp_based {
+        if frame.rbp_based && !frame.chain {
             writeln!(self.out, "\tmovq\t%rsp, %rbp")?;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_register %rbp")?;
@@ -649,13 +659,21 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.cfi_remember_state")?;
         }
         let mut cfa = frame.cfa_offset();
-        let base = if frame.rbp_based { "rbp" } else { "rsp" };
+        let (base, shift) = if frame.rbp_based {
+            ("rbp", i64::from(frame.rbp_offset()))
+        } else {
+            ("rsp", 0)
+        };
         for &(register, offset) in &frame.saved_xmm {
             writeln!(
                 self.out,
-                "\tmovaps\t{offset}(%{base}), %{}",
+                "\tmovaps\t{}(%{base}), %{}",
+                i64::from(offset) - shift,
                 register.name(Width::B64)
             )?;
+        }
+        if frame.chain {
+            return self.linked_epilogue(frame);
         }
         if frame.rbp_based {
             writeln!(self.out, "\tleaq\t{size}(%rbp), %rsp")?;
@@ -682,6 +700,25 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.cfi_restore_state")?;
         }
         Ok(())
+    }
+
+    /// The rest of an epilogue whose `%rbp` links the frame: `%rsp` back to
+    /// the pushes, from `%rbp` if `%rsp` moved, then the pops. The CFA stays
+    /// 16 bytes above `%rbp` until its pop, as in GCC's and Clang's
+    /// epilogues.
+    fn linked_epilogue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        let others = 8 * (frame.saved.len() - 1);
+        if frame.rbp_based {
+            writeln!(self.out, "\tleaq\t-{others}(%rbp), %rsp")?;
+        } else if frame.allocation() > 0 {
+            writeln!(self.out, "\taddq\t${}, %rsp", frame.allocation())?;
+        }
+        for &register in frame.saved.iter().rev() {
+            writeln!(self.out, "\tpopq\t%{}", register.name(Width::B64))?;
+        }
+        writeln!(self.out, "\t.cfi_def_cfa %rsp, 8")?;
+        writeln!(self.out, "\tretq")?;
+        writeln!(self.out, "\t.cfi_restore_state")
     }
 
     /// One instruction; `next` is the block laid out after this one, which
@@ -1136,7 +1173,8 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(out, ".LSJ{uid}:")?;
                 // `%rbp` holds the frame address, a fixed distance above
                 // the address the frame's objects are relative to.
-                if frame.rbp_based {
+                // A linked `%rbp` is the frame address itself.
+                if frame.rbp_based && !frame.chain {
                     let (base, offset) = frame.address(FrameObject::FrameAddress);
                     debug_assert_eq!(base, PReg::Rbp, "an rbp-based frame");
                     writeln!(out, "\tleaq\t{}(%rbp), %rbp", -offset)?;

@@ -337,6 +337,7 @@ fn emit<'m>(
                     tls_model: code.tls_model,
                     indirect_returns_twice,
                     track_sources,
+                    keep_frame_pointer: code.hardening.keep_frame_pointer,
                 },
                 arena,
             )

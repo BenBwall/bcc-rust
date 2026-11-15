@@ -699,7 +699,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                         self.intrinsic("llvm.stackrestore", &[arg], &[api.ty(Type::Ptr)]),
                     // GCC's builtin non-local jumps, as Clang emits them.
                     | Opcode::SjljSetjmp => self.sjlj_setjmp(arg),
-                    | Opcode::SjljLongjmp => self.intrinsic("llvm.eh.sjlj.longjmp", &[arg], &[]),
+                    | Opcode::SjljLongjmp => self.sjlj_longjmp(arg),
                     | Opcode::AdjustTrampoline =>
                         self.intrinsic("llvm.adjust.trampoline", &[arg], &[]),
                     | Opcode::Fneg => api.fneg(arg),
@@ -1110,6 +1110,22 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             returns_twice(api, call, true);
         }
         call
+    }
+
+    /// `llvm.eh.sjlj.longjmp` on a `buffer` held in a register. The X86
+    /// back end reloads the frame pointer from word 0 first and the other
+    /// words after it, so a buffer in a frame that keeps a frame pointer,
+    /// addressed from it, would have its stack pointer and resume address
+    /// read through the new one; Clang 18 at `-O2 -fno-omit-frame-pointer`
+    /// jumps nowhere that way. An empty `asm` hands the address over in a
+    /// register. GNU extension: GCC manual, "Nonlocal Gotos".
+    fn sjlj_longjmp(&self, buffer: Val<'id>) -> Val<'id> {
+        let api = self.emitter.api;
+        let ptr = api.ty(Type::Ptr);
+        let ty = api.signature(ptr, &[ptr], false);
+        let register = api.inline_asm(ty, "", "=r,0", false);
+        let buffer = api.call(ty, register, &[buffer]);
+        self.intrinsic("llvm.eh.sjlj.longjmp", &[buffer], &[])
     }
 
     /// Whether an operation on values of `types` is emitted as a constrained
