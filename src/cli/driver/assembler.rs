@@ -13,12 +13,14 @@
     clippy::disallowed_types,
     reason = "The assembler's prefix is a startup string beside clap's arguments."
 )]
+use std::ffi::OsString;
+#[expect(
+    clippy::disallowed_types,
+    reason = "The assembler's search prefixes are startup paths beside clap's arguments."
+)]
+use std::path::PathBuf;
 use std::{
-    ffi::OsString,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::Path,
     sync::atomic::{
         AtomicBool,
         Ordering,
