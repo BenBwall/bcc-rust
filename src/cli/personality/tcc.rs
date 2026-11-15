@@ -683,7 +683,7 @@ impl Parser<'_> {
             | "w" => state.options.push("-w".into()),
             | "O" => state
                 .options
-                .push(format!("-O{}", tcc_optimization_level(&value_text)).into()),
+                .push(format!("-O{}", tcc_optimization_level(value_text)).into()),
             | "P" => state.line_markers = if value_text.starts_with('1') { 2 } else { 1 },
             | "M" | "MM" => {
                 state.just_dependencies = true;
