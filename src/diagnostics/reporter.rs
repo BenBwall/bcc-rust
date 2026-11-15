@@ -41,8 +41,9 @@ use crate::{
 /// into the parser error just before it when no input was consumed between
 /// them, otherwise into a lexing or preprocessing error at that place; a
 /// preprocessing error into the preprocessing error just before it. The
-/// parser and the preprocessor are considered separately. Semantic errors
-/// never fold.
+/// parser and the preprocessor are considered separately. Only errors in the
+/// input's syntax fold ([`TranslationError::may_fold`]): a semantic error, an
+/// extension report or a warning made an error never does.
 ///
 /// Pending diagnostics are built in the translation-unit arena (`'tu`). The
 /// pending list, the folding map, and the locations live in the reporter's
@@ -93,14 +94,11 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
                     .map(|source| (source.source_file_index, u32::MAX)),
             },
         };
-        // Semantic analysis reports each mistake once, so its errors at one
-        // place are different mistakes, as when `-Werror` makes a warning
-        // about a declaration an error beside one about its initializer.
-        let (parser, consumed, foldable) = match error {
-            | TranslationError::Parsing(error) => (true, error.consumed_tokens, error.may_fold()),
-            | TranslationError::Semantic(_) => (false, 0, false),
-            | _ => (false, 0, true),
+        let (parser, consumed) = match error {
+            | TranslationError::Parsing(error) => (true, error.consumed_tokens),
+            | _ => (false, 0),
         };
+        let foldable = error.may_fold();
         let empty_translation_unit =
             matches!(error, TranslationError::Parsing(error) if error.is_empty_translation_unit());
         let target =
