@@ -511,9 +511,12 @@ fn highlights_cover_the_invocations_their_ends_come_from() {
     );
     assert_eq!(
         context.highlight_vectors(written, &scratch),
-        [argument.clone()]
+        std::slice::from_ref(&argument)
     );
-    assert_eq!(context.highlight_vectors(plain, &scratch), [after.clone()]);
+    assert_eq!(
+        context.highlight_vectors(plain, &scratch),
+        std::slice::from_ref(&after)
+    );
     let operand = context.merge_vector_list(&[body, written, plain]);
     assert_eq!(
         context.highlight_vectors(operand, &scratch),
