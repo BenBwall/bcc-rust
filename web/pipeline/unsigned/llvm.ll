@@ -7,7 +7,7 @@ target triple = "x86_64-unknown-linux-gnu"
 @.str.1 = internal constant [27 x i8] c"the countdown ended at %u\0A\00", align 1
 @.str.2 = internal constant [42 x i8] c"%zu bytes, sum %u, -1 < 1u is %d, %u, %u\0A\00", align 1
 
-define i32 @main() {
+define i32 @main() #0 {
 block0:
   %slot0 = alloca [12 x i8], align 4
   %v2 = sub i32 2, 3
@@ -57,6 +57,8 @@ block7:                                           ; preds = %block4
 }
 
 declare i32 @printf(ptr noundef, ...)
+
+attributes #0 = { "frame-pointer"="all" }
 
 !llvm.module.flags = !{!0, !1}
 

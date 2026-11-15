@@ -3141,7 +3141,7 @@ int main(void) { char str[] = "__builtin_frame_address"; char *fp0 = __builtin_f
                 false,
             ),
             (
-                "int main(void){__asm__(\"\" :: \"t\"(1.0L));return 0;}",
+                "int main(void){__asm__(\"\" :: \"y\"(1));return 0;}",
                 vec!["--emit=ir"],
                 1,
                 false,
@@ -3419,7 +3419,7 @@ int main(void) { char str[] = "__builtin_frame_address"; char *fp0 = __builtin_f
 
     #[test]
     fn unsupported_constructs_and_errors_fail_code_generation_only() {
-        let source = "int main(void) {\n  __asm__(\"\" :: \"t\"(1.0L));\n  return 0;\n}\n";
+        let source = "int main(void) {\n  __asm__(\"\" :: \"y\"(1));\n  return 0;\n}\n";
         for flags in [
             &["--interpret"][..],
             &["--emit=ir"][..],
@@ -4064,7 +4064,7 @@ int main(void) { printf("main\n"); return zero; }
             ("semantics", "int value = not_declared;\n"),
             (
                 "lowering",
-                "int value(void) { __asm__(\"\" :: \"t\"(1.0L)); return 0; }\n",
+                "int value(void) { __asm__(\"\" :: \"y\"(1)); return 0; }\n",
             ),
             (
                 "backend",

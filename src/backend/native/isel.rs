@@ -284,6 +284,11 @@ fn lay_out_added_blocks<'a>(
 
 /// What selection needs to know beyond the function and the target.
 #[derive(Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Shared-library code, returns-twice calls, source notes and frame pointers are \
+              independent options."
+)]
 pub(crate) struct SelectOptions {
     /// Whether the code is for a shared library (ELF `-fpic` or `-fPIC`),
     /// which reaches preemptible symbols through the GOT and PLT.

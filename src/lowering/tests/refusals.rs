@@ -8,7 +8,7 @@ use crate::diagnostics::ToDiagnostic;
 fn asm_collision_keeps_checking_later_function_bodies() {
     let errors = lower(
         "int a __asm__(\"same\")=1; int b __asm__(\"same\")=2;\nint f(int n){{static int same; \
-         int *p=&same;}int a[n]; return 0;}\nint g(void){__asm__(\"\" :: \"t\"(1.0L));return 1;}",
+         int *p=&same;}int a[n]; return 0;}\nint g(void){__asm__(\"\" :: \"y\"(1));return 1;}",
     )
     .unwrap_err();
     assert_eq!(errors.len(), 2, "{errors:?}");
@@ -57,7 +57,7 @@ fn unsupported_constructs_name_themselves() {
             "atomic complex values",
         ),
         (
-            "void f(void) { __asm__(\"\" :: \"t\"(1.0L)); }",
+            "void f(void) { __asm__(\"\" :: \"y\"(1)); }",
             "inline assembly operands of this register class or type",
         ),
     ];
@@ -83,7 +83,7 @@ fn every_failing_function_is_reported() {
     let errors = lower(
         "double _Complex f(void) { _Atomic(double _Complex) z; return z; }
 int ok(int a) { return a; }
-int g(int n) { __asm__(\"\" :: \"t\"(1.0L)); return n; }",
+int g(int n) { __asm__(\"\" :: \"y\"(1)); return n; }",
     )
     .expect_err("two functions are unsupported");
     assert_eq!(errors.len(), 2, "{errors:?}");
@@ -92,7 +92,7 @@ int g(int n) { __asm__(\"\" :: \"t\"(1.0L)); return n; }",
 #[test]
 fn errors_point_at_their_syntax_and_render() {
     let tu = Bump::new();
-    let source = tu.alloc_str("int f(int n) {\n  __asm__(\"\" :: \"t\"(1.0L));\n  return 0;\n}\n");
+    let source = tu.alloc_str("int f(int n) {\n  __asm__(\"\" :: \"y\"(1));\n  return 0;\n}\n");
     let mut context = Context::new(&tu);
     let unit = parse_translation_unit(
         &mut context,
