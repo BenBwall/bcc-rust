@@ -182,7 +182,7 @@ mod tests {
         let gcc = bcc(&["--gcc-mode", "-fsyntax-only"], program);
         assert!(gcc.status.success(), "{}", stderr(&gcc));
         assert!(
-            stderr(&gcc).contains("warning: attribute ignored"),
+            stderr(&gcc).contains("warning: 'target' attribute ignored"),
             "{}",
             stderr(&gcc)
         );
