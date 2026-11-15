@@ -1652,6 +1652,7 @@ impl PreprocessorErrorType<'_> {
             | Self::ElseDirectiveWithoutIfDirective => "#else without #if",
             | Self::ElifDirectiveWithoutIfDirective(name) =>
                 format_in!(arena, "#{name} without #if"),
+            | Self::ConditionalArmAfterElse(name) => format_in!(arena, "#{name} after #else"),
             | Self::DuplicateMacroParameter(name) =>
                 format_in!(arena, "duplicate macro parameter name '{name}'"),
             | Self::HashOperatorMustBeFollowedByAMacroArgument(_)
@@ -1703,6 +1704,19 @@ impl ToDiagnostic for PreprocessorError<'_> {
             })
             .at(self.severity(), source);
         diagnostic.fatal |= fatal;
+        // Clang marks only the place of a conditional directive that no
+        // open conditional can take. Clang 23, `DiagnosticLexKinds.td`:
+        // `err_pp_endif_without_if`, `pp_err_else_without_if`,
+        // `pp_err_elif_without_if` and `pp_err_*_after_else`.
+        diagnostic.point |= context.configuration.diagnostic_format()
+            == crate::configuration::DiagnosticFormat::Clang
+            && matches!(
+                self.error_type,
+                PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
+                    | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
+                    | PreprocessorErrorType::ElifDirectiveWithoutIfDirective(_)
+                    | PreprocessorErrorType::ConditionalArmAfterElse(_)
+            );
         if let PreprocessorErrorType::DeprecatedMacro(deprecation) = &self.error_type {
             for expansion in deprecation.expansions {
                 diagnostic = diagnostic.secondary_segments(

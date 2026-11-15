@@ -1,0 +1,16 @@
+pp-conditional-arms-clang.c:3:2: error: #else without #if
+    3 | #else
+      |  ^
+pp-conditional-arms-clang.c:4:2: error: #elif without #if
+    4 | #elif 1
+      |  ^
+pp-conditional-arms-clang.c:5:2: error: #endif without #if
+    5 | #endif
+      |  ^
+pp-conditional-arms-clang.c:8:2: error: #elif after #else
+    8 | #elif 2
+      |  ^
+pp-conditional-arms-clang.c:9:2: error: #else after #else
+    9 | #else
+      |  ^
+5 errors generated.
