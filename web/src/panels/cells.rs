@@ -897,7 +897,7 @@ mod tests {
             };
             let key = (7, "s".to_owned());
             toggle.set(&key, true, 33);
-            assert_eq!(toggle.opened.get_untracked(), [key.clone()]);
+            assert_eq!(toggle.opened.get_untracked(), std::slice::from_ref(&key));
             assert_eq!(toggle.focus.get_value().as_deref(), Some("7:s"));
             assert_eq!(toggle.announcement.get_untracked(), "s opened into its 33 byte cells");
             // Pressed twice before a redraw, the string stays open once.
@@ -905,7 +905,7 @@ mod tests {
             assert_eq!(toggle.opened.get_untracked().len(), 1);
             toggle.focus.set_value(None);
             toggle.set(&key, false, 33);
-            assert!(toggle.opened.get_untracked().is_empty());
+            assert_eq!(toggle.opened.get_untracked(), Vec::<(usize, String)>::new());
             assert_eq!(toggle.focus.get_value().as_deref(), Some("7:s"));
             assert_eq!(toggle.announcement.get_untracked(), "s shown as one cell of its characters");
         });
