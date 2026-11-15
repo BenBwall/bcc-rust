@@ -290,6 +290,12 @@ pub(crate) struct Function<'ir> {
     pub(crate) inline_copy_of:     Option<&'ir str>,
     /// How the machine enters and leaves the function.
     pub(crate) entry:              EntryConvention,
+    /// x86 `target`: the features this function's code may use, where they
+    /// differ from the command line's. The inliner expands only a callee
+    /// whose features the caller has, and the LLVM back end gives them to
+    /// LLVM as the function's own. GNU extension: GCC manual, "x86 Function
+    /// Attributes", `target`.
+    pub(crate) target:             Option<crate::target::CodeFeatures>,
 }
 
 /// How the machine enters and leaves a function, beyond the signature the

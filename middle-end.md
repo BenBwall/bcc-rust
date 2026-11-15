@@ -2103,7 +2103,7 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
 `lowering/cleanup.rs`):
 
 - **Textual form.** Function headers end in
-  `linkage [align N] [returns_twice] [noinline|alwaysinline] [inline_copy_of @name] [interrupt|preserve_registers|naked] [hidden|protected] [section "name"] [used] [alias @target]`,
+  `linkage [align N] [returns_twice] [noinline|alwaysinline] [inline_copy_of @name] [interrupt|preserve_registers|naked] [target "+f,-g,arch=cpu,tune=cpu"] [hidden|protected] [section "name"] [used] [alias @target]`,
   global headers in `linkage [thread_local] [constant] size N, align N
   [hidden|protected] [section "name"] [used] [alias @target]`. Module lines `constructor @f priority N` and
   `destructor @f priority N` follow the globals. The verifier checks alias
@@ -2759,12 +2759,14 @@ passes one-lane `float` and `double` vectors as
 values and others by reference and `sret`, where wasi-sdk's Clang splits
 them into lanes.
 
-A `target` attribute changes nothing about a function's code, so such a
-function keeps the command line's convention. Where GCC or Clang would pass a
-vector of 32 bytes or more otherwise (the attribute turns AVX on or off, or an
-option bcc only warns about such as `-mavx512f`), `check_foreign_vectors` refuses
-it for a function another object can reach, and a call of one. `static`
-functions, whose callers are all bcc's, stay as they are.
+A function with a `target` attribute keeps the command line's convention,
+although its code takes the attribute's features ("x86 `target` attributes"
+below). Where GCC or Clang would pass a vector of 32 bytes or more otherwise (the
+attribute turns AVX on or off, or an option bcc only warns about such as
+`-mavx512f`), `check_foreign_vectors` refuses it for a function another object
+can reach, and a call of one. `static` functions, whose callers are all bcc's,
+stay as they are, unless the attribute turns AVX off or AVX-512 on under the
+command line's AVX, where LLVM would give their vectors other registers.
 
 The native back end writes no AVX instructions, so it refuses a signature
 with a YMM register (`Construct::VectorRegister`). It returns the `f128`/`i128`
@@ -3304,3 +3306,52 @@ the other sanitizers.
 function), `local-bounds`, `implicit-conversion` and the other checks outside
 `undefined`; a `_BitInt` of a non-standard width, a GNU complex integer, a
 vector, a 16-bit floating type, and a floating conversion to a 128-bit integer.
+
+## x86 `target` attributes (2026-11-08)
+
+A function's `target("...")` attribute, read in semantic analysis
+(`language-standards.md`, "Attribute status"), gives the IR function its x86
+features where they differ from the command line's: `Function::target` holds a
+`target::CodeFeatures`, the features on and those explicitly off and the processors
+of `arch=` and `tune=`. The text form writes it after the entry keyword, as `target
+"+avx,+avx2,-sse4a,arch=haswell,tune=znver3"`, in feature-table order; the parser
+reads it back. Functions without the attribute have none, and the module's
+processor and features stay those of the target machine.
+
+**Lowering.** `lowering/target_features.rs` refuses, in emitted code: a direct call
+of an `always_inline` function whose features the caller lacks when either has the
+attribute, in Clang's or GCC's words; a call of an `__builtin_ia32_*` builtin whose
+measured feature the caller lacks; a function turning off x87, MMX, FXSR, SSE or SSE2,
+or asking for general registers only; and a `static` function whose vectors would
+move registers (above).
+
+**Optimizer.** The inliner expands a callee only into a caller whose features include
+the callee's, as LLVM's `areInlineCompatible` compares subtargets, except for an
+`always_inline` callee, which LLVM's always-inliner expands whatever the features and
+whose calls lowering has checked. A callee and caller of which only one has the
+attribute stay apart, which costs only speed: LLVM's inliner, at -O2, compares them
+exactly.
+
+**LLVM back end.** A defined function gets `"target-cpu"` for `arch=` (`x86-64` for a
+processor only GCC knows, whose features the list completes), `"tune-cpu"` for a
+`tune=` LLVM knows, and `"target-features"` listing every feature it has and every one
+it turns off, as Clang writes them, since LLVM reads a function's list in place of the
+target machine's. `-mgeneral-regs-only` and `-muintr` add their entries to the same
+list.
+
+**Native back end and interpreter.** Neither has instructions beyond the baseline, and
+a feature only permits instructions, so both run a `target` function's code as any
+other: the native back end writes baseline code for it, which is correct on every
+processor that has the features, and the interpreter computes it. What the features
+would change otherwise stays refused: the native back end's refusal of a signature with
+a YMM register, and every x86 builtin, which lowering refuses whatever the features.
+
+**Evidence.** `src/target/x86_features/tests.rs` covers each compiler's reading;
+`tests/integration/target_attribute.rs` the diagnostics (against the pinned Clang
+live), the refused calls, the LLVM attributes, redeclarations and the inliner; and
+`tests/fixtures/programs/target_attribute.c` calls AVX2 and BMI2 functions where
+`__builtin_cpu_supports` finds the features, under both identities, interpreted, at
+-O0 and -O2 and through the native back end, against the host GCC's build. zstd 1.5.6
+builds under `--gcc-mode` and `--clang-mode` without warnings about `target`; its
+`*_bmi2` functions use `shrx`, `shlx` and `tzcnt` and run on a BMI2 processor, and
+`tests/playTests.sh` passes.

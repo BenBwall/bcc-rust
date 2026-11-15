@@ -177,6 +177,12 @@ then refuses a frame whose combined outgoing arguments, spills, locals and
 incoming stack parameters would still need offsets beyond 32-bit
 displacements.
 
+A function's x86 `target` features (`Function::target`, from GCC's and Clang's
+`target` attribute) are not refused: they only permit instructions, and the
+baseline code this back end writes for such a function runs on every processor
+that has them. Lowering has refused what they would change otherwise
+(`middle-end.md`, "x86 `target` attributes").
+
 ### Legalization
 
 The post-ABI IR is already close to the machine: integers of 1-64 bits,

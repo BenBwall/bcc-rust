@@ -2569,6 +2569,11 @@ pass lives in `attributes.rs` and `attributes/`:
   function alignment merge into `EntityAttributes` keyed by `EntityId`; the
   correspondence retains the linked-name entity map so lowering can find a
   binding's entity (`SemanticTranslationUnit::entity_attributes`).
+  An x86 `target` attribute is read over the command line's features into
+  `EntityAttributes::target` (`attributes/function_target.rs`), merged over
+  the declarations as the selected compiler merges them: Clang's first per
+  declaration, inherited, another text refused as multiversioning; GCC's
+  every one per declaration, the latest declaration's replacing.
 - **Completion.** `finish_attributes` runs after translation-unit definitions
   are final: alias requests resolve through chains to a definition by C name
   (`SymbolFacts::aliases`), with target, kind, cycle and type checks; alias
