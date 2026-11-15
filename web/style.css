@@ -669,7 +669,7 @@
   .cell-run { display: flex; flex: none; gap: 1px; }
   /* A cell's width follows its size in bytes: 44px for a char, 68px for an
      int, 100px for a long or a pointer. */
-  .cell { display: flex; flex: none; flex-direction: column; justify-content: space-between; min-width: calc(36px + var(--bytes, 4) * 8px); height: 62px; padding: 4px 7px; background: var(--cell); color: var(--ink-3); font-size: 10px; }
+  .cell { display: flex; flex: none; flex-direction: column; justify-content: space-between; min-width: calc(36px + var(--bytes, 4) * 8px); min-height: 62px; padding: 4px 7px; background: var(--cell); color: var(--ink-3); font-size: 10px; }
   .cell-bytes { margin-left: 5px; opacity: .8; }
   .cell-value { color: var(--ink); font-size: 20px; line-height: 1; font-weight: 700; white-space: nowrap; }
   .cell.is-long .cell-value { font-size: 13px; line-height: 20px; }
@@ -689,6 +689,48 @@
   .cell.is-padding .cell-value { color: var(--ink-3); font-size: 13px; font-weight: 400; }
   .cell-frame.is-static .cell-frame-name { background: var(--ink-2); }
   .cell.is-ended .cell-value { text-decoration: line-through; color: var(--ink-3); }
+  /* A string: one cell of its characters, a column per byte over an index
+     ruler (a tick per byte, its index every eighth), the null character
+     boxed as the byte it is. It wraps before it outgrows the strip, so a
+     phone shows all of it; the bytes the step used are marked in place, as
+     whole cells are. */
+  .cell.is-string { gap: 3px; }
+  .cell.is-string .cell-type, .cell.is-string-head .cell-type { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .string-bytes {
+    display: flex; flex-wrap: wrap; row-gap: 3px; max-width: min(60ch, calc(100vw - 104px));
+    color: var(--ink); font: 400 13px/1 var(--font-mono);
+  }
+  .string-word { display: flex; }
+  .string-byte { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 1ch; padding-bottom: 11px; }
+  .string-char { height: 19px; line-height: 19px; white-space: pre; border-bottom: 1px solid var(--ink-3); }
+  /* The ruler: a tick at each byte's start, a longer one with the index at
+     every eighth. */
+  .string-byte::before { content: ""; position: absolute; left: 0; top: 19px; width: 1px; height: 3px; background: var(--ink-3); }
+  .string-byte.is-ruled::before { height: 7px; }
+  .string-index { position: absolute; left: 3px; top: 21px; font-size: 9px; line-height: 9px; color: var(--ink-3); white-space: nowrap; }
+  .string-byte.is-escape .string-char { font-size: 10.5px; color: var(--ink-2); }
+  .string-byte.is-null .string-char { margin-left: 2px; padding: 0 2px; height: 17px; line-height: 15px; margin-top: 1px; border: 1px solid currentColor; font-size: 10.5px; }
+  .string-byte.is-indeterminate .string-char { width: 1ch; background: repeating-linear-gradient(45deg, var(--ink-3) 0 1px, transparent 1px 5px); }
+  .string-byte.is-pointed .string-char { box-shadow: inset 0 2px 0 var(--flow-ink); }
+  /* Bytes the step used, where it did not use the whole string. */
+  .cell.is-string:not([data-access]) .string-byte[data-access="write"] .string-char,
+  .cell.is-string:not([data-access]) .string-byte[data-access="create"] .string-char { background: var(--accent); color: var(--on-accent); }
+  .cell.is-string:not([data-access]) .string-byte[data-access="read"] .string-char { box-shadow: inset 0 -3px 0 var(--flow-ink); }
+  .cell.is-string:not([data-access]) .string-byte:is([data-access="designate"], [data-access="address"]) .string-char { outline: 1.5px dashed var(--ink); outline-offset: -1px; }
+  /* Lit as a whole, the cell takes the accent and its ruler the cell's
+     dark ink. */
+  .cell.is-string:is([data-access="write"], [data-access="create"]) .string-bytes { color: var(--on-accent); }
+  .cell.is-string:is([data-access="write"], [data-access="create"]) .string-char { border-color: currentColor; color: inherit; }
+  .cell.is-string:is([data-access="write"], [data-access="create"]) .string-byte::before { background: currentColor; }
+  .cell.is-string:is([data-access="write"], [data-access="create"]) .string-index { color: #3a1406; }
+  /* The key that opens a string into its byte cells, and folds them back. */
+  .cell-open {
+    flex: none; padding: 1px 5px; border: 1px solid currentColor; background: transparent; color: inherit;
+    font: 700 9px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+  }
+  .cell-open:hover { color: var(--accent-ink); }
+  .cell-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .cell.is-string-head { min-width: 0; align-items: flex-start; }
 
   /* The note hangs off the playhead. */
   .notes-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 1px; background: var(--seam); border-top: 3px solid var(--accent); }
@@ -811,12 +853,14 @@
 
   .recent { margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--seam); }
   .recent[hidden] { display: none; }
-  .recent > summary { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 28px; cursor: pointer; list-style: none; }
+  /* The latest title wraps under the heading rather than losing its end
+     to an ellipsis on a phone. */
+  .recent > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; min-height: 28px; padding: 5px 0; cursor: pointer; list-style: none; }
   .recent > summary::-webkit-details-marker { display: none; }
   .recent > summary::before { content: "▸"; font-size: 10px; color: var(--ink-3); }
   .recent[open] > summary::before { content: "▾"; }
   .recent h3 { font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
-  .recent-latest { overflow: hidden; color: var(--ink-3); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+  .recent-latest { flex: 1 1 24ch; min-width: 0; color: var(--ink-3); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
   .recent[open] .recent-latest { display: none; }
   .recent ol { display: grid; margin-top: 6px; }
   .recent-step {
@@ -826,7 +870,7 @@
   .recent-step:hover { background: var(--device-2); color: var(--ink); }
   .recent-dot { display: none; }
   .recent-index { color: var(--ink-3); text-align: right; }
-  .recent-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recent-title { min-width: 0; line-height: 1.45; overflow-wrap: anywhere; }
 
   /* The standard's terms, with their definitions on hover or focus. */
   .nowrap { white-space: nowrap; }
