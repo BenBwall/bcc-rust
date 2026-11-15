@@ -379,6 +379,18 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     external_declaration_count: usize,
     limits: ParserLimits,
     resource_limit_reported: bool,
+    /// How the compound statement parsed last ended, which a function
+    /// definition records.
+    compound_end: CompoundEnd,
+}
+
+/// How a compound statement ended: at its `}`, or at the end of the input,
+/// which leaves it open.
+/// C99: §6.8.2 paragraph 1, p. 132; PDF p. 144.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompoundEnd {
+    Brace,
+    EndOfInput,
 }
 
 // Tests

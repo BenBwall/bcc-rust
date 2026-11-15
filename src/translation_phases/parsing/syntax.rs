@@ -73,6 +73,10 @@ pub(crate) struct FunctionDefinition<'tu> {
     pub(crate) body:                   &'tu Statement<'tu>,
     pub(crate) source_vectors:         SourceVectors,
     pub(crate) recovered:              bool,
+    /// Whether the body reached its `}`, which the end of the input can
+    /// leave out.
+    /// C99: §6.8.2 paragraph 1, p. 132; PDF p. 144.
+    pub(crate) closed:                 bool,
 }
 
 /// One source-ordered item in a compound statement.

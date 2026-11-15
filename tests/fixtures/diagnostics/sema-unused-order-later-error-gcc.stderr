@@ -1,0 +1,12 @@
+sema-unused-order-later-error-gcc.c: In function 'first':
+sema-unused-order-later-error-gcc.c:4:32: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    4 | void first(void) { typedef int T; }
+      |                                ^
+sema-unused-order-later-error-gcc.c: In function 'second':
+sema-unused-order-later-error-gcc.c:5:33: warning: typedef 'U' locally defined but not used [-Wunused-local-typedefs]
+    5 | void second(void) { typedef int U; } int on_its_line = ;
+      |                                 ^
+sema-unused-order-later-error-gcc.c: At top level:
+sema-unused-order-later-error-gcc.c:5:56: error: expected expression before ';' token
+    5 | void second(void) { typedef int U; } int on_its_line = ;
+      |                                                        ^

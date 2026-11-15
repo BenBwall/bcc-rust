@@ -46,6 +46,24 @@ pub(crate) struct SemanticError {
     /// a macro's body wrote it, which GCC reports and Clang notes, and the
     /// order of its tokens. Empty when it is `source_vectors`.
     pub(crate) origin:             SourceVectors,
+    /// Where it falls among the other diagnostics.
+    pub(crate) order:              ReportOrder,
+}
+
+/// Where a diagnostic falls among the others, which the reporter prints in
+/// source order: GCC reports some warnings later than the place they name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ReportOrder {
+    /// At the place it names.
+    #[default]
+    AtSite,
+    /// At this token, the closing brace of the scope GCC reports it on
+    /// leaving (`pop_scope` and `finish_function` in `c-decl.cc`).
+    After(SourceVectors),
+    /// After the whole unit, which GCC reports once it has parsed
+    /// (`c_parse_final_cleanups` in `c-decl.cc`, `analyze_functions` in
+    /// `cgraphunit.cc`).
+    UnitEnd,
 }
 
 /// What an excess initializer element lies beyond, as GCC and Clang word it.

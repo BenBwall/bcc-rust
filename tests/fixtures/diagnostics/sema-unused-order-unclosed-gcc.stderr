@@ -1,0 +1,8 @@
+sema-unused-order-unclosed-gcc.c: In function 'closed':
+sema-unused-order-unclosed-gcc.c:3:33: warning: typedef 'T' locally defined but not used [-Wunused-local-typedefs]
+    3 | void closed(void) { typedef int T; }
+      |                                 ^
+sema-unused-order-unclosed-gcc.c: At top level:
+sema-unused-order-unclosed-gcc.c:5:1: error: expected `}`, found end of file
+    5 | 
+      | ^

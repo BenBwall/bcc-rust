@@ -128,6 +128,7 @@ pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
     MachineEntryFault,
+    ReportOrder,
     SemanticError,
     SemanticErrorKind,
 };
@@ -2243,6 +2244,9 @@ struct Analyzer<'a, 'tu, 's> {
     /// The operands Clang underlines beside the caret of what is reported
     /// now; see [`Self::with_highlights`].
     highlights:              [SourceVectors; 2],
+    /// Where a diagnostic reported now falls among the others; see
+    /// [`Self::with_report_order`].
+    report_order:            ReportOrder,
     function_name:           Option<Identifier>,
     old_parameter_mode:      bool,
     /// Exceptional evaluation yields a variable array bound, not an error.

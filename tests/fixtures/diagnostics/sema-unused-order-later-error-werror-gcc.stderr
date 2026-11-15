@@ -1,0 +1,17 @@
+sema-unused-order-later-error-werror-gcc.c:3:2: error: #warning promoted
+    3 | #warning promoted
+      |  ^~~~~~~
+sema-unused-order-later-error-werror-gcc.c:5:56: error: expected expression before ';' token
+    5 | void second(void) { typedef int U; } int on_its_line = ;
+      |                                                        ^
+sema-unused-order-later-error-werror-gcc.c: In function 'first':
+sema-unused-order-later-error-werror-gcc.c:4:24: error: unused variable 'unused' [-Werror=unused-variable]
+    4 | void first(void) { int unused; typedef int T; }
+      |                        ^~~~~~
+sema-unused-order-later-error-werror-gcc.c:4:44: error: typedef 'T' locally defined but not used [-Werror=unused-local-typedefs]
+    4 | void first(void) { int unused; typedef int T; }
+      |                                            ^
+sema-unused-order-later-error-werror-gcc.c: In function 'second':
+sema-unused-order-later-error-werror-gcc.c:5:33: error: typedef 'U' locally defined but not used [-Werror=unused-local-typedefs]
+    5 | void second(void) { typedef int U; } int on_its_line = ;
+      |                                 ^

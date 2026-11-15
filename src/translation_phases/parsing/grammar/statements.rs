@@ -22,6 +22,7 @@ use crate::{
     translation_phases::{
         SourceVectors,
         parsing::{
+            CompoundEnd,
             Parser,
             errors::ParserErrorType,
             grammar::{
@@ -1079,11 +1080,13 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None),
                     None,
                 );
+                self.compound_end = CompoundEnd::EndOfInput;
                 break;
             };
             if is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace) {
                 sources.push(token.source_vectors);
                 self.consume_token();
+                self.compound_end = CompoundEnd::Brace;
                 break;
             }
             // C99 §6.8.1p1: `identifier :` begins a labeled statement even

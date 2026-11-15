@@ -24,6 +24,7 @@ use super::super::{
     DefinitionKind,
     InitOperation,
     InitializerPlan,
+    ReportOrder,
     Scalar,
     SemanticError,
     SemanticErrorKind,
@@ -120,6 +121,7 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
             previous: None,
             highlights: Default::default(),
             origin: initializer.source_vectors,
+            order: ReportOrder::AtSite,
         })]);
     }
 }

@@ -1,0 +1,19 @@
+In file included from context-repeat-readings-clang.c:4:
+In file included from ./context-headers/repeat-outer.h:1:
+./context-headers/repeat-inner.h:4:2: warning: #warning first reading
+    4 | #warning first reading
+      |  ^~~~~~~
+In file included from context-repeat-readings-clang.c:6:
+In file included from ./context-headers/repeat-outer.h:1:
+./context-headers/repeat-inner.h:2:2: error: #error second reading
+    2 | #error second reading
+      |  ^~~~~
+In file included from context-repeat-readings-clang.c:7:
+./context-headers/every-reading.h:1:2: error: #error every reading
+    1 | #error every reading
+      |  ^~~~~
+In file included from context-repeat-readings-clang.c:9:
+./context-headers/every-reading.h:1:2: error: #error every reading
+    1 | #error every reading
+      |  ^~~~~
+1 warning and 3 errors generated.
