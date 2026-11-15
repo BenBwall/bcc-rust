@@ -461,10 +461,7 @@ mod tests {
             "no-fpmath=387",
             "avx2,fpmath=sse+387",
         ] {
-            let output = bcc(
-                &["--compiler-identity=gcc", "-c", "-o", "/dev/null"],
-                &function(text),
-            );
+            let output = bcc(&["--compiler-identity=gcc", "--emit=llvm"], &function(text));
             assert!(!output.status.success(), "{text}");
             assert!(
                 stderr(&output).contains("asks for x87 floating-point arithmetic"),
@@ -473,14 +470,11 @@ mod tests {
             );
         }
         for text in ["fpmath=sse", "fpmath=387,fpmath=sse"] {
-            let output = bcc(
-                &["--compiler-identity=gcc", "-c", "-o", "/dev/null"],
-                &function(text),
-            );
+            let output = bcc(&["--compiler-identity=gcc", "--emit=llvm"], &function(text));
             assert!(output.status.success(), "{text}: {}", stderr(&output));
         }
         let output = bcc(
-            &["--compiler-identity=clang", "-c", "-o", "/dev/null"],
+            &["--compiler-identity=clang", "--emit=llvm"],
             &function("fpmath=387"),
         );
         assert!(output.status.success(), "{}", stderr(&output));
