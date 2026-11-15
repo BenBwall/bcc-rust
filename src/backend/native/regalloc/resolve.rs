@@ -17,6 +17,7 @@ use super::{
     intervals::{
         Interval,
         Loc,
+        Range,
     },
     liveness::Liveness,
 };
@@ -24,6 +25,7 @@ use crate::{
     backend::native::mir::{
         MBlock,
         MFunction,
+        MInst,
         VReg,
     },
     ir::Entity,
@@ -52,9 +54,7 @@ pub(super) fn resolve<'a>(
             .map(|(id, interval)| (interval.vreg, interval.from, id)),
     );
     order.sort_unstable();
-    let mut slot = ArenaVec::with_capacity_in(count, arena);
-    slot.resize(count, None);
-    let mut spill_slots = 0;
+    let (slot, spill_slots) = spill_slots(func, intervals, arena);
     let mut pieces = ArenaVec::with_capacity_in(order.len(), arena);
     let mut piece_index = ArenaVec::with_capacity_in(count + 1, arena);
     let mut next = 0;
@@ -64,10 +64,7 @@ pub(super) fn resolve<'a>(
             let (_, from, id) = order[next];
             let location = match intervals[id].loc {
                 | Loc::Reg(register) => Location::Reg(register),
-                | Loc::Spill => Location::Spill(*slot[vreg].get_or_insert_with(|| {
-                    spill_slots += 1;
-                    spill_slots - 1
-                })),
+                | Loc::Spill => Location::Spill(slot[vreg]),
                 | Loc::None => unreachable!("the scan places every interval"),
             };
             pieces.push((from, location));
@@ -170,6 +167,116 @@ pub(super) fn resolve<'a>(
         .edits
         .sort_by_key(|edit| (edit.block, edit.index, edit.phase));
     allocation
+}
+
+/// Each spilled register's spill slot, and the number of slots.
+///
+/// Registers that are never live at once share a slot, as LLVM's
+/// `StackSlotColoring` shares them: a slot holds a register's value only
+/// where the register is live, and each register, in the order their
+/// lifetimes begin, takes the first slot none of whose registers is live
+/// where it is, else a new one. A lifetime here is every range of every
+/// piece of the register, whether in a register or spilled. The rewrite
+/// reads a slot only where its register is live, and stores into it at a
+/// definition, which starts a range, or at a move, where the register is
+/// live on both sides (a move before instruction `k` carries a value live
+/// at `2k - 1` and `2k`), so a register live elsewhere never sees the
+/// store.
+///
+/// A function that calls one that returns twice (`setjmp`) keeps a slot per
+/// register: a value live across the call is dead on the path to the
+/// `longjmp` that resumes it, so another register could take its slot
+/// there, as LLVM's pass also refuses for such functions.
+fn spill_slots<'a>(
+    func: &MFunction<'_>,
+    intervals: &[Interval<'_>],
+    arena: &'a Bump,
+) -> (ArenaVec<'a, u32>, u32) {
+    /// The most slots a register is tried against before it takes a new
+    /// one, which bounds the work of a function with very many.
+    const TRIES: usize = 256;
+    const NONE: u32 = u32::MAX;
+    let count = func.vreg_count();
+    let mut spilled = ArenaVec::with_capacity_in(count, arena);
+    spilled.resize(count, false);
+    for interval in intervals {
+        spilled[interval.vreg.index()] |= interval.loc == Loc::Spill;
+    }
+    // Every live range of each spilled register, by register and position.
+    let mut ranges = ArenaVec::new_in(arena);
+    for interval in intervals {
+        if spilled[interval.vreg.index()] {
+            ranges.extend(
+                interval
+                    .ranges
+                    .iter()
+                    .map(|&range| (interval.vreg.index(), range)),
+            );
+        }
+    }
+    ranges.sort_unstable();
+    let mut slot = ArenaVec::with_capacity_in(count, arena);
+    slot.resize(count, NONE);
+    let mut slots = 0;
+    // Each spilled register's ranges in `ranges`, by where they begin.
+    let mut order = ArenaVec::new_in(arena);
+    let mut at = 0;
+    while at < ranges.len() {
+        let vreg = ranges[at].0;
+        let end = at + ranges[at..].partition_point(|&(other, _)| other == vreg);
+        order.push((ranges[at].1.0, vreg, at..end));
+        at = end;
+    }
+    if returns_twice(func) {
+        for (_, vreg, _) in &order {
+            slot[*vreg] = slots;
+            slots += 1;
+        }
+        return (slot, slots);
+    }
+    order.sort_unstable_by_key(|&(start, vreg, _)| (start, vreg));
+    // Each slot's occupied ranges, sorted and disjoint.
+    let mut occupied: ArenaVec<'_, ArenaVec<'_, Range>> = ArenaVec::new_in(arena);
+    for (_, vreg, own) in order {
+        let own = &ranges[own];
+        let fits = |taken: &[Range]| {
+            own.iter().all(|&(_, (start, end))| {
+                let index = taken.partition_point(|&(_, taken_end)| taken_end <= start);
+                taken
+                    .get(index)
+                    .is_none_or(|&(taken_start, _)| end <= taken_start)
+            })
+        };
+        let chosen = occupied.iter().take(TRIES).position(|taken| fits(taken));
+        let chosen = chosen.unwrap_or_else(|| {
+            occupied.push(ArenaVec::new_in(arena));
+            occupied.len() - 1
+        });
+        let taken = &mut occupied[chosen];
+        for &(_, range) in own {
+            let index = taken.partition_point(|&(start, _)| start < range.0);
+            taken.insert(index, range);
+        }
+        slot[vreg] = u32::try_from(chosen).expect("spill slots fit u32");
+        slots = slots.max(slot[vreg] + 1);
+    }
+    (slot, slots)
+}
+
+/// Whether `func` calls a function that may return twice.
+fn returns_twice(func: &MFunction<'_>) -> bool {
+    func.blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(|inst| {
+            matches!(
+                inst,
+                MInst::Call {
+                    returns_twice: true,
+                    ..
+                } | MInst::SjljSetjmp { .. }
+            )
+        })
 }
 
 fn index(block: usize) -> u32 {

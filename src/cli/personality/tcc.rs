@@ -866,13 +866,17 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// `-m`: TCC's `-mms-bitfields` and `-m[no-]sse`, treated as the GCC
-    /// personality treats them (`-mno-sse` and, on Linux, `-mms-bitfields`
-    /// are refused), and `-m32`, for which TCC runs its i386 compiler. Any
+    /// `-m`: TCC's `-m[no-]ms-bitfields`, which bcc's own options follow,
+    /// `-m[no-]sse`, treated as the GCC personality treats them (`-mno-sse`
+    /// is refused), and `-m32`, for which TCC runs its i386 compiler. Any
     /// other is ignored, as in TCC.
     fn machine_option(&mut self, text: &str, value: &str) -> Result<(), MainError> {
         match value {
-            | "ms-bitfields" | "no-ms-bitfields" | "sse" | "no-sse" | "32" => self.treat(text),
+            | "ms-bitfields" | "no-ms-bitfields" => {
+                self.state.options.push(text.into());
+                Ok(())
+            },
+            | "sse" | "no-sse" | "32" => self.treat(text),
             | _ => {
                 self.unsupported(text);
                 Ok(())

@@ -347,12 +347,21 @@ impl Machine<'_, '_, '_> {
                 align,
                 addr,
                 ..
-            } =>
-                if flags.contains(InstFlags::VOLATILE) {
-                    self.memory.load_volatile(ty, self.value(addr), align)?
+            } => {
+                let address = self.value(addr);
+                let loaded = if flags.contains(InstFlags::VOLATILE) {
+                    self.memory.load_volatile(ty, address, align)
                 } else {
-                    self.memory.load(ty, self.value(addr), align)?
-                },
+                    self.memory.load(ty, address, align)
+                };
+                match loaded {
+                    // A machine frame keeps its caller's frame address and
+                    // its return address there; these frames do not.
+                    | Err(Fault::Ub(UbKind::NoProvenance)) if self.frame_record(address) =>
+                        return Err(Fault::Unsupported(Unsupported::FrameChain)),
+                    | loaded => loaded?,
+                }
+            },
             | InstData::Store {
                 ty,
                 align,

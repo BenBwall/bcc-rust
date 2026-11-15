@@ -12,12 +12,15 @@
 //! A Windows frame of 4096 bytes or more probes its pages through
 //! `___chkstk_ms` (MinGW) or `__chkstk` (MSVC) before moving `%rsp`
 //! ("x64 stack usage"), as Clang does. Win64's callee-saved SSE registers
-//! are saved with `movaps` after the allocation (`.seh_savexmm`). A function
-//! whose stack moves sets `%rbp` to `%rsp` after the allocation
-//! (`.cfi_def_cfa_register`, `.seh_setframe %rbp, 0`) and its epilogue
-//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form. A
-//! System V leaf frame in the red zone (`frame.rs`) needs neither the `sub`
-//! nor the `add`, and its CFA stays where the pushes left it.
+//! are saved with `movaps` after the allocation (`.seh_savexmm`). A Win64
+//! function whose stack moves sets `%rbp` to `%rsp` after the allocation
+//! (`.seh_setframe %rbp, 0`) and its epilogue starts with `lea size(%rbp),
+//! %rsp`, the frame-pointer epilogue form. A System V frame pointer is set
+//! right after its push, first (`.cfi_def_cfa_register %rbp`), and the CFA
+//! returns to `%rsp` only when the epilogue pops it, as in GCC's and Clang's
+//! epilogues. A System V leaf frame in the red zone (`frame.rs`) needs
+//! neither the `sub` nor the `add`, and its CFA stays where the pushes left
+//! it.
 //!
 //! Each function's read-only constants follow it in `.rodata` (`.rdata` on
 //! COFF), 16 bytes each so that `xorps` may read them.
@@ -47,7 +50,7 @@ use std::{
 };
 
 use super::{
-    defines,
+    debug_info::DebugWriter,
     frame::Frame,
     imported,
     mir::{
@@ -55,6 +58,7 @@ use super::{
         AsmMachine,
         Base,
         Callee,
+        DynamicTls,
         FrameObject,
         InstSource,
         MBlock,
@@ -66,6 +70,7 @@ use super::{
         Reg,
         ShiftAmount,
         SymbolRef,
+        TlsOffset,
         Width,
     },
     through_stub,
@@ -115,6 +120,9 @@ pub(crate) struct Emitter<'o, 'm, 'ir> {
     pub(crate) module: &'m Module<'ir>,
     pub(crate) out:    &'o mut dyn Write,
     elf:               bool,
+    /// Whether the code is for a shared library, whose calls reach a
+    /// preemptible function through its PLT stub.
+    pic:               bool,
     target:            Target,
     /// The symbols code reaches through a `.refptr` stub on COFF, whose
     /// stubs follow the data.
@@ -127,6 +135,8 @@ pub(crate) struct Emitter<'o, 'm, 'ir> {
     resume_uid:        u32,
     /// What each listing line of a function is for, when asked.
     recorder:          Option<ListingRecorder<'o>>,
+    /// The debug information `-g` asks for.
+    debug:             Option<DebugWriter<'o, 'm, 'ir>>,
 }
 
 /// One line of a listing that a function's code wrote.
@@ -164,6 +174,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     pub(crate) fn new(
         module: &'m Module<'ir>,
         target: Target,
+        pic: bool,
         out: &'o mut dyn Write,
         arena: &'o Bump,
     ) -> Self {
@@ -171,11 +182,26 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             module,
             out,
             elf: matches!(target, Target::LinuxGnu | Target::LinuxMusl),
+            pic,
             target,
             stubs: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             asm_uid: 0,
             resume_uid: 0,
             recorder: None,
+            debug: None,
+        }
+    }
+
+    /// Writes the debug information `debug` describes with the code.
+    pub(crate) fn describe(&mut self, debug: DebugWriter<'o, 'm, 'ir>) {
+        self.debug = Some(debug);
+    }
+
+    /// The debug information's sections, after everything else.
+    pub(crate) fn debug_sections(&mut self) -> fmt::Result {
+        match &mut self.debug {
+            | Some(debug) => debug.finish(self.out),
+            | None => Ok(()),
         }
     }
 
@@ -236,6 +262,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
         }
         writeln!(self.out, "\t.text")?;
+        if let Some(debug) = &mut self.debug {
+            debug.header(self.out)?;
+        }
         // File-scope assembly follows verbatim, in source order and before
         // every function and object as Clang places it, then AT&T syntax
         // again. GNU extension: GCC manual, "Basic Asm".
@@ -292,6 +321,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.p2align\t{align}, 0x90")?;
             writeln!(self.out, "\t.type\t{name},@function")?;
             writeln!(self.out, "{name}:")?;
+            if let Some(debug) = &mut self.debug {
+                let in_text = function.attributes.section.is_none() && !function.linkage.comdat();
+                debug.begin_function(self.out, id, in_text)?;
+            }
             // A handler has no caller to unwind to.
             if function.entry != EntryConvention::Interrupt {
                 writeln!(self.out, "\t.cfi_startproc")?;
@@ -305,6 +338,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         }
         if !self.elf {
             self.stubs.extend(func.indirect_symbols.iter().copied());
+        }
+        if let Some(debug) = &mut self.debug {
+            debug.prologue(self.out, !frame.writes_prologue())?;
         }
         let from = self.written();
         if function.entry == EntryConvention::Interrupt {
@@ -329,6 +365,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 "each instruction keeps its source"
             );
             for (position, inst) in block.insts.iter().enumerate() {
+                if let Some(debug) = &mut self.debug {
+                    let source = block.sources.get(position).copied();
+                    debug.instruction(self.out, id, source, index > 0 && position == 0)?;
+                }
                 let from = self.written();
                 if let MInst::InlineAsm { index, .. } = *inst {
                     self.inline_asm(&func.asm[index as usize], id, frame)?;
@@ -343,6 +383,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         if self.elf {
             if function.entry != EntryConvention::Interrupt {
                 writeln!(self.out, "\t.cfi_endproc")?;
+            }
+            if let Some(debug) = &mut self.debug {
+                debug.end_function(self.out, id, frame)?;
             }
             writeln!(self.out, "\t.size\t{name}, .-{name}")?;
         } else {
@@ -528,11 +571,14 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     fn prologue(&mut self, frame: &Frame<'_>) -> fmt::Result {
         let size = frame.allocation();
         let mut cfa = 8;
-        for &register in &frame.saved {
+        for (index, &register) in frame.saved.iter().enumerate() {
             writeln!(self.out, "\tpushq\t%{}", register.name(Width::B64))?;
             cfa += 8;
             if self.elf {
-                writeln!(self.out, "\t.cfi_def_cfa_offset {cfa}")?;
+                // Once `%rbp` links the frame, the CFA is 16 bytes above it.
+                if !(frame.chain && index > 0) {
+                    writeln!(self.out, "\t.cfi_def_cfa_offset {cfa}")?;
+                }
                 writeln!(
                     self.out,
                     "\t.cfi_offset %{}, -{cfa}",
@@ -540,6 +586,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 )?;
             } else {
                 writeln!(self.out, "\t.seh_pushreg %{}", register.name(Width::B64))?;
+            }
+            if frame.chain && index == 0 {
+                writeln!(self.out, "\tmovq\t%rsp, %rbp")?;
+                writeln!(self.out, "\t.cfi_def_cfa_register %rbp")?;
             }
         }
         if size > 0 {
@@ -555,10 +605,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             } else {
                 writeln!(self.out, "\tsubq\t${size}, %rsp")?;
             }
-            if self.elf {
-                writeln!(self.out, "\t.cfi_def_cfa_offset {}", frame.cfa_offset())?;
-            } else {
+            if !self.elf {
                 writeln!(self.out, "\t.seh_stackalloc {size}")?;
+            } else if !frame.chain {
+                writeln!(self.out, "\t.cfi_def_cfa_offset {}", frame.cfa_offset())?;
             }
         }
         for &(register, offset) in &frame.saved_xmm {
@@ -568,7 +618,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(self.out, "\t.seh_savexmm %{name}, {offset}")?;
             }
         }
-        if frame.rbp_based {
+        if frame.rbp_based && !frame.chain {
             writeln!(self.out, "\tmovq\t%rsp, %rbp")?;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_register %rbp")?;
@@ -649,13 +699,21 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.cfi_remember_state")?;
         }
         let mut cfa = frame.cfa_offset();
-        let base = if frame.rbp_based { "rbp" } else { "rsp" };
+        let (base, shift) = if frame.rbp_based {
+            ("rbp", i64::from(frame.rbp_offset()))
+        } else {
+            ("rsp", 0)
+        };
         for &(register, offset) in &frame.saved_xmm {
             writeln!(
                 self.out,
-                "\tmovaps\t{offset}(%{base}), %{}",
+                "\tmovaps\t{}(%{base}), %{}",
+                i64::from(offset) - shift,
                 register.name(Width::B64)
             )?;
+        }
+        if frame.chain {
+            return self.linked_epilogue(frame);
         }
         if frame.rbp_based {
             writeln!(self.out, "\tleaq\t{size}(%rbp), %rsp")?;
@@ -682,6 +740,25 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.cfi_restore_state")?;
         }
         Ok(())
+    }
+
+    /// The rest of an epilogue whose `%rbp` links the frame: `%rsp` back to
+    /// the pushes, from `%rbp` if `%rsp` moved, then the pops. The CFA stays
+    /// 16 bytes above `%rbp` until its pop, as in GCC's and Clang's
+    /// epilogues.
+    fn linked_epilogue(&mut self, frame: &Frame<'_>) -> fmt::Result {
+        let others = 8 * (frame.saved.len() - 1);
+        if frame.rbp_based {
+            writeln!(self.out, "\tleaq\t-{others}(%rbp), %rsp")?;
+        } else if frame.allocation() > 0 {
+            writeln!(self.out, "\taddq\t${}, %rsp", frame.allocation())?;
+        }
+        for &register in frame.saved.iter().rev() {
+            writeln!(self.out, "\tpopq\t%{}", register.name(Width::B64))?;
+        }
+        writeln!(self.out, "\t.cfi_def_cfa %rsp, 8")?;
+        writeln!(self.out, "\tretq")?;
+        writeln!(self.out, "\t.cfi_restore_state")
     }
 
     /// One instruction; `next` is the block laid out after this one, which
@@ -871,10 +948,33 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     writeln!(out, "\tcallq\t*{}(%rip)", Stub::of(self.module, symbol)),
                 | Callee::Symbol(symbol) => {
                     let name = symbol_name(self.module, symbol);
-                    let plt = self.elf && !defined(self.module, symbol);
+                    let plt = self.elf && !binds_locally(self.module, symbol, self.pic);
                     writeln!(out, "\tcallq\t{name}{}", if plt { "@PLT" } else { "" })
                 },
                 | Callee::Reg(target) => writeln!(out, "\tcallq\t*{}", reg(target, Width::B64)),
+                // The prefixes pad the sequence to the 16 bytes the linker
+                // rewrites for an executable's symbol (Drepper, "ELF Handling
+                // For Thread-Local Storage", §4.1, x86-64), as Clang writes
+                // them.
+                | Callee::TlsGetAddr {
+                    symbol,
+                    model: DynamicTls::General,
+                } => {
+                    let name = symbol_name(self.module, symbol);
+                    writeln!(out, "\tdata16\n\tleaq\t{name}@TLSGD(%rip), %rdi")?;
+                    writeln!(
+                        out,
+                        "\tdata16\n\tdata16\n\trex64\n\tcallq\t__tls_get_addr@PLT"
+                    )
+                },
+                | Callee::TlsGetAddr {
+                    symbol,
+                    model: DynamicTls::Local,
+                } => writeln!(
+                    out,
+                    "\tleaq\t{}@TLSLD(%rip), %rdi\n\tcallq\t__tls_get_addr@PLT",
+                    symbol_name(self.module, symbol)
+                ),
             },
             | MInst::XMov { width, dst, src } => match src {
                 | Operand::Reg(src) =>
@@ -1079,8 +1179,17 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 let pointer = if self.elf { "%fs:0" } else { "%gs:88" };
                 writeln!(out, "\tmovq\t{pointer}, {}", reg(dst, Width::B64))
             },
-            | MInst::TlsLea { dst, base, symbol } => {
-                let offset = if self.elf { "TPOFF" } else { "SECREL32" };
+            | MInst::TlsLea {
+                dst,
+                base,
+                symbol,
+                offset,
+            } => {
+                let offset = match offset {
+                    | TlsOffset::Module => "DTPOFF",
+                    | TlsOffset::Thread if self.elf => "TPOFF",
+                    | TlsOffset::Thread => "SECREL32",
+                };
                 writeln!(
                     out,
                     "\tleaq\t{}@{offset}({}), {}",
@@ -1136,7 +1245,8 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(out, ".LSJ{uid}:")?;
                 // `%rbp` holds the frame address, a fixed distance above
                 // the address the frame's objects are relative to.
-                if frame.rbp_based {
+                // A linked `%rbp` is the frame address itself.
+                if frame.rbp_based && !frame.chain {
                     let (base, offset) = frame.address(FrameObject::FrameAddress);
                     debug_assert_eq!(base, PReg::Rbp, "an rbp-based frame");
                     writeln!(out, "\tleaq\t{}(%rbp), %rbp", -offset)?;
@@ -1579,10 +1689,11 @@ fn aligned_blocks<'a>(func: &MFunction<'_>, arena: &'a Bump) -> ArenaVec<'a, boo
     aligned
 }
 
-/// Whether the module defines `symbol`; runtime symbols never are.
-fn defined(module: &Module<'_>, symbol: SymbolRef) -> bool {
+/// Whether ELF code may reach `symbol` PC-relative ([`super::binds_locally`]);
+/// the back end's runtime routines are another module's.
+fn binds_locally(module: &Module<'_>, symbol: SymbolRef, pic: bool) -> bool {
     match symbol {
-        | SymbolRef::Ir(symbol) => defines(module, symbol),
+        | SymbolRef::Ir(symbol) => super::binds_locally(module, symbol, pic),
         | SymbolRef::Runtime(_) => false,
     }
 }
@@ -1636,7 +1747,7 @@ pub(crate) struct SectionError<'m> {
 
 /// A symbol name, quoted unless it is a plain identifier.
 #[derive(Clone, Copy)]
-struct Name<'a>(&'a str);
+pub(super) struct Name<'a>(pub(super) &'a str);
 
 impl Name<'_> {
     /// Whether the assembler takes the name unquoted.

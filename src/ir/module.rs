@@ -171,6 +171,7 @@ impl<'ir> Module<'ir> {
             no_sanitize: super::NoSanitize::default(),
             inline_copy_of: None,
             entry: EntryConvention::C,
+            target: None,
         });
         self.add_symbol(name, Symbol::Function(id));
         id

@@ -68,6 +68,12 @@ use crate::{
     util::bump::ArenaVec,
 };
 
+/// The deepest outer frame `__builtin_frame_address` and
+/// `__builtin_return_address` walk to; GCC takes any constant, and a level
+/// deeper than the program's call chain reads past its first frame either
+/// way.
+const OUTER_FRAMES: i128 = 64;
+
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Varargs and offsetof keyword forms execute their checked instance;
     /// `choose_expr` evaluates its retained selection. The other type-generic
@@ -532,24 +538,44 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::ExtractReturnAddress
             | CommonBuiltin::AssocBarrier => items[0].operand,
             // Only the current frame has a defined address everywhere; GCC
-            // calls outer levels unpredictable. GNU extension: GCC "Return
-            // Address". <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
+            // calls outer levels unpredictable, and walks the frame-pointer
+            // chain for them, as this does outside Windows: each x86-64
+            // frame address holds the caller's, and the return address is
+            // the word after it. GNU extension: GCC "Return Address".
+            // <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
             | CommonBuiltin::Address(return_address) => {
                 let level = match instance.operands[0].expression {
                     | Some(level) => self.info(level)?.integer.map(|level| level.value),
                     | None => None,
                 };
-                if level != Some(0) {
-                    return Err(LoweringError::unsupported(
-                        super::Construct::Builtin,
-                        source,
-                    ));
+                let windows = matches!(
+                    self.unit.target,
+                    crate::target::Target::WindowsGnu | crate::target::Target::WindowsMsvc
+                );
+                match level {
+                    | Some(0) => Operand::Value(self.nullary(if return_address {
+                        Opcode::ReturnAddress
+                    } else {
+                        Opcode::FrameAddress
+                    })),
+                    | Some(outer @ 1..=OUTER_FRAMES) if !windows => {
+                        let mut frame = self.nullary(Opcode::FrameAddress);
+                        for _ in 0..outer {
+                            frame = self.load_frame_word(frame);
+                        }
+                        Operand::Value(if return_address {
+                            let word = self.offset_address(frame, 8);
+                            self.load_frame_word(word)
+                        } else {
+                            frame
+                        })
+                    },
+                    | _ =>
+                        return Err(LoweringError::unsupported(
+                            super::Construct::Builtin,
+                            source,
+                        )),
                 }
-                Operand::Value(self.nullary(if return_address {
-                    Opcode::ReturnAddress
-                } else {
-                    Opcode::FrameAddress
-                }))
             },
             // Debug-information annotations do not execute.
             // x86 keeps instruction fetch coherent with stores, so
@@ -989,6 +1015,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 args: [a, b],
             },
             Type::I1,
+        )
+    }
+
+    /// The word a frame or return address slot of the frame-pointer chain
+    /// holds at `address`.
+    fn load_frame_word(&mut self, address: Value) -> Value {
+        self.inst(
+            InstData::Load {
+                ty:    Type::Ptr,
+                flags: InstFlags::empty(),
+                align: Align::from_bytes(8).expect("a word's alignment"),
+                tag:   None,
+                addr:  address,
+            },
+            Type::Ptr,
         )
     }
 

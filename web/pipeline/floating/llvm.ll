@@ -10,7 +10,7 @@ target triple = "x86_64-unknown-linux-gnu"
 @.str.4 = internal constant [21 x i8] c"ten 0.1s make %.17g\0A\00", align 1
 @.str.5 = internal constant [17 x i8] c"(int)%.2f is %d\0A\00", align 1
 
-define i32 @main() {
+define i32 @main() #0 {
 block0:
   %v2 = sdiv i32 7, 2
   %v3 = sitofp i32 %v2 to double
@@ -45,6 +45,8 @@ block4:                                           ; preds = %block1
 }
 
 declare i32 @printf(ptr noundef, ...)
+
+attributes #0 = { "frame-pointer"="all" }
 
 !llvm.module.flags = !{!0, !1}
 

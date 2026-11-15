@@ -601,10 +601,12 @@ hidden objects, so a library bcc builds can be linked at startup or loaded
 with `dlopen`. `-ftls-model` names the least specific model allowed; a more
 specific implied model wins, as in LLVM. Windows targets use native TLS
 through `_tls_index` and the TEB, as Clang does for both MinGW and MSVC; the
-relocation flags do not change their code. The native back end generates
-executable code only: it uses the same executable models (local-exec for
-declarations too with `-ftls-model=local-exec`) and refuses `-fpic`,
-`-fPIC` and `-shared`.
+relocation flags do not change their code. The native back end uses the same
+executable models (local-exec for declarations too with
+`-ftls-model=local-exec`). In a shared library it uses local-dynamic for
+internal, hidden and protected definitions and general-dynamic for the rest,
+or initial-exec or local-exec when `-ftls-model` names them; as in GCC, a
+local-dynamic request reaches a preemptible symbol general-dynamic.
 
 ### Textual form
 
@@ -1668,7 +1670,8 @@ macro-expansion instruction selector over the post-ABI IR, a machine IR over
 virtual registers, linear-scan register allocation with fixed-register
 ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
 and AT&T assembly, which the bundled clang assembles, or ELF and COFF
-objects it encodes itself; the bundled clang links executables. It compiles
+objects it encodes itself; the bundled clang links executables and, from
+`-fpic` or `-fPIC` code, shared libraries (`-shared`). It compiles
 integer, pointer, `i128`, `f32` and `f64` code, `f80` on the x87 unit,
 `f128` through libgcc's soft-float routines (`isel/quad.rs`), `f16` and
 `bf16` in SSE registers with libgcc's `__extendhfsf2`,
@@ -1683,7 +1686,8 @@ it prints its assembly.
 For `-o` it encodes COFF objects directly on the Windows targets and has the
 bundled clang assemble its listing on Linux; `--native-object` and
 `--no-native-object` choose either path on any target, and the last of the
-two wins. By default a listing the encoder refuses is assembled.
+two wins. By default a listing the encoder refuses is assembled. With `-g` it
+writes DWARF 5 on ELF ([Debug information](#debug-information-2026-11-06)).
 
 ## Source layout
 
@@ -2103,7 +2107,7 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
 `lowering/cleanup.rs`):
 
 - **Textual form.** Function headers end in
-  `linkage [align N] [returns_twice] [noinline|alwaysinline] [inline_copy_of @name] [interrupt|preserve_registers|naked] [hidden|protected] [section "name"] [used] [alias @target]`,
+  `linkage [align N] [returns_twice] [noinline|alwaysinline] [inline_copy_of @name] [interrupt|preserve_registers|naked] [target "+f,-g,arch=cpu,tune=cpu"] [hidden|protected] [section "name"] [used] [alias @target]`,
   global headers in `linkage [thread_local] [constant] size N, align N
   [hidden|protected] [section "name"] [used] [alias @target]`. Module lines `constructor @f priority N` and
   `destructor @f priority N` follow the globals. The verifier checks alias
@@ -2759,12 +2763,14 @@ passes one-lane `float` and `double` vectors as
 values and others by reference and `sret`, where wasi-sdk's Clang splits
 them into lanes.
 
-A `target` attribute changes nothing about a function's code, so such a
-function keeps the command line's convention. Where GCC or Clang would pass a
-vector of 32 bytes or more otherwise (the attribute turns AVX on or off, or an
-option bcc only warns about such as `-mavx512f`), `check_foreign_vectors` refuses
-it for a function another object can reach, and a call of one. `static`
-functions, whose callers are all bcc's, stay as they are.
+A function with a `target` attribute keeps the command line's convention,
+although its code takes the attribute's features ("x86 `target` attributes"
+below). Where GCC or Clang would pass a vector of 32 bytes or more otherwise (the
+attribute turns AVX on or off, or an option bcc only warns about such as
+`-mavx512f`), `check_foreign_vectors` refuses it for a function another object
+can reach, and a call of one. `static` functions, whose callers are all bcc's,
+stay as they are, unless the attribute turns AVX off or AVX-512 on under the
+command line's AVX, where LLVM would give their vectors other registers.
 
 The native back end writes no AVX instructions, so it refuses a signature
 with a YMM register (`Construct::VectorRegister`). It returns the `f128`/`i128`
@@ -3101,8 +3107,8 @@ subprogram per function) and interned locations on the module. A body maps an
 instruction to a location in a side table that stays empty without `-g`, so the
 instruction record does not grow and a compilation without it pays nothing but
 a few empty tables. The configuration leaves `debug_info` unset when the back
-end would not use it, so lowering records nothing for the native back end, the
-WebAssembly back end or the interpreter. The explorer is the exception: it asks
+end would not use it, so lowering records nothing for the native back end on
+Windows, the WebAssembly back end or the interpreter. The explorer is the exception: it asks
 for the `-g1` tables with physical lines (`DebugOptions::physical`), so that
 every view links to the source line by line, and has the native back end follow
 each machine instruction to the IR instruction it was selected for
@@ -3197,8 +3203,39 @@ to the bundled clang, which asks `lld-link` for `-debug`. This has been checked
 by the object's sections (`.debug$S`, `.debug_info`) from Linux and not run on
 Windows.
 
-**Other back ends.** The native and WebAssembly back ends warn that they write
-no debug information and ignore `-g`. The interpreter ignores it silently, as it
+**Native back end.** On ELF `--backend=native` writes DWARF 5 itself
+(`src/backend/native/debug_info.rs`, designed in
+[docs/design/native-backend.md](docs/design/native-backend.md)), into the
+listing `-S` prints and into its direct objects alike: a `.loc` row before each
+instruction whose position changes, with the prologue at the scope line, unless
+the prologue is empty, and `prologue_end` and `is_stmt` where LLVM puts them; a
+compile unit, a subprogram per described function with `DW_OP_call_frame_cfa`
+as its frame base, lexical blocks bounded by the runs of their code, the types,
+the globals at `DW_OP_addr`, and the variables in stack slots at `DW_OP_fbreg`.
+Since it describes variables, `--stack-locals` and the personalities keep the
+`-O0` locals in memory with it too. The direct object's `.debug_line` matches
+what the bundled clang assembles from the same listing byte for byte. Its line
+tables agree with the LLVM back end's on the probes compared, except that a
+`do` or `while` whose branch falls through has no instruction and so no row,
+as with GCC. What it does not write, compared with the LLVM back end:
+
+- No `DW_TAG_inlined_subroutine`: an inlined copy's rows have the callee's
+  lines, and its frame is not shown.
+- A variable in a register, or one in a slot aligned beyond 16 bytes, has no
+  location, so at `-O1` and above most locals are optimized out, where LLVM's
+  passes follow some of them.
+- A variable kept at an address in a value (a variable-length array, or a
+  parameter its caller copied) has no location.
+- No `.debug_aranges`, `.debug_str` (strings are inline, `DW_FORM_string`),
+  MD5 checksums, `DW_AT_call_*` call sites, or location lists.
+- Only DWARF 5: `-gdwarf-2` to `-gdwarf-4` are ignored with a warning. A header
+  whose name is the main file's is attributed to it, since the assembler tells
+  the two apart only by their checksums.
+- Nothing for Windows targets, which warn that they ignore `-g`: no CodeView,
+  and no DWARF in COFF.
+
+**Other back ends.** The WebAssembly back end warns that it writes no debug
+information and ignores `-g`. The interpreter ignores it silently, as it
 writes no output a debugger could read. Assembly inputs get `-g` when clang
 assembles them, as GCC and Clang pass it on.
 
@@ -3304,3 +3341,122 @@ the other sanitizers.
 function), `local-bounds`, `implicit-conversion` and the other checks outside
 `undefined`; a `_BitInt` of a non-standard width, a GNU complex integer, a
 vector, a 16-bit floating type, and a floating conversion to a 128-bit integer.
+
+## x86 `target` attributes (2026-11-08)
+
+A function's `target("...")` attribute, read in semantic analysis
+(`language-standards.md`, "Attribute status"), gives the IR function its x86
+features where they differ from the command line's: `Function::target` holds a
+`target::CodeFeatures`, the features on and those explicitly off and the processors
+of `arch=` and `tune=`. The text form writes it after the entry keyword, as `target
+"+avx,+avx2,-sse4a,arch=haswell,tune=znver3"`, in feature-table order; the parser
+reads it back. Functions without the attribute have none, and the module's
+processor and features stay those of the target machine.
+
+**Lowering.** `lowering/target_features.rs` refuses, in emitted code: a direct call
+of an `always_inline` function whose features the caller lacks when either has the
+attribute, in Clang's or GCC's words; a call of an `__builtin_ia32_*` builtin whose
+measured feature the caller lacks; a function turning off x87, MMX, FXSR, SSE or SSE2,
+or asking for general registers only; and a `static` function whose vectors would
+move registers (above).
+
+**Optimizer.** The inliner expands a callee only into a caller whose features include
+the callee's, as LLVM's `areInlineCompatible` compares subtargets, except for an
+`always_inline` callee, which LLVM's always-inliner expands whatever the features and
+whose calls lowering has checked. A callee and caller of which only one has the
+attribute stay apart, which costs only speed: LLVM's inliner, at -O2, compares them
+exactly.
+
+**LLVM back end.** A defined function gets `"target-cpu"` for `arch=` (`x86-64` for a
+processor only GCC knows, whose features the list completes), `"tune-cpu"` for a
+`tune=` LLVM knows, and `"target-features"` listing every feature it has and every one
+it turns off, as Clang writes them, since LLVM reads a function's list in place of the
+target machine's. `-mgeneral-regs-only` and `-muintr` add their entries to the same
+list.
+
+**Native back end and interpreter.** Neither has instructions beyond the baseline, and
+a feature only permits instructions, so both run a `target` function's code as any
+other: the native back end writes baseline code for it, which is correct on every
+processor that has the features, and the interpreter computes it. What the features
+would change otherwise stays refused: the native back end's refusal of a signature with
+a YMM register, and every x86 builtin, which lowering refuses whatever the features.
+
+**Evidence.** `src/target/x86_features/tests.rs` covers each compiler's reading;
+`tests/integration/target_attribute.rs` the diagnostics (against the pinned Clang
+live), the refused calls, the LLVM attributes, redeclarations and the inliner; and
+`tests/fixtures/programs/target_attribute.c` calls AVX2 and BMI2 functions where
+`__builtin_cpu_supports` finds the features, under both identities, interpreted, at
+-O0 and -O2 and through the native back end, against the host GCC's build. zstd 1.5.6
+builds under `--gcc-mode` and `--clang-mode` without warnings about `target`; its
+`*_bmi2` functions use `shrx`, `shlx` and `tzcnt` and run on a BMI2 processor, and
+`tests/playTests.sh` passes.
+
+## Outer frame addresses (2026-11-08)
+
+GCC's `__builtin_frame_address (N)` and `__builtin_return_address (N)` for
+N > 0 ([Return Address](https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html))
+walk the frame-pointer chain: on x86-64 each frame address holds the
+caller's, and the return address is the word above it. The manual calls the
+outer levels unpredictable, and they are right only where every frame on the
+way keeps a frame pointer. TinyCC's `tests/tcctest.c` relies on them
+(`builtin_frame_address_test`, built with `-O0 -fno-omit-frame-pointer`).
+
+- **Lowering** (`lowering/builtins.rs`). Level 0 is `frame_address` or
+  `return_address`. Levels 1 to 64 outside Windows are `frame_address` and N
+  `load.ptr`s, and the return address one more load 8 bytes above the frame
+  reached. A deeper level, and any outer level on Windows (Win64 unwinds
+  through tables, and a Win64 `%rbp` points into its frame, so no chain
+  exists), stay refused as "not yet supported by lowering: this builtin".
+- **Frame pointers.** `-fno-omit-frame-pointer` (`Hardening::
+  keep_frame_pointer`) gives the LLVM back end `"frame-pointer"="all"` and
+  now the native back end GCC's System V frames, `%rbp` pushed first and set
+  to its own slot (see [docs/design/native-backend.md](docs/design/native-backend.md),
+  "Frame pointers"). As in GCC, which turns `-fomit-frame-pointer` on from
+  `-O1`, and Clang, a compilation without `__OPTIMIZE__` keeps them by
+  default on Linux, the only targets the command line passes the option to;
+  `-fomit-frame-pointer` drops them (`Hardening::initial`, used by the
+  command line and the explorer). Measured on lz4 1.10.0 at `-O0`, kept frame
+  pointers grow the native back end's text by 2.0% (198,047 to 201,991 bytes)
+  and shrink LLVM's by 8.5% (544,268 to 497,890, as `%rbp`-relative operands
+  need no SIB byte); compressing and decompressing an 88 MB file took the
+  same time either way, within run-to-run noise.
+- **Without frame pointers** (optimized, or `-fomit-frame-pointer`) bcc does
+  what GCC does rather than refuse: the walk reads whatever each frame's
+  `%rbp` slot holds. A function that takes its frame address still pushes
+  `%rbp` first, so level 1 is right whenever its caller keeps a frame
+  pointer; deeper levels may be any value, and following one may fault.
+  Optimization also changes which frames exist: inlined functions have none
+  and sibling calls replace theirs. TinyCC's test prints different lines with
+  GCC 13 at `-O2 -fno-omit-frame-pointer` and crashes with Clang 18 at `-O1`
+  and `-O2`; bcc's `--opt=bcc` inlines its `bfa` functions in the same way,
+  so the command-line test marks them `noinline`.
+- **Interpreter.** Its frames link no machine frames, so a load through a
+  frame address (or the word above it) stops the program as unsupported: "a
+  frame or return address of an outer frame (__builtin_frame_address or
+  __builtin_return_address above level 0); compile it with -o instead",
+  where it reported undefined behaviour through a pointer that names no
+  object before.
+- **`__builtin_longjmp` through LLVM.** The X86 back end reloads the frame
+  pointer from word 0 of the buffer before words 1 and 2, so a buffer in a
+  frame addressed from the frame pointer was read through the new one; with
+  frame pointers kept, `builtin_setjmp.c` crashed (as Clang 18 at `-O2
+  -fno-omit-frame-pointer` does). An empty `asm` now passes the buffer's
+  address in a register.
+
+Evidence: `code_generation_cli.rs` runs TinyCC's test and a return address
+check through LLVM and the native back end, with and without `--opt=bcc` and
+through the direct ELF writer, and at the unoptimized default, against what
+`gcc -O0 -fno-omit-frame-pointer` prints, and checks which options keep the
+frame pointer; `builtin_setjmp_and_longjmp_match_gcc_on_every_back_end` adds
+LLVM at `-O2 -fno-omit-frame-pointer`; `lowering/tests/extensions.rs` pins
+the chain loads, the bound and the Windows refusal; the native frame-layout
+tests are in `backend/native/tests/selection.rs`, and
+`programs_keeping_frame_pointers_match_the_interpreter` runs every native
+end-to-end program with frame pointers kept. `tests/fixtures/x86_interrupt/
+iret.c` read the flags with a `pushfq` into its leaf's red zone, which
+`gcc -O0` builds crashed on; it now steps over the red zone first.
+
+Remaining differences: GCC's `-Wframe-address` warning (in `-Wall`) is not
+implemented; outer levels stay refused on Windows and in the interpreter;
+the native back end addresses a fixed-size frame from `%rsp` where GCC's
+`-O0` code uses `%rbp`, which no program observes.

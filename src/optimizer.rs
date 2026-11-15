@@ -319,7 +319,7 @@ fn run_pass(
     report.begin_pass(pass);
     let start = Instant::now();
     let changed = match pass {
-        | Pass::Inline => inline::run(draft, module, graph, report),
+        | Pass::Inline => inline::run(draft, module, func, graph, report),
         | Pass::Fold => fold::run(draft, module.function_signature(func), report),
         | Pass::Combine => combine::run(draft, report),
         | Pass::Dce => dce::run(draft, report),

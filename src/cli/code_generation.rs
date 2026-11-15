@@ -504,16 +504,21 @@ impl CodeGeneration {
     }
 
     /// Whether the selected back end writes no debug information. The
-    /// interpreter has no output to put it in.
+    /// interpreter has no output to put it in, and the native back end
+    /// writes DWARF for ELF but no `CodeView` or DWARF for COFF.
     fn writes_no_debug_info(&self, target: Target) -> bool {
         self.interpret
             || target.is_wasm()
-            || self.backend != BackEnd::Llvm
             || matches!(self.emit, Some(Emit::Wasm | Emit::Wat))
+            || match self.backend {
+                | BackEnd::Llvm => false,
+                | BackEnd::Native => !matches!(target, Target::LinuxGnu | Target::LinuxMusl),
+                | BackEnd::Wasm => true,
+            }
     }
 
     /// Whether locals asked to live in memory do: no optimizer runs, and the
-    /// back end is LLVM, the one that describes variables.
+    /// back end describes variables: LLVM, or the native back end on ELF.
     pub(super) fn stack_locals_apply(&self, target: Target) -> bool {
         !self.optimization_macros().0 && !self.writes_no_debug_info(target)
     }
@@ -532,14 +537,29 @@ impl CodeGeneration {
         })
     }
 
-    /// The warning for `-g` with a back end that writes no debug information;
-    /// the interpreter's output has nothing to put it in, so it stays quiet.
+    /// The warning for `-g` with a back end that writes no debug information,
+    /// or for a DWARF version the native back end does not write; the
+    /// interpreter's output has nothing to put it in, so it stays quiet.
     fn ignored_debug_info(&self, target: Target) -> Option<&'static str> {
-        if self.debug_level() == 0 || self.interpret || !self.writes_no_debug_info(target) {
+        if self.debug_level() == 0 || self.interpret {
             return None;
         }
+        if !self.writes_no_debug_info(target) {
+            let native = self.backend == BackEnd::Native;
+            return match self.dwarf_version {
+                | Some(2) if native =>
+                    Some("warning: --backend=native writes DWARF 5; ignoring -gdwarf-2"),
+                | Some(3) if native =>
+                    Some("warning: --backend=native writes DWARF 5; ignoring -gdwarf-3"),
+                | Some(4) if native =>
+                    Some("warning: --backend=native writes DWARF 5; ignoring -gdwarf-4"),
+                | Some(6) if native =>
+                    Some("warning: --backend=native writes DWARF 5; ignoring -gdwarf-6"),
+                | _ => None,
+            };
+        }
         Some(if self.backend == BackEnd::Native {
-            "warning: --backend=native writes no debug information; ignoring -g"
+            "warning: --backend=native writes no debug information for Windows targets; ignoring -g"
         } else {
             "warning: the WebAssembly back end writes no debug information; ignoring -g"
         })

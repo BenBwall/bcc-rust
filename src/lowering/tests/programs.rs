@@ -42,6 +42,13 @@ int main(void) { int a[3][3]; return f(3,a[0])!=4 || g(3,a)!=16 || old(3,a[0])!=
         expected: 0,
     },
     Program {
+        name:     "vla_static_pointer",
+        source:   "static int f(int h, int w) { int arr[2][h][w]; static int (*p)[h][w];
+ arr[1][h-1][w-1] = 40; p = &arr[1]; return p[0][h-1][w-1] + (int)sizeof *p; }
+int main(void) { return f(3,4)!=88 || f(2,5)!=80; }",
+        expected: 0,
+    },
+    Program {
         name:     "sum_to_ten",
         source:   "int main(void) { int s = 0; for (int i = 1; i <= 10; i++) s += i; return s; }",
         expected: 55,
@@ -394,6 +401,37 @@ int main(void) {
         source:   "int scale(x, k) char x; int k; { return x * k; }
 int main(void) { return scale(7, 6); }",
         expected: 42,
+    },
+    // C99 §6.6p9: a row of a static two-dimensional array is an address
+    // constant once it decays, as in PostgreSQL's ecpg `descriptor.c`.
+    Program {
+        name:     "static_subarray_addresses",
+        source:   "static char rows[3][8] = {\"zero\", \"one\", \"two\"};
+static char *last = rows[2];
+static char *inner = &rows[1][1];
+static int grid[2][3][4];
+static int *cell = grid[1][2];
+static int (*plane)[4] = grid[1];
+struct var { char *name; int *type; };
+static char *pick(int i) { static char names[2][8]; static int type;
+ static struct var vars[2] = { {names[0], &type}, {names[1], &type} };
+ names[i][0] = (char)('a' + i); return vars[i].name; }
+int main(void) {
+ if (last[0] != 't' || inner[0] != 'n') return 1;
+ if (cell - &grid[0][0][0] != 20 || (int *)plane - &grid[0][0][0] != 12) return 2;
+ return pick(0)[0] + pick(1)[0] == 'a' + 'b' ? 0 : 3; }",
+        expected: 0,
+    },
+    // GNU extension: GCC manual, "Statement Exprs". An expression statement
+    // ending inside a folded conditional's skipped arm clears the joins the
+    // conditional marked (Perl 5.40's `re_comp.c`, through its asserts).
+    Program {
+        name:     "folded_conditional_statement_expressions",
+        source:   "static int g(int f) {
+ return 0 ? (f ? ({ if (f) ; 1; }) : 1) : ({ if (f) ; 2; }); }
+static int h(int f) { return 1 ? ({ if (f) ; 3; }) : (f ? ({ if (f) ; 4; }) : 5); }
+int main(void) { return g(1) + h(0) == 5 ? 0 : 1; }",
+        expected: 0,
     },
 ];
 

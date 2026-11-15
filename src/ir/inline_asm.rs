@@ -78,6 +78,9 @@ impl InlineAsm<'_> {
                     Some("a general register holds an integer or pointer of at most 64 bits"),
                 | C::Sse if !matches!(ty, Type::F32 | Type::F64) =>
                     Some("an SSE register holds a f32 or f64"),
+                | C::X87(class) if class > C::X87_ANY => Some("an x87 class is unknown"),
+                | C::X87(_) if !matches!(ty, Type::F32 | Type::F64 | Type::F80) =>
+                    Some("an x87 register holds a f32, f64 or f80"),
                 | C::Memory if operand.bytes == 0 => Some("a memory operand has no bytes"),
                 | C::Immediate if operand.output => Some("an immediate is an output"),
                 | C::Immediate if !(ty.is_int() || ty == Type::Ptr) =>
@@ -86,7 +89,7 @@ impl InlineAsm<'_> {
                     | _ if operand.output => Some("a tied operand is an output"),
                     | Some(tied)
                         if (output as usize) < outputs
-                            && matches!(tied.constraint, C::General(_) | C::Sse)
+                            && matches!(tied.constraint, C::General(_) | C::Sse | C::X87(_))
                             && tied.ty == ty =>
                         None,
                     | _ => Some("a tied input names no register output of its type"),
@@ -154,6 +157,10 @@ pub(crate) enum AsmConstraint {
     General(u16),
     /// An SSE register.
     Sse,
+    /// An x87 stack register: [`Self::X87_TOP`] for `%st(0)` (GCC's `t`),
+    /// [`Self::X87_SECOND`] for `%st(1)` (`u`), [`Self::X87_ANY`] for any
+    /// (`f`). GNU extension: GCC manual, "Machine Constraints", x86 family.
+    X87(u8),
     /// The object at the operand's address.
     Memory,
     /// A constant written into the instruction.
@@ -168,6 +175,12 @@ pub(crate) enum AsmConstraint {
 impl AsmConstraint {
     /// Every general register but `%rsp`.
     pub(crate) const ANY_GENERAL: u16 = !(1 << 4);
+    /// Any x87 stack register.
+    pub(crate) const X87_ANY: u8 = 2;
+    /// `%st(1)`, the register below the top.
+    pub(crate) const X87_SECOND: u8 = 1;
+    /// `%st(0)`, the top of the x87 stack.
+    pub(crate) const X87_TOP: u8 = 0;
 }
 
 /// The 64-bit names of the general registers, by hardware encoding.
@@ -287,6 +300,9 @@ impl fmt::Display for AsmConstraint {
                 f.write_str("}")
             },
             | Self::Sse => f.write_str("x"),
+            | Self::X87(Self::X87_TOP) => f.write_str("t"),
+            | Self::X87(Self::X87_SECOND) => f.write_str("u"),
+            | Self::X87(_) => f.write_str("f"),
             | Self::Memory => f.write_str("m"),
             | Self::Immediate => f.write_str("i"),
             | Self::Tied(output) => write!(f, "{output}"),
@@ -301,6 +317,9 @@ impl AsmConstraint {
         Some(match text {
             | "r" => Self::General(Self::ANY_GENERAL),
             | "x" => Self::Sse,
+            | "t" => Self::X87(Self::X87_TOP),
+            | "u" => Self::X87(Self::X87_SECOND),
+            | "f" => Self::X87(Self::X87_ANY),
             | "m" => Self::Memory,
             | "i" => Self::Immediate,
             | _ =>

@@ -5416,7 +5416,7 @@ mod tests {
         let reads = |mode: &str, options: &[&str]| {
             let args = [options, &["-w", "-c", "v.c", "-o", "v.o"]].concat();
             let output = directory.bcc(mode, &args);
-            let refused = stderr(&output).contains("ignores changes how it travels");
+            let refused = stderr(&output).contains("ignores, changes how it travels");
             assert_eq!(output.status.success(), !refused, "{}", stderr(&output));
             refused
         };
@@ -5471,7 +5471,7 @@ mod tests {
             let args = [options, &["/c", "v.c"]].concat();
             let output = directory.bcc("--clang-cl-mode", &args);
             assert_eq!(
-                stderr(&output).contains("ignores changes how it travels"),
+                stderr(&output).contains("ignores, changes how it travels"),
                 refused,
                 "{options:?}: {}",
                 stderr(&output)
@@ -5483,7 +5483,7 @@ mod tests {
     /// `__builtin_cpu_supports` and `__builtin_cpu_is` read libgcc's data as
     /// each compiler does: GCC gives the bit where it stands and Clang 1, and
     /// each words a bad name its own way. A function with a `target` attribute
-    /// that the query guards runs, computed in software.
+    /// that the query guards runs with the attribute's instructions.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn cpu_builtins_follow_each_compiler() {
@@ -10674,17 +10674,17 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             options.extend(args);
             gcc(&options)
         };
-        let refused = linux(&["-c", "-mms-bitfields", "x.c", "-o", "x.o"]);
+        let refused = linux(&["-c", "-mabi=ms", "x.c", "-o", "x.o"]);
         assert_eq!(refused.status.code(), Some(1));
         assert!(
-            stderr(&refused).contains("'-mms-bitfields' is not supported"),
+            stderr(&refused).contains("'-mabi=ms' is not supported"),
             "{}",
             stderr(&refused)
         );
         // `--target` may come after the option.
         succeeds(&gcc(&[
             "-c",
-            "-mms-bitfields",
+            "-mabi=ms",
             "--target=x86_64-w64-mingw32",
             "x.c",
             "-o",
@@ -10693,7 +10693,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         let windows = gcc(&[
             "-c",
             "--target=x86_64-w64-mingw32",
-            "-mno-ms-bitfields",
+            "-mabi=sysv",
             "x.c",
             "-o",
             "w.o",
@@ -10701,7 +10701,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert_eq!(windows.status.code(), Some(1), "{}", stderr(&windows));
         succeeds(&linux(&[
             "-c",
-            "-mno-ms-bitfields",
+            "-mabi=sysv",
             "-mlong-double-80",
             "x.c",
             "-o",
@@ -12015,7 +12015,7 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(
             text.contains(&format!(
                 " {exe} -v --compiler-extensions --compiler-identity=gcc --diagnostic-format=gcc \
-                 --target={triple} --driver-name=gcc a.c -c\n"
+                 --target={triple} --driver-name=gcc --assembler=auto a.c -c\n"
             )),
             "{text}"
         );
@@ -12253,8 +12253,12 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(!plain.contains("null_pointer_is_valid"), "{plain}");
         assert!(plain.contains("getelementptr inbounds i8"), "{plain}");
         let null = llvm(&["-fno-delete-null-pointer-checks"]);
+        // An unoptimized Linux function keeps its frame pointer too.
         assert!(
-            null.contains("attributes #0 = { null_pointer_is_valid }"),
+            null.contains("attributes #0 = { null_pointer_is_valid }")
+                || null.contains(
+                    "attributes #0 = { null_pointer_is_valid \"frame-pointer\"=\"all\" }"
+                ),
             "{null}"
         );
         let restored = llvm(&[
@@ -12670,8 +12674,8 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         assert!(
             text.ends_with(&format!(
                 " --compiler-extensions \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
-                 \"--target={}\" \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \
-                 \"--output=o\\$.o\"\n",
+                 \"--target={}\" \"--driver-name=gcc\" \"--assembler=auto\" \"a b.c\" -D \
+                 \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n",
                 HOST_TARGET.0
             )),
             "{text}"

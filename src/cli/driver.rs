@@ -17,7 +17,8 @@
 //! - Inputs and output names: `driver/inputs.rs`.
 //! - One translation unit's job: `driver/job.rs`.
 //! - Dependency output (`-M`, `-MD`): `driver/dependencies.rs`.
-//! - Linking and assembling: `driver/link.rs`.
+//! - Linking and assembling: `driver/link.rs`; which assembler runs:
+//!   `driver/assembler.rs`.
 //! - Options: `driver/options.rs`; the driver's own messages:
 //!   `driver/messages.rs`.
 //!
@@ -29,6 +30,7 @@ mod inputs;
 mod job;
 
 // Outputs
+mod assembler;
 mod dependencies;
 mod link;
 

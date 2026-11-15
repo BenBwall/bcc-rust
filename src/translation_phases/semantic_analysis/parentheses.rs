@@ -9,6 +9,8 @@
 //! `diagnoseLogicalNotOnLHSofCheck` in Clang.
 //! C99: §6.5p3, p. 67; PDF p. 79; §6.8.4.1p3, p. 133; PDF p. 145.
 
+mod truth_operand;
+
 use super::{
     Analyzer,
     ExpressionInfo,
@@ -155,7 +157,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .unwrap_or(operand.source_vectors)
             };
             self.parentheses_warning(G::Parentheses, at, text);
-        } else if logical_not(left).is_some() && matches!(operator, B::BitwiseAnd | B::BitwiseOr) {
+        } else if logical_not(left).is_some()
+            && matches!(operator, B::BitwiseAnd | B::BitwiseOr)
+            && !self.gcc_truth_operand(right)
+        {
             let text = format_in!(
                 self.scratch,
                 "suggest parentheses around operand of '!' or change '{name}' to '{name}{name}' \

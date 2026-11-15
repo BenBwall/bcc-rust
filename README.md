@@ -63,7 +63,12 @@ and objects, archives and libraries, which go to the linker in order with
 `-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`, `-rdynamic`, `-pthread` and
 `-nostdlib`; `-pthread` also defines `_REENTRANT`, as in GCC and Clang.
 `-Wa,` and `-Xassembler` options go to the assembly inputs; C
-sources, which bcc assembles itself, warn about any but `--noexecstack`. An
+sources, which bcc assembles itself, warn about any but `--noexecstack`.
+Assembly inputs use the bundled clang's integrated assembler, or the
+system's `as` under `-fno-integrated-as` or `--assembler=system`
+(`--assembler=auto`, which `--gcc-mode` selects, falls back to the integrated
+one with a note); `-B PREFIX`, `COMPILER_PATH` and `PATH` are searched for it
+in that order, as GCC searches them. An
 output that is one of the input files, even through a symbolic or hard link,
 is refused before any job runs. `--sysroot` also selects the libraries the
 bundled clang links against. `-c` and `-S` name each output after its source
@@ -127,7 +132,8 @@ As in Clang, Linux code is position-independent executable code by default
 shared library. `-ftls-model=global-dynamic|local-dynamic|initial-exec|local-exec`
 names the least specific thread-local access model, as in GCC and Clang
 ([middle-end.md](middle-end.md#module) has the rules). The native back end
-generates executable code only and refuses `-fpic`, `-fPIC` and `-shared`.
+builds shared libraries too: its `-fpic`/`-fPIC` code reaches preemptible
+symbols through the GOT and PLT and thread-locals through `__tls_get_addr`.
 
 `--backend=native` replaces LLVM with bcc's own x86-64 code generator
 ([design](docs/design/native-backend.md)): it writes AT&T assembly for System V

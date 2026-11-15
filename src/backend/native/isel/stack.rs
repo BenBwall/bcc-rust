@@ -158,12 +158,12 @@ impl Selector<'_, '_, '_> {
         let buffer = self.reg(buffer);
         self.copy(Reg::Phys(PReg::Rdi), buffer);
         // Every register but `%rsp` changes on a second return, and `%rbp`
-        // too unless it addresses the frame, which the sequence restores.
+        // too unless it holds a frame pointer, which the sequence restores.
         let mut clobbers = PReg::ALL
             .into_iter()
             .fold(PRegSet::EMPTY, PRegSet::with)
             .without(PReg::Rsp);
-        if self.func.dynamic {
+        if self.func.frame_pointer() {
             clobbers = clobbers.without(PReg::Rbp);
         }
         self.emit(MInst::SjljSetjmp { clobbers });

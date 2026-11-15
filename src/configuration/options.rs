@@ -859,6 +859,23 @@ impl CompilerConfiguration {
         self.default_pack
     }
 
+    /// Lays out the records that name no layout of their own in Microsoft's
+    /// bit-field layout (true) or System V's (false), as GCC's and Clang's
+    /// `-mms-bitfields` and `-mno-ms-bitfields` do; `ms_struct` and
+    /// `gcc_struct` still decide their own record.
+    /// Implementation-defined: C99 §6.7.2.1 paragraph 10, p. 102; PDF p. 114.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Options.html>
+    pub(crate) const fn with_ms_bitfields(mut self, enabled: bool) -> Self {
+        self.ms_bitfields = Some(enabled);
+        self
+    }
+
+    /// The bit-field layout `-mms-bitfields` or `-mno-ms-bitfields` asks
+    /// for, if either was given.
+    pub(crate) const fn ms_bitfields(self) -> Option<bool> {
+        self.ms_bitfields
+    }
+
     /// `-Wfatal-errors` or `-Wno-fatal-errors`.
     pub(crate) const fn with_fatal_errors(mut self, enabled: bool) -> Self {
         self.fatal_errors = enabled;
@@ -1113,6 +1130,7 @@ impl CompilerConfiguration {
             trapv_last: false,
             default_pack: 0,
             pack_structures: false,
+            ms_bitfields: None,
             default_visibility: super::DefaultVisibility::Default,
             relaxed_floating_point: 0,
             given_floating_point: 0,

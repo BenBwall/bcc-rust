@@ -117,6 +117,10 @@ pub(super) fn normalize_language_arguments(
             normalized.push(format!("--language={language}").into());
         } else if text.starts_with("-Wa,") {
             normalized.push(format!("--assembler-option={text}").into());
+        } else if text == "-fintegrated-as" {
+            normalized.push("--assembler=integrated".into());
+        } else if text == "-fno-integrated-as" {
+            normalized.push("--assembler=system".into());
         } else if text == "-Xassembler" {
             normalized.push("--assembler-option=-Xassembler".into());
             if let Some(operand) = arguments.next() {
@@ -447,10 +451,13 @@ impl Cli {
         }
     }
 
-    /// The run-time checks the options ask for, each from its last option.
-    /// Only Linux has them: the personalities warn about them on Windows.
+    /// The run-time checks the options ask for, each from its last option,
+    /// over what an unoptimized or optimized compilation starts with
+    /// ([`Hardening::initial`]). Only Linux has them: the personalities warn
+    /// about them on Windows.
     fn hardening(&self) -> Hardening {
-        let mut hardening = Hardening::default();
+        let mut hardening =
+            Hardening::initial(self.target, self.code_generation.optimization_macros().0);
         if !matches!(self.target, Target::LinuxGnu | Target::LinuxMusl) {
             return hardening;
         }
@@ -940,6 +947,8 @@ enum LanguageFlag {
     PackStruct(u32),
     /// `-fpack-struct` (true) or `-fno-pack-struct`, which also clears N.
     PackAll(bool),
+    /// `-mms-bitfields` (true) or `-mno-ms-bitfields`.
+    MsBitfields(bool),
     /// `-fvisibility=default|hidden|protected|internal`.
     Visibility(crate::configuration::DefaultVisibility),
     /// `-fpermissive` (true) or `-fno-permissive`: GCC's C type-safety
@@ -1143,6 +1152,8 @@ impl LanguageFlag {
             | "-fno-permissive" => return Some(Self::Permissive(false)),
             | "-fpack-struct" => return Some(Self::PackAll(true)),
             | "-fno-pack-struct" => return Some(Self::PackAll(false)),
+            | "-mms-bitfields" => return Some(Self::MsBitfields(true)),
+            | "-mno-ms-bitfields" => return Some(Self::MsBitfields(false)),
             | _ => {},
         }
         if text
@@ -1275,6 +1286,7 @@ impl LanguageFlag {
             | Self::PackAll(false) => configuration
                 .with_pack_structures(false)
                 .with_default_pack(0),
+            | Self::MsBitfields(enabled) => configuration.with_ms_bitfields(enabled),
             | Self::Visibility(visibility) => configuration.with_default_visibility(visibility),
             | Self::Permissive(enabled) => configuration.with_permissive(enabled),
         }

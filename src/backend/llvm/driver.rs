@@ -572,7 +572,11 @@ impl Toolchain {
         if out_path == Path::new("-") {
             return crate::backend::write_object(out_path, &output.stdout);
         }
-        Ok(())
+        // Otherwise what the assembler printed there, as `-Wa,--version`
+        // prints its identity.
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(&output.stdout)?;
+        stdout.flush()
     }
 
     /// Preprocesses one input as [`Self::compile_foreign`] would before
