@@ -1151,6 +1151,16 @@ impl State<'_> {
                 self.error(format_args!("no input files"));
             }
         }
+        // GCC's driver hands every `-o` to the compiler proper when it stops
+        // after compiling (`-E`, `-M`, `-MM` or `-S`), and `cc1` refuses a
+        // second one (`c-family/c-opts.cc`, `c_common_handle_option`,
+        // `OPT_o`). For `-c` and a link the driver keeps the last, as
+        // Clang always does.
+        if !clang && self.outputs.len() > 1 && (self.preprocesses() || self.stages.contains(&"-S"))
+        {
+            self.errors += 1;
+            super::print("cc1: error: output filename specified twice\n", true);
+        }
         // Clang counts the outputs of the inputs it kept.
         let compiled = self
             .inputs

@@ -13738,6 +13738,25 @@ warn.c:34: warning: cast between pointer and integer of different size
             } else {
                 &["-no-pie", "-pie", "-shared"]
             };
+            // GCC's `cc1` refuses a second `-o` when the driver stops after
+            // compiling; for `-c` the driver keeps the last, as Clang and
+            // TCC do (TCC warns "multiple -o option").
+            for stop in ["-E", "-S"] {
+                let output =
+                    directory.bcc(mode, &[stop, "repeat.c", "-o", "first", "-o", "second"]);
+                if mode == "--gcc-mode" {
+                    assert!(!output.status.success(), "{mode} {stop}");
+                    assert_eq!(
+                        stderr(&output),
+                        "cc1: error: output filename specified twice\n",
+                        "{mode} {stop}"
+                    );
+                } else if mode == "--clang-mode" {
+                    succeeds(&output);
+                }
+            }
+            succeeds(&directory.bcc(mode, &["-c", "repeat.c", "-o", "first.o", "-o", "last.o"]));
+            assert!(directory.path("last.o").exists(), "{mode}");
             for &flag in links {
                 let output = directory.bcc(mode, &[flag, flag, "-c", "repeat.c", "-o", "r.o"]);
                 assert!(
