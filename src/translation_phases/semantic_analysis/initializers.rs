@@ -273,17 +273,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             }
                             let errors_before_conversion = self.semantic_errors;
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
-                                || !self.initializer_conversion(target, info, diagnostic_site)
+                                || !self.initializer_conversion(
+                                    target,
+                                    info,
+                                    diagnostic_site,
+                                    site.braced,
+                                )
                             {
-                                let (kind, words) = if self.void_value(info.ty) {
-                                    (
-                                        SemanticErrorKind::VoidValueUsed,
-                                        self.void_value_wording(VoidUse::Initialization, target),
-                                    )
-                                } else {
-                                    (SemanticErrorKind::InvalidInitializer, None)
-                                };
-                                self.error(kind, diagnostic_site, words, None);
+                                self.invalid_initializer(target, info, diagnostic_site);
                                 continue;
                             }
                             if self.semantic_errors != errors_before_conversion {
@@ -389,6 +386,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                         scalar_source: Some(
                                             site.scalar_source.unwrap_or(site.source),
                                         ),
+                                        braced: true,
                                         ..site
                                     }),
                                 )
@@ -714,8 +712,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         | None =>
                             match self.plan_site(cursor.container, &cursor.at, cursor.index, source)
                             {
+                                // Brace elision or a designator may have gone
+                                // inside the list's own object.
                                 | Some(site) => Site {
                                     own_flexible,
+                                    braced: cursor.container == root,
                                     ..site
                                 },
                                 | None => {
@@ -747,6 +748,26 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .insert(std::ptr::from_ref(initializer).addr(), plan);
         }
         (ty, flexible)
+    }
+
+    /// Reports the expression `info` that cannot initialize a `target`: a
+    /// void value, or any other that assignment would not convert.
+    /// C99: §6.7.8p11, p. 126; PDF p. 138.
+    fn invalid_initializer(
+        &mut self,
+        target: TypeId,
+        info: super::ExpressionInfo<'tu>,
+        site: SourceVectors,
+    ) {
+        let (kind, words) = if self.void_value(info.ty) {
+            (
+                SemanticErrorKind::VoidValueUsed,
+                self.void_value_wording(VoidUse::Initialization, target),
+            )
+        } else {
+            (SemanticErrorKind::InvalidInitializer, None)
+        };
+        self.error(kind, site, words, None);
     }
 
     /// An initializer of an object with static storage duration is a
