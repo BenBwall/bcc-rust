@@ -865,7 +865,7 @@
   .ranks-type { align-self: end; color: var(--ink-3); font-size: 10px; line-height: 1.2; text-align: center; overflow-wrap: normal; word-break: normal; }
   .ranks-type.is-floating { color: var(--ink-2); }
   .ranks-row { align-self: center; padding-right: 4px; color: var(--ink-3); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
-  .ranks-cell { display: flex; align-items: center; justify-content: center; min-height: 24px; border: 1.5px solid var(--seam); background: var(--cell); color: var(--ink); font: 700 10.5px/1.2 var(--font-mono); text-align: center; }
+  .ranks-cell { display: flex; align-items: center; justify-content: center; min-height: 24px; border: 1.5px solid var(--seam); background: var(--cell); color: var(--ink); font: 700 10.5px/1.2 var(--font-mono); text-align: center; overflow-wrap: normal; word-break: normal; }
   .ranks-cell.is-from { border: 1.5px dashed var(--flow-ink); }
   .ranks-cell.is-other { border: 1.5px dotted var(--ink-2); }
   .ranks-cell.is-to { border-color: var(--flow-ink); background: color-mix(in srgb, var(--flow-ink) 28%, var(--cell)); }
