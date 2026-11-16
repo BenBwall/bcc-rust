@@ -265,7 +265,7 @@ const PATH: [&str; 11] = [
      call is `call @square(v2)`.",
     "An int argument and an int result need no rewriting on x86-64, so for this program the \
      ABI-lowered IR is the same as the IR.",
-    "`n * n` is `mul nsw i32 %v0, %v0`; `nsw` (no signed wrap) tells LLVM the product never \
+    "`n * n` is `mul nsw i32 %v0, %v0`; `nsw` (no signed wrap) lets LLVM assume the product never \
      overflows, since signed overflow is undefined in C.",
     "`n` arrives in `%rdi`; `movq %rdi, %rax` copies it, `imull %edi, %eax` multiplies the low \
      32-bit halves, and `%eax` returns n * n to main's `callq square`.",

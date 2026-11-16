@@ -1,0 +1,36 @@
+context-macro-ranges-clang.c:8:13: warning: operator '<<' has lower precedence than '+'; '+' will be evaluated first [-Wshift-op-parentheses]
+    8 |     int r = SUM(a, c) << c;
+      |             ^~~~~~~~~ ~~
+context-macro-ranges-clang.c:5:21: note: expanded from macro 'SUM'
+    5 | #define SUM(a, b) a + b
+      |                     ^
+context-macro-ranges-clang.c:9:12: warning: & has lower precedence than ==; == will be evaluated first [-Wparentheses]
+    9 |     r += a & MASK == c;
+      |            ^~~~~~~~~~~
+context-macro-ranges-clang.c:14:10: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+   14 |     r += Min(a, b);
+      |          ^   ~  ~
+context-macro-ranges-clang.c:1:24: note: expanded from macro 'Min'
+    1 | #define Min(x, y) ((x) < (y) ? (x) : (y))
+      |                        ^
+context-macro-ranges-clang.c:15:12: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+   15 |     r += a < ID(b);
+      |          ~ ^    ~
+context-macro-ranges-clang.c:16:12: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+   16 |     r += c < LIM + 1;
+      |          ~ ^ ~~~~~~~
+context-macro-ranges-clang.c:17:17: warning: comparison of integers of different signs: 'unsigned int' and 'int' [-Wsign-compare]
+   17 |     r += BIG(c) > a;
+      |          ~~~~~~ ^ ~
+context-macro-ranges-clang.c:18:12: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+   18 |     r += a < BIG(c);
+      |          ~ ^ ~~~~~~
+context-macro-ranges-clang.c:20:12: warning: comparison of integers of different signs: 'unsigned int' and 'int' [-Wsign-compare]
+   19 |     r += BIG(
+      |          ~~~~
+   20 |         c) > a;
+      |         ~~ ^ ~
+context-macro-ranges-clang.c:21:13: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+   21 |     r += (a < b) == ID(c);
+      |           ~ ^ ~
+9 warnings generated.

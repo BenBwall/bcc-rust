@@ -266,6 +266,46 @@ fn nested_arguments_keep_scratch_memory_and_provenance_linear() {
     }
 }
 
+/// The explorer's smoke test stringifies a 40,000-token argument through
+/// three calls, each collected across a replacement list. The expansion
+/// arena then holds the argument a few times over, which must fit the
+/// 32 MiB region a WebAssembly arena is (`util::vm::REGION_BYTES` there).
+/// Native tokens and frames hold 64-bit pointers, so a native run that fits
+/// leaves the WebAssembly build room. A call's queue of a parameter's
+/// replacement once kept a vector of substitutions growing beside it,
+/// which stopped either from growing in place and took 35 MB.
+#[test]
+fn long_stringified_arguments_fit_a_webassembly_expansion_arena() {
+    let source = format!(
+        "#define S(x) #x\n#define T(x) S(x)\n#define U(x) T(x) T(x) T(x)\nconst char *s[] = \
+         {{U({})}};\n",
+        "b ".repeat(20_000)
+    );
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
+        &mut context,
+        PathBuf::from("<test>").into_boxed_path(),
+        &source,
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let mut strings = 0;
+    preprocessor.for_each_item(&mut context, |_, token| {
+        strings += usize::from(matches!(token.kind, TokenType::String(..)));
+    });
+    // The three strings concatenate into one.
+    assert_eq!(strings, 1);
+    assert_eq!(context.pending_error_count(), 0);
+    let used = preprocessor.expansion.high_water();
+    assert!(
+        used < 32 << 20,
+        "expansion scratch took {used} bytes, more than a WebAssembly arena holds"
+    );
+}
+
 #[test]
 fn adjacent_string_lookahead_restores_diagnostics_to_the_phase_context() {
     preprocess("\"a\" 0xg\n", |_, errors| {

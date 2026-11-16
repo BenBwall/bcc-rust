@@ -26,6 +26,7 @@ use crate::{
     },
     snapshot::{
         Clause,
+        Conversion,
         Diagnostic,
         Encoding,
         Frame,
@@ -272,6 +273,7 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
             }],
             range:          location,
             encoding:       None,
+            conversion:     None,
             objects:        Vec::new(),
             sequence_point: false,
         },
@@ -335,6 +337,7 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
             objects: Vec::new(),
             sequence_point: false,
             encoding: None,
+            conversion: None,
         },
         tree: None,
         stack: Vec::new(),
@@ -401,6 +404,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             objects:        event.objects.clone(),
             sequence_point: event.sequence_point,
             encoding:       encoding(event),
+            conversion:     conversion(event),
         },
         tree:         state
             .evaluation
@@ -435,6 +439,23 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
         output:       state.output.clone(),
         written:      state.written,
     }
+}
+
+/// The types a promotion or a usual arithmetic conversion went between,
+/// and for a conversion the other operand's type, which decides it (C99
+/// §6.3.1.1p2, §6.3.1.8p1), for the rank picture.
+fn conversion(event: &abstract_machine::Event) -> Option<Conversion> {
+    let promotion = match event.kind {
+        | abstract_machine::EventKind::IntegerPromotion => true,
+        | abstract_machine::EventKind::ArithmeticConversion => false,
+        | _ => return None,
+    };
+    Some(Conversion {
+        from: event.from_type.clone()?,
+        to: event.result_type.clone()?,
+        other: event.other_type.clone(),
+        promotion,
+    })
 }
 
 /// The fields of the floating value a step produced, for the bit view:
@@ -848,6 +869,66 @@ mod tests {
         integer(states.last()?.return_value.as_ref())
     }
 
+    /// Every branch of §6.3.1.8p1 as the engine runs it, with each operand
+    /// on the left and on the right: the step carries the other operand's
+    /// type, and the rule names the branch the two select.
+    #[test]
+    fn conversion_steps_carry_both_operands_and_their_rule() {
+        let cases = [
+            ("int", "long", "Both are signed, and long has the higher rank"),
+            (
+                "unsigned int",
+                "unsigned long",
+                "Both are unsigned, and unsigned long has the higher rank",
+            ),
+            ("int", "unsigned int", "have the same rank, so the signed operand converts"),
+            ("int", "unsigned long", "unsigned long is unsigned and has the higher rank"),
+            ("unsigned int", "long", "long is signed, has the higher rank and holds every"),
+            ("long long", "unsigned long", "long long has the higher rank, but it cannot hold"),
+            ("int", "double", "The other operand is floating"),
+            ("float", "double", "Both are floating, and double is the wider"),
+        ];
+        for (a, b, expected) in cases {
+            for order in ["a < b", "b < a"] {
+                let source = format!(
+                    "int main(void) {{ {a} a = 1; {b} b = 2; return {order}; }}"
+                );
+                let states = execute(&mut Machine::default(), &source);
+                let rules: Vec<(String, String, String, String)> = states
+                    .iter()
+                    .filter_map(|state| state.event.conversion.clone())
+                    .filter(|conversion| !conversion.promotion)
+                    .map(|conversion| {
+                        let said = crate::panels::ranks::rule(&conversion).unwrap_or_default();
+                        (
+                            conversion.from,
+                            conversion.other.unwrap_or_default(),
+                            conversion.to,
+                            said,
+                        )
+                    })
+                    .collect();
+                // Both operands convert only when neither type is the common one.
+                let expected_count = if a == "long long" { 2 } else { 1 };
+                assert_eq!(rules.len(), expected_count, "{source}: {rules:?}");
+                for (from, other, to, said) in &rules {
+                    assert!(said.contains(expected), "{source}: {said}");
+                    assert!(
+                        [a, b].contains(&from.as_str()) && [a, b].contains(&other.as_str()),
+                        "{source}: {from} meets {other}"
+                    );
+                    assert_ne!(from, other, "{source}");
+                    if a == "long long" {
+                        assert_eq!(to, "unsigned long long", "{source}");
+                    } else {
+                        assert_eq!((from.as_str(), to.as_str()), (a, b), "{source}");
+                    }
+                }
+            }
+        }
+    }
+
+
     #[test]
     fn steps_show_their_value_flow_and_the_objects_they_touch() {
         let mut machine = Machine::default();
@@ -1138,7 +1219,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             crate::panels::value_text(&name.value).as_deref(),
-            Some("{'A','d','a','\\0'}")
+            Some("\"Ada\\0\"")
         );
         let Value::Array { elements } = &name.value else {
             panic!("name is an array");

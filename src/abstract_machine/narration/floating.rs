@@ -321,6 +321,7 @@ impl Machine {
         );
         event.from_type = Some(String::from(a));
         event.result_type = Some(String::from(target));
+        event.other_type = Some(String::from(b));
         event.operands.push(Operand::Value(value));
         result(event, Operand::Value(converted))
     }
@@ -406,8 +407,9 @@ impl Machine {
                 ),
                 format!(
                     "IEEE 754 gives the invalid operation {a} {operator} {b} the result NaN, not \
-                     a number; x86-64 makes it the default NaN, whose sign bit is set, which \
-                     glibc prints as {shown}."
+                     a number. Done by an x86-64 instruction at run time it is the default NaN, \
+                     whose sign bit is set, which glibc prints as {shown}; a compiler that works \
+                     it out from constants may give a NaN of either sign, and Clang's prints nan."
                 ),
             )
         } else if rounded.exact {
@@ -713,7 +715,7 @@ pub(in crate::abstract_machine) fn floating_declaration(format: Floating) -> Str
         ""
     };
     format!(
-        "{} object ({} bytes on x86-64{padding}: {}, about {} significant decimal digits)",
+        "{} object ({} bytes on x86-64{padding}: {}, keeping {} significant decimal digits)",
         article(format.spelling()),
         format.bytes(),
         format.format_name(),

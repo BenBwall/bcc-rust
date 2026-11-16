@@ -74,6 +74,32 @@ mod tests {
         assert!(!output.stdout.is_empty(), "the test list is captured");
     }
 
+    /// A program that crashes on purpose dumps no core, even where cores go
+    /// to a handler program, which ignores a limit of 0.
+    #[cfg(unix)]
+    #[test]
+    fn crashing_programs_dump_no_core() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let output =
+            crate::native::run_native(Command::new("sh").args(["-c", "kill -ABRT $$"])).unwrap();
+        assert_eq!(output.status.signal(), Some(libc::SIGABRT), "{output:?}");
+        assert!(!output.status.core_dumped(), "{output:?}");
+        #[cfg(target_os = "linux")]
+        {
+            let output =
+                crate::native::run_native(Command::new("cat").arg("/proc/self/limits")).unwrap();
+            let limits = std::str::from_utf8(&output.stdout).unwrap();
+            let core = limits
+                .lines()
+                .find(|line| line.starts_with("Max core file size"))
+                .expect("the core limit is listed");
+            let mut fields = core.split_whitespace().skip(4);
+            let (soft, hard) = (fields.next(), fields.next());
+            let expected = if hard == Some("0") { "0" } else { "1" };
+            assert_eq!(soft, Some(expected), "the soft limit is one byte: {core}");
+        }
+    }
+
     #[test]
     fn inherited_pipes_cannot_outlive_the_reader_deadline() {
         drop(run_until_timeout(

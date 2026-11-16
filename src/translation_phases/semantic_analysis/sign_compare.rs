@@ -120,10 +120,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 site,
             );
         } else {
-            // Clang's `DiagRuntimeBehavior`; it underlines both operands.
+            // Clang's `DiagRuntimeBehavior`; it underlines both operands,
+            // without their parentheses (`AnalyzeComparison` in
+            // `SemaChecking.cpp` takes `IgnoreParenImpCasts` of each).
             let operands = [
-                left.expression.source_vectors,
-                right.expression.source_vectors,
+                Self::without_parentheses(left.expression).source_vectors,
+                Self::without_parentheses(right.expression).source_vectors,
             ];
             self.with_highlights(operands, |analyzer| {
                 analyzer.warn_if_reachable(

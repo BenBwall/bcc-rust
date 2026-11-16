@@ -5,6 +5,8 @@
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 //! Macro expansion itself belongs to preprocessing.
 
+use std::num::NonZeroU32;
+
 use super::segmented_vec::SegmentedVec;
 use crate::{
     translation_phases::provenance::SourceVector,
@@ -20,8 +22,37 @@ use crate::{
 /// token until parsing reads past it, never copies itself into a larger
 /// buffer and leaves the old one behind.
 pub(super) struct ExpansionSites<'tu> {
-    pub(super) entries: SegmentedVec<'tu, (u32, u32)>,
-    pub(super) ends:    SegmentedVec<'tu, SourceVector>,
+    pub(super) entries:   SegmentedVec<'tu, (u32, u32)>,
+    pub(super) ends:      SegmentedVec<'tu, SourceVector>,
+    /// For the table of invocation starts, where each invocation in `ends`
+    /// ends, by the same index; the table of endpoints leaves it empty.
+    pub(super) spans:     SegmentedVec<'tu, SourceVector>,
+    /// For the table of invocation starts, the argument substitution that
+    /// produced the token, by the same index, or `None` for a token of a
+    /// replacement list; the table of endpoints leaves it empty.
+    pub(super) arguments: SegmentedVec<'tu, Option<ArgumentSubstitution>>,
+}
+
+/// One substitution of a macro argument for a parameter of the replacement
+/// list, numbered as the preprocessor makes it. Two tokens of the same
+/// invocation come from one argument expansion, which Clang draws where
+/// the invocation spells it, only when they share a substitution: two
+/// arguments, or two uses of one parameter, are separate expansions.
+/// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ArgumentSubstitution(NonZeroU32);
+
+impl ArgumentSubstitution {
+    /// The first substitution of a run of preprocessing.
+    pub(crate) const FIRST: Self = Self(NonZeroU32::MIN);
+
+    /// The substitution after this one. Numbers repeat only after
+    /// 2^32 - 1 substitutions within one top-level expansion, and the two
+    /// ends of a range compared are read within a few tokens of each other.
+    #[must_use]
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.checked_add(1).unwrap_or(NonZeroU32::MIN))
+    }
 }
 
 impl<'tu> ExpansionSites<'tu> {
@@ -67,6 +98,30 @@ impl<'tu> ExpansionSites<'tu> {
         id
     }
 
+    /// [`Self::site_id`] for an invocation that begins at `site` and ends at
+    /// `end`, and a token that `argument` substituted, for the table of
+    /// invocation starts.
+    pub(super) fn span_id(
+        &mut self,
+        site: SourceVector,
+        end: SourceVector,
+        argument: Option<ArgumentSubstitution>,
+    ) -> u32 {
+        if self.ends.last() == Some(&site)
+            && self.spans.last() == Some(&end)
+            && self.arguments.last() == Some(&argument)
+        {
+            return u32::try_from(self.ends.len() - 1)
+                .expect("macro expansion site index exceeds u32::MAX");
+        }
+        let id =
+            u32::try_from(self.ends.len()).expect("macro expansion site index exceeds u32::MAX");
+        self.ends.push(site);
+        self.spans.push(end);
+        self.arguments.push(argument);
+        id
+    }
+
     pub(super) fn discard_before(&mut self, end: u32) {
         let count = self.entries.partition_point(|&(key, _)| key < end);
         // Compact geometrically for full-batch input; renumbering the whole
@@ -77,21 +132,31 @@ impl<'tu> ExpansionSites<'tu> {
         self.entries.discard_front(count);
         let Some(first_id) = self.entries.iter().map(|&(_, id)| id).min() else {
             self.ends.clear();
+            self.spans.clear();
+            self.arguments.clear();
             return;
         };
         self.ends.discard_front(first_id as usize);
+        if !self.spans.is_empty() {
+            self.spans.discard_front(first_id as usize);
+            self.arguments.discard_front(first_id as usize);
+        }
         self.entries.for_each_mut(|(_, id)| *id -= first_id);
     }
 
     pub(super) fn clear(&mut self) {
         self.entries.clear();
         self.ends.clear();
+        self.spans.clear();
+        self.arguments.clear();
     }
 
     pub(super) fn new_in(tu: &'tu Bump) -> Self {
         Self {
-            entries: SegmentedVec::new_in(tu),
-            ends:    SegmentedVec::new_in(tu),
+            entries:   SegmentedVec::new_in(tu),
+            ends:      SegmentedVec::new_in(tu),
+            spans:     SegmentedVec::new_in(tu),
+            arguments: SegmentedVec::new_in(tu),
         }
     }
 }
