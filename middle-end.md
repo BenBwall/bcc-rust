@@ -459,6 +459,15 @@ Inline assembly (no result; see [GNU inline assembly](#gnu-inline-assembly-2026-
 asm [sideeffect] "template" (out|in "constraint" <ty> [bytes N] value, ...) [clobber(name, ...)]
 ```
 
+Named target instructions (see [x86 intrinsics](#x86-intrinsics-2026-11-16)):
+a vector operand is the `ptr` to its bytes, a vector result is written
+through a destination `ptr` that comes first, and a scalar result is the
+instruction's value:
+
+```text
+[v =] intrinsic x86.<name> [immediate,] values
+```
+
 Terminators end every block and nothing else does:
 
 ```text
@@ -877,10 +886,12 @@ See the [M7 receipt](docs/research/semantic-facts-m7.md).
 
 **M6 is complete.** The x86, vector and type-generic families are registry
 descriptors too, and `__has_builtin` queries the registry. Their operations are
-`Semantic` (folded or selected by semantic analysis) or `Unsupported`; neither
-retains a checked instance, so `schedule_builtin` lets the call reach the same
-refusal as before (an unsupported builtin, or an opaque binding's unanalyzed
-type), never an external symbol. Lowering's
+`Semantic` (folded or selected by semantic analysis) or `Family` (expanded by
+identity in `lowering/x86.rs`, `lowering/vectors.rs` and
+`lowering/elementwise.rs`); neither retains a checked instance. A family member
+lowering does not expand, and an opaque binding, reach the same refusal as
+before (an unsupported builtin, or its unanalyzed type), never an external
+symbol. Lowering's
 keyword scheduling still matches the keyword of a varargs, offsetof or
 `choose_expr` form.
 
@@ -3384,7 +3395,7 @@ a feature only permits instructions, so both run a `target` function's code as a
 other: the native back end writes baseline code for it, which is correct on every
 processor that has the features, and the interpreter computes it. What the features
 would change otherwise stays refused: the native back end's refusal of a signature with
-a YMM register, and every x86 builtin, which lowering refuses whatever the features.
+a YMM register, and of the named x86 instructions ("x86 intrinsics" below).
 
 **Evidence.** `src/target/x86_features/tests.rs` covers each compiler's reading;
 `tests/integration/target_attribute.rs` the diagnostics (against the pinned Clang
@@ -3465,3 +3476,69 @@ Remaining differences: GCC's `-Wframe-address` warning (in `-Wall`) is not
 implemented; outer levels stay refused on Windows and in the interpreter;
 the native back end addresses a fixed-size frame from `%rsp` where GCC's
 `-O0` code uses `%rbp`, which no program observes.
+
+## x86 intrinsics (2026-11-16)
+
+bcc's `<immintrin.h>` headers write most SSE intrinsics in C over GNU vectors,
+but their AVX, AVX2, AES-NI and PCLMULQDQ intrinsics call `__builtin_ia32_*`
+builtins (234 spellings) and Clang's elementwise, non-temporal and
+`__builtin_nondeterministic_value` builtins, which lowering refused. All of
+them lower now. The registry's family operation is `Family(X86)` or
+`Family(Vector)` (`builtins/contract.rs`); `lowering::x86::expands` lists the
+x86 builtins lowering expands, and the other x86 descriptors (those no header
+calls, such as `__builtin_ia32_crc32si`) keep their refusal by name.
+
+**Lane code.** A vector lives in memory (see "GNU vector values" above), so
+`lowering/x86.rs` expands each builtin into scalar code over the lanes of its
+operands' objects, as Clang's `CGBuiltin.cpp` expands many into generic LLVM
+IR: shuffles, blends, alignments, byte shifts, inserts and extracts by
+immediate (`x86/permutes.rs`, which copies lanes as integers so every NaN bit
+survives); permutes by a vector of indices, which load the lane at a computed
+offset; packs, horizontal and alternating sums, the multiplications that keep
+the high half or widen, averages, sums of absolute differences, sign transfer,
+the shifts (a count past the width clears the lane or fills it with the sign),
+the dot products in the order Intel's SDM sums them, minimum and maximum with
+x86's NaN rule, and ADCX/SBB carry chains (`x86/arithmetic.rs`); comparisons by
+all 32 `CMPPS` predicates, sign-bit masks, `PTEST`/`VTESTPS`, blends by mask,
+and the masked loads, stores and gathers, whose lanes each run in a guarded
+block so a masked-off lane's memory is never touched (`x86/masks.rs`).
+`lowering/elementwise.rs` applies `abs`, `min`, `max` (LLVM's `minnum` and
+`maxnum` for floating lanes), `add_sat`, `sub_sat` and `sqrt` to a scalar or to
+each lane; the non-temporal accesses are ordinary ones, and a
+nondeterministic value is zero. Every back end runs this code.
+
+**Named instructions.** What no generic code computes exactly, or only at great
+length, is one `intrinsic` instruction (`ir/intrinsics.rs`), which names the
+instruction and the LLVM intrinsic Clang calls for it: the AES rounds and key
+assist, `PCLMULQDQ`, `ROUNDPS` and its kin, `VCVTPS2DQ`/`VCVTPD2DQ` (in MXCSR's
+mode, with the integer indefinite for NaN and out-of-range lanes) and their
+truncating forms, `VRCPPS`, `VRSQRTPS`, `VZEROUPPER`, `VZEROALL`, the SSE4.2
+string comparisons, and the scalar square roots behind `__builtin_elementwise_sqrt`.
+Its vector operands are `ptr` values to their bytes and a vector result goes
+through a destination `ptr`, its first operand; a scalar result is its value,
+and an immediate is part of the record. The verifier checks the operands
+against the signature. The optimizer treats it as a call: it reads and
+writes memory it does not name, and it is never removed.
+
+- The LLVM back end loads each vector operand as an LLVM vector (alignment 1,
+  since a vector object may sit in a packed record), calls the LLVM intrinsic,
+  and stores a vector result.
+- The interpreter (`backend/interpreter/intrinsics.rs`) computes AES from
+  FIPS 197, the carry-less product, the rounding modes, the conversions and
+  the string comparisons (Intel SDM Vol. 1, §12.10) from the operand bytes,
+  and stops on `VRCPPS` and `VRSQRTPS`, whose results each processor
+  approximates its own way, as unsupported.
+- The native and WebAssembly back ends refuse the instruction by name.
+
+**Evidence.** `tests/fixtures/programs/x86_intrinsics_avx2.c` runs every AVX,
+AVX2, AES-NI and PCLMULQDQ intrinsic of bcc's headers that calls these
+builtins (functions and macros, every `_mm256_cmp_ps` predicate, shift counts
+from 0 past the width, gathers with masks) on six generated input sets of
+random bytes, special `float` and `double` values and boundary integers;
+`tests/integration/x86_intrinsics.rs` compares its output under both
+identities through LLVM at `-O0` and `-O2` with the builds of the host GCC and
+the pinned Clang, and the interpreter (without the approximations) and the
+native back end (without the named instructions), each with and without
+bcc's optimizer, with builds of the same subset. `lowering/tests/x86.rs`
+pins the lane code and the named instructions, `ir/tests/intrinsics.rs` the
+textual form and the verifier.

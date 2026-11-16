@@ -15,8 +15,9 @@
 //! - A call of an x86 builtin that needs a feature the calling function lacks,
 //!   which Clang names ("needs target feature"; GCC declares such a builtin
 //!   only where a target enables its feature, and bcc gives GCC's words for its
-//!   reading). Lowering has no x86 instructions, so a call the function's
-//!   features allow is refused as an unsupported builtin.
+//!   reading). A call the function's features allow is expanded
+//!   (`x86.rs`), or refused as an unsupported builtin where lowering does
+//!   not expand the builtin.
 //! - A function turning off a feature every function bcc compiles uses (x87,
 //!   SSE2 and their kin), or asking for general registers only.
 //! - A function whose attribute turns AVX or AVX-512 on or off where bcc's own
@@ -40,8 +41,8 @@ use super::{
 };
 use crate::{
     builtins::{
+        BuiltinFamily,
         BuiltinOperation,
-        UnsupportedReason,
     },
     target::FunctionTarget,
     translation_phases::{
@@ -139,7 +140,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let Some(descriptor) = unit.sema.bindings[binding].origin.descriptor() else {
             return Ok(());
         };
-        if descriptor.operation != BuiltinOperation::Unsupported(UnsupportedReason::X86) {
+        if descriptor.operation != BuiltinOperation::Family(BuiltinFamily::X86) {
             return Ok(());
         }
         let command_line;

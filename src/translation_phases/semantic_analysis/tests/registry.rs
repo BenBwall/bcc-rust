@@ -368,7 +368,7 @@ fn m6_family_descriptors_retain_no_instance_and_keep_their_contracts() {
         );
         assert_eq!(
             family,
-            matches!(descriptor.operation, B::Semantic(_) | B::Unsupported(_)),
+            matches!(descriptor.operation, B::Semantic(_) | B::Family(_)),
             "{}",
             descriptor.spelling
         );

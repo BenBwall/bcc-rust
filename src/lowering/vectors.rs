@@ -56,11 +56,7 @@ use super::{
 };
 use crate::{
     abi::Convention,
-    builtins::{
-        BuiltinId,
-        BuiltinOperation,
-        UnsupportedReason,
-    },
+    builtins::BuiltinId,
     configuration::RuleSet,
     ir::{
         AggregateFlags,
@@ -927,14 +923,6 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         e: &'tu Expression<'tu>,
     ) -> Result<bool, LoweringError> {
         let Some(builtin) = self.vector_builtin(e) else {
-            // The elementwise and non-temporal vector builtins have no
-            // lowering yet; refuse them by name rather than call them.
-            if self.unvectorized_builtin(e) {
-                return Err(LoweringError::unsupported(
-                    super::Construct::Builtin,
-                    e.source_vectors,
-                ));
-            }
             return Ok(false);
         };
         let arguments = self.vector_arguments(e)?;
@@ -1044,26 +1032,6 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             | BuiltinId::Shuffle => Some(VectorBuiltin::Shuffle),
             | _ => None,
         }
-    }
-
-    /// Whether `e` calls a vector builtin lowering does not expand.
-    fn unvectorized_builtin(&self, e: &'tu Expression<'tu>) -> bool {
-        let Some(call) = self.unit.sema.call_facts(e) else {
-            return false;
-        };
-        let Callee::Builtin {
-            binding: Some(binding),
-            ..
-        } = call.callee
-        else {
-            return false;
-        };
-        self.unit.sema.bindings[binding]
-            .origin
-            .descriptor()
-            .is_some_and(|descriptor| {
-                descriptor.operation == BuiltinOperation::Unsupported(UnsupportedReason::Vector)
-            })
     }
 
     /// The argument expressions of the call `e`.

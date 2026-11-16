@@ -334,14 +334,37 @@ fn foreign_vector_conventions_are_refused() {
     );
 }
 
-/// The vector builtins lowering does not expand are refused by name rather
-/// than called.
+/// Clang's elementwise builtins work lane by lane, or on a scalar: `max`
+/// compares each lane by its signedness and selects; `add_sat` widens and
+/// clamps; `sqrt` is the named square root.
 #[test]
-fn unexpanded_vector_builtins_are_refused() {
-    let errors = lower(
-        "typedef int V __attribute__((vector_size(16))); V f(V a, V b) { return \
-         __builtin_elementwise_max(a, b); }",
-    )
-    .expect_err("refused");
-    assert_eq!(errors, ["not yet supported by lowering: this builtin"]);
+fn elementwise_builtins_expand_lane_by_lane() {
+    for (source, wanted) in [
+        (
+            "typedef int V __attribute__((vector_size(16))); V f(V a, V b) { return \
+             __builtin_elementwise_max(a, b); }",
+            "icmp.i32 sgt",
+        ),
+        (
+            "typedef unsigned char V __attribute__((vector_size(16))); V f(V a, V b) { return \
+             __builtin_elementwise_add_sat(a, b); }",
+            "icmp.i8 ult",
+        ),
+        (
+            "typedef short V __attribute__((vector_size(16))); V f(V a, V b) { return \
+             __builtin_elementwise_sub_sat(a, b); }",
+            "sext.i32",
+        ),
+        (
+            "double f(double x) { return __builtin_elementwise_sqrt(x); }",
+            "intrinsic x86.sqrtsd",
+        ),
+        (
+            "int f(int *p) { return __builtin_nontemporal_load(p); }",
+            "load.i32",
+        ),
+    ] {
+        let text = functions(&lowered(source));
+        assert!(text.contains(wanted), "{source}\n{text}");
+    }
 }

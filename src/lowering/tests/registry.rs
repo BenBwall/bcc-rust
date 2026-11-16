@@ -68,11 +68,12 @@ fn m4_missing_checked_instances_and_operands_report_provenance() {
     }
 }
 
-/// Registered families without lowering keep their refusal; none becomes a
+/// Registered family members lowering does not expand keep their refusal;
+/// none becomes a
 /// call to an external symbol of its spelling or a missing-fact error. A
-/// prototyped x86 call and an unexpanded vector builtin are unsupported
-/// builtins; a binary128 binding keeps the opaque type it had before M6,
-/// which stops at its unanalyzed callee type.
+/// prototyped x86 builtin that bcc's headers do not call is an unsupported
+/// builtin, after Clang's check of its feature; a binary128 binding keeps the
+/// opaque type it had before M6, which stops at its unanalyzed callee type.
 #[test]
 fn m6_family_calls_remain_unsupported_builtins() {
     for (source, refusal) in [
@@ -90,7 +91,8 @@ fn m6_family_calls_remain_unsupported_builtins() {
             },
         ),
         (
-            "int f(int *p){return __builtin_nontemporal_load(p);}",
+            "typedef float v4sf __attribute__((vector_size(16)));v4sf f(v4sf a,v4sf b){return \
+             __builtin_ia32_cmpeqps(a,b);}",
             LoweringErrorKind::Unsupported(Construct::Builtin),
         ),
         (

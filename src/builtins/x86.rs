@@ -9,8 +9,9 @@
 //! Each descriptor records a signature, verified on all four targets, and
 //! the immediate-operand limits that
 //! `semantic_analysis/builtins/x86_builtins.rs` checks after prototype
-//! conversion. Lowering has no x86 instructions; the operation keeps the
-//! existing refusal rather than an external call. Header calls that name a
+//! conversion. Lowering expands the builtins bcc's intrinsic headers call
+//! (`lowering/x86.rs`) and refuses the others by name, never as an external
+//! call. Header calls that name a
 //! scalar registry spelling are listed in `MERGED`: those spellings keep their
 //! one scalar descriptor. C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84
 //! (prototype conversion).
@@ -19,6 +20,7 @@ use super::{
     Availability,
     BuiltinDescriptor,
     BuiltinEffectClass,
+    BuiltinFamily,
     BuiltinId as Id,
     BuiltinOperation,
     ConstantConstraint,
@@ -30,7 +32,6 @@ use super::{
     SignatureType as T,
     SyntaxForm,
     TypeRule,
-    UnsupportedReason,
 };
 use crate::{
     configuration::Feature,
@@ -518,7 +519,7 @@ const fn x86(
         arguments,
         arity: (parameters.len(), parameters.len()),
         effects: BuiltinEffectClass::Unknown,
-        operation: BuiltinOperation::Unsupported(UnsupportedReason::X86),
+        operation: BuiltinOperation::Family(BuiltinFamily::X86),
         library: None,
     }
 }

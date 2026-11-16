@@ -150,6 +150,8 @@ pub(super) enum Op<'s> {
     /// Inline assembly with one value per descriptor operand; the
     /// descriptor joins the module when the draft is emitted.
     InlineAsm(&'s crate::ir::InlineAsm<'s>, &'s [Value]),
+    /// A named target instruction with its immediate and operands.
+    Intrinsic(crate::ir::Intrinsic, u8, &'s [Value]),
 }
 
 /// How a block ends.

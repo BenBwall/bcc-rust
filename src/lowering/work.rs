@@ -179,6 +179,9 @@ pub(super) enum Task<'tu> {
     /// Complete a GNU vector builtin whose vector operands are on the
     /// stack (`vectors.rs`).
     FinishVectorBuiltin(&'tu Expression<'tu>),
+    /// Complete an x86 or elementwise builtin whose operands are on the
+    /// stack (`x86.rs`).
+    FinishTargetBuiltin(&'tu Expression<'tu>),
     FinishBuiltin(
         &'tu Expression<'tu>,
         &'tu crate::translation_phases::semantic_analysis::BuiltinCallFacts<'tu>,

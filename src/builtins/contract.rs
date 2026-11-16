@@ -420,9 +420,11 @@ pub(crate) enum BuiltinOperation {
     /// Checked and folded or selected by semantic analysis; lowering reads
     /// the retained constant or selected operand and otherwise refuses.
     Semantic(SemanticOperation),
-    /// Semantic-only support: lowering refuses the call as an unsupported
-    /// builtin, never as an external symbol.
-    Unsupported(UnsupportedReason),
+    /// A family of builtins lowering expands from the call's operands by
+    /// identity (`lowering/x86.rs`, `lowering/vectors.rs`,
+    /// `lowering/elementwise.rs`), never as an external symbol; it refuses a
+    /// member it does not expand as an unsupported builtin.
+    Family(BuiltinFamily),
 }
 
 impl BuiltinOperation {
@@ -430,7 +432,7 @@ impl BuiltinOperation {
     /// instance for lowering to execute. Family operations keep their result
     /// in the expression record instead.
     pub(crate) const fn retains_instance(self) -> bool {
-        !matches!(self, Self::Semantic(_) | Self::Unsupported(_))
+        !matches!(self, Self::Semantic(_) | Self::Family(_))
     }
 }
 
@@ -443,8 +445,9 @@ pub(crate) enum SemanticOperation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum UnsupportedReason {
-    /// x86 SIMD and system intrinsics have no lowering.
+pub(crate) enum BuiltinFamily {
+    /// x86 SIMD and system intrinsics: lowering expands those bcc's
+    /// intrinsic headers call (`lowering::x86::expands`).
     X86,
     /// Vector shuffles, conversions, bit casts and overloads.
     Vector,

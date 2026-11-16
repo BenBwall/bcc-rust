@@ -86,6 +86,7 @@ mod builtin_effects;
 mod builtins;
 mod cleanup;
 mod complex;
+mod elementwise;
 mod expressions;
 mod general_regs;
 mod gnu;
@@ -104,6 +105,7 @@ mod vla;
 mod wide_bit_int;
 mod wide_vectors;
 mod work;
+mod x86;
 
 // Construction
 mod debug_locations;
@@ -575,6 +577,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.finish_builtin(expression, builtin)
             },
             | Task::FinishVectorBuiltin(expression) => self.finish_vector_builtin(expression),
+            | Task::FinishTargetBuiltin(expression) => self.finish_target_builtin(expression),
             | Task::OmittedConditional {
                 expression,
                 conditional,

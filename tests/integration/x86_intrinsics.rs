@@ -7,7 +7,9 @@
 //! turns on AVX2 and BMI2 where the processor has them. Each is built under
 //! both identities,
 //! interpreted and compiled through LLVM and the native back end, and must
-//! print GCC's output.
+//! print GCC's output. `x86_intrinsics_avx2.c` covers the AVX, AVX2, AES-NI
+//! and PCLMULQDQ intrinsics whose builtins lowering expands, against both
+//! GCC's and the pinned Clang's builds.
 
 #[cfg(test)]
 #[expect(
@@ -57,6 +59,90 @@ mod tests {
     #[test]
     fn target_attribute_paths_match_gcc() {
         check("target_attribute.c", &[], &["-DALWAYS_FAST"]);
+    }
+
+    /// The AVX, AVX2, AES-NI and PCLMULQDQ intrinsics print what GCC's and
+    /// the pinned Clang's builds print, through LLVM at -O0 and -O2. The
+    /// interpreter runs all but the approximate reciprocals, and the native
+    /// back end all but the named instructions it refuses; each such arm is
+    /// compared with references built with the same macros. A processor
+    /// without AVX2, AES, PCLMULQDQ or SSE4.2 prints "skip" in every build,
+    /// and runs no interpreter comparison, whose reference could not run.
+    #[test]
+    fn avx2_intrinsics_match_gcc_and_clang() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let source = fixture("x86_intrinsics_avx2.c");
+        let mut references = vec![("--compiler-identity=clang", "target/llvm/bin/clang")];
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            references.push(("--compiler-identity=gcc", "gcc"));
+        }
+        for (identity, compiler) in references {
+            let expected = build_and_run(compiler, &source, &[]);
+            let skipped = expected == "skip\n";
+            let interpreted = ["-DALWAYS_FAST", "-DNO_APPROX"];
+            let arms: [(&[&str], &[&str]); 6] = [
+                (&[], &["-O0"]),
+                (&[], &["-O2"]),
+                (&interpreted, &["--interpret", "--opt=none"]),
+                (&interpreted, &["--interpret", "--opt=bcc"]),
+                (&["-DNO_NAMED"], &["--backend=native"]),
+                (&["-DNO_NAMED"], &["--backend=native", "--opt=bcc"]),
+            ];
+            for (defines, flags) in arms {
+                let interpreting = flags[0] == "--interpret";
+                if interpreting && skipped {
+                    continue;
+                }
+                let expected = if defines.is_empty() {
+                    expected.clone()
+                } else {
+                    build_and_run(compiler, &source, defines)
+                };
+                let context = format!("{identity} {defines:?} {flags:?}");
+                let stdout = if interpreting {
+                    let output = bcc(&[&[identity, "-w", &source][..], defines, flags].concat());
+                    assert_eq!(output.status.code(), Some(0), "{context}: {}", text(&output.stderr));
+                    text(&output.stdout)
+                } else {
+                    let executable = temporary("avx2.exe");
+                    let built = bcc(&[
+                        &[identity, "-w", &source, "-o", executable.to_str().unwrap()][..],
+                        defines,
+                        flags,
+                    ]
+                    .concat());
+                    assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+                    let run = run_native(&mut Command::new(&executable)).unwrap();
+                    std::fs::remove_file(&executable).unwrap();
+                    assert_eq!(run.status.code(), Some(0), "{context}");
+                    text(&run.stdout)
+                };
+                assert_lines(&stdout, &expected, &context);
+            }
+        }
+    }
+
+    /// The output of `source` built by `compiler` with `extra` arguments
+    /// (macros, more sources and objects) at -O0.
+    fn build_and_run(compiler: &str, source: &str, extra: &[&str]) -> String {
+        let executable = temporary("reference.exe");
+        let built = Command::new(compiler)
+            .args(extra)
+            .args([source, "-O0", "-w", "-o"])
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{compiler}: {}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&executable)).unwrap();
+        std::fs::remove_file(executable).unwrap();
+        assert_eq!(run.status.code(), Some(0), "{compiler} {extra:?}");
+        text(&run.stdout)
     }
 
     /// An out-of-range immediate is Clang's default-error

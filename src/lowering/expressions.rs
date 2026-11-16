@@ -421,7 +421,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     ));
                 }
                 self.check_builtin_features(expression)?;
-                if self.schedule_vector_call(expression)? || self.schedule_builtin(expression)? {
+                if self.schedule_vector_call(expression)?
+                    || self.schedule_target_call(expression)?
+                    || self.schedule_builtin(expression)?
+                {
                     return Ok(());
                 }
                 self.tasks.push(Task::Finish(expression));

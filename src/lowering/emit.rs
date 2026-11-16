@@ -211,6 +211,16 @@ pub(super) fn emit<'s>(
                     _ = builder.inline_asm(asm, &args);
                     None
                 },
+                | Op::Intrinsic(intrinsic, immediate, args) => {
+                    let args = map_list(args, &values, &map, scratch)?;
+                    let args = builder.value_list(&args);
+                    let inst = builder.insert(InstData::Intrinsic {
+                        intrinsic,
+                        immediate,
+                        args,
+                    });
+                    builder.inst_result(inst)
+                },
                 | Op::CallIndirect(sig, callee, args) => {
                     let callee = map(callee, &values)?;
                     let args = map_list(args, &values, &map, scratch)?;
@@ -340,7 +350,10 @@ fn undefined_uses<'s>(draft: &Draft<'s>, order: &[Block]) -> ArenaVec<'s, (bool,
                     });
                 },
                 | Op::Iconst(..) | Op::Fconst(..) | Op::Diagnostic(_) => {},
-                | Op::Atomic(_, args) | Op::Call(_, args) | Op::InlineAsm(_, args) =>
+                | Op::Atomic(_, args)
+                | Op::Call(_, args)
+                | Op::InlineAsm(_, args)
+                | Op::Intrinsic(_, _, args) =>
                     for &arg in args {
                         mark(arg);
                     },
