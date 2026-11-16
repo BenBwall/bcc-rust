@@ -88,8 +88,8 @@ clauses! {
     /// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
     FLOATING_OPERATIONS = "F.3p1", "pp. 445-447; PDF pp. 457-459", "Operators and functions",
         "Under Annex F, +, -, * and / are IEEE 754's operations: each gives its exact result \
-         rounded to the type, x / 0 is an infinity, 0 / 0 a NaN, and comparisons with a NaN are \
-         false.";
+         rounded to the type, x / 0 is an infinity, 0 / 0 a NaN, and a NaN is unordered: <, <=, \
+         >, >= and == with a NaN are false, and != is true.";
     /// C99: §F.7.3 paragraph 1, p. 449; PDF p. 461.
     ROUND_TO_NEAREST = "F.7.3p1", "p. 449; PDF p. 461", "Execution (Annex F)",
         "A program starts in IEEE 754's round-to-nearest mode: a result between two values of \
@@ -166,8 +166,11 @@ clauses! {
          Annex F defines as an infinity.";
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
     USUAL_ARITHMETIC = "6.3.1.8p1", "pp. 44-45; PDF pp. 56-57", "Usual arithmetic conversions",
-        "Binary arithmetic first converts both operands to a common type: the higher-ranked one, \
-         or the unsigned one when its rank is at least as high; two ints need no conversion.";
+        "Binary arithmetic first converts both operands to a common type. With the same \
+         signedness it is the higher-ranked one. Otherwise it is the unsigned one when its rank \
+         is at least as high; the signed one when it can represent every value of the other; \
+         and else the unsigned type of the signed one's rank (long long and unsigned long give \
+         unsigned long long). Two ints need no conversion.";
     /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
     LVALUE = "6.3.2.1p1", "p. 46; PDF p. 58", "Lvalues, arrays, and function designators",
         "An lvalue is an expression that designates an object: a location, not yet a value.";

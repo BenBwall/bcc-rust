@@ -407,8 +407,9 @@ impl Machine {
                 ),
                 format!(
                     "IEEE 754 gives the invalid operation {a} {operator} {b} the result NaN, not \
-                     a number; x86-64 makes it the default NaN, whose sign bit is set, which \
-                     glibc prints as {shown}."
+                     a number. Done by an x86-64 instruction at run time it is the default NaN, \
+                     whose sign bit is set, which glibc prints as {shown}; a compiler that works \
+                     it out from constants may give a NaN of either sign, and Clang's prints nan."
                 ),
             )
         } else if rounded.exact {

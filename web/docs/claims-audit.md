@@ -34,8 +34,8 @@ compilers are the evidence for what implementations do.
 
 ## Results
 
-61 claims checked: 37 hold as written, 10 were wrong, 13 over-promised and 1
-was too vague to check. All 24 are fixed on this branch. The first pass
+64 claims checked: 37 hold as written, 12 were wrong, 14 over-promised and 1
+was too vague to check. All 27 are fixed on this branch. The first pass
 found 53 of them (its count said 54); the review of the branch found the
 rank picture's mixed-rank rule, a NaN wording that still over-promised, and
 the `sizeof` and "constraint" claims below, and a second reading for the
@@ -141,6 +141,9 @@ N1256; every clause was checked against `standards/c99-n1256.html`.
 | A `#define` with a different replacement "would be an error the compiler must report" | `#define` step | warns "N redefined", uses the new replacement: exits 2 (`c28`) | warns (`-Wmacro-redefined`), exits 2 | warns, exits 2 | **Wrong**: §6.10.3p2 is a constraint, so it needs a diagnostic, not an error. Now: the compiler must report it, this machine stops, and the three compilers warn and use the new replacement |
 | An assignment to a const object "does not compile" | Const note, and a const object's declaration step (two wordings) | refuses (`c27`) | refuses | refuses | **Over-promised**: true of these compilers, but C requires only a diagnostic. Now: it breaks a constraint, the compiler must report it, and GCC, Clang and bcc refuse to compile it |
 | Signed conversion's clause summary: "x86-64 compilers keep the low bits" | clause list, every signed conversion | | | | **Over-promised** ("x86-64 compilers"), as the note was in the first pass: now GCC documents it, and Clang and bcc do the same |
+| An invalid operation's detail: "x86-64 makes it the default NaN, whose sign bit is set" | Floating point, any invalid operation (`inf - inf`, `0.0 / 0.0`) | `-nan 1` at -O0 and -O2 | `-nan 1` at -O0, `nan 1` at -O2 (folded) | `-nan 1` at -O0, `nan 1` at -O2 | **Over-promised** (found in the third review): true of the instruction at run time only. Now says a compiler that works it out from constants may give either sign |
+| Annex F's clause summary: "comparisons with a NaN are false" | clause list, every floating comparison | `invalid != invalid` is 1 | 1 | 1 | **Wrong** (third review): `!=` with a NaN is true. Now: `<`, `<=`, `>`, `>=` and `==` are false, `!=` is true |
+| The usual arithmetic conversions' clause summary: "the higher-ranked one, or the unsigned one when its rank is at least as high" | clause list, every conversion step | `long long` + `unsigned long` is `unsigned long long` | same | same | **Wrong** (third review), the clause-list twin of the rank picture's rule: now gives all of §6.3.1.8p1's integer cases |
 
 ## Teaching each step in order
 
