@@ -13814,4 +13814,23 @@ warn.c:34: warning: cast between pointer and integer of different size
             }
         }
     }
+
+    /// TCC 0.9.27 converts a constant that no longer fits silently, even
+    /// under `-Wall`; `--tcc-mode` printed Clang's `-Wconstant-conversion`
+    /// for each (64 times in GNU bash 5.2.37), while `--clang-mode` keeps it.
+    #[test]
+    fn tcc_mode_converts_constants_silently_as_tcc_does() {
+        let directory = Directory::new();
+        directory.write(
+            "convert.c",
+            "char a = 300;\nshort b = 70000;\nint d = 5000000000;\nvoid f(char *p) { *p = 1000; \
+             *p = 223; }\n",
+        );
+        let tcc = directory.bcc("--tcc-mode", &["-Wall", "-c", "convert.c", "-o", "tcc.o"]);
+        succeeds(&tcc);
+        assert_eq!(stderr(&tcc), "");
+        let clang = directory.bcc("--clang-mode", &["-c", "convert.c", "-o", "clang.o"]);
+        succeeds(&clang);
+        assert_eq!(stderr(&clang).matches("[-Wconstant-conversion]").count(), 5);
+    }
 }

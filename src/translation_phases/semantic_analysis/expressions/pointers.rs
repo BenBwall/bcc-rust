@@ -55,28 +55,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         source: ExpressionInfo<'tu>,
         site: ConversionSite,
     ) -> bool {
-        self.assignment_conversion_at(target, source, source.expression.source_vectors, site)
+        self.assignment_conversion_at(
+            target,
+            source,
+            source.expression.source_vectors,
+            site,
+            false,
+        )
     }
 
     /// [`Self::assignment_conversion`] of an initializer, reported at
-    /// `diagnostic_site`.
-    /// C99: §6.7.8p11, p. 126; PDF p. 138.
+    /// `diagnostic_site`; `braced` when it is an element of a brace-enclosed
+    /// list written for the subobject that holds it, not one brace elision
+    /// or a designator reaches inside.
+    /// C99: §6.7.8p11, p. 126; PDF p. 138; §6.7.8p20, p. 127; PDF p. 139.
     pub(in crate::translation_phases::semantic_analysis) fn initializer_conversion(
         &mut self,
         target: TypeId,
         source: ExpressionInfo<'tu>,
         diagnostic_site: SourceVectors,
+        braced: bool,
     ) -> bool {
         self.assignment_conversion_at(
             target,
             source,
             diagnostic_site,
             ConversionSite::Initialization,
+            braced,
         )
     }
 
     /// Uses the assignment operator as the diagnostic location while the
-    /// conversion remains attached to its operand.
+    /// conversion remains attached to its operand; `braced` as
+    /// [`Self::initializer_conversion`] takes it.
     /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
     pub(in crate::translation_phases::semantic_analysis) fn assignment_conversion_at(
         &mut self,
@@ -84,11 +95,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         source: ExpressionInfo<'tu>,
         diagnostic_site: SourceVectors,
         site: ConversionSite,
+        braced: bool,
     ) -> bool {
         let source = self.resolve_function_value(source, Some(target));
         if self.assignment_compatible(target, source) {
             self.literal_conversion_warning(target, source);
-            self.check_constant_conversion(target, source);
+            self.check_constant_conversion(target, source, braced);
             if self.pointer_target(target).is_some() && self.null_pointer_constant(source) {
                 self.null_conversion_warning(source, false, diagnostic_site);
             }
