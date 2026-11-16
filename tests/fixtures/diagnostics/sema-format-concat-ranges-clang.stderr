@@ -186,4 +186,28 @@ sema-format-concat-ranges-clang.c:79:44: warning: format specifies type 'int' bu
 sema-format-concat-ranges-clang.c:80:37: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
    80 |     printf(CALL2(NIL, () "%", "d"), l);
       |            ~~~~~~~~~~~~~~~~~~~~~~~  ^
-56 warnings generated.
+sema-format-concat-ranges-clang.c:90:28: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   90 |     printf(V("%", "d", 1), l);
+      |            ~~~~~~~~~~~~~~  ^
+sema-format-concat-ranges-clang.c:91:31: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   91 |     printf(V("%" "d", "", 1), l);
+      |               ~~~~~           ^
+sema-format-concat-ranges-clang.c:92:33: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   92 |     printf(VCAT2("%" "d", , 1), l);
+      |                   ~~~~~         ^
+sema-format-concat-ranges-clang.c:93:28: warning: data argument not used by format string [-Wformat-extra-args]
+   93 |     printf(VTWICE("%", 1), l);
+      |            ~~~~~~~~~~~~~~  ^
+sema-format-concat-ranges-clang.c:94:28: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   94 |     printf(V1("%" "d", 1), l);
+      |                ~~~~~       ^
+sema-format-concat-ranges-clang.c:95:26: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   95 |     printf(VPCT("d", 1), l);
+      |            ~~~~~~~~~~~~  ^
+sema-format-concat-ranges-clang.c:96:37: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   96 |     printf(VCALL(NIL, "%", "d", 1), l);
+      |            ~~~~~~~~~~~~~~~~~~~~~~~  ^
+sema-format-concat-ranges-clang.c:97:37: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   97 |     printf(VCALL1(NIL, "%" "d", 1), l);
+      |                         ~~~~~       ^
+64 warnings generated.

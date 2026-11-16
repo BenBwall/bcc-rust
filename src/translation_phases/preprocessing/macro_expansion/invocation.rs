@@ -632,7 +632,7 @@ enum PendingSubstitutions<'x> {
     /// substitution, and a `#` operator's result none.
     All(Option<ArgumentSubstitution>),
     /// Each token has its own, by the same index: the tokens `##` operators
-    /// formed.
+    /// formed, or a `__VA_OPT__` replacement.
     Each(&'x [Option<ArgumentSubstitution>]),
 }
 
@@ -904,8 +904,10 @@ impl<'x> MacroCallCursor<'x> {
                 })
             {
                 let prescan = preprocessor.expanded_argument(token, argument);
-                self.pending_substitutions =
-                    PendingSubstitutions::All(Some(preprocessor.new_substitution()));
+                self.pending_substitutions = match prescan.substitutions {
+                    | Some(each) => PendingSubstitutions::Each(each),
+                    | None => PendingSubstitutions::All(Some(preprocessor.new_substitution())),
+                };
                 let mut expanded = prescan.tokens.clone();
                 while let Some(token) = expanded.next_item(preprocessor.context) {
                     self.pending.push(token);

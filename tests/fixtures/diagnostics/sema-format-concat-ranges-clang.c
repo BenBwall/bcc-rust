@@ -79,3 +79,20 @@ void m(long l) {
     printf(PCALL(NIL, () "%" "d" EMP, TY), l);
     printf(CALL2(NIL, () "%", "d"), l);
 }
+#define V(a, b, ...) __VA_OPT__(a b)
+#define VCAT2(a, b, ...) __VA_OPT__(a ## b)
+#define VTWICE(a, ...) __VA_OPT__(a a)
+#define V1(a, ...) __VA_OPT__(a)
+#define VPCT(a, ...) __VA_OPT__("%" a)
+#define VCALL(f, a, b, ...) f __VA_OPT__(() a b)
+#define VCALL1(f, a, ...) f __VA_OPT__(() a)
+void va_opt(long l) {
+    printf(V("%", "d", 1), l);
+    printf(V("%" "d", "", 1), l);
+    printf(VCAT2("%" "d", , 1), l);
+    printf(VTWICE("%", 1), l);
+    printf(V1("%" "d", 1), l);
+    printf(VPCT("d", 1), l);
+    printf(VCALL(NIL, "%", "d", 1), l);
+    printf(VCALL1(NIL, "%" "d", 1), l);
+}

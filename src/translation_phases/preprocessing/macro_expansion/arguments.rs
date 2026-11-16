@@ -82,13 +82,18 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .expect("the argument was prescanned")
             .tokens
             .clone();
+        let substitutions = argument
+            .expanded
+            .get()
+            .expect("the argument was prescanned")
+            .substitutions;
         let end = self.pad_substitution(argument);
         let substitution = self.new_substitution();
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan {
                 argument: Some(substitution),
                 end,
-                substitutions: None,
+                substitutions,
             },
             tokenizer,
         });
@@ -107,13 +112,31 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// above it. An argument that is a `##` operand keeps its substitution
     /// in the tokens pasting leaves as they are, and a parameter's
     /// replacement in what a call collected across the list leaves of it.
+    /// A `__VA_OPT__` replacement keeps the substitutions of the arguments
+    /// in it, and its other tokens belong to the replacement list.
     /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3
-    /// paragraph 2, p. 154; PDF p. 166.
+    /// paragraph 2, p. 154; PDF p. 166. C23: §6.10.5.1 paragraph 7, p. 180;
+    /// PDF p. 193.
     pub(in crate::translation_phases::preprocessing) fn current_substitution(
         &self,
     ) -> Option<ArgumentSubstitution> {
         for (depth, frame) in self.tokenizer_stack.iter().rev().enumerate() {
             match frame.frame_type {
+                // Only the innermost frame's cursor says which token was
+                // just read.
+                | TokenizerFrameType::Rescan {
+                    argument,
+                    substitutions: Some(substitutions),
+                    ..
+                } if depth == 0 => {
+                    let read = self.position().index.checked_sub(1);
+                    match read.and_then(|index| substitutions.get(index).copied()) {
+                        | Some(Some(substitution)) => return Some(substitution),
+                        | Some(None) if argument.is_some() => return None,
+                        | _ if argument.is_some() => return argument,
+                        | _ => {},
+                    }
+                },
                 | TokenizerFrameType::Rescan {
                     argument: Some(substitution),
                     ..
@@ -122,20 +145,6 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     substitution: Some(substitution),
                     ..
                 } => return Some(substitution),
-                // Only the innermost frame's cursor says which token was
-                // just read.
-                | TokenizerFrameType::Rescan {
-                    argument: None,
-                    substitutions: Some(substitutions),
-                    ..
-                } if depth == 0 => {
-                    let read = self.position().index.checked_sub(1);
-                    if let Some(substitution) =
-                        read.and_then(|index| substitutions.get(index).copied().flatten())
-                    {
-                        return Some(substitution);
-                    }
-                },
                 | TokenizerFrameType::Rescan { argument: None, .. }
                 | TokenizerFrameType::DeferredQuery => {},
                 | _ => return None,
@@ -251,6 +260,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         drop(argument.expanded.set(Prescan {
             tokens,
             end: self.prescan_end(),
+            substitutions: None,
         }));
     }
 
@@ -519,10 +529,18 @@ pub(crate) struct FunctionLikeMacroArgument<'x> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Prescan<'x> {
     /// Its tokens.
-    pub(in crate::translation_phases::preprocessing) tokens: TokenSource<'x>,
+    pub(in crate::translation_phases::preprocessing) tokens:        TokenSource<'x>,
     /// For a text of phase 4, the padding that comes after them where the
     /// parameter is substituted.
-    pub(in crate::translation_phases::preprocessing) end:    TokenSpacing,
+    pub(in crate::translation_phases::preprocessing) end:           TokenSpacing,
+    /// For a `__VA_OPT__` replacement, the substitution of each token by its
+    /// place in `tokens`: an argument's tokens keep theirs, and the
+    /// replacement list's own have none. Every use of an ordinary
+    /// parameter is one new substitution instead.
+    ///
+    /// C23: §6.10.5.1 paragraph 7, p. 180; PDF p. 193.
+    pub(in crate::translation_phases::preprocessing) substitutions:
+        Option<&'x [Option<ArgumentSubstitution>]>,
 }
 
 /// The arguments of one invocation, each under its parameter's name.
