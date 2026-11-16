@@ -1018,6 +1018,19 @@
   .optimizer-note[data-level="O2"] { border-left-color: var(--accent); }
   .optimizer-note ul { margin: 6px 0 0 18px; list-style: square; }
   .optimizer-note li { margin-top: 2px; }
+  /* The comparison as paired bars, -O0 in ink and -O2 in vermilion as the
+     note's rule is, each pair scaled to its larger count. */
+  .optimizer-bars { margin: 10px 0 0; }
+  .optimizer-bars figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--ink-3); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; }
+  .optimizer-key { display: inline-block; width: 14px; height: 8px; background: var(--ink-2); }
+  .optimizer-key[data-level="O2"] { background: var(--accent); }
+  .optimizer-bars-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; margin-top: 6px; align-items: center; }
+  .optimizer-measure { color: var(--ink-3); font-size: 11px; }
+  .optimizer-pair { display: grid; gap: 2px; }
+  .optimizer-bar { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .optimizer-bar-fill { flex: none; height: 8px; min-width: 2px; background: var(--ink-2); }
+  .optimizer-bar[data-level="O2"] .optimizer-bar-fill { background: var(--accent); }
+  .optimizer-bar-count { flex: none; color: var(--ink); font: 700 11px/1 var(--font-mono); }
   .stop-banner { margin-top: 14px; padding: 10px 14px; border: 2px solid var(--danger); background: var(--danger-soft); color: var(--ink); font-size: 13px; line-height: 1.6; }
   .stop-title { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--danger); text-transform: uppercase; letter-spacing: .06em; font-size: 11.5px; margin-bottom: 4px; }
   .stop-icon { display: grid; place-items: center; width: 18px; height: 18px; background: var(--danger); color: var(--device); font-size: 10px; }

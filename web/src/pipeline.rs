@@ -1366,6 +1366,35 @@ pub fn optimizer_changes(
     changes
 }
 
+/// The optimizer comparison as numbers: for each measure of `stage`'s
+/// output, its name and its count at `-O0` and at `-O2`, for the bar
+/// picture. Measures that are zero at both levels are left out, and the
+/// front end, which the optimizer does not touch, has none.
+pub fn optimizer_measures(
+    stage: Stage,
+    plain: &Compilation,
+    optimized: &Compilation,
+) -> Vec<(&'static str, usize, usize)> {
+    let (Some(before), Some(after)) = (plain.output(stage), optimized.output(stage)) else {
+        return Vec::new();
+    };
+    if stage.phase() == "Front end" {
+        return Vec::new();
+    }
+    let (before, after) = (Census::of(stage, before), Census::of(stage, after));
+    let mut measures = vec![
+        ("instructions", before.instructions, after.instructions),
+        ("basic blocks", before.blocks, after.blocks),
+        ("loads and stores", before.memory, after.memory),
+        ("stack slots", before.slots, after.slots),
+    ];
+    if stage == Stage::MachineCode {
+        measures.push(("bytes of code", plain.code_bytes, optimized.code_bytes));
+    }
+    measures.retain(|&(_, before, after)| before.max(after) > 0);
+    measures
+}
+
 /// Counts of what one stage's output holds.
 #[derive(Default)]
 struct Census {
