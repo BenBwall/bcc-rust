@@ -38,9 +38,15 @@ use crate::{
             ExpressionType as E,
             UnaryOperator as U,
         },
-        preprocessing::KeywordTokenType,
+        preprocessing::{
+            KeywordTokenType,
+            bit_precise_magnitude,
+        },
     },
-    util::bump::ArenaVec,
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+    },
 };
 
 pub(super) mod int_float;
@@ -390,6 +396,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         target: TypeId,
         source: ExpressionInfo<'tu>,
+        braced: bool,
     ) {
         if self.tainted {
             return;
@@ -416,6 +423,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             target,
             bits,
             signed,
+            braced,
         };
         if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
             // GCC checks the folded value of the whole operand.
@@ -442,6 +450,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             target,
             bits,
             signed,
+            ..
         } = narrowing;
         if source_bits <= bits && source_signed == signed {
             return;
@@ -518,10 +527,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// The two are reported differently. A value that loses bits goes
     /// through `DiagRuntimeBehavior`, which waits for the end of the
     /// function and drops code that cannot run. A same-width sign change is
-    /// reported at once, in dead code too, and not at all for a literal
-    /// written in hexadecimal, octal or binary, which Clang reads as a bit
-    /// pattern (`isSameWidthConstantConversion`): `*p = 0xdf` for a `char`
-    /// is silent where `*p = 223` warns.
+    /// reported at once, in dead code too though not in an operand a
+    /// selection drops, and not at all for a literal written in
+    /// hexadecimal, octal or binary, which Clang reads as a bit pattern
+    /// (`isSameWidthConstantConversion`): `*p = 0xdf` for a `char` is silent
+    /// where `*p = 223` warns, nor for a character type's element of a
+    /// brace-enclosed list, which Clang takes for an array's
+    /// initialization. Only Clang's identities (Clang and clang-cl)
+    /// tell the two apart; the others that take this path report both as a
+    /// value that loses bits.
     fn clang_constant_conversion(&mut self, narrowing: Narrowing, e: &'tu Expression<'tu>) {
         let info = self.expression_info(e);
         let Some(value) = info.integer.filter(|value| value.wide.is_none()) else {
@@ -534,6 +548,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             target,
             bits,
             signed,
+            braced,
         } = narrowing;
         if source_bits <= bits && source_signed == signed {
             return;
@@ -544,11 +559,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             128 - value.value.cast_unsigned().leading_zeros()
         };
-        let same_width = needed <= bits;
+        let same_width = needed <= bits
+            && matches!(
+                self.context.configuration.compiler_identity(),
+                CompilerIdentity::Clang | CompilerIdentity::ClangCl
+            );
         if !(needed > bits || needed == bits && signed && !negative && source_signed) {
             return;
         }
-        if same_width && self.written_as_bit_pattern(e) {
+        if same_width
+            && (self.written_as_bit_pattern(e, value.value)
+                || braced
+                    && matches!(
+                        self.types.nodes[target.index],
+                        TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar)
+                    ))
+        {
             return;
         }
         let (Some(from), Some(to)) = (
@@ -569,13 +595,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => e.source_vectors,
         };
         if same_width && self.functions.current.is_some() {
-            self.spelled_group_diagnostic(
-                G::ConstantConversion,
-                SemanticErrorKind::ValueWarning(G::ConstantConversion),
-                site,
-                Some(name),
-                site,
-            );
+            // A `__builtin_choose_expr` drops its other operand now, and a
+            // `_Generic` its others once they are all typed.
+            if !self.functions.selections.unselected {
+                self.hold_warning(super::functions::HeldWarning {
+                    group: G::ConstantConversion,
+                    kind: SemanticErrorKind::ValueWarning(G::ConstantConversion),
+                    site,
+                    name: Some(name),
+                    highlights: self.highlights,
+                });
+            }
             return;
         }
         self.warn_if_selected(
@@ -587,17 +617,42 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
     }
 
-    /// Whether `e` is an integer constant spelled in hexadecimal, octal or
-    /// binary: a `0` followed by more characters. A macro's constant is
-    /// read where it is spelled.
-    /// C99: §6.4.4.1p1-4, p. 54; PDF p. 66.
-    fn written_as_bit_pattern(&self, e: &'tu Expression<'tu>) -> bool {
+    /// Whether `e` is an integer constant of `value` spelled in
+    /// hexadecimal, octal or binary: a `0` followed by more characters. A
+    /// macro's constant is read where it is spelled, and one `##` pasted
+    /// from pieces is read from them all, in order. Its provenance does not
+    /// keep the token's spelling, so a spelling is trusted only when it
+    /// holds `value`: `CAT(2,00)` is the decimal `200`, which neither its
+    /// last piece, `00`, nor the pieces together, `200`, make a bit pattern.
+    /// C99: §6.4.4.1p1-4, pp. 54-55; PDF pp. 66-67; §6.10.3.3p3, p. 154; PDF
+    /// p. 166.
+    fn written_as_bit_pattern(&self, e: &'tu Expression<'tu>, value: i128) -> bool {
         if !matches!(e.kind, E::Constant(Constant::Integer(_))) {
             return false;
         }
-        self.context
-            .source_spelling(Context::last_source_vector(e.source_vectors))
-            .is_some_and(|text| text.len() > 1 && text.starts_with('0'))
+        let holds_value = |spelling: &str| {
+            let mut limbs = [0_u64; 2];
+            bit_precise_magnitude(spelling, &mut limbs);
+            spelling.len() > 1
+                && spelling.starts_with('0')
+                && u128::from(limbs[1]) << 64 | u128::from(limbs[0]) == value.cast_unsigned()
+        };
+        let mut pieces = ArenaString::new_in(self.scratch);
+        for vector in self.context.get_source_vectors(e.source_vectors) {
+            let Some(piece) = self
+                .context
+                .source_text(vector.source_file_index)
+                .and_then(|text| text.get(vector.range()))
+            else {
+                return false;
+            };
+            pieces.push_str(piece);
+        }
+        holds_value(&pieces)
+            || self
+                .context
+                .source_spelling(Context::last_source_vector(e.source_vectors))
+                .is_some_and(holds_value)
     }
 
     fn value_warning(&mut self, group: G, site: SourceVectors, text: &str) {
@@ -619,6 +674,9 @@ struct Narrowing {
     target: TypeId,
     bits:   u32,
     signed: bool,
+    /// The constant is an element of a brace-enclosed list written for the
+    /// subobject it initializes ([`Analyzer::initializer_conversion`]).
+    braced: bool,
 }
 
 /// The low `bits` bits, for `bits` below 128.

@@ -612,6 +612,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | FunctionWork::RestoreElided(elided) => self.functions.elided = elided,
             | FunctionWork::RestoreSkippedOperand(skipped) =>
                 self.functions.skipped_operand = skipped,
+            | FunctionWork::RestoreSelections(selections) => self.functions.selections = selections,
             | FunctionWork::LeaveGeneric(skipped) => {
                 self.functions.skipped_operand = skipped;
                 self.functions.generic_selections -= 1;
@@ -771,6 +772,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.functions.elided = outer_elided || skipped || decided;
                 if skipped {
                     self.elide_condition_references(condition);
+                    if arm.is_none() {
+                        self.functions.selections.unselected = true;
+                    }
                 }
                 if let Some(arm) = arm
                     && value.is_none()
@@ -2406,9 +2410,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Reports `warning` now, or, in a generic selection being analyzed,
     /// once the outermost selection is typed if it is in the associations
-    /// selected ([`Self::settle_held_warnings`]).
+    /// selected ([`Self::settle_held_warnings`]). A selection outside the
+    /// innermost statement expression does not hold it ([`Selections`]).
     pub(super) fn hold_warning(&mut self, warning: HeldWarning) {
-        if self.functions.generic_selections == 0 {
+        if self.functions.generic_selections == self.functions.selections.generics {
             self.report_held_warning(warning);
         } else {
             self.functions.held_warnings.push(warning);
@@ -2416,8 +2421,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Keeps, of the warnings held since `start`, only those in `kept`, the
-    /// selected association's, and reports every held one once no generic
-    /// selection is open, as Clang checks only the selected association
+    /// selected association's, and reports those held since the innermost
+    /// statement expression began once no generic selection inside it is
+    /// open, as Clang checks only the selected association
     /// ([`Self::warn_if_selected`]).
     /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
     fn settle_held_warnings(&mut self, start: Option<usize>, kept: Option<std::ops::Range<usize>>) {
@@ -2427,11 +2433,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             held.copy_within(kept.clone(), start);
             held.truncate(start + kept.len());
         }
-        if self.functions.generic_selections != 0 || self.functions.held_warnings.is_empty() {
+        let floor = self.functions.selections;
+        if self.functions.generic_selections != floor.generics
+            || self.functions.held_warnings.len() <= floor.held
+        {
             return;
         }
-        let held = self.scratch.alloc_slice_copy(&self.functions.held_warnings);
-        self.functions.held_warnings.clear();
+        let held = self
+            .scratch
+            .alloc_slice_copy(&self.functions.held_warnings[floor.held..]);
+        self.functions.held_warnings.truncate(floor.held);
         // Each warning was taken only where nothing recovered around it.
         let tainted = std::mem::replace(&mut self.tainted, false);
         for &warning in &*held {
@@ -2441,13 +2452,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     fn report_held_warning(&mut self, warning: HeldWarning) {
-        self.group_diagnostic(
-            warning.group,
-            warning.kind,
-            warning.site,
-            warning.name,
-            None,
-        );
+        self.with_highlights(warning.highlights, |analyzer| {
+            analyzer.group_diagnostic(
+                warning.group,
+                warning.kind,
+                warning.site,
+                warning.name,
+                None,
+            );
+        });
+    }
+
+    /// Begins the selections of a statement expression's body, whose
+    /// statements Clang checks as full expressions of their own, wherever
+    /// the statement expression is: the selections around it do not hold
+    /// or drop their warnings ([`Selections`]).
+    /// GNU extension: GCC manual, "Statement Exprs".
+    pub(super) fn begin_statement_expression_selections(&mut self) {
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreSelections(
+                self.functions.selections,
+            )));
+        self.functions.selections = Selections {
+            generics:   self.functions.generic_selections,
+            held:       self.functions.held_warnings.len(),
+            unselected: false,
+        };
     }
 
     /// Pushes the work that enters operand `arm` of `condition`, taken when
@@ -3023,6 +3053,9 @@ pub(super) enum FunctionWork<'tu> {
     /// Restores whole-statement/operand omission, including declarations.
     RestoreElided(bool),
     RestoreSkippedOperand(bool),
+    /// Restores the selections around the code that follows
+    /// ([`State::selections`]).
+    RestoreSelections(Selections),
     /// Leaves a `_Generic`'s associations, restoring
     /// [`State::skipped_operand`].
     LeaveGeneric(bool),
@@ -3239,10 +3272,28 @@ struct EmissionMark {
 /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
 #[derive(Clone, Copy)]
 pub(super) struct HeldWarning {
-    pub(super) group: crate::configuration::DiagnosticGroup,
-    pub(super) kind:  SemanticErrorKind,
-    pub(super) site:  SourceVectors,
-    pub(super) name:  Option<StringCacheId>,
+    pub(super) group:      crate::configuration::DiagnosticGroup,
+    pub(super) kind:       SemanticErrorKind,
+    pub(super) site:       SourceVectors,
+    pub(super) name:       Option<StringCacheId>,
+    pub(super) highlights: [SourceVectors; 2],
+}
+
+/// The translation-time selections around the code being analyzed that
+/// Clang's walk of a full expression (`AnalyzeImplicitConversions`) steps
+/// through to the operand selected, inside the innermost statement
+/// expression: its statements are full expressions of their own, which
+/// Clang checks wherever the statement expression is.
+/// C11: §6.5.1.1p3, p. 79; PDF p. 97. GNU extension: GCC manual, "Other
+/// Builtins" and "Statement Exprs".
+#[derive(Clone, Copy, Default)]
+pub(super) struct Selections {
+    /// The `_Generic` selections open where these begin.
+    generics:              u32,
+    /// The number of warnings held where these begin.
+    held:                  usize,
+    /// The code is in an operand a `__builtin_choose_expr` does not select.
+    pub(super) unselected: bool,
 }
 
 /// A break's evaluation context settles after an enclosing sizeof/typeof
@@ -3357,6 +3408,9 @@ pub(super) struct State<'tu, 's> {
     pub(super) skipped_operand: bool,
     /// The `_Generic` selections whose associations are being analyzed.
     pub(super) generic_selections: u32,
+    /// The selections inside the innermost statement expression
+    /// ([`Selections`]).
+    pub(super) selections: Selections,
     /// A whole statement or operand is omitted, including its declarations:
     /// an untaken arm, an unselected switch region, or a non-simple statement
     /// without labels while `dead`. Simple declarations and compounds still
@@ -3425,6 +3479,7 @@ impl<'s> State<'_, 's> {
             sizeof: None,
             skipped_operand: false,
             generic_selections: 0,
+            selections: Selections::default(),
             dead: false,
             elided: false,
             unvisited: false,

@@ -25,4 +25,28 @@ sema-constant-conversion-literals-clang.c:25:8: warning: implicit conversion fro
 sema-constant-conversion-literals-clang.c:29:16: warning: implicit conversion from 'int' to 'char' changes value from 223 to -33 [-Wconstant-conversion]
    29 | char decimal = 223;
       |                ^~~
-9 warnings generated.
+sema-constant-conversion-literals-clang.c:34:27: warning: implicit conversion from 'int' to 'char' changes value from 200 to -56 [-Wconstant-conversion]
+   34 | char pasted_decimal = CAT(2, 00);
+      |                           ^~~~~
+sema-constant-conversion-literals-clang.c:35:26: warning: implicit conversion from 'int' to 'short' changes value from 40000 to -25536 [-Wconstant-conversion]
+   35 | short pasted_short = CAT(40, 000);
+      |                          ^~~~~~~
+sema-constant-conversion-literals-clang.c:45:34: warning: implicit conversion from 'int' to 'short' changes value from 57343 to -8193 [-Wconstant-conversion]
+   45 |   (void)_Generic(0, int: (short){57343}, default: 0);
+      |                                  ^~~~~
+sema-constant-conversion-literals-clang.c:47:42: warning: implicit conversion from 'int' to 'char' changes value from 223 to -33 [-Wconstant-conversion]
+   47 |   (void)__builtin_choose_expr(0, 0, *p = 223);
+      |                                          ^~~
+sema-constant-conversion-literals-clang.c:49:46: warning: implicit conversion from 'int' to 'char' changes value from 200 to -56 [-Wconstant-conversion]
+   49 |   (void)_Generic(0, int: 0, default: ({ *p = 200; 0; }));
+      |                                              ^~~
+sema-constant-conversion-literals-clang.c:50:45: warning: implicit conversion from 'int' to 'short' changes value from 57343 to -8193 [-Wconstant-conversion]
+   50 |   (void)__builtin_choose_expr(1, 0, ({ *s = 57343; 0; }));
+      |                                             ^~~~~
+sema-constant-conversion-literals-clang.c:52:36: warning: implicit conversion from 'int' to 'short' changes value from 57343 to -8193 [-Wconstant-conversion]
+   52 |     (void)_Generic(0, int: (short){57343}, default: (char){223});
+      |                                    ^~~~~
+sema-constant-conversion-literals-clang.c:54:19: warning: implicit conversion from 'int' to 'char' changes value from 223 to -33 [-Wconstant-conversion]
+   54 |   char b[2][1] = {223, 0};
+      |                   ^~~
+17 warnings generated.

@@ -213,6 +213,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::StatementExpression(s) => {
                 // Code generation resumes after the statement expression
                 // even when its body jumps away.
+                self.begin_statement_expression_selections();
                 self.begin_statement_expression(s);
                 self.enter_statement_expression(e.source_vectors);
                 self.begin_nested_full_expressions();
@@ -273,8 +274,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let [super::SyntaxOperand::Expression(condition), super::SyntaxOperand::Expression(yes), super::SyntaxOperand::Expression(no)] = &*b.operands {
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreElided(self.functions.elided)));
                     self.work.push(Work::FunctionWork(FunctionWork::RestoreDead(self.functions.dead)));
+                    // Each operand starts from the selections around the
+                    // builtin; the one not selected adds itself.
+                    let selections = self.functions.selections;
+                    self.work.push(Work::FunctionWork(FunctionWork::RestoreSelections(selections)));
                     self.work.push(Work::Expression(no));
                     self.dead_arm(condition, false, None);
+                    self.work.push(Work::FunctionWork(FunctionWork::RestoreSelections(selections)));
                     self.work.push(Work::Expression(yes));
                     self.dead_arm(condition, true, None);
                     self.begin_condition_references(condition);

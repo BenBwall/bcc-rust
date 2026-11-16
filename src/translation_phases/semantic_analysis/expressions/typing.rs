@@ -423,6 +423,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 right,
                 e.operator_source_vectors.unwrap_or(e.source_vectors),
                 super::super::compiler_wording::ConversionSite::Assignment,
+                false,
             ) {
                 if self.void_value(right.ty) {
                     return self.void_value_used(e, VoidUse::Assignment, left.ty);
