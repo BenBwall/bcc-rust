@@ -90,10 +90,10 @@ impl Expander<'_, '_, '_, '_> {
                 },
                 | TokenizerFrameType::SourceFile { .. }
                 | TokenizerFrameType::FunctionLikeMacroArgument { .. }
-                | TokenizerFrameType::Rescan { argument: true, .. } => break,
                 | TokenizerFrameType::Rescan {
-                    argument: false, ..
-                }
+                    argument: Some(_), ..
+                } => break,
+                | TokenizerFrameType::Rescan { argument: None, .. }
                 | TokenizerFrameType::DeferredQuery => {},
             }
         }

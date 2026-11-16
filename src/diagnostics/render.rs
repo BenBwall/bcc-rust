@@ -224,7 +224,7 @@ impl Renderer {
             .chain(spelled.as_ref().filter(|_| presentation.caret))
             .filter(|_| !repeated)
         {
-            Self::push_label_marks(label, context, &mut marks);
+            Self::push_label_marks(label, context, &mut marks, scratch);
         }
         // A diagnostic that names ranges of its own, or none, gets Clang's
         // caret alone at its place, with no `~` over the token there unless
@@ -239,10 +239,12 @@ impl Renderer {
             for mark in &mut marks {
                 mark.label = None;
             }
-            // A place is one caret at the start of its first character.
+            // A place is one caret at the start of its first character,
+            // beside the ranges the diagnostic names.
             if diagnostic.point && format == DiagnosticFormat::Clang {
-                marks.truncate(1);
-                for mark in &mut marks {
+                let mut first = true;
+                marks.retain(|mark| !mark.primary || std::mem::take(&mut first));
+                for mark in marks.iter_mut().filter(|mark| mark.primary) {
                     let text = context.source_text(mark.file).unwrap_or_default();
                     let width = text[mark.start..].chars().next().map_or(0, char::len_utf8);
                     mark.end = mark.end.min(mark.start + width);
@@ -417,7 +419,7 @@ impl Renderer {
             return;
         }
         let mut marks = ArenaVec::new_in(scratch);
-        Self::push_label_marks(label, context, &mut marks);
+        Self::push_label_marks(label, context, &mut marks, scratch);
         for mark in &mut marks {
             mark.primary = true;
             mark.label = None;
@@ -426,7 +428,7 @@ impl Renderer {
             Self::point_caret(&mut marks, context);
         }
         for highlight in highlights {
-            Self::push_label_marks(highlight, context, &mut marks);
+            Self::push_label_marks(highlight, context, &mut marks, scratch);
         }
         Self::retain_caret_block(&mut marks, scratch);
         let mut files = ArenaVec::new_in(scratch);
@@ -676,16 +678,14 @@ impl Renderer {
         label: &'a Label<'_>,
         context: &Context<'_>,
         marks: &mut ArenaVec<'_, Mark<'a>>,
+        scratch: &Bump,
     ) {
         let mut label_text = label.message;
         let first = marks.len();
-        // Clang draws an operand a macro wrote at the invocation.
+        // Clang draws an operand a macro wrote at the invocation, whole.
         let vectors = match label.source {
             | LabelSource::Range(source) if label.is_highlight() =>
-                context.macro_body_expansion(source).map_or_else(
-                    || context.get_source_vectors(source),
-                    |(_, site)| std::slice::from_ref(site),
-                ),
+                context.highlight_vectors(source, scratch),
             | source => source.vectors(context),
         };
         for vector in vectors {
@@ -721,6 +721,67 @@ impl Renderer {
                 label: label_text.take(),
                 order: marks.len(),
             });
+        }
+        if label.is_highlight() {
+            Self::span_lines(marks, first, context);
+        }
+    }
+
+    /// Draws the marks from `first` on, one range's, as Clang draws a range
+    /// over several lines (`prepareAndFilterRanges`, `highlightRange` in
+    /// `TextDiagnostic.cpp`): its first line to the line's end, the lines
+    /// between whole, its last line from the line's start, each without the
+    /// blanks at either end of the line.
+    fn span_lines(marks: &mut ArenaVec<'_, Mark<'_>>, first: usize, context: &Context<'_>) {
+        let Some(file) = marks.get(first).map(|mark| mark.file) else {
+            return;
+        };
+        let range = &marks[first..];
+        let (Some(top), Some(bottom)) = (
+            range.iter().map(|mark| mark.line).min(),
+            range.iter().map(|mark| mark.line).max(),
+        ) else {
+            return;
+        };
+        if top == bottom || range.iter().any(|mark| mark.file != file) {
+            return;
+        }
+        let (Some(text), Some(starts)) =
+            (context.source_text(file), context.source_line_starts(file))
+        else {
+            return;
+        };
+        let start = range
+            .iter()
+            .filter(|mark| mark.line == top)
+            .map(|mark| mark.start)
+            .min()
+            .unwrap_or_default();
+        let end = range
+            .iter()
+            .filter(|mark| mark.line == bottom)
+            .map(|mark| mark.end)
+            .max()
+            .unwrap_or_default();
+        marks.truncate(first);
+        for line in top..=bottom {
+            let (_, line_start, line_end) = Self::locate(starts, text, starts[line - 1]);
+            let from = if line == top { start } else { line_start };
+            let to = if line == bottom { end } else { line_end };
+            let drawn = text[from..to].trim_start_matches([' ', '\t']);
+            let from = to - drawn.len();
+            let to = from + drawn.trim_end_matches([' ', '\t']).len();
+            if from < to {
+                marks.push(Mark {
+                    file,
+                    line,
+                    start: from,
+                    end: to,
+                    primary: false,
+                    label: None,
+                    order: marks.len(),
+                });
+            }
         }
     }
 
