@@ -1,0 +1,7 @@
+sema-unused-value-bool-cast-gcc.c: In function 'f':
+sema-unused-value-bool-cast-gcc.c:14:4: warning: value computed is not used [-Wunused-value]
+   14 |   ((_Bool) a++);
+      |    ^~~~~~~
+sema-unused-value-bool-cast-gcc.c:16:4: warning: value computed is not used [-Wunused-value]
+   16 |   ((_Bool) g());
+      |    ^~~~~~~
