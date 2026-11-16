@@ -156,7 +156,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .operator_source_vectors
                     .unwrap_or(operand.source_vectors)
             };
-            self.parentheses_warning(G::Parentheses, at, text);
+            self.parentheses_warning(G::Parentheses, at, text, [SourceVectors::default(); 2]);
         } else if logical_not(left).is_some()
             && matches!(operator, B::BitwiseAnd | B::BitwiseOr)
             && !self.gcc_truth_operand(right)
@@ -166,13 +166,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 "suggest parentheses around operand of '!' or change '{name}' to '{name}{name}' \
                  or '!' to '~'"
             );
-            self.parentheses_warning(G::Parentheses, left.source_vectors, text);
+            self.parentheses_warning(
+                G::Parentheses,
+                left.source_vectors,
+                text,
+                [SourceVectors::default(); 2],
+            );
         }
         if is_comparison(operator) && self.gcc_logical_not_warns(operator, left, right) {
             self.parentheses_warning(
                 G::LogicalNotParentheses,
                 site,
                 "logical not is only applied to the left hand side of comparison",
+                [SourceVectors::default(); 2],
             );
         }
     }
@@ -269,7 +275,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let bitwise = |inner: Option<B>| {
                 matches!(inner, Some(B::BitwiseAnd | B::BitwiseOr | B::BitwiseXor))
             };
-            if compared(left_inner) != compared(right_inner)
+            let compared_left = compared(left_inner);
+            if compared_left != compared(right_inner)
                 && !bitwise(left_inner)
                 && !bitwise(right_inner)
             {
@@ -284,7 +291,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     "{name} has lower precedence than {compared}; {compared} will be evaluated \
                      first"
                 );
-                self.parentheses_warning(G::Parentheses, site, text);
+                // From the comparison to the operator, or from the operator
+                // to the comparison (`DiagnoseBitwisePrecedence`).
+                let range = if compared_left {
+                    self.context.merge_vectors(left.source_vectors, site)
+                } else {
+                    self.context.merge_vectors(site, right.source_vectors)
+                };
+                self.parentheses_warning(
+                    G::Parentheses,
+                    site,
+                    text,
+                    [range, SourceVectors::default()],
+                );
             }
         }
         let in_macro = self.context.produced_by_macro_expansion(site);
@@ -295,9 +314,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let at = operand
                 .operator_source_vectors
                 .unwrap_or(operand.source_vectors);
+            // The operand and this operator (`DiagnoseBitwiseOpInBitwiseOp`,
+            // `DiagnoseAdditionInShift`).
+            let ranges = [operand.source_vectors, site];
             if !in_macro && precedes_within_bitwise(inner, operator) {
                 let text = format_in!(self.scratch, "'{}' within '{name}'", spelling(inner));
-                self.parentheses_warning(G::BitwiseOpParentheses, at, text);
+                self.parentheses_warning(G::BitwiseOpParentheses, at, text, ranges);
             }
             if matches!(operator, B::LeftShift | B::RightShift)
                 && matches!(inner, B::Addition | B::Subtraction)
@@ -308,11 +330,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     "operator '{name}' has lower precedence than '{inner}'; '{inner}' will be \
                      evaluated first"
                 );
-                self.parentheses_warning(G::ShiftOpParentheses, at, text);
+                self.parentheses_warning(G::ShiftOpParentheses, at, text, ranges);
             }
         }
         if operator == B::LogicalOr && !in_macro {
-            self.clang_logical_and_in_or(left, right);
+            self.clang_logical_and_in_or(site, left, right);
         }
         if is_relational(operator)
             && let Some(inner) = binary_operator(left).filter(|&inner| is_relational(inner))
@@ -330,16 +352,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 G::Parentheses
             };
-            self.parentheses_warning(group, site, text);
+            // `warn_consecutive_comparison` names no range.
+            self.parentheses_warning(group, site, text, [SourceVectors::default(); 2]);
         }
         if is_comparison(operator) || operator == B::BitwiseAnd {
-            self.clang_logical_not(operator, left, right);
+            self.clang_logical_not(site, operator, left, right);
         }
     }
 
     /// `DiagnoseLogicalAndInLogicalOrLHS` and `...RHS`: a string literal says
     /// what `assert(a || b && "why")` is for, and `"why" && a || b`.
-    fn clang_logical_and_in_or(&mut self, left: &'tu Expression<'tu>, right: &'tu Expression<'tu>) {
+    fn clang_logical_and_in_or(
+        &mut self,
+        site: SourceVectors,
+        left: &'tu Expression<'tu>,
+        right: &'tu Expression<'tu>,
+    ) {
         let string_literal =
             |e: &'tu Expression<'tu>| matches!(strip_parentheses(e).kind, E::StringLiteral(..));
         let warned = match left.kind {
@@ -363,7 +391,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => None,
         };
         if let Some(operand) = warned {
-            self.logical_and_warning(operand);
+            self.logical_and_warning(site, operand);
         }
         if let E::Binary {
             operator: B::LogicalAnd,
@@ -372,23 +400,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } = right.kind
             && !string_literal(right_expression)
         {
-            self.logical_and_warning(right);
+            self.logical_and_warning(site, right);
         }
     }
 
-    fn logical_and_warning(&mut self, operand: &'tu Expression<'tu>) {
+    /// `EmitDiagnosticForLogicalAndInLogicalOr`, which underlines the `&&`
+    /// expression and the `||` at `site`.
+    fn logical_and_warning(&mut self, site: SourceVectors, operand: &'tu Expression<'tu>) {
         self.parentheses_warning(
             G::LogicalOpParentheses,
             operand
                 .operator_source_vectors
                 .unwrap_or(operand.source_vectors),
             "'&&' within '||'",
+            [operand.source_vectors, site],
         );
     }
 
-    /// `diagnoseLogicalNotOnLHSofCheck`.
+    /// `diagnoseLogicalNotOnLHSofCheck`, which underlines the operator at
+    /// `site`.
     fn clang_logical_not(
         &mut self,
+        site: SourceVectors,
         operator: B,
         left: &'tu Expression<'tu>,
         right: &'tu Expression<'tu>,
@@ -408,7 +441,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.scratch,
             "logical not is only applied to the left hand side of this {what}"
         );
-        self.parentheses_warning(G::LogicalNotParentheses, left.source_vectors, text);
+        self.parentheses_warning(
+            G::LogicalNotParentheses,
+            left.source_vectors,
+            text,
+            [site, SourceVectors::default()],
+        );
     }
 
     /// Clang's `Expr::isKnownToHaveBooleanValue`. A cast the program wrote
@@ -463,6 +501,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     G::Parentheses,
                     e.source_vectors,
                     "suggest parentheses around assignment used as truth value",
+                    [SourceVectors::default(); 2],
                 );
             }
             return;
@@ -472,6 +511,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 G::Parentheses,
                 e.operator_source_vectors.unwrap_or(e.source_vectors),
                 "using the result of an assignment as a condition without parentheses",
+                [e.source_vectors, SourceVectors::default()],
             );
         }
         if matches!(e.kind, E::Parenthesized { .. })
@@ -493,6 +533,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .operator_source_vectors
                     .unwrap_or(inner.source_vectors),
                 "equality comparison with extraneous parentheses",
+                [inner.source_vectors, SourceVectors::default()],
             );
         }
     }
@@ -543,6 +584,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 group,
                 e.operator_source_vectors.unwrap_or(e.source_vectors),
                 text,
+                [
+                    c.condition_expression.source_vectors,
+                    SourceVectors::default(),
+                ],
             );
         }
     }
@@ -561,7 +606,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some(e) = super::statements::slot_expression(slot)
             && self.clang_is_boolean(e)
         {
-            self.parentheses_warning(G::SwitchBool, site, "switch condition has boolean value");
+            self.parentheses_warning(
+                G::SwitchBool,
+                site,
+                "switch condition has boolean value",
+                [e.source_vectors, SourceVectors::default()],
+            );
         }
     }
 
@@ -598,25 +648,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 G::DanglingElse,
                 site.unwrap_or(s.source_vectors),
                 "suggest explicit braces to avoid ambiguous 'else'",
+                [SourceVectors::default(); 2],
             );
         } else if let Some(keyword) = self.context.dangling_else_site(otherwise) {
             self.parentheses_warning(
                 G::DanglingElse,
                 keyword,
                 "add explicit braces to avoid dangling else",
+                [SourceVectors::default(); 2],
             );
         }
     }
 
-    fn parentheses_warning(&mut self, group: G, site: SourceVectors, text: &str) {
+    /// Reports `text` at `site`, with the `ranges` Clang underlines beside
+    /// the caret, each one Clang's `Diag` streams in `SemaExpr.cpp` or
+    /// `SemaStmt.cpp`.
+    fn parentheses_warning(
+        &mut self,
+        group: G,
+        site: SourceVectors,
+        text: &str,
+        ranges: [SourceVectors; 2],
+    ) {
         let name = self.context.string_cache.intern(text);
-        self.spelled_group_diagnostic(
-            group,
-            SemanticErrorKind::Parentheses(group),
-            site,
-            Some(name),
-            site,
-        );
+        self.with_highlights(ranges, |analyzer| {
+            analyzer.spelled_group_diagnostic(
+                group,
+                SemanticErrorKind::Parentheses(group),
+                site,
+                Some(name),
+                site,
+            );
+        });
     }
 
     fn is_gcc(&self) -> bool {

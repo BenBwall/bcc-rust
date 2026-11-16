@@ -164,6 +164,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             kind: super::super::SemanticErrorKind::ValueWarning(group),
             site,
             name: Some(text),
+            highlights: self.highlights,
         });
     }
 

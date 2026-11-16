@@ -65,6 +65,7 @@ pub(in crate::translation_phases::preprocessing) use spacing::SpacingState;
 
 use super::{
     Expander,
+    Formation,
     runtime::{
         TokenizerFrame,
         TokenizerFrameType,
@@ -236,14 +237,15 @@ impl Expander<'_, '_, '_, '_> {
 
 /// A `##` paste waiting for an operand that an argument frame is still
 /// producing. `Lhs` holds the left operand, to paste with the right
-/// argument's first token; `Rhs` holds the right operand, to paste with the
+/// argument's first token, and how it came to be, which a placemarker on
+/// the right leaves it; `Rhs` holds the right operand, to paste with the
 /// left argument's last token; `Empty` marks a paste whose left argument is
 /// still being read.
 ///
 /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum HashHash {
-    Lhs(PreprocessorToken),
+    Lhs(PreprocessorToken, Formation),
     Rhs(PreprocessorToken),
     Empty,
 }

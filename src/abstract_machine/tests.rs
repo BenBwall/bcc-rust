@@ -1486,6 +1486,14 @@ fn structures_are_laid_out_with_padding_on_x86_64() {
         "{}",
         declared.event.explanation
     );
+    assert!(
+        declared
+            .event
+            .explanation
+            .contains("of padding at the end. Each member's value"),
+        "{}",
+        declared.event.explanation
+    );
     assert!(cited(&declared).contains(&"6.7.2.1p13"));
     assert!(
         declared.event.note.contains("padding"),
@@ -2499,10 +2507,18 @@ fn the_constants_lesson_narrates_define_const_cast_and_compound_assignment() {
     assert_eq!(cast.event.title, "Cast 300 to char → 44");
     assert_eq!(
         cast.event.summary,
-        "300 does not fit in a char, so the result is implementation-defined; bcc and GCC wrap it \
-         to 44."
+        "300 does not fit in a char, so the result is implementation-defined; bcc, GCC and Clang \
+         wrap it to 44."
     );
     assert!(cited(cast).contains(&"6.3.1.3p3"));
+    // An unsigned plain char gives the same byte, 44, but defined.
+    assert!(
+        cast.event
+            .explanation
+            .contains("as on ARM Linux, 300 becomes 44 too, and there the result is defined"),
+        "{}",
+        cast.event.explanation
+    );
     // += is E1 = E1 + (E2), with E1 evaluated once.
     let updates: Vec<&State> = states
         .iter()
@@ -3041,6 +3057,7 @@ fn the_usual_arithmetic_conversions_say_which_operand_converts_and_why() {
     assert_eq!(event.kind.category(), "convert");
     assert_eq!(event.from_type.as_deref(), Some("int"));
     assert_eq!(event.result_type.as_deref(), Some("unsigned int"));
+    assert_eq!(event.other_type.as_deref(), Some("unsigned int"));
     assert!(event.note.contains("-Wsign-compare"));
     let comparison = steps
         .iter()
@@ -3075,16 +3092,30 @@ fn the_usual_arithmetic_conversions_say_which_operand_converts_and_why() {
     // A long long is no wider than an unsigned long: both convert.
     let source = "int main(void) { long long a = -1; unsigned long b = 1; return a < b; }";
     returned(source, 0);
-    let titles: Vec<String> = states(source)
+    let steps = states(source);
+    let both: Vec<&super::Event> = steps
         .iter()
         .filter(|state| state.event.kind == EventKind::ArithmeticConversion)
-        .map(|state| state.event.title.clone())
+        .map(|state| &state.event)
         .collect();
+    let titles: Vec<&str> = both.iter().map(|event| event.title.as_str()).collect();
     assert_eq!(
         titles,
         [
             "Convert -1 to unsigned long long → 18446744073709551615",
             "Convert 1 to unsigned long long"
+        ]
+    );
+    // Each step names the operand it converted and the one it met.
+    let types: Vec<(Option<&str>, Option<&str>)> = both
+        .iter()
+        .map(|event| (event.from_type.as_deref(), event.other_type.as_deref()))
+        .collect();
+    assert_eq!(
+        types,
+        [
+            (Some("long long"), Some("unsigned long")),
+            (Some("unsigned long"), Some("long long"))
         ]
     );
     // Two ints, or a char and an int, need no conversion step.
@@ -3197,7 +3228,10 @@ fn conversions_to_unsigned_wrap_and_to_signed_are_the_implementations() {
         .collect();
     assert_eq!(casts[0].event.title, "Cast 4294967295 to int → -1");
     assert!(
-        casts[0].event.summary.contains("bcc and GCC wrap it to -1"),
+        casts[0]
+            .event
+            .summary
+            .contains("bcc, GCC and Clang wrap it to -1"),
         "{}",
         casts[0].event.summary
     );
@@ -3305,7 +3339,7 @@ fn shifts_promote_each_operand_and_stop_outside_their_width() {
         right
             .event
             .summary
-            .contains("implementation-defined; bcc and GCC"),
+            .contains("implementation-defined; bcc, GCC and Clang"),
         "{}",
         right.event.summary
     );
@@ -3842,7 +3876,9 @@ fn objects_and_events_carry_sizes_and_types_in_json() {
         "{json}"
     );
     assert!(json.contains("\"type\":\"long\",\"size\":8"));
-    assert!(json.contains("\"from_type\":\"int\",\"result_type\":\"unsigned int\""));
+    assert!(json.contains(
+        "\"from_type\":\"int\",\"result_type\":\"unsigned int\",\"other_type\":\"unsigned int\""
+    ));
     assert!(json.contains("\"kind\":\"arithmetic_conversion\""));
 }
 

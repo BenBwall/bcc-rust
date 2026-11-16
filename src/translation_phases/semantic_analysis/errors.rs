@@ -2867,6 +2867,16 @@ impl SemanticErrorKind {
             ),
             | Self::ShadowOrBody(group) =>
                 !matches!(group, crate::configuration::DiagnosticGroup::EmptyBody),
+            // The parser's `warn_dangling_else` and Sema's
+            // `warn_consecutive_comparison` name no range; nor do the
+            // `switch` warnings in `SemaStmt.cpp` but those about the
+            // condition, which name it as a range of their own.
+            | Self::Parentheses(group) => matches!(
+                group,
+                crate::configuration::DiagnosticGroup::DanglingElse
+                    | crate::configuration::DiagnosticGroup::ChainedComparison
+            ),
+            | Self::SwitchCases(_) => true,
             | _ => false,
         }
     }

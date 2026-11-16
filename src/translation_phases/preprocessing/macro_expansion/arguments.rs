@@ -14,12 +14,17 @@ use std::{
 
 use crate::{
     translation_phases::{
+        ArgumentSubstitution,
         Context,
         SourceVectors,
         TranslationPhase,
         preprocessing::{
             Expander,
-            macro_expansion::SpacingState,
+            Formation,
+            macro_expansion::{
+                SpacingState,
+                paste::PastedTokens,
+            },
             runtime::{
                 TokenizerFrame,
                 TokenizerFrameType,
@@ -81,14 +86,106 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .expect("the argument was prescanned")
             .tokens
             .clone();
+        let substitutions = argument
+            .expanded
+            .get()
+            .expect("the argument was prescanned")
+            .substitutions;
         let end = self.pad_substitution(argument);
+        let substitution = self.new_substitution();
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan {
-                argument: true,
+                argument: Some(substitution),
                 end,
+                substitutions,
             },
             tokenizer,
         });
+    }
+
+    /// Numbers a new substitution of an argument for its parameter.
+    pub(super) fn new_substitution(&mut self) -> ArgumentSubstitution {
+        let substitution = self.next_substitution;
+        self.next_substitution = substitution.next();
+        substitution
+    }
+
+    /// The substitution whose tokens are being read, when the token just
+    /// read came from an argument rather than a replacement list or the
+    /// file: the innermost argument frame, unless a replacement list lies
+    /// above it. An argument that is a `##` operand keeps its substitution
+    /// in the tokens pasting leaves as they are, and a parameter's
+    /// replacement in what a call collected across the list leaves of it.
+    /// A `__VA_OPT__` replacement keeps the substitutions of the arguments
+    /// in it, and its other tokens belong to the replacement list, as does
+    /// a token `##` formed from two tokens.
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3
+    /// paragraphs 2-3, p. 154; PDF p. 166. C23: §6.10.5.1 paragraph 7,
+    /// p. 180; PDF p. 193.
+    pub(in crate::translation_phases::preprocessing) fn current_substitution(
+        &self,
+    ) -> Option<ArgumentSubstitution> {
+        self.substitution_of(self.formation)
+    }
+
+    /// The substitution of the token just read, which came to be as
+    /// `formation` says: a token `##` formed from two tokens has none, one a
+    /// placemarker kept has its own, and the frames tell that of the rest.
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
+    pub(in crate::translation_phases::preprocessing) fn substitution_of(
+        &self,
+        formation: Formation,
+    ) -> Option<ArgumentSubstitution> {
+        match formation {
+            | Formation::Pasted => return None,
+            | Formation::Kept(substitution) => return substitution,
+            | Formation::Read => {},
+        }
+        for (depth, frame) in self.tokenizer_stack.iter().rev().enumerate() {
+            match frame.frame_type {
+                // Only the innermost frame's cursor says which token was
+                // just read.
+                | TokenizerFrameType::Rescan {
+                    argument,
+                    substitutions: Some(substitutions),
+                    ..
+                } if depth == 0 => {
+                    let read = self.position().index.checked_sub(1);
+                    match read.and_then(|index| substitutions.get(index).copied()) {
+                        | Some(Some(substitution)) => return Some(substitution),
+                        | Some(None) if argument.is_some() => return None,
+                        | _ if argument.is_some() => return argument,
+                        | _ => {},
+                    }
+                },
+                // A `__VA_OPT__` replacement read as written, as a `##`
+                // operand, keeps its table too; only its innermost read
+                // says which token that was.
+                | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }
+                    if argument.substituted =>
+                {
+                    let substitutions = argument.expanded.get()?.substitutions?;
+                    let read = self
+                        .position()
+                        .index
+                        .checked_sub(1)
+                        .filter(|_| depth == 0)?;
+                    return substitutions.get(read).copied().flatten();
+                },
+                | TokenizerFrameType::Rescan {
+                    argument: Some(substitution),
+                    ..
+                }
+                | TokenizerFrameType::FunctionLikeMacroArgument {
+                    substitution: Some(substitution),
+                    ..
+                } => return Some(substitution),
+                | TokenizerFrameType::Rescan { argument: None, .. }
+                | TokenizerFrameType::DeferredQuery => {},
+                | _ => return None,
+            }
+        }
+        None
     }
 
     pub(in crate::translation_phases::preprocessing) fn get_arguments(
@@ -198,6 +295,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         drop(argument.expanded.set(Prescan {
             tokens,
             end: self.prescan_end(),
+            substitutions: None,
         }));
     }
 
@@ -213,6 +311,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     released:            false,
                     operand:             false,
                     end:                 TokenSpacing::NONE,
+                    // A `__VA_OPT__` replacement keeps the substitutions
+                    // of the arguments in it.
+                    substitution:        (!arg.substituted).then(|| self.new_substitution()),
                 },
                 tokenizer:  arg.tokenizer.clone(),
             };
@@ -301,6 +402,18 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         argument: &'x FunctionLikeMacroArgument<'x>,
         expand: bool,
     ) -> ArenaVec<'x, PreprocessorToken> {
+        self.read_argument_recording(argument, expand, None)
+    }
+
+    /// [`Self::read_argument`], pushing to `substitutions`, when given, the
+    /// argument substitution of each token it returns, by the same index.
+    #[inline(always)]
+    fn read_argument_recording(
+        &mut self,
+        argument: &'x FunctionLikeMacroArgument<'x>,
+        expand: bool,
+        mut substitutions: Option<&mut ArenaVec<'x, Option<ArgumentSubstitution>>>,
+    ) -> ArenaVec<'x, PreprocessorToken> {
         let hash_hash_stack = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let generate_placeholders = self.generate_placeholders;
         let newlines = (self.last_was_newline, self.current_is_newline);
@@ -316,9 +429,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         } else {
             self.verbatim_fence
         };
-        let mut tokens = ArenaVec::new_in(self.scratch);
+        let capacity = substitutions
+            .as_ref()
+            .map_or(0, |substitutions| substitutions.capacity());
+        let mut tokens = ArenaVec::with_capacity_in(capacity, self.scratch);
         while let Some(token) = self.next_preprocessor_token::<false>() {
             tokens.push(token);
+            if let Some(substitutions) = substitutions.as_deref_mut() {
+                substitutions.push(self.current_substitution());
+            }
         }
         self.operand_fence = fence;
         self.expansion_fence = expansion_fence;
@@ -345,7 +464,48 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .position(|token| !is_whitespace(token))
             .unwrap_or(end);
         drop(tokens.drain(..start));
+        if let Some(substitutions) = substitutions {
+            substitutions.truncate(end);
+            drop(substitutions.drain(..start));
+        }
         tokens
+    }
+
+    /// The tokens that `argument` stands for as a `##` operand, as written,
+    /// each with its argument substitution: an argument is one new
+    /// substitution of its parameter, and a `__VA_OPT__` replacement keeps
+    /// those of the arguments in it, its own tokens having none, as it does
+    /// where it is rescanned.
+    ///
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3 paragraph
+    /// 2, p. 154; PDF p. 166. C23: §6.10.5.1 paragraph 7, p. 180; PDF p. 193.
+    pub(super) fn argument_operand(
+        &mut self,
+        argument: &'x FunctionLikeMacroArgument<'x>,
+    ) -> PastedTokens<'x> {
+        let table = argument
+            .expanded
+            .get()
+            .and_then(|prescan| prescan.substitutions)
+            .filter(|_| argument.substituted);
+        if let Some(table) = table {
+            // Reserved up front: two vectors growing together in the
+            // expansion arena could not grow in place.
+            let mut substitutions = ArenaVec::with_capacity_in(table.len(), self.scratch);
+            let tokens = self.read_argument_recording(argument, false, Some(&mut substitutions));
+            return PastedTokens {
+                tokens,
+                substitutions,
+            };
+        }
+        let tokens = self.read_argument(argument, false);
+        let substitution = (!argument.substituted).then(|| self.new_substitution());
+        let mut substitutions = ArenaVec::with_capacity_in(tokens.len(), self.scratch);
+        substitutions.resize(tokens.len(), substitution);
+        PastedTokens {
+            tokens,
+            substitutions,
+        }
     }
 
     /// Whether an argument's prescan is reading (§6.10.3.1 paragraph 1),
@@ -378,6 +538,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 released: false,
                 operand: false,
                 end: TokenSpacing::NONE,
+                substitution: None,
             },
             tokenizer:  argument.tokenizer.clone(),
         });
@@ -464,10 +625,18 @@ pub(crate) struct FunctionLikeMacroArgument<'x> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Prescan<'x> {
     /// Its tokens.
-    pub(in crate::translation_phases::preprocessing) tokens: TokenSource<'x>,
+    pub(in crate::translation_phases::preprocessing) tokens:        TokenSource<'x>,
     /// For a text of phase 4, the padding that comes after them where the
     /// parameter is substituted.
-    pub(in crate::translation_phases::preprocessing) end:    TokenSpacing,
+    pub(in crate::translation_phases::preprocessing) end:           TokenSpacing,
+    /// For a `__VA_OPT__` replacement, the substitution of each token by its
+    /// place in `tokens`: an argument's tokens keep theirs, and the
+    /// replacement list's own have none. Every use of an ordinary
+    /// parameter is one new substitution instead.
+    ///
+    /// C23: §6.10.5.1 paragraph 7, p. 180; PDF p. 193.
+    pub(in crate::translation_phases::preprocessing) substitutions:
+        Option<&'x [Option<ArgumentSubstitution>]>,
 }
 
 /// The arguments of one invocation, each under its parameter's name.

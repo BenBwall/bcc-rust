@@ -12,11 +12,13 @@ use super::{
     MacroArguments,
     MacroDefinition,
     arguments::find_argument,
+    paste::PastedTokens,
     spacing::frame_end,
 };
 use crate::{
     configuration::Feature,
     translation_phases::{
+        ArgumentSubstitution,
         Context,
         GetPosition,
         SetPosition,
@@ -596,23 +598,42 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 /// may follow the replacement list that ends with the macro's name.
 struct MacroCallCursor<'x> {
     /// Copies of the expander's frames from `base` up.
-    frames:       ArenaVec<'x, TokenizerFrame<'x>>,
-    base:         usize,
+    frames:                ArenaVec<'x, TokenizerFrame<'x>>,
+    base:                  usize,
     /// The frame being read, as an index into the whole stack.
-    index:        Option<usize>,
-    floor:        usize,
-    /// Consumed prefix stays in place until the queue empties.
-    pending:      ArenaVec<'x, PreprocessorToken>,
-    pending_head: usize,
-    line_start:   bool,
+    index:                 Option<usize>,
+    floor:                 usize,
+    /// Consumed prefix stays in place until the queue empties. It holds one
+    /// replacement at a time: a parameter's, or what `#` or `##` formed.
+    pending:               ArenaVec<'x, PreprocessorToken>,
+    /// The argument substitutions of the tokens of `pending`, which a
+    /// replay of what the call leaves keeps.
+    pending_substitutions: PendingSubstitutions<'x>,
+    pending_head:          usize,
+    line_start:            bool,
     /// Whether a text of phase 4 reads the call, so spacing matters.
-    text:         bool,
+    text:                  bool,
     /// The padding since the last token collected, for a text of phase 4.
-    spacing:      TokenSpacing,
+    spacing:               TokenSpacing,
     /// The padding that comes after `pending`.
-    pending_end:  TokenSpacing,
+    pending_end:           TokenSpacing,
     /// White space was read since the last token.
-    white:        bool,
+    white:                 bool,
+}
+
+/// The argument substitutions of the replacement a macro call cursor queues.
+/// No vector runs beside the queue: two vectors growing together in the
+/// expansion arena could not grow in place, and each would leave every
+/// outgrown copy behind, which for a long argument fills a WebAssembly
+/// arena.
+#[derive(Clone, Copy)]
+enum PendingSubstitutions<'x> {
+    /// Every token has this one: a parameter's replacement its own
+    /// substitution, and a `#` operator's result none.
+    All(Option<ArgumentSubstitution>),
+    /// Each token has its own, by the same index: the tokens `##` operators
+    /// formed, or a `__VA_OPT__` replacement.
+    Each(&'x [Option<ArgumentSubstitution>]),
 }
 
 /// A token of a macro call being collected: read with its provenance, or,
@@ -729,6 +750,7 @@ impl<'x> MacroCallCursor<'x> {
                 return Some(CallToken::Read(self.pad(token)));
             }
             self.pending.clear();
+            self.pending_substitutions = PendingSubstitutions::All(None);
             self.pending_head = 0;
             if self.text {
                 self.spacing = self.spacing.then(self.pending_end);
@@ -840,7 +862,7 @@ impl<'x> MacroCallCursor<'x> {
                     frame.tokenizer.set_position(position);
                 }
             }
-            let mut tokens = ArenaVec::new_in(preprocessor.scratch);
+            let mut tokens = PastedTokens::new_in(preprocessor.scratch);
             let mut pasted = false;
             if replacement {
                 loop {
@@ -870,7 +892,9 @@ impl<'x> MacroCallCursor<'x> {
                 }
             }
             if pasted {
-                self.pending.extend(tokens);
+                self.pending.extend(tokens.tokens);
+                self.pending_substitutions =
+                    PendingSubstitutions::Each(tokens.substitutions.leak());
                 self.pad_replacement(white, TokenSpacing::END);
                 continue;
             }
@@ -880,6 +904,10 @@ impl<'x> MacroCallCursor<'x> {
                 })
             {
                 let prescan = preprocessor.expanded_argument(token, argument);
+                self.pending_substitutions = match prescan.substitutions {
+                    | Some(each) => PendingSubstitutions::Each(each),
+                    | None => PendingSubstitutions::All(Some(preprocessor.new_substitution())),
+                };
                 let mut expanded = prescan.tokens.clone();
                 while let Some(token) = expanded.next_item(preprocessor.context) {
                     self.pending.push(token);
@@ -954,12 +982,30 @@ impl<'x> MacroCallCursor<'x> {
                 &[&self.pending[self.pending_head..]],
                 location,
             );
+            // What the call leaves of a parameter's replacement keeps its
+            // substitution.
+            let substitutions = match self.pending_substitutions {
+                | PendingSubstitutions::All(None) => None,
+                | PendingSubstitutions::All(substitution) => Some(
+                    &*preprocessor
+                        .scratch
+                        .alloc_slice_fill_iter(std::iter::repeat_n(
+                            substitution,
+                            self.pending.len() - self.pending_head,
+                        )),
+                ),
+                | PendingSubstitutions::Each(each) => {
+                    let each = &each[self.pending_head..];
+                    each.iter().any(Option::is_some).then_some(each)
+                },
+            };
             self.frames.insert(
                 self.index.map_or(0, |index| index + 1) - self.base,
                 TokenizerFrame {
                     frame_type: TokenizerFrameType::Rescan {
-                        argument: false,
-                        end:      self.pending_end,
+                        argument: None,
+                        end: self.pending_end,
+                        substitutions,
                     },
                     tokenizer,
                 },
@@ -986,6 +1032,7 @@ impl<'x> MacroCallCursor<'x> {
             index: stack.len().checked_sub(1),
             floor,
             pending: ArenaVec::new_in(preprocessor.scratch),
+            pending_substitutions: PendingSubstitutions::All(None),
             pending_head: 0,
             line_start: false,
             text: preprocessor.state.as_text,
