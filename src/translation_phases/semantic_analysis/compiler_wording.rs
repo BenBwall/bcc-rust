@@ -289,9 +289,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// (`ext_typecheck_convert_discards_qualifiers` and
     /// `ext_nested_pointer_qualifier_mismatch` in `DiagnosticSemaKinds.td`):
     /// the conversion as Clang names it at its site, then `discards
-    /// qualifiers` when the pointed-to type loses a qualifier, or `discards
-    /// qualifiers in nested pointer types` when only a deeper level does
-    /// (`char **` from `const char **`).
+    /// qualifiers` when the pointed-to types are compatible apart from their
+    /// own qualifiers (`char *` from `const char *`), or `discards qualifiers
+    /// in nested pointer types` when a deeper level differs, whatever the
+    /// pointed-to type's own qualifiers do (`char **` from `const char **`,
+    /// `int **` from `const int *const *`). This is the question
+    /// `pointer_conversion_violation` asked to put the conversion in
+    /// this group, as Clang's `checkPointerTypesForAssignment` (`SemaExpr.cpp`)
+    /// returns `CompatiblePointerDiscardsQualifiers` or
+    /// `IncompatibleNestedPointerQualifiers`.
     /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
     fn clang_discarded_qualifiers_wording(
         &mut self,
@@ -305,7 +311,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let nested = self
             .pointer_target(target)
             .zip(self.pointer_target(from))
-            .is_some_and(|(to, from)| to.qualifiers.contains(from.qualifiers));
+            .is_some_and(|(to, from)| !self.pointer_compatible(to, from, true));
         let suffix = if nested {
             "discards qualifiers in nested pointer types"
         } else {

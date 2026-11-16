@@ -22,4 +22,22 @@ sema-discards-qualifiers-clang.c:16:9: warning: passing 'const char **' to param
 sema-discards-qualifiers-clang.c:17:8: warning: initializing 'int *' with an expression of type 'volatile int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
    17 |   int *c = vi;
       |        ^   ~~
-8 warnings generated.
+sema-discards-qualifiers-clang.c:26:28: warning: returning 'const int *const *' from a function with result type 'int **' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
+   26 | int **mixed(void) { return cc; }
+      |                            ^~
+sema-discards-qualifiers-clang.c:28:9: warning: initializing 'int **' with an expression of type 'const int *const *' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
+   28 |   int **e = cc;
+      |         ^   ~~
+sema-discards-qualifiers-clang.c:29:5: warning: assigning to 'int **' from 'const int *const *' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
+   29 |   e = cc;
+      |     ^ ~~
+sema-discards-qualifiers-clang.c:30:9: warning: passing 'const int *const *' to parameter of type 'int **' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
+   30 |   take3(cc);
+      |         ^~
+sema-discards-qualifiers-clang.c:31:15: warning: initializing 'const int **' with an expression of type 'int *const *' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
+   31 |   const int **h = ic;
+      |               ^   ~~
+sema-discards-qualifiers-clang.c:32:7: warning: assigning to 'int (*)[2]' from 'const int (*)[2]' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   32 |   arr = carr;
+      |       ^ ~~~~
+14 warnings generated.
