@@ -241,6 +241,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                     frame_type: TokenizerFrameType::Rescan {
                                         argument: None,
                                         end:      TokenSpacing::NONE,
+                                        operands: None,
                                     },
                                     tokenizer,
                                 });

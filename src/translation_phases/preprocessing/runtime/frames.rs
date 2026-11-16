@@ -119,9 +119,9 @@ pub(in crate::translation_phases::preprocessing) struct TokenizerFrame<'a> {
 #[derive(Debug, PartialEq, Clone)]
 pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
     /// Tokens replayed ahead of the frame below: the remainder of a
-    /// boundary-crossing macro call, rejected lookahead, or the output of a
-    /// builtin query or `#embed`, or a macro-replaced argument substituted
-    /// for its parameter.
+    /// boundary-crossing macro call, rejected lookahead, the result of
+    /// `##` operators, or the output of a builtin query or `#embed`, or a
+    /// macro-replaced argument substituted for its parameter.
     Rescan {
         /// The substitution, when the tokens are a substituted argument.
         ///
@@ -129,6 +129,12 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         argument: Option<ArgumentSubstitution>,
         /// The padding its end brings, for a text of phase 4.
         end:      TokenSpacing,
+        /// For tokens that `##` operators formed, the substitution of each
+        /// by its place in the replay: an argument operand's own tokens
+        /// keep theirs, and a token that pasting formed has none.
+        ///
+        /// C99: §6.10.3.3 paragraph 2, p. 154; PDF p. 166.
+        operands: Option<&'a [Option<ArgumentSubstitution>]>,
     },
     /// Already collected query arguments, replayed without macro replacement
     /// until their enclosing embed parameter is evaluated.

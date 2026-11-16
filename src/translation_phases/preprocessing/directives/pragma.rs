@@ -739,6 +739,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             frame_type: super::super::runtime::TokenizerFrameType::Rescan {
                 argument: None,
                 end:      crate::translation_phases::preprocessor_tokenizer::TokenSpacing::NONE,
+                operands: None,
             },
             tokenizer,
         });

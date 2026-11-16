@@ -12,6 +12,7 @@ use super::{
     MacroArguments,
     MacroDefinition,
     arguments::find_argument,
+    paste::PastedTokens,
     spacing::frame_end,
 };
 use crate::{
@@ -840,7 +841,7 @@ impl<'x> MacroCallCursor<'x> {
                     frame.tokenizer.set_position(position);
                 }
             }
-            let mut tokens = ArenaVec::new_in(preprocessor.scratch);
+            let mut tokens = PastedTokens::new_in(preprocessor.scratch);
             let mut pasted = false;
             if replacement {
                 loop {
@@ -870,7 +871,9 @@ impl<'x> MacroCallCursor<'x> {
                 }
             }
             if pasted {
-                self.pending.extend(tokens);
+                // A collected call's tokens carry no substitutions; those it
+                // takes as arguments are substituted again.
+                self.pending.extend(tokens.tokens);
                 self.pad_replacement(white, TokenSpacing::END);
                 continue;
             }
@@ -960,6 +963,7 @@ impl<'x> MacroCallCursor<'x> {
                     frame_type: TokenizerFrameType::Rescan {
                         argument: None,
                         end:      self.pending_end,
+                        operands: None,
                     },
                     tokenizer,
                 },

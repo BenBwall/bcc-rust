@@ -53,3 +53,19 @@ void h(long l, int a) {
     printf(JOIN("%", "d" " %s"), l, a);
     printf(TWICE("%"), l);
 }
+#define CAT(a, b) a ## b
+#define CAT3(a, b, c) a ## b ## c
+#define VCAT(a, ...) __VA_ARGS__ ## a
+#define EMPTY
+void k(long l, int a) {
+    printf(CAT("%" "d",), l);
+    printf(CAT(,"%" "d"), l);
+    printf(CAT("%" "d" EMP, TY), l);
+    printf(CAT("%" "d" "%" "d",), a, l);
+    printf(VCAT(, "%" "d"), l);
+    printf(CAT3("%" "d",,), l);
+    printf(CAT3(,"%" "d",), l);
+    printf(CAT3(,,"%" "d"), l);
+    printf(CAT3(EMP, TY "%" "d" EMP, TY), l);
+    printf(CAT3("%" EMP, , TY "d"), l);
+}

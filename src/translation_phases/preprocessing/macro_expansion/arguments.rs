@@ -88,13 +88,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             frame_type: TokenizerFrameType::Rescan {
                 argument: Some(substitution),
                 end,
+                operands: None,
             },
             tokenizer,
         });
     }
 
     /// Numbers a new substitution of an argument for its parameter.
-    fn new_substitution(&mut self) -> ArgumentSubstitution {
+    pub(super) fn new_substitution(&mut self) -> ArgumentSubstitution {
         let substitution = self.next_substitution;
         self.next_substitution = substitution.next();
         substitution
@@ -103,12 +104,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// The substitution whose tokens are being read, when the token just
     /// read came from an argument rather than a replacement list or the
     /// file: the innermost argument frame, unless a replacement list lies
-    /// above it.
-    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+    /// above it. An argument that is a `##` operand keeps its substitution
+    /// in the tokens pasting leaves as they are.
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3
+    /// paragraph 2, p. 154; PDF p. 166.
     pub(in crate::translation_phases::preprocessing) fn current_substitution(
         &self,
     ) -> Option<ArgumentSubstitution> {
-        for frame in self.tokenizer_stack.iter().rev() {
+        for (depth, frame) in self.tokenizer_stack.iter().rev().enumerate() {
             match frame.frame_type {
                 | TokenizerFrameType::Rescan {
                     argument: Some(substitution),
@@ -118,6 +121,20 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     substitution: Some(substitution),
                     ..
                 } => return Some(substitution),
+                // Only the innermost frame's cursor says which token was
+                // just read.
+                | TokenizerFrameType::Rescan {
+                    argument: None,
+                    operands: Some(operands),
+                    ..
+                } if depth == 0 => {
+                    let read = self.position().index.checked_sub(1);
+                    if let Some(substitution) =
+                        read.and_then(|index| operands.get(index).copied().flatten())
+                    {
+                        return Some(substitution);
+                    }
+                },
                 | TokenizerFrameType::Rescan { argument: None, .. }
                 | TokenizerFrameType::DeferredQuery => {},
                 | _ => return None,

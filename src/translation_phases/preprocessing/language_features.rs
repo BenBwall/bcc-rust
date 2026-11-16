@@ -401,6 +401,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             frame_type: TokenizerFrameType::Rescan {
                 argument: None,
                 end:      TokenSpacing::NONE,
+                operands: None,
             },
             tokenizer,
         });
@@ -465,6 +466,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             frame_type: TokenizerFrameType::Rescan {
                 argument: None,
                 end:      TokenSpacing::NONE,
+                operands: None,
             },
             tokenizer,
         });
@@ -930,6 +932,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             frame_type: TokenizerFrameType::Rescan {
                 argument: None,
                 end:      TokenSpacing::NONE,
+                operands: None,
             },
             tokenizer,
         });
