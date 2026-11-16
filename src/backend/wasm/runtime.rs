@@ -16,10 +16,13 @@
 //! `clock_time_get`), so Node's `wasi` module, wasmtime or a browser
 //! shim runs the result. Files cannot be opened.
 //!
-//! [`modules`] compiles every runtime source once per thread and keeps the
-//! modules for the rest of the process in an arena that is never freed, so
-//! the explorer, which compiles many programs in one session, and a test
-//! process pay for the runtime once. The runtime's build depends only on
+//! [`with_modules`] compiles every runtime source on a thread's first link
+//! and keeps the modules in an arena until the thread exits, so the
+//! explorer, which compiles many programs in one session on one thread,
+//! pays for the runtime once. A compilation stack is a thread of its own,
+//! so a process that compiles each program on a new one (the command line,
+//! a test) frees the runtime with each compilation rather than keeping a
+//! copy for every thread it ever ran. The runtime's build depends only on
 //! its target: it is always optimized C17 with GNU extensions, whatever
 //! the program's language mode, optimization level or flags. Its sources
 //! are embedded in the binary, so the cache cannot outlive a change to
@@ -29,6 +32,7 @@
 use std::{
     cell::OnceCell,
     path::Path,
+    ptr::NonNull,
 };
 
 use crate::{
@@ -85,29 +89,74 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
 /// The runtime's private headers.
 const HEADERS: &[(&str, &str)] = &[("wasi.h", include_str!("runtime/wasi.h"))];
 
-/// The runtime's modules for `target` (`wasm32-wasip1`), compiled on this
-/// thread's first call and kept for the rest of the process. A failure is
-/// kept too: it is a bug of bcc, reported with the source's diagnostics.
-/// Modules hold arena references that are not `Sync`, so each thread keeps
-/// its own copy.
-pub(crate) fn modules(target: Target) -> Result<&'static [Module<'static>], &'static str> {
+/// Calls `link` with the runtime's modules for `target` (`wasm32-wasip1`),
+/// compiled on this thread's first call and kept until the thread exits. A
+/// failure is kept too: it is a bug of bcc, reported with the source's
+/// diagnostics. Modules hold arena references that are not `Sync`, so each
+/// thread keeps its own copy, and `link` borrows it only for the call, so
+/// nothing that outlives the thread can point into it.
+pub(crate) fn with_modules<R>(
+    target: Target,
+    link: impl FnOnce(Result<&[Module<'_>], &str>) -> R,
+) -> R {
     thread_local! {
-        static WASI: OnceCell<Result<&'static [Module<'static>], &'static str>> =
-            const { OnceCell::new() };
+        static WASI: OnceCell<Kept> = const { OnceCell::new() };
     }
     if target != Target::Wasm32Wasi {
-        return Err("only the wasm32-wasip1 target links the bundled runtime");
+        return link(Err(
+            "only the wasm32-wasip1 target links the bundled runtime"
+        ));
     }
-    WASI.with(|cached| {
-        *cached.get_or_init(|| {
-            #[expect(
-                clippy::disallowed_types,
-                reason = "The runtime's modules live for the process: their arena is leaked once                           per thread, never freed."
-            )]
-            let arena: &'static Bump = Box::leak(Box::new(Bump::new()));
-            compile(target, arena).map(|modules| &*modules.leak())
-        })
-    })
+    WASI.with(|kept| link(kept.get_or_init(|| Kept::compile(target)).modules()))
+}
+
+/// A thread's compiled runtime and the arena that holds it, which it frees
+/// when the thread exits.
+struct Kept {
+    /// Point into `arena`; [`Kept::modules`] lends them only for a borrow
+    /// of `self`.
+    modules: Result<&'static [Module<'static>], &'static str>,
+    /// Owned: from [`Box::into_raw`], freed by [`Kept`]'s `Drop`. A raw
+    /// pointer rather than a `Box`, whose moves would claim unique access
+    /// while `modules` borrow it.
+    arena:   NonNull<Bump>,
+}
+
+impl Kept {
+    fn compile(target: Target) -> Self {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "The runtime's arena lives as long as its thread, past every compilation's \
+                      arenas, so it is boxed and freed when the thread exits."
+        )]
+        let arena = NonNull::from(Box::leak(Box::new(Bump::new())));
+        // SAFETY: the arena stays allocated, and is not mutably borrowed,
+        // until `Kept` drops; `modules` lends what it holds only for a
+        // borrow of `Kept`, which ends first.
+        let shared: &'static Bump = unsafe { arena.as_ref() };
+        let modules = compile(target, shared).map(|modules| &*modules.leak());
+        Self { modules, arena }
+    }
+
+    /// The modules, for as long as `self` is borrowed (the `'static` of the
+    /// field shortens to it).
+    fn modules(&self) -> Result<&[Module<'_>], &str> {
+        self.modules
+    }
+}
+
+impl Drop for Kept {
+    fn drop(&mut self) {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "Frees the arena boxed in Kept::compile."
+        )]
+        // SAFETY: `arena` came from `Box::leak` in `Kept::compile` and is
+        // freed only here. Every module and message in it was lent for a
+        // borrow of `self`, so none is still in use.
+        let arena = unsafe { Box::from_raw(self.arena.as_ptr()) };
+        drop(arena);
+    }
 }
 
 /// Compiles every runtime source for `target` into `arena`, optimized by
@@ -207,5 +256,27 @@ impl std::io::Write for Rendered<'_> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::vm::accounting;
+
+    /// A thread's kept runtime returns its arena's memory when the thread
+    /// exits, so a process that links on many threads does not keep a copy
+    /// for each.
+    #[test]
+    fn a_kept_runtime_frees_its_arena_when_dropped() {
+        let before = accounting::live();
+        let kept = Kept::compile(Target::Wasm32Wasi);
+        _ = kept.modules().unwrap();
+        assert!(
+            accounting::live().committed > before.committed,
+            "the modules live in the kept arena"
+        );
+        drop(kept);
+        assert_eq!(accounting::live(), before);
     }
 }

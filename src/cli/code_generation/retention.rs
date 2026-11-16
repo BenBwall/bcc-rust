@@ -312,23 +312,40 @@ fn wasm<'ir>(
             status: FAILURE_STATUS,
         });
     }
-    let runtime: &[crate::ir::Module<'_>] = if target == Target::Wasm32Wasi {
-        wasm::runtime::modules(target).map_err(|text| {
-            message(
+    let output = if target == Target::Wasm32Wasi {
+        wasm::runtime::with_modules(target, |runtime| match runtime {
+            | Ok(runtime) => link_wasm(module, runtime, arena, target, options),
+            | Err(text) => Err(message(
                 arena,
                 format_args!("error: internal error: {text}"),
                 FAILURE_STATUS,
-            )
-        })?
+            )),
+        })
     } else {
-        &[]
-    };
+        link_wasm(module, &[], arena, target, options)
+    }?;
+    Ok(Some(Prepared {
+        output,
+        diagnostics,
+        atomic_runtime: false,
+        executable_stack: false,
+    }))
+}
+
+/// Links `module` with `runtime` into the output `options` ask for.
+fn link_wasm<'ir>(
+    module: &crate::ir::Module<'ir>,
+    runtime: &[crate::ir::Module<'_>],
+    arena: &'ir Bump,
+    target: Target,
+    options: &CodeGeneration,
+) -> Result<Output<'ir>, Failure<'ir>> {
     let mut units = ArenaVec::with_capacity_in(1 + runtime.len(), arena);
     units.push(module);
     units.extend(runtime.iter());
     let compiled = wasm::compile(&units, 1, target, arena)
         .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
-    let output = match (options.emit, &options.output_path) {
+    Ok(match (options.emit, &options.output_path) {
         | (Some(Emit::Wasm), _) => Output::Binary(arena.alloc_slice_copy(&compiled.bytes)),
         | (Some(_), _) => {
             let mut text = ArenaString::new_in(arena);
@@ -346,13 +363,7 @@ fn wasm<'ir>(
             Output::Built
         },
         | (None, None) => unreachable!("refused above"),
-    };
-    Ok(Some(Prepared {
-        output,
-        diagnostics,
-        atomic_runtime: false,
-        executable_stack: false,
-    }))
+    })
 }
 
 fn message<'ir>(arena: &'ir Bump, args: fmt::Arguments<'_>, status: i32) -> Failure<'ir> {
