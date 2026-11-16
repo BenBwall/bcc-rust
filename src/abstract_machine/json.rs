@@ -196,6 +196,7 @@ fn event(output: &mut String, event: &Event) {
     for (key, ty) in [
         ("from_type", &event.from_type),
         ("result_type", &event.result_type),
+        ("other_type", &event.other_type),
     ] {
         write!(output, ",\"{key}\":").expect("String write");
         if let Some(ty) = ty {

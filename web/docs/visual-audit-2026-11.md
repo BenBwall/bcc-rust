@@ -551,4 +551,5 @@ was measured again after these fixes and did not change.
   folding (one cell of its values, opened on demand) would fit it.
 - **A char array inside a structure** keeps its byte cells.
 - **The tape and Table 1** still show a literal's value as `{'%','z',…}`,
-  cut with an ellipsis; they could spell it as the string cell does.
+  cut with an ellipsis; they could spell it as the string cell does. Done
+  later: they spell it `"%zu…"` ([`claims-audit.md`](claims-audit.md#visuals)).
