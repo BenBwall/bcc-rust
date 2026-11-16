@@ -486,52 +486,14 @@ impl<'tu> Stages<'_, '_, 'tu> {
                 return Err(Failure::Calls(calls));
             }
             verify(&diagnosed.module)?;
-            let runtime: &[Module<'_>] = if target == Target::Wasm32Wasi {
-                wasm::runtime::modules(target).map_err(|text| Failure::Message(text.to_owned()))?
+            let output = if target == Target::Wasm32Wasi {
+                wasm::runtime::with_modules(target, |runtime| {
+                    let runtime = runtime.map_err(|text| Failure::Message(text.to_owned()))?;
+                    link_wasm(&diagnosed.module, runtime, target, arena)
+                })
             } else {
-                &[]
-            };
-            let mut units = vec![&diagnosed.module];
-            units.extend(runtime.iter());
-            let compiled = wasm::compile(&units, 1, target, arena)
-                .map_err(|error| Failure::Message(error.to_string()))?;
-            let mut text = String::new();
-            let mut lines = Vec::new();
-            _ = compiled.write_text_with_lines(&mut text, &mut lines);
-            let imports = u32_of(compiled.module.imports.len());
-            let output = ExplorerWasm {
-                binary: compiled.bytes.to_vec(),
-                text,
-                functions: compiled
-                    .bodies
-                    .iter()
-                    .enumerate()
-                    .map(|(position, &(name, start, end))| ExplorerWasmFunction {
-                        index: imports + u32_of(position),
-                        name: name.to_owned(),
-                        start,
-                        end,
-                        source: None,
-                    })
-                    .collect(),
-                positions: compiled
-                    .entries
-                    .iter()
-                    .map(|entry| ExplorerWasmPosition {
-                        offset:   entry.offset,
-                        function: entry.function,
-                        block:    (entry.block != u32::MAX).then_some(entry.block),
-                        inst:     (entry.inst != u32::MAX).then_some(entry.inst),
-                        line:     (entry.line != 0).then_some(entry.line),
-                    })
-                    .collect(),
-                instructions: compiled
-                    .offsets
-                    .iter()
-                    .zip(&lines)
-                    .map(|(&offset, &text_line)| ExplorerWasmInstruction { offset, text_line })
-                    .collect(),
-            };
+                link_wasm(&diagnosed.module, &[], target, arena)
+            }?;
             Ok((output, calls))
         });
         self.stage.set("back-end");
@@ -660,6 +622,57 @@ fn lower<'tu, 'ir>(
         (InlineCopies::Resolve, retain_locals),
     )
     .map_err(Failure::MiddleEnd)
+}
+
+/// Links `module` with `runtime` into the explorer's view of the
+/// WebAssembly module.
+fn link_wasm(
+    module: &Module<'_>,
+    runtime: &[Module<'_>],
+    target: Target,
+    arena: &Bump,
+) -> Result<ExplorerWasm, Failure<'static>> {
+    let mut units = vec![module];
+    units.extend(runtime.iter());
+    let compiled = wasm::compile(&units, 1, target, arena)
+        .map_err(|error| Failure::Message(error.to_string()))?;
+    let mut text = String::new();
+    let mut lines = Vec::new();
+    _ = compiled.write_text_with_lines(&mut text, &mut lines);
+    let imports = u32_of(compiled.module.imports.len());
+    Ok(ExplorerWasm {
+        binary: compiled.bytes.to_vec(),
+        text,
+        functions: compiled
+            .bodies
+            .iter()
+            .enumerate()
+            .map(|(position, &(name, start, end))| ExplorerWasmFunction {
+                index: imports + u32_of(position),
+                name: name.to_owned(),
+                start,
+                end,
+                source: None,
+            })
+            .collect(),
+        positions: compiled
+            .entries
+            .iter()
+            .map(|entry| ExplorerWasmPosition {
+                offset:   entry.offset,
+                function: entry.function,
+                block:    (entry.block != u32::MAX).then_some(entry.block),
+                inst:     (entry.inst != u32::MAX).then_some(entry.inst),
+                line:     (entry.line != 0).then_some(entry.line),
+            })
+            .collect(),
+        instructions: compiled
+            .offsets
+            .iter()
+            .zip(&lines)
+            .map(|(&offset, &text_line)| ExplorerWasmInstruction { offset, text_line })
+            .collect(),
+    })
 }
 
 /// Refuses a module the verifier rejects, as the command line does before
