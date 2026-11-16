@@ -1,0 +1,425 @@
+=== c01_char_wrap
+[GCC -O0] 44 44 -56 -56 127 4464| exit=0
+[GCC -O2] 44 44 -56 -56 127 4464| exit=0
+[CLANG -O0] 44 44 -56 -56 127 4464| exit=0
+[CLANG -O2] 44 44 -56 -56 127 4464| exit=0
+[BCC -O0] 44 44 -56 -56 127 4464| exit=0
+[BCC -O2] 44 44 -56 -56 127 4464| exit=0
+=== c02_puts_ret
+[GCC -O0] Hello, world!|Ada has 3 letters|x|puts=14 printf=18 putchar=120| exit=0
+[GCC -O2] Hello, world!|Ada has 3 letters|x|puts=14 printf=18 putchar=120| exit=0
+[CLANG -O0] Hello, world!|Ada has 3 letters|x|puts=14 printf=18 putchar=120| exit=0
+[CLANG -O2] Hello, world!|Ada has 3 letters|x|puts=14 printf=18 putchar=120| exit=0
+[BCC -O0] Hello, world!|Ada has 3 letters|x|puts=14 printf=18 putchar=120| exit=0
+[BCC -O2] Hello, world!|Ada has 3 letters|x|puts=14 printf=18 putchar=120| exit=0
+=== c03_shift
+[GCC -O0] 1 << 32 (run time) = 1|1u << 31 = 2147483648, << 1 = 0| exit=0
+[GCC -O2] 1 << 32 (run time) = 1|1u << 31 = 2147483648, << 1 = 0| exit=0
+[CLANG -O0] 1 << 32 (run time) = 1|1u << 31 = 2147483648, << 1 = 0| exit=0
+[CLANG -O2] 1 << 32 (run time) = 1|1u << 31 = 2147483648, << 1 = 0| exit=0
+[BCC -O0] 1 << 32 (run time) = 1|1u << 31 = 2147483648, << 1 = 0| exit=0
+[BCC -O2] 1 << 32 (run time) = 1|1u << 31 = 2147483648, << 1 = 0| exit=0
+=== c03b_shift_const
+[GCC -O0] shl(1, 32) = 1| exit=0
+[GCC -O2] shl(1, 32) = 0| exit=0
+[CLANG -O0] shl(1, 32) = 1| exit=0
+[CLANG -O2] shl(1, 32) = -597273816| exit=0
+[BCC -O0] shl(1, 32) = 1| exit=0
+[BCC -O2] shl(1, 32) = -84121240| exit=0
+=== c04_dbl_to_int
+[GCC -O0] (int)3e9 at run time = -2147483648|(int)2.99 = 2, (int)-2.99 = -2| exit=0
+[GCC -O2] (int)3e9 at run time = -2147483648|(int)2.99 = 2, (int)-2.99 = -2| exit=0
+[CLANG -O0] (int)3e9 at run time = -2147483648|(int)2.99 = 2, (int)-2.99 = -2| exit=0
+[CLANG -O2] (int)3e9 at run time = -2147483648|(int)2.99 = 2, (int)-2.99 = -2| exit=0
+[BCC -O0] (int)3e9 at run time = -2147483648|(int)2.99 = 2, (int)-2.99 = -2| exit=0
+[BCC -O2] (int)3e9 at run time = -2147483648|(int)2.99 = 2, (int)-2.99 = -2| exit=0
+=== c04b_dbl_to_int_const
+[GCC -O0] (int)3e9 folded = -2147483648| exit=0
+[GCC -O2] (int)3e9 folded = 2147483647| exit=0
+[CLANG -O0] (int)3e9 folded = -2147483648| exit=0
+[CLANG -O2] (int)3e9 folded = -200250696| exit=0
+[BCC -O0] (int)3e9 folded = -2147483648| exit=0
+[BCC -O2] (int)3e9 folded = -1061992360| exit=0
+=== c05_sizes
+[GCC -O0] char 1 short 2 int 4 long 8 llong 8 ptr 8 size_t 8|float 4 double 8 ldouble 16 align ldouble 16|FLT_DIG 6 DBL_DIG 15 LDBL_DIG 18 LDBL_MANT_DIG 64|CHAR_MIN -128 CHAR_MAX 127 INT_MIN -2147483648 INT_MAX 2147483647 UINT_MAX 4294967295|struct point 8 align 4 x@0 y@4|struct entry 8 align 4 tag@0 count@4|align int 4 ptr 8|sizeof values 12, 'A' 65, sizeof 'A' 4| exit=0
+[GCC -O2] char 1 short 2 int 4 long 8 llong 8 ptr 8 size_t 8|float 4 double 8 ldouble 16 align ldouble 16|FLT_DIG 6 DBL_DIG 15 LDBL_DIG 18 LDBL_MANT_DIG 64|CHAR_MIN -128 CHAR_MAX 127 INT_MIN -2147483648 INT_MAX 2147483647 UINT_MAX 4294967295|struct point 8 align 4 x@0 y@4|struct entry 8 align 4 tag@0 count@4|align int 4 ptr 8|sizeof values 12, 'A' 65, sizeof 'A' 4| exit=0
+[CLANG -O0] char 1 short 2 int 4 long 8 llong 8 ptr 8 size_t 8|float 4 double 8 ldouble 16 align ldouble 16|FLT_DIG 6 DBL_DIG 15 LDBL_DIG 18 LDBL_MANT_DIG 64|CHAR_MIN -128 CHAR_MAX 127 INT_MIN -2147483648 INT_MAX 2147483647 UINT_MAX 4294967295|struct point 8 align 4 x@0 y@4|struct entry 8 align 4 tag@0 count@4|align int 4 ptr 8|sizeof values 12, 'A' 65, sizeof 'A' 4| exit=0
+[CLANG -O2] char 1 short 2 int 4 long 8 llong 8 ptr 8 size_t 8|float 4 double 8 ldouble 16 align ldouble 16|FLT_DIG 6 DBL_DIG 15 LDBL_DIG 18 LDBL_MANT_DIG 64|CHAR_MIN -128 CHAR_MAX 127 INT_MIN -2147483648 INT_MAX 2147483647 UINT_MAX 4294967295|struct point 8 align 4 x@0 y@4|struct entry 8 align 4 tag@0 count@4|align int 4 ptr 8|sizeof values 12, 'A' 65, sizeof 'A' 4| exit=0
+[BCC -O0] char 1 short 2 int 4 long 8 llong 8 ptr 8 size_t 8|float 4 double 8 ldouble 16 align ldouble 16|FLT_DIG 6 DBL_DIG 15 LDBL_DIG 18 LDBL_MANT_DIG 64|CHAR_MIN -128 CHAR_MAX 127 INT_MIN -2147483648 INT_MAX 2147483647 UINT_MAX 4294967295|struct point 8 align 4 x@0 y@4|struct entry 8 align 4 tag@0 count@4|align int 4 ptr 8|sizeof values 12, 'A' 65, sizeof 'A' 4| exit=0
+[BCC -O2] char 1 short 2 int 4 long 8 llong 8 ptr 8 size_t 8|float 4 double 8 ldouble 16 align ldouble 16|FLT_DIG 6 DBL_DIG 15 LDBL_DIG 18 LDBL_MANT_DIG 64|CHAR_MIN -128 CHAR_MAX 127 INT_MIN -2147483648 INT_MAX 2147483647 UINT_MAX 4294967295|struct point 8 align 4 x@0 y@4|struct entry 8 align 4 tag@0 count@4|align int 4 ptr 8|sizeof values 12, 'A' 65, sizeof 'A' 4| exit=0
+=== c06_sign_compare
+[GCC -O0] 0 0 1| exit=0
+    web/docs/claims/c06_sign_compare.c:4:20: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
+    web/docs/claims/c06_sign_compare.c:7:20: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
+    web/docs/claims/c06_sign_compare.c:9:20: warning: comparison of integer expressions of different signedness: ‘int’ and ‘long unsigned int’ [-Wsign-compare]
+[GCC -O2] 0 0 1| exit=0
+    web/docs/claims/c06_sign_compare.c:4:20: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
+    web/docs/claims/c06_sign_compare.c:7:20: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
+    web/docs/claims/c06_sign_compare.c:9:20: warning: comparison of integer expressions of different signedness: ‘int’ and ‘long unsigned int’ [-Wsign-compare]
+[CLANG -O0] 0 0 1| exit=0
+    2 warnings generated.
+    web/docs/claims/c06_sign_compare.c:7:20: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+    web/docs/claims/c06_sign_compare.c:9:20: warning: comparison of integers of different signs: 'int' and '__size_t' (aka 'unsigned long') [-Wsign-compare]
+[CLANG -O2] 0 0 1| exit=0
+    2 warnings generated.
+    web/docs/claims/c06_sign_compare.c:7:20: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+    web/docs/claims/c06_sign_compare.c:9:20: warning: comparison of integers of different signs: 'int' and '__size_t' (aka 'unsigned long') [-Wsign-compare]
+[BCC -O0] 0 0 1| exit=0
+    2 warnings generated.
+    warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+    warning: comparison of integers of different signs: 'int' and 'unsigned long' [-Wsign-compare]
+[BCC -O2] 0 0 1| exit=0
+    2 warnings generated.
+    warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+    warning: comparison of integers of different signs: 'int' and 'unsigned long' [-Wsign-compare]
+=== c07_format
+[GCC -O0] -78967116| exit=0
+    web/docs/claims/c07_format.c:5:14: warning: format ‘%d’ expects argument of type ‘int’, but argument 2 has type ‘int *’ [-Wformat=]
+[GCC -O2] 1149805716| exit=0
+    web/docs/claims/c07_format.c:5:14: warning: format ‘%d’ expects argument of type ‘int’, but argument 2 has type ‘int *’ [-Wformat=]
+[CLANG -O0] 1286754792| exit=0
+    1 warning generated.
+    web/docs/claims/c07_format.c:5:20: warning: format specifies type 'int' but the argument has type 'int *' [-Wformat]
+[CLANG -O2] 897779188| exit=0
+    1 warning generated.
+    web/docs/claims/c07_format.c:5:20: warning: format specifies type 'int' but the argument has type 'int *' [-Wformat]
+[BCC -O0] 702048508| exit=0
+    1 warning generated.
+    warning: format specifies type 'int' but the argument has type 'int *' [-Wformat]
+[BCC -O2] -1528785996| exit=0
+    1 warning generated.
+    warning: format specifies type 'int' but the argument has type 'int *' [-Wformat]
+=== c09_overflow_check
+[GCC -O0] INT_MAX + 1 > INT_MAX: 1| exit=0
+[GCC -O2] INT_MAX + 1 > INT_MAX: 1| exit=0
+[CLANG -O0] INT_MAX + 1 > INT_MAX: 0| exit=0
+[CLANG -O2] INT_MAX + 1 > INT_MAX: 1| exit=0
+[BCC -O0] INT_MAX + 1 > INT_MAX: 0| exit=0
+[BCC -O2] INT_MAX + 1 > INT_MAX: 1| exit=0
+=== c10_literal_write
+[GCC -O0] Segmentation fault| exit=139
+[GCC -O2] Segmentation fault| exit=139
+[CLANG -O0] Segmentation fault| exit=139
+[CLANG -O2] exit=104
+[BCC -O0] Segmentation fault| exit=139
+[BCC -O2] exit=72
+=== c11_exit_status
+[GCC -O0] exit=15
+[GCC -O2] exit=15
+[CLANG -O0] exit=15
+[CLANG -O2] exit=15
+[BCC -O0] exit=15
+[BCC -O2] exit=15
+=== c12_division
+[GCC -O0] -3 -1| exit=0
+[GCC -O2] -3 -1| exit=0
+[CLANG -O0] -3 -1| exit=0
+[CLANG -O2] -3 -1| exit=0
+[BCC -O0] -3 -1| exit=0
+[BCC -O2] -3 -1| exit=0
+=== c13_const_cast
+[GCC -O0] step 4 *p 4| exit=0
+[GCC -O2] step 3 *p 4| exit=0
+[CLANG -O0] step 3 *p 4| exit=0
+[CLANG -O2] step 3 *p 4| exit=0
+[BCC -O0] step 4 *p 4| exit=0
+[BCC -O2] step 4 *p 4| exit=0
+=== c14_padding_memcmp
+[GCC -O0] members equal: 1, memcmp equal: 0| exit=0
+[GCC -O2] members equal: 1, memcmp equal: 0| exit=0
+[CLANG -O0] members equal: 1, memcmp equal: 0| exit=0
+[CLANG -O2] members equal: 1, memcmp equal: 0| exit=0
+[BCC -O0] members equal: 1, memcmp equal: 0| exit=0
+[BCC -O2] members equal: 1, memcmp equal: 0| exit=0
+=== c15_static_bss
+[GCC -O0] exit=7
+[GCC -O2] exit=7
+[CLANG -O0] exit=7
+[CLANG -O2] exit=7
+[BCC -O0] exit=7
+[BCC -O2] exit=7
+=== c16_char_arith
+[GCC -O0] 65 B 4| exit=0
+[GCC -O2] 65 B 4| exit=0
+[CLANG -O0] 65 B 4| exit=0
+[CLANG -O2] 65 B 4| exit=0
+[BCC -O0] 65 B 4| exit=0
+[BCC -O2] 65 B 4| exit=0
+=== c17_fp
+[GCC -O0] 0.1000000000000000055511151231257827021181583404541015625|0.30000000000000004|0.29999999999999999|0.99999999999999989 0|inf -inf -nan| exit=0
+[GCC -O2] 0.1000000000000000055511151231257827021181583404541015625|0.30000000000000004|0.29999999999999999|0.99999999999999989 0|inf -inf -nan| exit=0
+[CLANG -O0] 0.1000000000000000055511151231257827021181583404541015625|0.30000000000000004|0.29999999999999999|0.99999999999999989 0|inf -inf nan| exit=0
+[CLANG -O2] 0.1000000000000000055511151231257827021181583404541015625|0.30000000000000004|0.29999999999999999|0.99999999999999989 0|inf -inf nan| exit=0
+[BCC -O0] 0.1000000000000000055511151231257827021181583404541015625|0.30000000000000004|0.29999999999999999|0.99999999999999989 0|inf -inf -nan| exit=0
+[BCC -O2] 0.1000000000000000055511151231257827021181583404541015625|0.30000000000000004|0.29999999999999999|0.99999999999999989 0|inf -inf -nan| exit=0
+=== c19_nan
+[GCC -O0] inf -inf -nan| exit=0
+[GCC -O2] inf -inf -nan| exit=0
+[CLANG -O0] inf -inf -nan| exit=0
+[CLANG -O2] inf -inf -nan| exit=0
+[BCC -O0] inf -inf -nan| exit=0
+[BCC -O2] inf -inf -nan| exit=0
+=== c20_intdiv0
+[GCC -O0] start|Floating point exception| exit=136
+[GCC -O2] start| exit=0
+[CLANG -O0] start|Floating point exception| exit=136
+[CLANG -O2] start| exit=0
+[BCC -O0] start|Floating point exception| exit=136
+[BCC -O2] start| exit=0
+=== c20b_intdiv0_const
+[GCC -O0] start|Floating point exception| exit=136
+[GCC -O2] start|Illegal instruction| exit=132
+[CLANG -O0] start|Floating point exception| exit=136
+[CLANG -O2] start| exit=0
+[BCC -O0] start|Floating point exception| exit=136
+[BCC -O2] start| exit=0
+=== c21_conv
+[GCC -O0] -294967296 705032704| exit=0
+[GCC -O2] -294967296 705032704| exit=0
+[CLANG -O0] -294967296 705032704| exit=0
+[CLANG -O2] -294967296 705032704| exit=0
+[BCC -O0] -294967296 705032704| exit=0
+[BCC -O2] -294967296 705032704| exit=0
+=== c22_shr_neg
+[GCC -O0] -4| exit=0
+[GCC -O2] -4| exit=0
+[CLANG -O0] -4| exit=0
+[CLANG -O2] -4| exit=0
+[BCC -O0] -4| exit=0
+[BCC -O2] -4| exit=0
+=== c23_macro_debug
+[GCC -O0] exit=10
+[GCC -O2] exit=10
+[CLANG -O0] exit=10
+[CLANG -O2] exit=10
+[BCC -O0] exit=10
+[BCC -O2] exit=10
+=== c24_conversion_warnings
+[GCC -O0] (did not compile)
+    collect2: error: ld returned 1 exit status
+    web/docs/claims/c24_conversion_warnings.c:4:14: warning: overflow in conversion from ‘int’ to ‘char’ changes value from ‘300’ to ‘44’ [-Woverflow]
+    web/docs/claims/c24_conversion_warnings.c:9:19: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
+    web/docs/claims/c24_conversion_warnings.c: In function ‘f’:
+[GCC -O2] (did not compile)
+    collect2: error: ld returned 1 exit status
+    web/docs/claims/c24_conversion_warnings.c:4:14: warning: overflow in conversion from ‘int’ to ‘char’ changes value from ‘300’ to ‘44’ [-Woverflow]
+    web/docs/claims/c24_conversion_warnings.c:9:19: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
+    web/docs/claims/c24_conversion_warnings.c: In function ‘f’:
+[CLANG -O0] (did not compile)
+    2 warnings generated.
+    clang: error: linker command failed with exit code 1 (use -v to see invocation)
+    web/docs/claims/c24_conversion_warnings.c:4:14: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+    web/docs/claims/c24_conversion_warnings.c:9:19: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+[CLANG -O2] (did not compile)
+    2 warnings generated.
+    clang: error: linker command failed with exit code 1 (use -v to see invocation)
+    web/docs/claims/c24_conversion_warnings.c:4:14: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+    web/docs/claims/c24_conversion_warnings.c:9:19: warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+[BCC -O0] (did not compile)
+    2 warnings generated.
+    clang: error: linker command failed with exit code 1 (use -v to see invocation)
+    error: cannot build `/tmp/tmp.LRD6bM8LL7/c24_conversion_warnings-BCC-O0`: clang failed (exit status: 1):
+    ld.lld: error: undefined symbol: main
+    warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+    warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+     --> web/docs/claims/c24_conversion_warnings.c:4:14
+      --> web/docs/claims/c24_conversion_warnings.c:9:19
+[BCC -O2] (did not compile)
+    2 warnings generated.
+    clang: error: linker command failed with exit code 1 (use -v to see invocation)
+    error: cannot build `/tmp/tmp.LRD6bM8LL7/c24_conversion_warnings-BCC-O2`: clang failed (exit status: 1):
+    ld.lld: error: undefined symbol: main
+    warning: comparison of integers of different signs: 'int' and 'unsigned int' [-Wsign-compare]
+    warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+     --> web/docs/claims/c24_conversion_warnings.c:4:14
+      --> web/docs/claims/c24_conversion_warnings.c:9:19
+=== c25_shift_warning
+[GCC -O0] (did not compile)
+    collect2: error: ld returned 1 exit status
+    web/docs/claims/c25_shift_warning.c:2:22: warning: left shift count >= width of type [-Wshift-count-overflow]
+    web/docs/claims/c25_shift_warning.c: In function ‘f’:
+[GCC -O2] (did not compile)
+    collect2: error: ld returned 1 exit status
+    web/docs/claims/c25_shift_warning.c:2:22: warning: left shift count >= width of type [-Wshift-count-overflow]
+    web/docs/claims/c25_shift_warning.c: In function ‘f’:
+[CLANG -O0] (did not compile)
+    1 warning generated.
+    clang: error: linker command failed with exit code 1 (use -v to see invocation)
+    web/docs/claims/c25_shift_warning.c:2:22: warning: shift count >= width of type [-Wshift-count-overflow]
+[CLANG -O2] (did not compile)
+    1 warning generated.
+    clang: error: linker command failed with exit code 1 (use -v to see invocation)
+    web/docs/claims/c25_shift_warning.c:2:22: warning: shift count >= width of type [-Wshift-count-overflow]
+[BCC -O0] (did not compile)
+    clang: error: linker command failed with exit code 1 (use -v to see invocation)
+    error: cannot build `/tmp/tmp.LRD6bM8LL7/c25_shift_warning-BCC-O0`: clang failed (exit status: 1):
+    ld.lld: error: undefined symbol: main
+[BCC -O2] (did not compile)
+    clang: error: linker command failed with exit code 1 (use -v to see invocation)
+    error: cannot build `/tmp/tmp.LRD6bM8LL7/c25_shift_warning-BCC-O2`: clang failed (exit status: 1):
+    ld.lld: error: undefined symbol: main
+=== c26_sizeof_vla
+[GCC -O0] 8 3| exit=0
+[GCC -O2] 8 3| exit=0
+[CLANG -O0] 8 3| exit=0
+[CLANG -O2] 8 3| exit=0
+[BCC -O0] 8 3| exit=0
+[BCC -O2] 8 3| exit=0
+=== c27_constraint_rejected
+[GCC -O0] (did not compile)
+    web/docs/claims/c27_constraint_rejected.c:7:14: error: initialization of ‘int *’ from ‘int’ makes pointer from integer without a cast [-Wint-conversion]
+    web/docs/claims/c27_constraint_rejected.c:8:6: error: increment of read-only variable ‘x’
+[GCC -O2] (did not compile)
+    web/docs/claims/c27_constraint_rejected.c:7:14: error: initialization of ‘int *’ from ‘int’ makes pointer from integer without a cast [-Wint-conversion]
+    web/docs/claims/c27_constraint_rejected.c:8:6: error: increment of read-only variable ‘x’
+[CLANG -O0] (did not compile)
+    2 errors generated.
+    web/docs/claims/c27_constraint_rejected.c:7:10: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    web/docs/claims/c27_constraint_rejected.c:8:6: error: cannot assign to variable 'x' with const-qualified type 'const int'
+[CLANG -O2] (did not compile)
+    2 errors generated.
+    web/docs/claims/c27_constraint_rejected.c:7:10: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int' [-Wint-conversion]
+    web/docs/claims/c27_constraint_rejected.c:8:6: error: cannot assign to variable 'x' with const-qualified type 'const int'
+[BCC -O0] (did not compile)
+    2 errors generated.
+    error: incompatible integer and pointer conversion [-Wint-conversion]
+    error: operator requires a modifiable lvalue
+      = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+[BCC -O2] (did not compile)
+    2 errors generated.
+    error: incompatible integer and pointer conversion [-Wint-conversion]
+    error: operator requires a modifiable lvalue
+      = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+=== c28_constraint_warned
+[GCC -O0] exit=2
+    web/docs/claims/c28_constraint_warned.c:7:9: warning: "N" redefined
+    web/docs/claims/c28_constraint_warned.c:9:20: warning: excess elements in array initializer
+[GCC -O2] exit=2
+    web/docs/claims/c28_constraint_warned.c:7:9: warning: "N" redefined
+    web/docs/claims/c28_constraint_warned.c:9:20: warning: excess elements in array initializer
+[CLANG -O0] exit=2
+    2 warnings generated.
+    web/docs/claims/c28_constraint_warned.c:7:9: warning: 'N' macro redefined [-Wmacro-redefined]
+    web/docs/claims/c28_constraint_warned.c:9:20: warning: excess elements in array initializer [-Wexcess-initializers]
+[CLANG -O2] exit=2
+    2 warnings generated.
+    web/docs/claims/c28_constraint_warned.c:7:9: warning: 'N' macro redefined [-Wmacro-redefined]
+    web/docs/claims/c28_constraint_warned.c:9:20: warning: excess elements in array initializer [-Wexcess-initializers]
+[BCC -O0] exit=2
+    2 warnings generated.
+    warning: excess elements in array initializer [-Wexcess-initializers]
+    warning: macro `N` redefined differently
+[BCC -O2] exit=2
+    2 warnings generated.
+    warning: excess elements in array initializer [-Wexcess-initializers]
+    warning: macro `N` redefined differently
+=== bounds
+[GCC -O0] exit=0
+[GCC -O2] exit=0
+    web/demos/bounds.c:4:12: warning: array subscript 3 is outside array bounds of ‘int[3]’ [-Warray-bounds=]
+[CLANG -O0] exit=0
+[CLANG -O2] exit=44
+[BCC -O0] exit=80
+[BCC -O2] exit=124
+=== constants
+[GCC -O0] total is 056| exit=0
+[GCC -O2] total is 056| exit=0
+[CLANG -O0] total is 056| exit=0
+[CLANG -O2] total is 056| exit=0
+[BCC -O0] total is 056| exit=0
+[BCC -O2] total is 056| exit=0
+=== floating
+[GCC -O0] total / count is 3.000000|(double)total / count is 3.500000|0.1 + 0.2 == 0.3 is 0|0.1 + 0.2 is 0.30000000000000004|ten 0.1s make 0.99999999999999989|(int)2.99 is 2| exit=0
+[GCC -O2] total / count is 3.000000|(double)total / count is 3.500000|0.1 + 0.2 == 0.3 is 0|0.1 + 0.2 is 0.30000000000000004|ten 0.1s make 0.99999999999999989|(int)2.99 is 2| exit=0
+[CLANG -O0] total / count is 3.000000|(double)total / count is 3.500000|0.1 + 0.2 == 0.3 is 0|0.1 + 0.2 is 0.30000000000000004|ten 0.1s make 0.99999999999999989|(int)2.99 is 2| exit=0
+[CLANG -O2] total / count is 3.000000|(double)total / count is 3.500000|0.1 + 0.2 == 0.3 is 0|0.1 + 0.2 is 0.30000000000000004|ten 0.1s make 0.99999999999999989|(int)2.99 is 2| exit=0
+[BCC -O0] total / count is 3.000000|(double)total / count is 3.500000|0.1 + 0.2 == 0.3 is 0|0.1 + 0.2 is 0.30000000000000004|ten 0.1s make 0.99999999999999989|(int)2.99 is 2| exit=0
+[BCC -O2] total / count is 3.000000|(double)total / count is 3.500000|0.1 + 0.2 == 0.3 is 0|0.1 + 0.2 is 0.30000000000000004|ten 0.1s make 0.99999999999999989|(int)2.99 is 2| exit=0
+=== hello
+[GCC -O0] Hello, world!|Ada has 3 letters| exit=0
+[GCC -O2] Hello, world!|Ada has 3 letters| exit=0
+[CLANG -O0] Hello, world!|Ada has 3 letters| exit=0
+[CLANG -O2] Hello, world!|Ada has 3 letters| exit=0
+[BCC -O0] Hello, world!|Ada has 3 letters| exit=0
+[BCC -O2] Hello, world!|Ada has 3 letters| exit=0
+=== indeterminate
+[GCC -O0] exit=249
+    web/demos/indeterminate.c:3:9: warning: ‘uninitialized’ is used uninitialized [-Wuninitialized]
+[GCC -O2] exit=1
+    web/demos/indeterminate.c:3:9: warning: ‘uninitialized’ is used uninitialized [-Wuninitialized]
+[CLANG -O0] exit=201
+    1 warning generated.
+    web/demos/indeterminate.c:2:22: note: initialize the variable 'uninitialized' to silence this warning
+    web/demos/indeterminate.c:3:18: warning: variable 'uninitialized' is uninitialized when used here [-Wuninitialized]
+[CLANG -O2] exit=44
+    1 warning generated.
+    web/demos/indeterminate.c:2:22: note: initialize the variable 'uninitialized' to silence this warning
+    web/demos/indeterminate.c:3:18: warning: variable 'uninitialized' is uninitialized when used here [-Wuninitialized]
+[BCC -O0] exit=161
+[BCC -O2] exit=1
+=== macros
+[GCC -O0] exit=11
+[GCC -O2] exit=11
+[CLANG -O0] exit=11
+[CLANG -O2] exit=11
+[BCC -O0] exit=11
+[BCC -O2] exit=11
+=== objects
+[GCC -O0] exit=15
+[GCC -O2] exit=15
+[CLANG -O0] exit=15
+[CLANG -O2] exit=15
+[BCC -O0] exit=15
+[BCC -O2] exit=15
+=== overflow
+[GCC -O0] exit=1
+[GCC -O2] exit=255
+    web/demos/overflow.c:5:13: warning: iteration 1 invokes undefined behavior [-Waggressive-loop-optimizations]
+[CLANG -O0] exit=1
+[CLANG -O2] exit=255
+[BCC -O0] exit=1
+[BCC -O2] exit=255
+=== path
+[GCC -O0] exit=16
+[GCC -O2] exit=16
+[CLANG -O0] exit=16
+[CLANG -O2] exit=16
+[BCC -O0] exit=16
+[BCC -O2] exit=16
+=== pointers
+[GCC -O0] exit=17
+[GCC -O2] exit=17
+[CLANG -O0] exit=17
+[CLANG -O2] exit=17
+[BCC -O0] exit=17
+[BCC -O2] exit=17
+=== promotion
+[GCC -O0] exit=255
+[GCC -O2] exit=255
+[CLANG -O0] exit=255
+[CLANG -O2] exit=255
+[BCC -O0] exit=255
+[BCC -O2] exit=255
+=== recursion
+[GCC -O0] exit=24
+[GCC -O2] exit=24
+[CLANG -O0] exit=24
+[CLANG -O2] exit=24
+[BCC -O0] exit=24
+[BCC -O2] exit=24
+=== structs
+[GCC -O0] exit=31
+[GCC -O2] exit=31
+[CLANG -O0] exit=31
+[CLANG -O2] exit=31
+[BCC -O0] exit=31
+[BCC -O2] exit=31
+=== unsigned
+[GCC -O0] 2u - 3 is 4294967295|the countdown ended at 4294967295|12 bytes, sum 15, -1 < 1u is 0, 2147483648, 0| exit=0
+    web/demos/unsigned.c:21:20: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
+[GCC -O2] 2u - 3 is 4294967295|the countdown ended at 4294967295|12 bytes, sum 15, -1 < 1u is 0, 2147483648, 0| exit=0
+    web/demos/unsigned.c:21:20: warning: comparison of integer expressions of different signedness: ‘int’ and ‘unsigned int’ [-Wsign-compare]
+[CLANG -O0] 2u - 3 is 4294967295|the countdown ended at 4294967295|12 bytes, sum 15, -1 < 1u is 0, 2147483648, 0| exit=0
+[CLANG -O2] 2u - 3 is 4294967295|the countdown ended at 4294967295|12 bytes, sum 15, -1 < 1u is 0, 2147483648, 0| exit=0
+[BCC -O0] 2u - 3 is 4294967295|the countdown ended at 4294967295|12 bytes, sum 15, -1 < 1u is 0, 2147483648, 0| exit=0
+[BCC -O2] 2u - 3 is 4294967295|the countdown ended at 4294967295|12 bytes, sum 15, -1 < 1u is 0, 2147483648, 0| exit=0
