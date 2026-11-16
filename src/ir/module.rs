@@ -81,6 +81,7 @@ impl<'ir> Module<'ir> {
             | InstData::Nullary { ty, .. }
             | InstData::Load { ty, .. } => Some(ty),
             | InstData::IntCompare { .. } | InstData::FloatCompare { .. } => Some(Type::I1),
+            | InstData::Intrinsic { intrinsic, .. } => intrinsic.signature().result_type(),
 
             | InstData::Call { func, .. } => self
                 .functions

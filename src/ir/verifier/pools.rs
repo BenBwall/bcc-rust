@@ -27,7 +27,8 @@ impl Verifier<'_, '_, '_, '_> {
                     | InstData::Atomic { args, .. }
                     | InstData::Call { args, .. }
                     | InstData::CallIndirect { args, .. }
-                    | InstData::InlineAsm { args, .. } =>
+                    | InstData::InlineAsm { args, .. }
+                    | InstData::Intrinsic { args, .. } =>
                         self.pool_list(inst, EntityKind::ValueList, args.0, 1, 1),
                     | InstData::Jump { dest } => self.pool_edge(inst, dest),
                     | InstData::Brif { dests, .. } => {

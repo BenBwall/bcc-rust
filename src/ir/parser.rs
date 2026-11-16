@@ -55,6 +55,7 @@ use super::{
         ObjectSizeQuery,
         Opcode,
     },
+    intrinsics::Intrinsic,
     module::{
         AggregateFlags,
         AggregateLayout,
@@ -1098,6 +1099,7 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 }
             },
             | Opcode::InlineAsm => self.inline_asm()?,
+            | Opcode::Intrinsic => self.intrinsic()?,
             | Opcode::Jump => InstData::Jump {
                 dest: self.block_call()?,
             },
@@ -1207,6 +1209,49 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
         };
         Ok(InstData::InlineAsm {
             asm:  self.builder.add_inline_asm(&asm),
+            args: self.builder.value_list(&values),
+        })
+    }
+
+    /// `x86.name [immediate,] values`: a named target instruction, its
+    /// immediate if it has one, and its operands.
+    fn intrinsic(&mut self) -> Result<InstData, ParseError<'t>> {
+        let token = self.cursor.next();
+        let TokenKind::Ident(family) = token.kind else {
+            return Err(token.expected("an intrinsic name"));
+        };
+        self.cursor.expect(TokenKind::Dot, "`.`")?;
+        let name = self.cursor.next();
+        let intrinsic = match name.kind {
+            | TokenKind::Ident(name) => Intrinsic::ALL
+                .iter()
+                .copied()
+                .find(|item| item.name().split_once('.') == Some((family, name))),
+            | _ => None,
+        }
+        .ok_or_else(|| name.expected("a known intrinsic"))?;
+        let signature = intrinsic.signature();
+        let immediate = if signature.immediate.is_some() {
+            let (token, value) = self.cursor.unsigned()?;
+            let value =
+                u8::try_from(value).map_err(|_| token.expected("an immediate below 256"))?;
+            if signature.arity() != 0 {
+                self.cursor.expect(TokenKind::Comma, "`,`")?;
+            }
+            value
+        } else {
+            0
+        };
+        let mut values = ArenaVec::new_in(self.scratch);
+        for index in 0..signature.arity() {
+            if index > 0 {
+                self.cursor.expect(TokenKind::Comma, "`,`")?;
+            }
+            values.push(self.value()?);
+        }
+        Ok(InstData::Intrinsic {
+            intrinsic,
+            immediate,
             args: self.builder.value_list(&values),
         })
     }

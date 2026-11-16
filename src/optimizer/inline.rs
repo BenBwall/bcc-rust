@@ -261,7 +261,8 @@ pub(super) fn expand(
                 if let InstData::Atomic { args, .. }
                 | InstData::Call { args, .. }
                 | InstData::CallIndirect { args, .. }
-                | InstData::InlineAsm { args, .. } = data
+                | InstData::InlineAsm { args, .. }
+                | InstData::Intrinsic { args, .. } = data
                 {
                     let mapped = scratch
                         .alloc_slice_fill_iter(body.value_list(args).iter().map(|&v| map(v)));

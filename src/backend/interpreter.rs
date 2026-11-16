@@ -32,12 +32,13 @@
 //! instruction does and `machine.rs` for calls, returns and branches.
 //!
 //! - Execution: `machine.rs` loads a module and moves between frames and
-//!   blocks; `execute.rs` dispatches one instruction; `varargs.rs` implements
-//!   `va_start`, `va_arg`, `va_copy` and `va_end`; `nonlocal.rs` `setjmp` and
-//!   `longjmp`; `callbacks.rs` `qsort` and `bsearch`, which call back into the
-//!   program. `main.rs` supplies writable arguments for hosted C entry;
-//!   `startup.rs` orders and runs constructors and destructors around it, and
-//!   `exit.rs` the exit functions and the handlers they run.
+//!   blocks; `execute.rs` dispatches one instruction, and `intrinsics.rs`
+//!   computes the named x86 instructions; `varargs.rs` implements `va_start`,
+//!   `va_arg`, `va_copy` and `va_end`; `nonlocal.rs` `setjmp` and `longjmp`;
+//!   `callbacks.rs` `qsort` and `bsearch`, which call back into the program.
+//!   `main.rs` supplies writable arguments for hosted C entry; `startup.rs`
+//!   orders and runs constructors and destructors around it, and `exit.rs` the
+//!   exit functions and the handlers they run.
 //! - Semantics of values: `value.rs` defines runtime values and pointers;
 //!   `arithmetic.rs` the arithmetic, comparisons and conversions; `memory.rs`
 //!   objects, loads, stores, copies and provenance.
@@ -59,6 +60,7 @@
 pub(crate) mod callbacks;
 mod execute;
 pub(crate) mod exit;
+mod intrinsics;
 mod machine;
 mod main;
 mod nonlocal;

@@ -23,6 +23,7 @@ use super::{
         StackSlot,
         Value,
     },
+    intrinsics::Intrinsic,
     types::Type,
 };
 
@@ -171,6 +172,14 @@ pub(crate) enum InstData {
         asm:  AsmId,
         args: ValueList,
     },
+    /// A named target instruction (`intrinsics.rs`) with its immediate,
+    /// zero for one without, and its operands: the destination of a vector
+    /// result first, then one value per signature operand.
+    Intrinsic {
+        intrinsic: Intrinsic,
+        immediate: u8,
+        args:      ValueList,
+    },
     Jump {
         dest: BlockCall,
     },
@@ -223,6 +232,7 @@ impl InstData {
             | Self::Call { .. } => Opcode::Call,
             | Self::CallIndirect { .. } => Opcode::CallIndirect,
             | Self::InlineAsm { .. } => Opcode::InlineAsm,
+            | Self::Intrinsic { .. } => Opcode::Intrinsic,
             | Self::Jump { .. } => Opcode::Jump,
             | Self::Brif { .. } => Opcode::Brif,
             | Self::Switch { .. } => Opcode::Switch,
@@ -425,6 +435,8 @@ named! {
         CallIndirect = "call_indirect",
         /// Inline assembly; see `inline_asm.rs`.
         InlineAsm = "asm",
+        /// A named target instruction; see `intrinsics.rs`.
+        Intrinsic = "intrinsic",
         VaStart = "va_start",
         VaArg = "va_arg",
         VaArgAggregate = "va_arg_aggregate",
@@ -535,6 +547,7 @@ impl Opcode {
                 | Self::Call
                 | Self::CallIndirect
                 | Self::InlineAsm
+                | Self::Intrinsic
                 | Self::VaStart
                 | Self::VaCopy
                 | Self::VaEnd

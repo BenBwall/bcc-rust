@@ -1041,6 +1041,11 @@ impl Verifier<'_, '_, '_, '_> {
                     )),
                 },
             | InstData::InlineAsm { asm, args } => checker.inline_asm(asm, args),
+            | InstData::Intrinsic {
+                intrinsic,
+                immediate,
+                args,
+            } => checker.intrinsic(intrinsic, immediate, args),
             | InstData::Jump { dest } => checker.edges(&[dest]),
             | InstData::Brif { cond, dests } => {
                 checker.operand(0, cond, Type::I1);
@@ -1207,6 +1212,38 @@ impl InstChecker<'_, '_, '_, '_, '_> {
                     "an immediate is not an iconst, global_addr or func_addr",
                 ));
             }
+        }
+    }
+
+    /// Checks an `intrinsic` instruction against its signature: a `ptr`
+    /// destination for a vector result, then one value per operand of the
+    /// type it takes, and no immediate for an intrinsic without one.
+    fn intrinsic(&mut self, intrinsic: super::Intrinsic, immediate: u8, args: super::ValueList) {
+        let signature = intrinsic.signature();
+        let values = self.verifier.body.value_list(args);
+        if values.len() != signature.arity() {
+            self.report(VerifierErrorKind::Intrinsic(
+                "the operand count differs from the signature's",
+            ));
+            return;
+        }
+        if signature.immediate.is_none() && immediate != 0 {
+            self.report(VerifierErrorKind::Intrinsic(
+                "an intrinsic without an immediate has one",
+            ));
+        }
+        let expected = signature
+            .has_destination()
+            .then_some(Type::Ptr)
+            .into_iter()
+            .chain(
+                signature
+                    .operands
+                    .iter()
+                    .map(|operand| operand.value_type()),
+            );
+        for (index, (&value, ty)) in values.iter().zip(expected).enumerate() {
+            self.operand(index, value, ty);
         }
     }
 
@@ -1578,6 +1615,7 @@ pub(crate) enum VerifierErrorKind {
     MissingCallee,
     /// An `asm` instruction breaks the descriptor rule named.
     InlineAsm(&'static str),
+    Intrinsic(&'static str),
     ReturnValue {
         expected: Option<Type>,
         found:    Option<Type>,
@@ -1827,6 +1865,7 @@ impl fmt::Display for VerifierErrorKind {
             } => write!(f, "call argument {index} is {found}, expected {expected}"),
             | Self::MissingCallee => f.write_str("call_indirect has no callee"),
             | Self::InlineAsm(rule) => write!(f, "invalid inline assembly: {rule}"),
+            | Self::Intrinsic(rule) => write!(f, "invalid intrinsic: {rule}"),
             | Self::ReturnValue { expected, found } => write!(
                 f,
                 "the function returns {}, but the return gives {}",

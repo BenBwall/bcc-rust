@@ -278,6 +278,9 @@ pub(crate) enum Unsupported {
     /// chain: the interpreter's frames link no machine frames. GNU
     /// extension: GCC manual, "Return Address".
     FrameChain,
+    /// A named target instruction whose result the processor chooses, such
+    /// as the approximate reciprocal `vrcpps`.
+    Intrinsic(crate::ir::Intrinsic),
 }
 
 impl fmt::Display for Unsupported {
@@ -300,6 +303,12 @@ impl fmt::Display for Unsupported {
             | Self::FrameChain =>
                 "a frame or return address of an outer frame (__builtin_frame_address or \
                  __builtin_return_address above level 0); compile it with -o instead",
+            | Self::Intrinsic(intrinsic) =>
+                return write!(
+                    f,
+                    "the instruction {intrinsic}, whose result each processor approximates its \
+                     own way; compile it with -o instead"
+                ),
         })
     }
 }

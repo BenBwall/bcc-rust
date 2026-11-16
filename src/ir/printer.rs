@@ -433,6 +433,25 @@ impl<'ir> Module<'ir> {
                     " {}",
                     self.display_inline_asm(asm, body.value_list(args))
                 ),
+                | InstData::Intrinsic {
+                    intrinsic,
+                    immediate,
+                    args,
+                } => {
+                    write!(f, " {intrinsic}")?;
+                    let values = body.value_list(args);
+                    if intrinsic.signature().immediate.is_some() {
+                        write!(f, " {immediate}")?;
+                        if !values.is_empty() {
+                            f.write_str(",")?;
+                        }
+                    }
+                    if values.is_empty() {
+                        Ok(())
+                    } else {
+                        write!(f, " {}", display_values(values))
+                    }
+                },
                 | InstData::Jump { dest } => write!(f, " {}", display_block_call(body, dest)),
                 | InstData::Brif {
                     cond,
