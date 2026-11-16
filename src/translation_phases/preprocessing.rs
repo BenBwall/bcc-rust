@@ -454,7 +454,11 @@ impl Expander<'_, '_, '_, '_> {
             self.last_was_newline = false;
         };
         self.generate_placeholders = false;
-        self.formed_by_paste = formed && ret.is_some();
+        self.formation = if formed && ret.is_some() {
+            Formation::Pasted
+        } else {
+            Formation::Read
+        };
         self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);
         if self.state.as_text
             && let Some(token) = &mut ret
@@ -527,17 +531,25 @@ struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     /// The number the next argument substitution takes. Argument frames
     /// end with their expansion, so numbering restarts with each expander.
     next_substitution:     ArgumentSubstitution,
-    /// Whether `##` formed the token last read from two tokens rather than
-    /// a placemarker, which leaves the other as it was. Clang places such a
-    /// token at the `##` expression of the replacement list, so it comes
-    /// from no argument.
-    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
-    formed_by_paste:       bool,
+    /// How the token last read came to be.
+    formation:             Formation,
     /// For each `(` that collecting a macro call shared from a replay and
     /// saw closed there, keyed by its address, how many tokens later its
     /// `)` is. A call nested in that argument then skips the group rather
     /// than reading it again.
     paren_ends:            ArenaMap<'x, usize, usize>,
+}
+
+/// How a token that phase 4 read came to be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Formation {
+    /// Read as it was written, or left as it was by a paste with a
+    /// placemarker.
+    Read,
+    /// Formed by `##` from two tokens. Clang places it at the `##`
+    /// expression of the replacement list, so it comes from no argument.
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
+    Pasted,
 }
 
 // Tests.

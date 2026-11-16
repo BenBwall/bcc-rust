@@ -20,6 +20,7 @@ use crate::{
         TranslationPhase,
         preprocessing::{
             Expander,
+            Formation,
             macro_expansion::{
                 SpacingState,
                 paste::PastedTokens,
@@ -124,7 +125,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     pub(in crate::translation_phases::preprocessing) fn current_substitution(
         &self,
     ) -> Option<ArgumentSubstitution> {
-        if self.formed_by_paste {
+        if self.formation == Formation::Pasted {
             return None;
         }
         for (depth, frame) in self.tokenizer_stack.iter().rev().enumerate() {

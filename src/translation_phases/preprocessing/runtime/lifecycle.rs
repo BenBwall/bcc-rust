@@ -10,6 +10,7 @@ use std::fmt::Debug;
 use super::{
     super::{
         Expander,
+        Formation,
         Preprocessor,
         Token,
         expression::PreprocessorExpressionParser,
@@ -87,7 +88,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             spacing,
             pushed_frames: 0,
             next_substitution: ArgumentSubstitution::FIRST,
-            formed_by_paste: false,
+            formation: Formation::Read,
             paren_ends: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         }
     }
