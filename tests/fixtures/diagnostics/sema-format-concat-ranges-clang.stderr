@@ -255,4 +255,40 @@ sema-format-concat-ranges-clang.c:123:32: warning: format specifies type 'int' b
 sema-format-concat-ranges-clang.c:124:27: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
   124 |     printf(CAT(u8, "%d"), l);
       |            ~~~~~~~~~~~~~  ^
-79 warnings generated.
+sema-format-concat-ranges-clang.c:129:27: warning: data argument not used by format string [-Wformat-extra-args]
+  129 |     printf(CAT("%d",), 1, 2);
+      |                ~~~~       ^
+sema-format-concat-ranges-clang.c:130:31: warning: data argument not used by format string [-Wformat-extra-args]
+  130 |     printf(VR1(, "%d", 1), 1, 2);
+      |                  ~~~~         ^
+sema-format-concat-ranges-clang.c:131:28: warning: data argument not used by format string [-Wformat-extra-args]
+  131 |     printf(CAT(, "%d"), 1, 2);
+      |                  ~~~~      ^
+sema-format-concat-ranges-clang.c:132:31: warning: data argument not used by format string [-Wformat-extra-args]
+  132 |     printf(VL1(, "%d", 1), 1, 2);
+      |                  ~~~~         ^
+sema-format-concat-ranges-clang.c:133:31: warning: data argument not used by format string [-Wformat-extra-args]
+  133 |     printf(CAT3("%d", , ), 1, 2);
+      |                 ~~~~          ^
+sema-format-concat-ranges-clang.c:134:31: warning: data argument not used by format string [-Wformat-extra-args]
+  134 |     printf(CAT3(, "%d", ), 1, 2);
+      |                   ~~~~        ^
+sema-format-concat-ranges-clang.c:135:33: warning: data argument not used by format string [-Wformat-extra-args]
+  135 |     printf(CAT3(u8, , "%d"), 1, 2);
+      |            ~~~~~~~~~~~~~~~~     ^
+sema-format-concat-ranges-clang.c:136:30: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+  136 |     printf(CAT("hello %d",), l);
+      |                       ~~     ^
+sema-format-concat-ranges-clang.c:137:34: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+  137 |     printf(VR1(, "hello %d", 1), l);
+      |                         ~~       ^
+sema-format-concat-ranges-clang.c:138:31: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+  138 |     printf(CAT(, "hello %d"), l);
+      |                         ~~    ^
+sema-format-concat-ranges-clang.c:139:34: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+  139 |     printf(CAT3("hello %d", , ), l);
+      |                        ~~        ^
+sema-format-concat-ranges-clang.c:140:36: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+  140 |     printf(CAT3(u8, , "hello %d"), l);
+      |            ~~~~~~~~~~~~~~~~~~~~~~  ^
+91 warnings generated.

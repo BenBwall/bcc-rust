@@ -123,3 +123,19 @@ void va_opt_paste(long l) {
     printf(CATS(u8, "%", "d"), l);
     printf(CAT(u8, "%d"), l);
 }
+#define VR1(x, a, ...) __VA_OPT__(a) ## x
+#define VL1(x, a, ...) x ## __VA_OPT__(a)
+void placemarker(long l) {
+    printf(CAT("%d",), 1, 2);
+    printf(VR1(, "%d", 1), 1, 2);
+    printf(CAT(, "%d"), 1, 2);
+    printf(VL1(, "%d", 1), 1, 2);
+    printf(CAT3("%d", , ), 1, 2);
+    printf(CAT3(, "%d", ), 1, 2);
+    printf(CAT3(u8, , "%d"), 1, 2);
+    printf(CAT("hello %d",), l);
+    printf(VR1(, "hello %d", 1), l);
+    printf(CAT(, "hello %d"), l);
+    printf(CAT3("hello %d", , ), l);
+    printf(CAT3(u8, , "hello %d"), l);
+}
