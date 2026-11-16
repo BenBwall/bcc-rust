@@ -224,6 +224,7 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | [Conflicting storage classes](parser-storage-class-redefinition.stderr) | Label the earlier `static` as well as the new `extern`. |
 | [GCC's conditional arms](pp-c23-directives-gcc-werror.stderr) | Checked 15 November 2026. GCC writes `#elifdef without #if` and `#elifdef after #else` without backticks, and follows the latter with a line-only `the conditional began here` error at the `#if`, after which it quotes the next diagnostic at the arm again. |
 | [Clang's `#embed` without a resource](pp-c23-directives-clang-werror.stderr) | Checked 15 November 2026. Clang writes `expected "FILENAME" or <FILENAME>` at the end of the directive with a caret only; bcc names the resource and underlines `embed`. |
+| [Clang's discarded qualifiers](sema-discards-qualifiers-clang.stderr) | Checked 16 November 2026 against Clang 23.1.5: every warning line, place and range matches. For an argument Clang follows the warning with `note: passing argument to parameter here` at the parameter's declaration; bcc gives that note for no argument conversion. |
 
 The prior panic and raw-NUL findings remain protected by the guard test and
 their existing fixtures. Keep those regressions even though the old review's
