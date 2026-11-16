@@ -34,7 +34,7 @@ compiler; each part is captioned with what its lessons share
   each string literal, named by its spelling) are created one step each
   before `main` and kept in a group of their own, outside every call. A
   char shows its character beside its value (`65 'A'`), and a char array
-  its characters. Under the head, a string literal's array, or a char array
+  is spelled as a string with its null characters written out (`"Ada\0"`). Under the head, a string literal's array, or a char array
   of more than eight bytes, is one cell: its characters a column per byte
   over an index ruler, the null character boxed as a byte of its own, the
   bytes the step used marked in place, wrapping between words before it
@@ -62,8 +62,8 @@ compiler; each part is captioned with what its lessons share
   page says the program breaks a rule of C rather than leaves the subset,
   while a store through a pointer whose `const` a cast removed stops as
   undefined behavior. A cast is a step of its own that says whether the
-  value was kept or, for an int that does not fit in a char, wrapped as bcc
-  and GCC do (implementation-defined), and `x += y` is narrated as `x = x +
+  value was kept or, for an int that does not fit in a char, wrapped as bcc,
+  GCC and Clang do (implementation-defined), and `x += y` is narrated as `x = x +
   (y)` with `x` evaluated once. The machine knows every integer type, from
   `char` to `unsigned long long`, with its x86-64 width (a declaration says
   it, and that C promises only a minimum range); each cell under the
@@ -72,10 +72,12 @@ compiler; each part is captioned with what its lessons share
   step of its own, and when a binary operator's operands differ in type, a
   step says which one the usual arithmetic conversions convert and why
   (rank, or signedness), so `-1 < 1u` shows `-1 + 2^32 = 4294967295` before
-  it compares. Unsigned arithmetic that leaves its range is reduced modulo
+  it compares; a promotion or conversion step draws the arithmetic types by
+  rank, with the type the operand had and the type it became marked
+  (`panels/ranks.rs`). Unsigned arithmetic that leaves its range is reduced modulo
   2^N, and its step says that this is defined, unlike signed overflow, which
   stops; a store or a cast into a signed type that cannot hold the value is
-  implementation-defined, and the step says bcc and GCC wrap. Shifts stop on
+  implementation-defined, and the step says bcc, GCC and Clang wrap. Shifts stop on
   a count out of range and on left-shifting a negative or overflowing signed
   value, `sizeof` is a step yielding a `size_t`, and a condition may count
   down with `k-- > 0`. An object declared `size_t` keeps that name on the
@@ -110,7 +112,11 @@ compiler; each part is captioned with what its lessons share
   with a short explanation and, for the front end, the C99 rules it applies.
   Each stage leads with one sentence on what it takes from the stage before
   and hands to the next, with a button to that next stage. The real compiler runs in the browser and recompiles as you
-  type, at `-O0` or `-O2`, with a note on what the optimizer changed. Its
+  type, at `-O0` or `-O2`, with a note on what the optimizer changed,
+  drawn as paired bars. Each stage's explanation says what goes in, what
+  comes out and what the stage decides, and an "In this program" line gives
+  one example of it read from the program's own output
+  (`pipeline/example.rs`). Its
   errors appear as squiggles in the source and in a diagnostics list, and the
   view says which stage stopped and why. Hovering a source line highlights
   what it became, line by line in every stage, and the reverse. The front-end
@@ -427,7 +433,8 @@ large source costs time in proportion to its size.
 The lesson "From source to a running program" (`demos/path.c`) follows one
 small program through the whole pipeline. It opens at the first stage; each
 stage adds a note on what it did to this program at `-O0` (`Demo::path`,
-checked against the compiler's output by a test in `src/explorer.rs`), and
+checked against the compiler's output by a test in `src/explorer.rs`, in
+place of the generated example every other program gets), and
 the last stage's **Next** opens the abstract machine to run it, with the
 focus on the narration's heading; for any other program it starts the path
 again. The page's third "how to use" step opens the pipeline at its first
