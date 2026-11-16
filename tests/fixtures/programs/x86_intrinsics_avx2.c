@@ -73,6 +73,21 @@ static void hex(const char *name, const void *p, int n) {
 }
 #define P(name, expr) do { __typeof__(expr) v_ = (expr); hex(name, &v_, sizeof v_); } while (0)
 
+/* Which NaN a dot product returns, sign and payload, differs between
+ * processors and even between lanes of one result, so every NaN lane of a
+ * `float` vector prints as the default NaN. */
+static void hex_nan_alike(const char *name, const void *p, int n) {
+  float f[8];
+  memcpy(f, p, n);
+  for (int i = 0; i < n / 4; i++)
+    if (f[i] != f[i]) {
+      unsigned int quiet = 0x7fc00000u;
+      memcpy(&f[i], &quiet, 4);
+    }
+  hex(name, f, n);
+}
+#define PN(name, expr) do { __typeof__(expr) v_ = (expr); hex_nan_alike(name, &v_, sizeof v_); } while (0)
+
 static int base_i[64];
 static long long base_q[64];
 static float base_f[64];
@@ -111,7 +126,7 @@ T static void avx(const unsigned char (*in)[32], int round) {
   P("permute2f128_ps", _mm256_permute2f128_ps(a, b, 0x21)); P("permute2f128_pd", _mm256_permute2f128_pd(d, e, 0x83));
   P("permute2f128_si256", _mm256_permute2f128_si256(ai, bi, 0x30)); P("permute2f128_z", _mm256_permute2f128_ps(a, b, 0x88));
   P("blend_ps", _mm256_blend_ps(a, b, 0xa6)); P("blend_pd", _mm256_blend_pd(d, e, 0x5));
-  P("dp_ps", _mm256_dp_ps(a, b, 0xff)); P("dp_ps2", _mm256_dp_ps(a, b, 0x7a));
+  PN("dp_ps", _mm256_dp_ps(a, b, 0xff)); PN("dp_ps2", _mm256_dp_ps(a, b, 0x7a));
   P("shuffle_ps", _mm256_shuffle_ps(a, b, 0x4e)); P("shuffle_pd", _mm256_shuffle_pd(d, e, 0xa));
   P("extract_epi32", _mm256_extract_epi32(ai, 5)); P("extract_epi16", _mm256_extract_epi16(ai, 13));
   P("extract_epi8", _mm256_extract_epi8(ai, 30)); P("extract_epi64", _mm256_extract_epi64(ai, 3));
