@@ -16,7 +16,7 @@ mod knob;
 mod narration;
 mod output;
 mod pipeline;
-mod ranks;
+pub(crate) mod ranks;
 mod schematic;
 mod tape;
 mod wasm;

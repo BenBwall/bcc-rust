@@ -2248,6 +2248,7 @@ impl Machine {
         );
         event.from_type = Some(String::from(a));
         event.result_type = Some(String::from(target));
+        event.other_type = Some(String::from(b));
         event.operands.push(Operand::Value(Value::Integer(value)));
         result(event, Operand::Value(Value::Integer(converted)))
     }

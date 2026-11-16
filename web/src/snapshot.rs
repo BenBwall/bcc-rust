@@ -87,8 +87,13 @@ pub struct Conversion {
     pub from:      String,
     /// The type it became.
     pub to:        String,
+    /// The other operand's type, when the usual arithmetic conversions
+    /// converted this operand to match it; `None` for a promotion, which
+    /// converts one value on its own.
+    #[serde(default)]
+    pub other:     Option<String>,
     /// Whether it is an integer promotion rather than a usual arithmetic
-    /// conversion.
+    /// conversion or a float's default argument promotion.
     pub promotion: bool,
 }
 

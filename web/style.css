@@ -857,7 +857,8 @@
   /* A conversion's ranks, drawn as the bits are: a caption, then the
      arithmetic types by rank in cells, the integers in a signed and an
      unsigned row and the floating types spanning both. The type the
-     operand had is outlined in blue and the type it became filled. */
+     operand had is outlined in blue, the other operand's type dotted and
+     the type it became filled. */
   .ranks { margin: 14px 0 0; }
   .ranks figcaption { color: var(--ink-3); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; }
   .ranks-grid { display: grid; grid-template-columns: auto repeat(8, minmax(min-content, 1fr)); gap: 3px; margin: 6px 0 0; align-items: stretch; }
@@ -866,6 +867,7 @@
   .ranks-row { align-self: center; padding-right: 4px; color: var(--ink-3); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
   .ranks-cell { display: flex; align-items: center; justify-content: center; min-height: 24px; border: 1.5px solid var(--seam); background: var(--cell); color: var(--ink); font: 700 10.5px/1.2 var(--font-mono); text-align: center; }
   .ranks-cell.is-from { border: 1.5px dashed var(--flow-ink); }
+  .ranks-cell.is-other { border: 1.5px dotted var(--ink-2); }
   .ranks-cell.is-to { border-color: var(--flow-ink); background: color-mix(in srgb, var(--flow-ink) 28%, var(--cell)); }
   .ranks-rule { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); }
   .cell-raw { font-size: 10px; letter-spacing: .3px; color: var(--ink-2); white-space: nowrap; font-family: var(--font-mono); }

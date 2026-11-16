@@ -73,7 +73,8 @@ compiler; each part is captioned with what its lessons share
   step says which one the usual arithmetic conversions convert and why
   (rank, or signedness), so `-1 < 1u` shows `-1 + 2^32 = 4294967295` before
   it compares; a promotion or conversion step draws the arithmetic types by
-  rank, with the type the operand had and the type it became marked
+  rank, with the type the operand had, the other operand's type and the type
+  it became marked, and states the branch of the rule the two operands select
   (`panels/ranks.rs`). Unsigned arithmetic that leaves its range is reduced modulo
   2^N, and its step says that this is defined, unlike signed overflow, which
   stops; a store or a cast into a signed type that cannot hold the value is

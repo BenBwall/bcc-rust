@@ -321,6 +321,7 @@ impl Machine {
         );
         event.from_type = Some(String::from(a));
         event.result_type = Some(String::from(target));
+        event.other_type = Some(String::from(b));
         event.operands.push(Operand::Value(value));
         result(event, Operand::Value(converted))
     }
