@@ -41,6 +41,7 @@ mod formatting;
 mod owned;
 
 pub(crate) use color::ColorChoice;
+pub(crate) use context_lines::macro_defined_at;
 pub(crate) use formatting::{
     closest_match,
     count_of,

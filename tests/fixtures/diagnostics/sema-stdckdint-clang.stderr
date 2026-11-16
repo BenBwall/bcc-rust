@@ -1,0 +1,97 @@
+sema-stdckdint-clang.c:18:3: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('char *' invalid)
+   18 |   ckd_add(&c, 127, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:59: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:19:3: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('bool *' invalid)
+   19 |   ckd_add(&b, 1, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:59: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:20:3: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('enum E *' invalid)
+   20 |   ckd_sub(&e, 1, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:19:59: note: expanded from macro 'ckd_sub'
+   19 | #define ckd_sub(R, A, B) __builtin_sub_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:21:3: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('_BitInt(9) *' invalid)
+   21 |   ckd_mul(&w, 255, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:20:59: note: expanded from macro 'ckd_mul'
+   20 | #define ckd_mul(R, A, B) __builtin_mul_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:22:3: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('unsigned _BitInt(9) *' invalid)
+   22 |   ckd_add(&u, 255, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:59: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:23:3: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('const int *' invalid)
+   23 |   ckd_add(&k, 1, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:59: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:24:3: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('int' invalid)
+   24 |   ckd_add(r, 1, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:59: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:25:3: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('int **' invalid)
+   25 |   ckd_add(&p, 1, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:59: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:26:3: error: operand argument to checked integer operation must be an integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('char' invalid)
+   26 |   ckd_add(&r, (char)1, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:49: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                 ^
+sema-stdckdint-clang.c:27:3: error: operand argument to checked integer operation must be an integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('bool' invalid)
+   27 |   ckd_add(&r, (_Bool)1, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:49: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                 ^
+sema-stdckdint-clang.c:28:3: error: operand argument to checked integer operation must be an integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('_BitInt(9)' invalid)
+   28 |   ckd_add(&r, (_BitInt(9))255, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:49: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                 ^
+sema-stdckdint-clang.c:29:3: error: operand argument to checked integer operation must be an integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('enum E' invalid)
+   29 |   ckd_sub(&r, 1, e);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:19:54: note: expanded from macro 'ckd_sub'
+   19 | #define ckd_sub(R, A, B) __builtin_sub_overflow((A), (B), (R))
+      |                                                      ^
+sema-stdckdint-clang.c:30:3: error: operand argument to checked integer operation must be an integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('double' invalid)
+   30 |   ckd_add(&r, 1.0, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:18:49: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                 ^
+sema-stdckdint-clang.c:31:3: error: operand argument to checked integer operation must be an integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('char' invalid)
+   31 |   ckd_mul(&c, (char)1, 1);
+      |   ^~~~~~~
+<built-in>/stdckdint.h:20:49: note: expanded from macro 'ckd_mul'
+   20 | #define ckd_mul(R, A, B) __builtin_mul_overflow((A), (B), (R))
+      |                                                 ^
+sema-stdckdint-clang.c:37:24: error: result argument to checked integer operation must be a pointer to a non-const integer type other than plain 'char', 'bool', bit-precise, or an enumeration ('char *' invalid)
+   37 | void nested(char *c) { ADD(c, 1, 1); }
+      |                        ^~~
+<built-in>/stdckdint.h:18:59: note: expanded from macro 'ckd_add'
+   18 | #define ckd_add(R, A, B) __builtin_add_overflow((A), (B), (R))
+      |                                                           ^
+sema-stdckdint-clang.c:41:26: error: operand argument to overflow builtin must be an integer type ('double' invalid)
+   41 |   __builtin_sub_overflow(1.0, 1, r);
+      |                          ^~~
+sema-stdckdint-clang.c:42:32: error: result argument to overflow builtin must be a pointer to a non-const integer type ('const int *' invalid)
+   42 |   __builtin_mul_overflow(1, 1, k);
+      |                                ^
+17 errors generated.

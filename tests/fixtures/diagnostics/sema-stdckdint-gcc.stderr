@@ -1,0 +1,26 @@
+sema-stdckdint-gcc.c: In function 'checked':
+sema-stdckdint-gcc.c:18:3: error: argument 3 in call to function '__builtin_add_overflow' has pointer to boolean type
+   18 |   ckd_add(&b, 1, 1);
+      |   ^~~~~~~
+sema-stdckdint-gcc.c:19:3: error: argument 3 in call to function '__builtin_sub_overflow' has pointer to enumerated type
+   19 |   ckd_sub(&e, 1, 1);
+      |   ^~~~~~~
+sema-stdckdint-gcc.c:22:3: error: argument 3 in call to function '__builtin_add_overflow' has pointer to 'const' type ('const int *')
+   22 |   ckd_add(&k, 1, 1);
+      |   ^~~~~~~
+sema-stdckdint-gcc.c:23:3: error: argument 3 in call to function '__builtin_add_overflow' does not have pointer to integral type
+   23 |   ckd_add(r, 1, 1);
+      |   ^~~~~~~
+sema-stdckdint-gcc.c:24:3: error: argument 3 in call to function '__builtin_add_overflow' does not have pointer to integral type
+   24 |   ckd_add(&p, 1, 1);
+      |   ^~~~~~~
+sema-stdckdint-gcc.c:29:3: error: argument 1 in call to function '__builtin_add_overflow' does not have integral type
+   29 |   ckd_add(&r, 1.0, 1);
+      |   ^~~~~~~
+sema-stdckdint-gcc.c: In function 'direct':
+sema-stdckdint-gcc.c:40:26: error: argument 1 in call to function '__builtin_sub_overflow' does not have integral type
+   40 |   __builtin_sub_overflow(1.0, 1, r);
+      |                          ^~~
+sema-stdckdint-gcc.c:41:32: error: argument 3 in call to function '__builtin_mul_overflow' has pointer to 'const' type ('const int *')
+   41 |   __builtin_mul_overflow(1, 1, k);
+      |                                ^

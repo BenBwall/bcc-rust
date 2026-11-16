@@ -5,7 +5,9 @@
    the wrapped result in *R and yields whether it overflowed. GCC's header
    casts the builtin's result to _Bool; the builtin's result is already
    bool, so the value and type agree, and leaving the cast out keeps
-   `ckd_add(&r, a, b);` a statement with an effect in every mode. The MSVC
+   `ckd_add(&r, a, b);` a statement with an effect in every mode. Under
+   Clang's rules a call these macros write takes only C23's types, as in
+   Clang, which finds the macro by its name (builtins/overflow.rs). The MSVC
    and TCC identities find no such header (headers::provides). */
 #ifndef __BCC_STDCKDINT_H
 #define __BCC_STDCKDINT_H

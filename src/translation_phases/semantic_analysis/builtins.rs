@@ -43,6 +43,7 @@ mod designators;
 mod floating;
 mod intrinsics;
 mod library;
+mod overflow;
 pub(super) mod registry;
 
 // Atomic calls
