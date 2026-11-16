@@ -2781,10 +2781,12 @@ them into lanes.
 
 A function with a `target` attribute keeps the command line's convention,
 although its code takes the attribute's features ("x86 `target` attributes"
-below). Where GCC or Clang would pass a vector of 32 bytes or more otherwise (the
-attribute turns AVX on or off, or an option bcc only warns about such as
-`-mavx512f`), `check_foreign_vectors` refuses it for a function another object
-can reach, and a call of one. `static` functions, whose callers are all bcc's,
+below), unless the attribute turns AVX on and another object can call it: then
+its vectors travel as its own compiler passes them ("x86 intrinsics" below).
+Where GCC or Clang would pass a vector of 32 bytes or more otherwise (the
+attribute turns AVX off or AVX-512 on, or an option bcc only warns about such
+as `-mavx512f`), `check_foreign_vectors` refuses it for a function another
+object can reach, and a call of one. `static` functions, whose callers are all bcc's,
 stay as they are, unless the attribute turns AVX off or AVX-512 on under the
 command line's AVX, where LLVM would give their vectors other registers.
 
@@ -3529,6 +3531,24 @@ writes memory it does not name, and it is never removed.
   and stops on `VRCPPS` and `VRSQRTPS`, whose results each processor
   approximates its own way, as unsupported.
 - The native and WebAssembly back ends refuse the instruction by name.
+
+**A function whose `target` attribute turns AVX on.** Such a function, when
+another object can call it (it is external, or its designator is used other
+than as a direct callee), passes its own 32-byte vectors as its own compiler
+does (`Unit::function_vectors`), where it was refused before. GCC classifies
+by the function's own instruction set, so the arguments and the result travel
+in YMM registers; Clang classifies the arguments by the unit's features, in
+memory, and returns the vector whole, which LLVM returns in YMM0 for a
+function with AVX. A direct call from bcc uses the callee's convention; a
+caller without AVX cannot pass a vector in a YMM register through LLVM and is
+refused (`Construct::AvxCallee`, GCC's "AVX vector argument without AVX
+enabled changes the ABI"). A call through a pointer from a function whose
+attribute turns AVX on uses that convention too, as both compilers classify
+by the calling function. An internal function whose address nothing takes
+keeps the command line's convention, and so do its calls. An attribute that
+turns AVX off or AVX-512 on stays refused, and so does a direct call from a
+function with AVX to an external one without it, which GCC passes in YMM
+registers and Clang refuses.
 
 **Evidence.** `tests/fixtures/programs/x86_intrinsics_avx2.c` runs every AVX,
 AVX2, AES-NI and PCLMULQDQ intrinsic of bcc's headers that calls these

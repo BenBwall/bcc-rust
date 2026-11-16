@@ -9,7 +9,9 @@
 //! interpreted and compiled through LLVM and the native back end, and must
 //! print GCC's output. `x86_intrinsics_avx2.c` covers the AVX, AVX2, AES-NI
 //! and PCLMULQDQ intrinsics whose builtins lowering expands, against both
-//! GCC's and the pinned Clang's builds.
+//! GCC's and the pinned Clang's builds, and `avx_target_abi_callee.c` with
+//! `avx_target_abi_caller.c` the vectors of functions whose `target`
+//! attribute turns AVX on, linked with either compiler's half.
 
 #[cfg(test)]
 #[expect(
@@ -124,6 +126,46 @@ mod tests {
                     text(&run.stdout)
                 };
                 assert_lines(&stdout, &expected, &context);
+            }
+        }
+    }
+
+    /// External functions whose `target` attribute turns AVX on, in units
+    /// built without AVX, link with the claimed compiler's build of the
+    /// other half, in both directions: GCC passes their 32-byte vectors in
+    /// YMM registers, and Clang their arguments in memory and their result
+    /// in YMM0. One is reached through a pointer.
+    #[test]
+    fn avx_target_functions_link_with_gcc_and_clang() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let callee = fixture("avx_target_abi_callee.c");
+        let caller = fixture("avx_target_abi_caller.c");
+        let mut references = vec![("--compiler-identity=clang", "target/llvm/bin/clang")];
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            references.push(("--compiler-identity=gcc", "gcc"));
+        }
+        for (identity, compiler) in references {
+            let expected = build_and_run(compiler, &callee, &[&caller]);
+            for (ours, theirs) in [(&callee, &caller), (&caller, &callee)] {
+                for flags in [&["-O0"][..], &["-O2"]] {
+                    let context = format!("{identity} {flags:?} {ours}");
+                    let object = temporary("part.o");
+                    let built = bcc(&[
+                        &[identity, "-w", "-c", ours, "-o", object.to_str().unwrap()][..],
+                        flags,
+                    ]
+                    .concat());
+                    assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+                    let output = build_and_run(compiler, theirs, &[object.to_str().unwrap()]);
+                    std::fs::remove_file(object).unwrap();
+                    assert_lines(&output, &expected, &context);
+                }
             }
         }
     }

@@ -262,9 +262,43 @@ fn foreign_vector_conventions_are_refused() {
         ] {
             accepted(definition, compiler, options);
         }
+        // A function whose attribute turns AVX on passes its vectors as its
+        // own compiler does: GCC in YMM registers, Clang the argument in
+        // memory and the result in YMM0.
         let target = "__attribute__((target(\"avx2\"))) V f(V a) { return a; }";
-        refused(target, compiler, &[], foreign);
+        let text = lower_with(
+            &format!("typedef int V __attribute__((vector_size(32))); {target}"),
+            with_options(compiler, &[]),
+        )
+        .expect(target);
+        let argument = if compiler == CompilerIdentity::Gcc {
+            "ptr aggregate(size 32, align 32, vector, wide)"
+        } else {
+            "ptr aggregate(size 32, align 32, vector) noundef"
+        };
+        assert!(
+            text.contains("ptr result(size 32, align 32, vector, wide)") && text.contains(argument),
+            "{text}"
+        );
         accepted(target, compiler, &["-mavx2"]);
+        // Its callers need AVX to pass them so, through a pointer too.
+        let declared = "__attribute__((target(\"avx2\"))) V f(V);";
+        refused(
+            &format!("{declared} V *g(V *p) {{ *p = f(*p); return p; }}"),
+            compiler,
+            &[],
+            "from a function without AVX",
+        );
+        accepted(
+            &format!("{declared} __attribute__((target(\"avx\"))) void g(V *p) {{ *p = f(*p); }}"),
+            compiler,
+            &[],
+        );
+        accepted(
+            "__attribute__((target(\"avx2\"))) void g(V (*f)(V), V *p) { *p = f(*p); }",
+            compiler,
+            &[],
+        );
         let target = "__attribute__((target(\"no-avx\"))) V f(V a) { return a; }";
         refused(target, compiler, &["-mavx2"], foreign);
         accepted(target, compiler, &[]);
@@ -284,7 +318,7 @@ fn foreign_vector_conventions_are_refused() {
         accepted(narrowed, compiler, &[]);
         let escaping =
             "__attribute__((target(\"avx2\"))) static V f(V a) { return a; } V (*p)(V) = f;";
-        refused(escaping, compiler, &[], foreign);
+        accepted(escaping, compiler, &[]);
         let call = "V e(V); __attribute__((target(\"avx2\"))) void g(V *p) { *p = e(*p); }";
         refused(call, compiler, &[], foreign);
         accepted(

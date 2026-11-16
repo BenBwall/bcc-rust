@@ -2595,10 +2595,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             call.fixed + hidden_count + usize::from(frame_argument)
         };
         let variadic = open_variadic || (call.prototype && call.variadic);
+        // A direct callee whose own `target` attribute turns AVX on takes its
+        // vectors as its definition does (`Unit::function_vectors`), which a
+        // caller whose attribute turns AVX on as well passes alike; such a
+        // caller passes them so through a pointer too, as both compilers
+        // classify by the calling function's instruction set.
+        let own_avx = direct.filter(|&binding| self.unit.own_avx(binding));
+        let caller_avx = self
+            .record
+            .binding
+            .is_some_and(|binding| self.unit.turns_avx_on(binding));
         let target_attribute = self
             .record
             .binding
-            .is_some_and(|binding| self.unit.target_vector_abi(binding));
+            .is_some_and(|binding| self.unit.target_vector_abi(binding))
+            && !(caller_avx && (own_avx.is_some() || direct.is_none()));
         // A caller whose own vectors move to other registers is refused even
         // for bcc's own callee (`target_features.rs`).
         if direct.is_none_or(|binding| {
@@ -2624,17 +2635,32 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Ok(Repr::Aggregate | Repr::Complex { .. })
             ) || types::limb_argument(&self.unit.sema.types, item.ty)
         });
+        let parameters = items[..if described { items.len() } else { fixed }]
+            .iter()
+            .map(|item| item.ty);
+        let command_line = self.unit.command_line_vectors();
+        let vectors = match own_avx {
+            | Some(binding) => self.unit.function_vectors(binding),
+            | None if caller_avx && direct.is_none() => self.unit.avx_vectors(),
+            | None => command_line,
+        };
         let mut signature = self
             .unit
-            .signature_of(
-                items[..if described { items.len() } else { fixed }]
-                    .iter()
-                    .map(|item| item.ty),
-                result,
-                variadic,
-                self.scratch,
-            )
+            .signature_of(parameters.clone(), result, variadic, vectors, self.scratch)
             .map_err(|kind| at(kind, source))?;
+        // LLVM gives YMM registers only to the vectors of a function with
+        // AVX, so a caller without it cannot pass them as the callee takes
+        // them.
+        if own_avx.is_some()
+            && !caller_avx
+            && signature
+                != self
+                    .unit
+                    .signature_of(parameters, result, variadic, command_line, self.scratch)
+                    .map_err(|kind| at(kind, source))?
+        {
+            return Err(LoweringError::unsupported(Construct::AvxCallee, source));
+        }
         if described {
             signature.variadic_fixed = Some(
                 u32::try_from(

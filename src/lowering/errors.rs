@@ -117,6 +117,11 @@ pub(crate) enum Construct {
     /// A vector of 32 bytes or more by value in a function whose `target`
     /// attribute gives such vectors other registers than bcc's calls use.
     TargetVectorRegisters,
+    /// A vector of 32 bytes or more by value from a function without AVX to
+    /// one whose `target` attribute turns AVX on, which takes it in a YMM
+    /// register (GCC's "AVX vector argument without AVX enabled changes the
+    /// ABI").
+    AvxCallee,
     /// MSVC `__asm` blocks.
     InlineAssembly,
     /// A GNU `asm` operand in a register class or of a type lowering does
@@ -229,6 +234,9 @@ impl Construct {
             | Self::TargetVectorRegisters =>
                 "passing a vector of 32 bytes or more by value to or from a function whose target \
                  attribute turns AVX off or AVX-512 on, under the command line's AVX",
+            | Self::AvxCallee =>
+                "passing a vector of 32 bytes or more by value from a function without AVX to one \
+                 whose target attribute turns AVX on, which takes it in a YMM register",
             | Self::VariadicNamedVector =>
                 "a named 32-byte vector parameter of a variadic function other objects can call, \
                  which GCC passes in a YMM register and LLVM can only pass on the stack",

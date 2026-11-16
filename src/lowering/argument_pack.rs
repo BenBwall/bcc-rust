@@ -546,7 +546,9 @@ impl<'tu> Unit<'_, 'tu, '_> {
         {
             return Ok(copy.func);
         }
-        let signature = self.signature_of(arguments.iter().copied(), result, false, self.tables)?;
+        let vectors = self.command_line_vectors();
+        let signature =
+            self.signature_of(arguments.iter().copied(), result, false, vectors, self.tables)?;
         let signature = self.module.intern(signature);
         let base = format_in!(self.tables, "{}.va_arg_pack", self.symbol_name(binding));
         let name = self.unique_name(base);

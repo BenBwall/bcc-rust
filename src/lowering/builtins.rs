@@ -229,7 +229,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             {
                 let signature = self
                     .unit
-                    .signature_of([ty], ty, false, self.scratch)
+                    .signature_of(
+                        [ty],
+                        ty,
+                        false,
+                        self.unit.command_line_vectors(),
+                        self.scratch,
+                    )
                     .map_err(|kind| super::module_items::at(kind, source))?;
                 let signature = crate::ir::Signature {
                     params: &signature.params[1..],

@@ -17,6 +17,7 @@ use crate::{
         },
         semantic_analysis::{
             AsmOperandKind,
+            BindingKind,
             SemanticTranslationUnit,
         },
     },
@@ -118,4 +119,45 @@ pub(super) fn find<'a>(
         }
     }
     Ok(taken)
+}
+
+/// The functions whose designator the unit uses other than as the callee of
+/// a direct call: their address may reach another object, which calls them
+/// with the convention their own compiler would give them.
+/// C99: §6.3.2.1 paragraph 4, p. 46; PDF p. 58 (function designators).
+pub(super) fn addressed_functions<'a>(
+    sema: &SemanticTranslationUnit<'_>,
+    arena: &'a Bump,
+) -> ArenaSet<'a, usize> {
+    let mut callees = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
+    for info in sema.expressions {
+        let ExpressionType::Call {
+            function_expression,
+            ..
+        } = info.expression.kind
+        else {
+            continue;
+        };
+        let mut callee = function_expression;
+        while let ExpressionType::Parenthesized { expression }
+        | ExpressionType::Unary {
+            operator: UnaryOperator::Extension,
+            operand_expression: expression,
+        } = callee.kind
+        {
+            callee = expression;
+        }
+        _ = callees.insert(core::ptr::from_ref(callee) as usize);
+    }
+    let mut addressed = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
+    for info in sema.expressions {
+        if let ExpressionType::Identifier(_) = info.expression.kind
+            && let Some(binding) = info.binding
+            && sema.bindings[binding].kind == BindingKind::Function
+            && !callees.contains(&(core::ptr::from_ref(info.expression) as usize))
+        {
+            _ = addressed.insert(binding);
+        }
+    }
+    addressed
 }
