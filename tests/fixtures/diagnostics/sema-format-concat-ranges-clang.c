@@ -96,3 +96,30 @@ void va_opt(long l) {
     printf(VCALL(NIL, "%", "d", 1), l);
     printf(VCALL1(NIL, "%" "d", 1), l);
 }
+#define VL(x, a, b, ...) x ## __VA_OPT__(a b)
+#define VR(x, a, b, ...) __VA_OPT__(a b) ## x
+#define VLL(x, a, ...) x ## __VA_OPT__(a a)
+#define VCH(x, y, a, b, ...) x ## __VA_OPT__(a b) ## y
+#define VCHR(x, a, b, ...) __VA_OPT__(a b) ## x ## x
+#define VARGS(x, a, ...) x ## __VA_OPT__(a __VA_ARGS__)
+#define VPASTE(x, a, b, c, ...) x ## __VA_OPT__(a ## b c)
+#define VNIL(f, x, a, b, ...) f x ## __VA_OPT__(() a b)
+#define VLIT(x, ...) x ## __VA_OPT__("%" "d")
+#define CATS(x, a, b) x ## a b
+void va_opt_paste(long l) {
+    printf(VL(, "%", "d", 1), l);
+    printf(VR(, "%", "d", 1), l);
+    printf(VLL(, "%", 1), l);
+    printf(VCH(, , "%", "d", 1), l);
+    printf(VCHR(, "%", "d", 1), l);
+    printf(VARGS(, "%", "d"), l);
+    printf(VPASTE(, , "%", "d", 1), l);
+    printf(VR(TY, "%", "d" EMP, 1), l);
+    printf(VNIL(NIL, , "%", "d", 1), l);
+    printf(VL(, "%" "d", "", 1), l);
+    printf(VR(, "%" "d", , 1), l);
+    printf(VL(u8, "%", "d", 1), l);
+    printf(VLIT(u8, 1), l);
+    printf(CATS(u8, "%", "d"), l);
+    printf(CAT(u8, "%d"), l);
+}
