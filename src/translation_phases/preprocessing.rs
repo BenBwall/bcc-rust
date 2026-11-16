@@ -301,7 +301,7 @@ impl Expander<'_, '_, '_, '_> {
         &mut self,
     ) -> Option<PreprocessorToken> {
         self.last_was_newline = self.current_is_newline;
-        let mut formed = false;
+        let mut formation = Formation::Read;
         let mut ret = 'base: loop {
             self.generate_placeholders = true;
             let Some((mut token, mut is_pasted)) =
@@ -310,7 +310,11 @@ impl Expander<'_, '_, '_, '_> {
                 break 'base None;
             };
             // Such a paste joins two tokens of the list.
-            formed = is_pasted;
+            formation = if is_pasted {
+                Formation::Pasted
+            } else {
+                Formation::Read
+            };
             self.generate_placeholders = false;
             if !self.hash_hash_stack.is_empty() {
                 'merge: loop {
@@ -329,7 +333,7 @@ impl Expander<'_, '_, '_, '_> {
                         // Whitespace is never a `##` operand, only the
                         // tokens around it.
                         if next_is_end
-                            || matches!(self.hash_hash_stack.last(), Some(HashHash::Lhs(_)))
+                            || matches!(self.hash_hash_stack.last(), Some(HashHash::Lhs(..)))
                         {
                             continue 'base;
                         }
@@ -337,10 +341,10 @@ impl Expander<'_, '_, '_, '_> {
                     }
                     let operands = match self.hash_hash_stack.last() {
                         | None | Some(HashHash::Empty) => None,
-                        | Some(HashHash::Lhs(lhs)) => {
-                            let lhs = *lhs;
+                        | Some(HashHash::Lhs(lhs, kept)) => {
+                            let (lhs, kept) = (*lhs, *kept);
                             _ = self.hash_hash_stack.pop();
-                            Some((lhs, self.paint_operand(token)))
+                            Some((lhs, kept, self.paint_operand(token), formation))
                         },
                         | Some(HashHash::Rhs(rhs)) => {
                             // Paste the last token of the left argument.
@@ -349,12 +353,17 @@ impl Expander<'_, '_, '_, '_> {
                             }
                             let rhs = *rhs;
                             _ = self.hash_hash_stack.pop();
-                            Some((self.paint_operand(token), rhs))
+                            Some((self.paint_operand(token), formation, rhs, Formation::Read))
                         },
                     };
-                    let new = operands.and_then(|(lhs, rhs)| {
-                        let placemarker = PreprocessorTokenType::Placeholder;
-                        formed = lhs.kind != placemarker && rhs.kind != placemarker;
+                    let new = operands.and_then(|(lhs, lhs_formation, rhs, rhs_formation)| {
+                        // A placemarker leaves the other operand as it was,
+                        // its substitution included.
+                        formation = match (lhs.kind, rhs.kind) {
+                            | (_, PreprocessorTokenType::Placeholder) => lhs_formation,
+                            | (PreprocessorTokenType::Placeholder, _) => rhs_formation,
+                            | _ => Formation::Pasted,
+                        };
                         self.merge_tokens(lhs, rhs)
                     });
                     if (next_is_end || token.kind == PreprocessorTokenType::Placeholder)
@@ -364,8 +373,11 @@ impl Expander<'_, '_, '_, '_> {
                             | Some(new) => new,
                             | None => self.paint_operand(token),
                         };
+                        // The frames move on before the right operand comes,
+                        // so the operand keeps the substitution read now.
+                        let kept = Formation::Kept(self.substitution_of(formation));
                         *self.hash_hash_stack.last_mut().expect("checked above") =
-                            HashHash::Lhs(operand);
+                            HashHash::Lhs(operand, kept);
                         continue 'base;
                     }
                     if let Some(new) = new {
@@ -454,8 +466,8 @@ impl Expander<'_, '_, '_, '_> {
             self.last_was_newline = false;
         };
         self.generate_placeholders = false;
-        self.formation = if formed && ret.is_some() {
-            Formation::Pasted
+        self.formation = if ret.is_some() {
+            formation
         } else {
             Formation::Read
         };
@@ -540,12 +552,18 @@ struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     paren_ends:            ArenaMap<'x, usize, usize>,
 }
 
-/// How a token that phase 4 read came to be.
+/// How a token that phase 4 read came to be, which tells the argument
+/// substitution it keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Formation {
+pub(crate) enum Formation {
     /// Read as it was written, or left as it was by a paste with a
-    /// placemarker.
+    /// placemarker: the frames it was read from tell its substitution.
     Read,
+    /// Left as it was by a paste with a placemarker read after the frames
+    /// moved on, as `"%d"` in `a ## b` for `CAT("%d",)`, keeping the
+    /// substitution it was read with. A placemarker creates no new token.
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
+    Kept(Option<ArgumentSubstitution>),
     /// Formed by `##` from two tokens. Clang places it at the `##`
     /// expression of the replacement list, so it comes from no argument.
     /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.

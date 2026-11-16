@@ -18,6 +18,7 @@ use crate::{
         ArgumentSubstitution,
         preprocessing::{
             Expander,
+            Formation,
             errors::{
                 PreprocessorError,
                 PreprocessorErrorType,
@@ -141,7 +142,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if let Some(frame) = lhs_frame {
             self.push_tokenizer_frame(frame);
         } else if rhs_is_macro_argument {
-            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs);
+            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs, Formation::Read);
         } else {
             _ = self.hash_hash_stack.pop();
             return self.merge_tokens(lhs, rhs);

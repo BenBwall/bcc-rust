@@ -125,8 +125,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     pub(in crate::translation_phases::preprocessing) fn current_substitution(
         &self,
     ) -> Option<ArgumentSubstitution> {
-        if self.formation == Formation::Pasted {
-            return None;
+        self.substitution_of(self.formation)
+    }
+
+    /// The substitution of the token just read, which came to be as
+    /// `formation` says: a token `##` formed from two tokens has none, one a
+    /// placemarker kept has its own, and the frames tell that of the rest.
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
+    pub(in crate::translation_phases::preprocessing) fn substitution_of(
+        &self,
+        formation: Formation,
+    ) -> Option<ArgumentSubstitution> {
+        match formation {
+            | Formation::Pasted => return None,
+            | Formation::Kept(substitution) => return substitution,
+            | Formation::Read => {},
         }
         for (depth, frame) in self.tokenizer_stack.iter().rev().enumerate() {
             match frame.frame_type {
