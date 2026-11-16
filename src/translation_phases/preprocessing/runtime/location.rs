@@ -95,10 +95,7 @@ impl Expander<'_, '_, '_, '_> {
                 !matches!(
                     frame.frame_type,
                     TokenizerFrameType::DeferredQuery
-                        | TokenizerFrameType::Rescan {
-                            argument: false,
-                            ..
-                        }
+                        | TokenizerFrameType::Rescan { argument: None, .. }
                 )
             })
             .is_none_or(|frame| {

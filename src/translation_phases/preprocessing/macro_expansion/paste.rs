@@ -15,8 +15,10 @@ use super::{
 use crate::{
     configuration::Feature,
     translation_phases::{
+        ArgumentSubstitution,
         preprocessing::{
             Expander,
+            Formation,
             errors::{
                 PreprocessorError,
                 PreprocessorErrorType,
@@ -36,6 +38,7 @@ use crate::{
     util::bump::{
         ArenaString,
         ArenaVec,
+        Bump,
     },
 };
 
@@ -110,8 +113,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if let Some(argument) = arguments
             .and_then(|arguments| find_argument(arguments, lhs.identifier_id(self.context)))
         {
-            let mut left = self.read_argument(argument, false);
-            if left.len() > 1 {
+            let mut left = self.argument_operand(argument);
+            if left.tokens.len() > 1 {
                 // Rescanning an argument prefix here can enter another macro
                 // frame and prematurely apply the pending paste to that macro's
                 // first token. Paste the complete raw operand first instead.
@@ -139,7 +142,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if let Some(frame) = lhs_frame {
             self.push_tokenizer_frame(frame);
         } else if rhs_is_macro_argument {
-            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs);
+            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs, Formation::Read);
         } else {
             _ = self.hash_hash_stack.pop();
             return self.merge_tokens(lhs, rhs);
@@ -576,19 +579,28 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.replay_pasted_tokens(&result);
     }
 
-    fn replay_pasted_tokens(&mut self, result: &[PreprocessorToken]) {
-        let Some(location) = result.first().map(|token| {
+    /// Replays `result` to be rescanned, each token with the argument
+    /// substitution it keeps.
+    fn replay_pasted_tokens(&mut self, result: &PastedTokens<'x>) {
+        let Some(location) = result.tokens.first().map(|token| {
             self.context
                 .first_source_vector_or_default(token.source_vectors)
         }) else {
             // Every operand was a placemarker.
             return;
         };
-        let tokenizer = TokenSource::replay(self.context, self.scratch, &[result], location);
+        let tokenizer =
+            TokenSource::replay(self.context, self.scratch, &[&result.tokens], location);
+        let substitutions = result
+            .substitutions
+            .iter()
+            .any(Option::is_some)
+            .then(|| &*self.scratch.alloc_slice_copy(&result.substitutions));
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan {
-                argument: false,
-                end:      TokenSpacing::END,
+                argument: None,
+                end: TokenSpacing::END,
+                substitutions,
             },
             tokenizer,
         });
@@ -603,35 +615,64 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         arguments: Option<MacroArguments<'x>>,
         token: PreprocessorToken,
-    ) -> ArenaVec<'x, PreprocessorToken> {
+    ) -> PastedTokens<'x> {
         if let Some(argument) = arguments
             .and_then(|arguments| find_argument(arguments, token.identifier_id(self.context)))
         {
-            return self.read_argument(argument, false);
+            return self.argument_operand(argument);
         }
-        let mut tokens = ArenaVec::new_in(self.scratch);
-        tokens.push(token);
-        tokens
+        let mut operand = PastedTokens::new_in(self.scratch);
+        operand.push(token, None);
+        operand
     }
 
     /// Pastes the last token of `left` with the first of `right`, then
     /// appends the rest of `right`. An empty side is a placemarker, which
-    /// leaves the other unchanged.
+    /// leaves the other unchanged, its substitution included; a token that
+    /// pasting forms comes from no argument.
     ///
     /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
-    pub(super) fn paste_onto(
-        &mut self,
-        left: &mut ArenaVec<'x, PreprocessorToken>,
-        mut right: ArenaVec<'x, PreprocessorToken>,
-    ) {
-        if !right.is_empty()
-            && let Some(lhs) = left.pop()
+    pub(super) fn paste_onto(&mut self, left: &mut PastedTokens<'x>, mut right: PastedTokens<'x>) {
+        if !right.tokens.is_empty()
+            && let Some((lhs, lhs_substitution)) = left.pop()
         {
-            let rhs = right.remove(0);
+            let rhs = right.tokens.remove(0);
+            let rhs_substitution = right.substitutions.remove(0);
+            let substitution = match (lhs.kind, rhs.kind) {
+                | (_, PreprocessorTokenType::Placeholder) => lhs_substitution,
+                | (PreprocessorTokenType::Placeholder, _) => rhs_substitution,
+                | _ => None,
+            };
             if let Some(merged) = self.merge_tokens(lhs, rhs) {
-                left.push(merged);
+                left.push(merged, substitution);
             }
         }
-        left.extend(right);
+        left.tokens.extend(right.tokens);
+        left.substitutions.extend(right.substitutions);
+    }
+}
+
+/// Tokens that `##` operators formed, with the argument substitution of
+/// each, by the same index.
+pub(super) struct PastedTokens<'x> {
+    pub(super) tokens:        ArenaVec<'x, PreprocessorToken>,
+    pub(super) substitutions: ArenaVec<'x, Option<ArgumentSubstitution>>,
+}
+
+impl<'x> PastedTokens<'x> {
+    pub(super) fn new_in(scratch: &'x Bump) -> Self {
+        Self {
+            tokens:        ArenaVec::new_in(scratch),
+            substitutions: ArenaVec::new_in(scratch),
+        }
+    }
+
+    fn push(&mut self, token: PreprocessorToken, substitution: Option<ArgumentSubstitution>) {
+        self.tokens.push(token);
+        self.substitutions.push(substitution);
+    }
+
+    fn pop(&mut self) -> Option<(PreprocessorToken, Option<ArgumentSubstitution>)> {
+        Some((self.tokens.pop()?, self.substitutions.pop()?))
     }
 }

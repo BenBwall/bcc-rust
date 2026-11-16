@@ -1,0 +1,65 @@
+warning: field width should have type 'int', but argument has type 'long' [-Wformat]
+ --> sema-format-macro-places-clang-bcc.c:6:12
+  |
+6 |     printf(WIDTH END, l, a);
+  |            ^^^^^ does not match the format
+  |
+  = note: C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, or whose argument does not have the correct type, has undefined behavior
+
+warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+ --> sema-format-macro-places-clang-bcc.c:7:23
+  |
+7 |     printf(FMT " %s", l, a);
+  |                       ^ does not match the format
+  |
+  = note: C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, or whose argument does not have the correct type, has undefined behavior
+
+warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+ --> sema-format-macro-places-clang-bcc.c:7:26
+  |
+7 |     printf(FMT " %s", l, a);
+  |                          ^ does not match the format
+  |
+  = note: C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, or whose argument does not have the correct type, has undefined behavior
+
+warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+ --> sema-format-macro-places-clang-bcc.c:8:23
+  |
+8 |     printf("%s " FMT, a, l);
+  |                       ^ does not match the format
+  |
+  = note: C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, or whose argument does not have the correct type, has undefined behavior
+
+warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+ --> sema-format-macro-places-clang-bcc.c:8:26
+  |
+8 |     printf("%s " FMT, a, l);
+  |                          ^ does not match the format
+  |
+  = note: C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, or whose argument does not have the correct type, has undefined behavior
+
+warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+  --> sema-format-macro-places-clang-bcc.c:9:32
+   |
+ 9 |     printf("%s " FMT " %s", s, l, a);
+   |                                ^ does not match the format
+   |
+   = note: C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, or whose argument does not have the correct type, has undefined behavior
+
+warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+  --> sema-format-macro-places-clang-bcc.c:9:35
+   |
+ 9 |     printf("%s " FMT " %s", s, l, a);
+   |                                   ^ does not match the format
+   |
+   = note: C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, or whose argument does not have the correct type, has undefined behavior
+
+warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+  --> sema-format-macro-places-clang-bcc.c:10:21
+   |
+10 |     printf("%" END, l);
+   |                     ^ does not match the format
+   |
+   = note: C99 §7.19.6.1p9 and §7.19.6.2p13: a conversion specification that is invalid, or whose argument does not have the correct type, has undefined behavior
+
+8 warnings generated.
