@@ -235,6 +235,14 @@ dark themes ([`screenshots/claims/`](screenshots/claims/)), with no page
 error. The first phone shots of the rank picture broke "double" inside the
 word; its column labels now keep whole words.
 
+After the second pass the site was built and stepped through again: every
+lesson reached the same count as in the table above, every step had a
+title and a lead, and no page logged an error. The rank picture's steps
+were shot again, with two programs typed into the editor for the cases no
+lesson has, `long long` against `unsigned long` (from each operand's side)
+and a float passed to printf. On a phone the "other, to" mark first broke
+inside "other"; the cells now break only between words.
+
 | Step | 1440x900 | 390x844 |
 | --- | --- | --- |
 | Hello, step 10: a store into a literal | [light](screenshots/claims/literal-note-1440-light.png), [dark](screenshots/claims/literal-note-1440-dark.png) | [light](screenshots/claims/literal-note-390-light.png), [dark](screenshots/claims/literal-note-390-dark.png) |
@@ -250,6 +258,9 @@ word; its column labels now keep whole words.
 | Floating point, step 17: digits each type keeps | [light](screenshots/claims/floating-sizes-note-1440-light.png), [dark](screenshots/claims/floating-sizes-note-1440-dark.png) | [light](screenshots/claims/floating-sizes-note-390-light.png), [dark](screenshots/claims/floating-sizes-note-390-dark.png) |
 | Floating point, step 36: an int meets a double | [light](screenshots/claims/int-to-double-ranks-1440-light.png), [dark](screenshots/claims/int-to-double-ranks-1440-dark.png) | [light](screenshots/claims/int-to-double-ranks-390-light.png), [dark](screenshots/claims/int-to-double-ranks-390-dark.png) |
 | Floating point, step 220: `(int)3e9` | [light](screenshots/claims/truncation-note-1440-light.png), [dark](screenshots/claims/truncation-note-1440-dark.png) | [light](screenshots/claims/truncation-note-390-light.png), [dark](screenshots/claims/truncation-note-390-dark.png) |
+| Edited program, step 15: `long long` meets `unsigned long`, and both convert | [light](screenshots/claims/mixed-ranks-1440-light.png), [dark](screenshots/claims/mixed-ranks-1440-dark.png) | [light](screenshots/claims/mixed-ranks-390-light.png), [dark](screenshots/claims/mixed-ranks-390-dark.png) |
+| The same program, step 16: the `unsigned long` operand's side | [light](screenshots/claims/mixed-ranks-right-1440-light.png), [dark](screenshots/claims/mixed-ranks-right-1440-dark.png) | [light](screenshots/claims/mixed-ranks-right-390-light.png), [dark](screenshots/claims/mixed-ranks-right-390-dark.png) |
+| Edited program, step 11: a float promoted for printf's `...` | [light](screenshots/claims/float-promotion-ranks-1440-light.png), [dark](screenshots/claims/float-promotion-ranks-1440-dark.png) | [light](screenshots/claims/float-promotion-ranks-390-light.png), [dark](screenshots/claims/float-promotion-ranks-390-dark.png) |
 | Structs, step 1: zeroed statics and the program file | [light](screenshots/claims/static-note-1440-light.png), [dark](screenshots/claims/static-note-1440-dark.png) | [light](screenshots/claims/static-note-390-light.png), [dark](screenshots/claims/static-note-390-dark.png) |
 | Structs, step 76: the layout, details open | [light](screenshots/claims/padding-details-1440-light.png), [dark](screenshots/claims/padding-details-1440-dark.png) | [light](screenshots/claims/padding-details-390-light.png), [dark](screenshots/claims/padding-details-390-dark.png) |
 | Signed overflow, step 37: why C leaves it undefined | [light](screenshots/claims/undefined-note-1440-light.png), [dark](screenshots/claims/undefined-note-1440-dark.png) | [light](screenshots/claims/undefined-note-390-light.png), [dark](screenshots/claims/undefined-note-390-dark.png) |
