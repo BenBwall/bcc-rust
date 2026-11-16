@@ -228,7 +228,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         plan.unmodeled(destination, site.source);
                         continue;
                     }
-                    let bit_field = site.bits.is_some();
                     let completion =
                         self.completion(target, std::ptr::eq(init, initializer), &site);
                     match init.kind {
@@ -298,43 +297,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 continue;
                             }
                             self.convert(e, target.unqualified(), ConversionKind::Assignment);
-                            // GNU: a static object's compound literal of its
-                            // type gives it the literal's bytes, so the plan
-                            // takes the literal from inside the wrappers GCC
-                            // folds away, fewer of them inside braces, where
-                            // Clang's evaluator still reads through them.
-                            let (literal, converted) = if static_storage {
-                                self.static_literal(target, e, std::ptr::eq(init, initializer))
-                            } else {
-                                (None, None)
-                            };
-                            // C99 §6.7.8p13: a structure or union initialized
-                            // by an expression of its type is copied whole, as
-                            // is a static scalar's compound literal of its
-                            // type (GNU), whose bytes are the literal's own.
-                            if matches!(
-                                self.types.nodes[self.types.non_atomic(target).index],
-                                TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
-                            ) || (literal.is_some() && !bit_field)
-                            {
-                                plan.copy(
-                                    literal.unwrap_or(e),
-                                    destination,
-                                    self.enclosing_unions(&site),
-                                );
-                            } else {
-                                plan.store(
-                                    literal.or(converted).unwrap_or(e),
-                                    destination,
-                                    site.bits,
-                                    site.scalar_source.unwrap_or(e.source_vectors),
-                                );
-                            }
-                            if let Some(literal) = literal.or(converted) {
-                                self.check_static_compound_literal(e, literal);
-                            } else if static_storage {
-                                self.check_static_initializer(target, info, e, site.bits);
-                            }
+                            let root = std::ptr::eq(init, initializer);
+                            self.plan_expression_value(
+                                plan,
+                                target,
+                                info,
+                                &site,
+                                static_storage,
+                                root,
+                            );
                         },
                         | InitializerType::InitializerList(list) => {
                             // GNU vector extension of C99 §6.7.8p13: a single
@@ -775,6 +746,59 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .insert(std::ptr::from_ref(initializer).addr(), plan);
         }
         (ty, flexible)
+    }
+
+    /// Plans what the expression `info`, already converted, stores in the
+    /// subobject `target` at `site`, and checks a static object's value;
+    /// `root` when the expression is the object's own initializer.
+    /// C99: §6.7.8p4, p. 125; PDF p. 137; §6.7.8p13, p. 126; PDF p. 138.
+    fn plan_expression_value(
+        &mut self,
+        plan: &mut PlanBuilder<'tu, 's>,
+        target: TypeId,
+        info: super::ExpressionInfo<'tu>,
+        site: &Site<'s>,
+        static_storage: bool,
+        root: bool,
+    ) {
+        let e = info.expression;
+        let destination = site.destination(target);
+        let bit_field = site.bits.is_some();
+        // GNU: a static object's compound literal of its type gives it the
+        // literal's bytes, so the plan takes the literal from inside the
+        // wrappers GCC folds away, fewer of them inside braces, where Clang's
+        // evaluator still reads through them.
+        let (literal, converted) = if static_storage {
+            self.static_literal(target, e, root)
+        } else {
+            (None, None)
+        };
+        // C99 §6.7.8p13: a structure or union initialized by an expression
+        // of its type is copied whole, as is a static scalar's compound
+        // literal of its type (GNU), whose bytes are the literal's own.
+        if matches!(
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
+        ) || (literal.is_some() && !bit_field)
+        {
+            plan.copy(
+                literal.unwrap_or(e),
+                destination,
+                self.enclosing_unions(site),
+            );
+        } else {
+            plan.store(
+                literal.or(converted).unwrap_or(e),
+                destination,
+                site.bits,
+                site.scalar_source.unwrap_or(e.source_vectors),
+            );
+        }
+        if let Some(literal) = literal.or(converted) {
+            self.check_static_compound_literal(e, literal);
+        } else if static_storage {
+            self.check_static_initializer(target, info, e, site.bits);
+        }
     }
 
     /// Reports the expression `info` that cannot initialize a `target`: a
