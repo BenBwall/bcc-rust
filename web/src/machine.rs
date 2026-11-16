@@ -1157,7 +1157,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             crate::panels::value_text(&name.value).as_deref(),
-            Some("{'A','d','a','\\0'}")
+            Some("\"Ada\\0\"")
         );
         let Value::Array { elements } = &name.value else {
             panic!("name is an array");
