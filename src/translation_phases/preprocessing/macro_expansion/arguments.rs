@@ -20,7 +20,10 @@ use crate::{
         TranslationPhase,
         preprocessing::{
             Expander,
-            macro_expansion::SpacingState,
+            macro_expansion::{
+                SpacingState,
+                paste::PastedTokens,
+            },
             runtime::{
                 TokenizerFrame,
                 TokenizerFrameType,
@@ -136,6 +139,20 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         | _ if argument.is_some() => return argument,
                         | _ => {},
                     }
+                },
+                // A `__VA_OPT__` replacement read as written, as a `##`
+                // operand, keeps its table too; only its innermost read
+                // says which token that was.
+                | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }
+                    if argument.substituted =>
+                {
+                    let substitutions = argument.expanded.get()?.substitutions?;
+                    let read = self
+                        .position()
+                        .index
+                        .checked_sub(1)
+                        .filter(|_| depth == 0)?;
+                    return substitutions.get(read).copied().flatten();
                 },
                 | TokenizerFrameType::Rescan {
                     argument: Some(substitution),
@@ -276,7 +293,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     released:            false,
                     operand:             false,
                     end:                 TokenSpacing::NONE,
-                    substitution:        Some(self.new_substitution()),
+                    // A `__VA_OPT__` replacement keeps the substitutions
+                    // of the arguments in it.
+                    substitution:        (!arg.substituted).then(|| self.new_substitution()),
                 },
                 tokenizer:  arg.tokenizer.clone(),
             };
@@ -365,6 +384,18 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         argument: &'x FunctionLikeMacroArgument<'x>,
         expand: bool,
     ) -> ArenaVec<'x, PreprocessorToken> {
+        self.read_argument_recording(argument, expand, None)
+    }
+
+    /// [`Self::read_argument`], pushing to `substitutions`, when given, the
+    /// argument substitution of each token it returns, by the same index.
+    #[inline(always)]
+    fn read_argument_recording(
+        &mut self,
+        argument: &'x FunctionLikeMacroArgument<'x>,
+        expand: bool,
+        mut substitutions: Option<&mut ArenaVec<'x, Option<ArgumentSubstitution>>>,
+    ) -> ArenaVec<'x, PreprocessorToken> {
         let hash_hash_stack = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let generate_placeholders = self.generate_placeholders;
         let newlines = (self.last_was_newline, self.current_is_newline);
@@ -380,9 +411,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         } else {
             self.verbatim_fence
         };
-        let mut tokens = ArenaVec::new_in(self.scratch);
+        let capacity = substitutions
+            .as_ref()
+            .map_or(0, |substitutions| substitutions.capacity());
+        let mut tokens = ArenaVec::with_capacity_in(capacity, self.scratch);
         while let Some(token) = self.next_preprocessor_token::<false>() {
             tokens.push(token);
+            if let Some(substitutions) = substitutions.as_deref_mut() {
+                substitutions.push(self.current_substitution());
+            }
         }
         self.operand_fence = fence;
         self.expansion_fence = expansion_fence;
@@ -409,7 +446,48 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .position(|token| !is_whitespace(token))
             .unwrap_or(end);
         drop(tokens.drain(..start));
+        if let Some(substitutions) = substitutions {
+            substitutions.truncate(end);
+            drop(substitutions.drain(..start));
+        }
         tokens
+    }
+
+    /// The tokens that `argument` stands for as a `##` operand, as written,
+    /// each with its argument substitution: an argument is one new
+    /// substitution of its parameter, and a `__VA_OPT__` replacement keeps
+    /// those of the arguments in it, its own tokens having none, as it does
+    /// where it is rescanned.
+    ///
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3 paragraph
+    /// 2, p. 154; PDF p. 166. C23: §6.10.5.1 paragraph 7, p. 180; PDF p. 193.
+    pub(super) fn argument_operand(
+        &mut self,
+        argument: &'x FunctionLikeMacroArgument<'x>,
+    ) -> PastedTokens<'x> {
+        let table = argument
+            .expanded
+            .get()
+            .and_then(|prescan| prescan.substitutions)
+            .filter(|_| argument.substituted);
+        if let Some(table) = table {
+            // Reserved up front: two vectors growing together in the
+            // expansion arena could not grow in place.
+            let mut substitutions = ArenaVec::with_capacity_in(table.len(), self.scratch);
+            let tokens = self.read_argument_recording(argument, false, Some(&mut substitutions));
+            return PastedTokens {
+                tokens,
+                substitutions,
+            };
+        }
+        let tokens = self.read_argument(argument, false);
+        let substitution = (!argument.substituted).then(|| self.new_substitution());
+        let mut substitutions = ArenaVec::with_capacity_in(tokens.len(), self.scratch);
+        substitutions.resize(tokens.len(), substitution);
+        PastedTokens {
+            tokens,
+            substitutions,
+        }
     }
 
     /// Whether an argument's prescan is reading (§6.10.3.1 paragraph 1),

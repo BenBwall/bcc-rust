@@ -112,12 +112,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if let Some(argument) = arguments
             .and_then(|arguments| find_argument(arguments, lhs.identifier_id(self.context)))
         {
-            let left = self.read_argument(argument, false);
-            if left.len() > 1 {
+            let mut left = self.argument_operand(argument);
+            if left.tokens.len() > 1 {
                 // Rescanning an argument prefix here can enter another macro
                 // frame and prematurely apply the pending paste to that macro's
                 // first token. Paste the complete raw operand first instead.
-                let mut left = self.substituted_operand(left);
                 let right = self.paste_operand(arguments, rhs);
                 self.paste_onto(&mut left, right);
                 self.replay_pasted_tokens(&left);
@@ -619,26 +618,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if let Some(argument) = arguments
             .and_then(|arguments| find_argument(arguments, token.identifier_id(self.context)))
         {
-            let tokens = self.read_argument(argument, false);
-            return self.substituted_operand(tokens);
+            return self.argument_operand(argument);
         }
         let mut operand = PastedTokens::new_in(self.scratch);
         operand.push(token, None);
         operand
-    }
-
-    /// `tokens`, an argument as written, as a new substitution for its
-    /// parameter, the `##` operand.
-    ///
-    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
-    fn substituted_operand(&mut self, tokens: ArenaVec<'x, PreprocessorToken>) -> PastedTokens<'x> {
-        let substitution = Some(self.new_substitution());
-        let mut substitutions = ArenaVec::with_capacity_in(tokens.len(), self.scratch);
-        substitutions.resize(tokens.len(), substitution);
-        PastedTokens {
-            tokens,
-            substitutions,
-        }
     }
 
     /// Pastes the last token of `left` with the first of `right`, then
