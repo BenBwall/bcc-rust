@@ -408,6 +408,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.selected_evaluation_inhibited() {
             return;
         }
+        // TCC 0.9.27 has no warning for a constant an implicit conversion
+        // changes, `-Wall` included: `gen_cast` in `tccgen.c` converts it
+        // silently.
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Tcc {
+            return;
+        }
         let target = self.types.non_atomic(target).unqualified();
         if !matches!(self.types.nodes[target.index], TypeKind::Scalar(scalar) if scalar != Scalar::Bool)
         {
