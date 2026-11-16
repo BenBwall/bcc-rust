@@ -18,6 +18,7 @@ use super::{
 use crate::{
     configuration::Feature,
     translation_phases::{
+        ArgumentSubstitution,
         Context,
         GetPosition,
         SetPosition,
@@ -597,23 +598,26 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 /// may follow the replacement list that ends with the macro's name.
 struct MacroCallCursor<'x> {
     /// Copies of the expander's frames from `base` up.
-    frames:       ArenaVec<'x, TokenizerFrame<'x>>,
-    base:         usize,
+    frames:                ArenaVec<'x, TokenizerFrame<'x>>,
+    base:                  usize,
     /// The frame being read, as an index into the whole stack.
-    index:        Option<usize>,
-    floor:        usize,
+    index:                 Option<usize>,
+    floor:                 usize,
     /// Consumed prefix stays in place until the queue empties.
-    pending:      ArenaVec<'x, PreprocessorToken>,
-    pending_head: usize,
-    line_start:   bool,
+    pending:               ArenaVec<'x, PreprocessorToken>,
+    /// The argument substitution of each token of `pending`, by the same
+    /// index, which a replay of what the call leaves keeps.
+    pending_substitutions: ArenaVec<'x, Option<ArgumentSubstitution>>,
+    pending_head:          usize,
+    line_start:            bool,
     /// Whether a text of phase 4 reads the call, so spacing matters.
-    text:         bool,
+    text:                  bool,
     /// The padding since the last token collected, for a text of phase 4.
-    spacing:      TokenSpacing,
+    spacing:               TokenSpacing,
     /// The padding that comes after `pending`.
-    pending_end:  TokenSpacing,
+    pending_end:           TokenSpacing,
     /// White space was read since the last token.
-    white:        bool,
+    white:                 bool,
 }
 
 /// A token of a macro call being collected: read with its provenance, or,
@@ -730,6 +734,7 @@ impl<'x> MacroCallCursor<'x> {
                 return Some(CallToken::Read(self.pad(token)));
             }
             self.pending.clear();
+            self.pending_substitutions.clear();
             self.pending_head = 0;
             if self.text {
                 self.spacing = self.spacing.then(self.pending_end);
@@ -871,9 +876,8 @@ impl<'x> MacroCallCursor<'x> {
                 }
             }
             if pasted {
-                // A collected call's tokens carry no substitutions; those it
-                // takes as arguments are substituted again.
                 self.pending.extend(tokens.tokens);
+                self.pending_substitutions.extend(tokens.substitutions);
                 self.pad_replacement(white, TokenSpacing::END);
                 continue;
             }
@@ -883,9 +887,11 @@ impl<'x> MacroCallCursor<'x> {
                 })
             {
                 let prescan = preprocessor.expanded_argument(token, argument);
+                let substitution = Some(preprocessor.new_substitution());
                 let mut expanded = prescan.tokens.clone();
                 while let Some(token) = expanded.next_item(preprocessor.context) {
                     self.pending.push(token);
+                    self.pending_substitutions.push(substitution);
                 }
                 if token.spacing.is_right_operand() {
                     self.pending_end = prescan.end;
@@ -896,6 +902,7 @@ impl<'x> MacroCallCursor<'x> {
             }
             if stringified && self.text {
                 self.pending.push(token);
+                self.pending_substitutions.push(None);
                 self.pad_replacement(white, TokenSpacing::END);
                 continue;
             }
@@ -957,13 +964,20 @@ impl<'x> MacroCallCursor<'x> {
                 &[&self.pending[self.pending_head..]],
                 location,
             );
+            // What the call leaves of a parameter's replacement keeps its
+            // substitution.
+            let substitutions = &self.pending_substitutions[self.pending_head..];
+            let substitutions = substitutions
+                .iter()
+                .any(Option::is_some)
+                .then(|| &*preprocessor.scratch.alloc_slice_copy(substitutions));
             self.frames.insert(
                 self.index.map_or(0, |index| index + 1) - self.base,
                 TokenizerFrame {
                     frame_type: TokenizerFrameType::Rescan {
                         argument: None,
-                        end:      self.pending_end,
-                        operands: None,
+                        end: self.pending_end,
+                        substitutions,
                     },
                     tokenizer,
                 },
@@ -990,6 +1004,7 @@ impl<'x> MacroCallCursor<'x> {
             index: stack.len().checked_sub(1),
             floor,
             pending: ArenaVec::new_in(preprocessor.scratch),
+            pending_substitutions: ArenaVec::new_in(preprocessor.scratch),
             pending_head: 0,
             line_start: false,
             text: preprocessor.state.as_text,

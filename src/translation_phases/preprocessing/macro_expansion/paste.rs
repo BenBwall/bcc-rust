@@ -591,7 +591,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         };
         let tokenizer =
             TokenSource::replay(self.context, self.scratch, &[&result.tokens], location);
-        let operands = result
+        let substitutions = result
             .substitutions
             .iter()
             .any(Option::is_some)
@@ -600,7 +600,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             frame_type: TokenizerFrameType::Rescan {
                 argument: None,
                 end: TokenSpacing::END,
-                operands,
+                substitutions,
             },
             tokenizer,
         });
@@ -670,8 +670,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 /// Tokens that `##` operators formed, with the argument substitution of
 /// each, by the same index.
 pub(super) struct PastedTokens<'x> {
-    pub(super) tokens: ArenaVec<'x, PreprocessorToken>,
-    substitutions:     ArenaVec<'x, Option<ArgumentSubstitution>>,
+    pub(super) tokens:        ArenaVec<'x, PreprocessorToken>,
+    pub(super) substitutions: ArenaVec<'x, Option<ArgumentSubstitution>>,
 }
 
 impl<'x> PastedTokens<'x> {

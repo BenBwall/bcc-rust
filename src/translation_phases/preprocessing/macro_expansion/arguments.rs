@@ -88,7 +88,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             frame_type: TokenizerFrameType::Rescan {
                 argument: Some(substitution),
                 end,
-                operands: None,
+                substitutions: None,
             },
             tokenizer,
         });
@@ -105,7 +105,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// read came from an argument rather than a replacement list or the
     /// file: the innermost argument frame, unless a replacement list lies
     /// above it. An argument that is a `##` operand keeps its substitution
-    /// in the tokens pasting leaves as they are.
+    /// in the tokens pasting leaves as they are, and a parameter's
+    /// replacement in what a call collected across the list leaves of it.
     /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3
     /// paragraph 2, p. 154; PDF p. 166.
     pub(in crate::translation_phases::preprocessing) fn current_substitution(
@@ -125,12 +126,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 // just read.
                 | TokenizerFrameType::Rescan {
                     argument: None,
-                    operands: Some(operands),
+                    substitutions: Some(substitutions),
                     ..
                 } if depth == 0 => {
                     let read = self.position().index.checked_sub(1);
                     if let Some(substitution) =
-                        read.and_then(|index| operands.get(index).copied().flatten())
+                        read.and_then(|index| substitutions.get(index).copied().flatten())
                     {
                         return Some(substitution);
                     }

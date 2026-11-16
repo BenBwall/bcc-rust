@@ -69,3 +69,13 @@ void k(long l, int a) {
     printf(CAT3(EMP, TY "%" "d" EMP, TY), l);
     printf(CAT3("%" EMP, , TY "d"), l);
 }
+#define NIL()
+#define CALL(f, a) f a
+#define CALL2(f, a, b) f a b
+#define PCALL(f, a, b) f a ## b
+void m(long l) {
+    printf(CALL(NIL, () "%" "d"), l);
+    printf(PCALL(NIL, () "%" "d",), l);
+    printf(PCALL(NIL, () "%" "d" EMP, TY), l);
+    printf(CALL2(NIL, () "%", "d"), l);
+}

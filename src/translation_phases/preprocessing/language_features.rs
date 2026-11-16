@@ -399,9 +399,9 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         );
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan {
-                argument: None,
-                end:      TokenSpacing::NONE,
-                operands: None,
+                argument:      None,
+                end:           TokenSpacing::NONE,
+                substitutions: None,
             },
             tokenizer,
         });
@@ -464,9 +464,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         );
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan {
-                argument: None,
-                end:      TokenSpacing::NONE,
-                operands: None,
+                argument:      None,
+                end:           TokenSpacing::NONE,
+                substitutions: None,
             },
             tokenizer,
         });
@@ -930,9 +930,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         let generate_placeholders = self.generate_placeholders;
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan {
-                argument: None,
-                end:      TokenSpacing::NONE,
-                operands: None,
+                argument:      None,
+                end:           TokenSpacing::NONE,
+                substitutions: None,
             },
             tokenizer,
         });

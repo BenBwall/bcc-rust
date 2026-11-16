@@ -174,4 +174,16 @@ sema-format-concat-ranges-clang.c:69:43: warning: format specifies type 'int' bu
 sema-format-concat-ranges-clang.c:70:37: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
    70 |     printf(CAT3("%" EMP, , TY "d"), l);
       |            ~~~~~~~~~~~~~~~~~~~~~~~  ^
-52 warnings generated.
+sema-format-concat-ranges-clang.c:77:35: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   77 |     printf(CALL(NIL, () "%" "d"), l);
+      |                          ~~~~~    ^
+sema-format-concat-ranges-clang.c:78:37: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   78 |     printf(PCALL(NIL, () "%" "d",), l);
+      |                           ~~~~~     ^
+sema-format-concat-ranges-clang.c:79:44: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   79 |     printf(PCALL(NIL, () "%" "d" EMP, TY), l);
+      |                           ~~~~~            ^
+sema-format-concat-ranges-clang.c:80:37: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   80 |     printf(CALL2(NIL, () "%", "d"), l);
+      |            ~~~~~~~~~~~~~~~~~~~~~~~  ^
+56 warnings generated.

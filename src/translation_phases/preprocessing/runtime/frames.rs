@@ -126,15 +126,18 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         /// The substitution, when the tokens are a substituted argument.
         ///
         /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
-        argument: Option<ArgumentSubstitution>,
+        argument:      Option<ArgumentSubstitution>,
         /// The padding its end brings, for a text of phase 4.
-        end:      TokenSpacing,
-        /// For tokens that `##` operators formed, the substitution of each
-        /// by its place in the replay: an argument operand's own tokens
-        /// keep theirs, and a token that pasting formed has none.
+        end:           TokenSpacing,
+        /// The substitution of each token by its place in the replay, for
+        /// tokens that `##` operators formed, where an argument operand's
+        /// own tokens keep theirs and a token that pasting formed has none,
+        /// and for what a macro call collected across a replacement list
+        /// leaves of a parameter's replacement.
         ///
-        /// C99: §6.10.3.3 paragraph 2, p. 154; PDF p. 166.
-        operands: Option<&'a [Option<ArgumentSubstitution>]>,
+        /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3
+        /// paragraph 2, p. 154; PDF p. 166.
+        substitutions: Option<&'a [Option<ArgumentSubstitution>]>,
     },
     /// Already collected query arguments, replayed without macro replacement
     /// until their enclosing embed parameter is evaluated.

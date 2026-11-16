@@ -239,9 +239,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 );
                                 self.push_tokenizer_frame(TokenizerFrame {
                                     frame_type: TokenizerFrameType::Rescan {
-                                        argument: None,
-                                        end:      TokenSpacing::NONE,
-                                        operands: None,
+                                        argument:      None,
+                                        end:           TokenSpacing::NONE,
+                                        substitutions: None,
                                     },
                                     tokenizer,
                                 });
