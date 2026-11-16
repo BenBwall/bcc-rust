@@ -23,7 +23,8 @@ for src in "$here"/*.c web/demos/*.c; do
             if [ -x "$exe" ]; then
                 timeout 5 "$exe" >"$out/printed" 2>&1
                 status=$?
-                printed=$(tr '\n' '|' <"$out/printed")
+                # timeout(1) reports a core dump where cores go to a pipe.
+                printed=$(grep -v '^timeout: the monitored command dumped core' "$out/printed" | tr '\n' '|')
                 [ -z "$printed" ] || printed="$printed "
                 echo "[$compiler -$level] ${printed}exit=$status"
             else

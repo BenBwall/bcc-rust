@@ -34,8 +34,13 @@ compilers are the evidence for what implementations do.
 
 ## Results
 
-54 claims checked: 37 hold as written, 4 were wrong, 11 over-promised and 1
-was too vague to check. All 16 are fixed on this branch. bcc agreed with
+61 claims checked: 37 hold as written, 10 were wrong, 13 over-promised and 1
+was too vague to check. All 24 are fixed on this branch. The first pass
+found 53 of them (its count said 54); the review of the branch found the
+rank picture's mixed-rank rule, a NaN wording that still over-promised, and
+the `sizeof` and "constraint" claims below, and a second reading for the
+same kinds of claim (evaluation, refusal to compile, a compiler's output)
+found the rest of the [second-pass table](#second-pass-after-review). bcc agreed with
 GCC and Clang wherever those two agree.
 
 ### What the lessons print and return
@@ -86,7 +91,7 @@ changed otherwise. Step numbers are the note numbers on the page.
 | On ARM64 Linux long double is a 128-bit format | same | | 113-bit significand | | Holds |
 | `-7 / 2` is -3 and `-7 % 2` is -1 | Division note | -3, -1 | same | same | Holds |
 | Integer division by zero "kills the program with SIGFPE" on x86-64 | Annex F note | SIGFPE at -O0; exits 0 at -O2 | same | same | **Over-promised**: now traps without optimization, but an optimizer may compute something else (GCC -O2 turns 1 / b into a comparison) |
-| printf writes 0.0 / 0.0 as nan | Annex F note | `-nan` | `-nan` | `-nan` | **Wrong** for x86-64: its NaN has the sign bit set; the note now says so |
+| printf writes 0.0 / 0.0 as nan | Annex F note | `-nan` at run time (`c19_nan`) and folded (`c17_fp`) | `-nan` at run time, `nan` folded at -O0 and -O2 | as GCC | **Wrong**: the sign depends on who computes the NaN. The first fix said x86-64's NaN has its sign bit set, which Clang's folded NaN contradicts; the note now says the division instruction sets it, so a run-time division prints -nan, and a NaN folded from constants may have either sign |
 | printf with a mismatched conversion: "Compilers warn about it (-Wformat)" | Format note, Hello step 83 | with -Wall (Ubuntu's GCC by default) | by default | by default | **Over-promised**: now Clang by default, GCC with -Wall |
 | A mismatched `%d` prints garbage | same | an address's low bits, different each run | same | same | Holds |
 | A store into a string literal "on most systems crashes" | Hello note, step 10 | SIGSEGV at -O0 and -O2 | SIGSEGV at -O0; exits 104 at -O2 (store dropped) | SIGSEGV at -O0; exits 72 at -O2 | **Over-promised**: now crashes without optimization, while an optimizer may drop the store |
@@ -115,6 +120,27 @@ changed otherwise. Step numbers are the note numbers on the page.
 Two claims about undefined behavior predicted one outcome where the
 compilers disagree, and now say what was seen instead: the shift by 32 and
 `(int)3e9`. The others keep to what C says and what may happen.
+
+### Second pass, after review
+
+The probes are `c26` to `c28` in [`claims/`](claims/), and
+[`claims/results.txt`](claims/results.txt) was made again with all of them,
+with the same GCC and Clang and a dev build of bcc whose compiler is this
+branch's. It differs from the first run only in the new probes and in the
+values the undefined probes print, which change from run to run (the folded
+shift and conversion, the uninitialized and out-of-bounds reads). C99 is
+N1256; every clause was checked against `standards/c99-n1256.html`.
+
+| Claim | Where | GCC 14 | Clang 23 | bcc | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| The rank picture's rule for `long long a; unsigned long b; a + b`: "The two have the same rank, and then the signed operand converts to the unsigned type" | rank picture, any mixed-rank conversion | | | | **Wrong**: the picture compared one operand's type before and after, not the two operands. `long long` outranks `unsigned long` (§6.3.1.1p1) but cannot hold all its values, so both become `unsigned long long` (§6.3.1.8p1). Each conversion step now carries the other operand's type, the picture marks it, and the rule names the branch the two select; tests cover each integer branch from both operands' sides, run through the engine with each operand on the left and on the right |
+| A float passed to printf's `...` was captioned "The usual arithmetic conversions" | rank picture, Floating point | | | | **Wrong**: it is a default argument promotion (§6.5.2.2p6); the caption and rule now say so |
+| "sizeof is worked out while the program is compiled: its operand is never evaluated" | Sizeof note | `sizeof(int[n++])` is 8 and n becomes 3 (`c26`) | same | same | **Wrong** for a variable length array, whose operand §6.5.3.4p2 evaluates. Now says so, and that the machine runs only arrays of constant length |
+| sizeof's clause summary: "the operand is not evaluated" | clause list, every sizeof step | | | | **Wrong** the same way: now "unless its type is a variable length array" |
+| A constraint violation "gets a diagnostic and does not compile" | glossary, "Constraint" | refuses `int *p = 1;` (`-Wint-conversion` is an error by default from GCC 14; with `-std=c89` only a warning) and `x++` on a const `x` (`c27`); warns about `int a[1] = {1, 2};` and compiles it (`c28`) | same, with `-Wint-conversion` an error in every mode | same as Clang | **Wrong**: §5.1.1.3p1 requires a diagnostic, and its footnote 8 lets an implementation translate the program anyway. Now says that, and which violations the three refuse and which they only warn about |
+| A `#define` with a different replacement "would be an error the compiler must report" | `#define` step | warns "N redefined", uses the new replacement: exits 2 (`c28`) | warns (`-Wmacro-redefined`), exits 2 | warns, exits 2 | **Wrong**: §6.10.3p2 is a constraint, so it needs a diagnostic, not an error. Now: the compiler must report it, this machine stops, and the three compilers warn and use the new replacement |
+| An assignment to a const object "does not compile" | Const note, and a const object's declaration step (two wordings) | refuses (`c27`) | refuses | refuses | **Over-promised**: true of these compilers, but C requires only a diagnostic. Now: it breaks a constraint, the compiler must report it, and GCC, Clang and bcc refuse to compile it |
+| Signed conversion's clause summary: "x86-64 compilers keep the low bits" | clause list, every signed conversion | | | | **Over-promised** ("x86-64 compilers"), as the note was in the first pass: now GCC documents it, and Clang and bcc do the same |
 
 ## Teaching each step in order
 
@@ -157,10 +183,13 @@ The step counts did not change: no fix needed another step.
 - **The usual arithmetic conversions.** A promotion or a usual arithmetic
   conversion step now draws the arithmetic types by rank (`panels/ranks.rs`),
   integers in a signed and an unsigned row, floating types after them, with
-  the operand's type outlined and the type it became filled, and the rule
-  that moved it in one line ("The two have the same rank, and then the
-  signed operand converts to the unsigned type, even when its value is
-  negative").
+  the operand's type outlined, the other operand's type dotted and the type
+  it became filled, and the branch of the rule the two operands select in
+  one line ("int and unsigned int have the same rank, so the signed operand
+  converts to the unsigned type, unsigned int, even when its value is
+  negative"; for `long long` against `unsigned long`, "long long has the
+  higher rank, but it cannot hold every unsigned long value, so both
+  operands convert to unsigned long long").
 - **What the optimizer removed.** The optimizer note under each back-end
   stage now draws its comparison as paired bars, -O0 in ink and -O2 in
   vermilion, for instructions, basic blocks, loads and stores, stack slots
@@ -232,9 +261,6 @@ word; its column labels now keep whole words.
 
 ## Left open
 
-- The rank picture marks the operand that converts; for `long long` against
-  `unsigned long`, where both operands become `unsigned long long`, its rule
-  line describes the case as equal rank.
 - bcc warns as Clang does about formats, signed/unsigned comparisons and
   constant conversions, but has no -Wuninitialized; the notes name GCC's and
   Clang's warnings.

@@ -489,7 +489,10 @@ pub static TERMS: [Term; 49] = [
         name:       "Constraint",
         phrases:    &["constraints", "constraint"],
         definition: "A rule the compiler must check: a program that breaks one, such as assigning \
-                     to a const object, gets a diagnostic and does not compile.",
+                     to a const object, must get a diagnostic, an error or a warning. C does not \
+                     require the compiler to reject it. GCC 14, Clang and bcc refuse to compile \
+                     many, such as int *p = 1, but only warn about others, such as int a[1] = {1, \
+                     2}.",
         clause:     "3.8",
         page:       17,
     },

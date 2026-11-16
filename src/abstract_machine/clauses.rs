@@ -141,7 +141,8 @@ clauses! {
     /// C99: §6.3.1.3 paragraph 3, p. 43; PDF p. 55.
     SIGNED_CONVERSION = "6.3.1.3p3", "p. 43; PDF p. 55", "Signed and unsigned integers",
         "Converting a value that does not fit into a signed type gives an implementation-defined \
-         result; x86-64 compilers keep the low bits (wrap around).";
+         result; GCC documents that it keeps the low bits (wraps around), and Clang and bcc do the \
+         same.";
     /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
     FLOATING_TO_INTEGER = "6.3.1.4p1", "p. 43; PDF p. 55", "Real floating and integer",
         "Converting a floating value to an integer type discards its fraction, truncating toward \
@@ -256,7 +257,8 @@ clauses! {
         "Unary - negates its (promoted) operand.";
     /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92.
     SIZEOF = "6.5.3.4p2", "p. 80; PDF p. 92", "The sizeof operator",
-        "sizeof yields the size in bytes of its operand's type; the operand is not evaluated.";
+        "sizeof yields the size in bytes of its operand's type; the operand is not evaluated \
+         unless its type is a variable length array.";
     /// C99: §6.5.3.4 paragraph 4, p. 80; PDF p. 92.
     SIZEOF_RESULT = "6.5.3.4p4", "p. 80; PDF p. 92", "The sizeof operator",
         "sizeof's result is an unsigned integer of type size_t, whose size is up to the \

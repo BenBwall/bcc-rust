@@ -279,11 +279,13 @@ impl Topic {
                  one from macros: `\"bcc \" VERSION`. The joining happens while the program is \
                  translated; C has no operator that joins strings while it runs.",
             | Self::Const =>
-                "const is a promise the compiler checks: an assignment to a const object does not \
-                 compile. It is not a lock on memory: a cast can remove the const from a pointer, \
-                 and storing through that pointer into the object is undefined behavior. A \
-                 compiler may keep using the value it knows, so after such a store the program can \
-                 still print the old value at one optimization level and the new one at another.",
+                "const is a promise the compiler checks: an assignment to a const object breaks a \
+                 constraint, so the compiler must report it, and GCC, Clang and bcc refuse to \
+                 compile it. It is not a lock on memory: a cast can remove the const from a \
+                 pointer, and storing through that pointer into the object is undefined behavior. \
+                 A compiler may keep using the value it knows, so after such a store the program \
+                 can still print the old value at one optimization level and the new one at \
+                 another.",
             | Self::Cast =>
                 "A cast tells the compiler that a conversion is intended, so it no longer warns: \
                  GCC and Clang warn about `char c = 300;` but not about `(char)300`. It does not \
@@ -322,10 +324,12 @@ impl Topic {
                  Shifting a negative value left is undefined too, which is why bit manipulation \
                  uses unsigned types.",
             | Self::Sizeof =>
-                "sizeof is worked out while the program is compiled: its operand is never \
-                 evaluated, so sizeof x++ leaves x alone. On an array it counts the whole array, \
-                 so sizeof a / sizeof a[0] is its length, but only where a has not decayed to a \
-                 pointer, as it has in a function's parameter.",
+                "sizeof is worked out from its operand's type, so the operand is not evaluated: \
+                 sizeof x++ leaves x alone. The exception is a variable length array, such as int \
+                 a[n] for a variable n: its size is known only at run time, so sizeof evaluates \
+                 the operand. This machine runs only arrays of constant length. On an array sizeof \
+                 counts the whole array, so sizeof a / sizeof a[0] is its length, but only where a \
+                 has not decayed to a pointer, as it has in a function's parameter.",
             | Self::FloatingPoint =>
                 "Most decimal fractions have no exact binary form: 0.1 is stored as the nearest \
                  double, 0.1000000000000000055511151231257827…, and each operation rounds its \
@@ -357,11 +361,14 @@ impl Topic {
                  is true only for a NaN, and it spreads: any arithmetic with a NaN gives a NaN.",
             | Self::AnnexF =>
                 "Floating division by zero does not stop a program that follows Annex F: x / 0.0 \
-                 is an infinity and 0.0 / 0.0 a NaN, which printf writes as inf and nan, or -nan \
-                 on x86-64, whose NaN has its sign bit set. Integer division by zero is still \
-                 undefined: without optimization x86-64's divide instruction traps and the program \
-                 dies with SIGFPE, but an optimizer may compute something else instead (GCC -O2 \
-                 turns 1 / b into a comparison that never traps).",
+                 is an infinity and 0.0 / 0.0 a NaN, which printf writes as inf and nan, with a \
+                 minus sign when the NaN's sign bit is set. C leaves that sign open. x86-64's \
+                 division instruction sets it, so a division done at run time prints -nan, as \
+                 here; a NaN the compiler works out from constants may have either sign (Clang's \
+                 prints nan, GCC's and bcc's -nan). Integer division by zero is still undefined: \
+                 without optimization x86-64's divide instruction traps and the program dies with \
+                 SIGFPE, but an optimizer may compute something else instead (GCC -O2 turns 1 / b \
+                 into a comparison that never traps).",
             | Self::VariadicPromotion =>
                 "A function with `...` cannot say what types its extra arguments have, so C widens \
                  them to a few standard types first. printf can then read every small integer as \
@@ -565,8 +572,9 @@ fn define(defined: &Macro, range: SourceRange, again: bool) -> Event {
                     "In translation phase 4 the preprocessor executes this #define, but {name} is \
                      already defined with the replacement list `{replacement}`. A macro may be \
                      defined again only with an identical replacement list; this one is, so the \
-                     directive has no effect. A different replacement would be an error the \
-                     compiler must report."
+                     directive has no effect. A different replacement would break a constraint: \
+                     the compiler must report it, and this machine stops, while GCC, Clang and \
+                     bcc warn and use the new replacement."
                 ),
                 &[
                     clauses::TRANSLATION_PHASES,
@@ -1073,8 +1081,9 @@ impl Machine {
             let _ = write!(
                 text,
                 " It is defined const: its initializer gives it its value, and after that the \
-                 program may not change it. An assignment to it, ++ or -- does not compile, since \
-                 a const object is not a modifiable lvalue."
+                 program may not change it. An assignment to it, ++ or -- breaks a constraint, \
+                 since a const object is not a modifiable lvalue: the compiler must report it, \
+                 and GCC, Clang and bcc refuse to compile it."
             );
             cited.push(clauses::MODIFIABLE_LVALUE);
         }
@@ -1232,7 +1241,7 @@ impl Machine {
             let _ = write!(
                 text,
                 " It is defined const, so the program may never change it: an assignment to it \
-                 does not compile."
+                 breaks a constraint, which GCC, Clang and bcc refuse to compile."
             );
             cited.push(clauses::MODIFIABLE_LVALUE);
             Topic::Const
