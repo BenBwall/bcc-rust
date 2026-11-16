@@ -109,7 +109,12 @@ mod tests {
                 let context = format!("{identity} {defines:?} {flags:?}");
                 let stdout = if interpreting {
                     let output = bcc(&[&[identity, "-w", &source][..], defines, flags].concat());
-                    assert_eq!(output.status.code(), Some(0), "{context}: {}", text(&output.stderr));
+                    assert_eq!(
+                        output.status.code(),
+                        Some(0),
+                        "{context}: {}",
+                        text(&output.stderr)
+                    );
                     text(&output.stdout)
                 } else {
                     let executable = temporary("avx2.exe");
@@ -144,15 +149,15 @@ mod tests {
         )) {
             return;
         }
-        let callee = fixture("avx_target_abi_callee.c");
-        let caller = fixture("avx_target_abi_caller.c");
+        let definitions = fixture("avx_target_abi_callee.c");
+        let calls = fixture("avx_target_abi_caller.c");
         let mut references = vec![("--compiler-identity=clang", "target/llvm/bin/clang")];
         if Command::new("gcc").arg("--version").output().is_ok() {
             references.push(("--compiler-identity=gcc", "gcc"));
         }
         for (identity, compiler) in references {
-            let expected = build_and_run(compiler, &callee, &[&caller]);
-            for (ours, theirs) in [(&callee, &caller), (&caller, &callee)] {
+            let expected = build_and_run(compiler, &definitions, &[&calls]);
+            for (ours, theirs) in [(&definitions, &calls), (&calls, &definitions)] {
                 for flags in [&["-O0"][..], &["-O2"]] {
                     let context = format!("{identity} {flags:?} {ours}");
                     let object = temporary("part.o");
@@ -180,7 +185,11 @@ mod tests {
             .arg(&executable)
             .output()
             .unwrap();
-        assert!(built.status.success(), "{compiler}: {}", text(&built.stderr));
+        assert!(
+            built.status.success(),
+            "{compiler}: {}",
+            text(&built.stderr)
+        );
         let run = run_native(&mut Command::new(&executable)).unwrap();
         std::fs::remove_file(executable).unwrap();
         assert_eq!(run.status.code(), Some(0), "{compiler} {extra:?}");

@@ -28,10 +28,6 @@ use crate::{
 
 impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// Expands the lane-movement builtin `id`, if it is one.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per instruction, each stating its selection rule"
-    )]
     pub(super) fn permute(
         &mut self,
         id: BuiltinId,

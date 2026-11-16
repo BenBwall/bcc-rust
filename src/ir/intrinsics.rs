@@ -166,20 +166,20 @@ intrinsics! {
         => overloaded(sig(Some(S(Type::F32)), &[S(Type::F32)], None, "llvm.sqrt")),
     SqrtF64 = "x86.sqrtsd"
         => overloaded(sig(Some(S(Type::F64)), &[S(Type::F64)], None, "llvm.sqrt")),
-    /// One AES encryption round (`aesenc`): ShiftRows, SubBytes,
-    /// MixColumns, then the round key XORed in. Intel SDM Vol. 2A, "AESENC";
-    /// Clang `BuiltinsX86.td`, `__builtin_ia32_aesenc128`.
+    /// One AES encryption round (`aesenc`): `ShiftRows`, `SubBytes`,
+    /// `MixColumns`, then the round key added by exclusive or. Intel SDM
+    /// Vol. 2A, "AESENC"; Clang `BuiltinsX86.td`, `__builtin_ia32_aesenc128`.
     AesEnc = "x86.aesenc" => sig(Some(I64X2), &[I64X2, I64X2], None, "llvm.x86.aesni.aesenc"),
-    /// The last AES encryption round, without MixColumns (`aesenclast`).
+    /// The last AES encryption round, without `MixColumns` (`aesenclast`).
     AesEncLast = "x86.aesenclast"
         => sig(Some(I64X2), &[I64X2, I64X2], None, "llvm.x86.aesni.aesenclast"),
-    /// One AES decryption round (`aesdec`): InvShiftRows, InvSubBytes,
-    /// InvMixColumns, then the round key XORed in.
+    /// One AES decryption round (`aesdec`): `InvShiftRows`, `InvSubBytes`,
+    /// `InvMixColumns`, then the round key added by exclusive or.
     AesDec = "x86.aesdec" => sig(Some(I64X2), &[I64X2, I64X2], None, "llvm.x86.aesni.aesdec"),
-    /// The last AES decryption round, without InvMixColumns (`aesdeclast`).
+    /// The last AES decryption round, without `InvMixColumns` (`aesdeclast`).
     AesDecLast = "x86.aesdeclast"
         => sig(Some(I64X2), &[I64X2, I64X2], None, "llvm.x86.aesni.aesdeclast"),
-    /// InvMixColumns of a round key (`aesimc`).
+    /// `InvMixColumns` of a round key (`aesimc`).
     AesImc = "x86.aesimc" => sig(Some(I64X2), &[I64X2], None, "llvm.x86.aesni.aesimc"),
     /// The AES key-schedule step (`aeskeygenassist`), with the round
     /// constant as its immediate.

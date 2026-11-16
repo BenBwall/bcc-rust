@@ -30,8 +30,8 @@ use crate::{
 impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// Expands the arithmetic builtin `id`, if it is one.
     #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per instruction, each stating its lane rule"
+        clippy::many_single_char_names,
+        reason = "the operands and lanes keep the SDM's names"
     )]
     pub(super) fn lane_arithmetic(
         &mut self,
@@ -507,6 +507,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     }
 
     /// `|a[i] - b[j]|` of unsigned bytes, as an `i32`.
+    #[expect(
+        clippy::many_single_char_names,
+        reason = "the operands and lanes keep the SDM's names"
+    )]
     fn byte_difference(&mut self, a: Value, i: u64, b: Value, j: u64) -> Value {
         let x = self.lane(a, Type::I8, i);
         let y = self.lane(b, Type::I8, j);

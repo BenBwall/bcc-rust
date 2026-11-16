@@ -29,8 +29,8 @@ use crate::{
 impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// Expands the mask builtin `id`, if it is one.
     #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per instruction family, each stating its rule"
+        clippy::many_single_char_names,
+        reason = "the operands and lanes keep the SDM's names"
     )]
     pub(super) fn mask_builtin(
         &mut self,

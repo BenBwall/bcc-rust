@@ -177,7 +177,9 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 .info(argument)?
                 .integer
                 .map_or(0, |integer| integer.value);
-            operands.constants.push(constant as i64);
+            operands
+                .constants
+                .push(i64::try_from(constant).unwrap_or(0));
         }
         let operand = match self.x86_builtin(id, &operands, source)? {
             | Produced::Vector(object) => Operand::Aggregate(object),
@@ -214,10 +216,6 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
     }
 
     /// Expands the x86 builtin `id` on `operands`.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per builtin family keeps the table readable"
-    )]
     fn x86_builtin(
         &mut self,
         id: BuiltinId,
@@ -280,7 +278,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let signature = intrinsic.signature();
         let count = signature.operands.len();
         let immediate = if signature.immediate.is_some() {
-            operands.imm(count) as u8
+            u8::try_from(operands.imm(count)).unwrap_or(0)
         } else {
             0
         };

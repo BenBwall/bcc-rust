@@ -6,41 +6,41 @@ use super::*;
 /// Each builtin lowers to the instructions its lanes need.
 #[test]
 fn x86_builtins_expand_into_lanes_or_named_instructions() {
-    let v2di = "typedef long long V2 __attribute__((vector_size(16)));";
-    let v16hi = "typedef short V16 __attribute__((vector_size(32)));";
-    let v8si = "typedef int V8 __attribute__((vector_size(32)));";
+    let quadwords = "typedef long long V2 __attribute__((vector_size(16)));";
+    let words = "typedef short V16 __attribute__((vector_size(32)));";
+    let doublewords = "typedef int V8 __attribute__((vector_size(32)));";
     for (source, wanted) in [
         (
             format!(
-                "{v2di}__attribute__((target(\"pclmul\"))) V2 f(V2 a, V2 b) {{ return \
+                "{quadwords}__attribute__((target(\"pclmul\"))) V2 f(V2 a, V2 b) {{ return \
                  __builtin_ia32_pclmulqdq128(a, b, 0x11); }}"
             ),
             "intrinsic x86.pclmulqdq 17,",
         ),
         (
             format!(
-                "{v2di}__attribute__((target(\"aes\"))) V2 f(V2 a, V2 b) {{ return \
+                "{quadwords}__attribute__((target(\"aes\"))) V2 f(V2 a, V2 b) {{ return \
                  __builtin_ia32_aesenc128(a, b); }}"
             ),
             "intrinsic x86.aesenc v",
         ),
         (
             format!(
-                "{v16hi}__attribute__((target(\"avx2\"))) V16 f(V16 a, V16 b) {{ return \
+                "{words}__attribute__((target(\"avx2\"))) V16 f(V16 a, V16 b) {{ return \
                  __builtin_ia32_pmulhw256(a, b); }}"
             ),
             "ashr.i32",
         ),
         (
             format!(
-                "{v8si}__attribute__((target(\"avx2\"))) V8 f(const V8 *p, V8 m) {{ return \
+                "{doublewords}__attribute__((target(\"avx2\"))) V8 f(const V8 *p, V8 m) {{ return \
                  __builtin_ia32_maskloadd256(p, m); }}"
             ),
             "brif",
         ),
         (
             format!(
-                "{v8si}__attribute__((target(\"avx2\"))) V8 f(V8 a) {{ return \
+                "{doublewords}__attribute__((target(\"avx2\"))) V8 f(V8 a) {{ return \
                  __builtin_ia32_pshufd256(a, 0x1b); }}"
             ),
             "load.i32",

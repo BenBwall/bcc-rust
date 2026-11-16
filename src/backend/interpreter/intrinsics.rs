@@ -7,7 +7,6 @@
 
 use super::{
     Machine,
-    memory::truncate_u64,
     trap::{
         Fault,
         Unsupported,
@@ -64,7 +63,7 @@ impl Machine<'_, '_, '_> {
                 },
                 | IntrinsicOperand::Scalar(_) => {
                     match self.value(arg) {
-                        | RuntimeValue::Int(bits) => lengths[scalar] = truncate_u64(bits) as i32,
+                        | RuntimeValue::Int(bits) => lengths[scalar] = low_i32(bits),
                         | _ => poison = true,
                     }
                     scalar += 1;
@@ -146,7 +145,7 @@ impl Machine<'_, '_, '_> {
                 .memory
                 .ptr_add(address, RuntimeValue::Int(index as u128), false);
             match self.memory.load(Type::I8, at, Align::BYTE)? {
-                | RuntimeValue::Int(bits) => *byte = bits as u8,
+                | RuntimeValue::Int(bits) => *byte = bits.to_le_bytes()[0],
                 | _ => return Ok(None),
             }
         }
@@ -176,6 +175,11 @@ impl Machine<'_, '_, '_> {
     }
 }
 
+/// The low 32 bits of an `i32` operand's value.
+fn low_i32(bits: u128) -> i32 {
+    i32::from_le_bytes(bits.to_le_bytes()[..4].try_into().expect("four bytes"))
+}
+
 /// What an instruction computes.
 #[expect(
     variant_size_differences,
@@ -199,10 +203,10 @@ enum Direction {
 }
 
 /// One AES round on the state `a` with the round key `b`, the state's byte
-/// `4c + r` in row `r` of column `c` (FIPS 197 §3.4): ShiftRows and SubBytes
-/// (or their inverses), MixColumns (or its inverse) unless it is the last
-/// round, then the key XORed in. Intel SDM Vol. 2A, "AESENC", "AESENCLAST",
-/// "AESDEC", "AESDECLAST".
+/// `4c + r` in row `r` of column `c` (FIPS 197 §3.4): `ShiftRows` and
+/// `SubBytes` (or their inverses), `MixColumns` (or its inverse) unless it is
+/// the last round, then the key added by exclusive or. Intel SDM Vol. 2A,
+/// "AESENC", "AESENCLAST", "AESDEC", "AESDECLAST".
 fn aes_round(a: &Bytes, b: &Bytes, direction: Direction, mix: bool) -> Output {
     let mut state = [0; 16];
     for row in 0..4 {
@@ -227,7 +231,7 @@ fn aes_round(a: &Bytes, b: &Bytes, direction: Direction, mix: bool) -> Output {
     Output::Vector(widen(state))
 }
 
-/// MixColumns or InvMixColumns: each column multiplied by the fixed
+/// `MixColumns` or `InvMixColumns`: each column multiplied by the fixed
 /// polynomial in GF(2^8). FIPS 197 §5.1.3 and §5.3.3.
 fn mix_columns(state: [u8; 16], direction: Direction) -> [u8; 16] {
     let factors: [u8; 4] = match direction {
@@ -279,9 +283,9 @@ fn inverse_sub_byte(byte: u8) -> u8 {
     (0..=255).find(|&x| sub_byte(x) == byte).unwrap_or(0)
 }
 
-/// `aeskeygenassist`: SubWord of dwords 1 and 3, and each rotated right by
-/// 8 bits and XORed with the round constant. Intel SDM Vol. 2A,
-/// "AESKEYGENASSIST".
+/// `aeskeygenassist`: `SubWord` of dwords 1 and 3, and each rotated right by
+/// 8 bits and combined with the round constant by exclusive or. Intel SDM
+/// Vol. 2A, "AESKEYGENASSIST".
 fn keygen_assist(a: &Bytes, rcon: u8) -> Bytes {
     let dword = |index: usize| {
         u32::from_le_bytes([
@@ -334,6 +338,10 @@ fn lane<const N: usize>(bytes: &Bytes, index: usize) -> f64 {
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a `float` lane widened exactly, or an integral value it holds"
+)]
 fn set_lane<const N: usize>(bytes: &mut Bytes, index: usize, value: f64) {
     let at = N * index;
     if N == 4 {
@@ -378,6 +386,10 @@ fn convert<const N: usize>(source: &Bytes, count: usize, truncate: bool) -> Byte
         } else {
             x.round_ties_even()
         };
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "an integral value in the range of `i32`"
+        )]
         let value = if (-2_147_483_648.0..2_147_483_648.0).contains(&rounded) {
             rounded as i32
         } else {
@@ -476,9 +488,9 @@ fn string_compare(
             Output::Vector(bytes)
         },
         | Intrinsic::Pcmpistri128 | Intrinsic::Pcmpestri128 => Output::Scalar(if result == 0 {
-            count as u32
+            if words { 8 } else { 16 }
         } else if immediate & 0x40 != 0 {
-            31 - result.leading_zeros()
+            result.ilog2()
         } else {
             result.trailing_zeros()
         }),
