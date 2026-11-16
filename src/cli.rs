@@ -157,6 +157,11 @@ fn run_driver(args: &Cli, matches: &clap::ArgMatches) -> Result<i32, MainError> 
 )]
 #[derive(Parser)]
 #[command(group(clap::ArgGroup::new("generation").multiple(true)))]
+// A switch or single-valued option given twice takes its last value, as in
+// GCC and Clang, whose drivers keep the last of a repeated flag: build
+// systems repeat flags such as `-no-pie` (gawk's link line has it three
+// times). Options that collect values (`-I`, `-D`, `-l`) still append.
+#[command(args_override_self = true)]
 #[command(author, version, about, long_about, color = ColorChoice::Always,
     after_help = "Preprocessing: -D NAME[=VALUE] or -DNAME[=VALUE], -U NAME or -UNAME, -include FILE.\nDefinitions default to 1. -D/-U run in order before forced includes.")]
 #[expect(

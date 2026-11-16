@@ -13708,4 +13708,44 @@ warn.c:34: warning: cast between pointer and integer of different size
             assert!(stderr(&output).contains("atomic_signal_fence"), "{mode}");
         }
     }
+
+    /// GCC, Clang and TCC keep the last of a repeated flag, and build systems
+    /// repeat them: gawk 5.3.1's link line has `-no-pie` three times. Each
+    /// switch below was refused by clap ("cannot be used multiple times")
+    /// before the command line let a flag override itself. TCC 0.9.27 has
+    /// no `-S`, `-M`, `-MP` or `-no-pie`, so its mode is checked only on the
+    /// switches it accepts.
+    #[test]
+    fn a_repeated_flag_is_accepted_as_each_compiler_accepts_it() {
+        let directory = Directory::new();
+        directory.write("repeat.c", "int f(void) { return 1; }\n");
+        let everywhere: [&[&str]; 3] = [
+            &["-c", "-c", "repeat.c", "-o", "repeat.o"],
+            &["-E", "-E", "-P", "-P", "repeat.c"],
+            &["-E", "-nostdinc", "-nostdinc", "repeat.c"],
+        ];
+        let gnu: [&[&str]; 2] = [
+            &["-S", "-S", "repeat.c", "-o", "repeat.s"],
+            &["-E", "-M", "-M", "-MP", "-MP", "repeat.c"],
+        ];
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let gnu: &[&[&str]] = if mode == "--tcc-mode" { &[] } else { &gnu };
+            for arguments in everywhere.iter().chain(gnu) {
+                succeeds(&directory.bcc(mode, arguments));
+            }
+            let links: &[&str] = if mode == "--tcc-mode" {
+                &["-shared"]
+            } else {
+                &["-no-pie", "-pie", "-shared"]
+            };
+            for &flag in links {
+                let output = directory.bcc(mode, &[flag, flag, "-c", "repeat.c", "-o", "r.o"]);
+                assert!(
+                    !stderr(&output).contains("multiple times"),
+                    "{mode} {flag}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
 }
