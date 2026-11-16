@@ -33,6 +33,7 @@ use crate::{
         RuleSet,
     },
     translation_phases::{
+        ArgumentSubstitution,
         TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -122,9 +123,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     }
                     index += 1;
                 }
-                let mut selected =
+                let (mut selected, mut substitutions) =
                     if self.variadic_argument_is_empty(&mut empty, invocation, argument) {
-                        ArenaVec::new_in(self.scratch)
+                        (
+                            ArenaVec::new_in(self.scratch),
+                            ArenaVec::new_in(self.scratch),
+                        )
                     } else {
                         self.expand_optional_replacement(
                             invocation,
@@ -134,8 +138,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                             &mut empty,
                         )
                     };
-                let trailing =
-                    self.optional_boundary_whitespace(&mut selected, &tokens[start..index]);
+                let trailing = self.optional_boundary_whitespace(
+                    &mut selected,
+                    &mut substitutions,
+                    &tokens[start..index],
+                );
                 let hash = output
                     .iter()
                     .rposition(|t: &PreprocessorToken| t.kind != T::Whitespace)
@@ -191,10 +198,16 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         location.clone(),
                     );
                     let expanded = self.scratch.alloc(OnceCell::new());
-                    drop(expanded.set(Prescan {
-                        tokens: tokenizer.clone(),
-                        end:    TokenSpacing::END,
-                    }));
+                    drop(
+                        expanded.set(Prescan {
+                            tokens:        tokenizer.clone(),
+                            end:           TokenSpacing::END,
+                            substitutions: substitutions
+                                .iter()
+                                .any(Option::is_some)
+                                .then(|| &*substitutions.leak()),
+                        }),
+                    );
                     results.push(FunctionLikeMacroArgument {
                         omitted: false,
                         variadic: false,
@@ -249,13 +262,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// keeps it, the space before `)` even when the replacement is empty:
     /// `"- x -"`, or `"- -"` without variable arguments. Returns, for an
     /// empty replacement under Clang's rules, the white space to write in
-    /// its place.
+    /// its place. `substitutions`, the argument substitution of each token
+    /// of `selected`, changes with it.
     /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192 leaves the white space
     /// of the replacement to §6.10.3.2 paragraph 2, which counts only the
     /// white space between the argument's tokens.
     fn optional_boundary_whitespace(
         &self,
         selected: &mut ArenaVec<'x, PreprocessorToken>,
+        substitutions: &mut ArenaVec<'x, Option<ArgumentSubstitution>>,
         written: &[PreprocessorToken],
     ) -> Option<PreprocessorToken> {
         let blank = |token: &PreprocessorToken| {
@@ -269,11 +284,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .rposition(|token| !blank(token))
             .map_or(0, |i| i + 1);
         selected.truncate(end);
+        substitutions.truncate(end);
         let start = selected
             .iter()
             .position(|token| !blank(token))
             .unwrap_or(end);
         drop(selected.drain(..start));
+        drop(substitutions.drain(..start));
         if self.context.configuration.compiler_identity().rules() == RuleSet::Gcc {
             return None;
         }
@@ -284,8 +301,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
         if let Some(leading) = leading {
             selected.insert(0, leading);
+            substitutions.insert(0, None);
         }
-        selected.extend(trailing);
+        if let Some(trailing) = trailing {
+            selected.push(trailing);
+            substitutions.push(None);
+        }
         None
     }
 
@@ -373,7 +394,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 
     /// Expands the inner replacement as a unit before outer #/##: parameters
     /// are substituted and `#` and `##` applied, but nothing is rescanned, so
-    /// no name in the result is macro-replaced here.
+    /// no name in the result is macro-replaced here. Returns the result and
+    /// the argument substitution of each of its tokens, by the same index:
+    /// each argument substituted in it is a substitution of its own, as
+    /// outside `__VA_OPT__`.
     /// C23: §6.10.5.1 paragraph 7, p. 180; PDF p. 193.
     fn expand_optional_replacement(
         &mut self,
@@ -382,7 +406,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         argument: &'x FunctionLikeMacroArgument<'x>,
         selected: &[PreprocessorToken],
         empty: &mut Option<bool>,
-    ) -> ArenaVec<'x, PreprocessorToken> {
+    ) -> (
+        ArenaVec<'x, PreprocessorToken>,
+        ArenaVec<'x, Option<ArgumentSubstitution>>,
+    ) {
         let mut prepared = ArenaVec::new_in(self.scratch);
         let mut index = 0;
         while index < selected.len() {
@@ -437,8 +464,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let saved_expansion = replace(&mut self.expansion_fence, depth);
         let saved_verbatim = replace(&mut self.verbatim_fence, depth);
         let mut result = ArenaVec::new_in(self.scratch);
+        let mut substitutions = ArenaVec::new_in(self.scratch);
         while let Some(token) = self.next_preprocessor_token::<false>() {
             result.push(token);
+            substitutions.push(self.current_substitution());
         }
         self.operand_fence = saved_operand;
         self.expansion_fence = saved_expansion;
@@ -448,7 +477,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.state.retain_placeholders = retain_placeholders;
         (self.last_was_newline, self.current_is_newline) = newlines;
         self.spacing = spacing;
-        result
+        (result, substitutions)
     }
 
     /// Prepares GNU comma-paste and traditional MSVC comma elision before

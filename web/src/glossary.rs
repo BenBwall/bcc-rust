@@ -30,7 +30,7 @@ impl Term {
 /// Every term, in the glossary's order: from what a program is made of to
 /// what can go wrong. Longer phrases come before the shorter ones they
 /// contain (`lvalue conversion` before `lvalue`).
-pub static TERMS: [Term; 47] = [
+pub static TERMS: [Term; 49] = [
     Term {
         id:         "abstract-machine",
         name:       "Abstract machine",
@@ -70,6 +70,17 @@ pub static TERMS: [Term; 47] = [
                      the functions it declares; the functions' code is in the library itself.",
         clause:     "7.1.2p1",
         page:       177,
+    },
+    Term {
+        id:         "prototype",
+        name:       "Prototype",
+        phrases:    &["prototypes", "prototype"],
+        definition: "A declaration of a function that gives its parameters' types: int \
+                     length(const char *text) says that length takes a pointer to const char. \
+                     With one in sight, a call is checked and each argument converted to its \
+                     parameter's type; headers are mostly prototypes.",
+        clause:     "6.2.1p2",
+        page:       41,
     },
     Term {
         id:         "conversion-specification",
@@ -254,6 +265,16 @@ pub static TERMS: [Term; 47] = [
                      and p->m designate member m of the structure s, or of the one p points to.",
         clause:     "6.5.2.3p3",
         page:       85,
+    },
+    Term {
+        id:         "alignment",
+        name:       "Alignment",
+        phrases:    &["alignment", "aligned"],
+        definition: "Where an object of a type may start: at an address that is a multiple of its \
+                     alignment. On x86-64 an int is aligned to 4 and a pointer or a double to 8, \
+                     so the processor can load each in one access.",
+        clause:     "3.2",
+        page:       15,
     },
     Term {
         id:         "padding",
@@ -468,7 +489,10 @@ pub static TERMS: [Term; 47] = [
         name:       "Constraint",
         phrases:    &["constraints", "constraint"],
         definition: "A rule the compiler must check: a program that breaks one, such as assigning \
-                     to a const object, gets a diagnostic and does not compile.",
+                     to a const object, must get a diagnostic, an error or a warning. C does not \
+                     require the compiler to reject it. GCC 14, Clang and bcc refuse to compile \
+                     many, such as int *p = 1, but only warn about others, such as int a[1] = {1, \
+                     2}.",
         clause:     "3.8",
         page:       17,
     },

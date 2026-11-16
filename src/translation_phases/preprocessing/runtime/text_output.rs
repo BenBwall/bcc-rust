@@ -280,12 +280,28 @@ impl Expander<'_, '_, '_, '_> {
     pub(in crate::translation_phases::preprocessing) fn outermost_invocation(
         &self,
     ) -> Option<&SourceVector> {
+        self.outermost_invocation_span().map(|(start, _)| start)
+    }
+
+    /// Where the outermost macro invocation being read begins and ends, as
+    /// [`Self::outermost_invocation`] finds it: its name, and its last token,
+    /// the `)` of a function-like macro's arguments.
+    pub(in crate::translation_phases::preprocessing) fn outermost_invocation_span(
+        &self,
+    ) -> Option<(&SourceVector, &SourceVector)> {
         let mut outermost = None;
         for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
-                | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
-                | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } =>
-                    outermost = Some(invocation),
+                | TokenizerFrameType::ObjectLikeMacroInvocation {
+                    invocation,
+                    invocation_end,
+                    ..
+                }
+                | TokenizerFrameType::FunctionLikeMacroInvocation {
+                    invocation,
+                    invocation_end,
+                    ..
+                } => outermost = Some((invocation, invocation_end)),
                 | TokenizerFrameType::SourceFile { .. } => break,
                 | _ => {},
             }

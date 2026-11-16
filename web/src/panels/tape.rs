@@ -512,7 +512,9 @@ pub fn value_text(value: &Value) -> Option<String> {
             character: Some(character),
         } => Some(format!("{text} {character}")),
         | Value::Integer { text, .. } | Value::Floating { text, .. } => Some(text.clone()),
-        // A char array reads as its characters.
+        // A char array reads as a string, spelled as a literal with every
+        // null character written out, as the string cell boxes it:
+        // `"Ada\0"`.
         | Value::Array { elements }
             if !elements.is_empty()
                 && elements.iter().all(|element| {
@@ -525,15 +527,17 @@ pub fn value_text(value: &Value) -> Option<String> {
                     )
                 }) =>
             Some(format!(
-                "{{{}}}",
+                "\"{}\"",
                 elements
                     .iter()
                     .filter_map(|element| match element {
-                        | Value::Integer { character, .. } => character.clone(),
+                        | Value::Integer {
+                            character: Some(character),
+                            ..
+                        } => Some(in_string(character)),
                         | _ => None,
                     })
-                    .collect::<Vec<_>>()
-                    .join(",")
+                    .collect::<String>()
             )),
         | Value::Array { elements } => Some(format!(
             "{{{}}}",
@@ -705,11 +709,37 @@ fn source_text(source: &str, range: Range) -> Option<String> {
     Some(shorten(&text, 26))
 }
 
+/// A character constant's spelling as it is written inside a string
+/// literal: `'A'` is `A`, `'\''` is `'`, and `'"'` is `\"`.
+fn in_string(character: &str) -> String {
+    let inner = character
+        .strip_prefix('\'')
+        .and_then(|inner| inner.strip_suffix('\''))
+        .unwrap_or(character);
+    match inner {
+        | "\\'" => String::from("'"),
+        | "\"" => String::from("\\\""),
+        | _ => inner.to_owned(),
+    }
+}
+
 /// `text` cut to `chars` characters, ending in `…` when it was longer. An
-/// array keeps whole elements: `{3,1,4,…}`.
+/// array keeps whole elements: `{3,1,4,…}`, and a string its closing
+/// quote: `"total is…"`.
 fn shorten(text: &str, chars: usize) -> String {
     if text.chars().count() <= chars {
         return text.to_owned();
+    }
+    if text.starts_with('"') && text.ends_with('"') {
+        let mut shown: String = text.chars().take(chars.saturating_sub(2)).collect();
+        // An escape is not cut in half.
+        if let Some(backslash) = shown.rfind('\\')
+            && shown.len() - backslash < 4
+        {
+            shown.truncate(backslash);
+        }
+        shown.push_str("…\"");
+        return shown;
     }
     if text.starts_with('{') {
         let mut shown = String::from("{");
@@ -2404,6 +2434,16 @@ mod tests {
         assert_eq!(shorten("{3,1,4,1,5,9,2,6}", 10), "{3,1,4,…}");
         assert_eq!(shorten("2147483647", 10), "2147483647");
         assert_eq!(shorten("→a_rather_long_name", 8), "→a_rath…");
+        assert_eq!(shorten("\"total is %.3d\\n\\0\"", 12), "\"total is …\"");
+        assert_eq!(
+            shorten("\"ab\\ncd\"", 7),
+            "\"ab…\"",
+            "an escape is not cut in half"
+        );
+        assert_eq!(in_string("'A'"), "A");
+        assert_eq!(in_string("'\\''"), "'");
+        assert_eq!(in_string("'\"'"), "\\\"");
+        assert_eq!(in_string("'\\0'"), "\\0");
         assert_eq!(fit_slots(10), 16);
         assert_eq!(fit_slots(16), 16);
         assert_eq!(fit_slots(22), 32);

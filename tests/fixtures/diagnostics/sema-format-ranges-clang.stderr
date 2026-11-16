@@ -1,0 +1,63 @@
+sema-format-ranges-clang.c:5:13: warning: incomplete format specifier [-Wformat]
+    5 |     printf("%5");
+      |             ^~
+sema-format-ranges-clang.c:6:13: warning: position arguments in format strings start counting at 1 (not 0) [-Wformat]
+    6 |     printf("%0$d\n", i);
+      |             ^~~
+sema-format-ranges-clang.c:7:16: warning: position arguments in format strings start counting at 1 (not 0) [-Wformat]
+    7 |     printf("%1$*0$d\n", i, i);
+      |                ^~~
+sema-format-ranges-clang.c:8:16: warning: invalid position specified for field width [-Wformat]
+    8 |     printf("%1$*d\n", i, i);
+      |                ^
+sema-format-ranges-clang.c:9:16: warning: '.*' specified field precision is missing a matching 'int' argument [-Wformat]
+    9 |     printf("%*.*d\n", i);
+      |             ~~~^~
+sema-format-ranges-clang.c:10:15: warning: field precision should have type 'int', but argument has type 'long' [-Wformat]
+   10 |     printf("%.*d\n", l, i);
+      |             ~~^~     ~
+sema-format-ranges-clang.c:11:19: warning: cannot mix positional and non-positional arguments in format string [-Wformat]
+   11 |     printf("%1$d %d\n", i, i);
+      |                  ~^
+sema-format-ranges-clang.c:12:15: warning: flag ' ' is ignored when flag '+' is present [-Wformat]
+   12 |     printf("%+ d\n", i);
+      |             ~~^~
+sema-format-ranges-clang.c:13:14: warning: flag '#' results in undefined behavior with 'd' conversion specifier [-Wformat]
+   13 |     printf("%#d\n", i);
+      |             ~^~
+sema-format-ranges-clang.c:14:14: warning: precision used with 'c' conversion specifier, resulting in undefined behavior [-Wformat]
+   14 |     printf("%.3c\n", i);
+      |             ~^~~
+sema-format-ranges-clang.c:15:25: warning: format specifies type 'long double' but the argument has type 'double' [-Wformat]
+   15 |     printf("%Lf %qd\n", d, l);
+      |             ~~~         ^
+sema-format-ranges-clang.c:15:28: warning: format specifies type 'long long' but the argument has type 'long' [-Wformat]
+   15 |     printf("%Lf %qd\n", d, l);
+      |                 ~~~        ^
+sema-format-ranges-clang.c:16:22: warning: using '%c' format specifier, but argument has boolean value [-Wformat]
+   16 |     printf("%c\n", i < 2);
+      |             ~~       ^
+sema-format-ranges-clang.c:17:20: warning: using '%c' format specifier, but argument has boolean value [-Wformat]
+   17 |     printf("%c\n", b);
+      |             ~~     ^
+sema-format-ranges-clang.c:19:12: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   18 |     printf("%d %s\n",
+      |             ~~
+   19 |            l, s);
+      |            ^
+sema-format-ranges-clang.c:20:20: warning: format specifies type 'int' but the argument has type 'long' [-Wformat]
+   20 |     printf("%d\n", (l + 1));
+      |             ~~     ^~~~~~~
+sema-format-ranges-clang.c:21:20: warning: format specifies type 'char *' but the argument has type 'int' [-Wformat]
+   21 |     printf(FORMAT, i);
+      |            ~~~~~~  ^
+sema-format-ranges-clang.c:22:14: warning: invalid conversion specifier '\xff' [-Wformat-invalid-specifier]
+   22 |     printf("%\xff" "d\n", i);
+      |             ~^
+sema-format-ranges-clang.c:23:16: warning: no closing ']' for '%[' in scanf format string [-Wformat]
+   23 |     scanf("%[abc", s);
+      |             ~~~^
+sema-format-ranges-clang.c:24:18: warning: format specifies type 'int *' but the argument has type 'long *' [-Wformat]
+   24 |     scanf("%5d", &l);
+      |            ~~~   ^~
+20 warnings generated.

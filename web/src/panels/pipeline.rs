@@ -34,6 +34,7 @@ use crate::{
         gutter,
         is_folded,
         optimizer_changes,
+        optimizer_measures,
     },
 };
 
@@ -164,14 +165,20 @@ pub fn PipelineView(
     let on_path = move || {
         source.with(|source| demos::matching(source).is_some_and(|demo| !demo.path.is_empty()))
     };
-    // The whole-path lesson's note on what this stage did to it, which
-    // describes its -O0 output.
-    let path_note = move || {
-        if optimize.get() {
-            return None;
+    // What this stage did to the program: the whole-path lesson's own note,
+    // which describes its -O0 output, or else an example read from the
+    // output on screen.
+    let path_note = move || -> Option<String> {
+        let stage = stage.get();
+        let index = Stage::ALL.iter().position(|&each| each == stage)?;
+        let written = source
+            .with(|source| demos::matching(source).and_then(|demo| demo.path.get(index).copied()));
+        match written {
+            | Some(note) if !optimize.get() => Some(note.to_owned()),
+            | _ => shown.with(|compilation| {
+                source.with(|source| crate::pipeline::example(stage, compilation.as_ref()?, source))
+            }),
         }
-        let index = Stage::ALL.iter().position(|&each| each == stage.get())?;
-        source.with(|source| demos::matching(source).and_then(|demo| demo.path.get(index).copied()))
     };
     let on_hover = Callback::new(move |line| pointing.hover(Side::Output, line));
     let on_cursor = Callback::new(move |line| pointing.cursor(Side::Output, line));
@@ -236,7 +243,7 @@ pub fn PipelineView(
                 </p>
                 <p class="stage-path-note" hidden=move || path_note().is_none()>
                     <strong>"In this program: "</strong>
-                    {move || path_note().map(super::rich_text)}
+                    {move || path_note().map(|note| super::rich_text(&note))}
                 </p>
                 <StopBanner compilation=shown />
                 <div class="stage-toolbar">
@@ -563,6 +570,18 @@ fn OptimizerNote(
             })
         })
     });
+    // The same comparison as bars: -O0 above -O2 for each measure.
+    let measures = Memo::new(move |_| {
+        let stage = stage.get();
+        compilation.with(|current| {
+            other.with(|other| match (current, other) {
+                | (Some(current), Some(other)) if optimize.get() =>
+                    optimizer_measures(stage, other, current),
+                | (Some(current), Some(other)) => optimizer_measures(stage, current, other),
+                | _ => Vec::new(),
+            })
+        })
+    });
     let summary = move || {
         if optimize.get() {
             stage.get().optimizer_note().to_owned()
@@ -578,7 +597,58 @@ fn OptimizerNote(
             <ul hidden=move || changes.with(Vec::is_empty)>
                 {move || changes.get().into_iter().map(|change| view! { <li>{change}</li> }).collect_view()}
             </ul>
+            <OptimizerBars measures />
         </aside>
+    }
+}
+
+/// What the optimizer removed, drawn: for each measure, a bar for `-O0`
+/// and one for `-O2`, both scaled to the larger, so a measure the
+/// optimizer halved shows a bar half as long.
+#[component]
+fn OptimizerBars(measures: Memo<Vec<(&'static str, usize, usize)>>) -> impl IntoView {
+    let label = move || {
+        measures.with(|measures| {
+            let rows: Vec<String> = measures
+                .iter()
+                .map(|(what, before, after)| format!("{what}: {before} at -O0, {after} at -O2"))
+                .collect();
+            format!("This stage at -O0 and at -O2: {}.", rows.join("; "))
+        })
+    };
+    let bar = |count: usize, most: usize, level: &'static str| {
+        // The share of the larger count, in thousandths, of the room the
+        // count's digits leave.
+        let share = (count * 1000).checked_div(most).unwrap_or(0);
+        view! {
+            <span class="optimizer-bar" data-level=level>
+                <span
+                    class="optimizer-bar-fill"
+                    style=format!("width: calc((100% - 7ch) * {}.{:03})", share / 1000, share % 1000)
+                ></span>
+                <span class="optimizer-bar-count">{count}</span>
+            </span>
+        }
+    };
+    view! {
+        <figure class="optimizer-bars" hidden=move || measures.with(Vec::is_empty) aria-label=label>
+            <figcaption>
+                "-O0 "<span class="optimizer-key" data-level="O0" aria-hidden="true"></span>
+                " against -O2 "<span class="optimizer-key" data-level="O2" aria-hidden="true"></span>
+            </figcaption>
+            <div class="optimizer-bars-grid" aria-hidden="true">
+                {move || measures.get().into_iter().map(|(what, before, after)| {
+                    let most = before.max(after);
+                    view! {
+                        <span class="optimizer-measure">{what}</span>
+                        <span class="optimizer-pair">
+                            {bar(before, most, "O0")}
+                            {bar(after, most, "O2")}
+                        </span>
+                    }
+                }).collect_view()}
+            </div>
+        </figure>
     }
 }
 

@@ -1905,9 +1905,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether a cast from `from` to `to` is a `NOP_EXPR`: to an integer type
-    /// no narrower, or between a pointer and an integer of its size.
-    /// C99: §6.3.1.3p1, p. 43; PDF p. 55; §6.3.2.3p5-6, p. 47; PDF p. 59.
+    /// no narrower, or between a pointer and an integer of its size. A cast
+    /// to the operand's own type, `bool` included, is none at all: GCC's
+    /// `build_c_cast` returns the operand, so `(_Bool) b++` and
+    /// `(_Bool) __builtin_add_overflow(a, b, &r)` say nothing.
+    /// C99: §6.3.1.3p1, p. 43; PDF p. 55; §6.3.2.3p5-6, p. 47; PDF p. 59;
+    /// §6.5.4p4, p. 81; PDF p. 93.
     fn gcc_cast_keeps_representation(&self, to: TypeId, from: TypeId) -> bool {
+        if self.types.non_atomic(to).unqualified() == self.types.non_atomic(from).unqualified() {
+            return true;
+        }
         let pointer = |ty: TypeId| matches!(self.types.nodes[ty.index], TypeKind::Pointer(_));
         let width = |ty: TypeId| match self.types.nodes[self.types.non_atomic(ty).index] {
             | TypeKind::Pointer(_) => Some(self.types.target.pointer.size * 8),

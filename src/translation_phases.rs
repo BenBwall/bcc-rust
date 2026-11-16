@@ -56,6 +56,7 @@ mod extension;
 mod interface;
 
 pub(crate) use context::{
+    ArgumentSubstitution,
     Context,
     FileSystem,
     IncludeEntry,
