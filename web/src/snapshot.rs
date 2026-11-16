@@ -73,6 +73,23 @@ pub struct StepEvent {
     /// for the bit view.
     #[serde(default)]
     pub encoding:       Option<Encoding>,
+    /// The type a promotion or a usual arithmetic conversion started from
+    /// and the one it produced, for the rank picture.
+    #[serde(default)]
+    pub conversion:     Option<Conversion>,
+}
+
+/// A conversion between arithmetic types, by the types' spellings.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Conversion {
+    /// The operand's type, such as `char` or `int`.
+    pub from:      String,
+    /// The type it became.
+    pub to:        String,
+    /// Whether it is an integer promotion rather than a usual arithmetic
+    /// conversion.
+    pub promotion: bool,
 }
 
 /// A stored floating value taken apart, as the engine reports it: the sign

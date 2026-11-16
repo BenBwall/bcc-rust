@@ -26,6 +26,7 @@ use crate::{
     },
     snapshot::{
         Clause,
+        Conversion,
         Diagnostic,
         Encoding,
         Frame,
@@ -272,6 +273,7 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
             }],
             range:          location,
             encoding:       None,
+            conversion:     None,
             objects:        Vec::new(),
             sequence_point: false,
         },
@@ -335,6 +337,7 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
             objects: Vec::new(),
             sequence_point: false,
             encoding: None,
+            conversion: None,
         },
         tree: None,
         stack: Vec::new(),
@@ -401,6 +404,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             objects:        event.objects.clone(),
             sequence_point: event.sequence_point,
             encoding:       encoding(event),
+            conversion:     conversion(event),
         },
         tree:         state
             .evaluation
@@ -435,6 +439,21 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
         output:       state.output.clone(),
         written:      state.written,
     }
+}
+
+/// The types a promotion or a usual arithmetic conversion went between
+/// (C99 §6.3.1.1p2, §6.3.1.8p1), for the rank picture.
+fn conversion(event: &abstract_machine::Event) -> Option<Conversion> {
+    let promotion = match event.kind {
+        | abstract_machine::EventKind::IntegerPromotion => true,
+        | abstract_machine::EventKind::ArithmeticConversion => false,
+        | _ => return None,
+    };
+    Some(Conversion {
+        from: event.from_type.clone()?,
+        to: event.result_type.clone()?,
+        promotion,
+    })
 }
 
 /// The fields of the floating value a step produced, for the bit view:
