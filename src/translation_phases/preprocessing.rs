@@ -301,6 +301,7 @@ impl Expander<'_, '_, '_, '_> {
         &mut self,
     ) -> Option<PreprocessorToken> {
         self.last_was_newline = self.current_is_newline;
+        let mut formed = false;
         let mut ret = 'base: loop {
             self.generate_placeholders = true;
             let Some((mut token, mut is_pasted)) =
@@ -308,6 +309,8 @@ impl Expander<'_, '_, '_, '_> {
             else {
                 break 'base None;
             };
+            // Such a paste joins two tokens of the list.
+            formed = is_pasted;
             self.generate_placeholders = false;
             if !self.hash_hash_stack.is_empty() {
                 'merge: loop {
@@ -332,13 +335,12 @@ impl Expander<'_, '_, '_, '_> {
                         }
                         break 'merge;
                     }
-                    let new = match self.hash_hash_stack.last() {
+                    let operands = match self.hash_hash_stack.last() {
                         | None | Some(HashHash::Empty) => None,
                         | Some(HashHash::Lhs(lhs)) => {
                             let lhs = *lhs;
                             _ = self.hash_hash_stack.pop();
-                            let rhs = self.paint_operand(token);
-                            self.merge_tokens(lhs, rhs)
+                            Some((lhs, self.paint_operand(token)))
                         },
                         | Some(HashHash::Rhs(rhs)) => {
                             // Paste the last token of the left argument.
@@ -347,10 +349,14 @@ impl Expander<'_, '_, '_, '_> {
                             }
                             let rhs = *rhs;
                             _ = self.hash_hash_stack.pop();
-                            let lhs = self.paint_operand(token);
-                            self.merge_tokens(lhs, rhs)
+                            Some((self.paint_operand(token), rhs))
                         },
                     };
+                    let new = operands.and_then(|(lhs, rhs)| {
+                        let placemarker = PreprocessorTokenType::Placeholder;
+                        formed = lhs.kind != placemarker && rhs.kind != placemarker;
+                        self.merge_tokens(lhs, rhs)
+                    });
                     if (next_is_end || token.kind == PreprocessorTokenType::Placeholder)
                         && matches!(self.hash_hash_stack.last(), Some(HashHash::Empty))
                     {
@@ -448,6 +454,7 @@ impl Expander<'_, '_, '_, '_> {
             self.last_was_newline = false;
         };
         self.generate_placeholders = false;
+        self.formed_by_paste = formed && ret.is_some();
         self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);
         if self.state.as_text
             && let Some(token) = &mut ret
@@ -520,6 +527,12 @@ struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     /// The number the next argument substitution takes. Argument frames
     /// end with their expansion, so numbering restarts with each expander.
     next_substitution:     ArgumentSubstitution,
+    /// Whether `##` formed the token last read from two tokens rather than
+    /// a placemarker, which leaves the other as it was. Clang places such a
+    /// token at the `##` expression of the replacement list, so it comes
+    /// from no argument.
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
+    formed_by_paste:       bool,
     /// For each `(` that collecting a macro call shared from a replay and
     /// saw closed there, keyed by its address, how many tokens later its
     /// `)` is. A call nested in that argument then skips the group rather

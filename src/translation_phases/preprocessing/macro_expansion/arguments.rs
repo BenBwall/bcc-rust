@@ -116,13 +116,17 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// in the tokens pasting leaves as they are, and a parameter's
     /// replacement in what a call collected across the list leaves of it.
     /// A `__VA_OPT__` replacement keeps the substitutions of the arguments
-    /// in it, and its other tokens belong to the replacement list.
+    /// in it, and its other tokens belong to the replacement list, as does
+    /// a token `##` formed from two tokens.
     /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3
-    /// paragraph 2, p. 154; PDF p. 166. C23: §6.10.5.1 paragraph 7, p. 180;
-    /// PDF p. 193.
+    /// paragraphs 2-3, p. 154; PDF p. 166. C23: §6.10.5.1 paragraph 7,
+    /// p. 180; PDF p. 193.
     pub(in crate::translation_phases::preprocessing) fn current_substitution(
         &self,
     ) -> Option<ArgumentSubstitution> {
+        if self.formed_by_paste {
+            return None;
+        }
         for (depth, frame) in self.tokenizer_stack.iter().rev().enumerate() {
             match frame.frame_type {
                 // Only the innermost frame's cursor says which token was

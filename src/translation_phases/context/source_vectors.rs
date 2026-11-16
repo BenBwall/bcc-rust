@@ -294,9 +294,12 @@ impl Context<'_> {
 
     /// Records where the outermost macro invocation that produced the
     /// token `source` begins, at `site`, and ends, at `end`, and the
-    /// argument substitution that produced it, when one did.
+    /// argument substitution that produced it, when one did. Each vector of
+    /// a token `##` formed keeps them, so a range that starts or ends within
+    /// it, as a specification within `u8 ## "%d"`, finds the invocation.
     /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22; §6.10.3.1
-    /// paragraph 1, p. 153; PDF p. 165.
+    /// paragraph 1, p. 153; PDF p. 165; §6.10.3.3 paragraph 3, p. 154;
+    /// PDF p. 166.
     pub(crate) fn record_expansion_start(
         &mut self,
         source: SourceVectors,
@@ -308,7 +311,9 @@ impl Context<'_> {
             let (arena, start) = SourceArena::decode(source);
             let sites = &mut self.expansion_starts[arena as usize];
             let id = sites.span_id(site, end, argument);
-            sites.insert(start, id);
+            for index in start..start + source.length() {
+                sites.insert(index, id);
+            }
         }
     }
 
@@ -535,10 +540,10 @@ impl Context<'_> {
     /// file's tokens between the two ends stay; a range within one argument
     /// stays where the invocation spells it, while one whose ends two
     /// substitutions of arguments produced, as in `TWICE("%")` (`a a`),
-    /// covers the invocation; and a range no replacement list wrote comes
-    /// back as it is. Only the outermost invocation is
-    /// recorded, so a range within a macro invoked in an argument covers
-    /// the outer invocation.
+    /// covers the invocation, as does a token `##` formed; and a range no
+    /// replacement list wrote comes back as it is. Only the outermost
+    /// invocation is recorded, so a range within a macro invoked in an
+    /// argument covers the outer invocation.
     /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
     pub(crate) fn highlight_vectors<'a>(
         &'a self,
@@ -553,7 +558,7 @@ impl Context<'_> {
         let first_token = Self::first_token_vector(source);
         let last_token = Self::last_source_vector(source);
         let Some(written) = (start..start + source.length())
-            .find_map(|index| self.invocation_site(arena.encode(index, index + 1)))
+            .find_map(|index| self.listed_site(arena.encode(index, index + 1)))
             .or_else(|| self.separate_arguments(first_token, last_token))
         else {
             return vectors;
@@ -561,8 +566,7 @@ impl Context<'_> {
         // An end a list wrote moves to its own invocation; an argument's, to
         // the invocation whose list wrote a token of the range.
         let produced = |token| {
-            self.invocation_site(token).is_some()
-                || self.outermost_invocation(token) == Some(written)
+            self.listed_site(token).is_some() || self.outermost_invocation(token) == Some(written)
         };
         let begin = if produced(first_token) {
             self.outermost_invocation(first_token).unwrap_or(first)
@@ -589,6 +593,20 @@ impl Context<'_> {
                 .chain(std::iter::once(end))
                 .cloned(),
         )
+    }
+
+    /// The outermost invocation that produced the first token of `source`
+    /// from no argument: a token its replacement list wrote, or one that
+    /// `##` formed, which Clang places at the `##` expression of the list
+    /// although the invocation spells its operands.
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
+    fn listed_site(&self, source: SourceVectors) -> Option<&SourceVector> {
+        self.invocation_site(source).or_else(|| {
+            self.argument_substitution(source)
+                .is_none()
+                .then(|| self.outermost_invocation(source))
+                .flatten()
+        })
     }
 
     /// The outermost invocation that produced the tokens `first` and `last`

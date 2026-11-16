@@ -87,6 +87,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             spacing,
             pushed_frames: 0,
             next_substitution: ArgumentSubstitution::FIRST,
+            formed_by_paste: false,
             paren_ends: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         }
     }

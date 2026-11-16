@@ -501,7 +501,8 @@ fn highlights_cover_the_invocations_their_ends_come_from() {
     let body = context.push_source_vectors(std::slice::from_ref(&in_definition));
     context.record_expansion_start(body, site.clone(), end.clone(), None);
     let written = context.push_source_vectors(std::slice::from_ref(&argument));
-    context.record_expansion_start(written, site.clone(), end.clone(), None);
+    let substitution = Some(ArgumentSubstitution::FIRST);
+    context.record_expansion_start(written, site.clone(), end.clone(), substitution);
     let plain = context.push_source_vectors(std::slice::from_ref(&after));
     let [plain_before, body, written, plain] =
         [plain_before, body, written, plain].map(|source| context.retain_token_source(source));
@@ -611,4 +612,40 @@ fn highlights_cover_the_invocation_for_two_argument_expansions() {
     );
     let same = context.merge_vectors(first_token, same);
     assert_eq!(context.highlight_vectors(same, &scratch), [first, second]);
+}
+
+/// A token `##` formed from two tokens comes from no argument, although the
+/// invocation spells its operands: Clang places it at the `##` expression
+/// of the list, so `CAT(u8, "%d")` is underlined whole. Each of its vectors
+/// keeps the invocation, so a range that starts within it, at `%d`, finds
+/// the invocation too.
+#[test]
+fn highlights_draw_a_pasted_token_as_its_invocation() {
+    let tu = crate::util::bump::Bump::new();
+    let scratch = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 3,
+        length,
+        ..SourceVector::default()
+    };
+    // `CAT(u8, "%d")` on line 3, from its name to its `)`.
+    let (site, prefix, string, end) = (at(40, 3), at(44, 2), at(48, 4), at(52, 1));
+    let pasted = context.push_source_vectors(&[prefix.clone(), string.clone()]);
+    context.record_expansion_start(pasted, site.clone(), end.clone(), None);
+    let pasted = context.retain_token_source(pasted);
+    context.compact_preprocessor_vectors();
+    let inner = Context::source_vector_at(pasted, 1);
+    assert_eq!(
+        context
+            .invocation_span(inner)
+            .map(|(start, end)| (start.clone(), end.clone())),
+        Some((site.clone(), end.clone()))
+    );
+    assert_eq!(context.argument_substitution(inner), None);
+    assert_eq!(
+        context.highlight_vectors(pasted, &scratch),
+        [site, prefix, string, end]
+    );
 }

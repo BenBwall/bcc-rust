@@ -244,12 +244,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// one substitution of an argument: in `FMT " %s"`, a specification of
     /// `FMT` is drawn at `FMT`, and `%s` stays in place; `%d` stays in place
     /// in `ID("%" "d")`, but `JOIN("%", "d")` is drawn whole, as its two
-    /// arguments are separate expansions. An end on a later line than the
-    /// start is kept as its own vector, so the range is drawn down to that
-    /// line. Only the outermost invocation is recorded, so a macro invoked
-    /// in an argument is drawn as the outer invocation, and the arguments of
-    /// such an inner macro, replayed through the outer argument's one
-    /// substitution, count as one expansion.
+    /// arguments are separate expansions, and so is a token `##` formed,
+    /// which comes from no argument, as `u8"%d"` in `CAT(u8, "%d")`. An end on
+    /// a later line than the start is kept as its own vector, so the range is
+    /// drawn down to that line. Only the outermost invocation is recorded, so a
+    /// macro invoked in an argument is drawn as the outer invocation, and the
+    /// arguments of such an inner macro, replayed through the outer argument's
+    /// one substitution, count as one expansion.
     /// C99: §6.4.5p4, p. 62; PDF p. 74; §6.10.3p10, p. 152; PDF p. 164;
     /// §6.10.3.1p1, p. 153; PDF p. 165.
     pub(super) fn byte_span(
