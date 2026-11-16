@@ -256,8 +256,9 @@ impl Topic {
             | Self::StringInitializer =>
                 "`char s[] = \"hi\";` makes an array of your own, a copy you may change. `char *p \
                  = \"hi\";` only points at the literal's array, which you must not change: storing \
-                 through p is undefined, and on most systems it crashes, because literals live in \
-                 read-only memory.",
+                 through p is undefined. Literals usually live in read-only memory, so without \
+                 optimization the store crashes the program; an optimizer may instead drop the \
+                 store, and then nothing visible happens.",
             | Self::CharacterConstant =>
                 "A char is a small integer: 'A' is just another way to write 65 in ASCII, and 'A' \
                  + 1 is 'B'. That is why a loop can compare a char with '\\0' or count from 'a' to \
