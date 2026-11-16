@@ -33,6 +33,7 @@ use crate::{
         SourceVectors,
         parsing::syntax::{
             BinaryOperator as B,
+            Constant,
             Expression,
             ExpressionType as E,
             UnaryOperator as U,
@@ -513,6 +514,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang's `CheckImplicitConversion` of the integer constant `e`: a value
     /// that needs more bits than the target has, or a signed source's
     /// nonnegative value that fills a signed target and turns negative.
+    ///
+    /// The two are reported differently. A value that loses bits goes
+    /// through `DiagRuntimeBehavior`, which waits for the end of the
+    /// function and drops code that cannot run. A same-width sign change is
+    /// reported at once, in dead code too, and not at all for a literal
+    /// written in hexadecimal, octal or binary, which Clang reads as a bit
+    /// pattern (`isSameWidthConstantConversion`): `*p = 0xdf` for a `char`
+    /// is silent where `*p = 223` warns.
     fn clang_constant_conversion(&mut self, narrowing: Narrowing, e: &'tu Expression<'tu>) {
         let info = self.expression_info(e);
         let Some(value) = info.integer.filter(|value| value.wide.is_none()) else {
@@ -535,7 +544,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             128 - value.value.cast_unsigned().leading_zeros()
         };
+        let same_width = needed <= bits;
         if !(needed > bits || needed == bits && signed && !negative && source_signed) {
+            return;
+        }
+        if same_width && self.written_as_bit_pattern(e) {
             return;
         }
         let (Some(from), Some(to)) = (
@@ -555,6 +568,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::Binary { .. } => e.operator_source_vectors.unwrap_or(e.source_vectors),
             | _ => e.source_vectors,
         };
+        if same_width && self.functions.current.is_some() {
+            self.spelled_group_diagnostic(
+                G::ConstantConversion,
+                SemanticErrorKind::ValueWarning(G::ConstantConversion),
+                site,
+                Some(name),
+                site,
+            );
+            return;
+        }
         self.warn_if_selected(
             e,
             G::ConstantConversion,
@@ -562,6 +585,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             site,
             Some(name),
         );
+    }
+
+    /// Whether `e` is an integer constant spelled in hexadecimal, octal or
+    /// binary: a `0` followed by more characters. A macro's constant is
+    /// read where it is spelled.
+    /// C99: §6.4.4.1p1-4, p. 54; PDF p. 66.
+    fn written_as_bit_pattern(&self, e: &'tu Expression<'tu>) -> bool {
+        if !matches!(e.kind, E::Constant(Constant::Integer(_))) {
+            return false;
+        }
+        self.context
+            .source_spelling(Context::last_source_vector(e.source_vectors))
+            .is_some_and(|text| text.len() > 1 && text.starts_with('0'))
     }
 
     fn value_warning(&mut self, group: G, site: SourceVectors, text: &str) {
