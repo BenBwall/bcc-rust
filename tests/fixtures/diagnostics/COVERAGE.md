@@ -58,10 +58,55 @@ caret of such a diagnostic is then a point, not an underlined token
 (`int *pointer_name = value;` -> `^              ~~~~~`), as it is for a
 warning Clang gives no range at all: an unused parameter, a variable set
 but not used, an unused local typedef, and a shadowing declaration with
-its note (`sema-unused-variables-clang`, `sema-shadow-kinds-clang`). An
-operand a function-like macro wrote is underlined at the macro's name only,
-where Clang covers the whole invocation. Its caret lines
-match Clang 23's; its messages keep bcc's words for the operator errors,
+its note (`sema-unused-variables-clang`, `sema-shadow-kinds-clang`). The
+`-Wparentheses` family, the `switch` warnings and `-Wformat` have Clang's
+ranges too (`sema-parentheses-clang`, `sema-switch-clang`,
+`sema-format-ranges-clang`). A range whose end a macro's replacement list
+wrote takes that end of the whole invocation, so `Min(a, b)` is underlined
+from its name to its `)`, and a range over several lines runs to the ends
+of its lines, as Clang draws them (`context-macro-ranges-clang`, which
+matches Clang 23 but for its fix-it notes and an argument's range in an
+`expanded from macro` note: Clang underlines there the parameter the
+argument replaced, which bcc does not record). A `-Wformat` specification
+in a concatenated string takes the place of each of its ends on its own: a
+token a macro wrote is drawn as its invocation, a token the file wrote stays
+in place, a specification split between two arguments, as `JOIN("%", "d")`,
+or two uses of one is drawn as the invocation, and one split over lines is
+drawn on each of them. An argument that is a `##` operand keeps its place
+in the tokens pasting leaves as they are, on either side of the `##` and in
+a chain, so `CAT("%" "d",)` is drawn where the invocation spells it, as is
+the single string a placemarker leaves on either side, as `CAT("%d",)`
+and `VR1(, "%d", 1)` (`__VA_OPT__(a) ## x`), while a token pasting forms
+from two tokens is drawn as the invocation, even one within an argument,
+as `u8"%d"` in `CAT(u8, "%d")`, or across an empty middle operand, as in
+`CAT3(u8, , "%d")`. A `__VA_OPT__` replacement that
+is a `##` operand keeps the place of each argument in it, so
+`VL(, "%", "d", 1)` (`x ## __VA_OPT__(a b)`) is drawn as the invocation on
+either side of the `##`, in a chain, with `__VA_ARGS__` or a paste inside
+it, and when a call collected across it leaves its tokens. The rest of an
+argument that holds the arguments of a macro named before it, as `"%" "d"`
+in `CALL(NIL, () "%" "d")` (`f a`), keeps its place too
+(`sema-format-concat-ranges-clang`, which matches
+Clang 23 but for its fix-it lines). Only Clang's format places a warning at
+the token a macro wrote; under the Clang identity the other formats keep it
+at the string (`sema-format-macro-places-clang-bcc`,
+`sema-format-macro-places-clang-gcc`). A string a macro invoked in another
+macro's argument wrote, as `FMT` in `WRAP(FMT)`, is drawn as the outer
+invocation, and a string from `#` whole; a specification split between the
+arguments of a macro invoked in an argument, as `ID(JOIN("%", "d"))`, stays
+in place, where Clang draws the outer invocation, as the inner macro's
+arguments are replayed through one substitution of the outer one; so does
+one split between two arguments that a list passes on as one argument of
+another macro, which takes them as one argument of its own: directly, as
+`OUTER("%", "d")` (`ID(a b)`); after a parameter that names the macro,
+as `CALLJ(ID, "%", "d")` (`f (a b)`) and `OF(ID, "%", "d", 1)`
+(`__VA_OPT__(f) (a b)`); and through a `##` operand, as
+`ON(, "%", "d", 1)` (`ID(x ## __VA_OPT__(a b))`) and `OC(, ID, "%", "d",
+1)` (`x ## __VA_OPT__(f (a b))`). A diagnostic whose caret names its
+operand's range, as `-Wpointer-sign` on `J(u8"%", "d")` (`a b`) under
+`-std=gnu2x`, keeps the caret and that range where the tokens are spelled,
+where Clang moves them to the invocation as it does other ranges.
+`context-ranges-clang`'s caret lines match Clang 23's; its messages keep bcc's words for the operator errors,
 and it prints no fix-it lines (`&`). `context-macros-gcc` and
 `context-macros-clang` pin the notes about a token a macro's body wrote:
 GCC reports the diagnostic in the body and adds `in expansion of macro
@@ -224,6 +269,7 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | [Conflicting storage classes](parser-storage-class-redefinition.stderr) | Label the earlier `static` as well as the new `extern`. |
 | [GCC's conditional arms](pp-c23-directives-gcc-werror.stderr) | Checked 15 November 2026. GCC writes `#elifdef without #if` and `#elifdef after #else` without backticks, and follows the latter with a line-only `the conditional began here` error at the `#if`, after which it quotes the next diagnostic at the arm again. |
 | [Clang's `#embed` without a resource](pp-c23-directives-clang-werror.stderr) | Checked 15 November 2026. Clang writes `expected "FILENAME" or <FILENAME>` at the end of the directive with a caret only; bcc names the resource and underlines `embed`. |
+| [Clang's constant conversions of literals](sema-constant-conversion-literals-clang.stderr) | Checked 16 November 2026 against Clang 23.1.5: the warnings, their lines and their order match. Clang also underlines the whole converted expression and the token the conversion happens at (`~ ^~~` under `*p = 0xdf`, `~~~~~~~   ^~~` under `char decimal = 223`); bcc draws only the caret's range. For a literal pasted by `##`, Clang's caret is on the macro's name (`CAT`, column 23 on line 34) and bcc's on the pasted pieces (column 27). |
 | [GCC's casts of discarded values](sema-unused-value-bool-cast-gcc.stderr) | Checked 16 November 2026 against GCC 14.2: the warnings and their lines match. GCC underlines the whole parenthesized cast with its caret on the cast's `(` (`~^~~~~~~~~~~~`); bcc underlines only the cast's type (`^~~~~~~`). |
 
 The prior panic and raw-NUL findings remain protected by the guard test and
@@ -812,14 +858,14 @@ pinned by the `.args` sidecars.
 | `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c), [cleanup use](sema3-internal-cleanup.c) |
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `SignCompare` | [GCC](sema-sign-compare-gcc.c), [Clang](sema-sign-compare-clang.c) |
-| `ValueWarning` | [GCC](sema-value-warnings-gcc.c), [Clang](sema-value-warnings-clang.c), [Clang int to float](sema-int-float-clang.c), through GNU `?:` and `__extension__` ([Clang](sema-int-float-gnu-clang.c)); constant conversions in code that does not run, in the operands `_Generic` and `__builtin_choose_expr` do not select (in file-scope and static initializers too), in conditional operands and from 128-bit values: [GCC](sema-constant-conversion-gcc.c), [Clang](sema-constant-conversion-clang.c) |
+| `ValueWarning` | [GCC](sema-value-warnings-gcc.c), [Clang](sema-value-warnings-clang.c), [Clang int to float](sema-int-float-clang.c), through GNU `?:` and `__extension__` ([Clang](sema-int-float-gnu-clang.c)); constant conversions in code that does not run, in the operands `_Generic` and `__builtin_choose_expr` do not select (in file-scope and static initializers too), in conditional operands and from 128-bit values: [GCC](sema-constant-conversion-gcc.c), [Clang](sema-constant-conversion-clang.c); Clang's silence for a same-width conversion of a hexadecimal, octal or binary literal (pasted ones too) or of a character's element in its own braces, and its report of a same-width one in code that does not run but not in an unselected operand: [Clang](sema-constant-conversion-literals-clang.c), unchanged under the MSVC identity ([MSVC](sema-constant-conversion-literals-msvc.c)) |
 | `TypeLimits` | [GCC](sema-type-limits-gcc.c), [Clang](sema-type-limits-clang.c) |
 | `ShadowOrBody` | Shadowing: [GCC](sema-shadow-gcc.c), [Clang](sema-shadow-clang.c); by declaration kind: [GCC](sema-shadow-kinds-gcc.c), [Clang](sema-shadow-kinds-clang.c); of a system header's declarations: [GCC](sema-shadow-system-gcc.c), [Clang](sema-shadow-system-clang.c); empty bodies: [GCC](sema-empty-body-gcc.c), [Clang](sema-empty-body-clang.c); multiline headers and empty macros: [Clang](sema-empty-body-lines-clang.c) |
 | `Parentheses` | [GCC](sema-parentheses-gcc.c), [Clang](sema-parentheses-clang.c) |
-| `SwitchCases` | [GCC](sema-switch-gcc.c), [Clang](sema-switch-clang.c); constant and converted conditions: [GCC](sema-switch-constant-gcc.c), [Clang](sema-switch-constant-clang.c) |
+| `SwitchCases` | [GCC](sema-switch-gcc.c), [Clang](sema-switch-clang.c); constant and converted conditions: [GCC](sema-switch-constant-gcc.c), [Clang](sema-switch-constant-clang.c). Clang's carets are points, with the condition underlined for a missing enumerator or a constant condition; bcc orders the diagnostics by place, so line 20 of `sema-switch-clang` quotes no source for `-Wswitch-default`, which Clang reports after the `case` and quotes again |
 | `ReturnFlow` | [GCC](sema-return-type-gcc.c), [Clang](sema-return-type-clang.c). GCC reports `no return statement` at the end of the function and its middle end's `control reaches end` and `'noreturn' function does return` after the unit, which the GCC snapshot's order follows |
 | `MissingFieldInitializer` | [GCC](sema-missing-fields-gcc.c), [Clang](sema-missing-fields-clang.c), [GCC with a system macro](sema-missing-fields-system-gcc.c) |
-| `Format`, `FormatAttribute` | [GCC](sema-format-gcc.c) under `-Wall -Wformat=2`, [Clang](sema-format-clang.c) by default: argument types, too few and too many arguments, an invalid conversion, a non-literal and an empty format, a null character, concatenation, a conditional, flags, `scanf`, and the attribute's own checks. Lines match GCC 14.2 and Clang 23.1 but for the order of GCC's two warnings on line 10. The review fixtures, [GCC](sema-format-review-gcc.c) and [Clang](sema-format-review-clang.c), hold operand numbers and amounts past every integer type, `u8` formats, `_Generic` and `__builtin_choose_expr` selections, constant offsets, formats on function pointers and members, constant-expression attribute operands, arrays cut short of their string and (Clang) fixed parameters, and match both compilers line for line. On Windows, [MinGW's `ms_printf`](sema-format-mingw.c) matches MinGW's GCC 13.3 but for the order of `too many arguments` on its line, and [the Microsoft C runtime's](sema-format-msvcrt.c) matches Clang 23.1 for `x86_64-pc-windows-msvc` |
+| `Format`, `FormatAttribute` | [GCC](sema-format-gcc.c) under `-Wall -Wformat=2`, [Clang](sema-format-clang.c) by default: argument types, too few and too many arguments, an invalid conversion, a non-literal and an empty format, a null character, concatenation, a conditional, flags, `scanf`, and the attribute's own checks. Lines match GCC 14.2 and Clang 23.1 but for the order of GCC's two warnings on line 10. The review fixtures, [GCC](sema-format-review-gcc.c) and [Clang](sema-format-review-clang.c), hold operand numbers and amounts past every integer type, `u8` formats, `_Generic` and `__builtin_choose_expr` selections, constant offsets, formats on function pointers and members, constant-expression attribute operands, arrays cut short of their string and (Clang) fixed parameters, and match both compilers line for line. On Windows, [MinGW's `ms_printf`](sema-format-mingw.c) matches MinGW's GCC 13.3 but for the order of `too many arguments` on its line, and [the Microsoft C runtime's](sema-format-msvcrt.c) matches Clang 23.1 for `x86_64-pc-windows-msvc`. [Clang's ranges](sema-format-ranges-clang.c): the specification beside the caret, with the argument or a `*`'s argument, the position of `%0$` and `*0$`, the scan list, the format string for a null character or an unused argument, and a macro's string at its invocation; it matches Clang 23.1 but for Clang's fix-it lines. [Concatenated strings](sema-format-concat-ranges-clang.c): a macro's string at the start, middle and end of a concatenation, a macro expanding to another, a macro's string that concatenates two strings or holds another macro, a specification split between a macro's string and the file's, within one macro argument and between two, within `##` operands on the left, on the right and in a chain, and between two of them, a single string a placemarker leaves on either side, alone or in a `__VA_OPT__` replacement, the rest of an argument after the call it ends, within one argument of a `__VA_OPT__` replacement and between two arguments, two uses of one, the replacement's own string and an argument's, and what a call collected across it leaves, the replacement as a `##` operand on either side, in a chain and with `__VA_ARGS__` or a paste inside it, a token `##` formed within an argument, and specifications split over two and three strings and lines; it matches Clang 23.1 but for Clang's fix-it lines. Under the Clang identity, the [bcc](sema-format-macro-places-clang-bcc.c) and [GCC](sema-format-macro-places-clang-gcc.c) formats place a specification a macro's string holds at the string |
 | `Unused` | GCC's words: [variables and parameters](sema-unused-variables-gcc.c), [file scope](sema-unused-file-scope-gcc.c), [labels](sema-unused-label-gcc.c), [values](sema-unused-value-gcc.c), [casts to the operand's own type](sema-unused-value-bool-cast-gcc.c); Clang's: [variables and parameters](sema-unused-variables-clang.c), [file scope](sema-unused-file-scope-clang.c), [labels](sema-unused-label-clang.c), [values](sema-unused-value-clang.c); [`-Werror`](sema-unused-werror-clang.c). GCC's order: [scope ends](sema-unused-order-gcc.c), where it reports a block's variables and labels latest first after every warning inside the block, then at the end of a function the parameters only set, the local typedefs and the unused parameters; [errors](sema-unused-order-errors-gcc.c), after which GCC still reports variables but no local typedef, unlike [warnings `-Werror` promotes](sema-unused-order-werror-gcc.c); errors GCC has not read by a function's end: [later in the file](sema-unused-order-later-error-gcc.c), [in a header included later](sema-unused-order-header-error-gcc.c), [in a later reading of a header read before](sema-unused-order-repeat-header-gcc.c), as an invalid [`\x`](sema-unused-order-repeat-hex-gcc.c) or [`\u`](sema-unused-order-repeat-ucn-gcc.c) escape there, [in each of three readings](sema-unused-order-repeat-readings-gcc.c), [in the second reading of a header two deep](sema-unused-order-nested-repeat-gcc.c), [a `#warning` in each reading under `-Werror=cpp`](sema-unused-order-repeat-warning-gcc.c), [under `-Werror`](sema-unused-order-later-error-werror-gcc.c), and [the end of the input](sema-unused-order-unclosed-gcc.c), which counts in the function it leaves open; [the end of the unit](sema-unused-order-unit-gcc.c): undefined internal functions, then `control reaches end`, then the latest symbol first; [`-fsyntax-only`](sema-unused-order-syntax-only-gcc.c), which reports only the front end's warnings. Each matches GCC 14.2 line for line but for GCC's range over a parameter's type and the `cc1: some warnings being treated as errors` line, and but for these: bcc prints the header's error before the earlier warning, since a change of file keeps the order diagnostics were reported in; under `-Werror` it prints the parser's error before the semantic errors and leaves out `[-Werror=cpp]` and `cc1: all warnings being treated as errors`; and it words the unclosed function's error its own way, at the line after the input ends |
 | `Unused` (local typedefs) | [GCC](sema-unused-typedefs-gcc.c), [Clang](sema-unused-typedefs-clang.c) |
 | `InlineInternalReference` | [inline-reference](sema3-inline-reference.c) |

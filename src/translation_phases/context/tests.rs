@@ -4,6 +4,7 @@
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 
 use super::{
+    ArgumentSubstitution,
     Context,
     segmented_vec::SegmentedVec,
 };
@@ -419,7 +420,7 @@ fn expansion_locations_outlive_compaction_and_follow_copies() {
         ..SourceVector::default()
     };
     let expanded = context.push_source_vectors(std::slice::from_ref(&spelled));
-    context.record_expansion_start(expanded, site.clone());
+    context.record_expansion_start(expanded, site.clone(), site.clone(), None);
     let plain = context.push_source_vectors(std::slice::from_ref(&spelled));
     let token = context.retain_token_source(expanded);
     let plain_token = context.retain_token_source(plain);
@@ -461,9 +462,9 @@ fn file_vectors_keep_arguments_the_invocation_spells() {
         ..SourceVector::default()
     };
     let replaced = context.push_source_vectors(std::slice::from_ref(&in_definition));
-    context.record_expansion_start(replaced, site.clone());
+    context.record_expansion_start(replaced, site.clone(), site.clone(), None);
     let written = context.push_source_vectors(std::slice::from_ref(&argument));
-    context.record_expansion_start(written, site.clone());
+    context.record_expansion_start(written, site.clone(), site.clone(), None);
     let replaced = context.retain_token_source(replaced);
     let written = context.retain_token_source(written);
     context.compact_preprocessor_vectors();
@@ -472,4 +473,179 @@ fn file_vectors_keep_arguments_the_invocation_spells() {
     assert_eq!(context.file_vector(replaced), &site);
     assert_eq!(context.file_vector(written), &argument);
     assert_eq!(context.file_location(written), written);
+}
+
+/// Clang underlines a range whose end a macro's list wrote out to that end
+/// of the whole invocation, `Min(a, b)`, and leaves an argument the
+/// invocation spells, and the file's tokens, where they are. The ends follow
+/// a range copied by a merge.
+#[test]
+fn highlights_cover_the_invocations_their_ends_come_from() {
+    let tu = crate::util::bump::Bump::new();
+    let scratch = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 3,
+        length,
+        ..SourceVector::default()
+    };
+    // `#define Min(x, y) ...` on line 1; `b < Min(a, c) + 1` on line 3.
+    let (before, site, argument, end, after) =
+        (at(30, 1), at(40, 3), at(44, 1), at(49, 1), at(53, 1));
+    let in_definition = SourceVector {
+        length: 1,
+        ..SourceVector::default()
+    };
+    let plain_before = context.push_source_vectors(std::slice::from_ref(&before));
+    let body = context.push_source_vectors(std::slice::from_ref(&in_definition));
+    context.record_expansion_start(body, site.clone(), end.clone(), None);
+    let written = context.push_source_vectors(std::slice::from_ref(&argument));
+    let substitution = Some(ArgumentSubstitution::FIRST);
+    context.record_expansion_start(written, site.clone(), end.clone(), substitution);
+    let plain = context.push_source_vectors(std::slice::from_ref(&after));
+    let [plain_before, body, written, plain] =
+        [plain_before, body, written, plain].map(|source| context.retain_token_source(source));
+    context.compact_preprocessor_vectors();
+    assert_eq!(
+        context.highlight_vectors(body, &scratch),
+        [site.clone(), end.clone()]
+    );
+    assert_eq!(
+        context.highlight_vectors(written, &scratch),
+        std::slice::from_ref(&argument)
+    );
+    assert_eq!(
+        context.highlight_vectors(plain, &scratch),
+        std::slice::from_ref(&after)
+    );
+    let operand = context.merge_vector_list(&[body, written, plain]);
+    assert_eq!(
+        context.highlight_vectors(operand, &scratch),
+        [site, argument, after]
+    );
+    // Not adjacent, so copied: its last token keeps its invocation.
+    let copied = context.merge_vectors(plain, body);
+    let copied = context.merge_vectors(plain_before, Context::last_source_vector(copied));
+    assert_eq!(context.highlight_vectors(copied, &scratch), [before, end]);
+}
+
+/// A concatenated string literal is one phase-6 token over several vectors.
+/// Each keeps the invocation of the token it came from once the token is
+/// retained, so a format specification a macro wrote in the middle of
+/// `"%s " FMT " %s"` is drawn as `FMT`.
+#[test]
+fn retained_tokens_keep_the_invocation_of_every_vector() {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 3,
+        length,
+        ..SourceVector::default()
+    };
+    // `#define FMT "%d"` on line 1; `"%s " FMT " %s"` on line 3.
+    let (first, site, last) = (at(30, 5), at(36, 3), at(40, 5));
+    let in_definition = SourceVector {
+        index: 12,
+        length: 4,
+        ..SourceVector::default()
+    };
+    let first = context.push_source_vectors(std::slice::from_ref(&first));
+    let written = context.push_source_vectors(std::slice::from_ref(&in_definition));
+    context.record_expansion_start(written, site.clone(), site.clone(), None);
+    let last = context.push_source_vectors(std::slice::from_ref(&last));
+    let literal = context.merge_vector_list(&[first, written, last]);
+    let literal = context.retain_token_source(literal);
+    context.compact_preprocessor_vectors();
+    let span = |context: &Context<'_>, index| {
+        context
+            .invocation_span(Context::source_vector_at(literal, index))
+            .map(|(start, end)| (start.clone(), end.clone()))
+    };
+    assert_eq!(span(&context, 0), None);
+    assert_eq!(span(&context, 1), Some((site.clone(), site)));
+    assert_eq!(span(&context, 2), None);
+    assert_eq!(Context::source_vector_at(literal, 3).length(), 0);
+}
+
+/// Two tokens one invocation produced from its arguments are in one
+/// argument expansion only when one substitution produced both: Clang
+/// leaves a range within `ID("%" "d")` where the invocation spells it, and
+/// draws one over `JOIN(" ", "d")` (`a b`) as the whole invocation. The
+/// substitutions survive retention and compaction.
+#[test]
+fn highlights_cover_the_invocation_for_two_argument_expansions() {
+    let tu = crate::util::bump::Bump::new();
+    let scratch = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 3,
+        length,
+        ..SourceVector::default()
+    };
+    // `JOIN("%", "d")` on line 3, from its name to its `)`.
+    let (site, first, second, end) = (at(40, 4), at(45, 3), at(50, 3), at(53, 1));
+    let one = ArgumentSubstitution::FIRST;
+    let other = one.next();
+    let mut record = |vector: &SourceVector, argument| {
+        let source = context.push_source_vectors(std::slice::from_ref(vector));
+        context.record_expansion_start(source, site.clone(), end.clone(), Some(argument));
+        source
+    };
+    let tokens = [
+        record(&first, one),
+        record(&second, other),
+        record(&second, one),
+    ];
+    let [first_token, split, same] = tokens.map(|source| context.retain_token_source(source));
+    context.compact_preprocessor_vectors();
+    assert_eq!(context.argument_substitution(first_token), Some(one));
+    assert_eq!(context.argument_substitution(split), Some(other));
+    assert_eq!(context.argument_substitution(same), Some(one));
+    // The arguments between the invocation's ends stay, drawn within it.
+    let split = context.merge_vectors(first_token, split);
+    assert_eq!(
+        context.highlight_vectors(split, &scratch),
+        [site, first.clone(), second.clone(), end]
+    );
+    let same = context.merge_vectors(first_token, same);
+    assert_eq!(context.highlight_vectors(same, &scratch), [first, second]);
+}
+
+/// A token `##` formed from two tokens comes from no argument, although the
+/// invocation spells its operands: Clang places it at the `##` expression
+/// of the list, so `CAT(u8, "%d")` is underlined whole. Each of its vectors
+/// keeps the invocation, so a range that starts within it, at `%d`, finds
+/// the invocation too.
+#[test]
+fn highlights_draw_a_pasted_token_as_its_invocation() {
+    let tu = crate::util::bump::Bump::new();
+    let scratch = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 3,
+        length,
+        ..SourceVector::default()
+    };
+    // `CAT(u8, "%d")` on line 3, from its name to its `)`.
+    let (site, prefix, string, end) = (at(40, 3), at(44, 2), at(48, 4), at(52, 1));
+    let pasted = context.push_source_vectors(&[prefix.clone(), string.clone()]);
+    context.record_expansion_start(pasted, site.clone(), end.clone(), None);
+    let pasted = context.retain_token_source(pasted);
+    context.compact_preprocessor_vectors();
+    let inner = Context::source_vector_at(pasted, 1);
+    assert_eq!(
+        context
+            .invocation_span(inner)
+            .map(|(start, end)| (start.clone(), end.clone())),
+        Some((site.clone(), end.clone()))
+    );
+    assert_eq!(context.argument_substitution(inner), None);
+    assert_eq!(
+        context.highlight_vectors(pasted, &scratch),
+        [site, prefix, string, end]
+    );
 }

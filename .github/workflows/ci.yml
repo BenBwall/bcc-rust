@@ -151,7 +151,15 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           llvm-key: ${{ needs.llvm.outputs.key }}
-      - run: cargo test --all-targets --no-fail-fast
+      # The tests take about 23 minutes. Some runs instead hung and lost the
+      # runner about 48 minutes in, which leaves no log. Under a deadline a
+      # hang ends the step with libtest's "has been running for over 60
+      # seconds" lines, and the processes still alive at 30 minutes are
+      # listed. `timeout` also runs the tests in a process group of their own.
+      - name: Run cargo test --all-targets --no-fail-fast
+        run: |
+          (sleep 1800 && echo "::group::Processes after 30 minutes" && ps -eo pid,ppid,rss,etime,stat,args --sort=-etime | tail -30 && echo "::endgroup::") &
+          timeout --signal=INT --kill-after=60 40m cargo test --all-targets --no-fail-fast
       - run: cargo test --features benchmarking-internals --test allocation_count
       - name: Compare the TCC personality with a real TCC
         run: |

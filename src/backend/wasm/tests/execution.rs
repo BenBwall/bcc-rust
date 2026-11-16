@@ -98,16 +98,18 @@ pub(crate) fn compile_configured<T: Send>(
             (InlineCopies::Resolve, false),
         )
         .map_err(|error| format!("{error:?}"))?;
-        let runtime: &[crate::ir::Module<'_>] = if target == Target::Wasm32Wasi {
-            wasm::runtime::modules(target).map_err(str::to_owned)?
-        } else {
-            &[]
+        let link = |runtime: &[crate::ir::Module<'_>]| {
+            let mut units = vec![&diagnosed.module];
+            units.extend(runtime.iter());
+            let compiled =
+                wasm::compile(&units, 1, target, &arena).map_err(|error| error.to_string())?;
+            Ok(with(&compiled))
         };
-        let mut units = vec![&diagnosed.module];
-        units.extend(runtime.iter());
-        let compiled =
-            wasm::compile(&units, 1, target, &arena).map_err(|error| error.to_string())?;
-        Ok(with(&compiled))
+        if target == Target::Wasm32Wasi {
+            wasm::runtime::with_modules(target, |runtime| link(runtime.map_err(str::to_owned)?))
+        } else {
+            link(&[])
+        }
     })
 }
 
@@ -667,13 +669,15 @@ int main(void) {
 /// the same module a fresh build of the runtime does.
 #[test]
 fn cached_runtime_matches_a_fresh_build() {
-    let first = wasm::runtime::modules(Target::Wasm32Wasi).unwrap();
-    let second = wasm::runtime::modules(Target::Wasm32Wasi).unwrap();
-    assert!(
-        std::ptr::eq(first, second),
-        "the second call reuses the modules"
-    );
-    _ = wasm::runtime::modules(Target::Wasm32Unknown).unwrap_err();
+    let address = |modules: Result<&[crate::ir::Module<'_>], &str>| {
+        std::ptr::from_ref(modules.unwrap()).addr()
+    };
+    let first = wasm::runtime::with_modules(Target::Wasm32Wasi, address);
+    let second = wasm::runtime::with_modules(Target::Wasm32Wasi, address);
+    assert_eq!(first, second, "the second call reuses the modules");
+    wasm::runtime::with_modules(Target::Wasm32Unknown, |modules| {
+        _ = modules.unwrap_err();
+    });
     let source = "#include <stdio.h>\nint main(void) { printf(\"%d\\n\", 42); return 0; }\n";
     let cached = compile(source, Target::Wasm32Wasi, false).unwrap();
     let fresh = crate::test_support::on_compilation_stack(|| {

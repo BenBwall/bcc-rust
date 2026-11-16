@@ -23,6 +23,7 @@ use super::super::{
 };
 use crate::{
     translation_phases::{
+        ArgumentSubstitution,
         SourceVector,
         TextEvent,
         TextEventKind,
@@ -118,16 +119,25 @@ pub(in crate::translation_phases::preprocessing) struct TokenizerFrame<'a> {
 #[derive(Debug, PartialEq, Clone)]
 pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
     /// Tokens replayed ahead of the frame below: the remainder of a
-    /// boundary-crossing macro call, rejected lookahead, or the output of a
-    /// builtin query or `#embed`, or a macro-replaced argument substituted
-    /// for its parameter.
+    /// boundary-crossing macro call, rejected lookahead, the result of
+    /// `##` operators, or the output of a builtin query or `#embed`, or a
+    /// macro-replaced argument substituted for its parameter.
     Rescan {
-        /// Whether the tokens are a substituted argument.
+        /// The substitution, when the tokens are a substituted argument.
         ///
         /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
-        argument: bool,
+        argument:      Option<ArgumentSubstitution>,
         /// The padding its end brings, for a text of phase 4.
-        end:      TokenSpacing,
+        end:           TokenSpacing,
+        /// The substitution of each token by its place in the replay, for
+        /// tokens that `##` operators formed, where an argument operand's
+        /// own tokens keep theirs and a token that pasting formed has none,
+        /// and for what a macro call collected across a replacement list
+        /// leaves of a parameter's replacement.
+        ///
+        /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165; §6.10.3.3
+        /// paragraph 2, p. 154; PDF p. 166.
+        substitutions: Option<&'a [Option<ArgumentSubstitution>]>,
     },
     /// Already collected query arguments, replayed without macro replacement
     /// until their enclosing embed parameter is evaluated.
@@ -196,6 +206,10 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         operand:             bool,
         /// The padding its end brings, for a text of phase 4.
         end:                 TokenSpacing,
+        /// The substitution of a `##` operand read in place, whose tokens
+        /// besides the pasted ones are output as they are; `None` for an
+        /// argument read to be prescanned or replaced.
+        substitution:        Option<ArgumentSubstitution>,
     },
 }
 

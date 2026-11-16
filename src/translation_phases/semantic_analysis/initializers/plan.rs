@@ -372,6 +372,11 @@ pub(super) struct Site<'s> {
     /// The subobject is the flexible array member the object's own
     /// initializer fills.
     pub(super) own_flexible:  bool,
+    /// The element is in a brace-enclosed list written for the subobject's
+    /// container, not one brace elision or a designator reached inside
+    /// ([`Analyzer::initializer_conversion`]).
+    /// C99: §6.7.8p20, p. 127; PDF p. 139.
+    pub(super) braced:        bool,
 }
 
 impl Site<'_> {
@@ -384,6 +389,7 @@ impl Site<'_> {
             source,
             scalar_source: None,
             own_flexible: false,
+            braced: false,
         }
     }
 
@@ -457,6 +463,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             source,
             scalar_source: None,
             own_flexible: false,
+            braced: false,
         })
     }
 

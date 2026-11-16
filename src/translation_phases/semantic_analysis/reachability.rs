@@ -276,6 +276,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 kind,
                 site,
                 name,
+                highlights: self.highlights,
             });
         }
     }

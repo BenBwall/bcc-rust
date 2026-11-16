@@ -1,6 +1,7 @@
 //! The workbench's insight panels. In abstract-machine mode: the run as a
 //! multitrack tape (`tape`), the cells under its playhead, the note on the
-//! step (`narration`), the expression being evaluated as a schematic, what
+//! step (`narration`, with the rank picture of a conversion in `ranks`), the
+//! expression being evaluated as a schematic, what
 //! the program has written to standard output (`output`), and the objects'
 //! datasheet.
 //! In pipeline mode: the compiler's output stage by stage, with what each
@@ -15,6 +16,7 @@ mod knob;
 mod narration;
 mod output;
 mod pipeline;
+pub(crate) mod ranks;
 mod schematic;
 mod tape;
 mod wasm;

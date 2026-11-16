@@ -176,6 +176,10 @@ pub struct Event {
     /// The type of the value the event produced, when it is an integer:
     /// a constant's type, a conversion's or an operator's result type.
     pub result_type:    Option<String>,
+    /// The other operand's type, when the usual arithmetic conversions
+    /// converted this one because of it (C99 §6.3.1.8p1): `unsigned int`
+    /// when an int meets an unsigned int.
+    pub other_type:     Option<String>,
 }
 
 impl Event {
@@ -194,6 +198,7 @@ impl Event {
             sequence_point: false,
             from_type: None,
             result_type: None,
+            other_type: None,
         }
     }
 }

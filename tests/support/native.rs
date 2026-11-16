@@ -73,6 +73,9 @@ pub(crate) fn run_native_with_timeout(
         use std::os::unix::process::CommandExt as _;
         // Establish the group before exec, so descendants inherit it.
         _ = command.process_group(0);
+        // SAFETY: the hook runs in the forked child before exec and calls
+        // only getrlimit and setrlimit, which are async-signal-safe.
+        _ = unsafe { command.pre_exec(dump_no_core) };
     }
     #[cfg(windows)]
     let tree = ProcessTree::new()?;
@@ -123,6 +126,33 @@ pub(crate) fn run_native_with_timeout(
             ),
         )),
     }
+}
+
+/// Keeps a program from dumping core: programs under test crash on purpose
+/// (an `abort`, a fortified function's overflow check), and their cores are
+/// noise. A soft limit of 0 is not enough where `core_pattern` pipes cores
+/// to a handler, as Ubuntu's does to systemd-coredump and apport: Linux
+/// ignores the limit for a pipe, except that a limit of exactly 1 byte skips
+/// the dump (`do_coredump` in the kernel's `fs/coredump.c`), and a byte is
+/// too small for a core file anyway. Each crash otherwise kept an apport
+/// process of about 120 MB for minutes; one test's 78 aborts held about
+/// 7 GB of a 16 GB CI runner. The hard limit is kept.
+#[cfg(unix)]
+fn dump_no_core() -> io::Result<()> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is writable storage for the result.
+    if unsafe { libc::getrlimit(libc::RLIMIT_CORE, &raw mut limit) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    limit.rlim_cur = limit.rlim_max.min(1);
+    // SAFETY: `limit` is an initialized limit no higher than the hard one.
+    if unsafe { libc::setrlimit(libc::RLIMIT_CORE, &raw const limit) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Owns the child's process tree. The job handle is not inheritable, so

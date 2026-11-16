@@ -473,3 +473,67 @@ fn the_stages_read_as_one_path_from_source_to_machine_code() {
         );
     }
 }
+
+#[test]
+fn every_stage_gives_an_example_from_the_program_on_screen() {
+    for demo in &DEMOS {
+        for optimize in [false, true] {
+            let compilation = crate::explorer::compile(demo.source, optimize);
+            for stage in Stage::ALL {
+                if compilation.output(stage).is_none() {
+                    continue;
+                }
+                let example = example(stage, &compilation, demo.source)
+                    .unwrap_or_else(|| panic!("{} {stage:?}: no example", demo.name));
+                assert!(
+                    example.ends_with('.') && !example.contains("``"),
+                    "{} {stage:?}: {example}",
+                    demo.name
+                );
+            }
+        }
+    }
+    let path = crate::demos::find("path").expect("the path lesson");
+    let compilation = crate::explorer::compile(path.source, false);
+    let example = |stage| example(stage, &compilation, path.source).expect("an example");
+    assert_eq!(
+        example(Stage::Lines),
+        "No line ends in a backslash, so each of the 10 physical lines stays a logical line of \
+         its own."
+    );
+    assert_eq!(
+        example(Stage::PpTokens),
+        "Line 3, `return n * n;`, is cut into 5 preprocessing tokens: `return`, `n`, `*`, `n` and \
+         `;`; `return` is still just an identifier."
+    );
+    assert_eq!(
+        example(Stage::Preprocessor),
+        "This program has no directives and no macros, so phase 4 passes its tokens on unchanged."
+    );
+    assert_eq!(
+        example(Stage::Tokens),
+        "`int` on line 2 is now a keyword, and `3` on line 7 an integer constant of type int: \
+         this file makes 38 tokens in all."
+    );
+    assert_eq!(
+        example(Stage::SyntaxTree),
+        "On line 3, `*` is a `binary *` node with its left operand, `n`, and its right operand, \
+         `n`, as its children."
+    );
+    assert_eq!(
+        example(Stage::IrAbi),
+        "Nothing here needs rewriting: every argument and result fits a register, so the \
+         ABI-lowered IR is the same as the IR."
+    );
+    let constants = crate::demos::find("constants").expect("the constants lesson");
+    let compilation = crate::explorer::compile(constants.source, false);
+    let preprocessor =
+        crate::pipeline::example(Stage::Preprocessor, &compilation, constants.source)
+            .expect("an example");
+    assert!(
+        preprocessor.starts_with("#include pasted in <stdio.h> (")
+            && preprocessor.contains("#define made the macros `LIMIT` and `LABEL`")
+            && preprocessor.contains("`LIMIT` becoming `4`"),
+        "{preprocessor}"
+    );
+}
