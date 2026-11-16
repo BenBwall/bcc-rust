@@ -79,15 +79,13 @@ impl Renderer {
             });
         // About a token a macro's body wrote: GCC reports it there and
         // notes the invocation, Clang notes the macro after the snippet.
-        // GCC reports a warning a system header's macro wrote, which it
-        // reports at all, where the user invoked the macro.
+        // GCC reports what a system header's macro wrote (a warning only if
+        // it reports one at all) where the user invoked the macro.
         let expansion = location
             .filter(|_| compiler_snippet)
             .and_then(|vector| Self::macro_expansion(context, diagnostic.reading?, vector))
             .filter(|expansion| {
-                format != DiagnosticFormat::Gcc
-                    || diagnostic.severity != ErrorSeverity::Warning
-                    || !context.in_system_header(&expansion.spelling)
+                format != DiagnosticFormat::Gcc || !context.in_system_header(&expansion.spelling)
             });
         let gcc_spelling = expansion
             .as_ref()

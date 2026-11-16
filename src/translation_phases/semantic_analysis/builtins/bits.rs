@@ -257,7 +257,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Whether `ty` is an enumerated type, with or without a fixed
     /// underlying type.
-    fn enumerated(&self, ty: TypeId) -> bool {
+    pub(super) fn enumerated(&self, ty: TypeId) -> bool {
         matches!(
             self.types.nodes[ty.index],
             TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum

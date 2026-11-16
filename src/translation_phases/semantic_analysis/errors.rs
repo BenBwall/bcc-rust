@@ -637,6 +637,18 @@ pub(crate) enum SemanticErrorKind {
     /// Clang extension: the error "`__builtin_mul_overflow` does not support
     /// 'signed `_BitInt`' operands of more than 128 bits".
     OverflowBuiltinBitInt,
+    /// An operand of `__builtin_add_overflow`, `__builtin_sub_overflow` or
+    /// `__builtin_mul_overflow` that is not an integer. Under Clang's rules,
+    /// a call written by C23's `ckd_add`, `ckd_sub` or `ckd_mul` also may
+    /// not take a plain `char`, `bool`, bit-precise or enumerated operand.
+    /// The name holds the words of the compiler whose format is in use.
+    /// GNU extension: GCC "Integer Overflow Builtins". C23: §7.20.1p3,
+    /// p. 313; PDF p. 326.
+    OverflowBuiltinOperand,
+    /// The third argument of one of those builtins that does not point to
+    /// a modifiable integer. Under the rules above, `ckd_*` also refuses
+    /// the same types as for an operand.
+    OverflowBuiltinResult,
     /// A type-generic bit builtin's operand that is no integer: GCC's
     /// "does not have integral type", Clang's "must be a scalar unsigned
     /// integer type".
@@ -1276,6 +1288,8 @@ impl SemanticErrorKind {
             | Self::AtomicOperandSize => "not a power-of-two size",
             | Self::AtomicOperandBytes => "more than 16 bytes",
             | Self::OverflowBuiltinBitInt => "a signed _BitInt of more than 128 bits",
+            | Self::OverflowBuiltinOperand => "not an integer this operation takes",
+            | Self::OverflowBuiltinResult => "not a pointer to a modifiable integer it takes",
             | Self::BitBuiltinNotInteger => "not an integer",
             | Self::BitBuiltinSigned => "has a signed type",
             | Self::BitBuiltinUnsigned => "has an unsigned type",
@@ -1639,6 +1653,19 @@ impl SemanticErrorKind {
                  than 128 bits",
                 "Clang's __builtin_mul_overflow multiplies at most 128 bits of a signed \
                  _BitInt; GCC accepts any width",
+            ),
+            | Self::OverflowBuiltinOperand => (
+                "operand of an overflow builtin must have an integer type",
+                "GCC's and Clang's overflow builtins compute on integers; C23 §7.20.1p3 \
+                 also excludes plain char, bool, bit-precise and enumerated types from \
+                 ckd_add, ckd_sub and ckd_mul, which Clang enforces",
+            ),
+            | Self::OverflowBuiltinResult => (
+                "result of an overflow builtin must point to a modifiable integer",
+                "GCC's and Clang's overflow builtins store the result through a pointer to a \
+                 non-const integer; C23 §7.20.1p3 also excludes plain char, bool, \
+                 bit-precise and enumerated types from ckd_add, ckd_sub and ckd_mul, which \
+                 Clang enforces",
             ),
             | Self::BitBuiltinNotInteger => (
                 "argument must have an integer type",
@@ -2958,6 +2985,14 @@ impl SemanticError {
                 };
                 return Some((arena.alloc_str(name), option));
             },
+            // The builtin's own words for the argument it refuses, which
+            // semantic analysis put together with the type
+            // (`Analyzer::overflow_arguments`); no option controls them.
+            | (
+                F::Gcc | F::Clang,
+                SemanticErrorKind::OverflowBuiltinOperand
+                | SemanticErrorKind::OverflowBuiltinResult,
+            ) if self.name.is_some() => return Some((arena.alloc_str(name), None)),
             // GCC words an attribute it drops by its name, under its one
             // `-Wattributes`.
             | (F::Gcc, SemanticErrorKind::IgnoredAttribute) =>

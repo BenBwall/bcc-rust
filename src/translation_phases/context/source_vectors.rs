@@ -401,6 +401,18 @@ impl Context<'_> {
         self.source_text(site.source_file_index)?.get(site.range())
     }
 
+    /// The name of the macro whose replacement list wrote the first token of
+    /// `source`, the innermost when invocations nest, or `None` when an
+    /// argument or the file wrote it: Clang's `Lexer::getImmediateMacroName`.
+    /// The name is read from the `#define` line that spells the token.
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
+    pub(crate) fn immediate_macro_name(&self, source: SourceVectors) -> Option<&str> {
+        if source.length() == 0 || !self.written_by_macro_body(source) {
+            return None;
+        }
+        crate::diagnostics::macro_defined_at(self, self.first_source_vector(source))
+    }
+
     /// Whether a macro's replacement list, not its argument or the file,
     /// wrote the first token of `source`. `source` must not be empty.
     pub(crate) fn written_by_macro_body(&self, source: SourceVectors) -> bool {
