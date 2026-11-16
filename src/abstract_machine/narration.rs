@@ -152,12 +152,14 @@ impl Topic {
                  calls that do them) change memory.",
             | Self::ArrayDecay =>
                 "Array-to-pointer decay is why passing an array to a function passes only the \
-                 address of its first element, and why the function cannot know the array's \
-                 length. The exceptions are `sizeof` and `&`, which see the whole array.",
+                 address of its first element, never a copy of the elements, and why the function \
+                 cannot know the array's length: pass the length as an argument of its own. The \
+                 exceptions are `sizeof` and `&`, which see the whole array.",
             | Self::Promotion =>
-                "C never does arithmetic in a type narrower than int. That is why two chars \
-                 holding 100 add up to 200, more than a signed char (plain char on x86-64) can \
-                 hold: the sum is computed in int.",
+                "C never does arithmetic in a type narrower than int, the size a machine computes \
+                 in most naturally. That is why two chars holding 100 add up to 200, more than a \
+                 signed char (plain char on x86-64) can hold: the sum is computed in int, and so \
+                 is `c + 1` for a char c.",
             | Self::Address =>
                 "`&` does not read the object, so it is fine to take the address of a variable \
                  that has no value yet. The pointer is only a way to reach the object later.",
@@ -172,7 +174,8 @@ impl Topic {
             | Self::IntRange =>
                 "An int on x86-64 holds -2147483648 to 2147483647. A signed result outside that \
                  range is not wrapped around: it is undefined behavior, and this machine stops on \
-                 it.",
+                 it. Leaving it undefined lets a compiler treat `i + 1` as always larger than `i`, \
+                 which simplifies loops.",
             | Self::Division =>
                 "Integer division truncates toward zero, so `-7 / 2` is -3 and `-7 % 2` is -1. \
                  Dividing by zero is undefined behavior.",
@@ -182,15 +185,17 @@ impl Topic {
                  `int a[5] = {[3] = 7};` starts at `[3]`.",
             | Self::SequencePoint =>
                 "Between two sequence points C leaves the order of evaluations and side effects \
-                 open. Modifying an object twice, or modifying it and also reading it for another \
-                 purpose, with no sequence point between is undefined: `i = i++ + 1`, `i + i++` \
-                 and `a[i] = i++` all are. Sequence points come at the end of each full \
-                 expression, after the first operand of `&&`, `||` and `?:`, at each comma \
-                 operator, and just before a function is called.",
+                 open, so a compiler can pick whichever order is fastest. Modifying an object \
+                 twice, or modifying it and also reading it for another purpose, with no sequence \
+                 point between is undefined: `i = i++ + 1`, `i + i++` and `a[i] = i++` all are. \
+                 Sequence points come at the end of each full expression, after the first operand \
+                 of `&&`, `||` and `?:`, at each comma operator, and just before a function is \
+                 called.",
             | Self::ImplementationDefined =>
-                "Implementation-defined means each compiler must pick a result and document it. \
-                 This one is not portable: where plain char is unsigned (on ARM Linux, for \
-                 example), the object would hold 200.",
+                "Implementation-defined means each compiler must pick a result and document it: C \
+                 leaves the choice open because machines differ. This one is not portable: where \
+                 plain char is unsigned (on ARM Linux, for example), the object would hold 200. \
+                 Code that keeps bytes above 127 uses unsigned char for that reason.",
             | Self::Increment =>
                 "As a statement on its own, `i++` and `++i` do the same thing. They differ only in \
                  the value the expression yields: `i++` yields the old value, `++i` the new one.",
@@ -205,8 +210,9 @@ impl Topic {
                 "C has two lifetimes for ordinary variables. Automatic objects (locals) are \
                  created each time their block runs and start indeterminate. Static objects \
                  (declared outside every function, or with `static`) exist once, for the whole \
-                 run, and start at zero unless initialized: no code runs to set them, because the \
-                 value is already in the program file the system loads.",
+                 run, and start at zero unless initialized: no code runs to set them, because \
+                 their initial values are in the program file, and the system hands the program \
+                 the zero-filled ones without storing them there at all.",
             | Self::StaticLocal =>
                 "A `static` local keeps its value from one call to the next, which makes it useful \
                  for counters and caches, but also makes the function depend on its history: two \
@@ -227,12 +233,16 @@ impl Topic {
                 "The exit status is how a program reports to whoever ran it: 0 means success. A \
                  shell shows it as `$?`, and on Linux only its low 8 bits get there.",
             | Self::Undefined =>
-                "Compilers assume undefined behavior never happens and optimize on that \
-                 assumption: they may delete a check like `x + 1 > x`, or keep a loop running \
-                 forever. The same program can then behave differently at -O0 and -O2.",
+                "C leaves these errors undefined so that compiled code need not check for them: no \
+                 bounds check on each array access, no overflow test on each addition. Compilers \
+                 then assume undefined behavior never happens and optimize on that assumption: \
+                 they may delete a check like `x + 1 > x`, or keep a loop running forever. The \
+                 same program can then behave differently at -O0 and -O2.",
             | Self::IndeterminateRead =>
-                "In practice the read returns whatever was left in that register or stack slot, so \
-                 the result can change between runs, compilers and optimization levels.",
+                "Without optimization the read usually returns whatever an earlier call left in \
+                 that stack slot; an optimizer may pick any value or drop the computation. The \
+                 result can change between runs, compilers and optimization levels, and GCC and \
+                 Clang warn about it (-Wuninitialized, in -Wall).",
             | Self::Preprocessor =>
                 "#include pastes text in before the compiler reads the program, which is why it \
                  comes first: C needs a function declared before a call to it. The header only \
@@ -255,8 +265,9 @@ impl Topic {
             | Self::Format =>
                 "printf trusts its format: nothing at run time checks that each conversion matches \
                  the argument it takes. A %d given a pointer, or a conversion with no argument \
-                 left, is undefined, and in a real program prints garbage or crashes. Compilers \
-                 warn about it when the format is a literal (-Wformat).",
+                 left, is undefined, and in a real program prints garbage or crashes. When the \
+                 format is a literal, Clang warns about a mismatch by default and GCC with -Wall \
+                 (-Wformat).",
             | Self::Macro =>
                 "A macro is text substitution, not a variable: it has no type, no storage and no \
                  address, and the compiler never sees its name. `#define N 10` costs no memory, \
@@ -269,13 +280,14 @@ impl Topic {
             | Self::Const =>
                 "const is a promise the compiler checks: an assignment to a const object does not \
                  compile. It is not a lock on memory: a cast can remove the const from a pointer, \
-                 and storing through that pointer into the object is undefined behavior, which a \
-                 real program may or may not survive.",
+                 and storing through that pointer into the object is undefined behavior. A \
+                 compiler may keep using the value it knows, so after such a store the program can \
+                 still print the old value at one optimization level and the new one at another.",
             | Self::Cast =>
-                "A cast tells the compiler that a conversion is intended, so it no longer warns. \
-                 It does not check that the value fits: (char)300 quietly becomes 44, and a cast \
-                 that removes const compiles even though storing through the result can be \
-                 undefined.",
+                "A cast tells the compiler that a conversion is intended, so it no longer warns: \
+                 GCC and Clang warn about `char c = 300;` but not about `(char)300`. It does not \
+                 check that the value fits: (char)300 quietly becomes 44, and a cast that removes \
+                 const compiles even though storing through the result can be undefined.",
             | Self::CompoundAssign =>
                 "`x += 2` is shorthand for `x = x + 2`, except that `x` is evaluated once. That \
                  matters when the left side does work: `a[next()] += 1` calls next once, while \
@@ -287,23 +299,27 @@ impl Topic {
                  <stdint.h> names exact ones such as uint32_t.",
             | Self::Unsigned =>
                 "Unsigned arithmetic never overflows: a result outside the type's range is reduced \
-                 modulo 2^N, so 0u - 1 is the largest value. That is defined and portable, unlike \
+                 modulo 2^N, so 0u - 1 is the largest value. That is what binary hardware does \
+                 anyway, and hashes and checksums rely on it: it is defined and portable, unlike \
                  signed overflow, which is undefined. It is also why a countdown that tests `i >= \
                  0` never ends when i is unsigned.",
             | Self::ArithmeticConversion =>
                 "When a signed and an unsigned operand of the same rank meet, the signed one \
                  becomes unsigned, so -1 < 1u is false: -1 turns into 4294967295. Comparing an int \
-                 with sizeof or a size_t has the same trap, and compilers warn about it \
-                 (-Wsign-compare).",
+                 with sizeof or a size_t has the same trap, which GCC and Clang warn about with \
+                 -Wextra (-Wsign-compare).",
             | Self::SignedConversion =>
                 "Implementation-defined means each compiler must choose a result and document it. \
-                 Every x86-64 compiler keeps the low bits, but C does not promise it, and \
-                 -Wconversion warns because the value changed.",
+                 GCC documents that it keeps the low bits, and Clang and bcc do the same on \
+                 x86-64, but C does not promise it; -Wconversion warns about a conversion that may \
+                 change a value.",
             | Self::Shift =>
                 "x << n multiplies by 2^n and x >> n divides by 2^n, but only for counts from 0 to \
-                 the width minus 1: shifting a 32-bit int by 32 is undefined, and x86-64 quietly \
-                 shifts by 0 instead. Shifting a negative value left is undefined too, which is \
-                 why bit manipulation uses unsigned types.",
+                 the width minus 1: shifting a 32-bit int by 32 is undefined. x86-64's shift \
+                 instruction uses only the low 5 bits of the count, so at run time it shifts by 0, \
+                 but a compiler that knows the count may produce anything: GCC -O2 gives 0. \
+                 Shifting a negative value left is undefined too, which is why bit manipulation \
+                 uses unsigned types.",
             | Self::Sizeof =>
                 "sizeof is worked out while the program is compiled: its operand is never \
                  evaluated, so sizeof x++ leaves x alone. On an array it counts the whole array, \
@@ -316,11 +332,12 @@ impl Topic {
                  printf(\"%.17g\") shows enough digits to tell any two doubles apart. Compare \
                  floating results with a tolerance, not ==, and count money in integer cents.",
             | Self::FloatingSizes =>
-                "On x86-64 a float is 4 bytes with about 7 significant decimal digits, a double 8 \
-                 bytes with about 16, and a long double the x87's 80-bit format, padded to 16 \
-                 bytes, with about 19. C promises much less (6 digits for float, 10 for double), \
-                 and long double varies most: on 64-bit Windows it is just a double, on ARM64 \
-                 Linux a 128-bit format. Use double unless you have a reason not to.",
+                "On x86-64 a float is 4 bytes and keeps 6 significant decimal digits, a double 8 \
+                 bytes and keeps 15, and a long double, the x87's 80-bit format padded to 16 \
+                 bytes, keeps 18 (<float.h> calls these FLT_DIG, DBL_DIG and LDBL_DIG). C promises \
+                 only 6, 10 and 10, and long double varies most: with Microsoft's compiler it is \
+                 just a double, on ARM64 Linux a 128-bit format. Use double unless you have a \
+                 reason not to.",
             | Self::IntegerToFloating =>
                 "Every int converts to a double exactly, but only where the program converts it. \
                  In `double average = total / count;` the division happens first, in int, and only \
@@ -329,17 +346,21 @@ impl Topic {
             | Self::Truncation =>
                 "Converting to an integer cuts the fraction off, toward zero: (int)2.99 is 2 and \
                  (int)-2.99 is -2, never 3. To round to the nearest integer, use lround from \
-                 <math.h>. A value whose integral part does not fit, like (int)3e9, is undefined; \
-                 x86-64 gives -2147483648 for it, and an optimizer may assume it never happens.",
+                 <math.h>. A value whose integral part does not fit, like (int)3e9, is undefined: \
+                 x86-64's conversion instruction gives -2147483648 for it at run time, but GCC -O2 \
+                 folds the same conversion to 2147483647, and an optimizer may assume it never \
+                 happens.",
             | Self::NotANumber =>
                 "A NaN, not a number, comes from operations such as 0.0 / 0.0 that have no \
                  meaningful result. It compares unequal to everything, itself included, so x != x \
                  is true only for a NaN, and it spreads: any arithmetic with a NaN gives a NaN.",
             | Self::AnnexF =>
                 "Floating division by zero does not stop a program that follows Annex F: x / 0.0 \
-                 is an infinity and 0.0 / 0.0 a NaN, which printf writes as inf and nan. Integer \
-                 division by zero is still undefined, and on x86-64 it kills the program with \
-                 SIGFPE.",
+                 is an infinity and 0.0 / 0.0 a NaN, which printf writes as inf and nan, or -nan \
+                 on x86-64, whose NaN has its sign bit set. Integer division by zero is still \
+                 undefined: without optimization x86-64's divide instruction traps and the program \
+                 dies with SIGFPE, but an optimizer may compute something else instead (GCC -O2 \
+                 turns 1 / b into a comparison that never traps).",
             | Self::VariadicPromotion =>
                 "A function with `...` cannot say what types its extra arguments have, so C widens \
                  them to a few standard types first. printf can then read every small integer as \
@@ -1200,7 +1221,7 @@ impl Machine {
         if let Type::Struct(structure) = declared.ty {
             let _ = write!(
                 text,
-                " It is a {}, {}",
+                " It is a {}, {}.",
                 object.r#type,
                 self.layout_text(structure)
             );
@@ -2937,8 +2958,8 @@ impl Machine {
         } else if number < 0 {
             (
                 format!(
-                    "`>>` of the negative {a} is implementation-defined; bcc and GCC shift in \
-                     copies of the sign bit, giving {shown}."
+                    "`>>` of the negative {a} is implementation-defined; bcc, GCC and Clang shift \
+                     in copies of the sign bit, giving {shown}."
                 ),
                 format!(
                     "{a} >> {b} shifts a negative signed value right. C leaves the result to the \
@@ -3042,8 +3063,8 @@ impl Machine {
             | Some((from, to, number, result)) if number != result && to.signed() => format!(
                 "The value to store is the {} {number}. {operation} converts it to {location}'s \
                  type, {}, whose range is {} to {}. It does not fit, so the result is \
-                 implementation-defined: bcc, GCC and Clang on x86-64 keep the low {} bits, so \
-                 {location} now holds {shown}.",
+                 implementation-defined: GCC documents keeping the low {} bits, and bcc and Clang \
+                 do the same on x86-64, so {location} now holds {shown}.",
                 from.spelling(),
                 to.spelling(),
                 to.min(),
@@ -3469,7 +3490,7 @@ impl Machine {
                         format!("Cast {old} to {name} → {new}"),
                         format!(
                             "{old} does not fit in {}, so the result is implementation-defined; \
-                             bcc and GCC wrap it to {new}.",
+                             bcc, GCC and Clang wrap it to {new}.",
                             article(name)
                         ),
                         format!(
@@ -3478,8 +3499,8 @@ impl Machine {
                              that range. Converting a value that does not fit into a signed type \
                              gives an implementation-defined result (or raises an \
                              implementation-defined signal): each compiler must choose and \
-                             document one. bcc and GCC wrap the value modulo {}, keeping its low \
-                             {} bits: {modulo}.",
+                             document one. GCC documents that it reduces the value modulo {}, \
+                             keeping its low {} bits, and bcc and Clang do the same: {modulo}.",
                             target.min(),
                             target.max(),
                             power_text(target.bits()),
@@ -3516,7 +3537,7 @@ impl Machine {
                     format!("Cast {old} to char → {new}"),
                     format!(
                         "{old} does not fit in a char, so the result is implementation-defined; \
-                         bcc and GCC wrap it to {new}."
+                         bcc, GCC and Clang wrap it to {new}."
                     ),
                     format!(
                         "A cast converts its operand's value to the type it names, here from \
@@ -3524,13 +3545,10 @@ impl Machine {
                          127, and {old} is outside that range. Converting a value that does not \
                          fit into a signed type gives an implementation-defined result (or raises \
                          an implementation-defined signal): each compiler must choose and \
-                         document one. bcc and GCC wrap the value modulo 256, keeping its low 8 \
-                         bits, so {old} becomes {new}. Where plain char is unsigned, as on ARM \
-                         Linux, the cast would give {} instead.",
-                        match value {
-                            | Value::Integer(integer) => integer.rem_euclid(256),
-                            | _ => 0,
-                        }
+                         document one. GCC documents that it reduces the value modulo 256, \
+                         keeping its low 8 bits, and bcc and Clang do the same, so {old} becomes \
+                         {new}. {}",
+                        unsigned_char_text(&value, &converted)
                     ),
                     vec![
                         clauses::CAST,
@@ -3706,7 +3724,7 @@ impl Machine {
                     text,
                     " The arithmetic happens in {name}, giving {result}; that does not fit in {}, \
                      so the implementation-defined conversion back to {} keeps its low {} bits, \
-                     as bcc and GCC do.",
+                     as bcc, GCC and Clang do.",
                     article(leaf.spelling()),
                     leaf.spelling(),
                     leaf.bits()
@@ -4373,7 +4391,6 @@ impl Machine {
                 );
             }
         }
-        text.push('.');
         text
     }
 
@@ -4662,6 +4679,28 @@ fn shell_status(value: &Value) -> String {
     }
 }
 
+/// What a cast to char would give where plain char is unsigned (C99
+/// §6.2.5p15, §6.3.1.3p2): the same byte, now defined, or a different value.
+fn unsigned_char_text(value: &Value, converted: &Value) -> String {
+    let (&Value::Integer(value), &Value::Integer(signed)) = (value, converted) else {
+        return String::new();
+    };
+    let unsigned = value.rem_euclid(256);
+    if unsigned == signed {
+        format!(
+            "Where plain char is unsigned, as on ARM Linux, {value} becomes {unsigned} too, and \
+             there the result is defined: a conversion to an unsigned type always reduces modulo \
+             256."
+        )
+    } else {
+        format!(
+            "Where plain char is unsigned, as on ARM Linux, the cast gives {unsigned} instead, \
+             and there the result is defined: a conversion to an unsigned type always reduces \
+             modulo 256."
+        )
+    }
+}
+
 /// `event` with its one-sentence `summary`, the details `text`, and the
 /// rules it applied.
 fn explained(mut event: Event, summary: &str, text: &str, cited: &[Clause]) -> Event {
@@ -4772,7 +4811,7 @@ fn conversion_text(from: Integer, to: Integer, value: i128, converted: i128) -> 
         (
             format!(
                 "the {a} {value} does not fit in {b} ({} to {}), so the result is \
-                 implementation-defined; bcc and GCC wrap it: {}",
+                 implementation-defined; bcc, GCC and Clang wrap it: {}",
                 to.min(),
                 to.max(),
                 modulo_text(value, converted, to.bits())

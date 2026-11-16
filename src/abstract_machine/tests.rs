@@ -1486,6 +1486,14 @@ fn structures_are_laid_out_with_padding_on_x86_64() {
         "{}",
         declared.event.explanation
     );
+    assert!(
+        declared
+            .event
+            .explanation
+            .contains("of padding at the end. Each member's value"),
+        "{}",
+        declared.event.explanation
+    );
     assert!(cited(&declared).contains(&"6.7.2.1p13"));
     assert!(
         declared.event.note.contains("padding"),
@@ -2499,10 +2507,18 @@ fn the_constants_lesson_narrates_define_const_cast_and_compound_assignment() {
     assert_eq!(cast.event.title, "Cast 300 to char → 44");
     assert_eq!(
         cast.event.summary,
-        "300 does not fit in a char, so the result is implementation-defined; bcc and GCC wrap it \
-         to 44."
+        "300 does not fit in a char, so the result is implementation-defined; bcc, GCC and Clang \
+         wrap it to 44."
     );
     assert!(cited(cast).contains(&"6.3.1.3p3"));
+    // An unsigned plain char gives the same byte, 44, but defined.
+    assert!(
+        cast.event
+            .explanation
+            .contains("as on ARM Linux, 300 becomes 44 too, and there the result is defined"),
+        "{}",
+        cast.event.explanation
+    );
     // += is E1 = E1 + (E2), with E1 evaluated once.
     let updates: Vec<&State> = states
         .iter()
@@ -3197,7 +3213,10 @@ fn conversions_to_unsigned_wrap_and_to_signed_are_the_implementations() {
         .collect();
     assert_eq!(casts[0].event.title, "Cast 4294967295 to int → -1");
     assert!(
-        casts[0].event.summary.contains("bcc and GCC wrap it to -1"),
+        casts[0]
+            .event
+            .summary
+            .contains("bcc, GCC and Clang wrap it to -1"),
         "{}",
         casts[0].event.summary
     );
@@ -3305,7 +3324,7 @@ fn shifts_promote_each_operand_and_stop_outside_their_width() {
         right
             .event
             .summary
-            .contains("implementation-defined; bcc and GCC"),
+            .contains("implementation-defined; bcc, GCC and Clang"),
         "{}",
         right.event.summary
     );
