@@ -353,10 +353,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             preprocessing::FloatTokenType,
         };
         // Clang checks builtin integer targets only, not an enumeration or
-        // an atomic type.
+        // an atomic type, and not where a system macro wrote the context.
         if self.context.configuration.float_conversion_rules() == crate::configuration::RuleSet::Gcc
             || !matches!(self.types.nodes[target.index], TypeKind::Scalar(_))
             || self.integer_type(target).is_none()
+            || self.conversion_in_system_macro()
         {
             return;
         }

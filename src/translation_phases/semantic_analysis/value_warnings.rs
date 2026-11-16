@@ -436,8 +436,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.gcc_constant_conversion(narrowing, source);
             return;
         }
-        // Clang's `constexpr` refusal stands alone.
-        if self.underspecified > 0 {
+        // Clang's `constexpr` refusal stands alone, and a conversion whose
+        // context a system macro wrote is not reported.
+        if self.underspecified > 0 || self.conversion_in_system_macro() {
             return;
         }
         self.clang_constant_conversions(narrowing, source.expression);

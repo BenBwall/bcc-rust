@@ -36,6 +36,37 @@ impl Analyzer<'_, '_, '_> {
         result
     }
 
+    /// Runs `check` with `context` as Clang's context location for the
+    /// implicit conversions it checks: the call whose arguments convert, the
+    /// assignment operator, the `return`, the declarator, or the
+    /// brace-enclosed list an element belongs to.
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn with_conversion_context<R>(
+        &mut self,
+        context: SourceVectors,
+        check: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let outer = std::mem::replace(&mut self.conversion_context, context);
+        let result = check(self);
+        self.conversion_context = outer;
+        result
+    }
+
+    /// Whether Clang drops a conversion warning because its context location
+    /// is a system macro's body token: `CheckImplicitConversion` returns
+    /// early on `SourceManager::isInSystemMacro(CC)` for nearly every
+    /// conversion it reports, so `_mm256_dp_ps(a, b, 0xff)` is silent where
+    /// the immediate converts to the builtin's `char` parameter, wherever
+    /// the argument was written. Only Clang's identities (Clang and
+    /// clang-cl) ask; GCC asks of the warning's own location
+    /// ([`Self::spelled_group_diagnostic`]).
+    /// C99: §5.1.1.3p1 and footnote 8, p. 11; PDF p. 23.
+    pub(super) fn conversion_in_system_macro(&self) -> bool {
+        self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang
+            && self.context.in_system_macro(self.conversion_context)
+    }
+
     /// Runs `report` with what it reports placed `order` among the other
     /// diagnostics, for a warning GCC reports after the place it names.
     pub(super) fn with_report_order<R>(

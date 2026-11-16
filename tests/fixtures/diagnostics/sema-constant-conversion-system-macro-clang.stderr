@@ -1,0 +1,34 @@
+sema-constant-conversion-system-macro-clang.c:10:22: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+   10 |     v = immediate(v, WIDE);
+      |                      ^~~~
+system-headers/conversion-macros.h:11:14: note: expanded from macro 'WIDE'
+   11 | #define WIDE 300
+      |              ^~~
+sema-constant-conversion-system-macro-clang.c:12:10: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+   12 |     *p = WIDE;
+      |          ^~~~
+system-headers/conversion-macros.h:11:14: note: expanded from macro 'WIDE'
+   11 | #define WIDE 300
+      |              ^~~
+sema-constant-conversion-system-macro-clang.c:16:35: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+   16 | char also_returned(void) { return WIDE; }
+      |                                   ^~~~
+system-headers/conversion-macros.h:11:14: note: expanded from macro 'WIDE'
+   11 | #define WIDE 300
+      |              ^~~
+sema-constant-conversion-system-macro-clang.c:18:17: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+   18 | char declared = WIDE;
+      |                 ^~~~
+system-headers/conversion-macros.h:11:14: note: expanded from macro 'WIDE'
+   11 | #define WIDE 300
+      |              ^~~
+sema-constant-conversion-system-macro-clang.c:19:37: warning: implicit conversion from 'int' to 'char' changes value from 306 to 50 [-Wconstant-conversion]
+   19 | struct pair elided[] = { WIDE, 305, 306 };
+      |                                     ^~~
+sema-constant-conversion-system-macro-clang.c:21:42: warning: implicit conversion from 'int' to 'char' changes value from 310 to 54 [-Wconstant-conversion]
+   21 | struct holder written = { .pair.low = 1, 310 };
+      |                                          ^~~
+sema-constant-conversion-system-macro-clang.c:25:23: warning: data argument not used by format string [-Wformat-extra-args]
+   25 |     printf("%d\n", 1, 2);
+      |            ~~~~~~     ^
+7 warnings generated.

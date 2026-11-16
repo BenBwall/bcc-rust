@@ -418,13 +418,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
                     }
                 }
-            } else if !self.assignment_conversion_at(
-                left.ty,
-                right,
-                e.operator_source_vectors.unwrap_or(e.source_vectors),
-                super::super::compiler_wording::ConversionSite::Assignment,
-                false,
-            ) {
+            } else if !{
+                // Clang's context for the converted value is the operator.
+                let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
+                self.with_conversion_context(operator, |analyzer| {
+                    analyzer.assignment_conversion_at(
+                        left.ty,
+                        right,
+                        operator,
+                        super::super::compiler_wording::ConversionSite::Assignment,
+                        false,
+                    )
+                })
+            } {
                 if self.void_value(right.ty) {
                     return self.void_value_used(e, VoidUse::Assignment, left.ty);
                 }

@@ -417,6 +417,20 @@ impl Context<'_> {
         source.length() != 0 && self.in_system_header(self.first_source_vector(source))
     }
 
+    /// Whether a macro expansion produced the first token of `source` and a
+    /// system header spells it: Clang's `SourceManager::isInSystemMacro`,
+    /// true for a system macro's body token wherever the macro is invoked
+    /// and false for an argument the user wrote. A token `##` formed counts
+    /// as its first piece, where Clang takes the location of the operand
+    /// that begins the paste. An empty range is in none.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23;
+    /// §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
+    pub(crate) fn in_system_macro(&self, source: SourceVectors) -> bool {
+        source.length() != 0
+            && self.produced_by_macro_expansion(source)
+            && self.spelled_in_system_header(source)
+    }
+
     /// The first vector of `source` as a range, which belongs to its first
     /// token. An empty range stays empty.
     pub(crate) fn first_token_vector(source: SourceVectors) -> SourceVectors {
