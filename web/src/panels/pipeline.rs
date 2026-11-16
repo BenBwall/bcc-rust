@@ -164,14 +164,20 @@ pub fn PipelineView(
     let on_path = move || {
         source.with(|source| demos::matching(source).is_some_and(|demo| !demo.path.is_empty()))
     };
-    // The whole-path lesson's note on what this stage did to it, which
-    // describes its -O0 output.
-    let path_note = move || {
-        if optimize.get() {
-            return None;
+    // What this stage did to the program: the whole-path lesson's own note,
+    // which describes its -O0 output, or else an example read from the
+    // output on screen.
+    let path_note = move || -> Option<String> {
+        let stage = stage.get();
+        let index = Stage::ALL.iter().position(|&each| each == stage)?;
+        let written = source
+            .with(|source| demos::matching(source).and_then(|demo| demo.path.get(index).copied()));
+        match written {
+            | Some(note) if !optimize.get() => Some(note.to_owned()),
+            | _ => shown.with(|compilation| {
+                source.with(|source| crate::pipeline::example(stage, compilation.as_ref()?, source))
+            }),
         }
-        let index = Stage::ALL.iter().position(|&each| each == stage.get())?;
-        source.with(|source| demos::matching(source).and_then(|demo| demo.path.get(index).copied()))
     };
     let on_hover = Callback::new(move |line| pointing.hover(Side::Output, line));
     let on_cursor = Callback::new(move |line| pointing.cursor(Side::Output, line));
@@ -236,7 +242,7 @@ pub fn PipelineView(
                 </p>
                 <p class="stage-path-note" hidden=move || path_note().is_none()>
                     <strong>"In this program: "</strong>
-                    {move || path_note().map(super::rich_text)}
+                    {move || path_note().map(|note| super::rich_text(&note))}
                 </p>
                 <StopBanner compilation=shown />
                 <div class="stage-toolbar">
