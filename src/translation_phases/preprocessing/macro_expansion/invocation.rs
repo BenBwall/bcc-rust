@@ -603,11 +603,12 @@ struct MacroCallCursor<'x> {
     /// The frame being read, as an index into the whole stack.
     index:                 Option<usize>,
     floor:                 usize,
-    /// Consumed prefix stays in place until the queue empties.
+    /// Consumed prefix stays in place until the queue empties. It holds one
+    /// replacement at a time: a parameter's, or what `#` or `##` formed.
     pending:               ArenaVec<'x, PreprocessorToken>,
-    /// The argument substitution of each token of `pending`, by the same
-    /// index, which a replay of what the call leaves keeps.
-    pending_substitutions: ArenaVec<'x, Option<ArgumentSubstitution>>,
+    /// The argument substitutions of the tokens of `pending`, which a
+    /// replay of what the call leaves keeps.
+    pending_substitutions: PendingSubstitutions<'x>,
     pending_head:          usize,
     line_start:            bool,
     /// Whether a text of phase 4 reads the call, so spacing matters.
@@ -618,6 +619,21 @@ struct MacroCallCursor<'x> {
     pending_end:           TokenSpacing,
     /// White space was read since the last token.
     white:                 bool,
+}
+
+/// The argument substitutions of the replacement a macro call cursor queues.
+/// No vector runs beside the queue: two vectors growing together in the
+/// expansion arena could not grow in place, and each would leave every
+/// outgrown copy behind, which for a long argument fills a WebAssembly
+/// arena.
+#[derive(Clone, Copy)]
+enum PendingSubstitutions<'x> {
+    /// Every token has this one: a parameter's replacement its own
+    /// substitution, and a `#` operator's result none.
+    All(Option<ArgumentSubstitution>),
+    /// Each token has its own, by the same index: the tokens `##` operators
+    /// formed.
+    Each(&'x [Option<ArgumentSubstitution>]),
 }
 
 /// A token of a macro call being collected: read with its provenance, or,
@@ -734,7 +750,7 @@ impl<'x> MacroCallCursor<'x> {
                 return Some(CallToken::Read(self.pad(token)));
             }
             self.pending.clear();
-            self.pending_substitutions.clear();
+            self.pending_substitutions = PendingSubstitutions::All(None);
             self.pending_head = 0;
             if self.text {
                 self.spacing = self.spacing.then(self.pending_end);
@@ -877,7 +893,8 @@ impl<'x> MacroCallCursor<'x> {
             }
             if pasted {
                 self.pending.extend(tokens.tokens);
-                self.pending_substitutions.extend(tokens.substitutions);
+                self.pending_substitutions =
+                    PendingSubstitutions::Each(tokens.substitutions.leak());
                 self.pad_replacement(white, TokenSpacing::END);
                 continue;
             }
@@ -887,11 +904,11 @@ impl<'x> MacroCallCursor<'x> {
                 })
             {
                 let prescan = preprocessor.expanded_argument(token, argument);
-                let substitution = Some(preprocessor.new_substitution());
+                self.pending_substitutions =
+                    PendingSubstitutions::All(Some(preprocessor.new_substitution()));
                 let mut expanded = prescan.tokens.clone();
                 while let Some(token) = expanded.next_item(preprocessor.context) {
                     self.pending.push(token);
-                    self.pending_substitutions.push(substitution);
                 }
                 if token.spacing.is_right_operand() {
                     self.pending_end = prescan.end;
@@ -902,7 +919,6 @@ impl<'x> MacroCallCursor<'x> {
             }
             if stringified && self.text {
                 self.pending.push(token);
-                self.pending_substitutions.push(None);
                 self.pad_replacement(white, TokenSpacing::END);
                 continue;
             }
@@ -966,11 +982,21 @@ impl<'x> MacroCallCursor<'x> {
             );
             // What the call leaves of a parameter's replacement keeps its
             // substitution.
-            let substitutions = &self.pending_substitutions[self.pending_head..];
-            let substitutions = substitutions
-                .iter()
-                .any(Option::is_some)
-                .then(|| &*preprocessor.scratch.alloc_slice_copy(substitutions));
+            let substitutions = match self.pending_substitutions {
+                | PendingSubstitutions::All(None) => None,
+                | PendingSubstitutions::All(substitution) => Some(
+                    &*preprocessor
+                        .scratch
+                        .alloc_slice_fill_iter(std::iter::repeat_n(
+                            substitution,
+                            self.pending.len() - self.pending_head,
+                        )),
+                ),
+                | PendingSubstitutions::Each(each) => {
+                    let each = &each[self.pending_head..];
+                    each.iter().any(Option::is_some).then_some(each)
+                },
+            };
             self.frames.insert(
                 self.index.map_or(0, |index| index + 1) - self.base,
                 TokenizerFrame {
@@ -1004,7 +1030,7 @@ impl<'x> MacroCallCursor<'x> {
             index: stack.len().checked_sub(1),
             floor,
             pending: ArenaVec::new_in(preprocessor.scratch),
-            pending_substitutions: ArenaVec::new_in(preprocessor.scratch),
+            pending_substitutions: PendingSubstitutions::All(None),
             pending_head: 0,
             line_start: false,
             text: preprocessor.state.as_text,
