@@ -13757,6 +13757,53 @@ warn.c:34: warning: cast between pointer and integer of different size
             }
             succeeds(&directory.bcc(mode, &["-c", "repeat.c", "-o", "first.o", "-o", "last.o"]));
             assert!(directory.path("last.o").exists(), "{mode}");
+            // `-fsyntax-only` keeps GCC's driver from handing `-S`'s outputs
+            // to `cc1` (TCC has no `-S`).
+            if mode != "--tcc-mode" {
+                let syntax = ["-S", "-fsyntax-only", "repeat.c", "-o", "a", "-o", "b"];
+                let output = directory.bcc(mode, &syntax);
+                succeeds(&output);
+                if mode == "--gcc-mode" {
+                    assert_eq!(stderr(&output), "", "{mode}");
+                }
+            }
+            // GCC's driver turns each `-o` into a dependency file name for
+            // `-MD` and `-MMD` (`-MD first.d second.d`), and `cc1` takes the
+            // second for an input it refuses and cannot open. Clang and TCC
+            // keep the last `-o` and name the dependency file after it (TCC
+            // has no `-MMD`, and the source no `main` to link).
+            for dependencies in ["-MD", "-MMD"] {
+                for stage in [None, Some("-c"), Some("-S")] {
+                    let mut arguments = vec![dependencies];
+                    arguments.extend(stage);
+                    arguments.extend(["repeat.c", "-o", "first.o", "-o", "second.o"]);
+                    drop(std::fs::remove_file(directory.path("second.d")));
+                    let output = directory.bcc(mode, &arguments);
+                    if mode == "--gcc-mode" {
+                        assert!(!output.status.success(), "{mode} {arguments:?}");
+                        let twice = if stage == Some("-S") {
+                            "cc1: error: output filename specified twice\n"
+                        } else {
+                            ""
+                        };
+                        assert_eq!(
+                            stderr(&output),
+                            format!(
+                                "{twice}cc1: error: too many filenames given; type 'cc1 --help' \
+                                 for usage\ncc1: fatal error: second.d: No such file or \
+                                 directory\ncompilation terminated.\n"
+                            ),
+                            "{mode} {arguments:?}"
+                        );
+                        assert!(!directory.path("second.d").exists(), "{mode} {arguments:?}");
+                    } else if mode == "--clang-mode" && stage.is_some()
+                        || (dependencies, stage) == ("-MD", Some("-c"))
+                    {
+                        succeeds(&output);
+                        assert!(directory.path("second.d").exists(), "{mode} {arguments:?}");
+                    }
+                }
+            }
             for &flag in links {
                 let output = directory.bcc(mode, &[flag, flag, "-c", "repeat.c", "-o", "r.o"]);
                 assert!(

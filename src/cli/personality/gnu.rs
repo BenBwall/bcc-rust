@@ -1151,45 +1151,81 @@ impl State<'_> {
                 self.error(format_args!("no input files"));
             }
         }
-        // GCC's driver hands every `-o` to the compiler proper when it stops
-        // after compiling (`-E`, `-M`, `-MM` or `-S`), and `cc1` refuses a
-        // second one (`c-family/c-opts.cc`, `c_common_handle_option`,
-        // `OPT_o`). For `-c` and a link the driver keeps the last, as
-        // Clang always does.
-        if !clang && self.outputs.len() > 1 && (self.preprocesses() || self.stages.contains(&"-S"))
-        {
-            self.errors += 1;
-            super::print("cc1: error: output filename specified twice\n", true);
-        }
         // Clang counts the outputs of the inputs it kept.
         let compiled = self
             .inputs
             .iter()
             .filter(|input| input.kind != InputKind::Link && !input.dropped)
             .count();
-        if self.outputs.is_empty() || compiled < 2 {
-            return;
-        }
+        let several = !self.outputs.is_empty() && compiled > 1;
         // GCC refuses `-o` with `-c`, `-S` or `-E` given, even when
         // `-fsyntax-only` leaves nothing to write, but lets each unit's `-M`
         // rules replace the one before; Clang refuses any stage that writes
         // a file per input.
         if clang {
             let preprocesses = self.preprocesses();
-            if preprocesses || (!self.syntax_only && !self.stages.is_empty()) {
+            if several && (preprocesses || (!self.syntax_only && !self.stages.is_empty())) {
                 self.error(format_args!(
                     "cannot specify -o when generating multiple output files"
                 ));
             }
-        } else if self
-            .stages
-            .iter()
-            .any(|stage| matches!(*stage, "-c" | "-S" | "-E"))
+        } else if several
+            && self
+                .stages
+                .iter()
+                .any(|stage| matches!(*stage, "-c" | "-S" | "-E"))
         {
             self.errors += 1;
             self.invocation.fatal(format_args!(
                 "cannot specify '-o' with '-c', '-S' or '-E' with multiple files"
             ));
+        } else if self.outputs.len() > 1 {
+            self.check_repeated_outputs();
+        }
+    }
+
+    /// Reports what GCC's compiler, `cc1`, says about a second `-o`, once
+    /// for each C input it compiles. The driver hands it every `-o` when
+    /// it writes the output: under `-E`, `-M` or `-MM`, or under `-S`
+    /// unless `-fsyntax-only` writes nothing. `cc1` refuses a second one
+    /// (`c_common_handle_option`, `OPT_o`). Under `-MD` or `-MMD` the
+    /// driver also names a dependency file after each `-o` (`%{o*:%.d%*}`
+    /// in `cpp_unique_options`), and `cc1` takes the names after the first
+    /// for inputs: it refuses them and fails to open the first. For `-c`,
+    /// `-fsyntax-only` and a link without those the driver keeps the last
+    /// `-o`, as Clang always does.
+    fn check_repeated_outputs(&mut self) {
+        let writes = self.preprocesses() || (!self.syntax_only && self.stages.contains(&"-S"));
+        let dependencies = self
+            .out
+            .iter()
+            .any(|option| option == "-MD" || option == "-MMD");
+        let mut report = String::new();
+        if writes {
+            for _ in 1..self.outputs.len() {
+                report.push_str("cc1: error: output filename specified twice\n");
+            }
+        }
+        if dependencies {
+            let file = Path::new(&self.outputs[1]).with_extension("d");
+            report.push_str(
+                "cc1: error: too many filenames given; type 'cc1 --help' for usage\ncc1: fatal \
+                 error: ",
+            );
+            report.push_str(&file.to_string_lossy());
+            report.push_str(": No such file or directory\ncompilation terminated.\n");
+        }
+        let sources = self
+            .inputs
+            .iter()
+            .filter(|input| input.kind == InputKind::C && !input.dropped)
+            .count();
+        if report.is_empty() || sources == 0 {
+            return;
+        }
+        self.errors += 1;
+        for _ in 0..sources {
+            super::print(&report, true);
         }
     }
 
