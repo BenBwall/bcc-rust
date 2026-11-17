@@ -1286,15 +1286,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if data.kind != BindingKind::Object || data.linkage != Linkage::Internal {
                 continue;
             }
+            // Clang marks the first declaration in the main file, so a
+            // header's object that the main file declares again is still
+            // reported there (`MarkUnusedFileScopedDecl` and
+            // `ShouldWarnIfUnusedFileScopedDecl` in `SemaDecl.cpp`); with no
+            // declaration in the main file the site stays `usize::MAX`.
+            let in_main = !gcc && self.in_main_file(data.name.source_vectors);
             let (first, site) = sites
                 .entry(entry.name.name)
-                .or_insert((entry.binding, entry.binding));
+                .or_insert((entry.binding, if gcc { entry.binding } else { usize::MAX }));
             *first = (*first).min(entry.binding);
-            *site = if gcc {
-                (*site).max(entry.binding)
-            } else {
-                (*site).min(entry.binding)
-            };
+            if gcc {
+                *site = (*site).max(entry.binding);
+            } else if in_main {
+                *site = (*site).min(entry.binding);
+            }
         }
         // Each object's or function's place in GCC's symbol table, its own
         // place, and for a function its name and definition.
@@ -1314,9 +1320,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             symbols.sort_unstable_by_key(|&(_, site, _)| site);
         }
-        for (_, binding, function) in symbols {
+        for (first, binding, function) in symbols {
             if let Some((name, definition)) = function {
                 self.report_unused_function(name, definition);
+                continue;
+            }
+            if binding == usize::MAX {
                 continue;
             }
             let data = self.bindings[binding];
@@ -1342,13 +1351,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.unused_rule(rule, site, Some(data.name.name));
                     }
                 } else if !gcc {
-                    self.unused_rule(UnusedRule::Variable, site, Some(data.name.name));
+                    // Clang leaves the internal objects of headers alone
+                    // (`ShouldWarnIfUnusedFileScopedDecl` in `SemaDecl.cpp`).
+                    if self.in_main_file(site) {
+                        self.unused_rule(UnusedRule::Variable, site, Some(data.name.name));
+                    }
                 } else if !data.ty.is_volatile() {
                     self.unused_rule(UnusedRule::GccFileObject, site, Some(data.name.name));
                 }
             } else if !gcc
                 && usage.references == 0
-                && self.in_main_file(site)
+                // Clang classifies these at the first declaration, wherever
+                // the main file declares the object again.
+                && self.in_main_file(self.bindings[first].name.source_vectors)
                 && self
                     .context
                     .final_configuration()

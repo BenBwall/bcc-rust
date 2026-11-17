@@ -1,0 +1,31 @@
+sema-pointer-casts-clang.c:5:9: warning: cast to smaller integer type 'unsigned int' from 'int *' [-Wpointer-to-int-cast]
+    5 |   (void)(unsigned)p; (void)(int)v; (void)(enum E)p; (void)(enum E)v;
+      |         ^~~~~~~~~~~
+sema-pointer-casts-clang.c:5:28: warning: cast to smaller integer type 'int' from 'void *' [-Wvoid-pointer-to-int-cast]
+    5 |   (void)(unsigned)p; (void)(int)v; (void)(enum E)p; (void)(enum E)v;
+      |                            ^~~~~~
+sema-pointer-casts-clang.c:5:42: warning: cast to smaller integer type 'enum E' from 'int *' [-Wpointer-to-enum-cast]
+    5 |   (void)(unsigned)p; (void)(int)v; (void)(enum E)p; (void)(enum E)v;
+      |                                          ^~~~~~~~~
+sema-pointer-casts-clang.c:5:59: warning: cast to smaller integer type 'enum E' from 'void *' [-Wvoid-pointer-to-enum-cast]
+    5 |   (void)(unsigned)p; (void)(int)v; (void)(enum E)p; (void)(enum E)v;
+      |                                                           ^~~~~~~~~
+sema-pointer-casts-clang.c:6:9: warning: cast to smaller integer type 'int' from 'void (*)(void)' [-Wpointer-to-int-cast]
+    6 |   (void)(int)g; (void)(short)s;
+      |         ^~~~~~
+sema-pointer-casts-clang.c:6:23: warning: cast to smaller integer type 'short' from 'char *' [-Wpointer-to-int-cast]
+    6 |   (void)(int)g; (void)(short)s;
+      |                       ^~~~~~~~
+sema-pointer-casts-clang.c:7:9: warning: cast to 'int *' from smaller integer type 'int' [-Wint-to-pointer-cast]
+    7 |   (void)(int *)i; (void)(void *)i; (void)(char *)sh; (void)(void (*)(void))c;
+      |         ^~~~~~~~
+sema-pointer-casts-clang.c:7:25: warning: cast to 'void *' from smaller integer type 'int' [-Wint-to-void-pointer-cast]
+    7 |   (void)(int *)i; (void)(void *)i; (void)(char *)sh; (void)(void (*)(void))c;
+      |                         ^~~~~~~~~
+sema-pointer-casts-clang.c:7:42: warning: cast to 'char *' from smaller integer type 'short' [-Wint-to-pointer-cast]
+    7 |   (void)(int *)i; (void)(void *)i; (void)(char *)sh; (void)(void (*)(void))c;
+      |                                          ^~~~~~~~~~
+sema-pointer-casts-clang.c:7:60: warning: cast to 'void (*)(void)' from smaller integer type 'char' [-Wint-to-pointer-cast]
+    7 |   (void)(int *)i; (void)(void *)i; (void)(char *)sh; (void)(void (*)(void))c;
+      |                                                            ^~~~~~~~~~~~~~~~~
+10 warnings generated.
