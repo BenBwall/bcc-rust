@@ -95,7 +95,7 @@ impl<'s> Writes<'s> {
             node = self.enter(node, step, &mut found);
         }
         let range_step = steps[at];
-        let mut list = source;
+        let mut holder = source;
         for index in lower..=range_step.index {
             let step = Step {
                 index,
@@ -107,10 +107,10 @@ impl<'s> Writes<'s> {
                 for &step in &steps[at + 1..last] {
                     parent = self.enter(parent, step, &mut found);
                 }
-                list = self.list_place(parent);
+                holder = self.list_place(parent);
                 self.place(parent, steps[last], written, &mut found);
             } else {
-                list = self.list_place(parent);
+                holder = self.list_place(parent);
                 self.place(parent, step, written, &mut found);
             }
         }
@@ -118,7 +118,7 @@ impl<'s> Writes<'s> {
         if lower < range_step.index {
             self.nodes[written as usize].shared = true;
         }
-        (written, found, list)
+        (written, found, holder)
     }
 
     /// The place of the list that holds what is written inside `node`, whose
