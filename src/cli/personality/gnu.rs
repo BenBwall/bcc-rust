@@ -852,10 +852,13 @@ impl State<'_> {
             };
             let kept = |name: &OsString| {
                 let name = resolved_output(Path::new(name));
+                // Only the last `-o` is an output; an earlier one names
+                // nothing.
                 !self
                     .outputs
-                    .iter()
+                    .last()
                     .map(Path::new)
+                    .into_iter()
                     .chain(self.inputs.iter().map(|input| Path::new(&input.path)))
                     .any(|taken| resolved_output(taken) == name)
             };
@@ -919,9 +922,10 @@ impl State<'_> {
     /// `g.i`, in the output's directory under `-save-temps=obj`.
     fn saved_temporary_base(&self, input: &Path, save_temps: SaveTemps, links: bool) -> OsString {
         let stem = input.file_stem().unwrap_or(input.as_os_str());
+        // The last `-o` names the output, so it names the saved files too.
         let output = self
             .outputs
-            .first()
+            .last()
             .map(Path::new)
             .filter(|output| *output != Path::new("-"));
         if self.compiler == Compiler::Clang {

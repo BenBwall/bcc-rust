@@ -2846,7 +2846,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
     /// C23: §6.7.4.1 paragraph 10, p. 121; PDF p. 134.
-    pub(super) fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn pointer_compatible(
+        &mut self,
+        left: TypeId,
+        right: TypeId,
+        void: bool,
+    ) -> bool {
         if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
             return true;
         }

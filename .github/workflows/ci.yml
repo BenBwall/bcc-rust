@@ -156,7 +156,15 @@ jobs:
       # hang ends the step with libtest's "has been running for over 60
       # seconds" lines, and the processes still alive at 30 minutes are
       # listed. `timeout` also runs the tests in a process group of their own.
+      # Compiling the tests links several fat-LTO test binaries while rustc
+      # still builds the library: at four jobs a measured run left 657 MB of
+      # the runner's 16 GB (rustc 4.5 GB, three ld.lld links of 1.5-2.5 GB
+      # each, the integration crate 1.6 GB), and one run was shut down in
+      # this phase. Two jobs keep the build within memory; the tests
+      # themselves still run on every core.
       - name: Run cargo test --all-targets --no-fail-fast
+        env:
+          CARGO_BUILD_JOBS: 2
         run: |
           (sleep 1800 && echo "::group::Processes after 30 minutes" && ps -eo pid,ppid,rss,etime,stat,args --sort=-etime | tail -30 && echo "::endgroup::") &
           timeout --signal=INT --kill-after=60 40m cargo test --all-targets --no-fail-fast

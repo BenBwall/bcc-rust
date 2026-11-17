@@ -352,52 +352,62 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                     return Some(Self::expression_result(e, self.types.unknown()));
                 }
-                for &arg in &args[..2] {
-                    if let Some(scalar) = scalar {
-                        let ty = self.types.scalar(scalar);
-                        _ = self.common_argument(arg, ty);
-                    } else {
-                        let operand = self.expression_info(arg);
-                        let ty = self.converted(operand);
-                        if self.integer_type(ty).is_none() && !self.types.unanalyzed(ty) {
-                            self.error(
-                                SemanticErrorKind::InvalidArgumentType,
-                                arg.source_vectors,
-                                None,
-                                None,
-                            );
+                // The type-generic three word what they refuse as each
+                // compiler does, and Clang holds `<stdckdint.h>`'s calls to
+                // C23's types.
+                let destination = if scalar.is_none() && !predicate {
+                    self.overflow_arguments(name, callee, operation, args)
+                } else {
+                    for &arg in &args[..2] {
+                        if let Some(scalar) = scalar {
+                            let ty = self.types.scalar(scalar);
+                            _ = self.common_argument(arg, ty);
+                        } else {
+                            let operand = self.expression_info(arg);
+                            let ty = self.converted(operand);
+                            if self.integer_type(ty).is_none() && !self.types.unanalyzed(ty) {
+                                self.error(
+                                    SemanticErrorKind::InvalidArgumentType,
+                                    arg.source_vectors,
+                                    None,
+                                    None,
+                                );
+                            }
                         }
                     }
-                }
-                let operand = self.expression_info(args[2]);
-                let ty = self.converted(operand);
-                let destination = if predicate {
-                    Some(ty)
-                } else {
-                    match self.types.nodes[ty.index] {
-                        | TypeKind::Pointer(target) => Some(target),
-                        | _ => None,
+                    let operand = self.expression_info(args[2]);
+                    let ty = self.converted(operand);
+                    let destination = if predicate {
+                        Some(ty)
+                    } else {
+                        match self.types.nodes[ty.index] {
+                            | TypeKind::Pointer(target) => Some(target),
+                            | _ => None,
+                        }
+                    };
+                    // GCC and Clang accept a bit-precise destination too.
+                    let valid = destination.is_some_and(|ty| {
+                        matches!(
+                            self.types.nodes[ty.index],
+                            TypeKind::Scalar(s) if s.integer() && s != Scalar::Bool
+                        ) || (matches!(self.types.nodes[ty.index], TypeKind::BitInt { .. })
+                            && scalar.is_none())
+                    }) && destination.is_some_and(|ty| {
+                        (predicate || !ty.qualifiers.contains(TypeQualifiers::CONST))
+                            && scalar
+                                .is_none_or(|s| self.types.nodes[ty.index] == TypeKind::Scalar(s))
+                    });
+                    if !valid {
+                        self.error(
+                            SemanticErrorKind::InvalidArgumentType,
+                            args[2].source_vectors,
+                            None,
+                            None,
+                        );
                     }
+                    destination.filter(|_| valid)
                 };
-                // GCC and Clang accept a bit-precise destination too.
-                let valid = destination.is_some_and(|ty| {
-                    matches!(
-                        self.types.nodes[ty.index],
-                        TypeKind::Scalar(s) if s.integer() && s != Scalar::Bool
-                    ) || (matches!(self.types.nodes[ty.index], TypeKind::BitInt { .. })
-                        && scalar.is_none())
-                }) && destination.is_some_and(|ty| {
-                    (predicate || !ty.qualifiers.contains(TypeQualifiers::CONST))
-                        && scalar.is_none_or(|s| self.types.nodes[ty.index] == TypeKind::Scalar(s))
-                });
-                if !valid {
-                    self.error(
-                        SemanticErrorKind::InvalidArgumentType,
-                        args[2].source_vectors,
-                        None,
-                        None,
-                    );
-                } else if let Some(destination) = destination {
+                if let Some(destination) = destination {
                     info.operation_type = Some(destination);
                     if predicate {
                         let a = self.expression_info(args[0]);
@@ -411,7 +421,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             && let Some((a, b)) = a.integer.zip(b.integer)
                             && let Some((bits, signed)) = self.integer_type(destination)
                         {
-                            let bits = operand.bit_field.unwrap_or(bits);
+                            let bits = self.expression_info(args[2]).bit_field.unwrap_or(bits);
                             let overflows = if a.wide() || b.wide() || bits > 128 {
                                 self.wide.overflows(
                                     match operation {

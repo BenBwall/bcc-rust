@@ -567,19 +567,19 @@ fn gcc_scalar_builtin_counts_types_and_immediates_are_checked() {
         ),
         (
             "__builtin_sub_overflow(1,2,&b)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::OverflowBuiltinResult,
         ),
         (
             "__builtin_mul_overflow(1.0,2,&r)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::OverflowBuiltinOperand,
         ),
         (
             "__builtin_add_overflow(1,2,&e)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::OverflowBuiltinResult,
         ),
         (
             "__builtin_mul_overflow(1,2,&c)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::OverflowBuiltinResult,
         ),
         (
             "__builtin_uadd_overflow(1,2,&r)",
