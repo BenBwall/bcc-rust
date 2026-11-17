@@ -138,6 +138,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         comparison: Option<NullComparison<'tu>>,
         range: SourceVectors,
     ) {
+        // Only a pointer converts so (`CheckImplicitConversion`).
+        if comparison.is_none() {
+            let ty = self.expression_info(e).ty;
+            if self.pointer_target(ty).is_none()
+                && !matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::Array(..) | TypeKind::Function { .. }
+                )
+            {
+                return;
+            }
+        }
         let located = Self::clang_location(e);
         if self.context.produced_by_macro_expansion(located)
             && (self.context.written_by_macro_body(located)
