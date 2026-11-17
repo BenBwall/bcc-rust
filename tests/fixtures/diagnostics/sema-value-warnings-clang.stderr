@@ -55,12 +55,12 @@ sema-value-warnings-clang.c:23:11: warning: implicit conversion from 'int' to 'c
 sema-value-warnings-clang.c:25:10: warning: implicit conversion from 'long' to 'int' changes value from 2147483648 to -2147483648 [-Wconstant-conversion]
    25 | int c9 = 2147483648;
       |          ^~~~~~~~~~
-sema-value-warnings-clang.c:26:22: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
-   26 | void d(char c) { c = 300; char e = 128; unsigned char f = -1; (void)e; (void)f; }
-      |                      ^~~
 sema-value-warnings-clang.c:26:36: warning: implicit conversion from 'int' to 'char' changes value from 128 to -128 [-Wconstant-conversion]
    26 | void d(char c) { c = 300; char e = 128; unsigned char f = -1; (void)e; (void)f; }
       |                                    ^~~
+sema-value-warnings-clang.c:26:22: warning: implicit conversion from 'int' to 'char' changes value from 300 to 44 [-Wconstant-conversion]
+   26 | void d(char c) { c = 300; char e = 128; unsigned char f = -1; (void)e; (void)f; }
+      |                      ^~~
 sema-value-warnings-clang.c:27:24: warning: implicit conversion from 'int' to 'char' changes value from 1000 to -24 [-Wconstant-conversion]
    27 | char d2(void) { return 1000; }
       |                        ^~~~
