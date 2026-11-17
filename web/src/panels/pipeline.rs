@@ -287,14 +287,14 @@ pub fn PipelineView(
                         class="toggle-chip"
                         hidden=move || !stage.get().differs_by_level() || output.with(Option::is_none)
                         aria-pressed=move || compare.get().to_string()
-                        title="Show the -O0 and the -O2 output next to each other"
+                        title="Show the -O0 and the -O2 output together: side by side, or one above the other on a narrow screen"
                         on:click=move |_| {
                             compare.update(|compare| *compare = !*compare);
                             pointing.beside.set(0);
                         }
                     >
                         <span class="toggle-chip-dot" aria-hidden="true"></span>
-                        "-O0 and -O2 side by side"
+                        "Compare -O0 with -O2"
                     </button>
                 </div>
                 <p
