@@ -3537,6 +3537,53 @@ mod tests {
             }
         }
 
+        // A repeated `-o` keeps its last value for the saved files too, as
+        // the output's own name does in GCC 14 and Clang 23.
+        let repeated: [(&str, &[&str], &[&str]); 2] = [
+            (
+                "--gcc-mode",
+                &["-save-temps", "-c", "g.c", "-o", "first.o", "-o", "o/x.o"],
+                &["o/x.i", "o/x.s", "o/x.o"],
+            ),
+            (
+                "--clang-mode",
+                &[
+                    "-save-temps=obj",
+                    "-c",
+                    "g.c",
+                    "-o",
+                    "first.o",
+                    "-o",
+                    "o/x.o",
+                ],
+                &["o/g.i", "o/g.s", "o/x.o"],
+            ),
+        ];
+        for (mode, args, files) in repeated {
+            let directory = Directory::new();
+            std::fs::create_dir(directory.path("o")).unwrap();
+            directory.write("g.c", "int g(void) { return 1; }\n");
+            succeeds(&directory.bcc(mode, args));
+            for file in files {
+                assert!(directory.path(file).exists(), "{mode} {args:?}: {file}");
+            }
+            for file in ["first.o", "first.i", "first.s", "g.i", "g.s"] {
+                assert!(!directory.path(file).exists(), "{mode} {args:?}: {file}");
+            }
+        }
+        // An earlier `-o` names no output, so GCC saves its file under that
+        // name.
+        let directory = Directory::new();
+        directory.write("x.c", "int x;\n");
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-save-temps", "-c", "x.c", "-o", "last.i", "-o", "last.o"],
+        );
+        succeeds(&output);
+        for file in ["last.i", "last.s", "last.o"] {
+            assert!(directory.path(file).exists(), "{file}");
+        }
+
         let directory = Directory::new();
         directory.write("w.c", "#warning careful\nint w;\n");
         let output = directory.bcc("--clang-mode", &["-save-temps", "-c", "w.c"]);
