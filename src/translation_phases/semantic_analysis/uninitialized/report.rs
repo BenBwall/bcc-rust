@@ -315,7 +315,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             statement.source_vectors,
                             else_statement.source_vectors,
                         ),
-                        | None => Some(statement.source_vectors),
+                        | None => Some(clang_statement_range(statement)),
                     }
                 };
                 (
@@ -590,6 +590,45 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | _ => return e,
             };
         }
+    }
+}
+
+/// A statement's range as Clang's `Stmt::getSourceRange` gives it, which
+/// ends before the `;` of a statement that ends with an expression or a
+/// jump.
+fn clang_statement_range(statement: &Statement<'_>) -> SourceVectors {
+    let mut last = statement;
+    loop {
+        last = match last.kind {
+            | S::If {
+                then_statement,
+                else_statement,
+                ..
+            } => else_statement.unwrap_or(then_statement),
+            | S::While { body_statement, .. } | S::Switch { body_statement, .. } => body_statement,
+            | S::For(for_loop) => for_loop.body_statement,
+            | S::Label(_, child) | S::Case(_, child) | S::Default(child) => child,
+            | S::CaseRange(range) => range.statement,
+            | S::Attributed(attributed) => attributed.statement,
+            | _ => break,
+        };
+    }
+    let semicolon = matches!(
+        last.kind,
+        S::Expression(_)
+            | S::Return(_)
+            | S::Goto(_)
+            | S::ComputedGoto(_)
+            | S::Break
+            | S::Continue
+            | S::DoWhile { .. }
+            | S::Asm(_)
+    );
+    let end = Context::last_source_vector(statement.source_vectors);
+    if semicolon && let Some(trimmed) = Context::span_before(statement.source_vectors, end) {
+        trimmed
+    } else {
+        statement.source_vectors
     }
 }
 

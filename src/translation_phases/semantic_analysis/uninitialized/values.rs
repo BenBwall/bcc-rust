@@ -219,6 +219,7 @@ fn transfer(
             },
         ),
         | Element::ReturnsTwice => fill(vector, vars, INITIALIZED),
+        | Element::Unknown => vector.fill(0),
     }
 }
 

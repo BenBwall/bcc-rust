@@ -108,6 +108,9 @@ pub(super) enum Element<'tu> {
     /// A call to a function that returns twice: every variable may now be
     /// initialized.
     ReturnsTwice,
+    /// A call through a declaration marked `analyzer_noreturn`: every
+    /// variable's value is unknown, as if the path went no further.
+    Unknown,
 }
 
 /// The statement or expression whose condition ends a block, as far as the
@@ -1778,7 +1781,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             &mut cfg.known,
             ArenaMap::with_hasher_in(FxBuildHasher, cfg.arena),
         );
-        let noreturn = self.cfg_noreturn_call(&mut known, callee, arguments);
+        let analyzer_noreturn = self.callee_analyzer_noreturn(callee);
+        let noreturn = self.cfg_noreturn_call(&mut known, callee, arguments)
+            || analyzer_noreturn == Some(BindingKind::Function);
         cfg.known = known;
         if noreturn {
             if cfg.block.is_some() {
@@ -1790,6 +1795,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if self.callee_returns_twice(callee) {
             cfg.append(Element::ReturnsTwice);
+        } else if analyzer_noreturn.is_some() {
+            cfg.append(Element::Unknown);
         }
         let trivial = self.trivial_callee(callee);
         let parameters = self.parameter_types(callee);
@@ -2115,6 +2122,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | "vfork"
             );
         builtin || library || self.declared_returns_twice(binding)
+    }
+
+    /// The kind of the declaration marked `analyzer_noreturn` that the call
+    /// names, if any (`CallExpr::getCalleeDecl`): Clang's graph ends the
+    /// block at a direct call of such a function, as at one that does not
+    /// return (`FunctionDecl::isAnalyzerNoReturn`), and the analysis forgets
+    /// every value after a call through any such declaration.
+    fn callee_analyzer_noreturn(&self, callee: &'tu Expression<'tu>) -> Option<BindingKind> {
+        let designator = self.strip_noop(callee);
+        if !matches!(designator.kind, E::Identifier(_)) {
+            return None;
+        }
+        let binding = self.expression_info(designator).binding?;
+        self.functions
+            .emission
+            .analyzer_noreturn
+            .contains_key(&binding)
+            .then_some(self.bindings[binding].kind)
     }
 
     /// Whether the call's function is defined with an empty body
