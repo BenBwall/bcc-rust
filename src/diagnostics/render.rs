@@ -373,7 +373,8 @@ impl Renderer {
                 .iter()
                 .filter(|label| !label.primary && label.message.is_some())
             {
-                let point = format == DiagnosticFormat::Clang && diagnostic.point;
+                let point = format == DiagnosticFormat::Clang
+                    && (diagnostic.point || diagnostic.related_points);
                 self.render_related_note(&mut out, (label, &[]), point, context, scratch, true);
             }
             return out.into_str();

@@ -1193,15 +1193,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     position: index + 1,
                     callee:   callee_name,
                 };
-                if !self.assignment_conversion_for(parameter, info, site) {
-                    failed = true;
-                    self.error(
-                        SemanticErrorKind::InvalidArgumentType,
-                        argument.source_vectors,
-                        None,
-                        None,
-                    );
-                }
+                failed |= self.with_argument_parameter(named, index, |analyzer| {
+                    let converts = analyzer.assignment_conversion_for(parameter, info, site);
+                    if !converts {
+                        analyzer.error(
+                            SemanticErrorKind::InvalidArgumentType,
+                            argument.source_vectors,
+                            None,
+                            None,
+                        );
+                    }
+                    !converts
+                });
                 self.convert(argument, parameter, ConversionKind::Assignment);
             } else {
                 // A visible old-style definition supplies parameter types

@@ -120,6 +120,7 @@ impl OwnedDiagnostic {
             option_suffix: self.option_suffix,
             code: self.code,
             point: false,
+            related_points: false,
             labels,
             notes,
             help,

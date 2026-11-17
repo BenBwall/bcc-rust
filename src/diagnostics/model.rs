@@ -22,29 +22,36 @@ use crate::{
 /// A diagnostic ready to be rendered. Its text and labels live in the arena
 /// it was built in.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact of how the diagnostic is written."
+)]
 pub(crate) struct Diagnostic<'d> {
-    pub(crate) severity:      ErrorSeverity,
+    pub(crate) severity:       ErrorSeverity,
     /// Clang's `#pragma clang diagnostic fatal`, written as a `fatal error`.
-    pub(crate) fatal:         bool,
-    pub(crate) message:       &'d str,
+    pub(crate) fatal:          bool,
+    pub(crate) message:        &'d str,
     /// The message ends with the ` [-WNAME]` of the warning option that
     /// controls it, which bcc appended (see [`Explanation::option_suffix`]).
-    pub(crate) option_suffix: bool,
+    pub(crate) option_suffix:  bool,
     /// `cl`'s code for the diagnostic (`C2065`), which the MSVC formats
     /// write after the severity under the `cl` identity.
-    pub(crate) code:          Option<&'static str>,
+    pub(crate) code:           Option<&'static str>,
     /// Clang names a place rather than a range for it, as for its
     /// "expected" errors and some warnings: Clang's snippet marks only where
     /// the primary range starts, with no `~` over the token there, and its
     /// macro notes' carets are points too.
-    pub(crate) point:         bool,
-    pub(super) labels:        ArenaVec<'d, Label<'d>>,
-    pub(super) notes:         ArenaVec<'d, &'d str>,
-    pub(super) help:          ArenaVec<'d, &'d str>,
+    pub(crate) point:          bool,
+    /// Clang names a place rather than a range for each related note,
+    /// whose carets are then points.
+    pub(crate) related_points: bool,
+    pub(super) labels:         ArenaVec<'d, Label<'d>>,
+    pub(super) notes:          ArenaVec<'d, &'d str>,
+    pub(super) help:           ArenaVec<'d, &'d str>,
     /// The range of the token or syntax that the diagnostic was reported
     /// about, before it was moved to a place in a file, whose order says
     /// which reading of a file read twice it is in.
-    pub(crate) reading:       Option<SourceVectors>,
+    pub(crate) reading:        Option<SourceVectors>,
 }
 
 impl<'d> Diagnostic<'d> {
@@ -176,6 +183,7 @@ impl<'d> Explanation<'d> {
             option_suffix: self.option_suffix,
             code: self.code,
             point: false,
+            related_points: false,
             labels: ArenaVec::new_in(self.arena),
             notes: self.notes,
             help: self.help,

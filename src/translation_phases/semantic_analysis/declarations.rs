@@ -1070,6 +1070,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.bind(name, ty, kind, linkage, duration, None);
         if kind == BindingKind::Function {
             let index = self.bindings.len() - 1;
+            self.record_parameter_sites(index, declarator);
             let bound = self
                 .lookup(Namespace::Ordinary, name.name)
                 .is_some_and(|entry| entry.binding == index);

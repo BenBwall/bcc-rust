@@ -536,6 +536,19 @@ impl Context<'_> {
         (arena == outer_arena && start > outer_start).then(|| arena.encode(start - 1, start))
     }
 
+    /// The vector of the token just after `inner` when `outer`, which holds
+    /// `inner`, holds that token too: the `,` or `)` after a parameter.
+    pub(crate) fn token_after(outer: SourceVectors, inner: SourceVectors) -> Option<SourceVectors> {
+        if outer.length() == 0 || inner.length() == 0 {
+            return None;
+        }
+        let (arena, start) = SourceArena::decode(inner);
+        let (outer_arena, outer_start) = SourceArena::decode(outer);
+        let end = start + inner.length();
+        (arena == outer_arena && end < outer_start + outer.length())
+            .then(|| arena.encode(end, end + 1))
+    }
+
     /// Whether `source`'s expansion location is in the main source file, not
     /// in a file it includes. `source` must not be empty.
     pub(crate) fn in_main_file(&self, source: SourceVectors) -> bool {

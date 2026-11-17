@@ -510,10 +510,15 @@ pub(crate) struct PointerDeclarator<'tu> {
 /// PDF p. 140. GNU and MSVC attributes in the same place share it.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct PointerLevel<'tu> {
-    pub(crate) qualifiers: TypeQualifiers,
+    pub(crate) qualifiers:         TypeQualifiers,
+    /// How many qualifier keywords were written after the `*`. A repeated
+    /// qualifier behaves as if written once, so `qualifiers` holds it once,
+    /// but each one written is a token of the declarator. C99: §6.7.3p4,
+    /// p. 108; PDF p. 120.
+    pub(crate) written_qualifiers: u16,
     /// Attribute specifiers in reverse source order, as in
     /// [`super::modern::SpecifierExtension`] chains.
-    pub(crate) attributes: Option<&'tu super::modern::SpecifierExtension<'tu>>,
+    pub(crate) attributes:         Option<&'tu super::modern::SpecifierExtension<'tu>>,
 }
 
 /// declarator:

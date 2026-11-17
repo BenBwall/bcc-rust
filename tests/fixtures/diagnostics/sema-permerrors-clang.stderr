@@ -40,6 +40,9 @@ sema-permerrors-clang.c:15:6: error: incompatible function pointer types assigni
 sema-permerrors-clang.c:16:9: error: incompatible integer to pointer conversion passing 'int' to parameter of type 'int *'; take the address with & [-Wint-conversion]
    16 |   takep(i);
       |         ^
+sema-permerrors-clang.c:9:17: note: passing argument to parameter 'p' here
+    9 | void takep(int *p);
+      |                 ^
 sema-permerrors-clang.c:17:3: error: call to undeclared function 'undeclared'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
    17 |   undeclared(j, k);
       |   ^~~~~~~~~~

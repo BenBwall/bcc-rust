@@ -196,8 +196,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
             self.merge_source(&mut parts.source_vectors, token);
             parts.has_pointer_level = true;
             parts.pointer_levels.push(PointerLevel {
-                qualifiers: TypeQualifiers::empty(),
-                attributes: None,
+                qualifiers:         TypeQualifiers::empty(),
+                written_qualifiers: 0,
+                attributes:         None,
             });
             self.consume_token();
             break;
@@ -234,6 +235,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                     report_duplicate_type_qualifier(self, token, qualifier);
                 }
                 level.qualifiers.insert(qualifier);
+                level.written_qualifiers = level.written_qualifiers.saturating_add(1);
                 self.merge_source(&mut parts.source_vectors, token);
                 self.consume_token();
                 continue;
@@ -242,8 +244,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 return Some(());
             }
             parts.pointer_levels.push(PointerLevel {
-                qualifiers: TypeQualifiers::empty(),
-                attributes: None,
+                qualifiers:         TypeQualifiers::empty(),
+                written_qualifiers: 0,
+                attributes:         None,
             });
             let token = token.expect("asterisk token exists");
             self.merge_source(&mut parts.source_vectors, token);
