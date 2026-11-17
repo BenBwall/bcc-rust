@@ -1504,6 +1504,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::TautologicalUnsignedZeroCompare
                     | crate::configuration::DiagnosticGroup::TautologicalTypeLimitCompare
                     | crate::configuration::DiagnosticGroup::TautologicalPointerCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalCompare
                     | crate::configuration::DiagnosticGroup::Shadow
                     | crate::configuration::DiagnosticGroup::ShadowLocal
                     | crate::configuration::DiagnosticGroup::ShadowCompatibleLocal
