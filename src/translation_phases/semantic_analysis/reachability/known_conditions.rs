@@ -116,8 +116,30 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         match (left_known, right_known) {
             | (Some(_), known) => known,
             | (None, Some(known)) => (known == deciding).then_some(known),
-            | (None, None) => self.known_overlap(operator, left, right),
+            | (None, None) => self
+                .known_negation(operator, left, right)
+                .or_else(|| self.known_overlap(operator, left, right)),
         }
+    }
+
+    /// `checkIncorrectLogicOperator`'s first test: `!x && x` is false and
+    /// `x || !x` true, in either order.
+    fn known_negation(
+        &self,
+        operator: B,
+        left: &'tu Expression<'tu>,
+        right: &'tu Expression<'tu>,
+    ) -> Option<bool> {
+        let negates = |negation: &'tu Expression<'tu>, other: &'tu Expression<'tu>| {
+            matches!(
+                Self::without_parentheses(negation).kind,
+                E::Unary {
+                    operator: U::LogicalNot,
+                    operand_expression,
+                } if self.same_comparison_operand(operand_expression, other)
+            )
+        };
+        (negates(left, right) || negates(right, left)).then_some(operator == B::LogicalOr)
     }
 
     /// `checkIncorrectEqualityOperator`: a value no mask can produce, or that
