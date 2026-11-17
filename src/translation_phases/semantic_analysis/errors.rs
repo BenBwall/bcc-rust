@@ -1561,6 +1561,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::BoolOperation
                     | crate::configuration::DiagnosticGroup::CharSubscripts
                     | crate::configuration::DiagnosticGroup::Uninitialized
+                    | crate::configuration::DiagnosticGroup::UninitializedSelfReference
                     | crate::configuration::DiagnosticGroup::SometimesUninitialized
                     | crate::configuration::DiagnosticGroup::UninitializedConstPointer
                     | crate::configuration::DiagnosticGroup::ConditionalUninitialized

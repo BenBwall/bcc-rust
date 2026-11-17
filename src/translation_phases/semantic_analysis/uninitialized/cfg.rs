@@ -1612,13 +1612,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 left.or(right)
             },
             | E::Binary {
+                operator,
                 left_expression,
                 right_expression,
-                ..
             } => {
                 _ = cfg.auto_create_block();
-                let right = self.cfg_expression(cfg, right_expression, Context::Use);
-                let left = self.cfg_expression(cfg, left_expression, Context::Use);
+                // A vector's element is a subscript of the vector itself,
+                // which is not converted to its value.
+                let operand = |analyzer: &Self, operand: &'tu Expression<'tu>| {
+                    if operator == B::Subscript
+                        && matches!(
+                            analyzer.types.nodes[analyzer
+                                .types
+                                .non_atomic(analyzer.expression_info(operand).ty)
+                                .index],
+                            TypeKind::Vector { .. }
+                        )
+                    {
+                        Context::Plain
+                    } else {
+                        Context::Use
+                    }
+                };
+                let (left_context, right_context) = (
+                    operand(self, left_expression),
+                    operand(self, right_expression),
+                );
+                let right = self.cfg_expression(cfg, right_expression, right_context);
+                let left = self.cfg_expression(cfg, left_expression, left_context);
                 left.or(right)
             },
             | E::Conditional(_) | E::OmittedConditional(_) => {

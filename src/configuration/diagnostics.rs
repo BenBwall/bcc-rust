@@ -237,6 +237,7 @@ impl CompilerConfiguration {
             | DiagnosticGroup::UnusedLocalTypedefs if clang =>
                 &[DiagnosticGroup::UnusedLocalTypedef],
             | DiagnosticGroup::Uninitialized if clang => &[
+                DiagnosticGroup::UninitializedSelfReference,
                 DiagnosticGroup::SometimesUninitialized,
                 DiagnosticGroup::UninitializedConstPointer,
             ],
@@ -1136,6 +1137,9 @@ diagnostic_groups! {
     /// `-Wall`; it holds the sometimes and const-pointer groups. GCC's group
     /// of this name comes from its optimizer and is not modeled.
     Uninitialized => Some("uninitialized"), Ignored, false;
+    /// Clang's read of a variable in its own initializer, which the group
+    /// holds but which is on whenever the analysis runs.
+    UninitializedSelfReference => Some("uninitialized"), ClangWarning, false;
     /// Clang's read that a branch leaves uninitialized.
     SometimesUninitialized => Some("sometimes-uninitialized"), Ignored, false;
     /// Clang's `&x` of an uninitialized `x` passed as a pointer to `const`.

@@ -205,7 +205,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     "is uninitialized when used within its own initialization",
                 );
                 return self.emit_uninitialized(Warning {
-                    group: G::Uninitialized,
+                    group: G::UninitializedSelfReference,
                     site: u.user.source_vectors,
                     highlight: name.source_vectors,
                     text,
