@@ -98,3 +98,37 @@ fn builtins_and_implicit_declarations_have_prototypes() {
         assert!(reports.is_empty(), "{source}: {reports:?}");
     }
 }
+
+/// A declaration without a prototype takes the prototype of the one it
+/// redeclares once Clang has compared them, and Clang compares the next
+/// declaration with that: the second comparison reports `f()` as one with
+/// a parameter, which C23 does not support. The golden leaves this out,
+/// since bcc quotes no source for the second report at the place it just
+/// reported, where Clang quotes it again after the note between them.
+#[test]
+fn a_redeclaration_takes_the_prototype_it_redeclares() {
+    const SOURCE: &str = "int f(long); int f(); int f(long);";
+    let mut words = Vec::new();
+    with_exact_configuration(SOURCE, clang(), |context, _| {
+        for error in context.take_pending_errors() {
+            if let TranslationError::Semantic(error) = error
+                && error.kind == SemanticErrorKind::DeprecatedNonPrototype
+            {
+                let offset = context
+                    .get_source_vectors(error.source_vectors)
+                    .first()
+                    .map_or(usize::MAX, |vector| vector.index as usize);
+                let name = error
+                    .name
+                    .map(|name| context.string_cache.at(name).to_owned());
+                words.push((offset, name.unwrap_or_default()));
+            }
+        }
+    });
+    let at = SOURCE.find("f()").unwrap();
+    assert_eq!(words.len(), 2, "{words:?}");
+    assert_eq!(words[0].0, at, "{words:?}");
+    assert!(words[0].1.contains("zero-parameter prototype"), "{words:?}");
+    assert_eq!(words[1].0, at, "{words:?}");
+    assert!(words[1].1.contains("not supported in C23"), "{words:?}");
+}

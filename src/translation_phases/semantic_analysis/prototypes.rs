@@ -24,6 +24,7 @@ use super::{
     DeclarationSpecifiers,
     Expression,
     FunctionDefinition,
+    Linkage,
     Namespace,
     ReportOrder,
     SemanticErrorKind,
@@ -58,8 +59,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// redeclares, as Clang's `MergeFunctionDecl` does: when one of them
     /// has a prototype with parameters and the other has none, the one
     /// without is reported, and the prototype noted unless the one without
-    /// is a definition. Clang reports a declaration it compares later at
-    /// the place of the later one.
+    /// is a definition. A declaration of a builtin is neither reported nor
+    /// noted, and only the earlier one can be: Clang passes the builtin on
+    /// to the later one after comparing them (`SemaDecl.cpp`,
+    /// `MergeFunctionDecl`: `WithoutProto->getBuiltinID() == 0`). Clang
+    /// reports a declaration it compares later at the place of the later
+    /// one.
     pub(super) fn compare_prototypes(
         &mut self,
         index: usize,
@@ -75,8 +80,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         new.written |= specified;
         let file_scope = self.scope == 0;
         let name = self.bindings[index].name;
+        let old = previous.filter(|_| bound).and_then(|old_index| {
+            Some((old_index, *self.prototypes.declarations.get(&old_index)?))
+        });
         if bound {
-            _ = self.prototypes.declarations.insert(index, new);
+            // What Clang passes on from the declaration this one
+            // redeclares once it has compared them, and compares the next
+            // one with: whether it declares a builtin, and the prototype a
+            // declaration without one takes.
+            let mut declared = new;
+            declared.builtin = self.declares_builtin(index, old.map(|(_, old)| old));
+            if !new.written
+                && !new.definition
+                && let TypeKind::Function {
+                    prototype: true,
+                    parameters,
+                    ..
+                } = self.types.nodes[self.bindings[index].ty.index]
+            {
+                declared.parameters = parameters.len();
+            }
+            _ = self.prototypes.declarations.insert(index, declared);
         }
         let possible = self.prototypes.file_scope.get(&name.name).copied();
         if bound && file_scope {
@@ -87,10 +111,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             definition.written = new.written;
             definition.index = bound.then_some(index);
         }
-        let Some(old_index) = previous.filter(|_| bound) else {
-            return;
-        };
-        let Some(&old) = self.prototypes.declarations.get(&old_index) else {
+        let Some((old_index, old)) = old else {
             return;
         };
         if old.written == new.written || self.overloadable(index) || self.overloadable(old_index) {
@@ -115,7 +136,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             ((old, old_index), (new, index))
         };
-        if with.parameters == 0 {
+        if with.parameters == 0 || without.builtin {
             return;
         }
         let words = if without.parameters != 0 {
@@ -128,10 +149,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )
         };
         // Clang notes a prototype only when it is the cause, and never one
-        // that declares a library builtin.
-        let note = (!without.definition
-            && crate::builtins::ordinary(self.context.string_cache.at(name.name)).is_none())
-        .then(|| self.bindings[with_index].name.source_vectors);
+        // that declares a builtin.
+        let note = (!without.definition && !with.builtin)
+            .then(|| self.bindings[with_index].name.source_vectors);
         let site = self.bindings[without_index].name.source_vectors;
         self.with_report_order(ReportOrder::After(name.source_vectors), |analyzer| {
             analyzer.non_prototype_warning(site, words, note);
@@ -325,6 +345,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             })
     }
 
+    /// Whether the function declaration `index`, which redeclares `old`,
+    /// declares a builtin, as Clang's `getBuiltinID` tells: the first
+    /// declaration of a builtin's name does when its type is compatible
+    /// with the builtin's, and a later one when the one it redeclares
+    /// does. A declaration with internal linkage never does: Clang's
+    /// `ActOnFunctionDeclarator` gives the builtin only to a declaration
+    /// with C language linkage, and `getBuiltinID` none to a static one.
+    /// C99: §6.2.7p2, p. 40; PDF p. 52 (compatible types).
+    fn declares_builtin(&mut self, index: usize, old: Option<Declared>) -> bool {
+        let binding = self.bindings[index];
+        if binding.linkage != Linkage::External {
+            return false;
+        }
+        match old {
+            | Some(old) => old.builtin,
+            | None => self
+                .declared_builtin_type(binding.name)
+                .is_some_and(|builtin| self.types.composite(builtin, binding.ty).is_some()),
+        }
+    }
+
     /// Whether the function declaration `index` is one of Clang's
     /// overloads, which it never merges.
     fn overloadable(&self, index: usize) -> bool {
@@ -379,6 +420,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             written,
             parameters,
             definition: self.prototypes.definition.is_some(),
+            builtin: false,
         }
     }
 }
@@ -498,4 +540,6 @@ struct Declared {
     /// Its parameters: `getNumParams`.
     parameters: usize,
     definition: bool,
+    /// It declares a builtin: `getBuiltinID`.
+    builtin:    bool,
 }
