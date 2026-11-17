@@ -548,7 +548,25 @@ was measured again after these fixes and did not change.
 - **Other wide arrays still scroll.** No lesson has an array of another type
   wider than the window, but a program in the workbench can (`int a[100]`):
   a step that creates it lights more cells than the row shows. The same
-  folding (one cell of its values, opened on demand) would fit it.
+  folding (one cell of its values, opened on demand) would fit it. Done
+  later: an array of more than eight elements of a type other than char is
+  one cell of its values, a column per element over the string cell's index
+  ruler, wrapping between words of values, with a `CELLS` key that opens it
+  into its element cells and a `VALUES` key that folds them back. For a
+  program with `int squares[100] = {0, 1, 4, 9};`, the step that creates it
+  had 12 of its 100 elements on screen at 1440x900 and 4 at 390x844, in a
+  row 8,566 px wide; it now has all 100 at both sizes, in one cell 521 px
+  wide (366 px on a phone), and each later step's element is on screen as
+  before. Lessons are unchanged: their arrays have three or four elements.
+  [`create-1440-light`](screenshots/wide-arrays/create-1440-light-before.png)
+  ([after](screenshots/wide-arrays/create-1440-light-after.png)),
+  [`initialize-1440-light`](screenshots/wide-arrays/initialize-1440-light-before.png)
+  ([after](screenshots/wide-arrays/initialize-1440-light-after.png),
+  [opened](screenshots/wide-arrays/open-1440-light-after.png)),
+  [`create-390-dark`](screenshots/wide-arrays/create-390-dark-before.png)
+  ([after](screenshots/wide-arrays/create-390-dark-after.png)),
+  [`initialize-390-dark`](screenshots/wide-arrays/initialize-390-dark-before.png)
+  ([after](screenshots/wide-arrays/initialize-390-dark-after.png)).
 - **A char array inside a structure** keeps its byte cells.
 - **The tape and Table 1** still show a literal's value as `{'%','z',…}`,
   cut with an ellipsis; they could spell it as the string cell does. Done
