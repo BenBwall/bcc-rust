@@ -649,3 +649,44 @@ fn highlights_draw_a_pasted_token_as_its_invocation() {
         [site, prefix, string, end]
     );
 }
+
+/// The `##` that formed a token stays with the token's first vector when
+/// its provenance is retained, copied into a merged range, and compacted, so
+/// Clang's system-macro test can step out to the macro that pasted it. A
+/// token no `##` formed has none.
+#[test]
+fn a_pasted_token_keeps_where_its_hash_hash_is_written() {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let at = |index: u32, length: u32| SourceVector {
+        index,
+        line: 1,
+        length,
+        ..SourceVector::default()
+    };
+    let site = at(10, 2);
+    let pasted = context.push_source_vectors(&[at(20, 2), at(24, 2)]);
+    context.record_paste_site(pasted, site.clone());
+    let plain = context.push_source_vectors(&[at(30, 1)]);
+    let pasted = context.retain_token_source(pasted);
+    let plain = context.retain_token_source(plain);
+    context.compact_preprocessor_vectors();
+    assert_eq!(context.paste_site(pasted), Some(&site));
+    assert_eq!(context.paste_site(plain), None);
+    assert_eq!(context.paste_site(super::SourceVectors::empty()), None);
+    // Ranges in different arenas merge by copying into the retained arena.
+    let later = context.create_retained_source_vectors(
+        super::SourcePosition {
+            index:  40,
+            line:   1,
+            column: 41,
+        },
+        0,
+        1,
+    );
+    let merged = context.merge_vectors(pasted, later);
+    assert_ne!(SourceArena::decode(merged).0, SourceArena::decode(pasted).0);
+    assert_eq!(context.paste_site(merged), Some(&site));
+    let begins_elsewhere = context.merge_vectors(later, pasted);
+    assert_eq!(context.paste_site(begins_elsewhere), None);
+}

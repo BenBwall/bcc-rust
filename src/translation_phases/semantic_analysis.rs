@@ -2247,6 +2247,11 @@ struct Analyzer<'a, 'tu, 's> {
     /// The range GCC underlines around the caret of what is reported now;
     /// see [`Self::with_gcc_extent`].
     gcc_extent:              SourceVectors,
+    /// The expression or token whose location Clang takes as the context of
+    /// the implicit conversion checked now (`CC` in `CheckImplicitConversion`),
+    /// or an empty range when none is known; see
+    /// [`Self::with_conversion_context`].
+    conversion_context:      SourceVectors,
     /// Where a diagnostic reported now falls among the others; see
     /// [`Self::with_report_order`].
     report_order:            ReportOrder,
