@@ -294,8 +294,25 @@ impl Renderer {
                 && site.source_file_index == expansion.site.source_file_index
                 && site.index == expansion.site.index
             {
+                // The definition holds the range; what the arguments wrote
+                // of it is in the invocation, which Clang's note does not
+                // draw.
+                let invocation = context
+                    .invocation_span(source)
+                    .map(|(start, end)| (start.source_file_index, start.index..=end.index));
+                let written = scratch.alloc_slice_fill_iter(
+                    context
+                        .get_source_vectors(source)
+                        .iter()
+                        .filter(|vector| {
+                            invocation.as_ref().is_none_or(|(file, span)| {
+                                vector.source_file_index != *file || !span.contains(&vector.index)
+                            })
+                        })
+                        .cloned(),
+                );
                 highlights.push(Label {
-                    source:  LabelSource::Segments(context.get_source_vectors(source)),
+                    source:  LabelSource::Segments(written),
                     message: None,
                     primary: false,
                 });
