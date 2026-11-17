@@ -1,0 +1,28 @@
+sema-char-subscripts-clang.c:7:15: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    7 |   return table[c] + table[s] + table[u] + table[t] + table[k] + c[table]
+      |               ^~
+sema-char-subscripts-clang.c:7:48: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    7 |   return table[c] + table[s] + table[u] + table[t] + table[k] + c[table]
+      |                                                ^~
+sema-char-subscripts-clang.c:7:59: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    7 |   return table[c] + table[s] + table[u] + table[t] + table[k] + c[table]
+      |                                                           ^~
+sema-char-subscripts-clang.c:7:66: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    7 |   return table[c] + table[s] + table[u] + table[t] + table[k] + c[table]
+      |                                                                 ~^
+sema-char-subscripts-clang.c:8:17: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    8 |          + table[*p] + q[c] + q[(char)1] + q[(char)-1] + q[(char)200]
+      |                 ^~~
+sema-char-subscripts-clang.c:8:25: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    8 |          + table[*p] + q[c] + q[(char)1] + q[(char)-1] + q[(char)200]
+      |                         ^~
+sema-char-subscripts-clang.c:8:45: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    8 |          + table[*p] + q[c] + q[(char)1] + q[(char)-1] + q[(char)200]
+      |                                             ^~~~~~~~~
+sema-char-subscripts-clang.c:8:59: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    8 |          + table[*p] + q[c] + q[(char)1] + q[(char)-1] + q[(char)200]
+      |                                                           ^~~~~~~~~~
+sema-char-subscripts-clang.c:9:45: warning: array subscript is of type 'char' [-Wchar-subscripts]
+    9 |          + table[c + 1] + table['x'] + table[(char)(c)];
+      |                                             ^~~~~~~~~~
+9 warnings generated.

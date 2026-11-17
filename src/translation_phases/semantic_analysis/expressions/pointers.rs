@@ -120,6 +120,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         braced: bool,
     ) -> bool {
         let source = self.resolve_function_value(source, Some(target));
+        if !self.bool_negations.is_empty() {
+            let to_bool = matches!(
+                self.types.nodes[self.types.non_atomic(target).index],
+                TypeKind::Scalar(Scalar::Bool)
+            );
+            self.convert_negation(source.expression, to_bool);
+        }
         if self.assignment_compatible(target, source) {
             self.literal_conversion_warning(target, source);
             self.check_constant_conversion(target, source, braced);

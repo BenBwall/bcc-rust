@@ -90,7 +90,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// parentheses, `__extension__` and the operand `_Generic` or
     /// `__builtin_choose_expr` selects.
     /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
-    fn selected_operand(&self, mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+    pub(super) fn selected_operand(&self, mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
         loop {
             e = match e.kind {
                 | E::Parenthesized { expression }

@@ -4,6 +4,7 @@
 use std::fmt;
 
 use super::{
+    bool_operation::BoolOperationRule,
     main_function::MainRule,
     unused::UnusedRule,
 };
@@ -140,6 +141,8 @@ pub(crate) enum SemanticErrorKind {
     Main(MainRule),
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
     Unused(UnusedRule),
+    /// C99: §6.5.3.3p4, p. 79; PDF p. 91.
+    BoolOperation(BoolOperationRule),
     /// The words are the diagnostic's name.
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
@@ -1213,6 +1216,7 @@ impl SemanticErrorKind {
             | Self::IncompleteDefinitionParameter => "incomplete parameter type",
             | Self::DefinitionStarArray => "`[*]` is not allowed in a definition",
             | Self::Unused(rule) => rule.label(),
+            | Self::BoolOperation(_) => "a truth value's bits",
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::ValueWarning(_) => "this value is not what it seems",
@@ -1514,6 +1518,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnusedLocalTypedef
                     | crate::configuration::DiagnosticGroup::UnusedValue
                     | crate::configuration::DiagnosticGroup::UnusedComparison
+                    | crate::configuration::DiagnosticGroup::BoolOperation
+                    | crate::configuration::DiagnosticGroup::CharSubscripts
                     | crate::configuration::DiagnosticGroup::Main
                     | crate::configuration::DiagnosticGroup::MainExtension
                     | crate::configuration::DiagnosticGroup::MainReturnType
@@ -1995,6 +2001,11 @@ impl SemanticErrorKind {
                 "missing field initializer",
                 "C99 §6.7.8p21: members with no initializer in a brace-enclosed list are \
                  initialized as if they had static storage duration",
+            ),
+            | Self::BoolOperation(rule) => (
+                rule.words(),
+                "C99 §6.5.3.3p4: `~` complements each bit, so it makes 0 and 1 two values that \
+                 are both true",
             ),
             | Self::Unused(rule) => (
                 rule.words().0,
@@ -2923,6 +2934,7 @@ impl SemanticErrorKind {
             | Self::ReturnFlow(group) => Some(group),
             | Self::UndefinedInternal(group) => group,
             | Self::Unused(rule) => Some(rule.group()),
+            | Self::BoolOperation(_) => Some(G::BoolOperation),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
@@ -3532,6 +3544,7 @@ impl ToDiagnostic for SemanticError {
                         == crate::configuration::CompilerIdentity::Gcc =>
                     "shadowed declaration is here",
                 | SemanticErrorKind::UndefinedInternal(Some(_)) => "used here",
+                | SemanticErrorKind::BoolOperation(_) => "did you mean to use logical not?",
                 | SemanticErrorKind::Format(_, note) => note.words(context, arena),
                 | SemanticErrorKind::FormatAttributeCount(count) =>
                     format_in!(arena, "expected 3, found {count}"),
