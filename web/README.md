@@ -112,10 +112,14 @@ compiler; each part is captioned with what its lessons share
   IR, native x86-64 assembly, and machine code with its encoded bytes, each
   with a short explanation and, for the front end, the C99 rules it applies.
   Each stage leads with one sentence on what it takes from the stage before
-  and hands to the next, with a button to that next stage. The real compiler runs in the browser and recompiles as you
+  and hands to the next, with a button to that next stage, and beside it
+  three lines (`Stage::brief`): what goes in, what comes out, and why a
+  compiler has the stage, their terms linked to the glossary's second part,
+  Compiler terms. The real compiler runs in the browser and recompiles as you
   type, at `-O0` or `-O2`, with a note on what the optimizer changed,
-  drawn as paired bars. Each stage's explanation says what goes in, what
-  comes out and what the stage decides, and an "In this program" line gives
+  drawn as paired bars; at the stages the optimizer changes, the two levels
+  can be shown side by side, each linked to the source. Each stage's
+  explanation says what the stage decides, and an "In this program" line gives
   one example of it read from the program's own output
   (`pipeline/example.rs`). Its
   errors appear as squiggles in the source and in a diagnostics list, and the

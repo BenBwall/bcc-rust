@@ -553,3 +553,213 @@ was measured again after these fixes and did not change.
 - **The tape and Table 1** still show a literal's value as `{'%','z',…}`,
   cut with an ellipsis; they could spell it as the string cell does. Done
   later: they spell it `"%zu…"` ([`claims-audit.md`](claims-audit.md#visuals)).
+
+## Part 4: the compiler stages as teaching (2026-11)
+
+The first three parts and the earlier audits checked the stage views for
+layout, contrast and correctness, but none asked whether they teach: the
+eleven stages Figure 0 promises, from the logical lines to machine code,
+and the WebAssembly text beside them. This part reads them as a programmer
+new to compilers would, on `main` at `da963840b` (before) and on
+`agent/site-pipeline-views` (after).
+
+### Method
+
+The site was built with `web/build.sh`, served from `web/dist`, and driven
+with Playwright in Chromium with reduced motion, one browser run per lesson
+and configuration. "Objects, loops and calls" ran at 1440x900 and 390x844 in
+both themes, "From source to a running program" (the whole-path lesson) at
+1440x900 light and 390x844 dark, and "Floating point: close, not exact" at
+1440x900 light. At every stage the script took a screenshot with the stage
+card at the top of the window and recorded:
+
+- the stage's header (its kicker, command, hand-off sentence and
+  explanation) and where each part sits;
+- the colour, weight and style of every token on screen in the output
+  editor, with its WCAG contrast on the editor's background, and samples
+  of the text each colour carried;
+- every source line hovered in turn, with the number of output lines it
+  marked, and every output line on screen hovered, with the number of
+  source lines it marked;
+- the folding controls in the output editor;
+- for the five stages after semantic analysis, the first line on screen
+  after scrolling the output 400 px, after switching to `-O2`, after
+  switching back, and after visiting another stage and returning;
+- sideways scroll of the page, clipped text, text running off the window,
+  and the contrast of every text node in the pipeline card.
+
+The WebAssembly view's listing (the floating lesson) was measured the same
+way for its tokens. A second script took the before and after pairs below,
+named `<item>-<width>-<theme>-before.png` and `…-after.png` in
+[`screenshots/pipeline-views/`](screenshots/pipeline-views/).
+
+### Findings
+
+#### What each stage is, takes, gives and is for
+
+Every stage led with one sentence on what it hands to the next (the
+hand-off) and a button to that stage. What goes in and what comes out
+opened the stage's explanation ("In: the typed tree. Out: bcc's
+intermediate representation…"), but the explanation sat under the output,
+the C99 rules and the "In this program" note: 884 to 934 px below the
+stage's heading at 1440x900, always below the fold. No stage said why a
+compiler has it. The words the stages use (IR, SSA, basic block, ABI,
+register) were in no glossary: the glossary held only the C standard's
+terms.
+
+**Fixed.** Beside the hand-off each stage now lists *In*, *Out* and *Why*:
+"In: the typed syntax tree. Out: bcc IR: simple operations on values, in
+basic blocks. Why: C has many ways to write one computation. A few simple
+operations, with every jump explicit, give the optimizer one form to
+improve and every back end one form to translate." The explanation starts
+at what the stage decides. The glossary has a second part, *Compiler
+terms*: logical source line, preprocessing token, translation unit and
+token, each with its C99 paragraph, and syntax tree, intermediate
+representation, static single assignment, basic block, optimizer, ABI,
+register, assembly language and machine code, each with a link that opens
+the stage showing it. The In, Out and Why lines link their terms there. The
+narration does not mark these words, so no lesson's note changed. The
+brief sits in a column of its own where the view beside the source is
+900 px wide or more, and under the hand-off on a phone; at 1440x900 the
+output moved down by 0 to 61 px (it starts 384 to 457 px under the stage's heading, from 384 to
+431).
+[`brief-ir-1440-light`](screenshots/pipeline-views/brief-ir-1440-light-before.png)
+([after](screenshots/pipeline-views/brief-ir-1440-light-after.png)),
+[`brief-asm-1440-dark`](screenshots/pipeline-views/brief-asm-1440-dark-before.png)
+([after](screenshots/pipeline-views/brief-asm-1440-dark-after.png)),
+[`brief-ir-390-dark`](screenshots/pipeline-views/brief-ir-390-dark-before.png)
+([after](screenshots/pipeline-views/brief-ir-390-dark-after.png)),
+[`glossary-terms-1440-light`](screenshots/pipeline-views/glossary-terms-1440-light-after.png).
+
+#### Token colours
+
+Every editor is the device's dark screen in both themes (`#0b0b0b` in the
+light theme, `#050505` in the dark), so a token's contrast is the same in
+both. Every colour passed WCAG AA: the lowest, the muted grey of comments,
+directives and offsets, is 6.9:1. The colours did not separate the kinds a
+newcomer needs to tell apart, though. Measured as CIEDE2000 differences,
+where about 10 is a difference seen at a glance:
+
+| Kinds side by side | Where | Before | After |
+| --- | --- | ---: | ---: |
+| A type and a value (`i32`, `v3`; `double`, `%v3`) | bcc IR, LLVM IR | 7.5 | 25.7 |
+| A register and a label (`%rbx`, `.LBB1_2:`) | assembly, machine code | 7.0 | 42.9 |
+| A label and a number | everywhere | 36.1 | 15.8 |
+| A value and a string | IR | 39.1 | 20.0 |
+
+Beyond the palette, the grammars gave one thing two colours or two things
+one:
+
+- a jump's or call's target (`jge .LBB1_4`, `callq bump`) was the near-white
+  of a plain name, while the label it names was pink;
+- in LLVM IR a block named by a branch (`label %block2`) or by a phi was a
+  value, while its definition (`block2:`) was a label;
+- an instruction's modifiers (`nsw`, `align`, `inbounds`, `noundef`,
+  `external`) were the instructions' orange, set apart only by weight, and a
+  comparison's condition (`slt`) was pink like the block names around it;
+- an assembler directive's operands (`.cfi_offset %rbp, -16`) were as
+  bright as an instruction's, and `objects.c`'s assembly has 32 directive
+  lines among its 36 instructions;
+- the machine code's bytes, the stage's whole output, were the same muted
+  grey as the offsets beside them;
+- in the floating lesson a float constant's bits (`0x401C000000000000`)
+  split into a `0` and a name, LLVM's `sitofp`, `fptosi` and `oeq` were
+  plain text, and `3.000000e-01` broke at its point.
+
+**Fixed.** Values are teal and labels khaki; a jump's or call's target, and
+an LLVM block named as a target, takes its label's colour; modifiers and
+conditions recede (grey, and plain orange); a directive is muted whole; the
+machine code's bytes are as plain as text, with only the offsets muted; and
+the floating IR's constants, casts and conditions are coloured as the
+integer IR's are. The WebAssembly text (`wat`) shares the palette: its
+locals, the values of that listing, are teal too. Comments stay italic grey,
+registers pink, immediates and other numbers ochre, types blue and
+instructions bold orange, all 6.9:1 or more.
+[`colors-asm-1440-light`](screenshots/pipeline-views/colors-asm-1440-light-before.png)
+([after](screenshots/pipeline-views/colors-asm-1440-light-after.png)),
+[`colors-ir-1440-light`](screenshots/pipeline-views/colors-ir-1440-light-before.png)
+([after](screenshots/pipeline-views/colors-ir-1440-light-after.png)),
+[`colors-llvm-1440-light`](screenshots/pipeline-views/colors-llvm-1440-light-before.png)
+([after](screenshots/pipeline-views/colors-llvm-1440-light-after.png)),
+[`colors-machine-1440-light`](screenshots/pipeline-views/colors-machine-1440-light-before.png)
+([after](screenshots/pipeline-views/colors-machine-1440-light-after.png)),
+[`wat-1440-light`](screenshots/pipeline-views/wat-1440-light-before.png)
+([after](screenshots/pipeline-views/wat-1440-light-after.png)).
+
+#### `-O0` against `-O2`
+
+The two levels could be seen only one at a time. The optimizer note under
+each stage lists what changed and draws bars of the counts, but to see what
+`-O2` did to a line a reader switched levels and lost the `-O0` text.
+
+**Fixed.** At the five stages the optimizer changes, *Compare -O0 with -O2*
+sets the other level's output beside the selected one, `-O0` on the left,
+each under its caption (one above the other on a phone). Pointing at a
+source line marks what it became at both levels: at `-O2` the call to
+`bump` on line 13 is the hatched, inlined body of `bump` in `main`, beside
+the `call @bump` of `-O0`. Pointing at a line of either output marks its
+source, and the reading names the level ("Line 9 of the -O2 bcc IR came
+from source line 14."). A diff was the other choice, but it pairs lines by their
+text, not by the source line they came from: a line diff of `objects.c`'s
+LLVM IR marks 20 of the 36 lines of its `-O2` functions, most for a value
+renumbered, while the links pair the two levels by source line.
+[`compare-ir-1440-light`](screenshots/pipeline-views/compare-ir-1440-light-before.png)
+([after](screenshots/pipeline-views/compare-ir-1440-light-after.png)),
+[`compare-asm-1440-light`](screenshots/pipeline-views/compare-asm-1440-light-before.png)
+([after](screenshots/pipeline-views/compare-asm-1440-light-after.png)),
+[`compare-ir-390-dark`](screenshots/pipeline-views/compare-ir-output-390-dark-after.png)
+(after only: the phone sets the levels one above the other).
+
+#### Text below WCAG AA
+
+In the dark theme, "In this program:", the label of the note that reads
+the stage's output, was vermilion on the note's plate of light ink: 2.6:1,
+at every stage of both lessons. No other text in the pipeline card fell
+below AA in any configuration.
+
+**Fixed.** The label takes the light theme's darker accent on that plate
+(5.0:1), and keeps vermilion on the light theme's dark plate (6.1:1). All
+four configurations now measure no failure.
+[`brief-asm-1440-dark`](screenshots/pipeline-views/brief-asm-1440-dark-before.png)
+([after](screenshots/pipeline-views/brief-asm-1440-dark-after.png)).
+
+#### What held
+
+- **Source and output link both ways at every stage.** Hovering each source
+  line of `objects.c` marked output lines at all eleven stages: every line
+  in the logical lines, the preprocessing tokens and the preprocessed text,
+  and every line with code from the tokens to the machine code (13 to 16 of
+  its 19 lines; a declaration whose value lives in a register, such as
+  `int total = 0;`, has no line of its own in the LLVM IR or the assembly,
+  and the reading says that nothing came from it). Hovering the output lines on screen marked their source lines,
+  except the lines that are no single line's code (a function's directives,
+  its prologue), which a dotted margin marks and the legend explains. The
+  cursor's links share the hover's code path and were not measured again.
+- **Long outputs fold.** The IR, ABI-lowered IR, LLVM IR, assembly and
+  machine code fold by function and block; the token and type listings are
+  flat lists and have no folds.
+- **Phones.** No stage scrolled the page sideways or clipped text at 390 px
+  in either theme, before or after; the output still comes first.
+- **The WebAssembly text** measured 6.9:1 or more for every token class.
+
+### Left for later
+
+- **Scroll position follows pixels, not code.** Switching levels or stages
+  keeps the output's scroll offset in pixels: after scrolling the assembly to
+  line 45, `-O2` showed line 33 of a shorter listing, and the machine code
+  opened in the middle of `main`. Keeping the same function (or the line
+  under the pointer) in view would need the editor to report its first
+  visible line to Rust.
+- **The linked lines can be below the fold.** At 1440x900, with the stage
+  card at the top of the window, the output shows its first 9 or 10 lines
+  above the fold; hovering source line 13 marks assembly lines 55 and 56,
+  inside the editor's view but under the window's edge. The source pane
+  stays beside the output when the page scrolls down to it, so a reader can
+  see both, but the page does not move there by itself.
+- **The IR opens with two lines a newcomer cannot read**, the target triple
+  and the data layout string (`e-m:e-p270:32:32-…`); folding them into one
+  line, as the preprocessed text folds headers, would put the first function
+  first.
+- **Function names are the colour of plain text** in the C source and the IR
+  (`@main`), as the theme intends for the source; the IR could set them
+  apart.
