@@ -235,11 +235,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// When the function's definition is known and has another number of
     /// parameters, the call has too many or too few arguments, at its `)`.
     /// A call with arguments is deprecated, at its `(`, unless the function
-    /// is an implicit declaration, one where the warning is off, or a
-    /// library builtin's, which Clang gives the builtin's prototype, or a
-    /// definition with an identifier list gave the function parameters,
-    /// which Clang takes as a prototype. Clang words that one when it
-    /// reports what follows the `)`.
+    /// is an implicit declaration, one where the warning is off, or one
+    /// that declares a builtin as [`Self::compare_prototypes`] recorded it
+    /// (`getBuiltinID`: an external declaration compatible with a builtin
+    /// available in this mode, or one redeclaring such a declaration),
+    /// which Clang gives the builtin's prototype, or a definition with an
+    /// identifier list gave the function parameters, which Clang takes as
+    /// a prototype. Clang words that one when it reports what follows the
+    /// `)`.
     pub(super) fn call_without_prototype(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -300,8 +303,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )
                     .is_none()
                 || self
-                    .implicit_library_type(binding.name)
-                    .is_some_and(|(builtin, _)| self.types.composite(builtin, binding.ty).is_some())
+                    .prototypes
+                    .declarations
+                    .get(&index)
+                    .is_some_and(|declared| declared.builtin)
             {
                 return;
             }

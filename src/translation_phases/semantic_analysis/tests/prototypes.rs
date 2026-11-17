@@ -99,6 +99,44 @@ fn builtins_and_implicit_declarations_have_prototypes() {
     }
 }
 
+/// A call takes the builtin status its declaration recorded, as Clang's
+/// `getBuiltinID` does: the GNU modes' `alloca` declares a builtin, as the
+/// library functions do, and a declaration with internal linkage never
+/// declares one, so a call with arguments to it is deprecated, at its `(`.
+#[test]
+fn calls_take_their_declarations_builtin_status() {
+    let gnu = || clang().with_gnu_extensions(true);
+    for (source, configuration, deprecated) in [
+        ("void *alloca(); void use(void) { (void)alloca(8UL); }", gnu(), false),
+        ("void *alloca(); void use(void) { (void)alloca(8UL); }", clang(), true),
+        ("long labs(); void use(void) { (void)labs(1L); }", clang(), false),
+        ("static long labs(); long g(void) { return labs(1L); }", clang(), true),
+        ("static long labs(); long g(void) { return labs(1L); }", gnu(), true),
+        (
+            "static char *index(); void use(void) { (void)index(\"x\", 120); }",
+            gnu(),
+            true,
+        ),
+        (
+            "char *index(); void use(void) { (void)index(\"x\", 120); }",
+            gnu(),
+            false,
+        ),
+    ] {
+        let reports: Vec<_> = reports(source, configuration)
+            .into_iter()
+            .filter(|&(kind, _)| kind == SemanticErrorKind::DeprecatedNonPrototype)
+            .collect();
+        let call = source.rfind('(').unwrap();
+        let expected: &[_] = if deprecated {
+            &[(SemanticErrorKind::DeprecatedNonPrototype, call)]
+        } else {
+            &[]
+        };
+        assert_eq!(reports, expected, "{source}");
+    }
+}
+
 /// A declaration without a prototype takes the prototype of the one it
 /// redeclares once Clang has compared them, and Clang compares the next
 /// declaration with that: the second comparison reports `f()` as one with
