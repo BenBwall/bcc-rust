@@ -709,10 +709,11 @@
      its underline breaks between elements as the ruler ticks them. */
   .cell.is-values .string-byte { padding-right: 1ch; }
   .cell.is-values .string-char { padding: 0 1px; }
-  /* It shows four rows of them (27 px of character and ruler, 3 of gap),
+  /* It shows two rows of them (27 px of character and ruler, 3 of gap)
      and scrolls to the elements a step uses (follow_down in
-     src/panels/cells.rs), so an array of hundreds stays a row's height. */
-  .cell.is-values .string-bytes { max-height: 117px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+     src/panels/cells.rs), so an array of hundreds stays about as tall as
+     a row of cells and its note stays where it was. */
+  .cell.is-values .string-bytes { max-height: 57px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .string-byte { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 1ch; padding-bottom: 10px; }
   .string-char { height: 17px; line-height: 16px; white-space: pre; border-bottom: 1px solid var(--ink-3); }
   /* The ruler: a tick at each byte's start, a longer one with the index at

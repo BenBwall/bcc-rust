@@ -555,9 +555,22 @@ was measured again after these fixes and did not change.
   into its element cells and a `VALUES` key that folds them back. For a
   program with `int squares[100] = {0, 1, 4, 9};`, the step that creates it
   had 12 of its 100 elements on screen at 1440x900 and 4 at 390x844, in a
-  row 8,566 px wide; it now has all 100 at both sizes, in one cell 521 px
-  wide (366 px on a phone), and each later step's element is on screen as
+  row 8,566 px wide; it is now one cell 521 px wide (366 px on a phone)
+  and two rows of values high, which scroll within the cell to the
+  elements each step uses, so each later step's element is on screen as
   before. Lessons are unchanged: their arrays have three or four elements.
+  A review found that the fold first grew as tall as its values: for
+  `int a[500]`, the write to `a[499]` was marked 1,292 px down a 686 px
+  cell at 1440x900, with its note pushed below it, where the unfolded row
+  had been 88 px high and followed the element. Two rows (a cell 90 px
+  high) keep the old row's footprint, and the first, middle and last
+  elements of 500 and of 512 (the engine's largest array) are each marked
+  inside the cell's two rows at both sizes, in both themes, with and
+  without reduced motion.
+  [`follow-1440-light`](screenshots/wide-arrays/follow-1440-light-before.png)
+  ([after](screenshots/wide-arrays/follow-1440-light-after.png)),
+  [`follow-390-dark`](screenshots/wide-arrays/follow-390-dark-before.png)
+  ([after](screenshots/wide-arrays/follow-390-dark-after.png), `long long a[100]`).
   [`create-1440-light`](screenshots/wide-arrays/create-1440-light-before.png)
   ([after](screenshots/wide-arrays/create-1440-light-after.png)),
   [`initialize-1440-light`](screenshots/wide-arrays/initialize-1440-light-before.png)

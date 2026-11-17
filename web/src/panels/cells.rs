@@ -14,7 +14,8 @@
 //! outgrows a phone's strip, so every byte a step uses is in view with the
 //! rest of the string, and a key opens it into its byte cells. An array of
 //! more than eight elements of another type folds the same way, into one
-//! cell of its values, a column per element. On a phone
+//! cell of its values, a column per element, two rows high and scrolled to
+//! the elements the step used. On a phone
 //! each call's cells are a row of their own, which follows the cells the
 //! step used as the strip does on a wide screen.
 
@@ -50,8 +51,8 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     // than the window (or, on a phone, where a call's row is), bring the
     // cells the step used into the middle, or, when they are wider than the
     // window too, the first of them to its left edge. A folded array's
-    // values scroll within their cell, which is only a few rows high, to
-    // the elements the step used in the same way.
+    // values scroll within their cell, two rows high, to the elements the
+    // step used (follow_down).
     let section = NodeRef::<html::Section>::new();
     Effect::new(move || {
         snapshot.track();
@@ -125,7 +126,9 @@ fn follow(row: &web_sys::Element) {
 }
 
 /// Scrolls the folded array's `values` up or down so the elements under it
-/// that the step used are in view, when it holds more rows than it shows.
+/// that the step used are in view, when it holds more rows than it shows:
+/// on its last row, after the row before them, or, when they take more rows
+/// than it shows, the first of them on its first row.
 fn follow_down(values: &web_sys::Element) {
     if values.scroll_height() <= values.client_height() {
         return;
@@ -148,9 +151,10 @@ fn follow_down(values: &web_sys::Element) {
     };
     let offset = top - values.get_bounding_client_rect().top();
     let room = f64::from(values.client_height());
-    let top = f64::from(values.scroll_top()) + offset - ((room - (bottom - top)) / 2.0).max(0.0);
+    let span = bottom - top;
+    let shift = if span > room { offset } else { offset + span - room };
     let options = web_sys::ScrollToOptions::new();
-    options.set_top(top.max(0.0));
+    options.set_top((f64::from(values.scroll_top()) + shift).max(0.0));
     values.scroll_to_with_scroll_to_options(&options);
 }
 
