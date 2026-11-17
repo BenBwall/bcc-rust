@@ -171,7 +171,7 @@ pub fn App() -> impl IntoView {
                 </div>
             </section>
             <About />
-            <Glossary />
+            <Glossary on_stage=Callback::new(move |stage| state.open_view(Mode::Pipeline, Some(stage))) />
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.announcement}</p>
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.pointing.announcement}</p>
         </main>

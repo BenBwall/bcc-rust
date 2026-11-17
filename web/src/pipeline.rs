@@ -380,6 +380,94 @@ impl Stage {
         }
     }
 
+    /// What the stage takes in, what it gives out, and why a compiler has
+    /// it, for the stage's header. A term written `[text](id)` links to the
+    /// glossary entry `#term-id`.
+    #[expect(clippy::too_many_lines, reason = "One brief per stage.")]
+    pub fn brief(self) -> Brief {
+        match self {
+            | Self::Lines => Brief {
+                input:  "the source file's bytes",
+                output: "[logical source lines](logical-line)",
+                why:    "The later phases can then ignore how the file was stored: which bytes \
+                         make up a character, how a line ends, and where a backslash continued a \
+                         line.",
+            },
+            | Self::PpTokens => Brief {
+                input:  "[logical source lines](logical-line)",
+                output: "[preprocessing tokens](preprocessing-token) and white space",
+                why:    "The preprocessor works on tokens, not characters: a macro replaces whole \
+                         identifiers, and a directive is read token by token. Cutting the text \
+                         first also turns each comment into a space, once.",
+            },
+            | Self::Preprocessor => Brief {
+                input:  "the main file's [preprocessing tokens](preprocessing-token)",
+                output: "one [translation unit](translation-unit), its directives gone",
+                why:    "Headers, macros and #if let one source file share declarations, name \
+                         constants and adapt to each system. Running them first leaves the rest \
+                         of the compiler a single, self-contained sequence of tokens.",
+            },
+            | Self::Tokens => Brief {
+                input:  "the translation unit's [preprocessing tokens](preprocessing-token)",
+                output: "[tokens](token): keywords, identifiers, constants, string literals and \
+                         punctuators",
+                why:    "The parser decides by what each token is: a keyword or a name, a \
+                         constant with its value and type. White space has done its work and is \
+                         dropped.",
+            },
+            | Self::SyntaxTree => Brief {
+                input:  "[tokens](token)",
+                output: "a [syntax tree](syntax-tree) of declarations, statements and expressions",
+                why:    "A list of tokens does not show which operator takes which operands, or \
+                         which statements a loop repeats; a tree does, so the later stages work \
+                         on whole expressions and statements.",
+            },
+            | Self::SemanticTypes => Brief {
+                input:  "the [syntax tree](syntax-tree)",
+                output: "the tree with each name bound to its declaration and each expression \
+                         given a type",
+                why:    "The same syntax means different things for different types: a + b adds \
+                         ints or doubles, or moves a pointer. Only once every name and type is \
+                         known can the compiler choose the operation, and report what C forbids.",
+            },
+            | Self::Ir => Brief {
+                input:  "the typed syntax tree",
+                output: "[bcc IR](ir): simple operations on values, in [basic blocks](basic-block)",
+                why:    "C has many ways to write one computation. A few simple operations, with \
+                         every jump explicit, give the [optimizer](optimizer) one form to improve \
+                         and every back end one form to translate.",
+            },
+            | Self::IrAbi => Brief {
+                input:  "[bcc IR](ir)",
+                output: "IR whose functions and calls follow the x86-64 [ABI](abi)",
+                why:    "Separately compiled code, the C library included, can call across files \
+                         only if caller and callee agree where each argument and result goes. The \
+                         platform's ABI fixes that agreement; this stage applies it.",
+            },
+            | Self::Llvm => Brief {
+                input:  "[bcc IR](ir)",
+                output: "LLVM IR, the [IR](ir) of the LLVM compiler framework",
+                why:    "LLVM optimizes and generates code for many processors, so a compiler \
+                         that writes LLVM IR gets all of them, as Clang and rustc do. bcc-rust \
+                         uses it as its default back end.",
+            },
+            | Self::Asm => Brief {
+                input:  "the ABI-lowered IR",
+                output: "x86-64 [assembly](assembly)",
+                why:    "A processor has no variables: it has a few [registers](register), memory \
+                         and its own instructions. This stage picks an instruction for each \
+                         operation and a register or a stack slot for each value.",
+            },
+            | Self::MachineCode => Brief {
+                input:  "x86-64 [assembly](assembly)",
+                output: "[machine code](machine-code): the bytes the processor runs",
+                why:    "The processor reads bytes, not text. Encoding each instruction is the \
+                         assembler's work; the linker then joins the object files and fills in \
+                         the addresses still missing, such as a call's target.",
+            },
+        }
+    }
+
     /// One sentence on what the stage takes from the one before and hands
     /// to the one after, so the stages read as one path.
     pub fn handoff(self) -> &'static str {
@@ -553,24 +641,22 @@ impl Stage {
         Some(format!("bcc-rust {level}{flags} {file}"))
     }
 
-    /// A short explanation for programmers new to compilers: what goes in,
-    /// what comes out, and what the stage decides.
+    /// A short explanation for programmers new to compilers of what the
+    /// stage decides and how; what goes in and comes out is its [`Brief`].
     #[expect(clippy::too_many_lines, reason = "One explanation per stage.")]
     pub fn explanation(self) -> &'static str {
         match self {
             | Self::Lines =>
-                "In: the file's bytes. Out: logical lines of characters. Decided here: which \
-                 character each byte is and where each line really ends. Translation phase 1 maps \
-                 the bytes to source characters: bcc reads UTF-8, so é is one character though it \
-                 takes two bytes, and in the strict ISO modes it replaces each trigraph, such as \
-                 ??=, with the character it stands for (#). Phase 2 then deletes every backslash \
-                 that ends a line, together with that new-line, so the next physical line \
-                 continues this one: that is how a long macro definition spans several lines. The \
-                 gutter numbers the physical lines each logical line came from, and ↩ marks where \
-                 two were spliced.",
+                "Decided here: which character each byte is and where each line really ends. \
+                 Translation phase 1 maps the bytes to source characters: bcc reads UTF-8, so é is \
+                 one character though it takes two bytes, and in the strict ISO modes it replaces \
+                 each trigraph, such as ??=, with the character it stands for (#). Phase 2 then \
+                 deletes every backslash that ends a line, together with that new-line, so the \
+                 next physical line continues this one: that is how a long macro definition spans \
+                 several lines. The gutter numbers the physical lines each logical line came from, \
+                 and ↩ marks where two were spliced.",
             | Self::PpTokens =>
-                "In: the logical lines. Out: preprocessing tokens and the white space between \
-                 them. Decided here: where each token starts and ends. The tokens are identifiers, \
+                "Decided here: where each token starts and ends. The tokens are identifiers, \
                  pp-numbers, character constants, string literals, punctuators, and any other \
                  single character. Phase 3 always takes the longest token it can, so x+++y is x ++ \
                  + y. Each comment becomes one space, and bcc turns every other run of spaces and \
@@ -580,83 +666,72 @@ impl Stage {
                  name. Header names are the one special case: bcc's lexer does not form them, and \
                  #include reads the tokens of <limits.h> back as one name.",
             | Self::Preprocessor =>
-                "In: the main file's preprocessing tokens. Out: one translation unit's tokens with \
-                 no directives left. Decided here: which lines are kept, which files are pasted \
-                 in, and what each macro becomes. #include runs phases 1 to 4 on a header and puts \
-                 the result in its place; #if keeps or skips whole groups of lines; each macro \
-                 name is replaced by its definition, with a function-like macro's arguments \
-                 substituted for its parameters. # makes an argument a string literal, ## pastes \
-                 two tokens into one, and the result is rescanned for more macros, though never \
-                 the one being expanded. This is the text phase 4 leaves, laid out as bcc -E lays \
-                 it out but with adjacent string literals still apart: -E shows them already \
-                 joined, which is phase 6. A line marker such as # 3 \"file.c\" says where the \
-                 next line came from.",
+                "Decided here: which lines are kept, which files are pasted in, and what each \
+                 macro becomes. #include runs phases 1 to 4 on a header and puts the result in its \
+                 place; #if keeps or skips whole groups of lines; each macro name is replaced by \
+                 its definition, with a function-like macro's arguments substituted for its \
+                 parameters. # makes an argument a string literal, ## pastes two tokens into one, \
+                 and the result is rescanned for more macros, though never the one being expanded. \
+                 This is the text phase 4 leaves, laid out as bcc -E lays it out but with adjacent \
+                 string literals still apart: -E shows them already joined, which is phase 6. A \
+                 line marker such as # 3 \"file.c\" says where the next line came from.",
             | Self::Tokens =>
-                "In: the preprocessed tokens. Out: C tokens, each with a kind, a value and a \
-                 place. Decided here: what each token is. Escape sequences such as \\n in \
-                 character constants and string literals become the characters they stand for \
-                 (phase 5), adjacent string literals are joined into one, so \"ab\" \"cd\" is \
-                 \"abcd\" (phase 6), and each preprocessing token becomes a C token (phase 7): an \
-                 identifier may turn out to be a keyword, and a pp-number becomes an integer or \
-                 floating constant with a value and a type. White space no longer matters. Every \
-                 token keeps its line and column, which is how later errors point at your source.",
+                "Decided here: what each token is. Escape sequences such as \\n in character \
+                 constants and string literals become the characters they stand for (phase 5), \
+                 adjacent string literals are joined into one, so \"ab\" \"cd\" is \"abcd\" (phase \
+                 6), and each preprocessing token becomes a C token (phase 7): an identifier may \
+                 turn out to be a keyword, and a pp-number becomes an integer or floating constant \
+                 with a value and a type. White space no longer matters. Every token keeps its \
+                 line and column, which is how later errors point at your source.",
             | Self::SyntaxTree =>
-                "In: the tokens. Out: a syntax tree of declarations, statements and expressions. \
-                 Decided here: how the tokens group, which operator takes which operands and which \
+                "Decided here: how the tokens group, which operator takes which operands and which \
                  statements a block holds. The parser checks the tokens against C's grammar and \
                  reports an error where they do not fit. Precedence is decided here: in total + \
                  next * 2 the multiplication becomes a child of the addition, because * binds \
                  tighter. The tree records only what was written; what the names mean is the next \
                  stage's work.",
             | Self::SemanticTypes =>
-                "In: the syntax tree. Out: the same program with meaning attached. Decided here: \
-                 which declaration each name refers to, the type of every expression, and the \
-                 conversions C inserts. Each name is looked up in its scope (the file, a function, \
-                 a block) and bound to one declaration, which gets a type, a linkage that says \
-                 whether other files can see it, and a storage duration that says how long it \
-                 lives: static for the whole run, automatic for one execution of its block. \
-                 Objects get their size and alignment in bytes. Then every expression gets a type \
-                 and a category: an lvalue designates an object (a modifiable-lvalue is one you \
-                 may assign to, unlike a const or an array), a function-designator names a \
-                 function, and an rvalue is just a value. The convert lines are the implicit \
-                 conversions C inserts, such as reading an lvalue (lvalue conversion), an array \
-                 becoming a pointer, or an int becoming a long. Rules the grammar cannot express, \
-                 such as assigning to a const or calling with the wrong arguments, are checked \
-                 here; a type written <unanalyzed> is one bcc could not work out, usually because \
-                 of an error earlier in the program.",
+                "Decided here: which declaration each name refers to, the type of every \
+                 expression, and the conversions C inserts. Each name is looked up in its scope \
+                 (the file, a function, a block) and bound to one declaration, which gets a type, \
+                 a linkage that says whether other files can see it, and a storage duration that \
+                 says how long it lives: static for the whole run, automatic for one execution of \
+                 its block. Objects get their size and alignment in bytes. Then every expression \
+                 gets a type and a category: an lvalue designates an object (a modifiable-lvalue \
+                 is one you may assign to, unlike a const or an array), a function-designator \
+                 names a function, and an rvalue is just a value. The convert lines are the \
+                 implicit conversions C inserts, such as reading an lvalue (lvalue conversion), an \
+                 array becoming a pointer, or an int becoming a long. Rules the grammar cannot \
+                 express, such as assigning to a const or calling with the wrong arguments, are \
+                 checked here; a type written <unanalyzed> is one bcc could not work out, usually \
+                 because of an error earlier in the program.",
             | Self::Ir =>
-                "In: the typed tree. Out: bcc's intermediate representation (IR), simple \
-                 operations on values that no longer depend on C's syntax. Decided here: how each \
-                 statement becomes operations and jumps, and which variables need memory. Each \
-                 value (v1, v2, …) is assigned exactly once (static single assignment), control \
-                 flow is explicit as basic blocks that pass values as block parameters, and \
-                 variables that never have their address taken live in values rather than memory. \
-                 Arrays, and variables whose address is taken, still need memory, so they get a \
-                 stack_slot.",
+                "Decided here: how each statement becomes operations and jumps, and which \
+                 variables need memory. Each value (v1, v2, …) is assigned exactly once (static \
+                 single assignment), control flow is explicit as basic blocks that pass values as \
+                 block parameters, and variables that never have their address taken live in \
+                 values rather than memory. Arrays, and variables whose address is taken, still \
+                 need memory, so they get a stack_slot.",
             | Self::IrAbi =>
-                "In: the IR. Out: IR whose functions and calls follow the x86-64 System V calling \
-                 convention. Decided here: which arguments travel in registers, which in memory, \
-                 and how values are returned. For programs that pass only ints and pointers, very \
-                 little changes; structs and wide values are where this stage earns its keep.",
+                "Decided here: which arguments travel in registers, which in memory, and how \
+                 values are returned. For programs that pass only ints and pointers, very little \
+                 changes; structs and wide values are where this stage earns its keep.",
             | Self::Llvm =>
-                "In: bcc's IR. Out: the same program in LLVM IR, the input of LLVM, the optimizer \
-                 and code generator behind Clang and Rust. Decided here: nothing new, since bcc \
-                 only translates; LLVM, bcc-rust's default back end, picks the instructions later. \
-                 LLVM IR is also in SSA form: %names are values, @names are globals, and phi \
-                 instructions merge values where control flow joins. In a program that computes \
-                 with chars, trunc and sext make the integer promotions explicit.",
+                "Decided here: nothing new, since bcc only translates; LLVM, bcc-rust's default \
+                 back end, picks the instructions later. LLVM IR is also in SSA form: %names are \
+                 values, @names are globals, and phi instructions merge values where control flow \
+                 joins. In a program that computes with chars, trunc and sext make the integer \
+                 promotions explicit.",
             | Self::Asm =>
-                "In: the ABI-lowered IR. Out: x86-64 assembly. Decided here: which instruction \
-                 carries out each operation, which register holds each value, and how the stack \
-                 frame is laid out. bcc's own native back end does this. Arguments arrive in %rdi, \
-                 %rsi, …, and an int result leaves in %eax. Lines starting with a dot are \
-                 directives for the assembler, not instructions.",
+                "Decided here: which instruction carries out each operation, which register holds \
+                 each value, and how the stack frame is laid out. bcc's own native back end does \
+                 this. Arguments arrive in %rdi, %rsi, …, and an int result leaves in %eax. Lines \
+                 starting with a dot are directives for the assembler, not instructions.",
             | Self::MachineCode =>
-                "In: the assembly. Out: the bytes the CPU actually runs. Decided here: each \
-                 instruction's exact encoding and length. The left column is the instruction's \
-                 offset from the start of its function, then its encoding, both in hexadecimal. \
-                 x86-64 instructions vary from 1 to 15 bytes long. Calls to other functions show \
-                 zero bytes where the linker will later fill in the address.",
+                "Decided here: each instruction's exact encoding and length. The left column is \
+                 the instruction's offset from the start of its function, then its encoding, both \
+                 in hexadecimal. x86-64 instructions vary from 1 to 15 bytes long. Calls to other \
+                 functions show zero bytes where the linker will later fill in the address.",
         }
     }
 
@@ -868,6 +943,40 @@ pub struct Rule {
     pub gloss:    &'static str,
     /// The full citation, such as `C99: §6.4 paragraph 3, p. 49; PDF p. 61.`
     pub citation: &'static str,
+}
+
+/// What a stage takes in, gives out and is for: the three lines of its
+/// header. `[text](id)` in them links `text` to the glossary's `#term-id`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Brief {
+    pub input:  &'static str,
+    pub output: &'static str,
+    /// Why a compiler has the stage, in a sentence or two.
+    pub why:    &'static str,
+}
+
+/// `text` split into plain runs (`None`) and glossary links (`Some(id)`),
+/// from its `[text](id)` marks.
+pub fn linked_terms(text: &str) -> Vec<(&str, Option<&str>)> {
+    let mut pieces = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let Some((label, after)) = rest[open + 1..].split_once("](") else {
+            break;
+        };
+        let Some((id, tail)) = after.split_once(')') else {
+            break;
+        };
+        if open > 0 {
+            pieces.push((&rest[..open], None));
+        }
+        pieces.push((label, Some(id)));
+        rest = tail;
+    }
+    if !rest.is_empty() {
+        pieces.push((rest, None));
+    }
+    pieces
 }
 
 /// How the lines of one stage's output relate to the source lines.

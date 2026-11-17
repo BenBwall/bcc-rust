@@ -26,6 +26,7 @@ use crate::{
         Layer,
     },
     pipeline::{
+        Brief,
         Compilation,
         CompileDiagnostic,
         Links,
@@ -33,6 +34,7 @@ use crate::{
         displayed,
         gutter,
         is_folded,
+        linked_terms,
         optimizer_changes,
         optimizer_measures,
     },
@@ -217,6 +219,8 @@ pub fn PipelineView(
                         | (None, None) => ().into_any(),
                     }
                 }}
+                <div class="stage-lead">
+                <div class="stage-lead-main">
                 <p class="stage-handoff">
                     <span>{move || stage.get().handoff()}</span>
                     // One button for every stage, so the keyboard focus stays
@@ -245,6 +249,9 @@ pub fn PipelineView(
                     <strong>"In this program: "</strong>
                     {move || path_note().map(|note| super::rich_text(&note))}
                 </p>
+                </div>
+                <StageBrief stage />
+                </div>
                 <StopBanner compilation=shown />
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
@@ -321,6 +328,39 @@ pub fn PipelineView(
             <Diagnostics compilation live on_reveal />
         </section>
     }
+}
+
+/// What goes into the stage, what comes out and why a compiler has it, with
+/// the terms linked to the glossary.
+#[component]
+fn StageBrief(stage: RwSignal<Stage>) -> impl IntoView {
+    let row = move |label: &'static str, part: fn(Brief) -> &'static str| {
+        view! {
+            <div>
+                <dt>{label}</dt>
+                <dd>{move || linked(part(stage.get().brief()))}</dd>
+            </div>
+        }
+    };
+    view! {
+        <dl class="stage-brief" aria-label="What this stage is">
+            {row("In", |brief| brief.input)}
+            {row("Out", |brief| brief.output)}
+            {row("Why", |brief| brief.why)}
+        </dl>
+    }
+}
+
+/// `text` with each `[text](id)` a link to the glossary entry `#term-id`.
+fn linked(text: &'static str) -> impl IntoView {
+    linked_terms(text)
+        .into_iter()
+        .map(|(piece, id)| match id {
+            | Some(id) =>
+                view! { <a class="stage-term" href=format!("#term-{id}")>{piece}</a> }.into_any(),
+            | None => piece.into_any(),
+        })
+        .collect_view()
 }
 
 /// Switches to the bcc IR stage and moves the focus to its tab, since the
