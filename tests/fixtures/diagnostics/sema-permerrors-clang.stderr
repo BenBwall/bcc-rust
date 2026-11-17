@@ -10,6 +10,9 @@ sema-permerrors-clang.c:4:16: error: type specifier missing, defaults to 'int'; 
 sema-permerrors-clang.c:5:12: error: parameter 'b' was not declared, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
     5 | int old(a, b) int a; { return a + b; }
       |            ^
+sema-permerrors-clang.c:5:5: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+    5 | int old(a, b) int a; { return a + b; }
+      |     ^
 sema-permerrors-clang.c:6:13: error: a parameter list without types is only allowed in a function definition
     6 | void listed(n);
       |             ^
@@ -55,4 +58,4 @@ sema-permerrors-clang.c:21:13: error: type specifier missing, defaults to 'int';
 sema-permerrors-clang.c:22:49: warning: pointer type mismatch in conditional expression [-Wpointer-type-mismatch]
    22 | void *choose(int c, int *p, long *q) { return c ? p : q; }
       |                                                 ^~~~~
-1 warning and 17 errors generated.
+2 warnings and 17 errors generated.

@@ -1,3 +1,11 @@
+warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+ --> sema3-knr-mismatch.c:1:18
+  |
+1 | int f(int); int (f(a)) double a; {return 0;}
+  |                  ^ no prototype
+  |
+  = note: C99 §6.11.6-§6.11.7: empty parentheses in a function declarator and identifier lists in a definition are obsolescent; C23 removes both
+
 error: redeclaration has an incompatible type: `f`
  --> sema3-knr-mismatch.c:1:18
   |
@@ -8,4 +16,12 @@ error: redeclaration has an incompatible type: `f`
   |
   = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
 
-1 error generated.
+warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+ --> sema3-knr-mismatch.c:1:18
+  |
+1 | int f(int); int (f(a)) double a; {return 0;}
+  |                  ^ no prototype
+  |
+  = note: C99 §6.11.6-§6.11.7: empty parentheses in a function declarator and identifier lists in a definition are obsolescent; C23 removes both
+
+1 error and 2 warnings generated.

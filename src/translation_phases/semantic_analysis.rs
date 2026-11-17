@@ -83,6 +83,7 @@ mod missing_fields;
 mod parameter_notes;
 mod parentheses;
 mod predefined;
+mod prototypes;
 mod reachability;
 mod shadowing;
 mod sign_compare;
@@ -2355,6 +2356,7 @@ struct Analyzer<'a, 'tu, 's> {
     ice_operands:            ArenaMap<'s, (usize, bool), bool>,
     functions:               functions::State<'tu, 's>,
     parameter_notes:         parameter_notes::State<'s>,
+    prototypes:              prototypes::State<'s>,
     va_list_type:            Option<TypeId>,
     statements:              statements::State<'tu, 's>,
     unused:                  unused::UnusedState<'s>,

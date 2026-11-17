@@ -1,0 +1,88 @@
+sema-deprecated-non-prototype-clang.c:3:5: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+    3 | int defined(a, b) int a; char *b; { return a + !b; }
+      |     ^
+sema-deprecated-non-prototype-clang.c:5:38: warning: passing arguments to 'declared' without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+    5 | int later(a) int a; { return declared(a) + later(a); }
+      |                                      ^
+sema-deprecated-non-prototype-clang.c:5:5: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+    5 | int later(a) int a; { return declared(a) + later(a); }
+      |     ^
+sema-deprecated-non-prototype-clang.c:6:5: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+    6 | int declared(a) int a; { return a; }
+      |     ^
+sema-deprecated-non-prototype-clang.c:4:5: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent definition [-Wdeprecated-non-prototype]
+    4 | int declared();
+      |     ^
+sema-deprecated-non-prototype-clang.c:8:5: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+    8 | int with_prototype();
+      |     ^
+sema-deprecated-non-prototype-clang.c:7:5: note: conflicting prototype is here
+    7 | int with_prototype(int);
+      |     ^
+sema-deprecated-non-prototype-clang.c:10:5: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   10 | int prototype_then(x) int x; { return x; }
+      |     ^
+sema-deprecated-non-prototype-clang.c:11:5: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent definition [-Wdeprecated-non-prototype]
+   11 | int empty_then();
+      |     ^
+sema-deprecated-non-prototype-clang.c:12:5: note: conflicting prototype is here
+   12 | int empty_then(int x) { return x; }
+      |     ^
+sema-deprecated-non-prototype-clang.c:13:21: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+   13 | int twice(int); int twice(); int twice(c) int c; { return c; }
+      |                     ^
+sema-deprecated-non-prototype-clang.c:13:5: note: conflicting prototype is here
+   13 | int twice(int); int twice(); int twice(c) int c; { return c; }
+      |     ^
+sema-deprecated-non-prototype-clang.c:13:34: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   13 | int twice(int); int twice(); int twice(c) int c; { return c; }
+      |                                  ^
+sema-deprecated-non-prototype-clang.c:13:21: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent definition [-Wdeprecated-non-prototype]
+   13 | int twice(int); int twice(); int twice(c) int c; { return c; }
+      |                     ^
+sema-deprecated-non-prototype-clang.c:16:5: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   16 | int from_typedef(t) int t; { return t; }
+      |     ^
+sema-deprecated-non-prototype-clang.c:15:9: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent definition [-Wdeprecated-non-prototype]
+   15 | Untyped from_typedef;
+      |         ^
+sema-deprecated-non-prototype-clang.c:18:12: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   18 | static int internal(s) int s; { return s; }
+      |            ^
+sema-deprecated-non-prototype-clang.c:17:12: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent definition [-Wdeprecated-non-prototype]
+   17 | static int internal();
+      |            ^
+sema-deprecated-non-prototype-clang.c:29:37: warning: too few arguments in call to 'defined'
+   29 |   return defined(1, "x") + defined(1) + defined(1, "x", 2)
+      |                            ~~~~~~~  ^
+sema-deprecated-non-prototype-clang.c:29:58: warning: too many arguments in call to 'defined'
+   29 |   return defined(1, "x") + defined(1) + defined(1, "x", 2)
+      |                                         ~~~~~~~          ^
+sema-deprecated-non-prototype-clang.c:30:27: warning: too many arguments in call to 'no_parameters'
+   30 |          + no_parameters(1) + no_parameters()
+      |            ~~~~~~~~~~~~~  ^
+sema-deprecated-non-prototype-clang.c:30:25: warning: passing arguments to 'no_parameters' without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   30 |          + no_parameters(1) + no_parameters()
+      |                         ^
+sema-deprecated-non-prototype-clang.c:31:19: warning: passing arguments to a function without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   31 |          + pointer(1) + (*pointer)(2) + local(3) + holder.member(4)
+      |                   ^
+sema-deprecated-non-prototype-clang.c:31:35: warning: passing arguments to a function without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   31 |          + pointer(1) + (*pointer)(2) + local(3) + holder.member(4)
+      |                                   ^
+sema-deprecated-non-prototype-clang.c:31:46: warning: passing arguments to a function without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   31 |          + pointer(1) + (*pointer)(2) + local(3) + holder.member(4)
+      |                                              ^
+sema-deprecated-non-prototype-clang.c:31:65: warning: passing arguments to a function without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   31 |          + pointer(1) + (*pointer)(2) + local(3) + holder.member(4)
+      |                                                                 ^
+sema-deprecated-non-prototype-clang.c:36:8: warning: passing arguments to 'inner' without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   36 |   inner(8);
+      |        ^
+sema-deprecated-non-prototype-clang.c:38:5: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   38 | int inner(i) int i; { return i; }
+      |     ^
+sema-deprecated-non-prototype-clang.c:45:18: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   45 | Untyped_handler *get_untyped(n) char *n; { return 0; }
+      |                  ^
+26 warnings generated.

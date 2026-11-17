@@ -194,11 +194,16 @@ fn declaration_heavy_source(count: usize) -> String {
 pub(super) fn benchmark_context(tu: &Bump) -> Context<'_> {
     Context::with_configuration(
         tu,
-        // A workload's statements are there to be analyzed, not to be used.
+        // A workload's statements are there to be analyzed, not to be used,
+        // and its K&R definitions to take the old-style paths.
         CompilerConfiguration::default()
             .with_source_date_epoch(Some(0))
             .with_warning_option(
                 crate::configuration::DiagnosticGroup::UnusedValue,
+                crate::configuration::WarningOption::Enable(false),
+            )
+            .with_warning_option(
+                crate::configuration::DiagnosticGroup::DeprecatedNonPrototype,
                 crate::configuration::WarningOption::Enable(false),
             ),
     )

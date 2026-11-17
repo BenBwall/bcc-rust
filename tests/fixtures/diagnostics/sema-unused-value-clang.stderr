@@ -1,12 +1,12 @@
+sema-unused-value-clang.c:5:7: warning: equality comparison result unused [-Wunused-comparison]
+    5 |     a == 1;
+      |       ^~
 sema-unused-value-clang.c:3:5: warning: expression result unused [-Wunused-value]
     3 |     a;
       |     ^
 sema-unused-value-clang.c:4:7: warning: expression result unused [-Wunused-value]
     4 |     a + 1;
       |       ^
-sema-unused-value-clang.c:5:7: warning: equality comparison result unused [-Wunused-comparison]
-    5 |     a == 1;
-      |       ^~
 sema-unused-value-clang.c:6:5: warning: expression result unused [-Wunused-value]
     6 |     *p;
       |     ^
