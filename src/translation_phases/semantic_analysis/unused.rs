@@ -1585,10 +1585,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// around it, which GCC's `build_c_cast` leaves out: the tree GCC builds
     /// for `e`, at `e`'s place.
     /// C99: §6.5.4p4, p. 81; PDF p. 93.
-    fn gcc_relocated_operand(
-        &self,
-        mut e: &'tu Expression<'tu>,
-    ) -> &'tu Expression<'tu> {
+    fn gcc_relocated_operand(&self, mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
         loop {
             e = Self::without_parentheses(e);
             match e.kind {
