@@ -206,6 +206,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let Some(target) = self.pointer_target(ty) {
                 self.report_void_arithmetic(e, target);
             }
+            self.check_bool_operation(e, op, operand);
             let mut result = Self::expression_result(e, ty);
             // GCC also gives the old value a postfix operator yields the
             // bit-field's own type, where Clang gives it the declared type.
@@ -241,6 +242,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if matches!(op, U::Real | U::Imag) {
             return self.real_imag(e, op, operand);
+        }
+        if op == U::BitwiseNot && !conjugate {
+            self.check_bool_operation(e, op, operand);
         }
         let ty = if op == U::LogicalNot {
             self.boolean_conversion_warning(operand, e.source_vectors);

@@ -359,7 +359,9 @@ fn each_compiler_counts_uses_its_own_way() {
             &[U::GccValueComputed],
             &[],
         ),
-        ("void f(int a) { ({ a; }); }", &[], &[]),
+        // Clang takes a discarded statement expression's warning from its
+        // value statement.
+        ("void f(int a) { ({ a; }); }", &[], &[U::ClangResult]),
         (
             "int f(int a) { return ({ a; a + 1; }); }",
             &[U::GccNoEffect],

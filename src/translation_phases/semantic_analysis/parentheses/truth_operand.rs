@@ -54,6 +54,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             || matches!(node.code, Code::Integer(0 | 1))
     }
 
+    /// Whether GCC's `build_unary_op` takes the operand `e` of `~` for a
+    /// truth value, for `-Wbool-operation`: of type `_Bool`, or, past the
+    /// left operands of its commas, a comparison, `!`, `&&` or `||` that
+    /// did not fold to a constant (`truth_value_p`).
+    pub(in crate::translation_phases::semantic_analysis) fn gcc_complements_truth(
+        &self,
+        e: &'tu Expression<'tu>,
+    ) -> bool {
+        let mut node = self.gcc_tree(e);
+        if node.ty.class == Class::Boolean {
+            return true;
+        }
+        while let Code::Compound { right, .. } = node.code {
+            node = *right;
+        }
+        node.code.is_truth()
+    }
+
     /// The tree GCC's parser builds for `e`.
     fn gcc_tree(&self, e: &'tu Expression<'tu>) -> Node<'s, 'tu> {
         if let E::Parenthesized { expression }
