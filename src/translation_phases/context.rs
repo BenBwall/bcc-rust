@@ -34,6 +34,7 @@ mod source_text;
 
 // Provenance storage
 mod expansion_sites;
+mod fix_it_places;
 mod merge_anchors;
 mod segmented_vec;
 mod source_map;

@@ -530,6 +530,10 @@ impl Cli {
                 | "-fdiagnostics-color=never"
                 | "-fno-color-diagnostics" => presentation.color = DiagnosticColor::Never,
                 | "-fdiagnostics-color=auto" => presentation.color = DiagnosticColor::Auto,
+                | "-fdiagnostics-fixit-info" => presentation.fix_its = true,
+                | "-fno-diagnostics-fixit-info" => presentation.fix_its = false,
+                | "-fdiagnostics-parseable-fixits" => presentation.parseable = true,
+                | "-fno-diagnostics-parseable-fixits" => presentation.parseable = false,
                 | "-fdiagnostics-plain-output" => {
                     presentation.caret = false;
                     presentation.line_numbers = false;
@@ -805,6 +809,10 @@ pub(super) fn is_diagnostic_presentation(text: &str) -> bool {
             | "-fdiagnostics-color=auto"
             | "-fcolor-diagnostics"
             | "-fno-color-diagnostics"
+            | "-fdiagnostics-fixit-info"
+            | "-fno-diagnostics-fixit-info"
+            | "-fdiagnostics-parseable-fixits"
+            | "-fno-diagnostics-parseable-fixits"
             | "-fdiagnostics-plain-output"
     )
 }

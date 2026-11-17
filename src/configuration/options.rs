@@ -1190,6 +1190,8 @@ impl CompilerConfiguration {
                 option_names:   true,
                 color:          super::DiagnosticColor::Unset,
                 msvc_locations: false,
+                fix_its:        true,
+                parseable:      false,
             },
             warning_options: [super::diagnostics::WarningSettings::DEFAULT;
                 super::DiagnosticGroup::COUNT],
