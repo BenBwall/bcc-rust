@@ -299,6 +299,7 @@ pub(crate) struct State {
 }
 
 impl State {
+    #[expect(clippy::too_many_lines, reason = "One line per piece of the page's state.")]
     fn new() -> Self {
         let tour = &DEMOS[0];
         let history = RwSignal::new(Vec::<Snapshot>::new());
@@ -392,12 +393,7 @@ impl State {
             shown: live.shown,
             other_level: live.other_level,
             compare,
-            other_links: Memo::new(move |_| {
-                if !compare.get() || !stage.get().differs_by_level() {
-                    return crate::pipeline::Links::default();
-                }
-                links_memo_value(live.other_level, stage, headers, editor_text)
-            }),
+            other_links: other_links_memo(live.other_level, compare, stage, headers, editor_text),
             markers: markers(mode, editor_text, wasm_checks, live.markers),
             placeholder: Memo::new(move |_| {
                 editor_text.with(|text| demos::matching(text).map_or("", |demo| demo.summary))
@@ -1331,6 +1327,23 @@ fn links_memo(
     source: RwSignal<String>,
 ) -> Memo<crate::pipeline::Links> {
     Memo::new(move |_| links_memo_value(compilation, stage, headers, source))
+}
+
+/// The links between the source and the output of `stage` at the other
+/// level, `other`, while the two levels are shown side by side (`compare`).
+fn other_links_memo(
+    other: Memo<Option<Compilation>>,
+    compare: RwSignal<bool>,
+    stage: RwSignal<Stage>,
+    headers: RwSignal<bool>,
+    source: RwSignal<String>,
+) -> Memo<crate::pipeline::Links> {
+    Memo::new(move |_| {
+        if !compare.get() || !stage.get().differs_by_level() {
+            return crate::pipeline::Links::default();
+        }
+        links_memo_value(other, stage, headers, source)
+    })
 }
 
 /// The value of [`links_memo`], tracking what it reads.

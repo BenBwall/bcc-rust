@@ -383,7 +383,6 @@ impl Stage {
     /// What the stage takes in, what it gives out, and why a compiler has
     /// it, for the stage's header. A term written `[text](id)` links to the
     /// glossary entry `#term-id`.
-    #[expect(clippy::too_many_lines, reason = "One brief per stage.")]
     pub fn brief(self) -> Brief {
         match self {
             | Self::Lines => Brief {
@@ -653,7 +652,6 @@ impl Stage {
 
     /// A short explanation for programmers new to compilers of what the
     /// stage decides and how; what goes in and comes out is its [`Brief`].
-    #[expect(clippy::too_many_lines, reason = "One explanation per stage.")]
     pub fn explanation(self) -> &'static str {
         match self {
             | Self::Lines =>

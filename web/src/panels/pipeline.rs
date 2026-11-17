@@ -424,8 +424,7 @@ fn Beside(
             compilation
                 .as_ref()
                 .and_then(|compilation| displayed(stage, compilation, headers))
-                .map(|(text, _)| text)
-                .unwrap_or_default()
+                .map_or_default(|(text, _)| text)
         })
     });
     let line_numbers = Signal::derive(move || {
