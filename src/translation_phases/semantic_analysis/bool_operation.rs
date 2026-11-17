@@ -97,13 +97,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// integer whose value is 0 or 1 by its form: a comparison, `!`, `&&`
     /// or `||`, a bitwise operator or a conditional whose operands all are,
     /// or an assignment or comma whose right operand is. An explicit cast
-    /// to another type hides what its operand is.
+    /// to another type hides what its operand is. Like Clang's
+    /// `IgnoreParens`, it looks through parentheses, `__extension__` and the
+    /// operand a `_Generic` or `__builtin_choose_expr` selects.
     fn clang_known_boolean(&self, e: &'tu Expression<'tu>) -> bool {
         // Every operand still to be found boolean.
         let mut work = ArenaVec::new_in(self.scratch);
         work.push(e);
         while let Some(e) = work.pop() {
-            let e = Self::without_parentheses(e);
+            let e = self.selected_operand(e);
             let ty = self.expression_info(e).ty;
             if self.bool_typed(ty) {
                 continue;

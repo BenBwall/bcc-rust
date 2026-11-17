@@ -51,3 +51,7 @@ _Bool sel_bool(_Bool b) { return __extension__ __builtin_choose_expr(1, (~b), 0)
 _Bool sel_generic(_Bool b) { return (_Generic(b, _Bool: ~b, default: 0)); }
 int sel_file = _Generic((_Bool)0, int: ~(_Bool)0, default: 0)
     + __builtin_choose_expr(1, 0, ~(_Bool)0);
+/* `_Generic`, `__builtin_choose_expr` and `__extension__` pass a comparison on. */
+int through_generic(int x) { return ~_Generic(x, default: x > 0); }
+int through_choose(int x) { return ~__builtin_choose_expr(1, x > 0, 0); }
+int through_extension(int x) { return ~__extension__(x > 0); }
