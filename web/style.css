@@ -68,6 +68,8 @@
     --cell: #2c2c28;
     --accent: #ff5a1f;
     --accent-ink: #ff8a5c;
+    /* The accent on a plate of --ink, which the light theme inverts. */
+    --accent-on-ink: #b33a0b;
     --on-accent: #111111;
     --flow-ink: #8db6ff;
     --danger: #ff7a6b;
@@ -139,6 +141,7 @@
     --key-ink: #111111;
     --cell: #f6f5f0;
     --accent-ink: #b33a0b;
+    --accent-on-ink: #ff5a1f;
     --flow-ink: #1d4fb8;
     --danger: #a3221b;
     --knob-blue: #2f6fde;
@@ -1059,7 +1062,7 @@
   }
   .stage-next:active { transform: translateY(2px); box-shadow: none; }
   .stage-path-note { margin-bottom: 12px; padding: 8px 12px; max-width: 76ch; background: var(--ink); color: var(--device); font-size: 12.5px; line-height: 1.65; }
-  .stage-path-note strong { color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
+  .stage-path-note strong { color: var(--accent-on-ink); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
   .stage-path-note code { background: color-mix(in srgb, var(--device) 18%, var(--ink)); color: var(--device); }
   .stage-path-note[hidden] { display: none; }
   .stage-explanation { margin-top: 20px; color: var(--ink-2); font-size: 13px; line-height: 1.75; max-width: 76ch; }
