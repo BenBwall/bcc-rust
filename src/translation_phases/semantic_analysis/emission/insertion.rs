@@ -1027,7 +1027,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// The expression statement that gives statement expression `block` its
     /// value: the item that holds it, after its labels.
     /// GNU extension: GCC manual, "Statement Exprs".
-    fn value_statement_of(&self, block: &'tu Statement<'tu>) -> Option<&'tu Statement<'tu>> {
+    pub(in crate::translation_phases::semantic_analysis) fn value_statement_of(
+        &self,
+        block: &'tu Statement<'tu>,
+    ) -> Option<&'tu Statement<'tu>> {
         let StatementType::Compound { items } = block.kind else {
             return None;
         };

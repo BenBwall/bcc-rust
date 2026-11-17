@@ -65,6 +65,7 @@ use crate::{
             syntax::{
                 BinaryOperator as B,
                 Expression,
+                ExpressionSlot,
                 ExpressionType as E,
                 Identifier,
                 Statement,
@@ -1887,6 +1888,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::Conditional(c) => {
                 _ = self.clang_unused_result(c.then_expression)?;
                 self.clang_unused_result(c.else_expression)
+            },
+            // The value of a statement expression is its last statement's:
+            // of an expression statement, that expression's warning, and
+            // otherwise one at its `(`.
+            // GNU extension: GCC manual, "Statement Exprs".
+            | E::StatementExpression(block) => match self.value_statement_of(block) {
+                | Some(Statement {
+                    kind: StatementType::Expression(ExpressionSlot::Parsed(value)),
+                    ..
+                }) => self.clang_unused_result(value),
+                | _ => Some((
+                    UnusedRule::ClangResult,
+                    Context::first_token_vector(e.source_vectors),
+                    e,
+                )),
             },
             | E::Cast { .. } => {
                 let ty = self.expression_info(e).ty;

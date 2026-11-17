@@ -1,0 +1,13 @@
+sema-unused-value-statement-expression-clang.c:5:8: warning: expression result unused [-Wunused-value]
+    5 |   ({ a + 1; });
+      |        ^
+sema-unused-value-statement-expression-clang.c:6:11: warning: expression result unused [-Wunused-value]
+    6 |   ({ h(); a; });
+      |           ^
+sema-unused-value-statement-expression-clang.c:7:19: warning: expression result unused [-Wunused-value]
+    7 |   ({ goto l; l: a == 1; });
+      |                   ^~
+sema-unused-value-statement-expression-clang.c:10:17: warning: expression result unused [-Wunused-value]
+   10 |   ({ int v = a; v; });
+      |                 ^
+4 warnings generated.
