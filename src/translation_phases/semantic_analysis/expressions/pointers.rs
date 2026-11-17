@@ -313,7 +313,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .context
                     .in_system_header(self.context.first_source_vector(site)))
         {
-            let wording = self.msvc_cast_wording(target, from);
+            let wording = self.cast_wording(target, from);
             self.group_diagnostic(
                 group,
                 crate::translation_phases::semantic_analysis::SemanticErrorKind::PointerConstraint(
