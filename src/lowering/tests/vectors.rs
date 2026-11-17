@@ -439,6 +439,11 @@ fn elementwise_builtins_expand_lane_by_lane() {
              __builtin_elementwise_sub_sat(a, b); }",
             "sext.i32",
         ),
+        // Every operand is loaded, not only the first.
+        (
+            "int f(const int *p, int b) { return __builtin_elementwise_max(p[1], b); }",
+            "icmp.i32 sgt",
+        ),
         (
             "double f(double x) { return __builtin_elementwise_sqrt(x); }",
             "intrinsic x86.sqrtsd",
