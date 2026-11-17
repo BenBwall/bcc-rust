@@ -70,6 +70,7 @@ use crate::{
     util::{
         bump::{
             ArenaMap,
+            ArenaSet,
             ArenaVec,
             Bump,
         },
@@ -635,139 +636,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let entity = self.entity_of(binding);
         let attributes = self.attributes.entity(entity);
         attributes.returns_nonnull = attributes.returns_nonnull.or(Some(attribute.source));
-    }
-
-    /// Retains GNU `nonnull` parameter indices after checking each integer
-    /// constant operand. The annotation affects diagnostics at later calls.
-    /// GNU extension: GCC Common Function Attributes, nonnull.
-    /// C99: §6.6p6, p. 95; PDF p. 107 (integer constant operands).
-    fn nonnull_attribute(
-        &mut self,
-        subject: Subject,
-        specifier: &'tu AttributeSpecifier<'tu>,
-        attribute: WrittenAttribute<'_>,
-    ) {
-        use crate::translation_phases::parsing::syntax::{
-            BinaryOperator as B,
-            ExpressionType as E,
-        };
-        let Subject::Function { binding, .. } = subject else {
-            self.ignored(attribute);
-            return;
-        };
-        let TypeKind::Function {
-            parameters,
-            variadic,
-            ..
-        } = self.types.nodes[self.bindings[binding].ty.index]
-        else {
-            return;
-        };
-        let entity = self.entity_of(binding);
-        let site = &mut self.attributes.entity(entity).nonnull_site;
-        *site = site.or(Some(attribute.source));
-        if attribute.arguments.is_none_or(<[_]>::is_empty) {
-            self.attributes.entity(entity).nonnull = Some(&[]);
-            return;
-        }
-        let retained = self.attributes.entity(entity).nonnull;
-        let mut positions = ArenaVec::new_in(self.scratch);
-        positions.extend_from_slice(retained.unwrap_or_default());
-        let mut work: ArenaVec<
-            '_,
-            &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,
-        > = ArenaVec::new_in(self.scratch);
-        work.extend(
-            specifier
-                .arguments
-                .iter()
-                .filter(|argument| argument.index == attribute.index)
-                .map(|argument| argument.expression),
-        );
-        while let Some(expression) = work.pop() {
-            if let E::Binary {
-                operator: B::Comma,
-                left_expression,
-                right_expression,
-            } = expression.kind
-            {
-                work.push(right_expression);
-                work.push(left_expression);
-                continue;
-            }
-            let info = self.expression_info(expression);
-            let position = info
-                .integer
-                .filter(|_| info.ice)
-                .and_then(super::super::Integer::to_i128)
-                .and_then(|value| usize::try_from(value).ok())
-                .and_then(|value| value.checked_sub(1));
-            let Some(position) =
-                position.filter(|&position| position < parameters.len() || variadic)
-            else {
-                self.error(
-                    SemanticErrorKind::AttributeArguments,
-                    expression.source_vectors,
-                    None,
-                    None,
-                );
-                continue;
-            };
-            if parameters
-                .get(position)
-                .is_some_and(|&parameter| self.pointer_target(parameter).is_none())
-            {
-                self.ignored(attribute);
-                continue;
-            }
-            if !positions.contains(&position) {
-                positions.push(position);
-            }
-        }
-        if retained.is_none_or(|positions| !positions.is_empty()) && !positions.is_empty() {
-            self.attributes.entity(entity).nonnull =
-                Some(self.types.tu.alloc_slice_copy(&positions));
-        }
-    }
-
-    /// Emits `-Wnonnull` only for calls whose visible declaration carries
-    /// the annotation and whose argument is known to be a null pointer.
-    /// GNU extension: GCC Common Function Attributes, nonnull.
-    pub(in crate::translation_phases::semantic_analysis) fn check_nonnull_arguments(
-        &mut self,
-        binding: Option<usize>,
-        arguments: crate::util::arena_list::ArenaList<
-            'tu,
-            &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,
-        >,
-    ) {
-        let Some(binding) = binding else {
-            return;
-        };
-        let entity = self.entity_of(binding);
-        let attributes = *self.attributes.entity(entity);
-        let Some(positions) = attributes.nonnull else {
-            return;
-        };
-        let parameters = match self.types.nodes[self.bindings[binding].ty.index] {
-            | TypeKind::Function { parameters, .. } => parameters,
-            | _ => &[],
-        };
-        for (index, &argument) in arguments.iter().enumerate() {
-            let info = self.expression_info(argument);
-            if ((positions.is_empty()
-                && parameters
-                    .get(index)
-                    .is_some_and(|&parameter| self.pointer_target(parameter).is_some()))
-                || positions.contains(&index))
-                && self.null_pointer_constant(info)
-            {
-                self.pointer_diagnostic(
-                    crate::configuration::DiagnosticGroup::Nonnull,
-                    argument.source_vectors,
-                );
-            }
-        }
     }
 
     /// Gives every linked function that the external-symbol contract says
@@ -1875,6 +1743,19 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// The `format` attributes of function pointers and members that
     /// point to functions (`formats.rs`).
     pub(super) pointer_formats: ArenaMap<'s, FormatHolder, FormatAttribute>,
+    /// Each function's `nonnull` attributes in the order Clang keeps them
+    /// on its latest declaration: those of earlier declarations first, and
+    /// each declaration's in source order (`Decl::addAttr` puts inherited
+    /// attributes first; `NonNullAttr` inherits even when present).
+    pub(super) nonnull: ArenaMap<'s, EntityId, &'s [super::nonnull::NonnullAttribute<'s>]>,
+    /// Where Clang's `nonnull` was first written on the parameter whose
+    /// attributes are being applied.
+    pub(in crate::translation_phases::semantic_analysis) parameter_nonnull: Option<SourceVectors>,
+    /// The parameters an assignment writes or whose address `&` takes, as
+    /// written, without parentheses: Clang stops calling a `nonnull` one
+    /// nonnull from then on (`RecordModifiableNonNullParam` in
+    /// `SemaExpr.cpp`, `FunctionScopeInfo::ModifiedNonNullParams`).
+    pub(super) modified_parameters: ArenaSet<'s, usize>,
 }
 
 /// What holds a function pointer's `format` attribute: a linked object's
@@ -1897,26 +1778,29 @@ impl<'tu, 's> AttributeState<'tu, 's> {
 
     pub(in crate::translation_phases::semantic_analysis) fn new(scratch: &'s Bump) -> Self {
         Self {
-            checked:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            refusals:           ArenaVec::new_in(scratch),
-            conventions:        ArenaVec::new_in(scratch),
-            entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            machine_entries:    false,
-            call_diagnostics:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            sections:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            initializers:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            aliases:            ArenaVec::new_in(scratch),
-            weakrefs:           ArenaVec::new_in(scratch),
-            bare_weakrefs:      ArenaVec::new_in(scratch),
-            alias_names:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            pending_cleanups:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            before_definition:  ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            initializing_jumps: ArenaVec::new_in(scratch),
-            pending_dll:        ArenaVec::new_in(scratch),
-            targets:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            dll:                ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            declaration_start:  None,
-            pointer_formats:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            checked:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            refusals:            ArenaVec::new_in(scratch),
+            conventions:         ArenaVec::new_in(scratch),
+            entities:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            machine_entries:     false,
+            call_diagnostics:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            sections:            ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            initializers:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            aliases:             ArenaVec::new_in(scratch),
+            weakrefs:            ArenaVec::new_in(scratch),
+            bare_weakrefs:       ArenaVec::new_in(scratch),
+            alias_names:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            pending_cleanups:    ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            before_definition:   ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            initializing_jumps:  ArenaVec::new_in(scratch),
+            pending_dll:         ArenaVec::new_in(scratch),
+            targets:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            dll:                 ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            declaration_start:   None,
+            pointer_formats:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            nonnull:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            parameter_nonnull:   None,
+            modified_parameters: ArenaSet::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 

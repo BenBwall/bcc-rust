@@ -1077,6 +1077,9 @@ diagnostic_groups! {
     TautologicalUnsignedZeroCompare => Some("tautological-unsigned-zero-compare"), Ignored, false;
     /// Clang's constant at the limit of the operand type's range.
     TautologicalTypeLimitCompare => Some("tautological-type-limit-compare"), Ignored, false;
+    /// Clang's pointer that is never null compared with a null pointer, on
+    /// by default.
+    TautologicalPointerCompare => Some("tautological-pointer-compare"), ClangWarning, false;
     /// A declaration that hides another one in an enclosing scope.
     Shadow => Some("shadow"), Ignored, false;
     /// GCC's `-Wshadow=local`: one that hides a local declaration.

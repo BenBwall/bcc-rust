@@ -4,6 +4,7 @@
 use std::fmt;
 
 use super::{
+    always_nonnull::NonnullNote,
     bool_operation::BoolOperationRule,
     main_function::MainRule,
     unused::UnusedRule,
@@ -176,6 +177,13 @@ pub(crate) enum SemanticErrorKind {
     /// names.
     /// C99: §6.11.6-§6.11.7, p. 163; PDF p. 175 (obsolescent features).
     DeprecatedNonPrototype,
+    /// A pointer that is never null compared with a null pointer or
+    /// converted to `_Bool`, or a null argument for a `nonnull` parameter,
+    /// in the words that are the diagnostic's name; the note says what is
+    /// at `previous`.
+    /// C99: §6.3.2.3p3, p. 47; PDF p. 59; §6.5.9p6, p. 87; PDF p. 99.
+    /// GNU extension: GCC manual, "Common Function Attributes", nonnull.
+    Nonnull(crate::configuration::DiagnosticGroup, NonnullNote),
     /// Clang's call with another number of arguments than the parameters
     /// of the definition without a prototype, in its words, which are the
     /// diagnostic's name.
@@ -1249,6 +1257,9 @@ impl SemanticErrorKind {
             | Self::Parentheses(_) => "this may not group as written",
             | Self::KnrPromotedParameter => "the prototype gives it another type",
             | Self::DeprecatedNonPrototype => "no prototype",
+            | Self::Nonnull(crate::configuration::DiagnosticGroup::Nonnull, _) =>
+                "this argument is null",
+            | Self::Nonnull(..) => "this is never null",
             | Self::CallArgumentCount => "the definition takes another number",
             | Self::SwitchCases(_) => "this switch may not handle every value",
             | Self::ReturnFlow(_) => "control can reach this point",
@@ -1492,6 +1503,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::TautologicalConstantOutOfRangeCompare
                     | crate::configuration::DiagnosticGroup::TautologicalUnsignedZeroCompare
                     | crate::configuration::DiagnosticGroup::TautologicalTypeLimitCompare
+                    | crate::configuration::DiagnosticGroup::TautologicalPointerCompare
                     | crate::configuration::DiagnosticGroup::Shadow
                     | crate::configuration::DiagnosticGroup::ShadowLocal
                     | crate::configuration::DiagnosticGroup::ShadowCompatibleLocal
@@ -2005,6 +2017,15 @@ impl SemanticErrorKind {
                 "argument count",
                 "C99 §6.5.2.2p6: a call without a prototype whose arguments do not match the \
                  definition's parameters in number has undefined behavior",
+            ),
+            | Self::Nonnull(crate::configuration::DiagnosticGroup::Nonnull, _) => (
+                "null argument for a nonnull parameter",
+                "GNU nonnull: the function may assume the argument is not a null pointer",
+            ),
+            | Self::Nonnull(..) => (
+                "pointer that is never null",
+                "C99 §6.3.2.3p3: a null pointer compares unequal to a pointer to any object or \
+                 function, and a nonnull parameter or result is assumed never to be null",
             ),
             | Self::DeprecatedNonPrototype => (
                 "function without a prototype",
@@ -2976,6 +2997,7 @@ impl SemanticErrorKind {
             | Self::SignCompare => Some(G::SignCompare),
             | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::DeprecatedNonPrototype => Some(G::DeprecatedNonPrototype),
+            | Self::Nonnull(group, _) => Some(group),
             | Self::CallArgumentCount => Some(G::CallArgumentCount),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),
@@ -3439,6 +3461,7 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FormatAttributeCount(_)
                 | SemanticErrorKind::KnrPromotedParameter
                 | SemanticErrorKind::DeprecatedNonPrototype
+                | SemanticErrorKind::Nonnull(..)
                 | SemanticErrorKind::CallArgumentCount
                 | SemanticErrorKind::SwitchCases(_)
                 | SemanticErrorKind::ReturnFlow(_)
@@ -3579,6 +3602,7 @@ impl ToDiagnostic for SemanticError {
                     "initialized flexible array member is here",
                 | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
                 | SemanticErrorKind::DeprecatedNonPrototype => "conflicting prototype is here",
+                | SemanticErrorKind::Nonnull(_, note) => note.words(context, arena, Some(previous)),
                 | SemanticErrorKind::ShadowOrBody(
                     crate::configuration::DiagnosticGroup::EmptyBody,
                 ) => "put the semicolon on a separate line to silence this warning",
@@ -3594,6 +3618,13 @@ impl ToDiagnostic for SemanticError {
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
+            if let SemanticErrorKind::Nonnull(_, note) = self.kind {
+                if let Some(label) = note.second_words() {
+                    diagnostic = diagnostic.secondary(previous, label);
+                }
+                // Clang's notes name places.
+                diagnostic.related_points = true;
+            }
         }
         if let Some(parameter) = self.parameter {
             let label = match parameter.name {

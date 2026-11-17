@@ -850,6 +850,11 @@ pub(crate) struct Parameter<'tu> {
     pub(crate) ty:                TypeId,
     pub(crate) array_minimum:     Option<ArrayBound>,
     pub(crate) original:          TypeId,
+    /// Where Clang's `nonnull` was first written on the parameter itself,
+    /// which makes it nonnull whatever the function's attributes say
+    /// (`handleNonNullAttrParameter` in `SemaDeclAttr.cpp`).
+    /// GNU extension: GCC manual, "Common Function Attributes", nonnull.
+    pub(crate) nonnull:           Option<crate::translation_phases::SourceVectors>,
 }
 
 /// Array completeness and run-time extent; `Star` is prototype-scope `[*]`.

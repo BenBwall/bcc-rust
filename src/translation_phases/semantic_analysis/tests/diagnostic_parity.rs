@@ -92,7 +92,7 @@ fn warning_groups_cover_null_constants_casts_void_and_old_style_calls() {
             let errors = context.take_pending_errors();
             assert_eq!(errors.len(), 1, "{source}: {errors:?}");
             assert!(
-                matches!(errors[0], TranslationError::Semantic(error) if error.kind==SemanticErrorKind::PointerConstraint(group)),
+                matches!(errors[0], TranslationError::Semantic(error) if error.kind.group()==Some(group)),
                 "{source}: {errors:?}"
             );
             assert_eq!(unit.errors, 0);
@@ -145,7 +145,7 @@ fn nonnull_operands_and_redeclarations_retain_parameter_positions() {
         |context, unit| {
             let errors = context.take_pending_errors();
             assert_eq!(errors.len(), 4, "{errors:?}");
-            assert!(errors.iter().all(|error|matches!(error,TranslationError::Semantic(error) if error.kind==SemanticErrorKind::PointerConstraint(G::Nonnull))),"{errors:?}");
+            assert!(errors.iter().all(|error|matches!(error,TranslationError::Semantic(error) if error.kind.group()==Some(G::Nonnull))),"{errors:?}");
             assert_eq!(unit.errors, 0);
         },
     );
@@ -199,10 +199,8 @@ fn pointer_bool_warnings(
                 .filter(|error| {
                     matches!(
                         error,
-                        TranslationError::Semantic(SemanticError {
-                            kind: SemanticErrorKind::PointerConstraint(G::PointerBoolConversion),
-                            ..
-                        })
+                        TranslationError::Semantic(SemanticError { kind, .. })
+                            if kind.group() == Some(G::PointerBoolConversion)
                     )
                 })
                 .count();
