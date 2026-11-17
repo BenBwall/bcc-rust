@@ -80,6 +80,7 @@ mod inference;
 mod initializers;
 mod main_function;
 mod missing_fields;
+mod parameter_notes;
 mod parentheses;
 mod predefined;
 mod reachability;
@@ -128,6 +129,7 @@ pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
     MachineEntryFault,
+    ParameterNote,
     ReportOrder,
     SemanticError,
     SemanticErrorKind,
@@ -2340,6 +2342,7 @@ struct Analyzer<'a, 'tu, 's> {
     register_variables:      ArenaMap<'s, usize, u8>,
     ice_operands:            ArenaMap<'s, (usize, bool), bool>,
     functions:               functions::State<'tu, 's>,
+    parameter_notes:         parameter_notes::State<'s>,
     va_list_type:            Option<TypeId>,
     statements:              statements::State<'tu, 's>,
     unused:                  unused::UnusedState<'s>,

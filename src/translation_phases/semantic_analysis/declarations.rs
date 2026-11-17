@@ -1052,6 +1052,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let errors_before = self.semantic_errors;
         self.bind(name, ty, kind, linkage, duration, None);
+        if kind == BindingKind::Function {
+            self.record_parameter_sites(self.bindings.len() - 1, declarator);
+        }
         self.constexpr_binding(
             name,
             constexpr && kind == BindingKind::Object,

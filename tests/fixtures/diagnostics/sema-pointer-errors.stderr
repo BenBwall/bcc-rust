@@ -17,6 +17,8 @@ error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
 error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
  --> sema-pointer-errors.c:4:34
   |
+3 | void accept(char *p);
+  |                   - passing argument to parameter 'p' here
 4 | void argument(float *q) { accept(q); }
   |                                  ^ pointer constraint violation
   |

@@ -1089,16 +1089,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
         };
-        // GCC names the called function in its words.
-        let callee_name = function
-            .binding
-            .filter(|_| {
-                matches!(
-                    self.selected_designator(function.expression).kind,
-                    ExpressionType::Identifier(_)
-                )
-            })
-            .map(|binding| self.bindings[binding].name.name);
+        // The binding a call names. GCC names the called function in its
+        // words.
+        let named = function.binding.filter(|_| {
+            matches!(
+                self.selected_designator(function.expression).kind,
+                ExpressionType::Identifier(_)
+            )
+        });
+        let callee_name = named.map(|binding| self.bindings[binding].name.name);
         // C99 §6.5.2.2p2: a prototype fixes the number of arguments; GCC and
         // TCC say which way a call misses it.
         if prototype && arguments.len() < parameters.len() {
@@ -1135,15 +1134,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     position: index + 1,
                     callee:   callee_name,
                 };
-                if !self.assignment_conversion_for(parameter, info, site) {
-                    failed = true;
-                    self.error(
-                        SemanticErrorKind::InvalidArgumentType,
-                        argument.source_vectors,
-                        None,
-                        None,
-                    );
-                }
+                failed |= self.with_argument_parameter(named, index, |analyzer| {
+                    let converts = analyzer.assignment_conversion_for(parameter, info, site);
+                    if !converts {
+                        analyzer.error(
+                            SemanticErrorKind::InvalidArgumentType,
+                            argument.source_vectors,
+                            None,
+                            None,
+                        );
+                    }
+                    !converts
+                });
                 self.convert(argument, parameter, ConversionKind::Assignment);
             } else {
                 // A visible old-style definition supplies parameter types

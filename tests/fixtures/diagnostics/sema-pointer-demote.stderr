@@ -1,6 +1,8 @@
 warning: incompatible pointer types in conversion [-Wincompatible-pointer-types]
  --> sema-pointer-demote.c:2:34
   |
+1 | void accept(char *p);
+  |                   - passing argument to parameter 'p' here
 2 | void argument(float *q) { accept(q); }
   |                                  ^ pointer constraint violation
   |

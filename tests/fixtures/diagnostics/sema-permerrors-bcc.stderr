@@ -97,6 +97,9 @@ error: incompatible function pointer types in conversion [-Wincompatible-functio
 error: incompatible integer and pointer conversion [-Wint-conversion]
   --> sema-permerrors-bcc.c:16:9
    |
+ 9 | void takep(int *p);
+   |                 - passing argument to parameter 'p' here
+...
 16 |   takep(i);
    |         ^ pointer constraint violation
    |

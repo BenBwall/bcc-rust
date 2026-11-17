@@ -49,6 +49,7 @@ mod machine_entry;
 mod main_function;
 mod math_builtins;
 mod mingw_inline;
+mod parameter_notes;
 mod pointer_integer_casts;
 mod pointers;
 mod pragma_pack;
@@ -577,6 +578,7 @@ fn semantic_diagnostic_positions_reject_empty_primary_ranges() {
         highlights:         Default::default(),
         origin:             SourceVectors::default(),
         order:              ReportOrder::AtSite,
+        parameter:          None,
     };
     _ = crate::translation_phases::GetPosition::position(&error, &context);
 }

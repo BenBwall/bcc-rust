@@ -175,6 +175,7 @@ impl Analyzer<'_, '_, '_> {
         let origin = source_vectors;
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
+        let parameter = self.argument_parameter_note(kind);
         let highlights = self.format_highlights();
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
@@ -195,6 +196,7 @@ impl Analyzer<'_, '_, '_> {
                 highlights,
                 origin,
                 order: self.report_order,
+                parameter,
             }),
         );
     }
@@ -247,6 +249,7 @@ impl Analyzer<'_, '_, '_> {
                 highlights,
                 origin: at,
                 order: self.report_order,
+                parameter: self.argument_parameter_note(kind),
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
             let hard = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
@@ -294,6 +297,7 @@ impl Analyzer<'_, '_, '_> {
                         highlights: [SourceVectors::default(); 2],
                         origin: SourceVectors::default(),
                         order,
+                        parameter: None,
                     })
                 },
             );

@@ -1,0 +1,58 @@
+sema-parameter-note-clang.c:16:9: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   16 |   named(c);
+      |         ^
+sema-parameter-note-clang.c:4:17: note: passing argument to parameter 'p' here
+    4 | void named(int *p);
+      |                 ^
+sema-parameter-note-clang.c:17:11: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   17 |   unnamed(c, c);
+      |           ^
+sema-parameter-note-clang.c:5:20: note: passing argument to parameter here
+    5 | void unnamed(int * , const char *);
+      |                    ^
+sema-parameter-note-clang.c:17:14: error: incompatible pointer types passing 'const int *' to parameter of type 'const char *' [-Wincompatible-pointer-types]
+   17 |   unnamed(c, c);
+      |              ^
+sema-parameter-note-clang.c:5:34: note: passing argument to parameter here
+    5 | void unnamed(int * , const char *);
+      |                                  ^
+sema-parameter-note-clang.c:18:9: error: incompatible pointer types passing 'const int *' to parameter of type 'char *' [-Wincompatible-pointer-types]
+   18 |   later(c);
+      |         ^
+sema-parameter-note-clang.c:7:18: note: passing argument to parameter 's' here
+    7 | void later(char *s);
+      |                  ^
+sema-parameter-note-clang.c:19:11: error: incompatible pointer types passing 'const int *' to parameter of type 'char *' [-Wincompatible-pointer-types]
+   19 |   defined(c);
+      |           ^
+sema-parameter-note-clang.c:8:20: note: passing argument to parameter 'd' here
+    8 | void defined(char *d) { (void)d; }
+      |                    ^
+sema-parameter-note-clang.c:20:11: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   20 |   pointer(c);
+      |           ^
+sema-parameter-note-clang.c:21:16: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   21 |   from_typedef(c);
+      |                ^
+sema-parameter-note-clang.c:11:7: note: passing argument to parameter here
+   11 | Typed from_typedef;
+      |       ^
+sema-parameter-note-clang.c:22:9: error: incompatible integer to pointer conversion passing 'long' to parameter of type 'int *' [-Wint-conversion]
+   22 |   named(l);
+      |         ^
+sema-parameter-note-clang.c:4:17: note: passing argument to parameter 'p' here
+    4 | void named(int *p);
+      |                 ^
+sema-parameter-note-clang.c:23:9: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   23 |   array(c);
+      |         ^
+sema-parameter-note-clang.c:12:16: note: passing argument to parameter 'a' here
+   12 | void array(int a[]);
+      |                ^
+sema-parameter-note-clang.c:29:9: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   29 |   named(c);
+      |         ^
+sema-parameter-note-clang.c:28:19: note: passing argument to parameter 'q' here
+   28 |   void named(int *q);
+      |                   ^
+6 warnings and 4 errors generated.

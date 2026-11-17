@@ -121,6 +121,7 @@ fn warn(
         highlights: Default::default(),
         origin: crate::translation_phases::SourceVectors::default(),
         order: super::ReportOrder::AtSite,
+        parameter: None,
     })]);
 }
 

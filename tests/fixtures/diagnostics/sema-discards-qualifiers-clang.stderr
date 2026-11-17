@@ -10,6 +10,9 @@ sema-discards-qualifiers-clang.c:12:5: warning: assigning to 'char *' from 'cons
 sema-discards-qualifiers-clang.c:13:8: warning: passing 'const char *' to parameter of type 'char *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
    13 |   take(cs);
       |        ^~
+sema-discards-qualifiers-clang.c:4:17: note: passing argument to parameter here
+    4 | void take(char *);
+      |                 ^
 sema-discards-qualifiers-clang.c:14:10: warning: initializing 'char **' with an expression of type 'const char **' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
    14 |   char **b = css;
       |          ^   ~~~
@@ -19,6 +22,9 @@ sema-discards-qualifiers-clang.c:15:5: warning: assigning to 'char **' from 'con
 sema-discards-qualifiers-clang.c:16:9: warning: passing 'const char **' to parameter of type 'char **' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
    16 |   take2(css);
       |         ^~~
+sema-discards-qualifiers-clang.c:5:19: note: passing argument to parameter here
+    5 | void take2(char **);
+      |                   ^
 sema-discards-qualifiers-clang.c:17:8: warning: initializing 'int *' with an expression of type 'volatile int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
    17 |   int *c = vi;
       |        ^   ~~
@@ -34,6 +40,9 @@ sema-discards-qualifiers-clang.c:29:5: warning: assigning to 'int **' from 'cons
 sema-discards-qualifiers-clang.c:30:9: warning: passing 'const int *const *' to parameter of type 'int **' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
    30 |   take3(cc);
       |         ^~
+sema-discards-qualifiers-clang.c:21:18: note: passing argument to parameter here
+   21 | void take3(int **);
+      |                  ^
 sema-discards-qualifiers-clang.c:31:15: warning: initializing 'const int **' with an expression of type 'int *const *' discards qualifiers in nested pointer types [-Wincompatible-pointer-types-discards-qualifiers]
    31 |   const int **h = ic;
       |               ^   ~~

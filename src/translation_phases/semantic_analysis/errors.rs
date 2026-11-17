@@ -48,6 +48,19 @@ pub(crate) struct SemanticError {
     pub(crate) origin:             SourceVectors,
     /// Where it falls among the other diagnostics.
     pub(crate) order:              ReportOrder,
+    /// The parameter an argument converts to, which Clang notes after a
+    /// diagnostic of the conversion.
+    pub(crate) parameter:          Option<ParameterNote>,
+}
+
+/// Where the declaration of a call's function declares the parameter an
+/// argument converts to, and its name, for Clang's `note: passing argument
+/// to parameter here` (`InitializationSequence::PrintInitLocationNote` in
+/// `SemaInit.cpp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ParameterNote {
+    pub(crate) site: SourceVectors,
+    pub(crate) name: Option<StringCacheId>,
 }
 
 /// Where a diagnostic falls among the others, which the reporter prints in
@@ -3538,6 +3551,19 @@ impl ToDiagnostic for SemanticError {
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
+        }
+        if let Some(parameter) = self.parameter {
+            let label = match parameter.name {
+                | Some(name) => format_in!(
+                    arena,
+                    "passing argument to parameter '{}' here",
+                    context.string_cache.at(name)
+                ),
+                | None => "passing argument to parameter here",
+            };
+            diagnostic = diagnostic.secondary(parameter.site, label);
+            // `PrintInitLocationNote` names the parameter's place.
+            diagnostic.related_points = true;
         }
         for highlight in self.highlights {
             if highlight.length() != 0 {
