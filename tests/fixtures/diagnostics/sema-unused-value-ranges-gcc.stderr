@@ -1,0 +1,135 @@
+sema-unused-value-ranges-gcc.c: In function 'f':
+sema-unused-value-ranges-gcc.c:12:3: warning: statement with no effect [-Wunused-value]
+   12 |   (_Bool) a;
+      |   ^~~~~~~~~
+sema-unused-value-ranges-gcc.c:13:3: warning: statement with no effect [-Wunused-value]
+   13 |   (T) a;
+      |   ^~~~~
+sema-unused-value-ranges-gcc.c:5:18: warning: statement with no effect [-Wunused-value]
+    5 | #define CAST(x) ((long)(x))
+      |                 ~^~~~~~~~~~
+sema-unused-value-ranges-gcc.c:14:3: note: in expansion of macro 'CAST'
+   14 |   CAST(a);
+      |   ^~~~
+sema-unused-value-ranges-gcc.c:15:3: warning: statement with no effect [-Wunused-value]
+   15 |   (bool) a;
+      |   ^~~~~~~~
+sema-unused-value-ranges-gcc.c:6:14: warning: statement with no effect [-Wunused-value]
+    6 | #define C(x) (long)x
+      |              ^
+sema-unused-value-ranges-gcc.c:16:3: note: in expansion of macro 'C'
+   16 |   C(a);
+      |   ^
+sema-unused-value-ranges-gcc.c:7:21: warning: statement with no effect [-Wunused-value]
+    7 | #define ADD(x, y) x + y
+      |                     ^
+sema-unused-value-ranges-gcc.c:17:3: note: in expansion of macro 'ADD'
+   17 |   ADD(a, b);
+      |   ^~~
+sema-unused-value-ranges-gcc.c:18:5: warning: statement with no effect [-Wunused-value]
+   18 |   a + ONE;
+      |     ^
+sema-unused-value-ranges-gcc.c:19:7: warning: statement with no effect [-Wunused-value]
+   19 |   ONE + a;
+      |       ^
+sema-unused-value-ranges-gcc.c:20:5: warning: statement with no effect [-Wunused-value]
+   20 |   a +
+      |   ~~^
+   21 |     b;
+      |     ~
+sema-unused-value-ranges-gcc.c:22:3: warning: statement with no effect [-Wunused-value]
+   22 |   (T)
+      |   ^~~
+   23 |     a;
+      |     ~
+sema-unused-value-ranges-gcc.c:24:13: warning: statement with no effect [-Wunused-value]
+   24 |   a ? b + 1 : b;
+      |   ~~~~~~~~~~^~~
+sema-unused-value-ranges-gcc.c:26:5: warning: statement with no effect [-Wunused-value]
+   25 |   a ? b
+      |   ~~~~~
+   26 |     : a;
+      |     ^~~
+sema-unused-value-ranges-gcc.c:27:4: warning: statement with no effect [-Wunused-value]
+   27 |   s.m;
+      |   ~^~
+sema-unused-value-ranges-gcc.c:28:5: warning: statement with no effect [-Wunused-value]
+   28 |   ps->m;
+      |   ~~^~~
+sema-unused-value-ranges-gcc.c:29:4: warning: statement with no effect [-Wunused-value]
+   29 |   p[1];
+      |   ~^~~
+sema-unused-value-ranges-gcc.c:30:4: warning: statement with no effect [-Wunused-value]
+   30 |   1[p];
+      |   ~^~~
+sema-unused-value-ranges-gcc.c:31:3: warning: statement with no effect [-Wunused-value]
+   31 |   -a;
+      |   ^~
+sema-unused-value-ranges-gcc.c:32:3: warning: statement with no effect [-Wunused-value]
+   32 |   &a;
+      |   ^~
+sema-unused-value-ranges-gcc.c:33:3: warning: statement with no effect [-Wunused-value]
+   33 |   "str";
+      |   ^~~~~
+sema-unused-value-ranges-gcc.c:34:3: warning: statement with no effect [-Wunused-value]
+   34 |   sizeof a;
+      |   ^~~~~~
+sema-unused-value-ranges-gcc.c:35:3: warning: statement with no effect [-Wunused-value]
+   35 |   (a);
+      |   ^
+sema-unused-value-ranges-gcc.c:36:6: warning: statement with no effect [-Wunused-value]
+   36 |   (a + 1);
+      |   ~~~^~~~
+sema-unused-value-ranges-gcc.c:37:3: warning: statement with no effect [-Wunused-value]
+   37 |   0 ? 1 : 2;
+      |   ^
+sema-unused-value-ranges-gcc.c:38:3: warning: statement with no effect [-Wunused-value]
+   38 |   (int) a;
+      |   ^
+sema-unused-value-ranges-gcc.c:39:3: warning: statement with no effect [-Wunused-value]
+   39 |   (int) (a + 1);
+      |   ^~~~~~~~~~~~~
+sema-unused-value-ranges-gcc.c:40:10: warning: statement with no effect [-Wunused-value]
+   40 |   (void)0, a + 1;
+      |          ^
+sema-unused-value-ranges-gcc.c:41:3: warning: statement with no effect [-Wunused-value]
+   41 |   (a, b);
+      |   ^
+sema-unused-value-ranges-gcc.c:41:5: warning: left-hand operand of comma expression has no effect [-Wunused-value]
+   41 |   (a, b);
+      |     ^
+sema-unused-value-ranges-gcc.c:42:4: warning: left-hand operand of comma expression has no effect [-Wunused-value]
+   42 |   a, 1;
+      |    ^
+sema-unused-value-ranges-gcc.c:42:4: warning: statement with no effect [-Wunused-value]
+sema-unused-value-ranges-gcc.c:43:3: warning: right-hand operand of comma expression has no effect [-Wunused-value]
+   43 |   (int)(*p = 2, a);
+      |   ^~~~~~~~~~~~~~~~
+sema-unused-value-ranges-gcc.c:44:7: warning: right-hand operand of comma expression has no effect [-Wunused-value]
+   44 |   (h(), a + 1);
+      |   ~~~~^~~~~~~~
+sema-unused-value-ranges-gcc.c:45:16: warning: value computed is not used [-Wunused-value]
+   45 |   ((long) (h() + 1));
+      |           ~~~~~^~~~
+sema-unused-value-ranges-gcc.c:46:16: warning: value computed is not used [-Wunused-value]
+   46 |   ((long) h()) + 1;
+      |   ~~~~~~~~~~~~~^~~
+sema-unused-value-ranges-gcc.c:47:3: warning: value computed is not used [-Wunused-value]
+   47 |   (char) h();
+      |   ^~~~~~~~~~
+sema-unused-value-ranges-gcc.c:48:4: warning: left-hand operand of comma expression has no effect [-Wunused-value]
+   48 |   a, h() + 1;
+      |    ^
+sema-unused-value-ranges-gcc.c:48:4: warning: value computed is not used [-Wunused-value]
+sema-unused-value-ranges-gcc.c:49:6: warning: right-hand operand of comma expression has no effect [-Wunused-value]
+   49 |   h(), a + 1;
+      |      ^
+sema-unused-value-ranges-gcc.c:50:12: warning: value computed is not used [-Wunused-value]
+   50 |   a && h() == 1;
+      |        ~~~~^~~~
+sema-unused-value-ranges-gcc.c:51:8: warning: value computed is not used [-Wunused-value]
+   51 |   a && !h();
+      |        ^~~~
+sema-unused-value-ranges-gcc.c:52:5: warning: value computed is not used [-Wunused-value]
+   52 |   a && (b = h());
+      |     ^~

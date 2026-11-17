@@ -97,8 +97,9 @@ pub(crate) struct Renderer {
 }
 
 /// Where a diagnostic was reported: a range's file, first byte and length,
-/// and the reading segment it lies in.
-type Place = (u32, u32, u32, Option<u32>);
+/// the reading segment it lies in, and where the first range it draws beside
+/// the caret begins and ends.
+type Place = (u32, u32, u32, Option<u32>, Option<(u32, usize)>);
 
 // Tests
 #[cfg(test)]

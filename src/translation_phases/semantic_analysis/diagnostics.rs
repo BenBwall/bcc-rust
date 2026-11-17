@@ -36,6 +36,21 @@ impl Analyzer<'_, '_, '_> {
         result
     }
 
+    /// Runs `report` with `extent` as the range GCC underlines with `~`
+    /// around the caret of what it reports: the expression a location's
+    /// range covers in GCC, where the caret is one point within it.
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn with_gcc_extent<R>(
+        &mut self,
+        extent: SourceVectors,
+        report: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let outer = std::mem::replace(&mut self.gcc_extent, extent);
+        let result = report(self);
+        self.gcc_extent = outer;
+        result
+    }
+
     /// Runs `check` with `context` as Clang's context location for the
     /// implicit conversions it checks: the call whose arguments convert, the
     /// assignment operator, the `return`, the declarator, or the
@@ -88,17 +103,17 @@ impl Analyzer<'_, '_, '_> {
         result
     }
 
-    /// The highlighted operands, for Clang's format only: the others draw
-    /// none. They keep the places macros wrote them, which the renderer
-    /// draws at the invocation and again in Clang's `expanded from macro`
-    /// note.
-    fn clang_highlights(&self) -> [SourceVectors; 2] {
-        if self.context.configuration.diagnostic_format()
-            == crate::configuration::DiagnosticFormat::Clang
-        {
-            self.highlights
-        } else {
-            [SourceVectors::default(); 2]
+    /// The ranges the format draws beside the caret: the highlighted
+    /// operands in Clang's, the extent in GCC's, and none in the others.
+    /// They keep the places macros wrote them, which the renderer draws at
+    /// the invocation and again in Clang's `expanded from macro` note, or,
+    /// for GCC, where GCC would.
+    fn format_highlights(&self) -> [SourceVectors; 2] {
+        match self.context.configuration.diagnostic_format() {
+            | crate::configuration::DiagnosticFormat::Clang => self.highlights,
+            | crate::configuration::DiagnosticFormat::Gcc =>
+                [self.gcc_extent, SourceVectors::default()],
+            | _ => [SourceVectors::default(); 2],
         }
     }
 
@@ -160,7 +175,7 @@ impl Analyzer<'_, '_, '_> {
         let origin = source_vectors;
         let source_vectors = self.context.file_location(source_vectors);
         let previous = previous.map(|previous| self.context.file_location(previous));
-        let highlights = self.clang_highlights();
+        let highlights = self.format_highlights();
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
@@ -222,7 +237,7 @@ impl Analyzer<'_, '_, '_> {
             self.semantic_errors += 1;
             let at = source_vectors;
             let source_vectors = self.context.file_location(source_vectors);
-            let highlights = self.clang_highlights();
+            let highlights = self.format_highlights();
             let error = SemanticError {
                 extension_severity: None,
                 kind,
