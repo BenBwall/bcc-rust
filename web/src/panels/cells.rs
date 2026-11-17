@@ -770,7 +770,10 @@ fn text_description(
             "element",
         )
     } else {
-        (format!("the characters {}", shown.collect::<String>()), "byte")
+        (
+            format!("the characters {}", shown.collect::<String>()),
+            "byte",
+        )
     };
     let mut used: Vec<String> = Vec::new();
     for (index, kind) in kinds.iter().enumerate() {
@@ -930,18 +933,18 @@ mod tests {
             .collect();
         elements.push(Value::Indeterminate);
         Object {
-            id: 3,
-            name: "squares".to_owned(),
-            ty: format!("int[{length}]"),
-            storage: "automatic".to_owned(),
-            alive: true,
-            frame_id: 1,
-            function: "main".to_owned(),
-            scope: None,
+            id:        3,
+            name:      "squares".to_owned(),
+            ty:        format!("int[{length}]"),
+            storage:   "automatic".to_owned(),
+            alive:     true,
+            frame_id:  1,
+            function:  "main".to_owned(),
+            scope:     None,
             parameter: false,
-            literal: false,
-            size: 4 * length,
-            value: Value::Array { elements },
+            literal:   false,
+            size:      4 * length,
+            value:     Value::Array { elements },
         }
     }
 
@@ -957,11 +960,14 @@ mod tests {
             [Part::Text { values: true, .. }]
         ));
         let opened = parts(&squares, true);
-        assert!(matches!(opened[0], Part::TextHead {
-            count: 12,
-            values: true,
-            ..
-        }));
+        assert!(matches!(
+            opened[0],
+            Part::TextHead {
+                count: 12,
+                values: true,
+                ..
+            }
+        ));
         let names: Vec<&str> = opened[1..]
             .iter()
             .map(|part| match part {
@@ -1009,8 +1015,8 @@ mod tests {
             .collect();
         assert_eq!(
             text_description(&squares, &glyphs, &kinds, &[], true),
-            "squares, int[10], 40 bytes: the values 0, 1, 4, 9, 16, 25, 36, 49, 64, ?, element \
-             2 written by this step"
+            "squares, int[10], 40 bytes: the values 0, 1, 4, 9, 16, 25, 36, 49, 64, ?, element 2 \
+             written by this step"
         );
     }
 
