@@ -49,7 +49,9 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     // The strip is drawn anew at each step, at its start. Where it is wider
     // than the window (or, on a phone, where a call's row is), bring the
     // cells the step used into the middle, or, when they are wider than the
-    // window too, the first of them to its left edge.
+    // window too, the first of them to its left edge. A folded array's
+    // values scroll within their cell, which is only a few rows high, to
+    // the elements the step used in the same way.
     let section = NodeRef::<html::Section>::new();
     Effect::new(move || {
         snapshot.track();
@@ -57,6 +59,13 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
         let Some(section) = section.get() else {
             return;
         };
+        if let Ok(folded) = section.query_selector_all(".cell.is-values .string-bytes") {
+            for index in 0..folded.length() {
+                if let Some(values) = element(folded.item(index)) {
+                    follow_down(&values);
+                }
+            }
+        }
         let Ok(rows) = section.query_selector_all(".cells, .cell-run") else {
             return;
         };
@@ -113,6 +122,36 @@ fn follow(row: &web_sys::Element) {
     let options = web_sys::ScrollToOptions::new();
     options.set_left(left.max(0.0));
     row.scroll_to_with_scroll_to_options(&options);
+}
+
+/// Scrolls the folded array's `values` up or down so the elements under it
+/// that the step used are in view, when it holds more rows than it shows.
+fn follow_down(values: &web_sys::Element) {
+    if values.scroll_height() <= values.client_height() {
+        return;
+    }
+    let Ok(lit) = values.query_selector_all("[data-access]") else {
+        return;
+    };
+    let mut span: Option<(f64, f64)> = None;
+    for index in 0..lit.length() {
+        let Some(element) = element(lit.item(index)) else {
+            continue;
+        };
+        let element = element.get_bounding_client_rect();
+        span = Some(span.map_or((element.top(), element.bottom()), |(top, bottom)| {
+            (top.min(element.top()), bottom.max(element.bottom()))
+        }));
+    }
+    let Some((top, bottom)) = span else {
+        return;
+    };
+    let offset = top - values.get_bounding_client_rect().top();
+    let room = f64::from(values.client_height());
+    let top = f64::from(values.scroll_top()) + offset - ((room - (bottom - top)) / 2.0).max(0.0);
+    let options = web_sys::ScrollToOptions::new();
+    options.set_top(top.max(0.0));
+    values.scroll_to_with_scroll_to_options(&options);
 }
 
 fn element(node: Option<web_sys::Node>) -> Option<web_sys::Element> {
