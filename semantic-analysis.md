@@ -1233,7 +1233,9 @@ needs them off no uses are recorded. `-Wunused-local-typedefs` reports a
 typedef a block declares and nothing names. `const`/`pure` calls under
 `-Wunused-value`, `-Wunused-result`, and a value in a statement expression's last
 statement, which Clang reads, report nothing; a discarded statement expression
-takes that statement's warning under Clang's rules (`isUnusedResultAWarning`).
+takes that statement's warning under Clang's rules (`isUnusedResultAWarning`),
+which Clang drops when a macro's body or argument placed it, unless parentheses
+or `__extension__` surround the statement expression (`DiagnoseUnused`).
 
 Clang reports these in source order. The GCC identity reports them when GCC
 does, and a semantic diagnostic's `ReportOrder` places it there for the

@@ -10,4 +10,28 @@ sema-unused-value-statement-expression-clang.c:7:19: warning: expression result 
 sema-unused-value-statement-expression-clang.c:10:17: warning: expression result unused [-Wunused-value]
    10 |   ({ int v = a; v; });
       |                 ^
-4 warnings generated.
+sema-unused-value-statement-expression-clang.c:33:14: warning: expression result unused [-Wunused-value]
+   33 |   ({ SAME(a) + 1; });
+      |              ^
+sema-unused-value-statement-expression-clang.c:34:15: warning: expression result unused [-Wunused-value]
+   34 |   ({ VALUE(a) + 1; });
+      |               ^
+sema-unused-value-statement-expression-clang.c:35:7: warning: expression result unused [-Wunused-value]
+   35 |   (({ VALUE(a); }));
+      |       ^~~~~
+sema-unused-value-statement-expression-clang.c:17:23: note: expanded from macro 'VALUE'
+   17 | #define VALUE(x) ((x) + 1)
+      |                       ^
+sema-unused-value-statement-expression-clang.c:36:20: warning: expression result unused [-Wunused-value]
+   36 |   __extension__ ({ VALUE(a); });
+      |                    ^~~~~
+sema-unused-value-statement-expression-clang.c:17:23: note: expanded from macro 'VALUE'
+   17 | #define VALUE(x) ((x) + 1)
+      |                       ^
+sema-unused-value-statement-expression-clang.c:37:10: warning: expression result unused [-Wunused-value]
+   37 |   SAME(a + 1);
+      |          ^
+sema-unused-value-statement-expression-clang.c:38:17: warning: expression result unused [-Wunused-value]
+   38 |   SYSTEM_SAME(a + 1);
+      |                 ^
+10 warnings generated.

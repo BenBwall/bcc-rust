@@ -1797,8 +1797,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's `DiagnoseUnusedExprResult`, which says nothing about an
-    /// expression a macro's body wrote and, comparisons aside, which report at
-    /// once, about one it does not reach (`DiagIfReachable`).
+    /// expression a macro's body wrote, or about a statement expression whose
+    /// value a macro gave ([`Self::clang_macro_statement_expression`]), and,
+    /// comparisons aside, which report at once, about one it does not reach
+    /// (`DiagIfReachable`).
     fn clang_discarded_value(&mut self, e: &'tu Expression<'tu>, inhibited: bool) {
         let comparison = match Self::without_parentheses(e).kind {
             | E::Binary {
@@ -1821,6 +1823,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && !self
                 .context
                 .written_by_macro_body(Self::operator_site(Self::without_parentheses(e)))
+            && !self.clang_macro_statement_expression(e, site)
         {
             if let Some(comparison) = comparison {
                 self.unused_rule(comparison, site, None);
@@ -1834,6 +1837,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             }
         }
+    }
+
+    /// Whether `e` is a statement expression, unparenthesized, whose warning
+    /// `site` a macro's expansion placed, from its body or an argument:
+    /// Clang's `DiagnoseUnused` (`SemaStmt.cpp`) takes it for a function-like
+    /// macro used as a statement (`isa<StmtExpr>(E) && Loc.isMacroID()`),
+    /// where `Loc` is the place `isUnusedResultAWarning` takes from the
+    /// value statement. GNU extension: GCC manual, "Statement Exprs".
+    fn clang_macro_statement_expression(
+        &self,
+        e: &'tu Expression<'tu>,
+        site: SourceVectors,
+    ) -> bool {
+        matches!(e.kind, E::StatementExpression(_))
+            && site.length() != 0
+            && self.context.produced_by_macro_expansion(site)
     }
 
     /// Clang's `Expr::isUnusedResultAWarning`: the rule and place of the
@@ -1980,10 +1999,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
             if !self.evaluation_inhibited()
-                && let Some((_, _, anchor)) = self.clang_unused_result(left)
+                && let Some((_, site, anchor)) = self.clang_unused_result(left)
                 && !self
                     .context
                     .written_by_macro_body(Self::operator_site(Self::without_parentheses(left)))
+                && !self.clang_macro_statement_expression(left, site)
             {
                 let rule = UnusedRule::ClangCommaLeft;
                 self.warn_if_reachable(
