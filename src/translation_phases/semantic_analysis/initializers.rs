@@ -379,7 +379,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 parent:     None,
                                 root_index: 0,
                                 at:         container,
-                                context:    init.source_vectors,
                             });
                             work.push(InitWork::List(ListWork {
                                 root: target,
@@ -436,13 +435,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     // this element's operations for.
                     let mut repeats = 0;
                     if let Some(designation) = element.designation {
-                        // The list's own context, outside any list brace
-                        // elision implies.
-                        let mut outermost = &cursor;
-                        while let Some(parent) = outermost.parent {
-                            outermost = parent;
-                        }
-                        let list_context = outermost.context;
                         let mut selected = root;
                         let mut selected_at = container;
                         let mut parent = None;
@@ -539,11 +531,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                     root_index: parent
                                         .map_or(index, |p: &Current<'_>| p.root_index),
                                     at: selected_at,
-                                    // The first designator selects in the
-                                    // list itself; each later one, in a
-                                    // list that begins at it.
-                                    context: parent
-                                        .map_or(list_context, |_| designator.source_vectors),
                                 };
                                 if flexible_designator.is_none()
                                     && let Some(member) = self.flexible_member(selected, index)
@@ -699,7 +686,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     if let Some(flexible) = &mut flexible {
                         self.extend_flexible(flexible, &cursor, ty);
                     }
-                    let node = self.record_write(writes, base, &cursor, &starts, range, element);
+                    let (node, context) =
+                        self.record_write(writes, base, &cursor, &starts, range, element);
                     // A braced scalar's element initializes the scalar itself.
                     let site = match scalar {
                         | Some(site) => site,
@@ -719,10 +707,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 },
                             },
                     };
-                    let site = Site {
-                        context: cursor.context,
-                        ..site
-                    };
+                    // Clang's context for the element's conversion is the
+                    // place of the list that holds it.
+                    let site = Site { context, ..site };
                     let next = self.advance_current(cursor);
                     work.push(next_task(self.scratch.alloc(next), repeats));
                     work.push(InitWork::Value(target, element.initializer, node, site));
@@ -1761,8 +1748,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             parent: Some(self.scratch.alloc(cursor)),
             root_index: cursor.root_index,
             at,
-            // The list brace elision implies begins at the element.
-            context: source,
         };
         self.plan_container_entry(plan, &cursor, zero, source);
         cursor
@@ -1866,9 +1851,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `base`; `inner` holds where writes inside each subobject the
     /// element's designation names begin. Reports what the write overrides
     /// as Clang's `-Winitializer-overrides` does, and returns the
-    /// subobject's node. A range of more than [`RANGE_WRITES`] elements
-    /// records only its last.
-    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+    /// subobject's node and the place of the list that holds it, Clang's
+    /// context for the element's conversion. A range of more than
+    /// [`RANGE_WRITES`] elements records only its last.
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139; §6.7.8 paragraph 20,
+    /// p. 127; PDF p. 139.
     fn record_write(
         &mut self,
         writes: &mut Writes<'_>,
@@ -1877,7 +1864,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         inner: &[SourceVectors],
         range: Option<(usize, u64)>,
         element: &InitializerElement<'tu>,
-    ) -> u32 {
+    ) -> (u32, SourceVectors) {
         let mut steps = ArenaVec::new_in(self.scratch);
         let mut path = Some(cursor);
         while let Some(current) = path {
@@ -1905,7 +1892,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .get(step)
                 .is_some_and(|upper| upper.index - lower < RANGE_WRITES)
         });
-        let (node, found) = writes.write(base, &steps, range, kind, source);
+        let (node, found, list) = writes.write(base, &steps, range, kind, source);
         // Clang reports a replaced union member at the element's
         // designation, a partly replaced expression where the element
         // enters it, and a replaced subobject at the new initializer.
@@ -1933,7 +1920,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 Some(previous),
             );
         }
-        node
+        (node, list)
     }
 
     /// An initializer reached the flexible array member of type `member`.
@@ -2465,13 +2452,6 @@ struct Current<'s> {
     root_index: u64,
     /// Where `container` is in the plan.
     at:         Container<'s>,
-    /// Where Clang places the list that initializes `container`, its
-    /// context location for the conversions of that list's elements: the
-    /// written `{`, or where the element or designator begins that starts
-    /// a list brace elision or a designator implies
-    /// (`InitListChecker::getStructuredSubobjectInit`).
-    /// C99: §6.7.8p20, p. 127; PDF p. 139.
-    context:    SourceVectors,
 }
 
 /// The checker's working storage, kept by the analyzer between
