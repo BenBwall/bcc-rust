@@ -32,10 +32,32 @@ impl Context<'_> {
     /// them (`Lexer::makeFileCharRange`). A token a replacement list wrote
     /// anywhere else has no place, nor has any place in a system header.
     ///
+    /// An insertion after a range is placed before the edit is made, after
+    /// the last token (`Lexer::getLocForEndOfToken`): a token a macro
+    /// expansion produced has that place only at the end of the expansion,
+    /// and otherwise the hint is left out alone ([`FixItPlacement::Dropped`]).
+    ///
     /// Only the outermost invocation of a token is recorded, so a token at
     /// the start of an inner expansion within an outer one counts as being
     /// at the start of the outer one only if it begins that too.
-    pub(crate) fn clang_fix_it_bytes(&self, place: FixItPlace) -> Option<FixItBytes> {
+    pub(crate) fn clang_fix_it_bytes(&self, place: FixItPlace) -> FixItPlacement {
+        // `getLocForEndOfToken` follows a token a macro expansion produced
+        // out only from the expansion's end.
+        if let FixItPlace::After(source) = place
+            && source.length() != 0
+            && self
+                .invocation_span(Self::last_source_vector(source))
+                .is_some()
+            && !self.at_expansion_edge(Self::last_source_vector(source), true)
+        {
+            return FixItPlacement::Dropped;
+        }
+        self.clang_fix_it_place(place)
+            .map_or(FixItPlacement::Refused, FixItPlacement::Placed)
+    }
+
+    /// [`Self::clang_fix_it_bytes`] for a hint that has a place.
+    fn clang_fix_it_place(&self, place: FixItPlace) -> Option<FixItBytes> {
         let (source, start, end) = Self::fix_it_edges(place);
         if source.length() == 0 {
             return None;
@@ -140,7 +162,13 @@ impl Context<'_> {
     /// spells them. `None` when a macro expansion produced either end, a
     /// virtual location GCC's `rich_location::reject_impossible_fixit`
     /// refuses, which drops every hint of the diagnostic.
-    pub(crate) fn gcc_fix_it_bytes(&self, place: FixItPlace) -> Option<FixItBytes> {
+    pub(crate) fn gcc_fix_it_bytes(&self, place: FixItPlace) -> FixItPlacement {
+        self.gcc_fix_it_place(place)
+            .map_or(FixItPlacement::Refused, FixItPlacement::Placed)
+    }
+
+    /// [`Self::gcc_fix_it_bytes`] for a hint GCC keeps.
+    fn gcc_fix_it_place(&self, place: FixItPlace) -> Option<FixItBytes> {
         let (source, start, end) = Self::fix_it_edges(place);
         if source.length() == 0 {
             return None;
@@ -189,4 +217,14 @@ pub(crate) struct FixItBytes {
     pub(crate) start: usize,
     pub(crate) end:   usize,
     pub(crate) line:  u32,
+}
+
+/// What a compiler does with a fix-it hint: place it, leave it out alone
+/// (`Dropped`), or refuse it and with it every hint of its diagnostic
+/// (`Refused`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FixItPlacement {
+    Placed(FixItBytes),
+    Dropped,
+    Refused,
 }
