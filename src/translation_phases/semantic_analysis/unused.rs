@@ -1320,7 +1320,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             symbols.sort_unstable_by_key(|&(_, site, _)| site);
         }
-        for (_, binding, function) in symbols {
+        for (first, binding, function) in symbols {
             if let Some((name, definition)) = function {
                 self.report_unused_function(name, definition);
                 continue;
@@ -1361,7 +1361,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             } else if !gcc
                 && usage.references == 0
-                && self.in_main_file(site)
+                // Clang classifies these at the first declaration, wherever
+                // the main file declares the object again.
+                && self.in_main_file(self.bindings[first].name.source_vectors)
                 && self
                     .context
                     .final_configuration()
