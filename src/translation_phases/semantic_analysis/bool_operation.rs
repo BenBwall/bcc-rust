@@ -9,8 +9,12 @@
 //! Clang reports only the `~`, as it walks the finished full expression
 //! (`AnalyzeImplicitConversions` in `SemaChecking.cpp`): each `~` it meets
 //! as an operand, with that operand's range, and in the words that its
-//! result is always true when the operand converts to `_Bool`. A `~` waits
-//! as a [`PendingNegation`] until whatever takes its value is known.
+//! result is always true when the operand converts to `_Bool`. The walk
+//! steps through parentheses, `__extension__`, and the operand a `_Generic`
+//! or `__builtin_choose_expr` selects (`IgnoreParensSingleStep` in
+//! `IgnoreExpr.h`), so it never meets a `~` in another operand of theirs, or
+//! in a `_Generic`'s controlling operand. A `~` waits as a
+//! [`PendingNegation`] until whatever takes its value is known.
 //! C99: §6.5.3.3p4, p. 79; PDF p. 91; §6.5.2.4p2, p. 75; PDF p. 87;
 //! §6.5.3.1p2, p. 78; PDF p. 90; §5.1.1.3p1, p. 11; PDF p. 23.
 
@@ -18,6 +22,7 @@ use super::{
     Analyzer,
     ExpressionInfo,
     SemanticErrorKind,
+    functions::HeldWarning,
     types::{
         Scalar,
         TypeKind,
@@ -30,12 +35,16 @@ use crate::{
     },
     translation_phases::{
         SourceVectors,
-        parsing::syntax::{
-            BinaryOperator as B,
-            Expression,
-            ExpressionType as E,
-            UnaryOperator as U,
+        parsing::{
+            SyntaxOperand,
+            syntax::{
+                BinaryOperator as B,
+                Expression,
+                ExpressionType as E,
+                UnaryOperator as U,
+            },
         },
+        preprocessing::KeywordTokenType,
     },
     util::bump::ArenaVec,
 };
@@ -68,14 +77,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | U::BitwiseNot if gcc && self.gcc_complements_truth(operand.expression) =>
                 self.bool_operation_warning(BoolOperationRule::GccBitwiseNot, site, Some(site)),
-            // Clang's walk stays out of `sizeof` and its kin.
+            // Clang's walk stays out of `sizeof` and its kin, and the
+            // operand `__builtin_choose_expr` does not select.
             | U::BitwiseNot
                 if !gcc
                     && !self.unevaluated_operand()
+                    && !self.functions.selections.unselected
                     && self.clang_known_boolean(operand.expression) =>
                 self.bool_negations.push(PendingNegation {
                     negation: e,
                     holder:   e,
+                    depth:    self.expression_depth,
                 }),
             | _ => {},
         }
@@ -143,39 +155,97 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         true
     }
 
-    /// Gives the waiting `~` its parentheses when `e` is them: Clang's range
-    /// is the operand its walk meets, which they are.
-    pub(super) fn note_negation_parentheses(&mut self, e: &'tu Expression<'tu>) {
-        if let E::Parenthesized { expression } = e.kind
-            && let Some(pending) = self
-                .bool_negations
+    /// Gives the waiting `~` that `e` steps through to `e`: Clang's range is
+    /// the operand its walk meets, which `e` is when it is parentheses,
+    /// `__extension__`, or a selection whose `selected` operand holds the
+    /// `~`. A `~` another operand of a selection holds, its controlling
+    /// operand's included, is never met; one deeper in it was dropped with
+    /// that operand's held warnings ([`Self::report_negation`]).
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97. GNU extension: GCC manual, "Other
+    /// Builtins" and "Alternate Keywords".
+    pub(super) fn note_negation_holder(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        selected: Option<&'tu Expression<'tu>>,
+    ) {
+        let operand = match e.kind {
+            | E::Parenthesized { expression }
+            | E::Unary {
+                operator: U::Extension,
+                operand_expression: expression,
+            } => Some(expression),
+            | E::Generic(generic) => {
+                if let SyntaxOperand::Expression(controlling) = generic.controlling {
+                    self.drop_unselected_negation(controlling, None);
+                }
+                for association in generic.associations {
+                    self.drop_unselected_negation(association.expression, selected);
+                }
+                selected
+            },
+            | E::Builtin(builtin) if builtin.keyword == KeywordTokenType::BuiltinChooseExpr => {
+                // The condition first, then the two operands.
+                for &operand in builtin.operands.iter().skip(1) {
+                    if let SyntaxOperand::Expression(operand) = operand {
+                        self.drop_unselected_negation(operand, selected);
+                    }
+                }
+                selected
+            },
+            | _ => None,
+        };
+        let depth = self.expression_depth;
+        if let Some(operand) = operand
+            && let Some(pending) = self.bool_negations[self.negations_start..]
                 .iter_mut()
-                .find(|pending| std::ptr::eq(pending.holder, expression))
+                .find(|pending| std::ptr::eq(pending.holder, operand))
         {
             pending.holder = e;
+            pending.depth = depth;
+        }
+    }
+
+    /// Forgets the waiting `~` that `operand` of a selection holds unless
+    /// it is the `selected` one.
+    fn drop_unselected_negation(
+        &mut self,
+        operand: &'tu Expression<'tu>,
+        selected: Option<&'tu Expression<'tu>>,
+    ) {
+        if selected.is_some_and(|selected| std::ptr::eq(selected, operand)) {
+            return;
+        }
+        let start = self.negations_start;
+        if let Some(index) = self.bool_negations[start..]
+            .iter()
+            .position(|pending| std::ptr::eq(pending.holder, operand))
+        {
+            _ = self.bool_negations.remove(start + index);
         }
     }
 
     /// Reports the waiting `~` that `value` is, which converts to `target`:
     /// always true when `target` is `_Bool`.
     pub(super) fn convert_negation(&mut self, value: &'tu Expression<'tu>, bool_target: bool) {
-        if let Some(index) = self
-            .bool_negations
+        let start = self.negations_start;
+        if let Some(index) = self.bool_negations[start..]
             .iter()
             .position(|pending| std::ptr::eq(pending.holder, value))
         {
-            let pending = self.bool_negations.swap_remove(index);
+            let pending = self.bool_negations.remove(start + index);
             self.report_negation(pending, bool_target);
         }
     }
 
-    /// Reports each waiting `~` but `keep`, whose value nothing converts to
-    /// `_Bool`: the expression that took it is done.
-    pub(super) fn flush_negations(&mut self, keep: Option<&'tu Expression<'tu>>) {
-        let mut index = 0;
+    /// Reports each waiting `~` of the current full expression but `keep`
+    /// that an operand deeper than `depth` holds, whose value nothing
+    /// converts to `_Bool`: the expression that took it is done.
+    pub(super) fn flush_negations(&mut self, keep: Option<&'tu Expression<'tu>>, depth: u32) {
+        let mut index = self.negations_start;
         while index < self.bool_negations.len() {
             let pending = self.bool_negations[index];
-            if keep.is_some_and(|keep| std::ptr::eq(pending.holder, keep)) {
+            if pending.depth <= depth || keep.is_some_and(|keep| std::ptr::eq(pending.holder, keep))
+            {
                 index += 1;
             } else {
                 _ = self.bool_negations.remove(index);
@@ -194,10 +264,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .negation
             .operator_source_vectors
             .unwrap_or(pending.negation.source_vectors);
-        self.with_highlights(
-            [pending.holder.source_vectors, SourceVectors::default()],
-            |analyzer| analyzer.bool_operation_warning(rule, site, None),
-        );
+        // One in an association a `_Generic` does not select, or in its
+        // controlling operand, is dropped with that operand's warnings.
+        self.hold_warning(HeldWarning {
+            group: G::BoolOperation,
+            kind: SemanticErrorKind::BoolOperation(rule),
+            site,
+            name: None,
+            highlights: [pending.holder.source_vectors, SourceVectors::default()],
+        });
     }
 
     fn bool_operation_warning(
@@ -220,12 +295,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
-/// A `~` Clang reports once what takes its value is known, and the operand
-/// that holds it: the `~` itself or the parentheses around it.
+/// A `~` Clang reports once what takes its value is known, the operand
+/// that holds it: the `~` itself or what steps through to it
+/// ([`Analyzer::note_negation_holder`]), and that operand's depth in its full
+/// expression, which the expression that takes its value is above.
 #[derive(Clone, Copy)]
 pub(super) struct PendingNegation<'tu> {
     negation: &'tu Expression<'tu>,
     holder:   &'tu Expression<'tu>,
+    depth:    u32,
 }
 
 /// One `-Wbool-operation` warning, in its compiler's words.

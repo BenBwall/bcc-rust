@@ -778,7 +778,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let root = Some(std::ptr::from_ref(e).addr());
                 let converted =
                     self.functions.initializer_value == root || self.return_value == root;
-                self.flush_negations(converted.then_some(e));
+                self.flush_negations(converted.then_some(e), 0);
             }
             self.finish_full_expression(e, self.full_expression_start);
         }
@@ -842,8 +842,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.work.push(Work::RestoreFullExpression(
             self.expression_depth,
             self.full_expression_start,
+            self.negations_start,
         ));
         self.expression_depth = 0;
+        self.negations_start = self.bool_negations.len();
     }
 }
 

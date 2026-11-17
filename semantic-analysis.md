@@ -1303,9 +1303,17 @@ reports only `~`, of an operand `Expr::isKnownToHaveBooleanValue` finds 0 or 1,
 as its walk of the finished full expression meets it (`AnalyzeImplicitConversions`):
 with the range of the operand there, parentheses included, in the words that it
 always evaluates to true when that operand converts to `_Bool`, and never in an
-operand of `sizeof`. A `~` waits as a `PendingNegation` until what takes its value
-is known: an assignment, argument, initializer or return conversion reports it,
-and otherwise the expression that took it, or the end of its full expression.
+operand of `sizeof` or a `_Generic`'s controlling operand. The walk steps through
+parentheses, `__extension__` and the operand a `_Generic` or
+`__builtin_choose_expr` selects (`IgnoreParensSingleStep`), so the selection is
+the range of a `~` its selected operand holds, and a `~` in another operand is
+never reported: the operand `__builtin_choose_expr` does not select records
+none, an unselected association's `~` is dropped with the association's other
+held warnings, and one the association itself holds when the selection is done.
+A `~` waits as a `PendingNegation` until what takes its value is known: an
+assignment, argument, initializer or return conversion reports it, and otherwise
+the expression that took it, or the end of its full expression. A statement
+expression's statements wait apart from the expression around it.
 
 #### Comparisons and initializers under `-Wextra`
 

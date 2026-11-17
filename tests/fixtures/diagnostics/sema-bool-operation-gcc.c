@@ -24,3 +24,14 @@ void f(_Bool b, int x, int y, _Bool *pb, int *r) {
   *r = sizeof ~b;
   ~b;
 }
+/* GCC reports ~ as it builds it, in every operand of a selection and in
+   unevaluated operands too. */
+int sel(_Bool b) {
+  int r = _Generic(b, int: ~b, default: 0);
+  r += __builtin_choose_expr(1, 0, ~b);
+  r += _Generic(~b, default: 0);
+  r += _Alignof(~b);
+  typeof(~b) t = __builtin_constant_p(~b);
+  return r + t;
+}
+int sel_file = _Generic((_Bool)0, int: ~(_Bool)0, default: 0);

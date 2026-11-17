@@ -91,9 +91,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn expression_done(&mut self, e: &'tu Expression<'tu>) {
         use ExpressionType as E;
         self.retain_expression_actions(e);
-        if !self.bool_negations.is_empty() {
-            self.note_negation_parentheses(e);
-        }
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
@@ -622,9 +619,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.close_block_effects();
             self.retain_statement_expression(e, block, info.ty);
         }
-        // A `~` this took the value of without converting it to `_Bool`.
+        // A `~` this steps through to, and one this took the value of
+        // without converting it to `_Bool`.
         if !self.bool_negations.is_empty() {
-            self.flush_negations(Some(e));
+            self.note_negation_holder(e, info.selected_expression);
+            self.flush_negations(None, self.expression_depth);
         }
         self.retain_expression(info);
     }

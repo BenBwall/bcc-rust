@@ -89,3 +89,47 @@ sema-bool-operation-gcc.c:25:3: note: did you mean to use logical not?
 sema-bool-operation-gcc.c:25:3: warning: statement with no effect [-Wunused-value]
    25 |   ~b;
       |   ^~
+sema-bool-operation-gcc.c: In function 'sel':
+sema-bool-operation-gcc.c:30:28: warning: '~' on a boolean expression [-Wbool-operation]
+   30 |   int r = _Generic(b, int: ~b, default: 0);
+      |                            ^
+sema-bool-operation-gcc.c:30:28: note: did you mean to use logical not?
+   30 |   int r = _Generic(b, int: ~b, default: 0);
+      |                            ^
+sema-bool-operation-gcc.c:31:36: warning: '~' on a boolean expression [-Wbool-operation]
+   31 |   r += __builtin_choose_expr(1, 0, ~b);
+      |                                    ^
+sema-bool-operation-gcc.c:31:36: note: did you mean to use logical not?
+   31 |   r += __builtin_choose_expr(1, 0, ~b);
+      |                                    ^
+sema-bool-operation-gcc.c:32:17: warning: '~' on a boolean expression [-Wbool-operation]
+   32 |   r += _Generic(~b, default: 0);
+      |                 ^
+sema-bool-operation-gcc.c:32:17: note: did you mean to use logical not?
+   32 |   r += _Generic(~b, default: 0);
+      |                 ^
+sema-bool-operation-gcc.c:33:17: warning: '~' on a boolean expression [-Wbool-operation]
+   33 |   r += _Alignof(~b);
+      |                 ^
+sema-bool-operation-gcc.c:33:17: note: did you mean to use logical not?
+   33 |   r += _Alignof(~b);
+      |                 ^
+sema-bool-operation-gcc.c:34:10: warning: '~' on a boolean expression [-Wbool-operation]
+   34 |   typeof(~b) t = __builtin_constant_p(~b);
+      |          ^
+sema-bool-operation-gcc.c:34:10: note: did you mean to use logical not?
+   34 |   typeof(~b) t = __builtin_constant_p(~b);
+      |          ^
+sema-bool-operation-gcc.c:34:39: warning: '~' on a boolean expression [-Wbool-operation]
+   34 |   typeof(~b) t = __builtin_constant_p(~b);
+      |                                       ^
+sema-bool-operation-gcc.c:34:39: note: did you mean to use logical not?
+   34 |   typeof(~b) t = __builtin_constant_p(~b);
+      |                                       ^
+sema-bool-operation-gcc.c: At top level:
+sema-bool-operation-gcc.c:37:40: warning: '~' on a boolean expression [-Wbool-operation]
+   37 | int sel_file = _Generic((_Bool)0, int: ~(_Bool)0, default: 0);
+      |                                        ^
+sema-bool-operation-gcc.c:37:40: note: did you mean to use logical not?
+   37 | int sel_file = _Generic((_Bool)0, int: ~(_Bool)0, default: 0);
+      |                                        ^

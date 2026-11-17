@@ -235,7 +235,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.return_done(slot, source);
                 self.return_value = None;
                 if !self.bool_negations.is_empty() {
-                    self.flush_negations(None);
+                    self.flush_negations(None, 0);
                 }
             },
             | StatementWork::ComputedGotoDone(slot) => self.computed_goto_done(slot),
