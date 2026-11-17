@@ -410,32 +410,26 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         zero,
                         close,
                         scalar,
-                        pending,
                         last_written,
+                        ..
                     } = task;
                     // The previous element is checked, with every range
                     // designator it repeated over.
                     plan.close_repeats(close);
-                    // So are the subobjects whose braces it left out that it
-                    // completed, and a designator or the list's end
-                    // completes the rest.
-                    let element = list.elements.as_slice().get(position);
-                    if let Some(written) = pending {
-                        self.missing_braces(list, written, Some(cursor), last_written);
-                    }
-                    if element.is_none_or(|element| element.designation.is_some()) {
-                        self.missing_braces(list, cursor, None, last_written);
-                    }
-                    let Some(element) = element else {
+                    // So are the subobjects whose braces it left out.
+                    self.complete_elided(&task);
+                    let Some(element) = list.elements.as_slice().get(position) else {
                         plan.close_zero(zero);
                         continue;
                     };
-                    let next_task = |cursor, close| {
+                    // `written` is where this element was written, if it was.
+                    let next_task = |cursor, close, written: Option<&'s Current<'s>>| {
                         InitWork::List(ListWork {
                             position: position + 1,
                             cursor,
                             close,
-                            pending: None,
+                            pending: written,
+                            last_written: written.map_or(last_written, |_| position),
                             ..task
                         })
                     };
@@ -607,7 +601,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                     None,
                                 );
                             }
-                            work.push(next_task(self.scratch.alloc(cursor), repeats));
+                            work.push(next_task(self.scratch.alloc(cursor), repeats, None));
                             continue;
                         }
                         // As in GCC and Clang, a designator may name a
@@ -620,6 +614,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             work.push(next_task(
                                 self.scratch.alloc(self.advance_current(at_member)),
                                 repeats,
+                                None,
                             ));
                             continue;
                         }
@@ -628,7 +623,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         if self.excess_element(cursor.container, element.source_vectors) {
                             plan.close_zero(zero);
                         } else {
-                            work.push(next_task(self.scratch.alloc(cursor), repeats));
+                            work.push(next_task(self.scratch.alloc(cursor), repeats, None));
                         }
                         continue;
                     };
@@ -697,7 +692,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                     if no_subobjects && self.gcc_drops_element(target, element.source_vectors) {
                         let next = self.advance_current(cursor);
-                        work.push(next_task(self.scratch.alloc(next), repeats));
+                        work.push(next_task(self.scratch.alloc(next), repeats, None));
                         continue;
                     }
                     if let Some(flexible) = &mut flexible {
@@ -728,14 +723,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     // place of the list that holds it.
                     let site = Site { context, ..site };
                     let next = self.advance_current(cursor);
-                    work.push(InitWork::List(ListWork {
-                        position: position + 1,
-                        cursor: self.scratch.alloc(next),
-                        close: repeats,
-                        pending: Some(self.scratch.alloc(cursor)),
-                        last_written: position,
-                        ..task
-                    }));
+                    let written = Some(&*self.scratch.alloc(cursor));
+                    work.push(next_task(self.scratch.alloc(next), repeats, written));
                     work.push(InitWork::Value(target, element.initializer, node, site));
                 },
             }
@@ -1724,11 +1713,31 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
+    /// Reports the subobjects whose braces were left out that `task`'s list
+    /// completed before its element: those the previous element's advance
+    /// left, and when the element has a designator or the list has ended,
+    /// all that remain ([`Self::missing_braces`]).
+    /// C99: §6.7.8 paragraph 20, p. 127; PDF p. 139.
+    fn complete_elided(&mut self, task: &ListWork<'tu, 's>) {
+        if let Some(written) = task.pending {
+            self.missing_braces(task.list, written, Some(task.cursor), task.last_written);
+        }
+        if task
+            .list
+            .elements
+            .as_slice()
+            .get(task.position)
+            .is_none_or(|element| element.designation.is_some())
+        {
+            self.missing_braces(task.list, task.cursor, None, task.last_written);
+        }
+    }
+
     /// Clang's `-Wmissing-braces` for each subobject of `list`'s object
     /// that brace elision entered at `from`, innermost first, that `to` no
     /// longer holds (all of them without `to`): its elements, from the one
-    /// that entered it to the element at `last`, initialize an array or a
-    /// structure or union whose braces were left out. Clang warns at the
+    /// that entered it to the element at `final_position`, initialize an array
+    /// or a structure or union whose braces were left out. Clang warns at the
     /// first with their range underlined, and suggests the braces. A list
     /// that is `{0}` alone warns of none, and neither does the only member
     /// of a structure or union (`InitListChecker::CheckImplicitInitList`
@@ -1741,7 +1750,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         list: &'tu BracedInitializerList<'tu>,
         from: &Current<'s>,
         to: Option<&Current<'s>>,
-        last: usize,
+        final_position: usize,
     ) {
         if self.context.configuration.compiler_identity().rules()
             != crate::configuration::RuleSet::Clang
@@ -1761,14 +1770,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let mut level = Some(from);
         while let Some(current) = level {
             level = current.parent;
-            let Some(first) = current.elided else {
+            let Some(opener) = current.elided else {
                 continue;
             };
             let at = depth(current);
             let mut open = to;
             let mut still_open = false;
             while let Some(other) = open {
-                still_open |= other.elided == Some(first) && depth(other) == at;
+                still_open |= other.elided == Some(opener) && depth(other) == at;
                 open = other.parent;
             }
             let only_member = current.parent.is_some_and(|parent| {
@@ -1781,12 +1790,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             if still_open || only_member || self.vector(current.container).is_some() {
                 continue;
             }
-            let (Some(first), Some(last)) = (elements.get(first), elements.get(last)) else {
+            let (Some(first), Some(closer)) = (elements.get(opener), elements.get(final_position))
+            else {
                 continue;
             };
             let range = self
                 .context
-                .range_through(first.initializer.source_vectors, last.source_vectors);
+                .range_through(first.initializer.source_vectors, closer.source_vectors);
             let group = crate::configuration::DiagnosticGroup::MissingBraces;
             let name = self
                 .context
