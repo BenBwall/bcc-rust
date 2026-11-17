@@ -16,7 +16,10 @@ use super::{
 };
 use crate::{
     configuration::DiagnosticFormat,
-    translation_phases::Context,
+    translation_phases::{
+        Context,
+        FixItPlacement,
+    },
     util::bump::{
         ArenaString,
         ArenaVec,
@@ -30,7 +33,8 @@ impl Renderer {
     /// order, an edit that starts where the one before it ends joined to
     /// it; none when that compiler would refuse one of them, which drops
     /// them all (Clang's `mergeFixits` and `EditedSource::applyRewrites`,
-    /// GCC's `rich_location::maybe_add_fixit`).
+    /// GCC's `rich_location::maybe_add_fixit`), while a hint Clang has no
+    /// place for is left out alone.
     pub(super) fn place_fix_its<'a>(
         fix_its: &[FixIt<'a>],
         note: Option<usize>,
@@ -45,8 +49,10 @@ impl Renderer {
                 | DiagnosticFormat::Gcc => context.gcc_fix_it_bytes(fix_it.place),
                 | _ => return &[],
             };
-            let Some(bytes) = placed else {
-                return &[];
+            let bytes = match placed {
+                | FixItPlacement::Placed(bytes) => bytes,
+                | FixItPlacement::Dropped => continue,
+                | FixItPlacement::Refused => return &[],
             };
             edits.push((
                 edits.len(),

@@ -49,6 +49,7 @@ use std::path::Path;
 
 pub(crate) use expansion_sites::ArgumentSubstitution;
 use expansion_sites::ExpansionSites;
+pub(crate) use fix_it_places::FixItPlacement;
 use rustc_hash::FxBuildHasher;
 pub(crate) use source_files::{
     FileSystem,
