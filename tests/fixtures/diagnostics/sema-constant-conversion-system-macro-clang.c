@@ -24,4 +24,20 @@ void formats(void) {
     PRINT_EXTRA("%d\n");
     printf("%d\n", 1, 2);
 }
+#define CAT(a, b) a##b
+int commas(int v) {
+    v = SELECT(v, (0, 311));
+    v = SELECT(v, SYSTEM_COMMA(312));
+    v = immediate(v, SYSTEM_COMMA(313));
+    v = SELECT(v, (0, v ? 314 : 315));
+    return SYSTEM_NAME(v, 316) + SYSTEM_CAT(immedi, ate)(v, 317);
+}
+char comma_returned(void) { RETURN((0, 318)); }
+char comma_listed[] = PAIR((0, 319));
+struct holder revisited = { .pair.low = 1, HIGH };
+struct holder reversed = { INNER, .pair.high = 320 };
+struct holder elided_once = { 1, HIGH };
+#define DECLARE_CHAR(name, value) char name = value
+DECLARE_CHAR(SYSTEM_CAT(paste, d), 322);
+DECLARE_CHAR(CAT(paste, e), 323);
 int following_valid;
