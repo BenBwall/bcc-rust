@@ -1,0 +1,21 @@
+fixit-parseable-lines-clang.c:5:10: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
+        int r = ~b;
+                ^~
+                !
+fix-it:"fixit-parseable-lines-clang.c":{5:10-5:11}:"!"
+fixit-parseable-lines-clang.c:6:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+  p = (y);
+    ^ ~~~
+      &( )
+fix-it:"fixit-parseable-lines-clang.c":{6:7-6:7}:"&("
+fix-it:"fixit-parseable-lines-clang.c":{6:10-6:10}:")"
+fixit-parseable-lines-clang.c:7:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; remove * [-Wint-conversion]
+  p = *p;
+    ^ ~~
+fix-it:"fixit-parseable-lines-clang.c":{7:7-7:8}:""
+fixit-parseable-lines-clang.c:8:14: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
+  return r + ~b;
+             ^~
+             !
+fix-it:"fixit-parseable-lines-clang.c":{8:14-8:15}:"!"
+4 warnings generated.

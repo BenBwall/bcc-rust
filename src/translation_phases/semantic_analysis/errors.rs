@@ -12,6 +12,7 @@ use crate::{
     diagnostics::{
         Diagnostic,
         Explanation,
+        FixItPlace,
         ToDiagnostic,
         format_in,
         quote_spelling,
@@ -52,6 +53,30 @@ pub(crate) struct SemanticError {
     /// The parameter an argument converts to, which Clang notes after a
     /// diagnostic of the conversion.
     pub(crate) parameter:          Option<ParameterNote>,
+    /// The edit Clang suggests for a conversion it refuses.
+    pub(crate) fix_it:             Option<ConversionFixIt>,
+}
+
+/// The edit Clang suggests for a conversion it refuses, which its words
+/// name: `&` or `*` before the value, with parentheses around a value that
+/// needs them, or the removal of the value's own `&` or `*`
+/// (`ConversionFixItGenerator::tryToFixConversion` in `SemaFixItUtils.cpp`).
+/// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConversionFixIt {
+    pub(crate) value: SourceVectors,
+    pub(crate) edit:  ConversionEdit,
+}
+
+/// What [`ConversionFixIt`] does to the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConversionEdit {
+    /// Writes the operator before the value.
+    Prefix(&'static str),
+    /// Writes the operator and `(` before the value and `)` after it.
+    Parenthesize(&'static str),
+    /// Removes the value's first token, its unary `&` or `*`.
+    RemoveOperator,
 }
 
 /// Where the declaration of a call's function declares the parameter an
@@ -3594,6 +3619,11 @@ impl ToDiagnostic for SemanticError {
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
+            if self.kind == SemanticErrorKind::BoolOperation(BoolOperationRule::GccBitwiseNot) {
+                // GCC's note suggests inserting `!` before the `~`
+                // (`build_unary_op` in `c-typeck.cc`).
+                diagnostic = diagnostic.note_fix_it(FixItPlace::Before(self.reported()), "!");
+            }
         }
         if let Some(parameter) = self.parameter {
             let label = match parameter.name {
@@ -3617,7 +3647,43 @@ impl ToDiagnostic for SemanticError {
             diagnostic.reading = Some(self.origin);
         }
         diagnostic.point = self.kind.clang_names_no_range();
+        if let Some(ConversionFixIt { value, edit }) = self.fix_it {
+            diagnostic = match edit {
+                | ConversionEdit::Prefix(operator) =>
+                    diagnostic.fix_it(FixItPlace::Before(value), operator),
+                | ConversionEdit::Parenthesize(operator) => diagnostic
+                    .fix_it(FixItPlace::Before(value), format_in!(arena, "{operator}("))
+                    .fix_it(FixItPlace::After(value), ")"),
+                | ConversionEdit::RemoveOperator =>
+                    diagnostic.fix_it(FixItPlace::Replace(Context::first_token_vector(value)), ""),
+            };
+        }
+        if matches!(
+            self.kind,
+            SemanticErrorKind::BoolOperation(
+                BoolOperationRule::ClangBitwiseNot | BoolOperationRule::ClangBitwiseNotTrue
+            )
+        ) {
+            // Clang suggests `!` for the `~` (`AnalyzeImplicitConversions`
+            // in `SemaChecking.cpp`).
+            diagnostic = diagnostic.fix_it(
+                FixItPlace::Replace(Context::first_token_vector(self.reported())),
+                "!",
+            );
+        }
         diagnostic
+    }
+}
+
+impl SemanticError {
+    /// The range the diagnostic was reported about, before it was moved to
+    /// a place in a file: where a macro wrote it, if one did.
+    fn reported(&self) -> SourceVectors {
+        if self.origin.length() == 0 {
+            self.source_vectors
+        } else {
+            self.origin
+        }
     }
 }
 

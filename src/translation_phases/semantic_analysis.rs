@@ -2255,6 +2255,9 @@ struct Analyzer<'a, 'tu, 's> {
     /// The range GCC underlines around the caret of what is reported now;
     /// see [`Self::with_gcc_extent`].
     gcc_extent:              SourceVectors,
+    /// The edit Clang suggests for the conversion reported now, which its
+    /// words name; see [`Self::clang_conversion_hint`].
+    conversion_fix_it:       Option<errors::ConversionFixIt>,
     /// The expression or token whose location Clang takes as the context of
     /// the implicit conversion checked now (`CC` in `CheckImplicitConversion`),
     /// or an empty range when none is known; see

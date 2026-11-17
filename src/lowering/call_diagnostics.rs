@@ -131,6 +131,7 @@ impl CallDiagnostic {
                     origin:             SourceVectors::default(),
                     order:              crate::translation_phases::semantic_analysis::ReportOrder::AtSite,
                     parameter:          None,
+                    fix_it:             None,
                 },
             ),
         );

@@ -1,0 +1,9 @@
+fixit-parseable-no-caret-gcc.c: In function 'f':
+fixit-parseable-no-caret-gcc.c:6:17: warning: '~' on a boolean expression [-Wbool-operation]
+fixit-parseable-no-caret-gcc.c:6:17: note: did you mean to use logical not?
+fix-it:"fixit-parseable-no-caret-gcc.c":{6:10-6:10}:"!"
+fixit-parseable-no-caret-gcc.c:7:11: warning: '~' on a boolean expression [-Wbool-operation]
+fixit-parseable-no-caret-gcc.c:7:11: note: did you mean to use logical not?
+renamed.c:40:14: warning: '~' on a boolean expression [-Wbool-operation]
+renamed.c:40:14: note: did you mean to use logical not?
+fix-it:"renamed.c":{40:14-40:14}:"!"

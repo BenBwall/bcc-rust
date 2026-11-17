@@ -11,6 +11,10 @@
 use super::{
     Analyzer,
     ExpressionInfo,
+    errors::{
+        ConversionEdit,
+        ConversionFixIt,
+    },
     expressions::ValueCategory,
     types::{
         ArrayBound,
@@ -26,7 +30,15 @@ use crate::{
         DiagnosticFormat,
         DiagnosticGroup,
     },
-    translation_phases::parsing::declaration_syntax::TypeQualifiers,
+    translation_phases::parsing::{
+        declaration_syntax::TypeQualifiers,
+        syntax::{
+            BinaryOperator,
+            Expression,
+            ExpressionType,
+            UnaryOperator,
+        },
+    },
     util::{
         bump::ArenaString,
         string_cache::StringCacheId,
@@ -495,22 +507,57 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's fix-it in words: dereferencing the value, or taking the
-    /// address of an lvalue, would give the target type.
+    /// address of an lvalue, would give the target type, and the value's own
+    /// `&` or `*` is removed rather than another put before it. The edit
+    /// itself waits in [`Analyzer::conversion_fix_it`] for the diagnostic.
+    /// A null pointer constant is not dereferenced
+    /// (`ConversionFixItGenerator::tryToFixConversion` in
+    /// `SemaFixItUtils.cpp`).
     fn clang_conversion_hint(
         &mut self,
         target: TypeId,
         from: TypeId,
         source: ExpressionInfo<'tu>,
     ) -> &'static str {
-        if let Some(pointee) = self.pointer_target(from)
+        let expression = source.expression;
+        let unary = match expression.kind {
+            | ExpressionType::Unary { operator, .. } => Some(operator),
+            | _ => None,
+        };
+        let edit = |operator: &'static str, own: UnaryOperator| match unary {
+            | Some(unary) if unary == own => Some(ConversionEdit::RemoveOperator),
+            | Some(_) => None,
+            | None if Self::clang_needs_parentheses(expression) =>
+                Some(ConversionEdit::Parenthesize(operator)),
+            | None => Some(ConversionEdit::Prefix(operator)),
+        };
+        let (words, edit) = if let Some(pointee) = self.pointer_target(from)
             && self
                 .types
                 .composite(pointee.unqualified(), target.unqualified())
                 .is_some()
         {
-            return "; dereference with *";
-        }
-        if matches!(
+            // Clang asks it of the value under its parentheses and casts.
+            let mut inner = expression;
+            while let ExpressionType::Parenthesized {
+                expression: operand_expression,
+            }
+            | ExpressionType::Cast {
+                operand_expression, ..
+            } = inner.kind
+            {
+                inner = operand_expression;
+            }
+            if self.null_pointer_constant(self.expression_info(inner)) {
+                return "";
+            }
+            let words = if unary == Some(UnaryOperator::AddressOf) {
+                "; remove &"
+            } else {
+                "; dereference with *"
+            };
+            (words, edit("*", UnaryOperator::AddressOf))
+        } else if matches!(
             source.category,
             ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
         ) && let Some(pointee) = self.pointer_target(target)
@@ -520,9 +567,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .composite(pointee.unqualified(), source.ty.unqualified())
                 .is_some()
         {
-            return "; take the address with &";
-        }
-        ""
+            let words = if unary == Some(UnaryOperator::Indirection) {
+                "; remove *"
+            } else {
+                "; take the address with &"
+            };
+            (words, edit("&", UnaryOperator::Indirection))
+        } else {
+            return "";
+        };
+        self.conversion_fix_it = edit.map(|edit| ConversionFixIt {
+            value: expression.source_vectors,
+            edit,
+        });
+        words
+    }
+
+    /// Whether Clang puts parentheses around `expression` before it writes
+    /// `&` or `*` before it: unless it is an identifier, a string literal,
+    /// a call, a subscript, a member access, a cast or a unary operator.
+    /// A parenthesized expression gets more, as Clang asks only whether the
+    /// expression under its implicit conversions is one of these.
+    const fn clang_needs_parentheses(expression: &Expression<'_>) -> bool {
+        !matches!(
+            expression.kind,
+            ExpressionType::Identifier(_)
+                | ExpressionType::StringLiteral(_)
+                | ExpressionType::Call { .. }
+                | ExpressionType::Builtin(_)
+                | ExpressionType::Binary {
+                    operator: BinaryOperator::Subscript,
+                    ..
+                }
+                | ExpressionType::DirectMember { .. }
+                | ExpressionType::IndirectMember { .. }
+                | ExpressionType::Cast { .. }
+                | ExpressionType::Unary { .. }
+        )
     }
 
     /// The text of a member access error in GCC's, Clang's or TCC's words,
