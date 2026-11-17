@@ -154,11 +154,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 fn unnamed_site(mut declarator: Declarator<'_>, mut after: SourceVectors) -> SourceVectors {
     loop {
         // The tokens before the direct abstract declarator: each `*`, its
-        // qualifiers and attributes, and the attributes and Microsoft
-        // modifiers among them. A qualifier written twice counts once.
+        // qualifiers as written, repeats included, and attributes, and the
+        // attributes and Microsoft modifiers among them.
         let mut prefix = 0;
         for level in declarator.pointer.levels {
-            prefix += 1 + level.qualifiers.bits().count_ones();
+            prefix += 1 + u32::from(level.written_qualifiers);
             let mut attributes = level.attributes;
             while let Some(attribute) = attributes {
                 prefix += attribute.source_vectors.length();
