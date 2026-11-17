@@ -6,4 +6,12 @@ error: parameter was not declared, defaults to `int`: `b` [-Wimplicit-int]
   |
   = note: C99 §6.9.1p6: every identifier in the identifier list shall be declared; C89 defaulted to `int`
 
-1 error generated.
+warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+ --> sema3-knr-implicit.c:1:5
+  |
+1 | int f(a,b) int a; {return b;}
+  |     ^ no prototype
+  |
+  = note: C99 §6.11.6-§6.11.7: empty parentheses in a function declarator and identifier lists in a definition are obsolescent; C23 removes both
+
+1 error and 1 warning generated.

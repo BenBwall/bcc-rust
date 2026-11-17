@@ -24,25 +24,12 @@ impl Analyzer<'_, '_, '_> {
         &mut self,
         name: Identifier,
     ) -> Option<(TypeId, crate::util::string_cache::StringCacheId)> {
-        // Freestanding ordinary names retain C89 implicit int. Reserved
-        // __builtin_ aliases keep their explicit GCC contract in either mode.
-        // C99: §5.1.2.1p1, p. 11; PDF p. 23.
-        if !self.context.configuration.hosted() {
-            return None;
-        }
         let spelling = self.context.string_cache.at(name.name);
-        if crate::builtins::extension_name(spelling) && !self.context.configuration.gnu_extensions()
+        if !self.library_name(spelling)
+            || (crate::builtins::extension_name(spelling)
+                && !self.context.configuration.gnu_extensions())
         {
             return None;
-        }
-        // `-fno-builtin` and `-fno-builtin-NAME` make the name an ordinary
-        // identifier, as in GCC and Clang: an undeclared call is an implicit
-        // declaration again.
-        match self.context.library_builtins {
-            | crate::configuration::LibraryBuiltins::None => return None,
-            | crate::configuration::LibraryBuiltins::Except(names) if names.contains(&spelling) =>
-                return None,
-            | _ => {},
         }
         let Some(descriptor) = crate::builtins::ordinary(spelling) else {
             let sized = sized_atomic(spelling)?;
@@ -70,6 +57,51 @@ impl Analyzer<'_, '_, '_> {
         spelling.push(')');
         let spelling = self.context.string_cache.intern(spelling.as_str());
         Some((ty, spelling))
+    }
+
+    /// The type of the builtin that a function declaration of `name`
+    /// declares when its type is compatible, which Clang's declaration
+    /// keeps as the builtin (`Builtins.td`): a library function, when an
+    /// implicit declaration of it would be one, `alloca` in the GNU modes
+    /// under the same conditions, or a reserved builtin such as
+    /// `__builtin_abs`, which `-fno-builtin` and `-ffreestanding` leave a
+    /// builtin.
+    pub(in crate::translation_phases::semantic_analysis) fn declared_builtin_type(
+        &mut self,
+        name: Identifier,
+    ) -> Option<TypeId> {
+        if let Some((ty, _)) = self.implicit_library_type(name) {
+            return Some(ty);
+        }
+        let spelling = self.context.string_cache.at(name.name);
+        let configuration = self.context.configuration;
+        let descriptor = crate::builtins::lookup(spelling)?;
+        let available = descriptor.accepted(configuration)
+            && match descriptor.availability.naming {
+                | crate::builtins::NamingPolicy::Reserved => true,
+                | crate::builtins::NamingPolicy::GnuOrdinary =>
+                    configuration.gnu_extensions() && self.library_name(spelling),
+                | crate::builtins::NamingPolicy::Microsoft => configuration.msvc_compatibility(),
+            };
+        available.then(|| self.descriptor_type(descriptor))
+    }
+
+    /// Whether the ordinary name `spelling` of a library function is
+    /// a builtin: freestanding ordinary names retain C89 implicit int, and
+    /// `-fno-builtin` and `-fno-builtin-NAME` make the name an ordinary
+    /// identifier, as in GCC and Clang, so an undeclared call is an implicit
+    /// declaration again. Reserved `__builtin_` aliases keep their explicit
+    /// GCC contract in either case.
+    /// C99: §5.1.2.1p1, p. 11; PDF p. 23.
+    fn library_name(&self, spelling: &str) -> bool {
+        if !self.context.configuration.hosted() {
+            return false;
+        }
+        match self.context.library_builtins {
+            | crate::configuration::LibraryBuiltins::None => false,
+            | crate::configuration::LibraryBuiltins::Except(names) => !names.contains(&spelling),
+            | crate::configuration::LibraryBuiltins::All => true,
+        }
     }
 
     /// The type GCC gives the size-specific forms of its atomic builtins,

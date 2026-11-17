@@ -1142,16 +1142,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
         };
-        // GCC names the called function in its words.
-        let callee_name = function
-            .binding
-            .filter(|_| {
-                matches!(
-                    self.selected_designator(function.expression).kind,
-                    ExpressionType::Identifier(_)
-                )
-            })
-            .map(|binding| self.bindings[binding].name.name);
+        // The binding a call names. GCC names the called function in its
+        // words.
+        let named = function.binding.filter(|_| {
+            matches!(
+                self.selected_designator(function.expression).kind,
+                ExpressionType::Identifier(_)
+            )
+        });
+        let callee_name = named.map(|binding| self.bindings[binding].name.name);
+        self.call_without_prototype(
+            e,
+            target,
+            named.map(|binding| (binding, function.expression.source_vectors)),
+            arguments.len(),
+        );
         // C99 §6.5.2.2p2: a prototype fixes the number of arguments; GCC and
         // TCC say which way a call misses it.
         if prototype && arguments.len() < parameters.len() {

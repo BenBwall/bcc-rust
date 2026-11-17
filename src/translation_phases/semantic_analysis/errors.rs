@@ -157,6 +157,17 @@ pub(crate) enum SemanticErrorKind {
     Parentheses(crate::configuration::DiagnosticGroup),
     /// C99: §6.7.5.3p15, p. 118; PDF p. 130.
     KnrPromotedParameter,
+    /// A function declarator without a prototype that C23 gives another
+    /// meaning, in Clang's words, which are the diagnostic's name; the
+    /// prototype it conflicts with, when there is one, is the one `note`
+    /// names.
+    /// C99: §6.11.6-§6.11.7, p. 163; PDF p. 175 (obsolescent features).
+    DeprecatedNonPrototype,
+    /// Clang's call with another number of arguments than the parameters
+    /// of the definition without a prototype, in its words, which are the
+    /// diagnostic's name.
+    /// C99: §6.5.2.2p6, p. 71; PDF p. 83.
+    CallArgumentCount,
     /// C99: §6.8.4.2p5, p. 134; PDF p. 146.
     SwitchCases(crate::configuration::DiagnosticGroup),
     /// C99: §6.9.1p12, p. 142; PDF p. 154.
@@ -1224,6 +1235,8 @@ impl SemanticErrorKind {
             | Self::ShadowOrBody(_) => "this may not be what it looks like",
             | Self::Parentheses(_) => "this may not group as written",
             | Self::KnrPromotedParameter => "the prototype gives it another type",
+            | Self::DeprecatedNonPrototype => "no prototype",
+            | Self::CallArgumentCount => "the definition takes another number",
             | Self::SwitchCases(_) => "this switch may not handle every value",
             | Self::ReturnFlow(_) => "control can reach this point",
             | Self::MissingFieldInitializer => "later members are left zero",
@@ -1482,6 +1495,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::DanglingElse
                     | crate::configuration::DiagnosticGroup::SwitchBool
                     | crate::configuration::DiagnosticGroup::KnrPromotedParameter
+                    | crate::configuration::DiagnosticGroup::DeprecatedNonPrototype
+                    | crate::configuration::DiagnosticGroup::CallArgumentCount
                     | crate::configuration::DiagnosticGroup::Switch
                     | crate::configuration::DiagnosticGroup::SwitchEnum
                     | crate::configuration::DiagnosticGroup::SwitchDefault
@@ -1972,6 +1987,16 @@ impl SemanticErrorKind {
                 "K&R parameter type",
                 "C99 §6.7.5.3p15: a parameter an identifier list declares is compatible with a \
                  prototype's only after the default argument promotions",
+            ),
+            | Self::CallArgumentCount => (
+                "argument count",
+                "C99 §6.5.2.2p6: a call without a prototype whose arguments do not match the \
+                 definition's parameters in number has undefined behavior",
+            ),
+            | Self::DeprecatedNonPrototype => (
+                "function without a prototype",
+                "C99 §6.11.6-§6.11.7: empty parentheses in a function declarator and \
+                 identifier lists in a definition are obsolescent; C23 removes both",
             ),
             | Self::SwitchCases(_) => (
                 "switch cases",
@@ -2914,7 +2939,7 @@ impl SemanticErrorKind {
                 crate::configuration::DiagnosticGroup::DanglingElse
                     | crate::configuration::DiagnosticGroup::ChainedComparison
             ),
-            | Self::SwitchCases(_) => true,
+            | Self::SwitchCases(_) | Self::DeprecatedNonPrototype => true,
             | _ => false,
         }
     }
@@ -2937,6 +2962,8 @@ impl SemanticErrorKind {
             | Self::BoolOperation(_) => Some(G::BoolOperation),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
+            | Self::DeprecatedNonPrototype => Some(G::DeprecatedNonPrototype),
+            | Self::CallArgumentCount => Some(G::CallArgumentCount),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),
             | Self::Main(rule) => rule.group(),
@@ -3398,6 +3425,8 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FormatAttribute
                 | SemanticErrorKind::FormatAttributeCount(_)
                 | SemanticErrorKind::KnrPromotedParameter
+                | SemanticErrorKind::DeprecatedNonPrototype
+                | SemanticErrorKind::CallArgumentCount
                 | SemanticErrorKind::SwitchCases(_)
                 | SemanticErrorKind::ReturnFlow(_)
                 | SemanticErrorKind::TargetAttribute(_)
@@ -3536,6 +3565,7 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::FlexibleArrayDesignator =>
                     "initialized flexible array member is here",
                 | SemanticErrorKind::AttributeAfterDefinition => "previous definition is here",
+                | SemanticErrorKind::DeprecatedNonPrototype => "conflicting prototype is here",
                 | SemanticErrorKind::ShadowOrBody(
                     crate::configuration::DiagnosticGroup::EmptyBody,
                 ) => "put the semicolon on a separate line to silence this warning",

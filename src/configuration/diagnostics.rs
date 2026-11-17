@@ -1163,6 +1163,13 @@ diagnostic_groups! {
     /// Clang's K&R parameter whose promoted type a preceding prototype does
     /// not give it.
     KnrPromotedParameter => Some("knr-promoted-parameter"), ClangWarning, false;
+    /// Clang's function declarator without a prototype that C23 gives
+    /// another meaning: a definition with an identifier list, a declaration
+    /// that one with parameters contradicts, and a call with arguments.
+    DeprecatedNonPrototype => Some("deprecated-non-prototype"), ClangWarning, false;
+    /// Clang's call with another number of arguments than a known
+    /// definition without a prototype takes, which no option controls.
+    CallArgumentCount => None, ClangWarning, false;
     /// A `switch` over an enumeration that leaves an enumerator out with no
     /// `default`, or names a value outside it. `-Wall` holds it in GCC, and
     /// Clang reports it by default.

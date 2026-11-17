@@ -129,8 +129,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .iter()
                 .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { .. }))
                 || !f.declaration_list.is_empty();
+            let identifiers = match function_derivation(f.declarator, self.scratch) {
+                | Some(DirectDeclarator::KAndRStyleFunction { parameters }) => parameters.len(),
+                | _ => 0,
+            };
+            self.prototypes.definition = Some(super::prototypes::Definition::new(identifiers));
             self.bind_declaration(f.declarator, f.declaration_specifiers, declared_type, false);
             self.functions.old_style_definition = false;
+            if let Some(name) = name {
+                self.definition_declared(f, name.source_vectors);
+            }
+            self.prototypes.definition = None;
         }
         let binding = name
             .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
@@ -507,6 +516,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn function_work(&mut self, work: FunctionWork<'tu>) {
         match work {
             | FunctionWork::Finish(previous, loops, switch, sizeof, targets) => {
+                if let Some(current) = self.functions.current {
+                    self.identifier_list_definition(current.syntax);
+                }
                 self.report_reachable_warnings();
                 let order = self.function_end_order();
                 self.with_report_order(order, |analyzer| {
@@ -1743,6 +1755,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Some(binding.name.name),
                 previous,
             );
+            self.incompatible_definition(function);
         }
     }
 

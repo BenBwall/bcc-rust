@@ -1,0 +1,25 @@
+sema-deprecated-non-prototype-builtins-clang.c:8:11: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+    8 | long long llabs();
+      |           ^
+sema-deprecated-non-prototype-builtins-clang.c:12:5: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+   12 | int __builtin_ffs();
+      |     ^
+sema-deprecated-non-prototype-builtins-clang.c:16:8: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+   16 | double sin();
+      |        ^
+sema-deprecated-non-prototype-builtins-clang.c:18:12: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent declaration [-Wdeprecated-non-prototype]
+   18 | static int abs();
+      |            ^
+sema-deprecated-non-prototype-builtins-clang.c:19:5: note: conflicting prototype is here
+   19 | int abs(int);
+      |     ^
+sema-deprecated-non-prototype-builtins-clang.c:26:10: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+   26 |   double tan();
+      |          ^
+sema-deprecated-non-prototype-builtins-clang.c:28:5: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent declaration [-Wdeprecated-non-prototype]
+   28 | int unrelated();
+      |     ^
+sema-deprecated-non-prototype-builtins-clang.c:29:5: note: conflicting prototype is here
+   29 | int unrelated(int);
+      |     ^
+6 warnings generated.

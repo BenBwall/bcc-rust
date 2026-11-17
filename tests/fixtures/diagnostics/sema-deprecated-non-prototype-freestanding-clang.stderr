@@ -1,0 +1,16 @@
+sema-deprecated-non-prototype-freestanding-clang.c:4:6: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent declaration [-Wdeprecated-non-prototype]
+    4 | long labs();
+      |      ^
+sema-deprecated-non-prototype-freestanding-clang.c:5:6: note: conflicting prototype is here
+    5 | long labs(long);
+      |      ^
+sema-deprecated-non-prototype-freestanding-clang.c:7:8: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+    7 | double sin();
+      |        ^
+sema-deprecated-non-prototype-freestanding-clang.c:6:8: note: conflicting prototype is here
+    6 | double sin(double);
+      |        ^
+sema-deprecated-non-prototype-freestanding-clang.c:11:8: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+   11 | double __builtin_sin();
+      |        ^
+3 warnings generated.

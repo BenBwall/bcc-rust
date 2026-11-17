@@ -34,6 +34,7 @@ use rustc_hash::FxBuildHasher;
 use super::{
     Analyzer,
     ExpressionType as E,
+    ReportOrder,
     SemanticErrorKind,
     types::{
         TagKind,
@@ -41,8 +42,12 @@ use super::{
     },
 };
 use crate::{
-    configuration::DiagnosticGroup,
+    configuration::{
+        DiagnosticGroup,
+        RuleSet,
+    },
     translation_phases::{
+        Context,
         SourceVectors,
         parsing::{
             Builtin,
@@ -307,21 +312,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
         // Each warning was taken only where nothing recovered around it.
         let tainted = std::mem::replace(&mut self.tainted, false);
-        for warning in &deferred {
-            if warning.function != function.id {
-                self.reachability.deferred.push(*warning);
-            } else if flow.anchors.get(&warning.anchor).copied().unwrap_or(false) {
-                self.with_highlights(warning.highlights, |analyzer| {
-                    analyzer.group_diagnostic(
-                        warning.group,
-                        warning.kind,
-                        warning.site,
-                        warning.name,
-                        None,
-                    );
-                });
+        // Clang reports them as it finishes the function, after what it
+        // reported in the body (`AnalysisBasedWarnings::IssueWarnings`).
+        let order = if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
+            ReportOrder::After(self.context.file_location(Context::last_source_vector(
+                function.syntax.body.source_vectors,
+            )))
+        } else {
+            self.report_order
+        };
+        self.with_report_order(order, |analyzer| {
+            for warning in &deferred {
+                if warning.function != function.id {
+                    analyzer.reachability.deferred.push(*warning);
+                } else if flow.anchors.get(&warning.anchor).copied().unwrap_or(false) {
+                    analyzer.with_highlights(warning.highlights, |analyzer| {
+                        analyzer.group_diagnostic(
+                            warning.group,
+                            warning.kind,
+                            warning.site,
+                            warning.name,
+                            None,
+                        );
+                    });
+                }
             }
-        }
+        });
         self.tainted = tainted;
     }
 
@@ -702,10 +718,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     ) -> bool {
         // GCC never takes the enumeration as complete; it records the
         // enumerators only for its `-Wswitch` checks.
-        let Some(condition) = condition.filter(|_| {
-            self.context.configuration.compiler_identity().rules()
-                == crate::configuration::RuleSet::Clang
-        }) else {
+        let Some(condition) = condition
+            .filter(|_| self.context.configuration.compiler_identity().rules() == RuleSet::Clang)
+        else {
             return false;
         };
         // The usual arithmetic conversions leave a conditional's result an

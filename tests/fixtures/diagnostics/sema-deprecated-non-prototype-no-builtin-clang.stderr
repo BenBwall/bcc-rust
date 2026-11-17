@@ -1,0 +1,25 @@
+sema-deprecated-non-prototype-no-builtin-clang.c:5:6: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent declaration [-Wdeprecated-non-prototype]
+    5 | long labs();
+      |      ^
+sema-deprecated-non-prototype-no-builtin-clang.c:6:6: note: conflicting prototype is here
+    6 | long labs(long);
+      |      ^
+sema-deprecated-non-prototype-no-builtin-clang.c:8:6: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a previous declaration [-Wdeprecated-non-prototype]
+    8 | long labs();
+      |      ^
+sema-deprecated-non-prototype-no-builtin-clang.c:7:6: note: conflicting prototype is here
+    7 | long labs(long);
+      |      ^
+sema-deprecated-non-prototype-no-builtin-clang.c:11:7: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent declaration [-Wdeprecated-non-prototype]
+   11 | void *alloca();
+      |       ^
+sema-deprecated-non-prototype-no-builtin-clang.c:12:7: note: conflicting prototype is here
+   12 | void *alloca(unsigned long);
+      |       ^
+sema-deprecated-non-prototype-no-builtin-clang.c:13:7: warning: a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a subsequent declaration [-Wdeprecated-non-prototype]
+   13 | char *index();
+      |       ^
+sema-deprecated-non-prototype-no-builtin-clang.c:14:7: note: conflicting prototype is here
+   14 | char *index(const char *, int);
+      |       ^
+4 warnings generated.

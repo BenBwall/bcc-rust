@@ -168,6 +168,8 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::ShadowOrBody(_)
                 | semantic_analysis::SemanticErrorKind::Parentheses(_)
                 | semantic_analysis::SemanticErrorKind::KnrPromotedParameter
+                | semantic_analysis::SemanticErrorKind::DeprecatedNonPrototype
+                | semantic_analysis::SemanticErrorKind::CallArgumentCount
                 | semantic_analysis::SemanticErrorKind::SwitchCases(_)
                 | semantic_analysis::SemanticErrorKind::ReturnFlow(_)
                 | semantic_analysis::SemanticErrorKind::MissingFieldInitializer
