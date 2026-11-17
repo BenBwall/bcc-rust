@@ -317,7 +317,10 @@ impl Renderer {
 /// the name is read again from the source text.
 /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164; §6.4.6 paragraph 3, p. 64;
 /// PDF p. 76.
-fn macro_defined_at<'c>(context: &'c Context<'_>, vector: &SourceVector) -> Option<&'c str> {
+pub(crate) fn macro_defined_at<'c>(
+    context: &'c Context<'_>,
+    vector: &SourceVector,
+) -> Option<&'c str> {
     let file = vector.source_file_index;
     let text = context.source_text(file)?;
     let starts = context.source_line_starts(file)?;

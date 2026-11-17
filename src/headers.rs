@@ -53,20 +53,25 @@ pub(crate) fn embedded(directory: &Path, name: &Path) -> Option<&'static str> {
 /// compilation as `identity`: every embedded header, except that the
 /// resource directory has no `<stdbit.h>` for the Clang identities, as
 /// Clang ships none, so their lookup finds only a C library's (bcc's WASI
-/// C library has one).
+/// C library has one), and no `<stdckdint.h>` for MSVC or TCC 0.9.27, which
+/// ship none, where GCC 14 and Clang do.
 pub(crate) fn provides(
     directory: &Path,
     name: &Path,
     identity: crate::configuration::CompilerIdentity,
 ) -> bool {
     use crate::configuration::CompilerIdentity;
+    let resource = directory == Path::new(DIRECTORY);
     embedded(directory, name).is_some()
-        && !(directory == Path::new(DIRECTORY)
+        && !(resource
             && name == Path::new("stdbit.h")
             && matches!(
                 identity,
                 CompilerIdentity::Clang | CompilerIdentity::ClangCl
             ))
+        && !(resource
+            && name == Path::new("stdckdint.h")
+            && matches!(identity, CompilerIdentity::Msvc | CompilerIdentity::Tcc))
 }
 
 /// The text of an embedded header's path, `DIRECTORY/name` or
@@ -119,6 +124,7 @@ pub(crate) fn text(name: &Path) -> Option<&'static str> {
         | "stdnoreturn.h" => include_str!("headers/stdnoreturn.h"),
         | "stdatomic.h" => include_str!("headers/stdatomic.h"),
         | "stdbit.h" => include_str!("headers/stdbit.h"),
+        | "stdckdint.h" => include_str!("headers/stdckdint.h"),
         | "tgmath.h" => include_str!("headers/tgmath.h"),
         | "mmintrin.h" => include_str!("headers/mmintrin.h"),
         | "xmmintrin.h" => include_str!("headers/xmmintrin.h"),

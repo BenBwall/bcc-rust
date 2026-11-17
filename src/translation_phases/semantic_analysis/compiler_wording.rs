@@ -172,6 +172,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             return Some(self.context.string_cache.intern(text));
         }
+        if format == DiagnosticFormat::Clang && group == DiagnosticGroup::PointerQualifiers {
+            return self.clang_discarded_qualifiers_wording(site, target, from, source);
+        }
         if site == ConversionSite::Other
             || !matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang)
             || !matches!(
@@ -280,6 +283,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         Some(self.context.string_cache.intern(text.as_str()))
+    }
+
+    /// Clang's words for `-Wincompatible-pointer-types-discards-qualifiers`
+    /// (`ext_typecheck_convert_discards_qualifiers` and
+    /// `ext_nested_pointer_qualifier_mismatch` in `DiagnosticSemaKinds.td`):
+    /// the conversion as Clang names it at its site, then `discards
+    /// qualifiers` when the pointed-to types are compatible apart from their
+    /// own qualifiers (`char *` from `const char *`), or `discards qualifiers
+    /// in nested pointer types` when a deeper level differs, whatever the
+    /// pointed-to type's own qualifiers do (`char **` from `const char **`,
+    /// `int **` from `const int *const *`). This is the question
+    /// `pointer_conversion_violation` asked to put the conversion in
+    /// this group, as Clang's `checkPointerTypesForAssignment` (`SemaExpr.cpp`)
+    /// returns `CompatiblePointerDiscardsQualifiers` or
+    /// `IncompatibleNestedPointerQualifiers`.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    fn clang_discarded_qualifiers_wording(
+        &mut self,
+        site: ConversionSite,
+        target: TypeId,
+        from: TypeId,
+        source: ExpressionInfo<'tu>,
+    ) -> Option<StringCacheId> {
+        let to = self.type_spelling(target, false)?;
+        let from_spelling = self.type_spelling(source.ty, false)?;
+        let nested = self
+            .pointer_target(target)
+            .zip(self.pointer_target(from))
+            .is_some_and(|(to, from)| !self.pointer_compatible(to, from, true));
+        let suffix = if nested {
+            "discards qualifiers in nested pointer types"
+        } else {
+            "discards qualifiers"
+        };
+        let text = match site {
+            | ConversionSite::Initialization => crate::diagnostics::format_in!(
+                self.scratch,
+                "initializing '{to}' with an expression of type '{from_spelling}' {suffix}"
+            ),
+            | ConversionSite::Assignment => crate::diagnostics::format_in!(
+                self.scratch,
+                "assigning to '{to}' from '{from_spelling}' {suffix}"
+            ),
+            | ConversionSite::Argument { .. } => crate::diagnostics::format_in!(
+                self.scratch,
+                "passing '{from_spelling}' to parameter of type '{to}' {suffix}"
+            ),
+            | ConversionSite::Return => crate::diagnostics::format_in!(
+                self.scratch,
+                "returning '{from_spelling}' from a function with result type '{to}' {suffix}"
+            ),
+            | ConversionSite::Other => return None,
+        };
+        Some(self.context.string_cache.intern(text))
     }
 
     /// `cl`'s words for an implicit conversion between a pointer and an
