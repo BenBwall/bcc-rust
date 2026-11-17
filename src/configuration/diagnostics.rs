@@ -323,6 +323,7 @@ impl CompilerConfiguration {
         }
         self.warning_options[DiagnosticGroup::Switch as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::BoolOperation as usize].apply_all(enabled);
+        self.warning_options[DiagnosticGroup::CharSubscripts as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::ReturnType as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
         // GCC's `-Wunused`, given or refused in either order, outranks
@@ -1117,6 +1118,9 @@ diagnostic_groups! {
     /// `~` on a truth value, and GCC's `++` and `--` of a `_Bool`, which
     /// `-Wall` holds in both compilers.
     BoolOperation => Some("bool-operation"), Ignored, false;
+    /// Clang's subscript of plain `char` type, under `-Wall`; GCC's form of
+    /// the group is not modeled.
+    CharSubscripts => Some("char-subscripts"), Ignored, false;
     /// `-Wformat`: a format string a call's arguments do not match. Clang
     /// reports it by default and its group holds the other format groups
     /// but `-Wformat-nonliteral`; GCC's `-Wall` holds it, and the other
@@ -1286,6 +1290,7 @@ impl DiagnosticGroup {
         Self::LogicalNotParentheses,
         Self::Switch,
         Self::BoolOperation,
+        Self::CharSubscripts,
         Self::ReturnType,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
@@ -1462,6 +1467,7 @@ impl WarningSettings {
                 | DiagnosticGroup::Format
                 | DiagnosticGroup::Switch
                 | DiagnosticGroup::BoolOperation
+                | DiagnosticGroup::CharSubscripts
                 | DiagnosticGroup::ReturnType
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction

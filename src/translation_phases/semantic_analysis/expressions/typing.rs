@@ -371,6 +371,54 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Clang's `-Wchar-subscripts` for the subscript `e` of the integer
+    /// operand `index`, either one: a plain `char` index, unless an integer
+    /// constant expression gives it a value that is not negative, at the
+    /// `[` with the index underlined (`CreateBuiltinArraySubscriptExpr` in
+    /// `SemaExpr.cpp`; `warn_subscript_is_char` in
+    /// `DiagnosticSemaKinds.td`). `char` may be signed, so a character above
+    /// 127 makes a negative subscript.
+    /// C99: §6.5.2.1p2, p. 70; PDF p. 82; §6.2.5p15, p. 35; PDF p. 47.
+    fn char_subscript_warning(&mut self, e: &'tu Expression<'tu>, index: ExpressionInfo<'tu>) {
+        if self.context.configuration.compiler_identity().rules()
+            != crate::configuration::RuleSet::Clang
+            || !matches!(
+                self.types.nodes[self.types.non_atomic(index.ty).index],
+                TypeKind::Scalar(Scalar::Char)
+            )
+            || (index.ice
+                && index
+                    .integer
+                    .and_then(Integer::to_i128)
+                    .is_some_and(|value| value >= 0))
+        {
+            return;
+        }
+        let bracket = crate::translation_phases::Context::first_token_vector(
+            e.operator_source_vectors.unwrap_or(e.source_vectors),
+        );
+        let name = self
+            .context
+            .string_cache
+            .intern("array subscript is of type 'char'");
+        let group = crate::configuration::DiagnosticGroup::CharSubscripts;
+        self.with_highlights(
+            [
+                index.expression.source_vectors,
+                crate::translation_phases::SourceVectors::default(),
+            ],
+            |analyzer| {
+                analyzer.group_diagnostic(
+                    group,
+                    SemanticErrorKind::ValueWarning(group),
+                    bracket,
+                    Some(name),
+                    None,
+                );
+            },
+        );
+    }
+
     /// C99: §6.5.5-§6.5.17, pp. 82-94; PDF pp. 94-106.
     pub(super) fn type_binary(
         &mut self,
@@ -509,6 +557,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.object_category(target)
                 };
                 let index = Self::subscript_index(pointer, [left, right]);
+                self.char_subscript_warning(e, index);
                 info.static_address = self.address_value(pointer) && Self::folded_offset(index);
                 // Array decay retains the designated register object, which
                 // GCC subscripts; reading a register pointer does not
