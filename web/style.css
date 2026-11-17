@@ -1158,6 +1158,9 @@
   }
   .stage-beside-waiting { padding: 16px; background: var(--screen); color: var(--screen-dim); font-size: 12px; }
   .stage-missing { margin-top: 16px; padding: 16px; background: var(--screen); color: var(--screen-dim); }
+  /* A level that failed, beside one that did not: its reason in its pane. */
+  .stage-missing.stage-pane-missing { margin-top: 0; }
+  .stage-pane-failure > .stop-banner { margin: 0 0 8px; }
   .stage-missing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 12px; }
   .stage-missing-actions[hidden] { display: none; }
   .stage-missing-actions .stage-command { margin: 0; border: 1px solid var(--screen-faint); }

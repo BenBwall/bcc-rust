@@ -1192,7 +1192,7 @@ impl State {
     fn hover_links(self) -> Vec<Decoration> {
         // A line of the other level's output, beside the selected one, links
         // through that level's own lines.
-        let beside = self.pointing.beside.get();
+        let beside = self.pointing.beside();
         let (hovered, links) = if beside > 0 {
             (beside, self.other_links)
         } else {
