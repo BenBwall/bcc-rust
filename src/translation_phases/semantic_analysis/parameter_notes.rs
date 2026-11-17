@@ -157,7 +157,7 @@ fn unnamed_site(mut declarator: Declarator<'_>, mut after: SourceVectors) -> Sou
         // qualifiers and attributes, and the attributes and Microsoft
         // modifiers among them. A qualifier written twice counts once.
         let mut prefix = 0;
-        for level in declarator.pointer.levels.iter() {
+        for level in declarator.pointer.levels {
             prefix += 1 + level.qualifiers.bits().count_ones();
             let mut attributes = level.attributes;
             while let Some(attribute) = attributes {
@@ -166,7 +166,7 @@ fn unnamed_site(mut declarator: Declarator<'_>, mut after: SourceVectors) -> Sou
             }
         }
         let mut direct = None;
-        for part in declarator.kind.iter() {
+        for part in declarator.kind {
             match *part {
                 | DirectDeclarator::Attributes(attributes) =>
                     prefix += attributes.source_vectors.length(),
