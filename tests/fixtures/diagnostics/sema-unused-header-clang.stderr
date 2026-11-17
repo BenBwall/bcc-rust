@@ -1,0 +1,11 @@
+In file included from sema-unused-header-clang.c:3:
+./sema-unused-header-clang.h:3:12: warning: unused function 'header_function' [-Wunused-function]
+    3 | static int header_function(void) { return 0; }
+      |            ^~~~~~~~~~~~~~~
+sema-unused-header-clang.c:4:14: warning: unused variable 'main_buffer' [-Wunused-variable]
+    4 | static char *main_buffer;
+      |              ^~~~~~~~~~~
+sema-unused-header-clang.c:5:18: warning: unused variable 'main_constant' [-Wunused-const-variable]
+    5 | static const int main_constant = 1;
+      |                  ^~~~~~~~~~~~~
+3 warnings generated.

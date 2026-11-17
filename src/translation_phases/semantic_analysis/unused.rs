@@ -1338,7 +1338,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.unused_rule(rule, site, Some(data.name.name));
                     }
                 } else if !gcc {
-                    self.unused_rule(UnusedRule::Variable, site, Some(data.name.name));
+                    // Clang leaves the internal objects of headers alone
+                    // (`ShouldWarnIfUnusedFileScopedDecl` in `SemaDecl.cpp`).
+                    if self.in_main_file(site) {
+                        self.unused_rule(UnusedRule::Variable, site, Some(data.name.name));
+                    }
                 } else if !data.ty.is_volatile() {
                     self.unused_rule(UnusedRule::GccFileObject, site, Some(data.name.name));
                 }
