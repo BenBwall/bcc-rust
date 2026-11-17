@@ -73,7 +73,7 @@ const bccIr = {
   brackets,
   keywords: [
     'function', 'target', 'triple', 'datalayout', 'abi', 'lowered', 'global', 'constant',
-    'declare',
+    'declare', 'bytes',
   ],
   // What qualifies a function or an instruction, set back from the
   // instruction itself.
@@ -90,10 +90,12 @@ const bccIr = {
       [/\bblock\d+\b/, 'label'],
       [/\bslot\d+\b/, 'variable.slot'],
       [/\bv\d+\b/, 'variable'],
-      [/(=\s*)([a-z_]+)((?:\.[a-z0-9]+)?)/, ['operator', 'keyword.instruction', 'type']],
-      [/^(\s+)([a-z_]+)((?:\.[a-z0-9]+)?)(?=\s)/, ['', 'keyword.instruction', 'type']],
+      [/(=\s*)([a-z_]+)((?:\.[a-z0-9]+)?)/, ['operator', { cases: { '@keywords': 'keyword', '@modifiers': 'keyword.modifier', '@default': 'keyword.instruction' } }, 'type']],
+      [/^(\s+)([a-z_]+)((?:\.[a-z0-9]+)?)(?=\s)/, ['', { cases: { '@keywords': 'keyword', '@modifiers': 'keyword.modifier', '@default': 'keyword.instruction' } }, 'type']],
       [/\b(i1|i8|i16|i32|i64|i128|f32|f64|ptr|void)\b/, 'type'],
-      [/\b(eq|ne|slt|sle|sgt|sge|ult|ule|ugt|uge)\b/, 'keyword.condition'],
+      [/\b(eq|ne|slt|sle|sgt|sge|ult|ule|ugt|uge|oeq|one|olt|ole|ogt|oge|ord|uno|ueq|une)\b/, 'keyword.condition'],
+      // A floating constant's bits, `0x401C000000000000`.
+      [/-?0x[0-9a-fA-F]+/, 'number'],
       [/[a-z_]\w*/, { cases: { '@instructions': 'keyword.instruction', '@keywords': 'keyword', '@modifiers': 'keyword.modifier', '@default': 'identifier' } }],
       [/-?\d+/, 'number'],
       [/->|[=:,]/, 'operator'],
@@ -118,7 +120,8 @@ const llvm = {
     'ret', 'br', 'switch', 'unreachable', 'add', 'sub', 'mul', 'sdiv', 'udiv', 'srem', 'urem',
     'shl', 'lshr', 'ashr', 'and', 'or', 'xor', 'alloca', 'load', 'store', 'getelementptr',
     'trunc', 'zext', 'sext', 'ptrtoint', 'inttoptr', 'bitcast', 'icmp', 'fcmp', 'phi', 'call',
-    'select', 'freeze', 'fadd', 'fsub', 'fmul', 'fdiv',
+    'select', 'freeze', 'fadd', 'fsub', 'fmul', 'fdiv', 'frem', 'fneg', 'sitofp', 'uitofp',
+    'fptosi', 'fptoui', 'fpext', 'fptrunc',
   ],
   tokenizer: {
     root: [
@@ -133,8 +136,11 @@ const llvm = {
       [/%[\w.$]+/, 'variable'],
       [/^[\w.$]+:/, 'label'],
       [/\b(i\d+|ptr|void|half|float|double)\b/, 'type'],
-      [/\b(eq|ne|slt|sle|sgt|sge|ult|ule|ugt|uge)\b/, 'keyword.condition'],
+      [/\b(eq|ne|slt|sle|sgt|sge|ult|ule|ugt|uge|oeq|one|olt|ole|ogt|oge|ord|uno|ueq|une)\b/, 'keyword.condition'],
       [/#\d+/, 'keyword.metadata'],
+      // Floating constants: `3.000000e-01`, and bits as `0x3FD3333333333334`.
+      [/-?\d+\.\d+(e[-+]?\d+)?/, 'number'],
+      [/f?0x[0-9a-fA-F]+/, 'number'],
       [/[a-z_][\w.]*/, { cases: { '@instructions': 'keyword.instruction', '@keywords': 'keyword', '@modifiers': 'keyword.modifier', '@default': 'identifier' } }],
       [/-?\d+/, 'number'],
       [/[=,*]/, 'operator'],
