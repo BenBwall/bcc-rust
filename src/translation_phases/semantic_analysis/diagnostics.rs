@@ -62,9 +62,17 @@ impl Analyzer<'_, '_, '_> {
     /// ([`Self::spelled_group_diagnostic`]).
     /// C99: §5.1.1.3p1 and footnote 8, p. 11; PDF p. 23.
     pub(super) fn conversion_in_system_macro(&self) -> bool {
+        self.in_system_macro_context(self.conversion_context)
+    }
+
+    /// [`Self::conversion_in_system_macro`] for the context location
+    /// `context`, which a conversion's operand may have replaced with its
+    /// own, as a comma does for its right operand.
+    /// C99: §5.1.1.3p1 and footnote 8, p. 11; PDF p. 23.
+    pub(super) fn in_system_macro_context(&self, context: SourceVectors) -> bool {
         self.context.configuration.compiler_identity().rules()
             == crate::configuration::RuleSet::Clang
-            && self.context.in_system_macro(self.conversion_context)
+            && self.context.in_system_macro(context)
     }
 
     /// Runs `report` with what it reports placed `order` among the other
