@@ -1261,7 +1261,18 @@ aside; Clang goes by the invocation. A `sizeof` of a variable length array and a
 cast to a variably modified type have an effect for GCC, and so does reading an
 atomic lvalue that is not `register`, which is a call to `__atomic_load`; an
 operand of `&` is not read. A comma's left operand takes the same checks as a
-statement. Clang's discarded-value
+statement. GCC reports a discarded value where its tree is: a caret at the
+operator (a cast's `(`, a conditional's `:`, a subscript's `[`) and a range over
+the whole expression, parentheses included, which GCC's format underlines
+around the caret; a name, a constant and a value GCC folds to one have no place,
+and take the statement's first token. A cast to the operand's own type is the
+operand at the cast's place, and `c_fully_fold` turns a comma whose left operand
+does nothing into its right operand at the comma's place. The renderer draws a
+GCC range from its first token to its last only when both are spelled in the
+caret's file and come from the caret's expansion, from its replacement list or
+its arguments as the caret does (`layout::maybe_add_location_range`), and the
+caret alone otherwise, so a macro inside the range draws nothing at its
+definition. Clang's discarded-value
 warnings, comparisons aside, stay out of what `Analyzer::evaluation_inhibited`
 says is not evaluated and of what `reachability.rs` finds unreachable.
 

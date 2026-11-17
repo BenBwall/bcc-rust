@@ -1480,115 +1480,248 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// GCC's `emit_side_effect_warnings`.
+    /// GCC's `emit_side_effect_warnings`, after `c_fully_fold`: at the place
+    /// of the expression's tree, or, when it has none, at the statement's
+    /// first token.
     fn gcc_discarded_value(&mut self, e: &'tu Expression<'tu>) {
         if self.is_void_or_unknown(e) {
             return;
         }
-        if !self.computes_more(e, true) {
-            self.unused_rule(UnusedRule::GccNoEffect, Self::gcc_statement_site(e), None);
+        let start = GccLocation::point(Context::first_token_vector(e.source_vectors));
+        let (folded, location) = self.gcc_folded(e);
+        let location = location.unwrap_or(start);
+        if !self.computes_more(folded, true) {
+            self.gcc_unused_rule(UnusedRule::GccNoEffect, location);
             return;
         }
-        self.gcc_unused_effectful_value(e);
+        self.gcc_unused_effectful_value(folded, location);
     }
 
-    /// What GCC says of a discarded expression with side effects, as a
-    /// statement or a comma's left operand: of a comma, about its last right
-    /// operand, and otherwise `warn_if_unused_value`.
-    fn gcc_unused_effectful_value(&mut self, e: &'tu Expression<'tu>) {
-        let e = Self::without_parentheses(e);
-        if matches!(
-            e.kind,
-            E::Binary {
-                operator: B::Comma,
-                ..
-            }
-        ) {
-            let mut comma = e;
-            let mut right = e;
+    /// What GCC says of a discarded expression with side effects at the
+    /// place `locus`, as a statement or a comma's left operand: of a comma,
+    /// about its last right operand, and otherwise `warn_if_unused_value`. A
+    /// cast to the operand's own type is the operand itself, at the cast's
+    /// place.
+    fn gcc_unused_effectful_value(&mut self, e: &'tu Expression<'tu>, locus: GccLocation) {
+        let inner = self.gcc_relocated_operand(e);
+        if let E::Binary {
+            operator: B::Comma, ..
+        } = inner.kind
+        {
+            // Each comma of the right spine has a place, which a cast or
+            // parentheses around it give.
+            let mut at = locus;
+            let mut right = inner;
             while let E::Binary {
                 operator: B::Comma,
                 right_expression,
                 ..
             } = right.kind
             {
-                comma = right;
-                right = Self::without_parentheses(right_expression);
+                right = self.gcc_relocated_operand(right_expression);
+                if matches!(
+                    right.kind,
+                    E::Binary {
+                        operator: B::Comma,
+                        ..
+                    }
+                ) {
+                    at = self.gcc_location(right_expression).unwrap_or(at);
+                }
             }
+            let right = Self::without_parentheses(right);
             if !self.computes_more(right, true)
                 && !self.is_void_or_unknown(right)
                 && !matches!(right.kind, E::Cast { .. })
             {
-                self.unused_rule(UnusedRule::GccCommaRight, Self::operator_site(comma), None);
+                self.gcc_unused_rule(UnusedRule::GccCommaRight, at);
             }
-        } else if self.computes_more(e, false) && self.gcc_value_is_unused(e) {
-            self.unused_rule(UnusedRule::GccValueComputed, Self::operator_site(e), None);
+        } else if self.computes_more(e, false)
+            && let Some(at) = self.gcc_unused_value_in(inner, locus)
+        {
+            self.gcc_unused_rule(UnusedRule::GccValueComputed, at);
         }
     }
 
-    /// Where GCC reports a discarded expression with no effect: at its
-    /// operator through parentheses, or, when it has no location of its own,
-    /// at the statement's first token.
-    fn gcc_statement_site(e: &'tu Expression<'tu>) -> SourceVectors {
+    /// GCC's `c_fully_fold` of a discarded expression: a comma whose left
+    /// operand has no side effect and whose right operand is no constant
+    /// folds to the right operand, which takes the comma's place
+    /// (`fold_binary_loc`, then `protected_set_expr_location`) unless it is
+    /// a name, which has none; the outermost such comma's place stays.
+    /// Returns the folded expression and its place.
+    fn gcc_folded(&self, e: &'tu Expression<'tu>) -> (&'tu Expression<'tu>, Option<GccLocation>) {
+        let location = self.gcc_location(e);
+        let mut folded = e;
+        while let E::Binary {
+            operator: B::Comma,
+            left_expression,
+            right_expression,
+        } = self.gcc_relocated_operand(folded).kind
+            && !self.computes_more(left_expression, true)
+            && !self.gcc_tree_constant(right_expression)
+        {
+            folded = right_expression;
+        }
+        if std::ptr::eq(folded, e) {
+            (e, location)
+        } else {
+            (folded, self.gcc_location(folded).and(location))
+        }
+    }
+
+    /// Whether GCC's tree for `e` is `TREE_CONSTANT`: an arithmetic or
+    /// address constant, or a string literal's address.
+    fn gcc_tree_constant(&self, e: &'tu Expression<'tu>) -> bool {
+        let info = self.expression_info(e);
+        info.integer.is_some()
+            || matches!(
+                info.constant,
+                super::ConstantClass::Arithmetic | super::ConstantClass::Address
+            )
+            || matches!(Self::without_parentheses(e).kind, E::StringLiteral(_))
+    }
+
+    /// `e` without its parentheses and the casts to the operand's own type
+    /// around it, which GCC's `build_c_cast` leaves out: the tree GCC builds
+    /// for `e`, at `e`'s place.
+    /// C99: §6.5.4p4, p. 81; PDF p. 93.
+    fn gcc_relocated_operand(
+        &self,
+        mut e: &'tu Expression<'tu>,
+    ) -> &'tu Expression<'tu> {
+        loop {
+            e = Self::without_parentheses(e);
+            match e.kind {
+                | E::Cast {
+                    operand_expression, ..
+                } if self.gcc_same_type_cast(e, operand_expression) => e = operand_expression,
+                | _ => return e,
+            }
+        }
+    }
+
+    /// Whether the cast `e` of `operand` is to the operand's own type, which
+    /// GCC's `build_c_cast` drops.
+    fn gcc_same_type_cast(&self, e: &'tu Expression<'tu>, operand: &'tu Expression<'tu>) -> bool {
+        let (to, from) = (self.expression_info(e).ty, self.expression_info(operand).ty);
+        self.types.non_atomic(to).unqualified() == self.types.non_atomic(from).unqualified()
+    }
+
+    /// Where GCC places the tree for `e`: its caret at the operator, and the
+    /// range around it the whole expression, parentheses included
+    /// (`set_c_expr_source_range` in `c-parser.cc`). A cast's caret is its
+    /// `(`, a conditional's its `:` and a subscript's its `[`; a comma's is
+    /// the comma, with no range unless parentheses give it one. A name, a
+    /// constant and a constant GCC folds have no place of their own.
+    fn gcc_location(&self, e: &'tu Expression<'tu>) -> Option<GccLocation> {
         let inner = Self::without_parentheses(e);
-        match inner.kind {
-            | E::Identifier(_)
-            | E::Constant(_)
-            | E::StringLiteral(_)
-            | E::SizeofExpr(_)
-            | E::SizeofType(_)
-            | E::AlignofExpr(_)
-            | E::AlignofType(_)
-            | E::Boolean(_)
-            | E::Nullptr => Self::operator_site(e),
-            | _ => Self::operator_site(inner),
+        if self.expression_info(inner).integer.is_some() {
+            return None;
         }
+        let operator = Self::operator_site(inner);
+        let caret = match inner.kind {
+            // A name cast to its own type is a `NON_LVALUE_EXPR` folding
+            // drops.
+            | E::Cast {
+                operand_expression, ..
+            } if self.gcc_same_type_cast(inner, operand_expression)
+                && self.gcc_location(operand_expression).is_none() =>
+                return None,
+            | E::Binary {
+                operator: B::Subscript,
+                ..
+            }
+            | E::Cast { .. } => Context::first_token_vector(operator),
+            | E::Conditional(_) | E::OmittedConditional(_) => Context::last_source_vector(operator),
+            | E::Binary { .. }
+            | E::Unary { .. }
+            | E::DirectMember { .. }
+            | E::IndirectMember { .. } => operator,
+            | _ => return None,
+        };
+        let extent = if std::ptr::eq(e, inner)
+            && matches!(
+                inner.kind,
+                E::Binary {
+                    operator: B::Comma,
+                    ..
+                }
+            ) {
+            SourceVectors::default()
+        } else {
+            e.source_vectors
+        };
+        Some(GccLocation { caret, extent })
     }
 
-    /// GCC's `warn_if_unused_value`, for an expression with side effects. It
-    /// looks through `NON_LVALUE_EXPR` and `NOP_EXPR`, which a cast is unless
-    /// it changes the representation, and a volatile read, an atomic read and
-    /// a conditional have an effect of their own. The right operand of `&&`
-    /// or `||` is compared with zero, unless it assigns.
+    /// GCC's `warn_if_unused_value`, for an expression with side effects:
+    /// where it says the value is unused, if it does. Each tree it looks
+    /// into that has a place of its own moves the place there. It looks
+    /// through `NON_LVALUE_EXPR` and `NOP_EXPR`, which a cast is unless it
+    /// changes the representation, and a volatile read, an atomic read and a
+    /// conditional have an effect of their own. The right operand of `&&` or
+    /// `||` is compared with zero at the operator, unless it is a truth
+    /// value already.
     /// C99: §6.5.13p3, p. 89; PDF p. 101; §6.5.14p3, p. 89; PDF p. 101.
-    fn gcc_value_is_unused(&self, e: &'tu Expression<'tu>) -> bool {
+    fn gcc_unused_value_at(
+        &self,
+        e: &'tu Expression<'tu>,
+        locus: GccLocation,
+    ) -> Option<GccLocation> {
+        let locus = self.gcc_location(e).unwrap_or(locus);
+        self.gcc_unused_value_in(Self::without_parentheses(e), locus)
+    }
+
+    /// [`Self::gcc_unused_value_at`] of `e`, whose place is `locus` already.
+    fn gcc_unused_value_in(
+        &self,
+        e: &'tu Expression<'tu>,
+        locus: GccLocation,
+    ) -> Option<GccLocation> {
         if self.is_effectful_read(e) {
-            return false;
+            return None;
         }
         match e.kind {
-            | E::Parenthesized {
-                expression: operand,
-            }
+            | E::Parenthesized { expression } =>
+                self.gcc_unused_value_in(Self::without_parentheses(expression), locus),
             | E::Unary {
                 operator: U::Plus,
-                operand_expression: operand,
-            } => self.gcc_value_is_unused(operand),
+                operand_expression,
+            } => self.gcc_unused_value_at(operand_expression, locus),
             | E::Cast {
                 operand_expression, ..
             } => {
+                // A cast to the operand's own type is the operand, at the
+                // cast's place.
+                if self.gcc_same_type_cast(e, operand_expression) {
+                    return self
+                        .gcc_unused_value_in(Self::without_parentheses(operand_expression), locus);
+                }
                 // Folding drops a widening cast under another cast.
+                let mut written = operand_expression;
                 let mut operand = Self::without_parentheses(operand_expression);
                 while let E::Cast {
                     operand_expression: inner,
                     ..
                 } = operand.kind
                 {
-                    let inner = Self::without_parentheses(inner);
+                    let stripped = Self::without_parentheses(inner);
                     if !self.gcc_cast_keeps_representation(
                         self.expression_info(operand).ty,
-                        self.expression_info(inner).ty,
+                        self.expression_info(stripped).ty,
                     ) {
                         break;
                     }
-                    operand = inner;
+                    written = inner;
+                    operand = stripped;
                 }
                 let (to, from) = (self.expression_info(e).ty, self.expression_info(operand).ty);
                 if self.is_void_or_unknown(e) {
-                    false
+                    None
                 } else if self.gcc_cast_keeps_representation(to, from) {
-                    self.gcc_value_is_unused(operand)
+                    self.gcc_unused_value_at(written, locus)
                 } else {
-                    self.types.nodes[to.index] == TypeKind::Scalar(Scalar::Bool)
+                    (self.types.nodes[to.index] == TypeKind::Scalar(Scalar::Bool)
                         || !matches!(
                             operand.kind,
                             E::Conditional(_)
@@ -1596,7 +1729,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     operator: B::Assignment,
                                     ..
                                 }
-                        )
+                        ))
+                    .then_some(locus)
                 }
             },
             | E::Binary {
@@ -1609,23 +1743,53 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | E::Binary {
                         operator: B::LogicalAnd | B::LogicalOr,
                         ..
-                    } => self.gcc_value_is_unused(right),
-                    | E::Binary { operator, .. } if Self::is_assignment(operator) => false,
+                    } => self.gcc_unused_value_at(right_expression, locus),
+                    // `(b = 1) != 0` folds to `(b = 1, 1)`, whose constant
+                    // GCC lets pass.
+                    | E::Binary {
+                        operator: B::Assignment,
+                        right_expression,
+                        ..
+                    } if self.expression_info(right_expression).integer.is_some() => None,
                     | E::Binary {
                         operator: B::Comma, ..
                     }
-                    | E::Conditional(_) => false,
-                    | _ => true,
+                    | E::Conditional(_) => None,
+                    | E::Binary {
+                        operator:
+                            B::Equal
+                            | B::NotEqual
+                            | B::LessThan
+                            | B::GreaterThan
+                            | B::LessThanOrEqual
+                            | B::GreaterThanOrEqual,
+                        ..
+                    }
+                    | E::Unary {
+                        operator: U::LogicalNot,
+                        ..
+                    } => self.gcc_location(right_expression).or(Some(locus)),
+                    | _ => Some(GccLocation::point(Self::operator_site(e))),
                 }
             },
-            | E::Binary { operator, .. } => !Self::is_assignment(operator) && operator != B::Comma,
+            | E::Binary { operator, .. } =>
+                (!Self::is_assignment(operator) && operator != B::Comma).then_some(locus),
             | E::Unary { operator, .. } => matches!(
                 operator,
                 U::Minus | U::BitwiseNot | U::LogicalNot | U::Indirection
-            ),
-            | E::DirectMember { .. } | E::IndirectMember { .. } => true,
-            | _ => false,
+            )
+            .then_some(locus),
+            | E::DirectMember { .. } | E::IndirectMember { .. } => Some(locus),
+            | _ => None,
         }
+    }
+
+    /// Reports `rule` at the caret of `location`, with GCC's range around
+    /// it.
+    fn gcc_unused_rule(&mut self, rule: UnusedRule, location: GccLocation) {
+        self.with_gcc_extent(location.extent, |analyzer| {
+            analyzer.unused_rule(rule, location.caret, None);
+        });
     }
 
     /// Clang's `DiagnoseUnusedExprResult`, which says nothing about an
@@ -1815,7 +1979,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else if !self.computes_more(left, true) {
             self.unused_rule(UnusedRule::GccCommaLeft, Self::operator_site(comma), None);
         } else {
-            self.gcc_unused_effectful_value(left);
+            // GCC's `build_compound_expr` reports it at the comma unless the
+            // operand has a place of its own.
+            let locus = self
+                .gcc_location(left)
+                .unwrap_or_else(|| GccLocation::point(Self::operator_site(comma)));
+            self.gcc_unused_effectful_value(left, locus);
         }
     }
 
@@ -2010,6 +2179,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.group_diagnostic_read_at(rule.group(), kind, site, name, None, settings_at);
         } else {
             self.spelled_group_diagnostic(rule.group(), kind, site, name, settings_at);
+        }
+    }
+}
+
+/// Where GCC places a tree: the caret, and the range around it, which is
+/// empty when GCC's location names no range beyond the caret's token.
+#[derive(Clone, Copy)]
+struct GccLocation {
+    caret:  SourceVectors,
+    extent: SourceVectors,
+}
+
+impl GccLocation {
+    /// A token's own place, with no range around it.
+    fn point(caret: SourceVectors) -> Self {
+        Self {
+            caret,
+            extent: SourceVectors::default(),
         }
     }
 }
