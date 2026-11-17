@@ -349,8 +349,8 @@ fn foreign_vector_conventions_are_refused() {
     // passes the vector in YMM0, as a callee whose attribute turns AVX on
     // takes it.
     accepted(
-        "__attribute__((target(\"avx\"))) V f(); __attribute__((target(\"avx\"))) void g(V \
-         *p) { *p = f(*p); }",
+        "__attribute__((target(\"avx\"))) V f(); __attribute__((target(\"avx\"))) void g(V *p) { \
+         *p = f(*p); }",
         CompilerIdentity::Gcc,
         &[],
     );

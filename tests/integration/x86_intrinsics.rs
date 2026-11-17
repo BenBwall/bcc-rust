@@ -208,7 +208,14 @@ mod tests {
                 let object = temporary("variadic-part.o");
                 let object = object.to_str().unwrap();
                 let built = bcc(&[
-                    &["--compiler-identity=clang", "-w", "-c", &source, "-o", object][..],
+                    &[
+                        "--compiler-identity=clang",
+                        "-w",
+                        "-c",
+                        &source,
+                        "-o",
+                        object,
+                    ][..],
                     ours,
                     flags,
                 ]
@@ -223,9 +230,13 @@ mod tests {
                     flags,
                 ]
                 .concat());
-                assert!(!refused.status.success(), "{context}: GCC identity accepted");
                 assert!(
-                    text(&refused.stderr).contains("a named 32-byte vector parameter of a variadic"),
+                    !refused.status.success(),
+                    "{context}: GCC identity accepted"
+                );
+                assert!(
+                    text(&refused.stderr)
+                        .contains("a named 32-byte vector parameter of a variadic"),
                     "{context}: {}",
                     text(&refused.stderr)
                 );
