@@ -53,6 +53,7 @@ mod pointer_integer_casts;
 mod pointers;
 mod pragma_pack;
 mod predefined_identifiers;
+mod prototypes;
 mod record_layout;
 mod registry;
 mod resolved;
@@ -142,8 +143,9 @@ fn builtin_va_list_is_complete_and_parameters_decay() {
 }
 
 /// Analyzes `source` under `configuration`, without Clang's by-default
-/// warning about a discarded value, since these tests' statements exist to be
-/// analyzed: `unused.rs` pins that warning.
+/// warnings about a discarded value and about functions without a
+/// prototype, since these tests' statements and K&R definitions exist to be
+/// analyzed: `unused.rs` and `tests/prototypes.rs` pin those warnings.
 fn with_configuration(
     source: &str,
     configuration: crate::configuration::CompilerConfiguration,
@@ -151,10 +153,15 @@ fn with_configuration(
 ) {
     with_exact_configuration(
         source,
-        configuration.with_warning_option(
-            crate::configuration::DiagnosticGroup::UnusedValue,
-            crate::configuration::WarningOption::Enable(false),
-        ),
+        configuration
+            .with_warning_option(
+                crate::configuration::DiagnosticGroup::UnusedValue,
+                crate::configuration::WarningOption::Enable(false),
+            )
+            .with_warning_option(
+                crate::configuration::DiagnosticGroup::DeprecatedNonPrototype,
+                crate::configuration::WarningOption::Enable(false),
+            ),
         run,
     );
 }

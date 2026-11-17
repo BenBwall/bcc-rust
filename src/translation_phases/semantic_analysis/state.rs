@@ -126,6 +126,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             register_variables: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             ice_operands: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             functions: functions::State::new(scratch),
+            prototypes: super::prototypes::State::new(scratch),
             va_list_type: None,
             statements: statements::State::new(scratch),
             unused: super::unused::UnusedState::new(scratch, configuration, pragmas, prior_error),

@@ -1051,7 +1051,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ty
         };
         let errors_before = self.semantic_errors;
+        // The declaration Clang compares a function declaration with: the
+        // visible one, or a hidden one of the same linkage.
+        let previous_function = (kind == BindingKind::Function)
+            .then(|| {
+                prior_index
+                    .filter(|&index| {
+                        self.bindings[index].kind == BindingKind::Function
+                            && self.bindings[index].linkage != Linkage::None
+                    })
+                    .or_else(|| {
+                        (linkage != Linkage::None)
+                            .then(|| self.external.get(&name.name).copied())
+                            .flatten()
+                    })
+            })
+            .flatten();
         self.bind(name, ty, kind, linkage, duration, None);
+        if kind == BindingKind::Function {
+            let index = self.bindings.len() - 1;
+            let bound = self
+                .lookup(Namespace::Ordinary, name.name)
+                .is_some_and(|entry| entry.binding == index);
+            let specified = self.specifies_prototype(spec);
+            self.compare_prototypes(index, ty, specified, previous_function, bound);
+        }
         self.constexpr_binding(
             name,
             constexpr && kind == BindingKind::Object,

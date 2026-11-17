@@ -30,6 +30,14 @@ error: parameter was not declared, defaults to `int`: `b` [-Wimplicit-int]
   |
   = note: C99 §6.9.1p6: every identifier in the identifier list shall be declared; C89 defaulted to `int`
 
+warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+ --> sema-permerrors-bcc.c:5:5
+  |
+5 | int old(a, b) int a; { return a + b; }
+  |     ^^^ no prototype
+  |
+  = note: C99 §6.11.6-§6.11.7: empty parentheses in a function declarator and identifier lists in a definition are obsolescent; C23 removes both
+
 error: a parameter list without types is only allowed in a function definition
  --> sema-permerrors-bcc.c:6:13
   |
@@ -142,4 +150,4 @@ warning: pointer type mismatch in conditional expression [-Wpointer-type-mismatc
    |
    = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
-17 errors and 1 warning generated.
+17 errors and 2 warnings generated.
