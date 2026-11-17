@@ -66,6 +66,15 @@ pub(super) struct Use<'tu> {
     pub(super) branches:  (u32, u32),
 }
 
+/// The working storage of [`frontier`], kept between uses: each block's
+/// count of successors the walk has visited, zero outside the walk, the
+/// blocks waiting, and the blocks the walk counted.
+pub(super) struct Walk<'b> {
+    visited: &'b mut [u32],
+    queue:   ArenaVec<'b, BlockId>,
+    touched: ArenaVec<'b, BlockId>,
+}
+
 /// What the final pass found, by variable in the order each was first met.
 pub(super) struct Uses<'b, 'tu> {
     pub(super) order:     ArenaVec<'b, u32>,
@@ -241,8 +250,11 @@ pub(super) fn find_uses<'b, 'tu>(
     };
     let seen = arena.alloc_slice_fill_iter(std::iter::repeat_n(false, values.vars));
     let scratch = arena.alloc_slice_fill_iter(std::iter::repeat_n(0_u64, values.words));
-    let visited = arena.alloc_slice_fill_iter(std::iter::repeat_n(0_u32, blocks));
-    let mut queue: ArenaVec<'_, BlockId> = ArenaVec::new_in(arena);
+    let mut walk = Walk {
+        visited: arena.alloc_slice_fill_iter(std::iter::repeat_n(0_u32, blocks)),
+        queue:   ArenaVec::new_in(arena),
+        touched: ArenaVec::new_in(arena),
+    };
     for block in 0..blocks {
         let block = BlockId::try_from(block).unwrap_or(BlockId::MAX);
         if !values.reached[block as usize] || block == cfg.entry {
@@ -277,15 +289,7 @@ pub(super) fn find_uses<'b, 'tu>(
                 let kind = if value == UNINITIALIZED {
                     Kind::Always
                 } else {
-                    frontier(
-                        cfg,
-                        values,
-                        block,
-                        var,
-                        visited,
-                        &mut queue,
-                        &mut uses.branches,
-                    )
+                    frontier(cfg, values, block, var, &mut walk, &mut uses.branches)
                 };
                 let count = uses.branches.len() - start;
                 uses.uses.push((
@@ -318,20 +322,20 @@ fn frontier(
     values: &Values<'_>,
     block: BlockId,
     var: u32,
-    visited: &mut [u32],
-    queue: &mut ArenaVec<'_, BlockId>,
+    walk: &mut Walk<'_>,
     branches: &mut ArenaVec<'_, Branch>,
 ) -> Kind {
     let start = branches.len();
-    visited.fill(0);
-    queue.clear();
+    walk.queue.clear();
+    walk.touched.clear();
     let succ_count =
         |block: BlockId| u32::try_from(cfg.successors(block).len()).unwrap_or(u32::MAX);
-    queue.push(block);
-    visited[block as usize] = succ_count(block);
+    walk.queue.push(block);
+    walk.touched.push(block);
+    walk.visited[block as usize] = succ_count(block);
     let mut after_call = false;
     let mut after_decl = false;
-    while let Some(current) = queue.pop() {
+    while let Some(current) = walk.queue.pop() {
         if current == cfg.entry {
             after_call = true;
         }
@@ -344,8 +348,9 @@ fn frontier(
                 after_decl = true;
                 continue;
             }
-            let count = &mut visited[pred as usize];
+            let count = &mut walk.visited[pred as usize];
             if *count == 0 {
+                walk.touched.push(pred);
                 // Pruned successors count as visited.
                 *count +=
                     u32::try_from(cfg.successors(pred).iter().filter(|s| s.is_none()).count())
@@ -353,16 +358,18 @@ fn frontier(
             }
             *count += 1;
             if *count == succ_count(pred) {
-                queue.push(pred);
+                walk.queue.push(pred);
             }
         }
     }
-    for candidate in 0..cfg.blocks.len() {
-        let candidate = BlockId::try_from(candidate).unwrap_or(BlockId::MAX);
+    // Only a block the walk reached can be on the frontier; Clang scans
+    // them all, in the order they were created.
+    walk.touched.sort_unstable();
+    for &candidate in walk.touched.iter() {
         if values.get(candidate, var) != UNINITIALIZED {
             continue;
         }
-        let count = visited[candidate as usize];
+        let count = walk.visited[candidate as usize];
         if count == 0
             || count >= succ_count(candidate)
             || cfg.blocks[candidate as usize].terminator.is_none()
@@ -375,7 +382,7 @@ fn frontier(
         );
         for (output, &successor) in cfg.successors(candidate).iter().enumerate() {
             if let Some(successor) = successor
-                && visited[successor as usize] >= succ_count(successor)
+                && walk.visited[successor as usize] >= succ_count(successor)
             {
                 // A switch reports the label its condition reaches, and not
                 // an edge no label may take.
@@ -394,6 +401,9 @@ fn frontier(
                 });
             }
         }
+    }
+    for &touched in walk.touched.iter() {
+        walk.visited[touched as usize] = 0;
     }
     if after_call {
         Kind::AfterCall
