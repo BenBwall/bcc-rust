@@ -1573,6 +1573,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnusedComparison
                     | crate::configuration::DiagnosticGroup::BoolOperation
                     | crate::configuration::DiagnosticGroup::CharSubscripts
+                    | crate::configuration::DiagnosticGroup::MissingBraces
                     | crate::configuration::DiagnosticGroup::Main
                     | crate::configuration::DiagnosticGroup::MainExtension
                     | crate::configuration::DiagnosticGroup::MainReturnType
@@ -3657,6 +3658,17 @@ impl ToDiagnostic for SemanticError {
                 | ConversionEdit::RemoveOperator =>
                     diagnostic.fix_it(FixItPlace::Replace(Context::first_token_vector(value)), ""),
             };
+        }
+        if self.kind
+            == SemanticErrorKind::ValueWarning(crate::configuration::DiagnosticGroup::MissingBraces)
+        {
+            // Clang suggests the braces around the elements, the range
+            // drawn beside the caret (`InitListChecker::CheckImplicitInitList`
+            // in `SemaInit.cpp`).
+            let [elements, _] = self.highlights;
+            diagnostic = diagnostic
+                .fix_it(FixItPlace::Before(elements), "{")
+                .fix_it(FixItPlace::After(elements), "}");
         }
         if matches!(
             self.kind,

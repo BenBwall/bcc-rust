@@ -332,6 +332,7 @@ impl CompilerConfiguration {
         self.warning_options[DiagnosticGroup::Switch as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::BoolOperation as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::CharSubscripts as usize].apply_all(enabled);
+        self.warning_options[DiagnosticGroup::MissingBraces as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::ReturnType as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
         // GCC's `-Wunused`, given or refused in either order, outranks
@@ -1129,6 +1130,10 @@ diagnostic_groups! {
     /// Clang's subscript of plain `char` type, under `-Wall`; GCC's form of
     /// the group is not modeled.
     CharSubscripts => Some("char-subscripts"), Ignored, false;
+    /// Clang's array, structure or union initialized by elements whose
+    /// braces were left out, under `-Wall`; GCC's form of the group, which
+    /// its `-Wall` holds too, is not modeled.
+    MissingBraces => Some("missing-braces"), Ignored, false;
     /// `-Wformat`: a format string a call's arguments do not match. Clang
     /// reports it by default and its group holds the other format groups
     /// but `-Wformat-nonliteral`; GCC's `-Wall` holds it, and the other
@@ -1306,6 +1311,7 @@ impl DiagnosticGroup {
         Self::Switch,
         Self::BoolOperation,
         Self::CharSubscripts,
+        Self::MissingBraces,
         Self::ReturnType,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
@@ -1483,6 +1489,7 @@ impl WarningSettings {
                 | DiagnosticGroup::Switch
                 | DiagnosticGroup::BoolOperation
                 | DiagnosticGroup::CharSubscripts
+                | DiagnosticGroup::MissingBraces
                 | DiagnosticGroup::ReturnType
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction
