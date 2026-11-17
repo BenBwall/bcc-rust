@@ -645,6 +645,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .push(Work::StatementWork(W::ReturnDone(slot, s.source_vectors)));
                 if let Some(ExpressionSlot::Parsed(e)) = slot {
                     // Assignment compatibility performs the value conversion.
+                    self.return_value = Some(std::ptr::from_ref(e).addr());
                     self.work.push(Work::Expression(e));
                 } else if let Some(slot) = slot {
                     self.expression_slot(slot);
@@ -771,6 +772,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.expression_depth -= 1;
         if self.expression_depth == 0 {
+            // A scalar initializer's value and a returned value convert to
+            // their types once their full expressions are done.
+            if !self.bool_negations.is_empty() {
+                let root = Some(std::ptr::from_ref(e).addr());
+                let converted =
+                    self.functions.initializer_value == root || self.return_value == root;
+                self.flush_negations(converted.then_some(e));
+            }
             self.finish_full_expression(e, self.full_expression_start);
         }
     }

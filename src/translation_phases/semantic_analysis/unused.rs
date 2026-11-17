@@ -144,6 +144,8 @@ pub(super) struct UnusedState<'s> {
     pub(super) values: bool,
     /// Whether a warning about a comparison the types decide may be on.
     pub(super) type_limits: bool,
+    /// Whether `-Wbool-operation` may be on.
+    pub(super) bool_operation: bool,
     /// Whether a warning about a hidden declaration may be on.
     pub(super) shadow: bool,
     /// Whether `-Wempty-body` may be on.
@@ -278,6 +280,7 @@ impl<'s> UnusedState<'s> {
                 || (configuration.compiler_identity() == CompilerIdentity::Tcc
                     && configuration.diagnostic_severity(G::ReturnType).is_some()),
             sign_compare: on(&[G::SignCompare]),
+            bool_operation: on(&[G::BoolOperation]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,
             variables: ArenaVec::new_in(scratch),
@@ -1586,7 +1589,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// around it, which GCC's `build_c_cast` leaves out: the tree GCC builds
     /// for `e`, at `e`'s place.
     /// C99: §6.5.4p4, p. 81; PDF p. 93.
-    fn gcc_relocated_operand(
+    pub(super) fn gcc_relocated_operand(
         &self,
         mut e: &'tu Expression<'tu>,
     ) -> &'tu Expression<'tu> {

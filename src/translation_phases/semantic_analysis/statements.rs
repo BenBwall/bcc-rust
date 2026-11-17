@@ -231,7 +231,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | StatementWork::CaseDone(statement, lower, upper, source) =>
                 self.case_done(statement, lower, upper, source),
-            | StatementWork::ReturnDone(slot, source) => self.return_done(slot, source),
+            | StatementWork::ReturnDone(slot, source) => {
+                self.return_done(slot, source);
+                self.return_value = None;
+                if !self.bool_negations.is_empty() {
+                    self.flush_negations(None);
+                }
+            },
             | StatementWork::ComputedGotoDone(slot) => self.computed_goto_done(slot),
         }
     }

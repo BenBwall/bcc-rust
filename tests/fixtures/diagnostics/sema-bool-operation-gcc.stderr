@@ -1,0 +1,91 @@
+sema-bool-operation-gcc.c: In function 'f':
+sema-bool-operation-gcc.c:6:4: warning: increment of a boolean expression [-Wbool-operation]
+    6 |   b++; ++b; b--; --b;
+      |    ^~
+sema-bool-operation-gcc.c:6:8: warning: increment of a boolean expression [-Wbool-operation]
+    6 |   b++; ++b; b--; --b;
+      |        ^~
+sema-bool-operation-gcc.c:6:14: warning: decrement of a boolean expression [-Wbool-operation]
+    6 |   b++; ++b; b--; --b;
+      |              ^~
+sema-bool-operation-gcc.c:6:18: warning: decrement of a boolean expression [-Wbool-operation]
+    6 |   b++; ++b; b--; --b;
+      |                  ^~
+sema-bool-operation-gcc.c:7:8: warning: increment of a boolean expression [-Wbool-operation]
+    7 |   (*pb)++;
+      |        ^~
+sema-bool-operation-gcc.c:8:8: warning: decrement of a boolean expression [-Wbool-operation]
+    8 |   pb[0]--;
+      |        ^~
+sema-bool-operation-gcc.c:9:7: warning: '~' on a boolean expression [-Wbool-operation]
+    9 |   b = ~b;
+      |       ^
+sema-bool-operation-gcc.c:9:7: note: did you mean to use logical not?
+    9 |   b = ~b;
+      |       ^
+sema-bool-operation-gcc.c:10:8: warning: '~' on a boolean expression [-Wbool-operation]
+   10 |   *r = ~(x > 0);
+      |        ^
+sema-bool-operation-gcc.c:10:8: note: did you mean to use logical not?
+   10 |   *r = ~(x > 0);
+      |        ^
+sema-bool-operation-gcc.c:11:8: warning: '~' on a boolean expression [-Wbool-operation]
+   11 |   *r = ~!x;
+      |        ^
+sema-bool-operation-gcc.c:11:8: note: did you mean to use logical not?
+   11 |   *r = ~!x;
+      |        ^
+sema-bool-operation-gcc.c:12:8: warning: '~' on a boolean expression [-Wbool-operation]
+   12 |   *r = ~(x && y);
+      |        ^
+sema-bool-operation-gcc.c:12:8: note: did you mean to use logical not?
+   12 |   *r = ~(x && y);
+      |        ^
+sema-bool-operation-gcc.c:13:8: warning: '~' on a boolean expression [-Wbool-operation]
+   13 |   *r = ~(x, x > 1);
+      |        ^
+sema-bool-operation-gcc.c:13:8: note: did you mean to use logical not?
+   13 |   *r = ~(x, x > 1);
+      |        ^
+sema-bool-operation-gcc.c:13:11: warning: left-hand operand of comma expression has no effect [-Wunused-value]
+   13 |   *r = ~(x, x > 1);
+      |           ^
+sema-bool-operation-gcc.c:14:8: warning: '~' on a boolean expression [-Wbool-operation]
+   14 |   *r = ~(_Bool) x;
+      |        ^
+sema-bool-operation-gcc.c:14:8: note: did you mean to use logical not?
+   14 |   *r = ~(_Bool) x;
+      |        ^
+sema-bool-operation-gcc.c:15:8: warning: '~' on a boolean expression [-Wbool-operation]
+   15 |   *r = ~(int) (x > 1);
+      |        ^
+sema-bool-operation-gcc.c:15:8: note: did you mean to use logical not?
+   15 |   *r = ~(int) (x > 1);
+      |        ^
+sema-bool-operation-gcc.c:16:8: warning: '~' on a boolean expression [-Wbool-operation]
+   16 |   *r = ~(b = x);
+      |        ^
+sema-bool-operation-gcc.c:16:8: note: did you mean to use logical not?
+   16 |   *r = ~(b = x);
+      |        ^
+sema-bool-operation-gcc.c:17:9: warning: '~' on a boolean expression [-Wbool-operation]
+   17 |   *r = (~b);
+      |         ^
+sema-bool-operation-gcc.c:17:9: note: did you mean to use logical not?
+   17 |   *r = (~b);
+      |         ^
+sema-bool-operation-gcc.c:24:15: warning: '~' on a boolean expression [-Wbool-operation]
+   24 |   *r = sizeof ~b;
+      |               ^
+sema-bool-operation-gcc.c:24:15: note: did you mean to use logical not?
+   24 |   *r = sizeof ~b;
+      |               ^
+sema-bool-operation-gcc.c:25:3: warning: '~' on a boolean expression [-Wbool-operation]
+   25 |   ~b;
+      |   ^
+sema-bool-operation-gcc.c:25:3: note: did you mean to use logical not?
+   25 |   ~b;
+      |   ^
+sema-bool-operation-gcc.c:25:3: warning: statement with no effect [-Wunused-value]
+   25 |   ~b;
+      |   ^~

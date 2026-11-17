@@ -86,6 +86,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             expression_depth: 0,
             full_expression_start: 0,
             pending_overflows: ArenaVec::new_in(scratch),
+            bool_negations: ArenaVec::new_in(scratch),
+            return_value: None,
             initializer_checks: 0,
             bit_field_overflowed: 0,
             semantic_errors: 0,

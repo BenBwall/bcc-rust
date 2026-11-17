@@ -93,6 +93,7 @@ mod value_warnings;
 
 // Types and constant values
 mod address_truth;
+mod bool_operation;
 mod compiler_parity;
 mod constants;
 mod exceptional_constants;
@@ -749,6 +750,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.finish_initializer_value_retention(binding, initializer);
                 self.finish_aggregate_initializer_emission(binding, initializer);
+                if !self.bool_negations.is_empty() {
+                    self.flush_negations(None);
+                }
             },
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
             | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
@@ -2273,6 +2277,11 @@ struct Analyzer<'a, 'tu, 's> {
     expression_depth:        u32,
     full_expression_start:   usize,
     pending_overflows:       ArenaVec<'s, exceptional_constants::PendingOverflow<'tu>>,
+    /// The `~` operators Clang reports once what takes their values is known.
+    bool_negations:          ArenaVec<'s, bool_operation::PendingNegation<'tu>>,
+    /// The value of the return statement being analyzed, which converts to
+    /// the function's result type once it is typed.
+    return_value:            Option<usize>,
     /// Counts the initializers checked, and the count when one last
     /// reported an out-of-range value for a static bit-field under Clang's
     /// rules: Clang's evaluator stops at the first, so one initializer
