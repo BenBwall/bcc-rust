@@ -1,0 +1,28 @@
+sema-uninitialized-conditional-clang.c:5:55: warning: variable 'x' may be uninitialized when used here [-Wconditional-uninitialized]
+    5 | int loop(int n) { int x; while (n--) x = g(n); return x; }
+      |                                                       ^
+sema-uninitialized-conditional-clang.c:5:24: note: initialize the variable 'x' to silence this warning
+    5 | int loop(int n) { int x; while (n--) x = g(n); return x; }
+      |                        ^
+sema-uninitialized-conditional-clang.c:6:57: warning: variable 'x' may be uninitialized when used here [-Wconditional-uninitialized]
+    6 | int deliberate(int a) { int x = x; if (a) x = 2; return x; }
+      |                                                         ^
+sema-uninitialized-conditional-clang.c:6:25: note: variable 'x' is declared here
+    6 | int deliberate(int a) { int x = x; if (a) x = 2; return x; }
+      |                         ^
+sema-uninitialized-conditional-clang.c:7:39: warning: variable 'x' is uninitialized when used within its own initialization [-Wuninitialized]
+    7 | int deliberate_always(void) { int x = x; return g(x); }
+      |                                   ~   ^
+sema-uninitialized-conditional-clang.c:8:30: warning: variable 'x' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+    8 | int tied(int a) { int x; if (a) x = 1; return x; }
+      |                              ^
+sema-uninitialized-conditional-clang.c:8:47: note: uninitialized use occurs here
+    8 | int tied(int a) { int x; if (a) x = 1; return x; }
+      |                                               ^
+sema-uninitialized-conditional-clang.c:8:26: note: remove the 'if' if its condition is always true
+    8 | int tied(int a) { int x; if (a) x = 1; return x; }
+      |                          ^~~~~~
+sema-uninitialized-conditional-clang.c:8:24: note: initialize the variable 'x' to silence this warning
+    8 | int tied(int a) { int x; if (a) x = 1; return x; }
+      |                        ^
+4 warnings generated.

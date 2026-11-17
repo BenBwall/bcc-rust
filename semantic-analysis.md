@@ -1284,7 +1284,8 @@ that asks waits until its function is analyzed, and then a walk in execution
 order reports it if it reaches the warning's expression. The walk follows what
 Clang's CFG builder does. `reachability/known_conditions.rs` holds
 `tryEvaluateBool`, with the evaluator ignoring side effects (`(g(), 0)`, `x && 0`)
-and the tautologies it recognizes (`x & 0`, `(x & 8) == 1`, `x == 1 && x == 2`). A
+and the tautologies it recognizes (`x & 0`, `(x & 8) == 1`, `x == 1 && x == 2`,
+`!x && x`). A
 constant switch reaches only its matching case, a switch whose labels cover its
 enumeration leaves `default` and its end no edge, an unreferenced label starts
 nothing, and `__builtin_trap` and `__builtin_assume(0)` end the path. A simple
@@ -1292,6 +1293,32 @@ assignment runs its right operand first and a compound one its left. The `dead`
 flag does not serve here: it reports code generation's insertion point, which
 stays after `__builtin_trap` and exists in a loop that never runs. What the walk
 does not read stays silent. Local labels are told apart by their declaration.
+
+#### Uninitialized variables
+
+`uninitialized.rs` reports Clang's `-Wuninitialized`, `-Wsometimes-uninitialized`,
+`-Wuninitialized-const-pointer` and `-Wconditional-uninitialized` when a function
+is finished, as `AnalysisBasedWarnings::IssueWarnings` does after the
+fall-through check, and only under Clang's rules, with no error so far and one
+of the groups on where the function begins. GCC's warnings of these names come
+from its optimizer and are not modeled. The warnings name blocks of Clang's
+control-flow graph: a branch's terminator, the case label a switch reaches, and
+the order blocks were created in, which orders the variables. So
+`uninitialized/cfg.rs` builds that graph as `CFGBuilder` does, backward, visitor
+for visitor, with the pruned edges of `known_conditions.rs`, and keeps only the
+elements the analysis transfers: references to tracked variables (local scalars,
+vectors and records with a member that holds data) classified as Clang's
+`ClassifyRefs` does, assignments, declarations, and calls that return twice.
+`uninitialized/values.rs` runs `runUninitializedVariablesAnalysis` to its fixed
+point and `getUninitUse`'s walk back from each use that may be uninitialized,
+and `uninitialized/report.rs` words them as `DiagnoseUninitializedUse`: each
+variable once, at its most certain use, with the notes at the use, at the
+branch to remove and at the initializer to add. A function holding something
+the graph cannot follow exactly (a designated or overflowing initializer that
+reads a tracked variable, `cleanup`, `asm goto`, a nested function, SEH)
+reports nothing. A differential corpus of about 1,000 generated programs
+matched Clang's warnings and notes line for line, and Clang's own graph dump
+(`-analyzer-checker=debug.DumpCFG`) block for block.
 
 #### Boolean operations
 

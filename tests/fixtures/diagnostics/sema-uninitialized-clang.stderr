@@ -1,0 +1,214 @@
+sema-uninitialized-clang.c:12:34: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+   12 | int always(void) { int x; return x; }
+      |                                  ^
+sema-uninitialized-clang.c:12:25: note: initialize the variable 'x' to silence this warning
+   12 | int always(void) { int x; return x; }
+      |                         ^
+sema-uninitialized-clang.c:13:34: warning: variable 'x' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+   13 | int if_false(int a) { int x; if (a) x = 1; return x; }
+      |                                  ^
+sema-uninitialized-clang.c:13:51: note: uninitialized use occurs here
+   13 | int if_false(int a) { int x; if (a) x = 1; return x; }
+      |                                                   ^
+sema-uninitialized-clang.c:13:30: note: remove the 'if' if its condition is always true
+   13 | int if_false(int a) { int x; if (a) x = 1; return x; }
+      |                              ^~~~~~
+sema-uninitialized-clang.c:13:28: note: initialize the variable 'x' to silence this warning
+   13 | int if_false(int a) { int x; if (a) x = 1; return x; }
+      |                            ^
+sema-uninitialized-clang.c:16:7: warning: variable 'x' is used uninitialized whenever 'if' condition is true [-Wsometimes-uninitialized]
+   16 |   if (a > 2) goto out;
+      |       ^~~~~
+sema-uninitialized-clang.c:19:10: note: uninitialized use occurs here
+   19 |   return x;
+      |          ^
+sema-uninitialized-clang.c:16:3: note: remove the 'if' if its condition is always false
+   16 |   if (a > 2) goto out;
+      |   ^~~~~~~~~~~~~~~~~~~
+sema-uninitialized-clang.c:15:8: note: initialize the variable 'x' to silence this warning
+   15 |   int x;
+      |        ^
+sema-uninitialized-clang.c:21:42: warning: variable 'x' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                          ^~~~~~
+sema-uninitialized-clang.c:21:83: note: uninitialized use occurs here
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                                                                   ^
+sema-uninitialized-clang.c:21:38: note: remove the 'if' if its condition is always true
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                      ^~~~~~~~~~~
+sema-uninitialized-clang.c:21:42: warning: variable 'x' is used uninitialized whenever '&&' condition is false [-Wsometimes-uninitialized]
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                          ^
+sema-uninitialized-clang.c:21:83: note: uninitialized use occurs here
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                                                                   ^
+sema-uninitialized-clang.c:21:42: note: remove the '&&' if its condition is always true
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                          ^~~~
+sema-uninitialized-clang.c:21:33: note: initialize the variable 'x' to silence this warning
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                 ^
+sema-uninitialized-clang.c:21:61: warning: variable 'y' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                                             ^~~~~~
+sema-uninitialized-clang.c:21:87: note: uninitialized use occurs here
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                                                                       ^
+sema-uninitialized-clang.c:21:57: note: remove the 'if' if its condition is always true
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                                         ^~~~~~~~~~~
+sema-uninitialized-clang.c:21:36: note: initialize the variable 'y' to silence this warning
+   21 | int and_or(int a, int b) { int x, y; if (a && b) x = 1; if (a || b) y = 1; return x + y; }
+      |                                    ^
+sema-uninitialized-clang.c:22:40: warning: variable 'x' is used uninitialized whenever 'if' condition is true [-Wsometimes-uninitialized]
+   22 | int or_true(int a, int b) { int x; if (a || b) goto out; x = 1; out: return x; }
+      |                                        ^~~~~~
+sema-uninitialized-clang.c:22:77: note: uninitialized use occurs here
+   22 | int or_true(int a, int b) { int x; if (a || b) goto out; x = 1; out: return x; }
+      |                                                                             ^
+sema-uninitialized-clang.c:22:36: note: remove the 'if' if its condition is always false
+   22 | int or_true(int a, int b) { int x; if (a || b) goto out; x = 1; out: return x; }
+      |                                    ^~~~~~~~~~~~~~~~~~~~
+sema-uninitialized-clang.c:22:40: warning: variable 'x' is used uninitialized whenever '||' condition is true [-Wsometimes-uninitialized]
+   22 | int or_true(int a, int b) { int x; if (a || b) goto out; x = 1; out: return x; }
+      |                                        ^
+sema-uninitialized-clang.c:22:77: note: uninitialized use occurs here
+   22 | int or_true(int a, int b) { int x; if (a || b) goto out; x = 1; out: return x; }
+      |                                                                             ^
+sema-uninitialized-clang.c:22:40: note: remove the '||' if its condition is always false
+   22 | int or_true(int a, int b) { int x; if (a || b) goto out; x = 1; out: return x; }
+      |                                        ^~~~
+sema-uninitialized-clang.c:22:34: note: initialize the variable 'x' to silence this warning
+   22 | int or_true(int a, int b) { int x; if (a || b) goto out; x = 1; out: return x; }
+      |                                  ^
+sema-uninitialized-clang.c:23:33: warning: variable 'x' is used uninitialized whenever '?:' condition is false [-Wsometimes-uninitialized]
+   23 | int conditional(int a) { int x; a ? (x = 1) : 0; return x; }
+      |                                 ^
+sema-uninitialized-clang.c:23:57: note: uninitialized use occurs here
+   23 | int conditional(int a) { int x; a ? (x = 1) : 0; return x; }
+      |                                                         ^
+sema-uninitialized-clang.c:23:33: note: remove the '?:' if its condition is always true
+   23 | int conditional(int a) { int x; a ? (x = 1) : 0; return x; }
+      |                                 ^~~
+sema-uninitialized-clang.c:23:31: note: initialize the variable 'x' to silence this warning
+   23 | int conditional(int a) { int x; a ? (x = 1) : 0; return x; }
+      |                               ^
+sema-uninitialized-clang.c:26:19: warning: variable 'x' is used uninitialized whenever 'for' loop exits because its condition is false [-Wsometimes-uninitialized]
+   26 |   for (int i = 0; i < n; i++)
+      |                   ^~~~~
+sema-uninitialized-clang.c:31:10: note: uninitialized use occurs here
+   31 |   return x;
+      |          ^
+sema-uninitialized-clang.c:26:19: note: remove the condition if it is always true
+   26 |   for (int i = 0; i < n; i++)
+      |                   ^~~~~
+sema-uninitialized-clang.c:25:8: note: initialize the variable 'x' to silence this warning
+   25 |   int x;
+      |        ^
+sema-uninitialized-clang.c:40:12: warning: variable 'x' is used uninitialized whenever 'do' loop exits because its condition is false [-Wsometimes-uninitialized]
+   40 |   } while (n--);
+      |            ^~~
+sema-uninitialized-clang.c:41:10: note: uninitialized use occurs here
+   41 |   return x;
+      |          ^
+sema-uninitialized-clang.c:40:12: note: remove the condition if it is always true
+   40 |   } while (n--);
+      |            ^~~
+sema-uninitialized-clang.c:34:8: note: initialize the variable 'x' to silence this warning
+   34 |   int x;
+      |        ^
+sema-uninitialized-clang.c:43:39: warning: variable 'x' is used uninitialized whenever 'while' loop exits because its condition is false [-Wsometimes-uninitialized]
+   43 | int while_exit(int n) { int x; while (n) { if (g(n)) { x = 1; break; } n--; } return x; }
+      |                                       ^
+sema-uninitialized-clang.c:43:86: note: uninitialized use occurs here
+   43 | int while_exit(int n) { int x; while (n) { if (g(n)) { x = 1; break; } n--; } return x; }
+      |                                                                                      ^
+sema-uninitialized-clang.c:43:39: note: remove the condition if it is always true
+   43 | int while_exit(int n) { int x; while (n) { if (g(n)) { x = 1; break; } n--; } return x; }
+      |                                       ^
+sema-uninitialized-clang.c:43:30: note: initialize the variable 'x' to silence this warning
+   43 | int while_exit(int n) { int x; while (n) { if (g(n)) { x = 1; break; } n--; } return x; }
+      |                              ^
+sema-uninitialized-clang.c:47:10: warning: variable 'x' is used uninitialized whenever 'while' loop is entered [-Wsometimes-uninitialized]
+   47 |   while (n) {
+      |          ^
+sema-uninitialized-clang.c:49:12: note: uninitialized use occurs here
+   49 |     return x;
+      |            ^
+sema-uninitialized-clang.c:47:10: note: remove the condition if it is always false
+   47 |   while (n) {
+      |          ^
+sema-uninitialized-clang.c:45:8: note: initialize the variable 'x' to silence this warning
+   45 |   int x;
+      |        ^
+sema-uninitialized-clang.c:57:8: warning: variable 'x' is used uninitialized whenever switch case is taken [-Wsometimes-uninitialized]
+   57 |   case 2: break;
+      |        ^
+sema-uninitialized-clang.c:60:10: note: uninitialized use occurs here
+   60 |   return x;
+      |          ^
+sema-uninitialized-clang.c:54:8: note: initialize the variable 'x' to silence this warning
+   54 |   int x;
+      |        ^
+sema-uninitialized-clang.c:62:67: warning: variable 'x' is used uninitialized whenever switch default is taken [-Wsometimes-uninitialized]
+   62 | int no_default(int a) { int x; switch (a) { case 1: x = 1; break; default: break; } return x; }
+      |                                                                   ^~~~~~~
+sema-uninitialized-clang.c:62:92: note: uninitialized use occurs here
+   62 | int no_default(int a) { int x; switch (a) { case 1: x = 1; break; default: break; } return x; }
+      |                                                                                            ^
+sema-uninitialized-clang.c:62:30: note: initialize the variable 'x' to silence this warning
+   62 | int no_default(int a) { int x; switch (a) { case 1: x = 1; break; default: break; } return x; }
+      |                              ^
+sema-uninitialized-clang.c:63:24: warning: variable 'x' is used uninitialized whenever function 'called' is called [-Wsometimes-uninitialized]
+   63 | int called(void) { int x; for (;;) { g(x); x = 1; } }
+      |                    ~~~~^
+sema-uninitialized-clang.c:63:40: note: uninitialized use occurs here
+   63 | int called(void) { int x; for (;;) { g(x); x = 1; } }
+      |                                        ^
+sema-uninitialized-clang.c:63:25: note: initialize the variable 'x' to silence this warning
+   63 | int called(void) { int x; for (;;) { g(x); x = 1; } }
+      |                         ^
+sema-uninitialized-clang.c:66:9: warning: variable 'x' is used uninitialized whenever its declaration is reached [-Wsometimes-uninitialized]
+   66 |     int x;
+      |     ~~~~^
+sema-uninitialized-clang.c:68:7: note: uninitialized use occurs here
+   68 |     g(x);
+      |       ^
+sema-uninitialized-clang.c:66:10: note: initialize the variable 'x' to silence this warning
+   66 |     int x;
+      |          ^
+sema-uninitialized-clang.c:73:28: warning: variable 'x' is uninitialized when used within its own initialization [-Wuninitialized]
+   73 | int itself(void) { int x = x + 1; return x; }
+      |                        ~   ^
+sema-uninitialized-clang.c:75:37: warning: variable 'x' is uninitialized when used within its own initialization [-Wuninitialized]
+   75 | int deliberate_read(void) { int x = x; return x; }
+      |                                 ~   ^
+sema-uninitialized-clang.c:76:39: warning: variable 'x' is uninitialized when passed as a const pointer argument here [-Wuninitialized-const-pointer]
+   76 | int pointer(void) { int x; read_only(&x); ignore(&x); return 0; }
+      |                                       ^
+sema-uninitialized-clang.c:77:51: warning: variable 'p' is uninitialized when used here [-Wuninitialized]
+   77 | int record(void) { struct pair p; struct pair q = p; return q.a; }
+      |                                                   ^
+sema-uninitialized-clang.c:77:20: note: variable 'p' is declared here
+   77 | int record(void) { struct pair p; struct pair q = p; return q.a; }
+      |                    ^
+sema-uninitialized-clang.c:78:46: warning: variable 'c' is uninitialized when used here [-Wuninitialized]
+   78 | int enumeration(void) { enum color c; return c; }
+      |                                              ^
+sema-uninitialized-clang.c:78:25: note: variable 'c' is declared here
+   78 | int enumeration(void) { enum color c; return c; }
+      |                         ^
+sema-uninitialized-clang.c:79:56: warning: variable 'y' is uninitialized when used here [-Wuninitialized]
+   79 | int order(int a) { int x, y; g(x); if (a) g(1); return y; }
+      |                                                        ^
+sema-uninitialized-clang.c:79:28: note: initialize the variable 'y' to silence this warning
+   79 | int order(int a) { int x, y; g(x); if (a) g(1); return y; }
+      |                            ^
+sema-uninitialized-clang.c:79:32: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+   79 | int order(int a) { int x, y; g(x); if (a) g(1); return y; }
+      |                                ^
+sema-uninitialized-clang.c:79:25: note: initialize the variable 'x' to silence this warning
+   79 | int order(int a) { int x, y; g(x); if (a) g(1); return y; }
+      |                         ^
+24 warnings generated.
