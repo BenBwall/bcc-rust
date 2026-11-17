@@ -710,6 +710,23 @@ renumbered, while the links pair the two levels by source line.
 [`compare-ir-390-dark`](screenshots/pipeline-views/compare-ir-output-390-dark-after.png)
 (after only: the phone sets the levels one above the other).
 
+A review found two gaps in the comparison, both fixed. A level whose
+compilation stopped before the stage (`-O0` refusing `__rdtsc` in the
+assembly, which `-O2` folds away) left its pane empty; it now shows that
+level's stop banner and why the stage did not run, and when the selected
+level is the one that failed, the other level's output stays beside the
+explanation.
+[`failed-level-1440-light`](screenshots/pipeline-views/failed-level-1440-light-before.png)
+([after](screenshots/pipeline-views/failed-level-1440-light-after.png);
+[phone](screenshots/pipeline-views/failed-level-390-dark-after.png),
+[`-O0` selected](screenshots/pipeline-views/failed-selected-level-1440-dark-after.png)).
+And the cursor in the other level's editor changed the reading on the page
+but was never announced; it now is, after the cursor rests, as in the
+selected level's editor, and with both levels on screen every sentence names
+its level ("Line 7 of the -O2 bcc IR came from source line 3.").
+[`keyboard-beside-1440-light`](screenshots/pipeline-views/keyboard-beside-1440-light-before.png)
+([after](screenshots/pipeline-views/keyboard-beside-1440-light-after.png)).
+
 #### Text below WCAG AA
 
 In the dark theme, "In this program:", the label of the note that reads
