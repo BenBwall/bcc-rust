@@ -3507,7 +3507,10 @@ block so a masked-off lane's memory is never touched (`x86/masks.rs`).
 `lowering/elementwise.rs` applies `abs`, `min`, `max` (LLVM's `minnum` and
 `maxnum` for floating lanes), `add_sat`, `sub_sat` and `sqrt` to a scalar or to
 each lane; the non-temporal accesses are ordinary ones, and a
-nondeterministic value is zero. Every back end runs this code.
+nondeterministic value is zero. A signed saturating sum or difference
+detects overflow in the operands' own width, which `__int128` needs, and a
+`long double`'s `abs` clears the sign byte in memory as `fabsl` does, since
+x87's 80 bits have no integer of their width. Every back end runs this code.
 
 **Named instructions.** What no generic code computes exactly, or only at great
 length, is one `intrinsic` instruction (`ir/intrinsics.rs`), which names the

@@ -419,8 +419,9 @@ fn avx_target_record_results_follow_each_compiler() {
 }
 
 /// Clang's elementwise builtins work lane by lane, or on a scalar: `max`
-/// compares each lane by its signedness and selects; `add_sat` widens and
-/// clamps; `sqrt` is the named square root.
+/// compares each lane by its signedness and selects; signed `sub_sat`
+/// detects overflow in the operands' width and clamps; `sqrt` is the named
+/// square root; `long double`'s `abs` clears the sign byte in memory.
 #[test]
 fn elementwise_builtins_expand_lane_by_lane() {
     for (source, wanted) in [
@@ -437,12 +438,28 @@ fn elementwise_builtins_expand_lane_by_lane() {
         (
             "typedef short V __attribute__((vector_size(16))); V f(V a, V b) { return \
              __builtin_elementwise_sub_sat(a, b); }",
-            "sext.i32",
+            "xor.i16",
         ),
         // Every operand is loaded, not only the first.
         (
             "int f(const int *p, int b) { return __builtin_elementwise_max(p[1], b); }",
             "icmp.i32 sgt",
+        ),
+        (
+            "__int128 f(__int128 a, __int128 b) { return __builtin_elementwise_add_sat(a, b); }",
+            "iconst.i128 170141183460469231731687303715884105727",
+        ),
+        (
+            "__int128 f(__int128 a, __int128 b) { return __builtin_elementwise_sub_sat(a, b); }",
+            "iconst.i128 -170141183460469231731687303715884105728",
+        ),
+        (
+            "long double f(long double x) { return __builtin_elementwise_abs(x); }",
+            "store.i8",
+        ),
+        (
+            "long double f(void) { return __builtin_nondeterministic_value((long double)0); }",
+            "fconst.f80",
         ),
         (
             "double f(double x) { return __builtin_elementwise_sqrt(x); }",

@@ -23,7 +23,10 @@ use super::{
     x86::int_of,
 };
 use crate::{
-    builtins::BuiltinId,
+    builtins::{
+        BuiltinId,
+        FloatOperation,
+    },
     ir::{
         FloatCC,
         IntCC,
@@ -101,6 +104,13 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             });
         }
         let repr = self.repr(ty, source)?;
+        // x87 extended precision has no integer of its width to clear the
+        // sign in, so it takes `fabsl`'s path through the sign byte in
+        // memory.
+        if id == BuiltinId::ElementwiseAbs && repr.value_type() == Some(Type::F80) {
+            let value = self.floating_builtin(FloatOperation::Fabs, items, ty, source)?;
+            return Ok(Item { operand: value, ty });
+        }
         let mut values = ArenaVec::with_capacity_in(items.len(), self.scratch);
         for &item in items {
             values.push(self.value(item, source)?);
@@ -127,8 +137,15 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let ty = self.draft.value_type(x);
         Ok(match id {
             // The magnitude: an integer's negation wraps for its minimum, and
-            // a floating value's sign bit is cleared.
+            // a floating value's sign bit is cleared, in an integer of its
+            // width; a scalar x87 value went through memory (`elementwise`).
             | BuiltinId::ElementwiseAbs if float => {
+                if ty == Type::F80 {
+                    return Err(LoweringError::unsupported(
+                        super::Construct::Builtin,
+                        source,
+                    ));
+                }
                 let int = int_of(u64::from(ty.bytes()));
                 let bits = self.convert(Opcode::Bitcast, int, x);
                 let mask = self.iconst(int, (1_i128 << (ty.bits() - 1)) - 1);
@@ -163,21 +180,30 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     self.choose(first, x, y)
                 }
             },
-            // The sum or difference clamped to the type's range.
+            // The sum or difference clamped to the type's range. A signed
+            // result wraps in the operands' width, which `__int128` has no
+            // wider integer beyond: it overflowed when its sign differs from
+            // that of both addends, or for a difference from the minuend's
+            // while the operands' signs differ, and then saturates toward
+            // the sign of `x`.
             | BuiltinId::ElementwiseAddSat | BuiltinId::ElementwiseSubSat => {
                 let y = values[1];
                 let add = id == BuiltinId::ElementwiseAddSat;
-                let bits = ty.bits();
                 if signed {
-                    let wide = int_of(u64::from(ty.bytes()) * 2);
-                    let (x, y) = (self.extend(x, true, wide), self.extend(y, true, wide));
                     let total = self.bin(if add { Opcode::Iadd } else { Opcode::Isub }, x, y);
-                    self.saturate(
-                        total,
-                        -(1_i128 << (bits - 1)),
-                        (1_i128 << (bits - 1)) - 1,
-                        ty,
-                    )
+                    let changed = self.bin(Opcode::Xor, x, total);
+                    let other = if add {
+                        self.bin(Opcode::Xor, y, total)
+                    } else {
+                        self.bin(Opcode::Xor, x, y)
+                    };
+                    let overflow = self.bin(Opcode::And, changed, other);
+                    let overflowed = self.sign_set(overflow);
+                    let max = self.iconst(ty, i128::MAX >> (128 - ty.bits()));
+                    let min = self.iconst(ty, !(i128::MAX >> (128 - ty.bits())));
+                    let negative = self.sign_set(x);
+                    let bound = self.choose(negative, min, max);
+                    self.choose(overflowed, bound, total)
                 } else if add {
                     let sum = self.bin(Opcode::Iadd, x, y);
                     let wrapped = self.icmp(IntCC::Ult, sum, x);
@@ -207,7 +233,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     .expect("a square root has a result")
             },
             | _ => match ty {
-                | Type::F32 | Type::F64 => self.fconst(ty, 0),
+                // Zero bits are positive zero in every floating format.
+                | _ if ty.is_float() => self.fconst(ty, 0),
                 | Type::Ptr => self.nullary(Opcode::Null),
                 | _ => self.iconst(ty, 0),
             },
