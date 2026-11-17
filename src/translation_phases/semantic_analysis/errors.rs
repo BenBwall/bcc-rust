@@ -2991,14 +2991,14 @@ impl SemanticErrorKind {
             | Self::TargetAttribute(group)
             | Self::Format(group, _)
             | Self::SwitchCases(group)
-            | Self::ReturnFlow(group) => Some(group),
+            | Self::ReturnFlow(group)
+            | Self::Nonnull(group, _) => Some(group),
             | Self::UndefinedInternal(group) => group,
             | Self::Unused(rule) => Some(rule.group()),
             | Self::BoolOperation(_) => Some(G::BoolOperation),
             | Self::SignCompare => Some(G::SignCompare),
             | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::DeprecatedNonPrototype => Some(G::DeprecatedNonPrototype),
-            | Self::Nonnull(group, _) => Some(group),
             | Self::CallArgumentCount => Some(G::CallArgumentCount),
             | Self::MissingFieldInitializer => Some(G::MissingFieldInitializers),
             | Self::UnusedStaticFunction => Some(G::UnusedFunction),

@@ -172,7 +172,7 @@ fn atomic_bool_accepts_static_address_initializers() {
         CStandard::C11,
         &[SemanticErrorKind::Nonnull(
             crate::configuration::DiagnosticGroup::PointerBoolConversion,
-            crate::translation_phases::semantic_analysis::always_nonnull::NonnullNote::Plain,
+            always_nonnull::NonnullNote::Plain,
         )],
     );
 }

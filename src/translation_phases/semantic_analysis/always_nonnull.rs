@@ -14,8 +14,8 @@
 //! nonnull, so Clang warns at `p`, underlines `0`, and notes the attribute.
 //! C99: §6.3.2.3p3, p. 47; PDF p. 59; §6.5.9p6, p. 87; PDF p. 99;
 //! §6.3.1.2p1, p. 43; PDF p. 55; §5.1.1.3p1, p. 11; PDF p. 23.
-//! GNU extension: GCC manual, "Common Function Attributes", nonnull and
-//! returns_nonnull.
+//! GNU extension: GCC manual, "Common Function Attributes", `nonnull` and
+//! `returns_nonnull`.
 
 use super::{
     Analyzer,
@@ -29,7 +29,10 @@ use super::{
     },
 };
 use crate::{
-    configuration::DiagnosticGroup,
+    configuration::{
+        DiagnosticGroup,
+        RuleSet,
+    },
     diagnostics::format_in,
     translation_phases::{
         Context,
@@ -103,11 +106,11 @@ impl NonnullNote {
 /// A comparison of a pointer with a null pointer constant, as
 /// [`Analyzer::always_nonnull`] needs it.
 #[derive(Clone, Copy)]
-pub(super) struct NullComparison<'tu> {
+struct NullComparison<'tu> {
     /// `==` rather than `!=`.
-    pub(super) equal: bool,
+    equal: bool,
     /// The null pointer constant.
-    pub(super) null:  ExpressionInfo<'tu>,
+    null:  ExpressionInfo<'tu>,
 }
 
 /// What Clang finds `e` is, when it can never be null.
@@ -124,6 +127,41 @@ enum Nonnull {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Clang's check of an equality comparison `==` (`equal`) or `!=` of a
+    /// pointer with a null pointer constant, which wants one operand null
+    /// and the other not (`CheckCompareOperands` in `SemaExpr.cpp`).
+    /// C99: §6.5.9p2, p. 86; PDF p. 98.
+    pub(super) fn null_comparison(
+        &mut self,
+        equal: bool,
+        left: ExpressionInfo<'tu>,
+        right: ExpressionInfo<'tu>,
+    ) {
+        if self.context.configuration.compiler_identity().rules() != RuleSet::Clang {
+            return;
+        }
+        let (pointer, null) = match (
+            self.null_pointer_constant(left),
+            self.null_pointer_constant(right),
+        ) {
+            | (false, true) => (left, right),
+            | (true, false) => (right, left),
+            | _ => return,
+        };
+        self.always_nonnull(
+            pointer.expression,
+            Some(NullComparison { equal, null }),
+            null.expression.source_vectors,
+        );
+    }
+
+    /// Clang's check of the pointer `e` converted to `_Bool`, at the token
+    /// `site` the conversion takes its location from.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
+    pub(super) fn bool_conversion_nonnull(&mut self, e: &'tu Expression<'tu>, site: SourceVectors) {
+        self.always_nonnull(e, None, site);
+    }
+
     /// Clang's `DiagnoseAlwaysNonNullPointer` for the pointer operand `e` of
     /// a comparison with a null pointer constant, or of a conversion to
     /// `_Bool` when `comparison` is `None`. `range` is what Clang underlines
@@ -132,7 +170,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// nothing, nor when `e` is a macro's argument and the macro's body
     /// writes `range`.
     /// C99: §6.3.2.3p3, p. 47; PDF p. 59; §6.5.9p6, p. 87; PDF p. 99.
-    pub(super) fn always_nonnull(
+    fn always_nonnull(
         &mut self,
         e: &'tu Expression<'tu>,
         comparison: Option<NullComparison<'tu>>,
@@ -258,10 +296,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .expression_info(Self::without_parentheses(function_expression))
                 .binding
             && self.bindings[callee].kind == BindingKind::Function
+            && let Some(site) = self.returns_nonnull_site(callee)
         {
-            if let Some(site) = self.returns_nonnull_site(callee) {
-                return Some((Nonnull::Assumed { call: true }, Some(site)));
-            }
+            return Some((Nonnull::Assumed { call: true }, Some(site)));
         }
         let info = self.expression_info(e);
         match e.kind {

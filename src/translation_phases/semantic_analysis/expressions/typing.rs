@@ -46,7 +46,6 @@ use crate::{
             Linkage,
             SemanticErrorKind,
             Work,
-            always_nonnull::NullComparison,
             compiler_wording::VoidUse,
             integer::Integer,
             scopes::Namespace,
@@ -94,12 +93,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let operand = self.resolve_function_value(operand, None);
             // Anything may write a parameter through its address.
             self.note_parameter_write(operand.binding);
-            if let ExpressionType::Unary {
-                operand_expression, ..
-            } = e.kind
-            {
-                self.note_nonnull_change(operand_expression);
-            }
+            self.note_nonnull_change(e);
             // A lane of a vector rvalue, or for Clang of an atomic vector,
             // is a value ("cannot take the address of an rvalue").
             if operand.vector_element && operand.category == ValueCategory::Rvalue {
@@ -462,13 +456,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
             }
             self.note_parameter_write(left.binding);
-            if op == B::Assignment
-                && let ExpressionType::Binary {
-                    left_expression, ..
-                } = e.kind
-            {
-                self.note_nonnull_change(left_expression);
-            }
+            self.note_nonnull_change(e);
             if let Some(operation) = compound {
                 // This is one bounded delegation, never a traversal of syntax.
                 if matches!(operation, B::Addition | B::Subtraction) {
@@ -737,29 +725,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             left
                         };
                         self.null_conversion_warning(null, true, null.expression.source_vectors);
-                        // Clang's check wants one operand null and the other
-                        // not (`CheckCompareOperands`).
-                        let (pointer, null) = match (
-                            self.null_pointer_constant(left),
-                            self.null_pointer_constant(right),
-                        ) {
-                            | (false, true) => (Some(left), right),
-                            | (true, false) => (Some(right), left),
-                            | _ => (None, null),
-                        };
-                        if self.context.configuration.compiler_identity().rules()
-                            == crate::configuration::RuleSet::Clang
-                            && let Some(pointer) = pointer
-                        {
-                            self.always_nonnull(
-                                pointer.expression,
-                                Some(NullComparison {
-                                    equal: op == B::Equal,
-                                    null,
-                                }),
-                                null.expression.source_vectors,
-                            );
-                        }
+                        self.null_comparison(op == B::Equal, left, right);
                         true
                     } else if let (Some(lp), Some(rp)) =
                         (self.pointer_target(lt), self.pointer_target(rt))

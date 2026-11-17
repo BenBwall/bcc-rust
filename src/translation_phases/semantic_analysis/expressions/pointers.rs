@@ -531,7 +531,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else if self.context.configuration.compiler_identity().rules()
             == crate::configuration::RuleSet::Clang
         {
-            self.always_nonnull(info.expression, None, site);
+            self.bool_conversion_nonnull(info.expression, site);
         } else {
             self.gcc_address_warning(info.expression, Some(site));
         }

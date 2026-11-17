@@ -47,6 +47,7 @@ use crate::{
                 BinaryOperator as B,
                 Expression,
                 ExpressionType as E,
+                UnaryOperator as U,
             },
         },
     },
@@ -288,13 +289,26 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             .and_then(|attributes| attributes.returns_nonnull)
     }
 
-    /// Records a parameter named as written, without parentheses, as the
-    /// operand of `&` or the left operand of `=`: Clang no longer assumes
-    /// it nonnull (`RecordModifiableNonNullParam` in `SemaExpr.cpp`).
+    /// Records the parameter that `e`, an `&` or an assignment, names as
+    /// its operand or left operand, as written, without parentheses: Clang
+    /// no longer assumes it nonnull (`RecordModifiableNonNullParam` in
+    /// `SemaExpr.cpp`). A compound assignment does not count.
     pub(in crate::translation_phases::semantic_analysis) fn note_nonnull_change(
         &mut self,
-        operand: &'tu Expression<'tu>,
+        e: &'tu Expression<'tu>,
     ) {
+        let (E::Unary {
+            operator: U::AddressOf,
+            operand_expression: operand,
+        }
+        | E::Binary {
+            operator: B::Assignment,
+            left_expression: operand,
+            ..
+        }) = e.kind
+        else {
+            return;
+        };
         if let E::Identifier(_) = operand.kind
             && let Some(binding) = self.expression_info(operand).binding
             && self.bindings[binding].kind == BindingKind::Parameter
