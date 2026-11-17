@@ -1232,7 +1232,10 @@ translation unit reports file-scope objects and functions. With every group that
 needs them off no uses are recorded. `-Wunused-local-typedefs` reports a
 typedef a block declares and nothing names. `const`/`pure` calls under
 `-Wunused-value`, `-Wunused-result`, and a value in a statement expression's last
-statement, which Clang reads, report nothing.
+statement, which Clang reads, report nothing; a discarded statement expression
+takes that statement's warning under Clang's rules (`isUnusedResultAWarning`),
+which Clang drops when a macro's body or argument placed it, unless parentheses
+or `__extension__` surround the statement expression (`DiagnoseUnused`).
 
 Clang reports these in source order. The GCC identity reports them when GCC
 does, and a semantic diagnostic's `ReportOrder` places it there for the
@@ -1289,6 +1292,30 @@ assignment runs its right operand first and a compound one its left. The `dead`
 flag does not serve here: it reports code generation's insertion point, which
 stays after `__builtin_trap` and exists in a loop that never runs. What the walk
 does not read stays silent. Local labels are told apart by their declaration.
+
+#### Boolean operations
+
+`bool_operation.rs` implements `-Wbool-operation`, which `-Wall` holds in both
+compilers. GCC reports `++` and `--` of a `_Bool` and `~` of a `_Bool` or of a
+truth value as it builds the operator, with `did you mean to use logical not?`
+after the `~`; whether the operand is a truth value goes by the tree GCC builds
+for it (`parentheses/truth_operand.rs`), past its commas' left operands, so a
+cast to `int` of a comparison counts and a comparison GCC folds does not. Clang
+reports only `~`, of an operand `Expr::isKnownToHaveBooleanValue` finds 0 or 1,
+as its walk of the finished full expression meets it (`AnalyzeImplicitConversions`):
+with the range of the operand there, parentheses included, in the words that it
+always evaluates to true when that operand converts to `_Bool`, and never in an
+operand of `sizeof` or a `_Generic`'s controlling operand. The walk steps through
+parentheses, `__extension__` and the operand a `_Generic` or
+`__builtin_choose_expr` selects (`IgnoreParensSingleStep`), so the selection is
+the range of a `~` its selected operand holds, and a `~` in another operand is
+never reported: the operand `__builtin_choose_expr` does not select records
+none, an unselected association's `~` is dropped with the association's other
+held warnings, and one the association itself holds when the selection is done.
+A `~` waits as a `PendingNegation` until what takes its value is known: an
+assignment, argument, initializer or return conversion reports it, and otherwise
+the expression that took it, or the end of its full expression. A statement
+expression's statements wait apart from the expression around it.
 
 #### Comparisons and initializers under `-Wextra`
 

@@ -65,6 +65,7 @@ use crate::{
             syntax::{
                 BinaryOperator as B,
                 Expression,
+                ExpressionSlot,
                 ExpressionType as E,
                 Identifier,
                 Statement,
@@ -143,6 +144,8 @@ pub(super) struct UnusedState<'s> {
     pub(super) values: bool,
     /// Whether a warning about a comparison the types decide may be on.
     pub(super) type_limits: bool,
+    /// Whether `-Wbool-operation` may be on.
+    pub(super) bool_operation: bool,
     /// Whether a warning about a hidden declaration may be on.
     pub(super) shadow: bool,
     /// Whether `-Wempty-body` may be on.
@@ -277,6 +280,7 @@ impl<'s> UnusedState<'s> {
                 || (configuration.compiler_identity() == CompilerIdentity::Tcc
                     && configuration.diagnostic_severity(G::ReturnType).is_some()),
             sign_compare: on(&[G::SignCompare]),
+            bool_operation: on(&[G::BoolOperation]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,
             variables: ArenaVec::new_in(scratch),
@@ -1585,7 +1589,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// around it, which GCC's `build_c_cast` leaves out: the tree GCC builds
     /// for `e`, at `e`'s place.
     /// C99: §6.5.4p4, p. 81; PDF p. 93.
-    fn gcc_relocated_operand(&self, mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+    pub(super) fn gcc_relocated_operand(
+        &self,
+        mut e: &'tu Expression<'tu>,
+    ) -> &'tu Expression<'tu> {
         loop {
             e = Self::without_parentheses(e);
             match e.kind {
@@ -1790,8 +1797,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's `DiagnoseUnusedExprResult`, which says nothing about an
-    /// expression a macro's body wrote and, comparisons aside, which report at
-    /// once, about one it does not reach (`DiagIfReachable`).
+    /// expression a macro's body wrote, or about a statement expression whose
+    /// value a macro gave ([`Self::clang_macro_statement_expression`]), and,
+    /// comparisons aside, which report at once, about one it does not reach
+    /// (`DiagIfReachable`).
     fn clang_discarded_value(&mut self, e: &'tu Expression<'tu>, inhibited: bool) {
         let comparison = match Self::without_parentheses(e).kind {
             | E::Binary {
@@ -1814,6 +1823,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && !self
                 .context
                 .written_by_macro_body(Self::operator_site(Self::without_parentheses(e)))
+            && !self.clang_macro_statement_expression(e, site)
         {
             if let Some(comparison) = comparison {
                 self.unused_rule(comparison, site, None);
@@ -1827,6 +1837,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             }
         }
+    }
+
+    /// Whether `e` is a statement expression, unparenthesized, whose warning
+    /// `site` a macro's expansion placed, from its body or an argument:
+    /// Clang's `DiagnoseUnused` (`SemaStmt.cpp`) takes it for a function-like
+    /// macro used as a statement (`isa<StmtExpr>(E) && Loc.isMacroID()`),
+    /// where `Loc` is the place `isUnusedResultAWarning` takes from the
+    /// value statement. GNU extension: GCC manual, "Statement Exprs".
+    fn clang_macro_statement_expression(
+        &self,
+        e: &'tu Expression<'tu>,
+        site: SourceVectors,
+    ) -> bool {
+        matches!(e.kind, E::StatementExpression(_))
+            && site.length() != 0
+            && self.context.produced_by_macro_expansion(site)
     }
 
     /// Clang's `Expr::isUnusedResultAWarning`: the rule and place of the
@@ -1884,6 +1910,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::Conditional(c) => {
                 _ = self.clang_unused_result(c.then_expression)?;
                 self.clang_unused_result(c.else_expression)
+            },
+            // The value of a statement expression is its last statement's:
+            // of an expression statement, that expression's warning, and
+            // otherwise one at its `(`.
+            // GNU extension: GCC manual, "Statement Exprs".
+            | E::StatementExpression(block) => match self.value_statement_of(block) {
+                | Some(Statement {
+                    kind: StatementType::Expression(ExpressionSlot::Parsed(value)),
+                    ..
+                }) => self.clang_unused_result(value),
+                | _ => Some((
+                    UnusedRule::ClangResult,
+                    Context::first_token_vector(e.source_vectors),
+                    e,
+                )),
             },
             | E::Cast { .. } => {
                 let ty = self.expression_info(e).ty;
@@ -1958,10 +1999,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if self.context.configuration.compiler_identity().rules() == RuleSet::Clang {
             if !self.evaluation_inhibited()
-                && let Some((_, _, anchor)) = self.clang_unused_result(left)
+                && let Some((_, site, anchor)) = self.clang_unused_result(left)
                 && !self
                     .context
                     .written_by_macro_body(Self::operator_site(Self::without_parentheses(left)))
+                && !self.clang_macro_statement_expression(left, site)
             {
                 let rule = UnusedRule::ClangCommaLeft;
                 self.warn_if_reachable(

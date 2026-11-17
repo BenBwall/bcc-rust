@@ -94,6 +94,7 @@ mod value_warnings;
 
 // Types and constant values
 mod address_truth;
+mod bool_operation;
 mod compiler_parity;
 mod constants;
 mod exceptional_constants;
@@ -681,9 +682,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         self.inhibited_evaluations -= 1;
                     }
                 },
-            | Work::RestoreFullExpression(depth, start) => {
+            | Work::RestoreFullExpression(depth, start, negations) => {
                 self.expression_depth = depth;
                 self.full_expression_start = start;
+                self.negations_start = negations;
             },
             | Work::ValueExpression(e) => {
                 let info = self.expression_info(e);
@@ -750,6 +752,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.finish_initializer_value_retention(binding, initializer);
                 self.finish_aggregate_initializer_emission(binding, initializer);
+                if !self.bool_negations.is_empty() {
+                    self.flush_negations(None, 0);
+                }
             },
             | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
             | Work::RestoreInitializerValue(value) => self.functions.initializer_value = value,
@@ -2057,7 +2062,7 @@ enum Work<'tu, 's> {
     ),
     /// Restores the full expression around a statement expression or a
     /// compound literal, whose parts are full expressions of their own.
-    RestoreFullExpression(u32, usize),
+    RestoreFullExpression(u32, usize, usize),
     InitializeDeclaration(Declarator<'tu>, &'tu Initializer<'tu>),
     /// One init-declarator of a C23 `auto` or GNU `__auto_type`
     /// declaration, by index: its form is checked and its initializer
@@ -2279,6 +2284,13 @@ struct Analyzer<'a, 'tu, 's> {
     expression_depth:        u32,
     full_expression_start:   usize,
     pending_overflows:       ArenaVec<'s, exceptional_constants::PendingOverflow<'tu>>,
+    /// The `~` operators Clang reports once what takes their values is
+    /// known, and where those of the current full expression begin.
+    bool_negations:          ArenaVec<'s, bool_operation::PendingNegation<'tu>>,
+    negations_start:         usize,
+    /// The value of the return statement being analyzed, which converts to
+    /// the function's result type once it is typed.
+    return_value:            Option<usize>,
     /// Counts the initializers checked, and the count when one last
     /// reported an out-of-range value for a static bit-field under Clang's
     /// rules: Clang's evaluator stops at the first, so one initializer
