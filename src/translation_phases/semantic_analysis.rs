@@ -2244,6 +2244,9 @@ struct Analyzer<'a, 'tu, 's> {
     /// The operands Clang underlines beside the caret of what is reported
     /// now; see [`Self::with_highlights`].
     highlights:              [SourceVectors; 2],
+    /// The range GCC underlines around the caret of what is reported now;
+    /// see [`Self::with_gcc_extent`].
+    gcc_extent:              SourceVectors,
     /// Where a diagnostic reported now falls among the others; see
     /// [`Self::with_report_order`].
     report_order:            ReportOrder,

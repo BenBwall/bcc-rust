@@ -607,6 +607,57 @@ impl Context<'_> {
         )
     }
 
+    /// The places GCC draws for the range `source` beside a caret at the
+    /// first token of `caret`: its first and last tokens, which the renderer
+    /// draws as one span, or none when GCC would draw only the caret. GCC's
+    /// `layout::maybe_add_location_range` keeps a range whose start and
+    /// finish are spelled in the caret's file, and `compatible_locations_p`
+    /// one whose ends each come from the caret's macro expansion and from
+    /// its replacement list or its arguments as the caret does, or from no
+    /// expansion when the caret does not. The tokens between the ends do not
+    /// count, so a macro the range holds draws nothing at its definition.
+    /// Only the outermost invocation is recorded, so tokens of two macros
+    /// invoked within one argument count as one expansion.
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
+    pub(crate) fn gcc_range_vectors<'a>(
+        &'a self,
+        source: SourceVectors,
+        caret: SourceVectors,
+        scratch: &'a Bump,
+    ) -> &'a [SourceVector] {
+        let vectors = self.get_source_vectors(source);
+        let (Some(start), Some(finish), Some(caret_vector)) = (
+            vectors.first(),
+            vectors.last(),
+            self.get_source_vectors(caret).first(),
+        ) else {
+            return &[];
+        };
+        let caret = Self::first_token_vector(caret);
+        let file = |vector: &SourceVector| self.physical_source_file(vector.source_file_index);
+        if !self.gcc_compatible(Self::first_token_vector(source), caret)
+            || !self.gcc_compatible(Self::last_source_vector(source), caret)
+            || file(start) != file(caret_vector)
+            || file(finish) != file(caret_vector)
+            || finish.end() < start.index as usize
+        {
+            return &[];
+        }
+        scratch.alloc_slice_fill_iter([start.clone(), finish.clone()])
+    }
+
+    /// Whether GCC's `compatible_locations_p` holds of the tokens `a` and
+    /// `b`: spelled outside any macro expansion both, or produced by one
+    /// invocation, both by its replacement list or both by its arguments.
+    fn gcc_compatible(&self, a: SourceVectors, b: SourceVectors) -> bool {
+        match (self.invocation_span(a), self.invocation_span(b)) {
+            | (None, None) => true,
+            | (Some(left), Some(right)) =>
+                left == right && self.written_by_macro_body(a) == self.written_by_macro_body(b),
+            | _ => false,
+        }
+    }
+
     /// The outermost invocation that produced the first token of `source`
     /// from no argument: a token its replacement list wrote, or one that
     /// `##` formed, which Clang places at the `##` expression of the list

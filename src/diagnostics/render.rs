@@ -32,6 +32,7 @@ use crate::{
         Context,
         ErrorSeverity,
         SourceVector,
+        SourceVectors,
     },
     util::{
         bump::{
@@ -176,14 +177,15 @@ impl Renderer {
         // GCC and Clang share one snippet: a gutter five wide, nothing around
         // the source line and its caret, and what relates to the message in
         // `note:` lines of its own.
-        // GCC's format draws only the primary range; Clang's also the ranges
-        // it underlines with `~`, on the caret's lines (Clang's
-        // `TextDiagnostic::emitCaret`); the others draw every labelled one.
+        // GCC's and Clang's formats draw the primary range and the ranges
+        // they underline with `~` beside the caret, on the caret's lines
+        // (Clang's `TextDiagnostic::emitCaret`; for GCC, the range around
+        // its caret); the others draw every labelled one.
         let drawn = |label: &&Label<'_>| {
             presentation.caret
                 && (label.primary
                     || if compiler_snippet {
-                        format == DiagnosticFormat::Clang && label.message.is_none()
+                        label.message.is_none()
                     } else {
                         label.message.is_some()
                     })
@@ -199,13 +201,24 @@ impl Renderer {
         // has the same range, and in Clang's when it has no range at all,
         // only a place (GCC's `diagnostic_context::maybe_show_locus`, Clang's
         // `TextDiagnostic::emitSnippetAndCaret`). A token a macro wrote has
-        // a place of its own in each expansion.
+        // a place of its own in each expansion. GCC's range takes in the
+        // span it draws around its caret.
+        let around = diagnostic
+            .labels
+            .iter()
+            .filter(|_| format == DiagnosticFormat::Gcc)
+            .find(|label| label.is_highlight())
+            .and_then(|label| {
+                let vectors = label.source.vectors(context);
+                Some((vectors.first()?.index, vectors.last()?.end()))
+            });
         let place = location.filter(|_| expansion.is_none()).map(|vector| {
             (
                 vector.source_file_index,
                 vector.index,
                 vector.length,
                 segment,
+                around,
             )
         });
         let repeated = compiler_snippet
@@ -214,6 +227,16 @@ impl Renderer {
             && (format == DiagnosticFormat::Gcc
                 || diagnostic.point && !diagnostic.labels.iter().any(Label::is_highlight));
         let mut marks = ArenaVec::new_in(scratch);
+        // GCC's caret is a point beside the range it draws around it.
+        let mut gcc_point =
+            format == DiagnosticFormat::Gcc && diagnostic.labels.iter().any(Label::is_highlight);
+        let caret = diagnostic.reading.or_else(|| {
+            diagnostic
+                .labels
+                .iter()
+                .find(|label| label.primary)
+                .and_then(|label| label.source.range())
+        });
         for label in diagnostic
             .labels
             .iter()
@@ -222,13 +245,21 @@ impl Renderer {
             .chain(spelled.as_ref().filter(|_| presentation.caret))
             .filter(|_| !repeated)
         {
-            Self::push_label_marks(label, context, &mut marks, scratch);
+            if format == DiagnosticFormat::Gcc {
+                let first = marks.len();
+                let label = Self::gcc_label(label, caret, &mut gcc_point, context, scratch);
+                Self::push_label_marks(label, context, &mut marks, scratch);
+                Self::span_lines(&mut marks, first, context);
+            } else {
+                Self::push_label_marks(label, context, &mut marks, scratch);
+            }
         }
         // A diagnostic that names ranges of its own, or none, gets Clang's
         // caret alone at its place, with no `~` over the token there unless
         // a range covers it: `int *name = 1;` -> `^      ~`.
-        let point = format == DiagnosticFormat::Clang
-            && (diagnostic.point || diagnostic.labels.iter().any(Label::is_highlight));
+        let point = gcc_point
+            || format == DiagnosticFormat::Clang
+                && (diagnostic.point || diagnostic.labels.iter().any(Label::is_highlight));
         if point {
             Self::point_caret(&mut marks, context);
         }
@@ -670,6 +701,42 @@ impl Renderer {
         );
     }
 
+    /// What GCC draws of `label`, a range of a diagnostic whose caret is at
+    /// the start of `caret`: the whole span from its start to its finish,
+    /// where GCC keeps it ([`Context::gcc_range_vectors`]), and otherwise
+    /// nothing, or for the primary range, which holds the caret, the caret
+    /// alone, which sets `point`.
+    /// GCC: `layout::maybe_add_location_range` in `diagnostic-show-locus.cc`.
+    fn gcc_label<'a>(
+        label: &'a Label<'a>,
+        caret: Option<SourceVectors>,
+        point: &mut bool,
+        context: &'a Context<'_>,
+        scratch: &'a Bump,
+    ) -> &'a Label<'a> {
+        let LabelSource::Range(source) = label.source else {
+            return label;
+        };
+        let caret = if label.primary {
+            source
+        } else {
+            caret.unwrap_or(source)
+        };
+        let mut vectors = context.gcc_range_vectors(source, caret, scratch);
+        if vectors.is_empty() && label.primary {
+            vectors = context
+                .get_source_vectors(source)
+                .get(..1)
+                .unwrap_or_default();
+            *point = true;
+        }
+        scratch.alloc(Label {
+            source:  LabelSource::Segments(vectors),
+            message: label.message,
+            primary: label.primary,
+        })
+    }
+
     /// Adds the marks of `label`: one on each physical line it covers, the
     /// first holding its message.
     fn push_label_marks<'a>(
@@ -729,7 +796,8 @@ impl Renderer {
     /// over several lines (`prepareAndFilterRanges`, `highlightRange` in
     /// `TextDiagnostic.cpp`): its first line to the line's end, the lines
     /// between whole, its last line from the line's start, each without the
-    /// blanks at either end of the line.
+    /// blanks at either end of the line. GCC draws a range so too
+    /// (`layout::get_state_at_point`).
     fn span_lines(marks: &mut ArenaVec<'_, Mark<'_>>, first: usize, context: &Context<'_>) {
         let Some(file) = marks.get(first).map(|mark| mark.file) else {
             return;
@@ -761,6 +829,9 @@ impl Renderer {
             .map(|mark| mark.end)
             .max()
             .unwrap_or_default();
+        // A primary range keeps its caret, and its label, on its first line.
+        let primary = range[0].primary;
+        let mut label = range[0].label;
         marks.truncate(first);
         for line in top..=bottom {
             let (_, line_start, line_end) = Self::locate(starts, text, starts[line - 1]);
@@ -775,8 +846,8 @@ impl Renderer {
                     line,
                     start: from,
                     end: to,
-                    primary: false,
-                    label: None,
+                    primary: primary && line == top,
+                    label: label.take(),
                     order: marks.len(),
                 });
             }
