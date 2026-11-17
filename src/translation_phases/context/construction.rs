@@ -77,6 +77,7 @@ impl<'tu> Context<'tu> {
             literal_values: DedupArena::new(tu),
             expansion_sites: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
             expansion_starts: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
+            paste_sites: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
             ignore_tokenizer_errors: false,
             skipping_group: false,
             pending_errors: ArenaQueue::new_in(tu),

@@ -140,6 +140,10 @@ pub(crate) struct ReplayedToken<'a> {
 enum ReplaySources<'a> {
     Single(SourceVector),
     Multiple(&'a [SourceVector]),
+    /// A token `##` formed: its segments, followed by where its `##` is
+    /// written ([`Context::record_paste_site`]), which reading it records
+    /// again.
+    Pasted(&'a [SourceVector]),
 }
 
 /// A token read from a replay without recording its provenance. It names
@@ -275,7 +279,7 @@ impl<'a> ReplayCursor<'a> {
                 kind:           token.kind,
                 contents:       token.contents,
                 spacing:        token.spacing,
-                source_vectors: ReplaySources::new(arena, token.source_vectors.as_slice()),
+                source_vectors: token.source_vectors.copy_into(arena),
             });
         }
         ReplayCursor {
@@ -329,24 +333,33 @@ fn position_index(index: usize) -> u32 {
 impl<'a> ReplayedToken<'a> {
     /// `token`, with its provenance copied into `arena`.
     fn new(context: &Context<'_>, arena: &'a Bump, token: &PreprocessorToken) -> Self {
+        let sources = context.get_source_vectors(token.source_vectors);
         Self {
             kind:           token.kind,
             contents:       token.contents,
             spacing:        token.spacing,
-            source_vectors: ReplaySources::new(
-                arena,
-                context.get_source_vectors(token.source_vectors),
-            ),
+            source_vectors: match context.paste_site(token.source_vectors) {
+                | Some(site) => ReplaySources::Pasted(
+                    arena.alloc_slice_fill_iter(sources.iter().chain([site]).cloned()),
+                ),
+                | None => ReplaySources::new(arena, sources),
+            },
         }
     }
 
     /// The token, with its provenance pushed again.
     fn read(&self, context: &mut Context<'_>) -> PreprocessorToken {
+        let source_vectors = context.push_source_vectors(self.source_vectors.as_slice());
+        if let ReplaySources::Pasted(sources) = self.source_vectors
+            && let Some(site) = sources.last()
+        {
+            context.record_paste_site(source_vectors, site.clone());
+        }
         PreprocessorToken {
-            kind:           self.kind,
-            contents:       self.contents,
-            spacing:        self.spacing,
-            source_vectors: context.push_source_vectors(self.source_vectors.as_slice()),
+            kind: self.kind,
+            contents: self.contents,
+            spacing: self.spacing,
+            source_vectors,
         }
     }
 }
@@ -359,10 +372,20 @@ impl<'a> ReplaySources<'a> {
         }
     }
 
+    /// The same sources, copied into `arena`.
+    fn copy_into<'b>(&self, arena: &'b Bump) -> ReplaySources<'b> {
+        match self {
+            | Self::Pasted(sources) =>
+                ReplaySources::Pasted(arena.alloc_slice_fill_iter(sources.iter().cloned())),
+            | _ => ReplaySources::new(arena, self.as_slice()),
+        }
+    }
+
     fn as_slice(&self) -> &[SourceVector] {
         match self {
             | Self::Single(source) => std::slice::from_ref(source),
             | Self::Multiple(sources) => sources,
+            | Self::Pasted(sources) => sources.split_last().map_or(&[], |(_, sources)| sources),
         }
     }
 }

@@ -72,6 +72,7 @@ use super::{
     },
 };
 use crate::translation_phases::{
+    SourceVector,
     TranslationPhase,
     preprocessor_tokenizer::{
         PreprocessorToken,
@@ -240,12 +241,13 @@ impl Expander<'_, '_, '_, '_> {
 /// argument's first token, and how it came to be, which a placemarker on
 /// the right leaves it; `Rhs` holds the right operand, to paste with the
 /// left argument's last token; `Empty` marks a paste whose left argument is
-/// still being read.
+/// still being read. Each keeps where its `##` is written, which places the
+/// token it forms ([`crate::translation_phases::Context::record_paste_site`]).
 ///
 /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum HashHash {
-    Lhs(PreprocessorToken, Formation),
-    Rhs(PreprocessorToken),
-    Empty,
+    Lhs(PreprocessorToken, Formation, SourceVector),
+    Rhs(PreprocessorToken, SourceVector),
+    Empty(SourceVector),
 }

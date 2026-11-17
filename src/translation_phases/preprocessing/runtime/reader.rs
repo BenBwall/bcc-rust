@@ -99,7 +99,7 @@ impl Expander<'_, '_, '_, '_> {
             && self
                 .hash_hash_stack
                 .iter()
-                .all(|operand| matches!(operand, HashHash::Empty))
+                .all(|operand| matches!(operand, HashHash::Empty(_)))
     }
 }
 

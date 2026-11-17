@@ -84,6 +84,7 @@ impl Context<'_> {
         self.source_vectors.0.clear();
         self.expansion_sites[SourceArena::Preprocessor as usize].clear();
         self.expansion_starts[SourceArena::Preprocessor as usize].clear();
+        self.paste_sites[SourceArena::Preprocessor as usize].clear();
     }
 
     /// Joins two provenance ranges, preserving `v1`'s vectors followed by
@@ -217,6 +218,7 @@ impl Context<'_> {
         // literal places what a macro wrote in it.
         if source.length() != 0 {
             self.copy_expansion_start(target, (arena, start), end - source.length());
+            self.copy_paste_site(target, (arena, start), end - source.length());
         }
         if target == SourceArena::ParserTokens {
             for offset in 1..source.length().saturating_sub(1) {
@@ -281,6 +283,45 @@ impl Context<'_> {
             self.expansion_starts[target as usize].span_id(start, end, argument)
         };
         self.expansion_starts[target as usize].insert(to, site);
+    }
+
+    /// Records for the vector `to` of `target` the `##` recorded for the
+    /// vector `from`, if one is.
+    fn copy_paste_site(&mut self, target: SourceArena, from: (SourceArena, u32), to: u32) {
+        let (arena, index) = from;
+        let Some(site) = self.paste_sites[arena as usize].get(index) else {
+            return;
+        };
+        let site = if arena == target {
+            site
+        } else {
+            let location = self.paste_sites[arena as usize].ends[site as usize].clone();
+            self.paste_sites[target as usize].site_id(location)
+        };
+        self.paste_sites[target as usize].insert(to, site);
+    }
+
+    /// Records that the `##` at `site`, in a macro's replacement list,
+    /// formed the token `source`.
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
+    pub(crate) fn record_paste_site(&mut self, source: SourceVectors, site: SourceVector) {
+        if source.length() != 0 {
+            let (arena, start) = SourceArena::decode(source);
+            let sites = &mut self.paste_sites[arena as usize];
+            let id = sites.site_id(site);
+            sites.insert(start, id);
+        }
+    }
+
+    /// Where the `##` that formed the first token of `source` is written,
+    /// when `##` formed it. An empty range has none.
+    pub(crate) fn paste_site(&self, source: SourceVectors) -> Option<&SourceVector> {
+        if source.length() == 0 {
+            return None;
+        }
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.paste_sites[arena as usize];
+        Some(&sites.ends[sites.get(start)? as usize])
     }
 
     pub(crate) fn record_expansion_end(&mut self, source: SourceVectors, site: SourceVector) {
@@ -432,15 +473,22 @@ impl Context<'_> {
     /// Whether a macro expansion produced the first token of `source` and a
     /// system header spells it: Clang's `SourceManager::isInSystemMacro`,
     /// true for a system macro's body token wherever the macro is invoked
-    /// and false for an argument the user wrote. A token `##` formed counts
-    /// as its first piece, where Clang takes the location of the operand
-    /// that begins the paste. An empty range is in none.
+    /// and false for an argument the user wrote. A token `##` formed is
+    /// spelled in Clang's scratch space, so Clang steps out to the
+    /// replacement list that pasted it (`getImmediateMacroCallerLoc`): the
+    /// token is in a system macro when a system header defines the macro
+    /// whose `##` formed it, wherever its pieces are spelled. An empty range
+    /// is in none.
     /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23;
     /// §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
     pub(crate) fn in_system_macro(&self, source: SourceVectors) -> bool {
-        source.length() != 0
-            && self.produced_by_macro_expansion(source)
-            && self.spelled_in_system_header(source)
+        if source.length() == 0 || !self.produced_by_macro_expansion(source) {
+            return false;
+        }
+        match self.paste_site(source) {
+            | Some(site) => self.in_system_header(site),
+            | None => self.spelled_in_system_header(source),
+        }
     }
 
     /// The first vector of `source` as a range, which belongs to its first

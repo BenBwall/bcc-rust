@@ -340,35 +340,43 @@ impl Expander<'_, '_, '_, '_> {
                         break 'merge;
                     }
                     let operands = match self.hash_hash_stack.last() {
-                        | None | Some(HashHash::Empty) => None,
-                        | Some(HashHash::Lhs(lhs, kept)) => {
-                            let (lhs, kept) = (*lhs, *kept);
+                        | None | Some(HashHash::Empty(_)) => None,
+                        | Some(HashHash::Lhs(lhs, kept, site)) => {
+                            let (lhs, kept, site) = (*lhs, *kept, site.clone());
                             _ = self.hash_hash_stack.pop();
-                            Some((lhs, kept, self.paint_operand(token), formation))
+                            Some((lhs, kept, self.paint_operand(token), formation, site))
                         },
-                        | Some(HashHash::Rhs(rhs)) => {
+                        | Some(HashHash::Rhs(rhs, site)) => {
                             // Paste the last token of the left argument.
                             if argument_continues {
                                 break 'merge;
                             }
-                            let rhs = *rhs;
+                            let (rhs, site) = (*rhs, site.clone());
                             _ = self.hash_hash_stack.pop();
-                            Some((self.paint_operand(token), formation, rhs, Formation::Read))
+                            Some((
+                                self.paint_operand(token),
+                                formation,
+                                rhs,
+                                Formation::Read,
+                                site,
+                            ))
                         },
                     };
-                    let new = operands.and_then(|(lhs, lhs_formation, rhs, rhs_formation)| {
-                        // A placemarker leaves the other operand as it was,
-                        // its substitution included.
-                        formation = match (lhs.kind, rhs.kind) {
-                            | (_, PreprocessorTokenType::Placeholder) => lhs_formation,
-                            | (PreprocessorTokenType::Placeholder, _) => rhs_formation,
-                            | _ => Formation::Pasted,
-                        };
-                        self.merge_tokens(lhs, rhs)
-                    });
+                    let new =
+                        operands.and_then(|(lhs, lhs_formation, rhs, rhs_formation, site)| {
+                            // A placemarker leaves the other operand as it
+                            // was, its substitution included.
+                            formation = match (lhs.kind, rhs.kind) {
+                                | (_, PreprocessorTokenType::Placeholder) => lhs_formation,
+                                | (PreprocessorTokenType::Placeholder, _) => rhs_formation,
+                                | _ => Formation::Pasted,
+                            };
+                            self.merge_tokens(lhs, rhs, &site)
+                        });
                     if (next_is_end || token.kind == PreprocessorTokenType::Placeholder)
-                        && matches!(self.hash_hash_stack.last(), Some(HashHash::Empty))
+                        && let Some(HashHash::Empty(site)) = self.hash_hash_stack.last()
                     {
+                        let site = site.clone();
                         let operand = match new {
                             | Some(new) => new,
                             | None => self.paint_operand(token),
@@ -377,7 +385,7 @@ impl Expander<'_, '_, '_, '_> {
                         // so the operand keeps the substitution read now.
                         let kept = Formation::Kept(self.substitution_of(formation));
                         *self.hash_hash_stack.last_mut().expect("checked above") =
-                            HashHash::Lhs(operand, kept);
+                            HashHash::Lhs(operand, kept, site);
                         continue 'base;
                     }
                     if let Some(new) = new {
