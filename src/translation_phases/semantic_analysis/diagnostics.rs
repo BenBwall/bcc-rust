@@ -36,6 +36,20 @@ impl Analyzer<'_, '_, '_> {
         result
     }
 
+    /// Runs `report` with `notes` following what it reports, as Clang's
+    /// analyses follow a warning with `note:` lines of their own.
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn with_related_notes<R>(
+        &mut self,
+        notes: super::RelatedNotes,
+        report: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let outer = std::mem::replace(&mut self.related_notes, notes);
+        let result = report(self);
+        self.related_notes = outer;
+        result
+    }
+
     /// Runs `report` with `extent` as the range GCC underlines with `~`
     /// around the caret of what it reports: the expression a location's
     /// range covers in GCC, where the caret is one point within it.
@@ -177,6 +191,10 @@ impl Analyzer<'_, '_, '_> {
         let previous = previous.map(|previous| self.context.file_location(previous));
         let parameter = self.argument_parameter_note(kind);
         let highlights = self.format_highlights();
+        let mut related = self.related_notes;
+        for (site, _) in related.0.iter_mut().flatten() {
+            *site = self.context.file_location(*site);
+        }
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
@@ -197,6 +215,7 @@ impl Analyzer<'_, '_, '_> {
                 origin,
                 order: self.report_order,
                 parameter,
+                related,
             }),
         );
     }
@@ -250,6 +269,7 @@ impl Analyzer<'_, '_, '_> {
                 origin: at,
                 order: self.report_order,
                 parameter: self.argument_parameter_note(kind),
+                related: super::RelatedNotes::default(),
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
             let hard = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
@@ -298,6 +318,7 @@ impl Analyzer<'_, '_, '_> {
                         origin: SourceVectors::default(),
                         order,
                         parameter: None,
+                        related: super::RelatedNotes::default(),
                     })
                 },
             );

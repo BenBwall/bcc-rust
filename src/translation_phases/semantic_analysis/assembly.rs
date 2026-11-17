@@ -814,7 +814,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// The text of an ordinary string literal in the statement, or `None`
     /// after reporting a wide or Unicode one.
-    fn assembly_string(&mut self, token: Token) -> Option<&'tu str> {
+    pub(super) fn assembly_string(&mut self, token: Token) -> Option<&'tu str> {
         let TokenType::String(StringTokenType::String(id)) = token.kind else {
             if matches!(token.kind, TokenType::String(_)) {
                 self.assembly_error(AsmFault::WideString, token.source_vectors, None);

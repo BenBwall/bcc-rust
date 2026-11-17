@@ -52,7 +52,14 @@ pub(crate) struct SemanticError {
     /// The parameter an argument converts to, which Clang notes after a
     /// diagnostic of the conversion.
     pub(crate) parameter:          Option<ParameterNote>,
+    /// The notes that follow it, in order.
+    pub(crate) related:            RelatedNotes,
 }
+
+/// Up to three notes that follow a diagnostic, each a place and its words,
+/// as Clang writes `note:` lines after the warnings of its analyses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct RelatedNotes(pub(crate) [Option<(SourceVectors, StringCacheId)>; 3]);
 
 /// Where the declaration of a call's function declares the parameter an
 /// argument converts to, and its name, for Clang's `note: passing argument
@@ -162,6 +169,10 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
     ValueWarning(crate::configuration::DiagnosticGroup),
+    /// A read of a local variable no store may have reached, in Clang's
+    /// words, which are the diagnostic's name.
+    /// C99: §6.2.4p5, p. 32; PDF p. 44; §6.7.8p10, p. 126; PDF p. 138.
+    Uninitialized(crate::configuration::DiagnosticGroup),
     /// C99: §6.5.8p6, p. 86; PDF p. 98.
     TypeLimits(crate::configuration::DiagnosticGroup),
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
@@ -1244,6 +1255,7 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::ValueWarning(_) => "this value is not what it seems",
+            | Self::Uninitialized(_) => "this may read an indeterminate value",
             | Self::TypeLimits(_) => "the types decide this comparison",
             | Self::ShadowOrBody(_) => "this may not be what it looks like",
             | Self::Parentheses(_) => "this may not group as written",
@@ -1548,6 +1560,10 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnusedComparison
                     | crate::configuration::DiagnosticGroup::BoolOperation
                     | crate::configuration::DiagnosticGroup::CharSubscripts
+                    | crate::configuration::DiagnosticGroup::Uninitialized
+                    | crate::configuration::DiagnosticGroup::SometimesUninitialized
+                    | crate::configuration::DiagnosticGroup::UninitializedConstPointer
+                    | crate::configuration::DiagnosticGroup::ConditionalUninitialized
                     | crate::configuration::DiagnosticGroup::Main
                     | crate::configuration::DiagnosticGroup::MainExtension
                     | crate::configuration::DiagnosticGroup::MainReturnType
@@ -1981,6 +1997,11 @@ impl SemanticErrorKind {
                 "constant changed by conversion",
                 "C99 §6.3.1.3p3: converting a value the new type cannot represent gives an \
                  implementation-defined result",
+            ),
+            | Self::Uninitialized(_) => (
+                "variable read before it is initialized",
+                "C99 §6.2.4p5 and §6.7.8p10: an automatic object without an initializer has an \
+                 indeterminate value until something is stored in it",
             ),
             | Self::TypeLimits(_) => (
                 "comparison decided by type",
@@ -2963,6 +2984,7 @@ impl SemanticErrorKind {
         match self {
             | Self::PointerConstraint(group)
             | Self::ValueWarning(group)
+            | Self::Uninitialized(group)
             | Self::TypeLimits(group)
             | Self::ShadowOrBody(group)
             | Self::Parentheses(group)
@@ -3431,6 +3453,7 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ValueWarning(_)
+                | SemanticErrorKind::Uninitialized(_)
                 | SemanticErrorKind::TypeLimits(_)
                 | SemanticErrorKind::ShadowOrBody(_)
                 | SemanticErrorKind::Parentheses(_)
@@ -3594,6 +3617,10 @@ impl ToDiagnostic for SemanticError {
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
+        }
+        for &(site, words) in self.related.0.iter().flatten() {
+            let label = arena.alloc_str(context.string_cache.at(words));
+            diagnostic = diagnostic.secondary(site, label);
         }
         if let Some(parameter) = self.parameter {
             let label = match parameter.name {

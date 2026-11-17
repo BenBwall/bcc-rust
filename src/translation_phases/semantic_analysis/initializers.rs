@@ -2265,6 +2265,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let Some(first) = rest.first() else {
             return;
         };
+        // Clang drops them unevaluated, which the uninitialized-values graph
+        // does not model.
+        self.uninitialized.unsupported |= self.functions.current.is_some();
         match self.context.configuration.compiler_identity() {
             | Identity::Clang | Identity::ClangCl => self.group_diagnostic(
                 crate::configuration::DiagnosticGroup::ExcessInitializers,
@@ -2301,6 +2304,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// C99: §6.7.8 paragraph 2, p. 125; PDF p. 137.
     fn excess_element(&mut self, container: TypeId, source: SourceVectors) -> bool {
         use crate::configuration::CompilerIdentity as Identity;
+        // Clang drops the element unevaluated, which the uninitialized-values
+        // graph does not model.
+        self.uninitialized.unsupported |= self.functions.current.is_some();
         let identity = self.context.configuration.compiler_identity();
         let object = match self.types.nodes[container.index] {
             | TypeKind::Array(_, ArrayBound::Constant(_)) => Some(InitializedObject::Array),

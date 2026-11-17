@@ -20,11 +20,14 @@ use super::{
     },
     Flow,
 };
-use crate::translation_phases::parsing::syntax::{
-    BinaryOperator as B,
-    Constant,
-    Expression,
-    UnaryOperator as U,
+use crate::{
+    translation_phases::parsing::syntax::{
+        BinaryOperator as B,
+        Constant,
+        Expression,
+        UnaryOperator as U,
+    },
+    util::bump::ArenaMap,
 };
 
 /// A comparison normalized to `operand operator constant`.
@@ -44,18 +47,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         flow: &mut Flow<'s>,
         e: &'tu Expression<'tu>,
     ) -> Option<bool> {
+        self.known_condition_in(&mut flow.known, e)
+    }
+
+    /// [`Self::known_condition`] with its own cache of what is decided.
+    pub(in crate::translation_phases::semantic_analysis) fn known_condition_in(
+        &mut self,
+        known: &mut ArenaMap<'_, usize, Option<bool>>,
+        e: &'tu Expression<'tu>,
+    ) -> Option<bool> {
         let key = std::ptr::from_ref(e).addr();
-        if let Some(&known) = flow.known.get(&key) {
-            return known;
+        if let Some(&decided) = known.get(&key) {
+            return decided;
         }
-        let known = self.compute_known_condition(flow, e);
-        _ = flow.known.insert(key, known);
-        known
+        let decided = self.compute_known_condition(known, e);
+        _ = known.insert(key, decided);
+        decided
     }
 
     fn compute_known_condition(
         &mut self,
-        flow: &mut Flow<'s>,
+        known: &mut ArenaMap<'_, usize, Option<bool>>,
         e: &'tu Expression<'tu>,
     ) -> Option<bool> {
         if let E::Binary {
@@ -66,7 +78,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         {
             let special = match operator {
                 | B::LogicalAnd | B::LogicalOr =>
-                    return self.known_logical(flow, operator, left, right),
+                    return self.known_logical(known, operator, left, right),
                 | B::Equal | B::NotEqual => self.known_equality(operator, left, right),
                 | B::LessThan | B::GreaterThan | B::LessThanOrEqual | B::GreaterThanOrEqual =>
                     self.known_relational(operator, left, right),
@@ -90,17 +102,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// C99: §6.5.13p3, p. 89; PDF p. 101; §6.5.14p3, p. 89; PDF p. 101.
     fn known_logical(
         &mut self,
-        flow: &mut Flow<'s>,
+        known: &mut ArenaMap<'_, usize, Option<bool>>,
         operator: B,
         left: &'tu Expression<'tu>,
         right: &'tu Expression<'tu>,
     ) -> Option<bool> {
         let deciding = operator == B::LogicalOr;
-        let left_known = self.known_condition(flow, left);
+        let left_known = self.known_condition_in(known, left);
         if left_known == Some(deciding) {
             return left_known;
         }
-        let right_known = self.known_condition(flow, right);
+        let right_known = self.known_condition_in(known, right);
         match (left_known, right_known) {
             | (Some(_), known) => known,
             | (None, Some(known)) => (known == deciding).then_some(known),

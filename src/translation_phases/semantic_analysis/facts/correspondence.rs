@@ -217,6 +217,15 @@ impl<'tu> CorrespondenceBuilder<'tu> {
         id
     }
 
+    /// The binding an analyzed declarator declares, if it was accepted.
+    pub(in crate::translation_phases::semantic_analysis) fn binding_of(
+        &self,
+        syntax: Declarator<'tu>,
+    ) -> Option<usize> {
+        let id = self.indices.get(&identity(syntax))?;
+        self.declarations.get(id.0)?.binding
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn initializer(
         &mut self,
         syntax: Declarator<'tu>,

@@ -525,6 +525,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     analyzer.check_return_flow();
                     analyzer.report_unused_at_function_end();
                 });
+                self.report_uninitialized_uses();
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());

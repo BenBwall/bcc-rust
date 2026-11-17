@@ -447,6 +447,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
+    /// Whether a declaration of function `binding` says `returns_twice`.
+    pub(in crate::translation_phases::semantic_analysis) fn declared_returns_twice(
+        &mut self,
+        binding: usize,
+    ) -> bool {
+        let entity = self.entity_of(binding);
+        self.attributes
+            .entities
+            .get(&entity)
+            .is_some_and(|attributes| attributes.returns_twice)
+    }
+
     /// Microsoft `selectany` on an object with external linkage; on a
     /// function or an object without external linkage it is Clang's error.
     /// A typedef keeps it silently, as in Clang.
@@ -1228,6 +1240,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             }
         }
+        // Clang's graph destroys the object where its scope ends, which the
+        // uninitialized-values graph does not model.
+        self.uninitialized.unsupported = true;
         _ = self.attributes.pending_cleanups.insert(
             declarator,
             (

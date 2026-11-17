@@ -101,14 +101,14 @@ struct DeferredWarning {
 
 /// What the walk needs that analysis alone knows.
 pub(super) struct ReachabilityState<'s> {
-    deferred:                   ArenaVec<'s, DeferredWarning>,
+    deferred:                    ArenaVec<'s, DeferredWarning>,
     /// Each enumeration's values, by tag, which tell whether a switch covers
     /// them, with each name and whether an attribute marks it unused.
-    pub(super) enumerators:     ArenaMap<'s, usize, ArenaVec<'s, (i128, StringCacheId, bool)>>,
+    pub(super) enumerators:      ArenaMap<'s, usize, ArenaVec<'s, (i128, StringCacheId, bool)>>,
     /// The enumeration each enumerator belongs to, by binding.
-    pub(super) enumerator_tags: ArenaMap<'s, usize, usize>,
+    pub(super) enumerator_tags:  ArenaMap<'s, usize, usize>,
     /// The association each generic selection selects, by identity.
-    selected_generic:           ArenaMap<'s, usize, usize>,
+    pub(super) selected_generic: ArenaMap<'s, usize, usize>,
 }
 
 impl<'s> ReachabilityState<'s> {
@@ -190,10 +190,10 @@ struct SwitchFlow {
 
 /// What a switch's condition and labels decide, which no repetition changes.
 #[derive(Clone, Copy)]
-struct SwitchFacts {
-    value:       Option<super::Integer>,
-    covered:     bool,
-    has_default: bool,
+pub(super) struct SwitchFacts {
+    pub(super) value:   Option<super::Integer>,
+    pub(super) covered: bool,
+    has_default:        bool,
 }
 
 impl<'s> Flow<'s> {
@@ -623,7 +623,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether a switch's condition is a constant, whether a label matches
     /// it or its labels cover its enumeration, and whether it has `default`.
-    fn switch_facts(
+    pub(super) fn switch_facts(
         &mut self,
         statement: &'tu Statement<'tu>,
         condition: ExpressionSlot<'tu>,
@@ -685,7 +685,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             .is_none_or(|(low, high)| Self::in_case_range(value, low, high))
     }
 
-    fn case_value_range(
+    pub(super) fn case_value_range(
         &self,
         low: ConstantExpressionSlot<'tu>,
         high: ConstantExpressionSlot<'tu>,
@@ -700,7 +700,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether a condition's `value` is in a case's range, the bounds being
     /// converted to its type. C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146.
-    fn in_case_range(value: super::Integer, low: super::Integer, high: super::Integer) -> bool {
+    pub(super) fn in_case_range(
+        value: super::Integer,
+        low: super::Integer,
+        high: super::Integer,
+    ) -> bool {
         let converted = |bound: super::Integer| bound.cast(value.bits, value.signed).to_i128();
         match (value.to_i128(), converted(low), converted(high)) {
             | (Some(value), Some(low), Some(high)) => low <= value && value <= high,
@@ -1058,6 +1062,44 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             }
         }
         live
+    }
+
+    /// Whether Clang's graph ends the block at a call through `callee`
+    /// (`CFGBuilder::VisitCallExpr`), as [`Self::cfg_call_does_not_return`]
+    /// decides, deciding conditions with the cache `known`.
+    /// C11: §6.7.4 paragraph 8, p. 126; PDF p. 144.
+    pub(super) fn cfg_noreturn_call(
+        &mut self,
+        known: &mut ArenaMap<'_, usize, Option<bool>>,
+        callee: &'tu Expression<'tu>,
+        arguments: &'tu [&'tu Expression<'tu>],
+    ) -> bool {
+        if self.call_does_not_return(callee) {
+            return true;
+        }
+        let designator = Self::without_parentheses(callee);
+        let E::Identifier(name) = designator.kind else {
+            return false;
+        };
+        let intrinsic = self
+            .expression_info(designator)
+            .binding
+            .is_some_and(|binding| {
+                !matches!(
+                    self.bindings[binding].origin,
+                    super::BindingOrigin::User | super::BindingOrigin::ImplicitOrdinary
+                )
+            });
+        if !intrinsic {
+            return false;
+        }
+        match self.context.string_cache.at(name.name) {
+            | "__builtin_trap" | "__builtin_verbose_trap" | "__builtin_eh_return" => true,
+            | "__builtin_assume" => arguments
+                .first()
+                .is_some_and(|&condition| self.known_condition_in(known, condition) == Some(false)),
+            | _ => false,
+        }
     }
 
     /// Clang's `FunctionDecl::isNoReturn` and the CFG's `__builtin_assume` of
