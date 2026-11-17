@@ -118,17 +118,15 @@ fn a_redeclaration_takes_the_prototype_it_redeclares() {
                     .get_source_vectors(error.source_vectors)
                     .first()
                     .map_or(usize::MAX, |vector| vector.index as usize);
-                let name = error
-                    .name
-                    .map(|name| context.string_cache.at(name).to_owned());
-                words.push((offset, name.unwrap_or_default()));
+                let name = error.name.map_or("", |name| context.string_cache.at(name));
+                words.push((
+                    offset,
+                    name.contains("zero-parameter prototype"),
+                    name.contains("not supported in C23"),
+                ));
             }
         }
     });
     let at = SOURCE.find("f()").unwrap();
-    assert_eq!(words.len(), 2, "{words:?}");
-    assert_eq!(words[0].0, at, "{words:?}");
-    assert!(words[0].1.contains("zero-parameter prototype"), "{words:?}");
-    assert_eq!(words[1].0, at, "{words:?}");
-    assert!(words[1].1.contains("not supported in C23"), "{words:?}");
+    assert_eq!(words, [(at, true, false), (at, false, true)], "{words:?}");
 }
