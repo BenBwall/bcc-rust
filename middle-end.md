@@ -3539,7 +3539,9 @@ does (`Unit::function_vectors`), where it was refused before. GCC classifies
 by the function's own instruction set, so the arguments and the result travel
 in YMM registers; Clang classifies the arguments by the unit's features, in
 memory, and returns the vector whole, which LLVM returns in YMM0 for a
-function with AVX. Under GCC's convention a variadic such function with a named
+function with AVX, but a record holding one in memory, as the unit's features
+classify it (`getIndirectReturnResult` returns only a non-aggregate
+directly). Under GCC's convention a variadic such function with a named
 32-byte vector stays refused, as under `-mavx`: GCC passes it in YMM0, and
 LLVM keeps a variadic function's named vectors on the stack. A direct call from bcc uses the callee's convention; a
 caller without AVX cannot pass a vector in a YMM register through LLVM and is

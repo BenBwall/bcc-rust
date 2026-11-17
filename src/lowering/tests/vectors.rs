@@ -396,6 +396,28 @@ fn foreign_vector_conventions_are_refused() {
     );
 }
 
+/// A function whose `target` attribute turns AVX on returns a record
+/// holding a 32-byte vector as GCC does, in YMM0, but as Clang does, in
+/// memory, where it returns the bare vector in YMM0.
+#[test]
+fn avx_target_record_results_follow_each_compiler() {
+    use crate::configuration::CompilerIdentity;
+    let source = "typedef float V __attribute__((vector_size(32))); struct w { V v; }; \
+                  __attribute__((target(\"avx\"))) struct w f(struct w *p) { return *p; } \
+                  __attribute__((target(\"avx\"))) V g(V *p) { return *p; }";
+    for (compiler, record) in [
+        (CompilerIdentity::Gcc, "ptr result(size 32, align 32, wide)"),
+        (CompilerIdentity::Clang, "ptr result(size 32, align 32)"),
+    ] {
+        let text = lower_with(source, with_options(compiler, &[])).expect("lowers");
+        assert!(text.contains(record), "{compiler:?}\n{text}");
+        assert!(
+            text.contains("ptr result(size 32, align 32, vector, wide)"),
+            "{compiler:?}\n{text}"
+        );
+    }
+}
+
 /// Clang's elementwise builtins work lane by lane, or on a scalar: `max`
 /// compares each lane by its signedness and selects; `add_sat` widens and
 /// clamps; `sqrt` is the named square root.

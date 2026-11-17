@@ -1,8 +1,9 @@
 /* External functions whose `target` attribute turns AVX on, in a unit built
  * without AVX: each compiler passes their 32-byte vectors as it classifies
  * them for such a function (GCC in YMM registers, Clang's arguments in
- * memory and its result in YMM0). Linked with `avx_target_abi_caller.c`
- * built by the other compiler. */
+ * memory and its result in YMM0, but a record holding one in memory, as
+ * its arguments). Linked with `avx_target_abi_caller.c` built by the other
+ * compiler. */
 #include <immintrin.h>
 
 __attribute__((target("avx2"))) __m256i avx_add(__m256i a, __m256i b, int scale) {
@@ -18,3 +19,13 @@ __attribute__((target("avx2"))) static __m256i avx_xor(__m256i a, __m256i b) {
   return _mm256_xor_si256(a, b);
 }
 __m256i (*const avx_table[1])(__m256i, __m256i) = {avx_xor};
+
+/* A record holding one vector: GCC passes and returns it in YMM registers
+ * as the vector, Clang passes and returns it in memory. */
+struct wrap {
+  __m256 v;
+};
+__attribute__((target("avx"))) struct wrap avx_wrap(struct wrap w, float x) {
+  w.v = _mm256_add_ps(w.v, _mm256_set1_ps(x));
+  return w;
+}

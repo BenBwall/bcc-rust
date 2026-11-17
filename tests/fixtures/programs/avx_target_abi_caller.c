@@ -8,6 +8,10 @@
 __attribute__((target("avx2"))) __m256i avx_add(__m256i, __m256i, int);
 __attribute__((target("avx"))) __m256d avx_mix(double, __m256d, __m256d);
 extern __m256i (*const avx_table[1])(__m256i, __m256i);
+struct wrap {
+  __m256 v;
+};
+__attribute__((target("avx"))) struct wrap avx_wrap(struct wrap, float);
 
 static void print(const char *name, const void *p, int n) {
   const unsigned char *b = p;
@@ -25,6 +29,8 @@ __attribute__((target("avx2"))) static void run(void) {
   print("avx_mix", &mix, 32);
   __m256i x = avx_table[0](a, b);
   print("avx_xor", &x, 32);
+  struct wrap w = avx_wrap((struct wrap){_mm256_setr_ps(1, -2, 3.5f, -4, 5, 6, 0.25f, 8)}, 1.5f);
+  print("avx_wrap", &w, 32);
 }
 
 int main(void) {

@@ -140,7 +140,8 @@ mod tests {
     /// built without AVX, link with the claimed compiler's build of the
     /// other half, in both directions: GCC passes their 32-byte vectors in
     /// YMM registers, and Clang their arguments in memory and their result
-    /// in YMM0. One is reached through a pointer.
+    /// in YMM0, but a record holding one in memory. One is reached through
+    /// a pointer.
     #[test]
     fn avx_target_functions_link_with_gcc_and_clang() {
         if !cfg!(all(

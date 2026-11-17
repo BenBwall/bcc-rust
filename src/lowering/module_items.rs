@@ -1050,8 +1050,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     pub(super) fn command_line_vectors(&self) -> VectorAvx {
         let avx = self.avx();
         VectorAvx {
-            arguments: avx,
-            result:    avx,
+            arguments:     avx,
+            result:        avx,
+            record_result: avx,
         }
     }
 
@@ -1062,8 +1063,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// function's own instruction set (`classify_argument` reads the
     /// function's `TARGET_AVX`); Clang classifies the arguments by the
     /// unit's features, in memory, and returns the vector whole, which LLVM
-    /// returns in YMM0 for a function with AVX.
-    /// System V AMD64 psABI §3.2.3, "Classification", rule 1, `__m256`.
+    /// returns in YMM0 for a function with AVX, but a record holding one in
+    /// memory: `getIndirectReturnResult` returns only a non-aggregate
+    /// directly.
+    /// System V AMD64 psABI §3.2.3, "Classification", rule 1, `__m256`;
+    /// Clang `X86_64ABIInfo::classifyReturnType` and
+    /// `X86_64ABIInfo::getIndirectReturnResult`
+    /// (`clang/lib/CodeGen/Targets/X86.cpp`).
     pub(super) fn function_vectors(&self, binding: usize) -> VectorAvx {
         if self.own_avx(binding) {
             self.avx_vectors()
@@ -1075,9 +1081,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// How the claimed compiler has vectors of 32 bytes travel to and from
     /// a function with AVX in a unit without it ([`Self::function_vectors`]).
     pub(super) fn avx_vectors(&self) -> VectorAvx {
+        let gcc = self.rules() == crate::configuration::RuleSet::Gcc;
         VectorAvx {
-            arguments: self.rules() == crate::configuration::RuleSet::Gcc,
-            result:    true,
+            arguments:     gcc,
+            result:        true,
+            record_result: gcc,
         }
     }
 
@@ -1266,7 +1274,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     self.with_wide_record(
                         result,
                         types::object_layout(types, result, self.rules(), scratch)?,
-                        vectors.result,
+                        vectors.record_result,
                     )?
                 };
                 aggregates.push(AggregateParam {
@@ -2857,12 +2865,13 @@ pub(super) fn at(kind: LoweringErrorKind, source: SourceVectors) -> LoweringErro
     }
 }
 
-/// Whether vectors of 32 bytes travel whole in YMM registers, as arguments
-/// and as a result.
+/// Whether vectors of 32 bytes travel whole in YMM registers, as arguments,
+/// as a result, and inside a record result.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct VectorAvx {
-    pub(super) arguments: bool,
-    pub(super) result:    bool,
+    pub(super) arguments:     bool,
+    pub(super) result:        bool,
+    pub(super) record_result: bool,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
