@@ -705,6 +705,10 @@
   /* A word is at most 16 columns wide (words in src/panels/cells.rs), and
      wraps within itself should a row be narrower still. */
   .string-word { display: flex; flex-wrap: wrap; }
+  /* A wide array's values, a column per element with a space after each:
+     its underline breaks between elements as the ruler ticks them. */
+  .cell.is-values .string-byte { padding-right: 1ch; }
+  .cell.is-values .string-char { padding: 0 1px; }
   .string-byte { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 1ch; padding-bottom: 10px; }
   .string-char { height: 17px; line-height: 16px; white-space: pre; border-bottom: 1px solid var(--ink-3); }
   /* The ruler: a tick at each byte's start, a longer one with the index at

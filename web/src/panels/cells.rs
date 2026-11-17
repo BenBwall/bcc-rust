@@ -12,7 +12,9 @@
 //! the null character boxed as a byte of its own, over an index ruler, the
 //! bytes the step used marked in place. It wraps onto more rows before it
 //! outgrows a phone's strip, so every byte a step uses is in view with the
-//! rest of the string, and a key opens it into its byte cells. On a phone
+//! rest of the string, and a key opens it into its byte cells. An array of
+//! more than eight elements of another type folds the same way, into one
+//! cell of its values, a column per element. On a phone
 //! each call's cells are a row of their own, which follows the cells the
 //! step used as the strip does on a wide screen.
 
@@ -117,7 +119,8 @@ fn element(node: Option<web_sys::Node>) -> Option<web_sys::Element> {
     wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(node?).ok()
 }
 
-/// What a string's `BYTES` and `TEXT` keys change: which strings are open,
+/// What the keys of a folded cell (a string's `BYTES` and `TEXT`, a wide
+/// array's `CELLS` and `VALUES`) change: which of them are open,
 /// where the focus goes once the strip is drawn again, and what a screen
 /// reader hears.
 #[derive(Clone, Copy)]
@@ -129,8 +132,9 @@ struct Toggle {
 }
 
 impl Toggle {
-    /// Opens the string `key` into its `count` byte cells, or folds it back.
-    fn set(self, key: &(usize, String), open: bool, count: usize) {
+    /// Opens the string or wide array `key` into its `count` cells, or folds
+    /// it back; `values` for an array of values rather than characters.
+    fn set(self, key: &(usize, String), open: bool, count: usize, values: bool) {
         self.opened.update(|opened| {
             opened.retain(|known| known != key);
             if open {
@@ -138,7 +142,8 @@ impl Toggle {
             }
         });
         self.focus.set_value(Some(string_key(key)));
-        self.announcement.set(toggle_announcement(&key.1, open, count));
+        self.announcement
+            .set(toggle_announcement(&key.1, open, count, values));
     }
 }
 
@@ -148,13 +153,15 @@ fn string_key((id, name): &(usize, String)) -> String {
     format!("{id}:{name}")
 }
 
-/// What a screen reader says when the string `name` opens or folds.
-fn toggle_announcement(name: &str, open: bool, count: usize) -> String {
+/// What a screen reader says when the string or wide array `name` opens or
+/// folds.
+fn toggle_announcement(name: &str, open: bool, count: usize, values: bool) -> String {
     let name = shorten(name, 24);
-    if open {
-        format!("{name} opened into its {count} byte cells")
-    } else {
-        format!("{name} shown as one cell of its characters")
+    match (open, values) {
+        | (true, false) => format!("{name} opened into its {count} byte cells"),
+        | (true, true) => format!("{name} opened into its {count} element cells"),
+        | (false, false) => format!("{name} shown as one cell of its characters"),
+        | (false, true) => format!("{name} shown as one cell of its values"),
     }
 }
 
@@ -196,16 +203,22 @@ enum Part {
     },
     /// A char array as one cell: each byte's character as a constant spells
     /// it without its quotes (`A`, `\n`, `\0`), or `None` while
-    /// indeterminate.
+    /// indeterminate. Or a wide array of other scalars as one cell: each
+    /// element's value as the cells write it.
     Text {
         glyphs: Vec<Option<String>>,
         ty:     String,
+        /// Whether the glyphs are an array's values, not a string's
+        /// characters.
+        values: bool,
     },
-    /// The key before an opened string's byte cells that folds them back.
+    /// The key before an opened string's or wide array's cells that folds
+    /// them back.
     TextHead {
-        ty:    String,
-        /// How many bytes it opened into.
-        count: usize,
+        ty:     String,
+        /// How many cells it opened into.
+        count:  usize,
+        values: bool,
     },
 }
 
@@ -214,21 +227,27 @@ enum Part {
 const BYTE_CELLS: usize = 8;
 
 /// The cells of `object`: one per scalar, in memory order, with a padding
-/// cell after each structure member that has padding; or, for a string the
-/// reader has not opened, one cell of its characters.
+/// cell after each structure member that has padding; or, for a string or a
+/// wide array the reader has not opened, one cell of its characters or
+/// values.
 fn parts(object: &Object, open: bool) -> Vec<Part> {
     let mut parts = Vec::new();
     let ty = object.ty.split('[').next().unwrap_or_default().trim().to_owned();
-    if let Some(glyphs) = text(object) {
+    let folded = text(object)
+        .map(|glyphs| (glyphs, false))
+        .or_else(|| values(object).map(|glyphs| (glyphs, true)));
+    if let Some((glyphs, values)) = folded {
         if !open {
             return vec![Part::Text {
                 glyphs,
                 ty: object.ty.clone(),
+                values,
             }];
         }
         parts.push(Part::TextHead {
-            ty:    object.ty.clone(),
+            ty: object.ty.clone(),
             count: glyphs.len(),
+            values,
         });
         // A literal's bytes are named by their index alone: its spelling
         // heads the run, and would make every cell as wide as the string.
@@ -322,6 +341,52 @@ fn text(object: &Object) -> Option<Vec<Option<String>>> {
             | _ => None,
         })
         .collect()
+}
+
+/// The values of `object` when it shows as one wide cell: an array of more
+/// than [`BYTE_CELLS`] elements of a type other than char, which would
+/// otherwise be a cell per element, wider than the window. `None` stands for
+/// an indeterminate element.
+fn values(object: &Object) -> Option<Vec<Option<String>>> {
+    let Value::Array { elements } = &object.value else {
+        return None;
+    };
+    if elements.len() <= BYTE_CELLS || text(object).is_some() {
+        return None;
+    }
+    elements
+        .iter()
+        .map(|element| match element {
+            | Value::Indeterminate => Some(None),
+            | Value::Integer {
+                character: None,
+                text,
+            }
+            | Value::Floating { text, .. } => Some(Some(text.clone())),
+            | _ => None,
+        })
+        .collect()
+}
+
+/// How many elements each word of a wide array's values holds: a word ends
+/// before it would be wider than [`WORD`] columns, each value taking its
+/// digits and a column of space after them.
+fn value_words(values: &[Option<String>]) -> Vec<usize> {
+    let mut words = Vec::new();
+    let (mut length, mut width) = (0, 0);
+    for value in values {
+        let columns = value.as_deref().map_or(1, |value| value.chars().count()) + 1;
+        if length > 0 && width + columns > WORD {
+            words.push(length);
+            (length, width) = (0, 0);
+        }
+        length += 1;
+        width += columns;
+    }
+    if length > 0 {
+        words.push(length);
+    }
+    words
 }
 
 /// How many bytes each word of a string holds, so a string that wraps
@@ -522,7 +587,7 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                         }
                         .into_any()
                     },
-                    | Part::Text { glyphs, ty } => {
+                    | Part::Text { glyphs, ty, values } => {
                         let kinds: Vec<Option<String>> =
                             (0..glyphs.len()).map(|index| access(object.id, Some(index))).collect();
                         let marks: Vec<String> = (0..glyphs.len())
@@ -531,11 +596,16 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                                 (!marks.is_empty()).then(|| format!("{marks} at [{index}]"))
                             })
                             .collect();
-                        let description = text_description(object, &glyphs, &kinds, &marks);
+                        let description = text_description(object, &glyphs, &kinds, &marks, values);
                         let count = glyphs.len();
                         let key = (object.id, object.name.clone());
-                        let label = format!("Show {} as its {count} byte cells", shorten(&object.name, 24));
-                        let words = words(&glyphs);
+                        let (unit, open, title) = if values {
+                            ("element", "cells", "Show each element as a cell of its own")
+                        } else {
+                            ("byte", "bytes", "Show each byte as a cell of its own")
+                        };
+                        let label = format!("Show {} as its {count} {unit} cells", shorten(&object.name, 24));
+                        let words = if values { value_words(&glyphs) } else { words(&glyphs) };
                         let mut bytes = glyphs.into_iter().zip(kinds).enumerate();
                         let bytes = words
                             .into_iter()
@@ -545,8 +615,8 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                                     .take(length)
                                     .map(|(index, (glyph, kind))| {
                                         let pointed = !pointed(object.id, index).is_empty();
-                                        let null = glyph.as_deref() == Some("\\0");
-                                        let escape = glyph.as_deref().is_some_and(|glyph| glyph.starts_with('\\'));
+                                        let null = !values && glyph.as_deref() == Some("\\0");
+                                        let escape = !values && glyph.as_deref().is_some_and(|glyph| glyph.starts_with('\\'));
                                         let indeterminate = glyph.is_none();
                                         view! {
                                             <span
@@ -571,21 +641,22 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                         view! {
                             <li
                                 class=format!("cell is-string {}", palette::class(&object.name))
+                                class:is-values=values
                                 data-access=whole(object.id)
                                 aria-label=description
                             >
                                 <span class="cell-type">
-                                    <span aria-hidden="true">{ty}<span class="cell-bytes">{format!("{count}B")}</span></span>
+                                    <span aria-hidden="true">{ty}<span class="cell-bytes">{format!("{}B", object.size)}</span></span>
                                     <button
                                         type="button"
                                         class="cell-open"
                                         aria-expanded="false"
                                         aria-label=label
                                         data-string=string_key(&key)
-                                        title="Show each byte as a cell of its own"
-                                        on:click=move |_| toggle.set(&key, true, count)
+                                        title=title
+                                        on:click=move |_| toggle.set(&key, true, count, values)
                                     >
-                                        "bytes"
+                                        {open}
                                     </button>
                                 </span>
                                 <span class="string-bytes" aria-hidden="true">{bytes}</span>
@@ -594,9 +665,14 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                         }
                         .into_any()
                     },
-                    | Part::TextHead { ty, count } => {
+                    | Part::TextHead { ty, count, values } => {
                         let key = (object.id, object.name.clone());
-                        let label = format!("Show {} as one cell of its characters", shorten(&object.name, 24));
+                        let (what, close, title) = if values {
+                            ("values", "values", "Show the array as one cell again")
+                        } else {
+                            ("characters", "text", "Show the string as one cell again")
+                        };
+                        let label = format!("Show {} as one cell of its {what}", shorten(&object.name, 24));
                         view! {
                             <li
                                 class=format!("cell is-string-head {}", palette::class(&object.name))
@@ -609,10 +685,10 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                                     aria-expanded="true"
                                     aria-label=label
                                     data-string=string_key(&key)
-                                    title="Show the string as one cell again"
-                                    on:click=move |_| toggle.set(&key, false, count)
+                                    title=title
+                                    on:click=move |_| toggle.set(&key, false, count, values)
                                 >
-                                    "text"
+                                    {close}
                                 </button>
                                 <span class="cell-name" aria-hidden="true">{shorten(&object.name, 16)}</span>
                             </li>
@@ -678,21 +754,28 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
     }
 }
 
-/// A string cell, in words: what it holds and which bytes the step used.
+/// A string or wide array cell, in words: what it holds and which bytes or
+/// elements the step used.
 fn text_description(
     object: &Object,
     glyphs: &[Option<String>],
     kinds: &[Option<String>],
     marks: &[String],
+    values: bool,
 ) -> String {
-    let characters: String = glyphs
-        .iter()
-        .map(|glyph| glyph.as_deref().unwrap_or("?"))
-        .collect();
+    let shown = glyphs.iter().map(|glyph| glyph.as_deref().unwrap_or("?"));
+    let (contents, unit) = if values {
+        (
+            format!("the values {}", shown.collect::<Vec<_>>().join(", ")),
+            "element",
+        )
+    } else {
+        (format!("the characters {}", shown.collect::<String>()), "byte")
+    };
     let mut used: Vec<String> = Vec::new();
     for (index, kind) in kinds.iter().enumerate() {
         if let Some(kind) = kind {
-            used.push(format!("byte {index} {}", verb(kind)));
+            used.push(format!("{unit} {index} {}", verb(kind)));
         }
     }
     let used = if used.len() == glyphs.len() && !used.is_empty() {
@@ -708,10 +791,8 @@ fn text_description(
         format!(", pointed to by {}", marks.join(", ").replace('◂', ""))
     };
     format!(
-        "{}, {}, {} bytes: the characters {characters}{used}{marks}",
-        object.name,
-        object.ty,
-        glyphs.len()
+        "{}, {}, {} bytes: {contents}{used}{marks}",
+        object.name, object.ty, object.size
     )
 }
 
@@ -838,6 +919,101 @@ mod tests {
         assert_eq!(parts(values, false).len(), 3);
     }
 
+    /// An `int` array of `length` elements, each its index squared, the
+    /// last indeterminate.
+    fn wide(length: usize) -> Object {
+        let mut elements: Vec<Value> = (0..length - 1)
+            .map(|index| Value::Integer {
+                text:      (index * index).to_string(),
+                character: None,
+            })
+            .collect();
+        elements.push(Value::Indeterminate);
+        Object {
+            id: 3,
+            name: "squares".to_owned(),
+            ty: format!("int[{length}]"),
+            storage: "automatic".to_owned(),
+            alive: true,
+            frame_id: 1,
+            function: "main".to_owned(),
+            scope: None,
+            parameter: false,
+            literal: false,
+            size: 4 * length,
+            value: Value::Array { elements },
+        }
+    }
+
+    #[test]
+    fn a_wide_array_is_one_cell_of_its_values_until_opened() {
+        let squares = wide(12);
+        let folded = values(&squares).expect("twelve ints fold");
+        assert_eq!(folded.len(), 12);
+        assert_eq!(folded[3].as_deref(), Some("9"));
+        assert_eq!(folded[11], None);
+        assert!(matches!(
+            parts(&squares, false).as_slice(),
+            [Part::Text { values: true, .. }]
+        ));
+        let opened = parts(&squares, true);
+        assert!(matches!(opened[0], Part::TextHead {
+            count: 12,
+            values: true,
+            ..
+        }));
+        let names: Vec<&str> = opened[1..]
+            .iter()
+            .map(|part| match part {
+                | Part::Cell { name, .. } => name.as_str(),
+                | _ => panic!("an element cell"),
+            })
+            .collect();
+        assert_eq!(names.len(), 12);
+        assert_eq!(names[0], "squares[0]");
+        assert_eq!(names[11], "squares[11]");
+        // Eight elements still fit the window as cells of their own.
+        assert_eq!(values(&wide(8)), None);
+        assert_eq!(parts(&wide(8), false).len(), 8);
+        // A string is not an array of values.
+        let unsigned = objects("unsigned");
+        assert_eq!(values(named(&unsigned, "\"%zu")), None);
+    }
+
+    #[test]
+    fn a_wide_array_wraps_between_words_of_values() {
+        // `0 1 4 9 16 25 ` is 14 columns, a space after each value; `36`
+        // would make 17.
+        let squares = values(&wide(40)).expect("forty ints fold");
+        let words = value_words(&squares);
+        assert_eq!(words[0], 6);
+        assert_eq!(words.iter().sum::<usize>(), 40);
+        let wide: Vec<Option<String>> = vec![Some("-2147483648".to_owned()); 3];
+        assert_eq!(value_words(&wide), [1, 1, 1]);
+    }
+
+    #[test]
+    fn a_wide_arrays_keys_say_what_it_opens_into() {
+        assert_eq!(
+            toggle_announcement("squares", true, 40, true),
+            "squares opened into its 40 element cells"
+        );
+        assert_eq!(
+            toggle_announcement("squares", false, 40, true),
+            "squares shown as one cell of its values"
+        );
+        let squares = wide(10);
+        let glyphs = values(&squares).expect("ten ints fold");
+        let kinds: Vec<Option<String>> = (0..10)
+            .map(|index| (index == 2).then(|| "write".to_owned()))
+            .collect();
+        assert_eq!(
+            text_description(&squares, &glyphs, &kinds, &[], true),
+            "squares, int[10], 40 bytes: the values 0, 1, 4, 9, 16, 25, 36, 49, 64, ?, element \
+             2 written by this step"
+        );
+    }
+
     #[test]
     fn a_string_wraps_between_words() {
         let glyphs: Vec<Option<String>> = "2u - 3 is %u"
@@ -896,15 +1072,15 @@ mod tests {
                 announcement: RwSignal::new(String::new()),
             };
             let key = (7, "s".to_owned());
-            toggle.set(&key, true, 33);
+            toggle.set(&key, true, 33, false);
             assert_eq!(toggle.opened.get_untracked(), std::slice::from_ref(&key));
             assert_eq!(toggle.focus.get_value().as_deref(), Some("7:s"));
             assert_eq!(toggle.announcement.get_untracked(), "s opened into its 33 byte cells");
             // Pressed twice before a redraw, the string stays open once.
-            toggle.set(&key, true, 33);
+            toggle.set(&key, true, 33, false);
             assert_eq!(toggle.opened.get_untracked().len(), 1);
             toggle.focus.set_value(None);
-            toggle.set(&key, false, 33);
+            toggle.set(&key, false, 33, false);
             assert_eq!(toggle.opened.get_untracked(), Vec::<(usize, String)>::new());
             assert_eq!(toggle.focus.get_value().as_deref(), Some("7:s"));
             assert_eq!(toggle.announcement.get_untracked(), "s shown as one cell of its characters");
