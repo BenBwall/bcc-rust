@@ -1,0 +1,13 @@
+sema-parameter-note-abstract-c23-clang.c:7:18: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)(void)' [-Wincompatible-pointer-types]
+    7 |   empty_function(p);
+      |                  ^
+sema-parameter-note-abstract-c23-clang.c:4:26: note: passing argument to parameter here
+    4 | void empty_function(int ());
+      |                          ^
+sema-parameter-note-abstract-c23-clang.c:8:21: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)(...)' [-Wincompatible-pointer-types]
+    8 |   variadic_function(p);
+      |                     ^
+sema-parameter-note-abstract-c23-clang.c:5:29: note: passing argument to parameter here
+    5 | void variadic_function(int (...));
+      |                             ^
+2 errors generated.

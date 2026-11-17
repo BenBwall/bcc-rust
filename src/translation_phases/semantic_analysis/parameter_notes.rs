@@ -42,10 +42,10 @@ use crate::{
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Keeps where the function declaration bound as `index` by `declarator`
     /// declares its parameters, when it has a prototype: each parameter's
-    /// name, or for one without a name the token after it, where Clang's
-    /// parser places it; a function type from a typedef declares them all at
-    /// the declarator's name. A definition with an identifier list has
-    /// none Clang notes.
+    /// name, or for one without a name where Clang's parser places the name
+    /// its abstract declarator leaves out ([`unnamed_site`]); a function
+    /// type from a typedef declares them all at the declarator's name. A
+    /// definition with an identifier list has none Clang notes.
     pub(super) fn record_parameter_sites(&mut self, index: usize, declarator: Declarator<'tu>) {
         if self.context.configuration.compiler_identity().rules() != RuleSet::Clang {
             return;
@@ -65,15 +65,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 site: name.source_vectors,
                                 name: Some(name.name),
                             },
-                            | None => ParameterNote {
-                                site: Context::token_after(
+                            | None => {
+                                let after = Context::token_after(
                                     declarator.source_vectors,
                                     parameter.source_vectors,
                                 )
                                 .unwrap_or_else(|| {
                                     Context::last_source_vector(parameter.source_vectors)
-                                }),
-                                name: None,
+                                });
+                                ParameterNote {
+                                    site: parameter
+                                        .declarator
+                                        .map_or(after, |abstract_| unnamed_site(abstract_, after)),
+                                    name: None,
+                                }
                             },
                         }
                     })),
@@ -134,6 +139,69 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             site: self.context.file_location(note.site),
             name: note.name,
         })
+    }
+}
+
+/// Where Clang's parser places the name that the abstract declarator
+/// `declarator` of an unnamed parameter leaves out, which is the place of
+/// the parameter (`Declarator::SetIdentifier(nullptr, Tok.getLocation())`
+/// in `Parser::ParseDirectDeclarator` and `Parser::ParseParenDeclarator`,
+/// `ParseDecl.cpp`): past the pointers, with their qualifiers and
+/// attributes, at the `[` of an array, at the token after the `(` of a
+/// function's parameters, within parentheses where the declarator inside
+/// places it, and otherwise at `after`, the token after the declarator.
+/// C99: §6.7.6p1-2, p. 122; PDF p. 134 (abstract declarators).
+fn unnamed_site(mut declarator: Declarator<'_>, mut after: SourceVectors) -> SourceVectors {
+    loop {
+        // The tokens before the direct abstract declarator: each `*`, its
+        // qualifiers and attributes, and the attributes and Microsoft
+        // modifiers among them. A qualifier written twice counts once.
+        let mut prefix = 0;
+        for level in declarator.pointer.levels.iter() {
+            prefix += 1 + level.qualifiers.bits().count_ones();
+            let mut attributes = level.attributes;
+            while let Some(attribute) = attributes {
+                prefix += attribute.source_vectors.length();
+                attributes = attribute.next;
+            }
+        }
+        let mut direct = None;
+        for part in declarator.kind.iter() {
+            match *part {
+                | DirectDeclarator::Attributes(attributes) =>
+                    prefix += attributes.source_vectors.length(),
+                | DirectDeclarator::MsModifier(_, source_vectors) =>
+                    prefix += source_vectors.length(),
+                | _ => {
+                    direct = Some(*part);
+                    break;
+                },
+            }
+        }
+        let at = |index| {
+            Some(Context::source_vector_at(declarator.source_vectors, index))
+                .filter(|site| site.length() != 0)
+                .unwrap_or(after)
+        };
+        match direct {
+            | Some(DirectDeclarator::Parenthesized(inner)) => {
+                after = Context::token_after(
+                    declarator.source_vectors,
+                    inner.declarator.source_vectors,
+                )
+                .unwrap_or(after);
+                declarator = inner.declarator;
+            },
+            | Some(DirectDeclarator::Array { .. }) => return at(prefix),
+            | Some(DirectDeclarator::Function { parameter_list, .. }) =>
+                return parameter_list.first().map_or_else(
+                    || at(prefix + 1),
+                    |first| Context::first_token_vector(first.source_vectors),
+                ),
+            // `()` before C23, which has no parameters.
+            | Some(DirectDeclarator::KAndRStyleFunction { .. }) => return at(prefix + 1),
+            | _ => return after,
+        }
     }
 }
 
