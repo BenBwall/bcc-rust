@@ -158,6 +158,9 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     tentative_objects: ArenaSet<'a, &'a str>,
     /// Bindings whose address is taken, which therefore live in memory.
     pub(super) address_taken: ArenaSet<'a, usize>,
+    /// The functions whose designator is used other than as a direct
+    /// callee ([`address_taken::addressed_functions`]).
+    pub(super) addressed_functions: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
     statics: ArenaMap<'a, usize, GlobalId>,
     /// Keyed by literal and [`string_form`]: narrow, `L`, `u8`, `u`, `U`.
@@ -758,7 +761,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             parameters.iter().copied(),
             result,
             variadic && prototype,
-            self.target_vector_abi(binding),
+            self.target_vector_abi(binding) && !self.own_avx(binding),
+            self.function_vectors(binding).arguments,
         )
     }
 
@@ -817,7 +821,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     "an external binding has no function type",
                 ));
             };
-            let signature = self.signature_of([], result, true, self.tables)?;
+            let vectors = self.command_line_vectors();
+            let signature = self.signature_of([], result, true, vectors, self.tables)?;
             self.module.intern(signature)
         } else {
             self.signature_for_binding(binding)?
@@ -916,6 +921,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// PDF p. 131. An unprototyped type has no fixed parameters.
     fn signature_for_binding(&mut self, binding: usize) -> Result<SigId, LoweringErrorKind> {
         let ty = self.sema.bindings[binding].ty;
+        let vectors = self.function_vectors(binding);
         if self.msvc_setjmp(binding)
             && let TypeKind::Function {
                 result, parameters, ..
@@ -923,11 +929,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         {
             // The frame argument is a pointer, as the buffer is.
             let parameters = [parameters[0], parameters[0]];
-            let signature = self.signature_of(parameters, result, false, self.tables)?;
+            let signature = self.signature_of(parameters, result, false, vectors, self.tables)?;
             return Ok(self.module.intern(signature));
         }
         let Some(extension) = self.sema.function_extensions.function(binding) else {
-            return self.signature(ty);
+            return self.signature_with(ty, vectors);
         };
         let TypeKind::Function {
             result,
@@ -936,7 +942,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             ..
         } = self.sema.types.kind(ty)
         else {
-            return self.signature(ty);
+            return self.signature_with(ty, vectors);
         };
         let mut expanded = ArenaVec::new_in(self.tables);
         for (index, &parameter) in parameters.iter().enumerate() {
@@ -949,8 +955,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 expanded.push(extension.size_type);
             }
         }
-        let signature =
-            self.signature_of(expanded.iter().copied(), result, variadic, self.tables)?;
+        let signature = self.signature_of(
+            expanded.iter().copied(),
+            result,
+            variadic,
+            vectors,
+            self.tables,
+        )?;
         Ok(self.module.intern(signature))
     }
 
@@ -978,6 +989,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     }
 
     pub(super) fn signature(&mut self, ty: TypeId) -> Result<SigId, LoweringErrorKind> {
+        let vectors = self.command_line_vectors();
+        self.signature_with(ty, vectors)
+    }
+
+    /// The IR signature of the function type `ty`, whose vectors travel as
+    /// `vectors` says.
+    fn signature_with(
+        &mut self,
+        ty: TypeId,
+        vectors: VectorAvx,
+    ) -> Result<SigId, LoweringErrorKind> {
         let TypeKind::Function {
             result,
             parameters,
@@ -989,8 +1011,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 "a function has no function type",
             ));
         };
-        let signature =
-            self.signature_of(parameters.iter().copied(), result, variadic, self.tables)?;
+        let signature = self.signature_of(
+            parameters.iter().copied(),
+            result,
+            variadic,
+            vectors,
+            self.tables,
+        )?;
         Ok(self.module.intern(signature))
     }
 
@@ -1000,6 +1027,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         &self,
         ty: TypeId,
         result: bool,
+        avx: bool,
         scratch: &'s Bump,
     ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
         super::vectors::abi_layout(
@@ -1008,7 +1036,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             crate::abi::Convention::of(self.target),
             self.rules(),
             result,
-            self.avx(),
+            avx,
             scratch,
         )
     }
@@ -1016,6 +1044,75 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// Whether AVX changes how vectors of 32 bytes and more travel.
     fn avx(&self) -> bool {
         self.context.configuration.code_options().x86_features.avx()
+    }
+
+    /// How the command line has vectors of 32 bytes travel.
+    pub(super) fn command_line_vectors(&self) -> VectorAvx {
+        let avx = self.avx();
+        VectorAvx {
+            arguments:     avx,
+            result:        avx,
+            record_result: avx,
+        }
+    }
+
+    /// How function `binding`'s vectors of 32 bytes travel, in its
+    /// definition and in each call of it: as the command line has them,
+    /// unless its own `target` attribute turns AVX on ([`Self::own_avx`]).
+    /// GCC then passes them and returns one in YMM registers, by the
+    /// function's own instruction set (`classify_argument` reads the
+    /// function's `TARGET_AVX`); Clang classifies the arguments by the
+    /// unit's features, in memory, and returns the vector whole, which LLVM
+    /// returns in YMM0 for a function with AVX, but a record holding one in
+    /// memory: `getIndirectReturnResult` returns only a non-aggregate
+    /// directly.
+    /// System V AMD64 psABI §3.2.3, "Classification", rule 1, `__m256`;
+    /// Clang `X86_64ABIInfo::classifyReturnType` and
+    /// `X86_64ABIInfo::getIndirectReturnResult`
+    /// (`clang/lib/CodeGen/Targets/X86.cpp`).
+    pub(super) fn function_vectors(&self, binding: usize) -> VectorAvx {
+        if self.own_avx(binding) {
+            self.avx_vectors()
+        } else {
+            self.command_line_vectors()
+        }
+    }
+
+    /// How the claimed compiler has vectors of 32 bytes travel to and from
+    /// a function with AVX in a unit without it ([`Self::function_vectors`]).
+    pub(super) fn avx_vectors(&self) -> VectorAvx {
+        let gcc = self.rules() == crate::configuration::RuleSet::Gcc;
+        VectorAvx {
+            arguments:     gcc,
+            result:        true,
+            record_result: gcc,
+        }
+    }
+
+    /// Whether function `binding`, which another object may call (it is
+    /// external, or its designator is used other than as a direct callee),
+    /// has a `target` attribute that turns AVX on where the command line has
+    /// none, under System V, and changes nothing else about how vectors
+    /// travel: its vectors then travel as its own compiler would pass them
+    /// ([`Self::function_vectors`]).
+    pub(super) fn own_avx(&self, binding: usize) -> bool {
+        crate::abi::Convention::of(self.target) == crate::abi::Convention::SystemV
+            && (self.sema.bindings[binding].linkage != Linkage::Internal
+                || self.addressed_functions.contains(&binding))
+            && self.turns_avx_on(binding)
+    }
+
+    /// Whether function `binding`'s `target` attribute turns AVX on where
+    /// the command line has none, and changes nothing else about how
+    /// vectors travel.
+    pub(super) fn turns_avx_on(&self, binding: usize) -> bool {
+        self.attribute_target(binding).is_some_and(|target| {
+            self.context
+                .configuration
+                .code_options()
+                .x86_features
+                .target_turns_avx_on(target)
+        })
     }
 
     /// Whether `binding` has a `target` attribute that changes how vectors of
@@ -1036,10 +1133,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// option bcc only warns about gives it YMM or ZMM registers bcc doesn't
     /// use, and under GCC's convention a variadic function's named one in YMM,
     /// since LLVM keeps such a function's named vectors on the stack, as
-    /// Clang's convention says (`CC_X86_64_C` has `CCIfNotVarArg`). An internal
-    /// function whose address nothing takes has only bcc's callers and keeps
-    /// bcc's convention.
-    /// GCC `classify_argument` and `function_arg_64`; System V AMD64 psABI
+    /// Clang's convention says (`CC_X86_64_C` has `CCIfNotVarArg`). `avx`
+    /// says whether the function's convention passes vectors whole, from the
+    /// command line or from its own `target` attribute
+    /// ([`Self::function_vectors`]). An internal function whose address
+    /// nothing takes has only bcc's callers and keeps bcc's convention.
+    /// C99 §6.7.5.3p9 (a variadic function's named parameters); GCC
+    /// `classify_argument` and `function_arg_64`; System V AMD64 psABI
     /// §3.2.3.
     pub(super) fn check_foreign_vectors(
         &self,
@@ -1047,6 +1147,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         result: TypeId,
         variadic: bool,
         target_attribute: bool,
+        avx: bool,
     ) -> Result<(), LoweringErrorKind> {
         let types = &self.sema.types;
         let unknown = self
@@ -1066,7 +1167,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         if variadic && self.rules() == crate::configuration::RuleSet::Gcc {
             for ty in named {
-                if self.travels_whole(ty)? {
+                if self.travels_whole_with(ty, avx)? {
                     return Err(LoweringErrorKind::Unsupported(
                         Construct::VariadicNamedVector,
                     ));
@@ -1077,16 +1178,20 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     }
 
     /// Whether an argument of type `ty` travels whole in a YMM register when it
-    /// is named and one is free.
-    pub(super) fn travels_whole(&self, ty: TypeId) -> Result<bool, LoweringErrorKind> {
+    /// is named and one is free, in a function whose convention has AVX when
+    /// `avx` says so.
+    pub(super) fn travels_whole_with(
+        &self,
+        ty: TypeId,
+        avx: bool,
+    ) -> Result<bool, LoweringErrorKind> {
         let types = &self.sema.types;
-        if !self.avx() || crate::abi::Convention::of(self.target) != crate::abi::Convention::SystemV
-        {
+        if !avx || crate::abi::Convention::of(self.target) != crate::abi::Convention::SystemV {
             return Ok(false);
         }
         if super::vectors::shape(types, ty).is_some() {
             return Ok(self
-                .vector_abi_layout(ty, false, self.tables)?
+                .vector_abi_layout(ty, false, avx, self.tables)?
                 .flags
                 .contains(AggregateFlags::WIDE));
         }
@@ -1100,8 +1205,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         &self,
         ty: TypeId,
         mut layout: AggregateLayout<'s>,
+        avx: bool,
     ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
-        if self.avx()
+        if avx
             && crate::abi::Convention::of(self.target) == crate::abi::Convention::SystemV
             && super::wide_vectors::record_travels_whole(&self.sema.types, ty, self.rules())?
         {
@@ -1137,6 +1243,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         parameters: impl IntoIterator<Item = TypeId>,
         result: TypeId,
         variadic: bool,
+        vectors: VectorAvx,
         scratch: &'s Bump,
     ) -> Result<Signature<'s>, LoweringErrorKind> {
         let types = &self.sema.types;
@@ -1162,11 +1269,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             {
                 params.push(Type::Ptr);
                 let layout = if super::vectors::shape(types, result).is_some() {
-                    self.vector_abi_layout(result, true, scratch)?
+                    self.vector_abi_layout(result, true, vectors.result, scratch)?
                 } else {
                     self.with_wide_record(
                         result,
                         types::object_layout(types, result, self.rules(), scratch)?,
+                        vectors.record_result,
                     )?
                 };
                 aggregates.push(AggregateParam {
@@ -1202,7 +1310,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     noundef.push(index);
                     params.push(Type::Ptr);
                     let layout = if super::vectors::shape(types, parameter).is_some() {
-                        self.vector_abi_layout(parameter, false, scratch)?
+                        self.vector_abi_layout(parameter, false, vectors.arguments, scratch)?
                     } else {
                         self.with_wide_record(
                             parameter,
@@ -1213,6 +1321,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                                 self.rules(),
                                 scratch,
                             )?,
+                            vectors.arguments,
                         )?
                     };
                     aggregates.push(AggregateParam {
@@ -2756,6 +2865,15 @@ pub(super) fn at(kind: LoweringErrorKind, source: SourceVectors) -> LoweringErro
     }
 }
 
+/// Whether vectors of 32 bytes travel whole in YMM registers, as arguments,
+/// as a result, and inside a record result.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct VectorAvx {
+    pub(super) arguments:     bool,
+    pub(super) result:        bool,
+    pub(super) record_result: bool,
+}
+
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     pub(super) fn new(
         context: &'a Context<'tu>,
@@ -2765,6 +2883,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         tables: &'a Bump,
     ) -> Result<Self, LoweringError> {
         let address_taken = address_taken::find(sema, tables)?;
+        let addressed_functions = address_taken::addressed_functions(sema, tables);
         let mut module = Module::new(arena);
         module.set_target(target.triple(), types::data_layout(target));
         for (index, binding) in sema.bindings.iter().enumerate() {
@@ -2822,6 +2941,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             defined_objects,
             tentative_objects: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             address_taken,
+            addressed_functions,
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             compound_literals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),

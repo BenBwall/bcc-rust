@@ -31,6 +31,7 @@ mod review;
 mod strict_volatile_bit_fields;
 mod vectors;
 mod void_and_incomplete;
+mod x86;
 
 use std::path::Path;
 

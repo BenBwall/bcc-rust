@@ -118,6 +118,7 @@ impl Codegen<'_, '_, '_, '_, '_> {
                 self.indirect_call(sig, args, result);
             },
             | InstData::InlineAsm { .. } => self.refuse("inline assembly"),
+            | InstData::Intrinsic { .. } => self.refuse("an x86 instruction"),
             | InstData::VaArgAggregate { .. } =>
                 self.refuse("va_arg of an aggregate before ABI lowering"),
             // Recomputed where they are used, and the terminators, which

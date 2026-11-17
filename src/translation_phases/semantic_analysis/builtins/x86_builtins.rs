@@ -159,6 +159,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return Self::expression_result(e, ty);
                 }
             } else {
+                // Each operand is a value, converted as the first is (C99
+                // §6.3.2.1p2), so lowering loads every lvalue operand.
+                let mut same = true;
+                for &arg in &args[1..] {
+                    let operand = self.expression_info(arg);
+                    same &= self.converted(operand).unqualified() == ty.unqualified();
+                }
                 let element = self.vector(ty).map_or(ty, |v| v.0);
                 let valid = (self.integer_type(element).is_some()
                     || matches!(
@@ -174,9 +181,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             self.types.nodes[element.index],
                             TypeKind::Scalar(Scalar::Float | Scalar::Double | Scalar::LongDouble)
                         ))
-                    && args
-                        .iter()
-                        .all(|&arg| self.expression_info(arg).ty.unqualified() == ty.unqualified());
+                    && same;
                 if valid {
                     return Self::expression_result(e, ty.unqualified());
                 }

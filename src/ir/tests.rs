@@ -9,6 +9,7 @@ mod debug_info;
 mod dominators;
 mod extensions;
 mod inline_asm;
+mod intrinsics;
 mod labels;
 mod noundef;
 mod scalar_builtins;

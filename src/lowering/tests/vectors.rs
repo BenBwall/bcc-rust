@@ -262,9 +262,43 @@ fn foreign_vector_conventions_are_refused() {
         ] {
             accepted(definition, compiler, options);
         }
+        // A function whose attribute turns AVX on passes its vectors as its
+        // own compiler does: GCC in YMM registers, Clang the argument in
+        // memory and the result in YMM0.
         let target = "__attribute__((target(\"avx2\"))) V f(V a) { return a; }";
-        refused(target, compiler, &[], foreign);
+        let text = lower_with(
+            &format!("typedef int V __attribute__((vector_size(32))); {target}"),
+            with_options(compiler, &[]),
+        )
+        .expect(target);
+        let argument = if compiler == CompilerIdentity::Gcc {
+            "ptr aggregate(size 32, align 32, vector, wide)"
+        } else {
+            "ptr aggregate(size 32, align 32, vector) noundef"
+        };
+        assert!(
+            text.contains("ptr result(size 32, align 32, vector, wide)") && text.contains(argument),
+            "{text}"
+        );
         accepted(target, compiler, &["-mavx2"]);
+        // Its callers need AVX to pass them so, through a pointer too.
+        let declared = "__attribute__((target(\"avx2\"))) V f(V);";
+        refused(
+            &format!("{declared} V *g(V *p) {{ *p = f(*p); return p; }}"),
+            compiler,
+            &[],
+            "from a function without AVX",
+        );
+        accepted(
+            &format!("{declared} __attribute__((target(\"avx\"))) void g(V *p) {{ *p = f(*p); }}"),
+            compiler,
+            &[],
+        );
+        accepted(
+            "__attribute__((target(\"avx2\"))) void g(V (*f)(V), V *p) { *p = f(*p); }",
+            compiler,
+            &[],
+        );
         let target = "__attribute__((target(\"no-avx\"))) V f(V a) { return a; }";
         refused(target, compiler, &["-mavx2"], foreign);
         accepted(target, compiler, &[]);
@@ -284,7 +318,7 @@ fn foreign_vector_conventions_are_refused() {
         accepted(narrowed, compiler, &[]);
         let escaping =
             "__attribute__((target(\"avx2\"))) static V f(V a) { return a; } V (*p)(V) = f;";
-        refused(escaping, compiler, &[], foreign);
+        accepted(escaping, compiler, &[]);
         let call = "V e(V); __attribute__((target(\"avx2\"))) void g(V *p) { *p = e(*p); }";
         refused(call, compiler, &[], foreign);
         accepted(
@@ -298,6 +332,34 @@ fn foreign_vector_conventions_are_refused() {
     refused(variadic, CompilerIdentity::Gcc, &["-mavx2"], named);
     accepted(variadic, CompilerIdentity::Clang, &["-mavx2"]);
     accepted(variadic, CompilerIdentity::Gcc, &[]);
+    // A `target` attribute that turns AVX on gives GCC's named vector YMM0
+    // as the command line does, in the definition and in each call.
+    let variadic = "__attribute__((target(\"avx\"))) V f(V a, int n, ...) { return a; }";
+    refused(variadic, CompilerIdentity::Gcc, &[], named);
+    accepted(variadic, CompilerIdentity::Clang, &[]);
+    let call = "__attribute__((target(\"avx\"))) V f(V, int, ...); \
+                __attribute__((target(\"avx\"))) void g(V *p) { *p = f(*p, 1, *p); }";
+    refused(call, CompilerIdentity::Gcc, &[], named);
+    accepted(call, CompilerIdentity::Clang, &[]);
+    let pointer =
+        "__attribute__((target(\"avx\"))) void g(V (*f)(V, int, ...), V *p) { *p = f(*p, 0); }";
+    refused(pointer, CompilerIdentity::Gcc, &[], named);
+    accepted(pointer, CompilerIdentity::Clang, &[]);
+    // Without a prototype every argument is named: GCC's caller with AVX
+    // passes the vector in YMM0, as a callee whose attribute turns AVX on
+    // takes it.
+    accepted(
+        "__attribute__((target(\"avx\"))) V f(); __attribute__((target(\"avx\"))) void g(V *p) { \
+         *p = f(*p); }",
+        CompilerIdentity::Gcc,
+        &[],
+    );
+    refused(
+        "V e(); __attribute__((target(\"avx\"))) void g(V *p) { *p = e(*p); }",
+        CompilerIdentity::Gcc,
+        &[],
+        "ignores, changes how it travels",
+    );
     accepted(
         "static int f(int n, V a, ...) { return a[n]; } int g(V *p) { return f(0, *p); }",
         CompilerIdentity::Gcc,
@@ -334,14 +396,81 @@ fn foreign_vector_conventions_are_refused() {
     );
 }
 
-/// The vector builtins lowering does not expand are refused by name rather
-/// than called.
+/// A function whose `target` attribute turns AVX on returns a record
+/// holding a 32-byte vector as GCC does, in YMM0, but as Clang does, in
+/// memory, where it returns the bare vector in YMM0.
 #[test]
-fn unexpanded_vector_builtins_are_refused() {
-    let errors = lower(
-        "typedef int V __attribute__((vector_size(16))); V f(V a, V b) { return \
-         __builtin_elementwise_max(a, b); }",
-    )
-    .expect_err("refused");
-    assert_eq!(errors, ["not yet supported by lowering: this builtin"]);
+fn avx_target_record_results_follow_each_compiler() {
+    use crate::configuration::CompilerIdentity;
+    let source = "typedef float V __attribute__((vector_size(32))); struct w { V v; }; \
+                  __attribute__((target(\"avx\"))) struct w f(struct w *p) { return *p; } \
+                  __attribute__((target(\"avx\"))) V g(V *p) { return *p; }";
+    for (compiler, record) in [
+        (CompilerIdentity::Gcc, "ptr result(size 32, align 32, wide)"),
+        (CompilerIdentity::Clang, "ptr result(size 32, align 32)"),
+    ] {
+        let text = lower_with(source, with_options(compiler, &[])).expect("lowers");
+        assert!(text.contains(record), "{compiler:?}\n{text}");
+        assert!(
+            text.contains("ptr result(size 32, align 32, vector, wide)"),
+            "{compiler:?}\n{text}"
+        );
+    }
+}
+
+/// Clang's elementwise builtins work lane by lane, or on a scalar: `max`
+/// compares each lane by its signedness and selects; signed `sub_sat`
+/// detects overflow in the operands' width and clamps; `sqrt` is the named
+/// square root; `long double`'s `abs` clears the sign byte in memory.
+#[test]
+fn elementwise_builtins_expand_lane_by_lane() {
+    for (source, wanted) in [
+        (
+            "typedef int V __attribute__((vector_size(16))); V f(V a, V b) { return \
+             __builtin_elementwise_max(a, b); }",
+            "icmp.i32 sgt",
+        ),
+        (
+            "typedef unsigned char V __attribute__((vector_size(16))); V f(V a, V b) { return \
+             __builtin_elementwise_add_sat(a, b); }",
+            "icmp.i8 ult",
+        ),
+        (
+            "typedef short V __attribute__((vector_size(16))); V f(V a, V b) { return \
+             __builtin_elementwise_sub_sat(a, b); }",
+            "xor.i16",
+        ),
+        // Every operand is loaded, not only the first.
+        (
+            "int f(const int *p, int b) { return __builtin_elementwise_max(p[1], b); }",
+            "icmp.i32 sgt",
+        ),
+        (
+            "__int128 f(__int128 a, __int128 b) { return __builtin_elementwise_add_sat(a, b); }",
+            "iconst.i128 170141183460469231731687303715884105727",
+        ),
+        (
+            "__int128 f(__int128 a, __int128 b) { return __builtin_elementwise_sub_sat(a, b); }",
+            "iconst.i128 -170141183460469231731687303715884105728",
+        ),
+        (
+            "long double f(long double x) { return __builtin_elementwise_abs(x); }",
+            "store.i8",
+        ),
+        (
+            "long double f(void) { return __builtin_nondeterministic_value((long double)0); }",
+            "fconst.f80",
+        ),
+        (
+            "double f(double x) { return __builtin_elementwise_sqrt(x); }",
+            "intrinsic x86.sqrtsd",
+        ),
+        (
+            "int f(int *p) { return __builtin_nontemporal_load(p); }",
+            "load.i32",
+        ),
+    ] {
+        let text = functions(&lowered(source));
+        assert!(text.contains(wanted), "{source}\n{text}");
+    }
 }

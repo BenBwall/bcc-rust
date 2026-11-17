@@ -177,6 +177,7 @@ fn has_side_effects(data: &InstData) -> bool {
         | InstData::Call { .. }
         | InstData::CallIndirect { .. }
         | InstData::InlineAsm { .. }
+        | InstData::Intrinsic { .. }
         | InstData::Unary {
             opcode:
                 Opcode::VaStart

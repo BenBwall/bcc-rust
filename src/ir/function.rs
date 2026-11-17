@@ -300,7 +300,8 @@ impl<'ir> Body<'ir> {
             | InstData::Atomic { args, .. }
             | InstData::Call { args, .. }
             | InstData::CallIndirect { args, .. }
-            | InstData::InlineAsm { args, .. } =>
+            | InstData::InlineAsm { args, .. }
+            | InstData::Intrinsic { args, .. } =>
                 self.value_list(args).iter().for_each(|&value| visit(value)),
             | InstData::Jump { dest } => edge(dest, &mut visit),
             | InstData::Brif { cond, dests } => {

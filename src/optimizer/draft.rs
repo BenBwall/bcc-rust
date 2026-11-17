@@ -552,8 +552,9 @@ impl<'b, 's> Draft<'b, 's> {
                     | InstData::Call { .. }
                     | InstData::CallIndirect { .. }
                     | InstData::InlineAsm { .. }
+                    | InstData::Intrinsic { .. }
             ),
-            "owned operand lists belong only to calls, inline assembly and atomics"
+            "owned operand lists belong only to calls, inline assembly, intrinsics and atomics"
         );
         self.call_args[inst.index()] = Some(self.scratch.alloc_slice_copy(args));
     }
@@ -666,7 +667,8 @@ impl<'b, 's> Draft<'b, 's> {
                 | InstData::Atomic { args, .. }
                 | InstData::Call { args, .. }
                 | InstData::CallIndirect { args, .. }
-                | InstData::InlineAsm { args, .. } => self
+                | InstData::InlineAsm { args, .. }
+                | InstData::Intrinsic { args, .. } => self
                     .call_operands(inst, args)
                     .iter()
                     .copied()

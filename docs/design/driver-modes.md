@@ -344,7 +344,8 @@ can reach and calls of them:
   turns AVX off or AVX-512 on under the command line's AVX is refused too, since LLVM
   would pass its vectors in other registers than bcc's calls do.
 - Under `--gcc-mode`, a variadic function's named 32-byte vector, which GCC passes in
-  YMM0 and LLVM only on the stack. `--clang-mode` keeps Clang's stack.
+  YMM0 and LLVM only on the stack, whether AVX comes from the command line or the
+  function's `target` attribute. `--clang-mode` keeps Clang's stack.
 - `--backend=native` refuses any YMM signature, since it writes no AVX instructions.
 
 A `static` function whose address nothing takes has only bcc's callers, so it keeps

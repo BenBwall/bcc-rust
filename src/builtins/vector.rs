@@ -3,9 +3,9 @@
 //! calls; and GCC's run-time shuffle `__builtin_shuffle`. None has a single C
 //! prototype, so each names a family [`TypeRule`] that
 //! `semantic_analysis/vectors.rs` and `semantic_analysis/builtins/x86_builtins.
-//! rs` check. Lowering expands the shuffles, the lane conversion and the bit
-//! cast inline (`lowering/vectors.rs`) and refuses the others
-//! ([`UnsupportedReason::Vector`]) rather than calling an external symbol.
+//! rs` check. Lowering expands them all inline ([`BuiltinFamily::Vector`]):
+//! the shuffles, the lane conversion and the bit cast in
+//! `lowering/vectors.rs`, the others in `lowering/elementwise.rs`.
 //!
 //! Clang extension: Clang Language Extensions, "Vectors and Extended
 //! Vectors" and "Builtin Functions".
@@ -16,6 +16,7 @@ use super::{
     Availability,
     BuiltinDescriptor,
     BuiltinEffectClass,
+    BuiltinFamily,
     BuiltinId as Id,
     BuiltinOperation,
     DesignatorPolicy,
@@ -23,7 +24,6 @@ use super::{
     OPAQUE_SIGNATURE,
     SyntaxForm,
     TypeRule,
-    UnsupportedReason,
     VectorOverload as O,
 };
 use crate::configuration::Feature;
@@ -128,7 +128,7 @@ const fn descriptor(
         arguments: &[],
         arity,
         effects: BuiltinEffectClass::Unknown,
-        operation: BuiltinOperation::Unsupported(UnsupportedReason::Vector),
+        operation: BuiltinOperation::Family(BuiltinFamily::Vector),
         library: None,
     }
 }

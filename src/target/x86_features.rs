@@ -287,6 +287,14 @@ impl X86Features {
         changed.avx() != self.avx() || changed.unknown_vector_abi() != self.unknown_vector_abi()
     }
 
+    /// Whether a `target` attribute turns AVX on where these options leave it
+    /// off, and changes nothing else about how vectors travel.
+    pub(crate) fn target_turns_avx_on(self, target: &FunctionTarget) -> bool {
+        !self.avx()
+            && target.features.avx()
+            && target.features.unknown_vector_abi() == self.unknown_vector_abi()
+    }
+
     /// The features in effect: those explicitly turned on, the processor's
     /// that no option decided, and what those bring by default.
     const fn enabled(self) -> u128 {

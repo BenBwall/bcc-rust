@@ -35,7 +35,7 @@ use crate::{
 impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// Inspect the object representation instead of comparing with zero:
     /// signed zero and both signs of NaN must preserve their sign bit.
-    pub(super) fn floating_builtin(
+    pub(in crate::lowering) fn floating_builtin(
         &mut self,
         operation: FloatOperation,
         items: &[Item],

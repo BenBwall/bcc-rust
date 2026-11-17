@@ -502,7 +502,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::DebugTrap
             | CommonBuiltin::Annotation
             | CommonBuiltin::Semantic(_)
-            | CommonBuiltin::Unsupported(_) => {},
+            | CommonBuiltin::Family(_) => {},
         }
         Some(info)
     }

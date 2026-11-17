@@ -7,7 +7,12 @@
 //! turns on AVX2 and BMI2 where the processor has them. Each is built under
 //! both identities,
 //! interpreted and compiled through LLVM and the native back end, and must
-//! print GCC's output.
+//! print GCC's output. `x86_intrinsics_avx2.c` covers the AVX, AVX2, AES-NI
+//! and PCLMULQDQ intrinsics whose builtins lowering expands, against both
+//! GCC's and the pinned Clang's builds, and `avx_target_abi_callee.c` with
+//! `avx_target_abi_caller.c` the vectors of functions whose `target`
+//! attribute turns AVX on, linked with either compiler's half, as
+//! `avx_target_variadic.c` does for a variadic one.
 
 #[cfg(test)]
 #[expect(
@@ -57,6 +62,207 @@ mod tests {
     #[test]
     fn target_attribute_paths_match_gcc() {
         check("target_attribute.c", &[], &["-DALWAYS_FAST"]);
+    }
+
+    /// The AVX, AVX2, AES-NI and PCLMULQDQ intrinsics print what GCC's and
+    /// the pinned Clang's builds print, through LLVM at -O0 and -O2. The
+    /// interpreter runs all but the approximate reciprocals, and the native
+    /// back end all but the named instructions it refuses; each such arm is
+    /// compared with references built with the same macros. A processor
+    /// without AVX2, AES, PCLMULQDQ or SSE4.2 prints "skip" in every build,
+    /// and runs no interpreter comparison, whose reference could not run.
+    #[test]
+    fn avx2_intrinsics_match_gcc_and_clang() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let source = fixture("x86_intrinsics_avx2.c");
+        let mut references = vec![("--compiler-identity=clang", "target/llvm/bin/clang")];
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            references.push(("--compiler-identity=gcc", "gcc"));
+        }
+        for (identity, compiler) in references {
+            let expected = build_and_run(compiler, &source, &[]);
+            let skipped = expected == "skip\n";
+            let interpreted = ["-DALWAYS_FAST", "-DNO_APPROX"];
+            let arms: [(&[&str], &[&str]); 6] = [
+                (&[], &["-O0"]),
+                (&[], &["-O2"]),
+                (&interpreted, &["--interpret", "--opt=none"]),
+                (&interpreted, &["--interpret", "--opt=bcc"]),
+                (&["-DNO_NAMED"], &["--backend=native"]),
+                (&["-DNO_NAMED"], &["--backend=native", "--opt=bcc"]),
+            ];
+            for (defines, flags) in arms {
+                let interpreting = flags[0] == "--interpret";
+                if interpreting && skipped {
+                    continue;
+                }
+                let expected = if defines.is_empty() {
+                    expected.clone()
+                } else {
+                    build_and_run(compiler, &source, defines)
+                };
+                let context = format!("{identity} {defines:?} {flags:?}");
+                let stdout = if interpreting {
+                    let output = bcc(&[&[identity, "-w", &source][..], defines, flags].concat());
+                    assert_eq!(
+                        output.status.code(),
+                        Some(0),
+                        "{context}: {}",
+                        text(&output.stderr)
+                    );
+                    text(&output.stdout)
+                } else {
+                    let executable = temporary("avx2.exe");
+                    let built = bcc(&[
+                        &[identity, "-w", &source, "-o", executable.to_str().unwrap()][..],
+                        defines,
+                        flags,
+                    ]
+                    .concat());
+                    assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+                    let run = run_native(&mut Command::new(&executable)).unwrap();
+                    std::fs::remove_file(&executable).unwrap();
+                    assert_eq!(run.status.code(), Some(0), "{context}");
+                    text(&run.stdout)
+                };
+                assert_lines(&stdout, &expected, &context);
+            }
+        }
+    }
+
+    /// External functions whose `target` attribute turns AVX on, in units
+    /// built without AVX, link with the claimed compiler's build of the
+    /// other half, in both directions: GCC passes their 32-byte vectors in
+    /// YMM registers, and Clang their arguments in memory and their result
+    /// in YMM0, but a record holding one in memory. One is reached through
+    /// a pointer.
+    #[test]
+    fn avx_target_functions_link_with_gcc_and_clang() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let definitions = fixture("avx_target_abi_callee.c");
+        let calls = fixture("avx_target_abi_caller.c");
+        let mut references = vec![("--compiler-identity=clang", "target/llvm/bin/clang")];
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            references.push(("--compiler-identity=gcc", "gcc"));
+        }
+        for (identity, compiler) in references {
+            let expected = build_and_run(compiler, &definitions, &[&calls]);
+            for (ours, theirs) in [(&definitions, &calls), (&calls, &definitions)] {
+                for flags in [&["-O0"][..], &["-O2"]] {
+                    let context = format!("{identity} {flags:?} {ours}");
+                    let object = temporary("part.o");
+                    let built = bcc(&[
+                        &[identity, "-w", "-c", ours, "-o", object.to_str().unwrap()][..],
+                        flags,
+                    ]
+                    .concat());
+                    assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+                    let output = build_and_run(compiler, theirs, &[object.to_str().unwrap()]);
+                    std::fs::remove_file(object).unwrap();
+                    assert_lines(&output, &expected, &context);
+                }
+            }
+        }
+    }
+
+    /// A variadic function whose `target` attribute turns AVX on, with a
+    /// named 32-byte vector: Clang's convention passes it in memory, as LLVM
+    /// does, so each half bcc builds links with Clang's build of the other;
+    /// GCC's passes it in YMM0, where LLVM cannot, so bcc refuses both the
+    /// definition and the call under GCC's identity.
+    #[test]
+    fn avx_target_variadic_functions_follow_each_convention() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let source = fixture("avx_target_variadic.c");
+        let clang = "target/llvm/bin/clang";
+        let callee = temporary("variadic-callee.o");
+        let built = Command::new(clang)
+            .args(["-DCALLEE", "-c", "-O0", "-w", &source, "-o"])
+            .arg(&callee)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let expected = build_and_run(clang, &source, &[callee.to_str().unwrap()]);
+        std::fs::remove_file(&callee).unwrap();
+        for flags in [&["-O0"][..], &["-O2"]] {
+            for (ours, theirs) in [(&["-DCALLEE"][..], &[][..]), (&[], &["-DCALLEE"])] {
+                let context = format!("{flags:?} {ours:?}");
+                let object = temporary("variadic-part.o");
+                let object = object.to_str().unwrap();
+                let built = bcc(&[
+                    &[
+                        "--compiler-identity=clang",
+                        "-w",
+                        "-c",
+                        &source,
+                        "-o",
+                        object,
+                    ][..],
+                    ours,
+                    flags,
+                ]
+                .concat());
+                assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+                let output = build_and_run(clang, &source, &[theirs, &[object]].concat());
+                std::fs::remove_file(object).unwrap();
+                assert_lines(&output, &expected, &context);
+                let refused = bcc(&[
+                    &["--compiler-identity=gcc", "-w", "-c", &source, "-o", object][..],
+                    ours,
+                    flags,
+                ]
+                .concat());
+                assert!(
+                    !refused.status.success(),
+                    "{context}: GCC identity accepted"
+                );
+                assert!(
+                    text(&refused.stderr)
+                        .contains("a named 32-byte vector parameter of a variadic"),
+                    "{context}: {}",
+                    text(&refused.stderr)
+                );
+            }
+        }
+    }
+
+    /// The output of `source` built by `compiler` with `extra` arguments
+    /// (macros, more sources and objects) at -O0.
+    fn build_and_run(compiler: &str, source: &str, extra: &[&str]) -> String {
+        let executable = temporary("reference.exe");
+        let built = Command::new(compiler)
+            .args(extra)
+            .args([source, "-O0", "-w", "-o"])
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{compiler}: {}",
+            text(&built.stderr)
+        );
+        let run = run_native(&mut Command::new(&executable)).unwrap();
+        std::fs::remove_file(executable).unwrap();
+        assert_eq!(run.status.code(), Some(0), "{compiler} {extra:?}");
+        text(&run.stdout)
     }
 
     /// An out-of-range immediate is Clang's default-error

@@ -39,6 +39,8 @@ use crate::{
         InstData,
         InstFlags,
         IntCC,
+        Intrinsic,
+        IntrinsicOperand,
         Module,
         Opcode,
         ParamAbi,
@@ -890,6 +892,14 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 )?;
                 return Ok(None);
             },
+            | InstData::Intrinsic {
+                intrinsic,
+                immediate,
+                args,
+            } => match self.target_intrinsic(intrinsic, immediate, self.body.value_list(args))? {
+                | Some(result) => result,
+                | None => return Ok(None),
+            },
             | InstData::Jump { dest } => api.jump(self.destination(dest)?),
             | InstData::Brif {
                 cond,
@@ -1158,6 +1168,57 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
         let api = self.emitter.api;
         let (function, ty) = api.intrinsic(name, overloads);
         api.call(ty, function, args)
+    }
+
+    /// A named target instruction: the LLVM intrinsic Clang calls for it,
+    /// on the vectors its operands point to, with the result stored through
+    /// the destination when it is a vector. The vectors are read and written
+    /// with alignment 1, since a vector object may be a member of a packed
+    /// record. Returns the scalar result, if the intrinsic has one.
+    fn target_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        immediate: u8,
+        args: &[Value],
+    ) -> Result<Option<Val<'id>>, EmitError<'m>> {
+        let api = self.emitter.api;
+        let signature = intrinsic.signature();
+        let vector = |lane: Type, count: u8| api.vector(api.ty(lane), u32::from(count));
+        let (destination, operands) = if signature.has_destination() {
+            let (&destination, operands) = args.split_first().ok_or(std::fmt::Error)?;
+            (Some(destination), operands)
+        } else {
+            (None, args)
+        };
+        let mut values = ArenaVec::with_capacity_in(operands.len() + 1, self.emitter.arena);
+        for (&operand, &arg) in signature.operands.iter().zip(operands) {
+            let value = self.value(arg)?;
+            values.push(match operand {
+                | IntrinsicOperand::Vector(lane, count) => {
+                    let loaded = api.load(vector(lane, count), value);
+                    api.alignment(loaded, 1);
+                    loaded
+                },
+                | IntrinsicOperand::Scalar(_) => value,
+            });
+        }
+        if let Some(ty) = signature.immediate {
+            values.push(api.bits(ty, u128::from(immediate)));
+        }
+        let overloads = match signature.result {
+            | Some(IntrinsicOperand::Scalar(ty)) if signature.overloaded => Some(api.ty(ty)),
+            | _ => None,
+        };
+        let call = self.intrinsic(signature.llvm, &values, overloads.as_slice());
+        match (signature.result, destination) {
+            | (Some(IntrinsicOperand::Vector(..)), Some(destination)) => {
+                let store = api.store(call, self.value(destination)?);
+                api.alignment(store, 1);
+                Ok(None)
+            },
+            | (Some(IntrinsicOperand::Scalar(_)), _) => Ok(Some(call)),
+            | _ => Ok(None),
+        }
     }
 
     fn call(

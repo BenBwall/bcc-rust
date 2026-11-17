@@ -421,6 +421,14 @@ impl Machine<'_, '_, '_> {
                 }
                 return Ok(None);
             },
+            | InstData::Intrinsic {
+                intrinsic,
+                immediate,
+                args,
+            } => match self.intrinsic(intrinsic, immediate, body.value_list(args))? {
+                | Some(value) => value,
+                | None => return Ok(None),
+            },
             | InstData::CallIndirect { sig, args } => {
                 let (&callee, args) = body
                     .value_list(args)

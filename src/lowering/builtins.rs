@@ -229,7 +229,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             {
                 let signature = self
                     .unit
-                    .signature_of([ty], ty, false, self.scratch)
+                    .signature_of(
+                        [ty],
+                        ty,
+                        false,
+                        self.unit.command_line_vectors(),
+                        self.scratch,
+                    )
                     .map_err(|kind| super::module_items::at(kind, source))?;
                 let signature = crate::ir::Signature {
                     params: &signature.params[1..],
@@ -493,7 +499,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     "varargs must use keyword scheduling",
                     source,
                 )),
-            | CommonBuiltin::Semantic(_) | CommonBuiltin::Unsupported(_) =>
+            | CommonBuiltin::Semantic(_) | CommonBuiltin::Family(_) =>
                 return Err(LoweringError::missing(
                     "family builtins retain no checked instance",
                     source,

@@ -36,9 +36,10 @@
 //!
 //! - Representation: `entities.rs` defines the `u32` entities and their dense
 //!   tables; `types.rs` the value types; `instructions.rs` the opcodes, the
-//!   instruction record and its flags; `function.rs` a function body and its
-//!   queries; `module.rs` signatures, globals, symbols and result types;
-//!   `debug_info.rs` the source locations and scopes `-g` keeps beside them.
+//!   instruction record and its flags; `intrinsics.rs` the named target
+//!   instructions; `function.rs` a function body and its queries; `module.rs`
+//!   signatures, globals, symbols and result types; `debug_info.rs` the source
+//!   locations and scopes `-g` keeps beside them.
 //! - Construction: `builder.rs` builds a body one instruction at a time.
 //! - Textual form: `printer.rs` writes it; `parser.rs` reads it, with
 //!   `parser/lexer.rs` splitting it into tokens.
@@ -58,6 +59,7 @@ mod entities;
 mod function;
 mod inline_asm;
 mod instructions;
+mod intrinsics;
 mod module;
 mod types;
 
@@ -153,6 +155,10 @@ pub(crate) use instructions::{
     Opcode,
     TRAMPOLINE_SIZE,
     ValueList,
+};
+pub(crate) use intrinsics::{
+    Intrinsic,
+    IntrinsicOperand,
 };
 pub(crate) use module::{
     AggregateFlags,
