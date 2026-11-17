@@ -1534,6 +1534,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnusedValue
                     | crate::configuration::DiagnosticGroup::UnusedComparison
                     | crate::configuration::DiagnosticGroup::BoolOperation
+                    | crate::configuration::DiagnosticGroup::CharSubscripts
                     | crate::configuration::DiagnosticGroup::Main
                     | crate::configuration::DiagnosticGroup::MainExtension
                     | crate::configuration::DiagnosticGroup::MainReturnType
