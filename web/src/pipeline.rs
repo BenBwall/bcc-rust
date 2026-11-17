@@ -468,6 +468,16 @@ impl Stage {
         }
     }
 
+    /// Whether the stage's output differs between `-O0` and `-O2`, so the
+    /// two can be shown side by side: the optimizer runs on the IR, and the
+    /// front end does the same work at every level.
+    pub fn differs_by_level(self) -> bool {
+        matches!(
+            self,
+            Self::Ir | Self::IrAbi | Self::Llvm | Self::Asm | Self::MachineCode
+        )
+    }
+
     /// One sentence on what the stage takes from the one before and hands
     /// to the one after, so the stages read as one path.
     pub fn handoff(self) -> &'static str {

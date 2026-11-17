@@ -1145,6 +1145,18 @@
   /* The stage's output: the channel's screen. */
   .stage-output { margin-top: 16px; }
   .stage-output .code-editor { --editor-height: clamp(360px, calc(100vh - 420px), 620px); }
+  /* -O0 and -O2 side by side: -O0 always on the left, as the optimizer's
+     before and after. */
+  .stage-output.is-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+  .stage-output.is-compare > .link-legend { grid-column: 1 / -1; }
+  .stage-output.is-compare[data-level="O2"] > .stage-main { order: 2; }
+  .stage-output.is-compare[data-level="O2"] > .link-legend { order: 3; }
+  .stage-main, .stage-beside { min-width: 0; }
+  .stage-level { margin-bottom: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink); }
+  @container insight (max-width: 700px) {
+    .stage-output.is-compare { grid-template-columns: minmax(0, 1fr); }
+  }
+  .stage-beside-waiting { padding: 16px; background: var(--screen); color: var(--screen-dim); font-size: 12px; }
   .stage-missing { margin-top: 16px; padding: 16px; background: var(--screen); color: var(--screen-dim); }
   .stage-missing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 12px; }
   .stage-missing-actions[hidden] { display: none; }

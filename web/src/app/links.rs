@@ -45,6 +45,9 @@ pub struct Pointing {
     cursor_output:    RwSignal<usize>,
     /// Whether the pointer moved after the cursor.
     pointer_latest:   RwSignal<bool>,
+    /// The line the pointer or the cursor is on in the other level's
+    /// output, shown beside the selected level's for comparison.
+    pub beside:       RwSignal<usize>,
     /// The text of the links' live region.
     pub announcement: RwSignal<String>,
 }
@@ -64,6 +67,7 @@ impl Pointing {
             cursor_source:  RwSignal::new(0),
             cursor_output:  RwSignal::new(0),
             pointer_latest: RwSignal::new(false),
+            beside:         RwSignal::new(0),
             announcement:   RwSignal::new(String::new()),
         }
     }
@@ -103,6 +107,7 @@ impl Pointing {
     pub fn clear_output(self) {
         self.hover_output.set(0);
         self.cursor_output.set(0);
+        self.beside.set(0);
     }
 
     fn signals(self, side: Side) -> (RwSignal<usize>, RwSignal<usize>) {
@@ -164,12 +169,39 @@ impl State {
             return None;
         }
         let pointing = self.pointing;
+        let beside = pointing.beside.get();
+        if beside > 0 {
+            return self.describe_beside(beside);
+        }
         let (side, line) = match (pointing.line(Side::Source), pointing.line(Side::Output)) {
             | (0, 0) => return Some("Point at a line to read what it links to.".to_owned()),
             | (0, output) => (Side::Output, output),
             | (source, _) => (Side::Source, source),
         };
         self.describe_link(side, line)
+    }
+
+    /// What `line` of the other level's output, beside the selected one,
+    /// links to in the source.
+    fn describe_beside(self, line: usize) -> Option<String> {
+        let stage = self.stage.get();
+        let headers = self.headers.get();
+        let optimized = !self.optimize.get();
+        self.other_level.with(|compilation| {
+            let compilation = compilation.as_ref()?;
+            self.other_links.with(|links| {
+                let linked = links.sources_for(line);
+                let view = View {
+                    name:     stage.view_name(),
+                    level:    Some(if optimized { "-O2" } else { "-O0" }),
+                    exact:    links.is_exact(),
+                    numbered: stage != Stage::MachineCode
+                        && pipeline::gutter(stage, compilation, headers).is_empty(),
+                };
+                let origins = Origins::of_output_line(links, line, stage, optimized);
+                Some(describe(Side::Output, line, &linked, view, origins))
+            })
+        })
     }
 
     /// What `line` of `side` links to in the view on screen, as a sentence,
@@ -198,6 +230,7 @@ impl State {
                             && pipeline::gutter(stage, compilation, headers).is_empty();
                         let view = View {
                             name: stage.view_name(),
+                            level: None,
                             exact: links.is_exact(),
                             numbered,
                         };
@@ -229,6 +262,7 @@ impl State {
                 };
                 let view = View {
                     name:     "WebAssembly text",
+                    level:    None,
                     exact:    true,
                     numbered: true,
                 };
@@ -243,6 +277,9 @@ impl State {
 struct View {
     /// As in "line 3 of the bcc IR".
     name:     &'static str,
+    /// The optimization level it names, when two are on screen: "line 3 of
+    /// the -O2 bcc IR".
+    level:    Option<&'static str>,
     /// Whether its lines link one by one rather than per function.
     exact:    bool,
     /// Whether its gutter numbers its lines, so a sentence can cite them.
@@ -318,9 +355,14 @@ const fn unclaimed_reason(stage: Stage, optimized: bool) -> &'static str {
 fn describe(side: Side, line: usize, linked: &[usize], view: View, origins: Origins) -> String {
     let View {
         name,
+        level,
         exact,
         numbered,
     } = view;
+    let name = match level {
+        | Some(level) => format!("{level} {name}"),
+        | None => name.to_owned(),
+    };
     let lines = line_list(linked);
     let outputs = if numbered {
         lines.clone()
@@ -464,16 +506,19 @@ mod tests {
         let plain = Origins::default();
         let ir = View {
             name:     "bcc IR",
+            level:    None,
             exact:    true,
             numbered: true,
         };
         let asm = View {
             name:     "x86-64 assembly",
+            level:    None,
             exact:    false,
             numbered: true,
         };
         let machine = View {
             name:     "machine code",
+            level:    None,
             exact:    false,
             numbered: false,
         };
@@ -497,6 +542,14 @@ mod tests {
             describe(Side::Source, 7, &[3, 4, 5, 6], asm, plain),
             "Source line 7 is in a function, on lines 3 to 6 of the x86-64 assembly."
         );
+        let beside = View {
+            level: Some("-O2"),
+            ..ir
+        };
+        assert_eq!(
+            describe(Side::Output, 9, &[14], beside, plain),
+            "Line 9 of the -O2 bcc IR came from source line 14."
+        );
         // The machine code shows offsets, not line numbers.
         assert_eq!(
             describe(Side::Output, 8, &[3, 4, 9], machine, plain),
@@ -514,6 +567,7 @@ mod tests {
         let said = |side, line, linked: &[usize], origins| {
             let asm = View {
                 name:     "x86-64 assembly",
+                level:    None,
                 exact:    true,
                 numbered: true,
             };

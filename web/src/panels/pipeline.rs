@@ -62,6 +62,10 @@ pub fn PipelineView(
     reading: Signal<Option<String>>,
     /// Its compilation at the other level, for the optimizer comparison.
     other: Memo<Option<Compilation>>,
+    /// Whether `-O0` and `-O2` are shown side by side.
+    compare: RwSignal<bool>,
+    /// The links between the source and `other`'s output, while they are.
+    other_links: Memo<Links>,
     /// The in-browser compiler's progress on `source` at the selected level.
     live: Signal<LiveCompile>,
     theme: Signal<&'static str>,
@@ -184,6 +188,7 @@ pub fn PipelineView(
     };
     let on_hover = Callback::new(move |line| pointing.hover(Side::Output, line));
     let on_cursor = Callback::new(move |line| pointing.cursor(Side::Output, line));
+    let side_by_side = Memo::new(move |_| compare.get() && stage.get().differs_by_level());
     view! {
         <section class="pipeline" aria-labelledby="pipeline-title">
             <h2 id="pipeline-title" class="sr-only">"Compiler pipeline"</h2>
@@ -277,6 +282,20 @@ pub fn PipelineView(
                         <span class="toggle-chip-dot" aria-hidden="true"></span>
                         "Show headers"
                     </button>
+                    <button
+                        type="button"
+                        class="toggle-chip"
+                        hidden=move || !stage.get().differs_by_level() || output.with(Option::is_none)
+                        aria-pressed=move || compare.get().to_string()
+                        title="Show the -O0 and the -O2 output next to each other"
+                        on:click=move |_| {
+                            compare.update(|compare| *compare = !*compare);
+                            pointing.beside.set(0);
+                        }
+                    >
+                        <span class="toggle-chip-dot" aria-hidden="true"></span>
+                        "-O0 and -O2 side by side"
+                    </button>
                 </div>
                 <p
                     class="link-reading"
@@ -285,7 +304,16 @@ pub fn PipelineView(
                 >
                     {move || reading.get()}
                 </p>
-                <div class="stage-output" hidden=move || output.with(Option::is_none)>
+                <div
+                    class="stage-output"
+                    class:is-compare=side_by_side
+                    data-level=move || if optimize.get() { "O2" } else { "O0" }
+                    hidden=move || output.with(Option::is_none)
+                >
+                    <div class="stage-main">
+                    <p class="stage-level" hidden=move || !side_by_side.get()>
+                        {move || level_caption(optimize.get())}
+                    </p>
                     <CodeEditor
                         text
                         language
@@ -298,6 +326,10 @@ pub fn PipelineView(
                         reveal
                         line_numbers
                     />
+                    </div>
+                    {move || side_by_side.get().then(|| view! {
+                        <Beside stage optimize other other_links theme pointing headers />
+                    })}
                     <footer class="link-legend" hidden=move || !shown_links.with(Links::has_origins)>
                         <span><i class="swatch swatch-link"></i>"came from the line you point at"</span>
                         <span><i class="swatch swatch-inlined"></i>"inlined from another function"</span>
@@ -361,6 +393,116 @@ fn linked(text: &'static str) -> impl IntoView {
             | None => piece.into_any(),
         })
         .collect_view()
+}
+
+/// The caption over one level's output when both are side by side.
+fn level_caption(optimized: bool) -> &'static str {
+    if optimized {
+        "-O2: optimized"
+    } else {
+        "-O0: each operation as written"
+    }
+}
+
+/// The other level's output, beside the selected level's: its lines linked
+/// to the source as the selected level's are, so a source line marks what it
+/// became at both levels.
+#[component]
+fn Beside(
+    stage: RwSignal<Stage>,
+    optimize: RwSignal<bool>,
+    other: Memo<Option<Compilation>>,
+    other_links: Memo<Links>,
+    theme: Signal<&'static str>,
+    pointing: Pointing,
+    headers: RwSignal<bool>,
+) -> impl IntoView {
+    let text = Signal::derive(move || {
+        let stage = stage.get();
+        let headers = headers.get();
+        other.with(|compilation| {
+            compilation
+                .as_ref()
+                .and_then(|compilation| displayed(stage, compilation, headers))
+                .map(|(text, _)| text)
+                .unwrap_or_default()
+        })
+    });
+    let line_numbers = Signal::derive(move || {
+        let stage = stage.get();
+        let headers = headers.get();
+        other.with(|compilation| {
+            compilation
+                .as_ref()
+                .map_or_else(Vec::new, |compilation| gutter(stage, compilation, headers))
+        })
+    });
+    let layers = Signal::derive(move || -> Vec<Layer> {
+        let hovered = pointing.line(Side::Source);
+        let linked = if hovered > 0 {
+            other_links.with(|links| {
+                links
+                    .outputs_for(hovered)
+                    .into_iter()
+                    .map(|line| {
+                        let class = if links.origin(line).call == 0 {
+                            "link-line"
+                        } else {
+                            "link-inlined"
+                        };
+                        Decoration::line(line, class)
+                    })
+                    .collect()
+            })
+        } else {
+            Vec::new()
+        };
+        let unclaimed = other_links.with(|links| {
+            links
+                .unclaimed()
+                .map(|line| Decoration {
+                    start_line: line,
+                    end_line: line,
+                    margin_class: Some("link-unclaimed".to_owned()),
+                    ..Decoration::default()
+                })
+                .collect()
+        });
+        vec![("links", linked), ("unclaimed", unclaimed)]
+    });
+    let reveal = Signal::derive(move || {
+        let hovered = pointing.line(Side::Source);
+        (hovered > 0)
+            .then(|| other_links.with(|links| links.first_output_for(hovered)))
+            .flatten()
+    });
+    let point = Callback::new(move |line| pointing.beside.set(line));
+    let language = Signal::derive(move || stage.get().language());
+    let waiting = Memo::new(move |_| other.with(Option::is_none));
+    view! {
+        <div class="stage-beside">
+            <p class="stage-level">
+                {move || level_caption(!optimize.get())}
+            </p>
+            <p class="stage-beside-waiting" hidden=move || !waiting.get()>
+                {move || format!("Compiling at {}…", if optimize.get() { "-O0" } else { "-O2" })}
+            </p>
+            <div hidden=move || waiting.get()>
+                <CodeEditor
+                    text
+                    language
+                    theme
+                    label="Compiler output at the other optimization level (read only)"
+                    read_only=true
+                    decorations=layers
+                    on_hover_line=point
+                    on_cursor_line=point
+                    reveal
+                    line_numbers
+                />
+            </div>
+        </div>
+    }
 }
 
 /// Switches to the bcc IR stage and moves the focus to its tab, since the
@@ -938,6 +1080,8 @@ mod tests {
                     links=Memo::new(|_| crate::pipeline::Links::default())
                     reading=Signal::stored(None)
                     other
+                    compare=RwSignal::new(false)
+                    other_links=Memo::new(|_| crate::pipeline::Links::default())
                     live=Signal::stored(LiveCompile::Compiling)
                     theme=Signal::stored("dark")
                     pointing=Pointing::new()
