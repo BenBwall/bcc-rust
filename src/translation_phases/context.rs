@@ -212,6 +212,10 @@ pub(crate) struct Context<'tu> {
     /// last for the whole translation unit, so semantic diagnostics can use
     /// them.
     expansion_starts: [ExpansionSites<'tu>; 3],
+    /// Where the `##` that formed a token is written in its macro's
+    /// replacement list, keyed by the token's first vector, for as long as
+    /// the invocation starts last.
+    paste_sites: [ExpansionSites<'tu>; 3],
     ignore_tokenizer_errors: bool,
     /// Phase 4 is skipping a conditional group, whose lines it reads only
     /// for conditional directives (C99 §6.10.1p6).

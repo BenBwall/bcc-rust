@@ -16,6 +16,7 @@ use crate::{
     configuration::Feature,
     translation_phases::{
         ArgumentSubstitution,
+        SourceVector,
         preprocessing::{
             Expander,
             Formation,
@@ -83,7 +84,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     return Some((lhs, false));
                 };
                 if self.hash_hash_follows() {
-                    self.paste_hash_hash_chain(lhs, rhs);
+                    let site = self
+                        .context
+                        .first_source_vector_or_default(h.source_vectors);
+                    self.paste_hash_hash_chain(lhs, rhs, &site);
                     continue 'base;
                 }
                 if let Some(r) = self.parse_hash_hash_operator(lhs, h, rhs) {
@@ -106,9 +110,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     fn parse_hash_hash_operator(
         &mut self,
         lhs: PreprocessorToken,
-        _hash_hash: PreprocessorToken,
+        hash_hash: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
+        let site = self
+            .context
+            .first_source_vector_or_default(hash_hash.source_vectors);
         let arguments = self.get_arguments();
         if let Some(argument) = arguments
             .and_then(|arguments| find_argument(arguments, lhs.identifier_id(self.context)))
@@ -119,14 +126,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 // frame and prematurely apply the pending paste to that macro's
                 // first token. Paste the complete raw operand first instead.
                 let right = self.paste_operand(arguments, rhs);
-                self.paste_onto(&mut left, right);
+                self.paste_onto(&mut left, right, &site);
                 self.replay_pasted_tokens(&left);
                 return None;
             }
         }
         let lhs_frame = self.operand_frame(lhs);
         let rhs_frame = self.operand_frame(rhs);
-        self.hash_hash_stack.push(HashHash::Empty);
+        self.hash_hash_stack.push(HashHash::Empty(site.clone()));
         let rhs_is_macro_argument = if let Some(mut frame) = rhs_frame {
             // The result's padding follows what remains of the right operand.
             if let TokenizerFrameType::FunctionLikeMacroArgument { end, .. } = &mut frame.frame_type
@@ -136,16 +143,16 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             self.push_tokenizer_frame(frame);
             true
         } else {
-            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Rhs(rhs);
+            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Rhs(rhs, site.clone());
             false
         };
         if let Some(frame) = lhs_frame {
             self.push_tokenizer_frame(frame);
         } else if rhs_is_macro_argument {
-            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs, Formation::Read);
+            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs, Formation::Read, site);
         } else {
             _ = self.hash_hash_stack.pop();
-            return self.merge_tokens(lhs, rhs);
+            return self.merge_tokens(lhs, rhs, &site);
         }
         None
     }
@@ -155,7 +162,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// is undefined behavior; it is diagnosed, keeping the left operand.
     /// Forming a universal character name by concatenation is undefined too;
     /// an identifier that pasting leaves with a `\` is read as a universal
-    /// identifier.
+    /// identifier. A token formed of two records `site`, where its `##` is
+    /// written ([`crate::translation_phases::Context::record_paste_site`]).
     ///
     /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166, and §5.1.1.2
     /// paragraph 1 item 4, p. 10; PDF p. 22.
@@ -163,6 +171,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         mut lhs: PreprocessorToken,
         mut rhs: PreprocessorToken,
+        site: &SourceVector,
     ) -> Option<PreprocessorToken> {
         // A placemarker leaves the other operand as it was, painted or not
         // (§6.10.3.4 paragraph 2, p. 155; PDF p. 167); a new token starts
@@ -180,6 +189,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             self.trace_pasted(lhs, rhs, merged);
         }
         let mut token = merged?;
+        // A placemarker's other operand, or the left one that a diagnosed
+        // paste keeps, is no token pasting formed.
+        if token.source_vectors != lhs.source_vectors && token.source_vectors != rhs.source_vectors
+        {
+            self.context
+                .record_paste_site(token.source_vectors, site.clone());
+        }
         if !self.context.configuration.is_native(Feature::Digraphs)
             && let spelling @ ("<:" | ":>" | "<%" | "%>" | "%:" | "%:%:") =
                 self.context.string_cache.at(token.contents)
@@ -562,15 +578,27 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166: the order of
     /// evaluation of `##` operators is unspecified; §6.10.3.4 paragraph 1,
     /// p. 155; PDF p. 167.
-    fn paste_hash_hash_chain(&mut self, first: PreprocessorToken, second: PreprocessorToken) {
+    fn paste_hash_hash_chain(
+        &mut self,
+        first: PreprocessorToken,
+        second: PreprocessorToken,
+        site: &SourceVector,
+    ) {
         let arguments = self.get_arguments();
         let mut result = self.paste_operand(arguments, first);
         let mut operand = Some(second);
+        let mut site = site.clone();
         while let Some(token) = operand {
             let right = self.paste_operand(arguments, token);
-            self.paste_onto(&mut result, right);
+            self.paste_onto(&mut result, right, &site);
             operand = if self.hash_hash_follows() {
-                _ = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+                if let Some(hash_hash) =
+                    Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+                {
+                    site = self
+                        .context
+                        .first_source_vector_or_default(hash_hash.source_vectors);
+                }
                 self.hash_hash_right_operand()
             } else {
                 None
@@ -629,10 +657,16 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// Pastes the last token of `left` with the first of `right`, then
     /// appends the rest of `right`. An empty side is a placemarker, which
     /// leaves the other unchanged, its substitution included; a token that
-    /// pasting forms comes from no argument.
+    /// pasting forms comes from no argument. `site` is where the `##` is
+    /// written.
     ///
     /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
-    pub(super) fn paste_onto(&mut self, left: &mut PastedTokens<'x>, mut right: PastedTokens<'x>) {
+    pub(super) fn paste_onto(
+        &mut self,
+        left: &mut PastedTokens<'x>,
+        mut right: PastedTokens<'x>,
+        site: &SourceVector,
+    ) {
         if !right.tokens.is_empty()
             && let Some((lhs, lhs_substitution)) = left.pop()
         {
@@ -643,7 +677,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 | (PreprocessorTokenType::Placeholder, _) => rhs_substitution,
                 | _ => None,
             };
-            if let Some(merged) = self.merge_tokens(lhs, rhs) {
+            if let Some(merged) = self.merge_tokens(lhs, rhs, site) {
                 left.push(merged, substitution);
             }
         }

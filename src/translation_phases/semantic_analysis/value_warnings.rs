@@ -491,7 +491,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang's walk: the operands a conditional may yield, through the forms
     /// `IgnoreParens` passes, each checked against the target in its own
     /// type, and each reported only where it may be evaluated.
+    ///
+    /// A conversion whose context location (`CC` in
+    /// `AnalyzeImplicitConversions`) a system macro wrote is not reported
+    /// ([`Self::conversion_in_system_macro`]); a conditional passes that
+    /// context to the operands it may yield (`CheckConditionalOperand`).
+    /// Under Clang's identities a comma that is itself the converted operand
+    /// has its right operand checked instead, whole, with the comma's
+    /// operator for its context (`CheckCommaOperand`): in `CALL((0, 300))`
+    /// a system macro's call does not hide the conversion of `300` that the
+    /// user's comma yields. A conditional or a comma there, or a comma
+    /// among a conditional's operands, is checked as one operand, since
+    /// Clang walks into it only in its own type.
+    /// C99: §6.5.15p4, p. 90; PDF p. 102; §6.5.17p2, p. 94; PDF p. 106.
     fn clang_constant_conversions(&mut self, narrowing: Narrowing, e: &'tu Expression<'tu>) {
+        let e = self.selected_operand(e);
+        if self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang
+            && let E::Binary {
+                operator: B::Comma,
+                right_expression,
+                ..
+            } = e.kind
+        {
+            let comma = e.operator_source_vectors.unwrap_or(e.source_vectors);
+            if !self.in_system_macro_context(comma) {
+                let right = self.selected_operand(right_expression);
+                self.clang_constant_conversion(narrowing, right);
+            }
+            return;
+        }
+        if self.conversion_in_system_macro() {
+            return;
+        }
         // Clang's control-flow graph decides which arms of a constant
         // condition run; outside a function nothing defers the warning, so
         // the arm is chosen here, as the graph of an initializer would.

@@ -422,13 +422,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
                     }
                 }
-            } else if !self.assignment_conversion_at(
-                left.ty,
-                right,
-                e.operator_source_vectors.unwrap_or(e.source_vectors),
-                super::super::compiler_wording::ConversionSite::Assignment,
-                false,
-            ) {
+            } else if !self.assigned_value_conversion(left.ty, right, e) {
                 if self.void_value(right.ty) {
                     return self.void_value_used(e, VoidUse::Assignment, left.ty);
                 }

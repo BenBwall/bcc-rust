@@ -871,10 +871,12 @@ impl<'x> MacroCallCursor<'x> {
                         &mut frame.tokenizer,
                         preprocessor.context,
                     );
-                    if !next.is_some_and(|token| token.kind == PreprocessorTokenType::HashHash) {
+                    let Some(hash_hash) =
+                        next.filter(|token| token.kind == PreprocessorTokenType::HashHash)
+                    else {
                         frame.tokenizer.set_position(position);
                         break;
-                    }
+                    };
                     let Some(rhs) = Expander::next_ignore_whitespace(
                         &mut frame.tokenizer,
                         preprocessor.context,
@@ -887,7 +889,10 @@ impl<'x> MacroCallCursor<'x> {
                         tokens = preprocessor.paste_operand(arguments, token);
                     }
                     let right = preprocessor.paste_operand(arguments, rhs);
-                    preprocessor.paste_onto(&mut tokens, right);
+                    let site = preprocessor
+                        .context
+                        .first_source_vector_or_default(hash_hash.source_vectors);
+                    preprocessor.paste_onto(&mut tokens, right, &site);
                     pasted = true;
                 }
             }

@@ -249,8 +249,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn clang_check_format(&mut self, call: &FormatCall<'_, 'tu>) {
         let mut uncovered = Uncovered::Unknown;
         let found = self.clang_format_expression(call, call.format, true, 0, &mut uncovered, 0);
+        // `UncoveredArgHandler::Diagnose` says nothing about an argument
+        // that begins in a system macro's body.
         if let Uncovered::First(index, string) = uncovered
             && let Some(&argument) = call.data().get(index)
+            && !self.context.in_system_macro(argument.source_vectors)
         {
             // `UncoveredArgHandler::Diagnose` underlines the string.
             self.with_highlights([string, SourceVectors::default()], |analyzer| {
