@@ -387,16 +387,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(self.context.string_cache.intern(text))
     }
 
-    /// `cl`'s words for a cast between a pointer and an integer of another
-    /// width: C4311 for a pointer truncated to an integer, C4312 for an
-    /// integer widened to a pointer. Microsoft Learn: "Compiler Warning
-    /// (level 1) C4311", "Compiler Warning (level 1) C4312".
-    /// C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
-    pub(super) fn msvc_cast_wording(
-        &mut self,
-        target: TypeId,
-        from: TypeId,
-    ) -> Option<StringCacheId> {
+    /// The words for a cast between a pointer and an integer of another
+    /// width: Clang's in its format under its rules
+    /// ([`Self::clang_cast_wording`]), or `cl`'s: C4311 for a pointer
+    /// truncated to an integer, C4312 for an integer widened to a pointer.
+    /// Microsoft Learn: "Compiler Warning (level 1) C4311", "Compiler Warning
+    /// (level 1) C4312". C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
+    pub(super) fn cast_wording(&mut self, target: TypeId, from: TypeId) -> Option<StringCacheId> {
+        if self.context.configuration.diagnostic_format() == DiagnosticFormat::Clang
+            && self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang
+        {
+            return self.clang_cast_wording(target, from);
+        }
         if !self.context.configuration.msvc_wording() {
             return None;
         }
@@ -411,6 +414,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             crate::diagnostics::format_in!(
                 self.scratch,
                 "'type cast': pointer truncation from '{from_spelling}' to '{to}'"
+            )
+        };
+        Some(self.context.string_cache.intern(text))
+    }
+
+    /// Clang's words for a cast between a pointer and a smaller integer
+    /// (`warn_pointer_to_int_cast`, `warn_int_to_pointer_cast` and their
+    /// `void *` and enumeration forms in `DiagnosticSemaKinds.td`), with
+    /// each type spelled as written without its typedef names, which bcc
+    /// does not keep: Clang adds `(aka '...')` after one.
+    /// C99: §6.3.2.3p5-6, p. 47; PDF p. 59.
+    fn clang_cast_wording(&mut self, target: TypeId, from: TypeId) -> Option<StringCacheId> {
+        let to = self.type_spelling(target, false)?;
+        let from_spelling = self.type_spelling(from, false)?;
+        let text = if self.pointer_target(target).is_some() {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "cast to '{to}' from smaller integer type '{from_spelling}'"
+            )
+        } else {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "cast to smaller integer type '{to}' from '{from_spelling}'"
             )
         };
         Some(self.context.string_cache.intern(text))
