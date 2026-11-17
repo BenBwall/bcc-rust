@@ -1,115 +1,184 @@
-sema-parameter-note-abstract-clang.c:26:9: error: incompatible pointer to integer conversion passing 'void *' to parameter of type 'int' [-Wint-conversion]
-   26 |   plain(v);
+sema-parameter-note-abstract-clang.c:25:26: warning: duplicate 'const' declaration specifier [-Wduplicate-decl-specifier]
+   25 | void repeated(int *const const [3]);
+      |                          ^
+sema-parameter-note-abstract-clang.c:26:44: warning: duplicate 'volatile' declaration specifier [-Wduplicate-decl-specifier]
+   26 | void repeated_volatile(int *volatile const volatile [3]);
+      |                                            ^
+sema-parameter-note-abstract-clang.c:27:38: warning: duplicate 'restrict' declaration specifier [-Wduplicate-decl-specifier]
+   27 | void repeated_restrict(int *restrict __restrict const restrict [3]);
+      |                                      ^
+sema-parameter-note-abstract-clang.c:27:55: warning: duplicate 'restrict' declaration specifier [-Wduplicate-decl-specifier]
+   27 | void repeated_restrict(int *restrict __restrict const restrict [3]);
+      |                                                       ^
+sema-parameter-note-abstract-clang.c:28:34: warning: duplicate 'volatile' declaration specifier [-Wduplicate-decl-specifier]
+   28 | void levels(int *const *volatile volatile *restrict const restrict [3]);
+      |                                  ^
+sema-parameter-note-abstract-clang.c:28:59: warning: duplicate 'restrict' declaration specifier [-Wduplicate-decl-specifier]
+   28 | void levels(int *const *volatile volatile *restrict const restrict [3]);
+      |                                                           ^
+sema-parameter-note-abstract-clang.c:29:32: warning: duplicate 'const' declaration specifier [-Wduplicate-decl-specifier]
+   29 | void atomic(int *const _Atomic const [3]);
+      |                                ^
+sema-parameter-note-abstract-clang.c:30:62: warning: duplicate 'const' declaration specifier [-Wduplicate-decl-specifier]
+   30 | void qualified_attributes(int *const __attribute__((unused)) const [3]);
+      |                                                              ^
+sema-parameter-note-abstract-clang.c:31:65: warning: duplicate 'const' declaration specifier [-Wduplicate-decl-specifier]
+   31 | void attribute_levels(int *__attribute__((unused)) const *const const [3]);
+      |                                                                 ^
+sema-parameter-note-abstract-clang.c:33:9: error: incompatible pointer to integer conversion passing 'void *' to parameter of type 'int' [-Wint-conversion]
+   33 |   plain(v);
       |         ^
 sema-parameter-note-abstract-clang.c:6:15: note: passing argument to parameter here
     6 | void plain(int);
       |               ^
-sema-parameter-note-abstract-clang.c:27:11: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-   27 |   pointer(c);
+sema-parameter-note-abstract-clang.c:34:11: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   34 |   pointer(c);
       |           ^
 sema-parameter-note-abstract-clang.c:7:19: note: passing argument to parameter here
     7 | void pointer(int *);
       |                   ^
-sema-parameter-note-abstract-clang.c:28:13: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-   28 |   qualified(c, 0);
+sema-parameter-note-abstract-clang.c:35:13: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   35 |   qualified(c, 0);
       |             ^
 sema-parameter-note-abstract-clang.c:8:26: note: passing argument to parameter here
     8 | void qualified(int *const, int);
       |                          ^
-sema-parameter-note-abstract-clang.c:29:14: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-   29 |   attributed(c);
+sema-parameter-note-abstract-clang.c:36:14: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   36 |   attributed(c);
       |              ^
 sema-parameter-note-abstract-clang.c:9:45: note: passing argument to parameter here
     9 | void attributed(int *__attribute__((unused)));
       |                                             ^
-sema-parameter-note-abstract-clang.c:30:9: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-   30 |   array(c);
+sema-parameter-note-abstract-clang.c:37:9: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   37 |   array(c);
       |         ^
 sema-parameter-note-abstract-clang.c:10:16: note: passing argument to parameter here
    10 | void array(int [3]);
       |                ^
-sema-parameter-note-abstract-clang.c:31:16: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-   31 |   static_array(c);
+sema-parameter-note-abstract-clang.c:38:16: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   38 |   static_array(c);
       |                ^
 sema-parameter-note-abstract-clang.c:11:23: note: passing argument to parameter here
    11 | void static_array(int [static 3]);
       |                       ^
-sema-parameter-note-abstract-clang.c:32:19: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-   32 |   qualified_array(c);
+sema-parameter-note-abstract-clang.c:39:19: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   39 |   qualified_array(c);
       |                   ^
 sema-parameter-note-abstract-clang.c:12:26: note: passing argument to parameter here
    12 | void qualified_array(int [const 3]);
       |                          ^
-sema-parameter-note-abstract-clang.c:33:12: error: incompatible pointer types passing 'const int *' to parameter of type 'int **' [-Wincompatible-pointer-types]
-   33 |   pointers(c);
+sema-parameter-note-abstract-clang.c:40:12: error: incompatible pointer types passing 'const int *' to parameter of type 'int **' [-Wincompatible-pointer-types]
+   40 |   pointers(c);
       |            ^
 sema-parameter-note-abstract-clang.c:13:20: note: passing argument to parameter here
    13 | void pointers(int *[3]);
       |                    ^
-sema-parameter-note-abstract-clang.c:34:10: error: incompatible pointer types passing 'const int *' to parameter of type 'int (*)[3]' [-Wincompatible-pointer-types]
-   34 |   arrays(c);
+sema-parameter-note-abstract-clang.c:41:10: error: incompatible pointer types passing 'const int *' to parameter of type 'int (*)[3]' [-Wincompatible-pointer-types]
+   41 |   arrays(c);
       |          ^
 sema-parameter-note-abstract-clang.c:14:17: note: passing argument to parameter here
    14 | void arrays(int [2][3]);
       |                 ^
-sema-parameter-note-abstract-clang.c:35:12: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)(double)' [-Wincompatible-pointer-types]
-   35 |   function(p);
+sema-parameter-note-abstract-clang.c:42:12: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)(double)' [-Wincompatible-pointer-types]
+   42 |   function(p);
       |            ^
 sema-parameter-note-abstract-clang.c:15:20: note: passing argument to parameter here
    15 | void function(int (double));
       |                    ^
-sema-parameter-note-abstract-clang.c:36:18: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)()' [-Wincompatible-pointer-types]
-   36 |   empty_function(p);
+sema-parameter-note-abstract-clang.c:43:18: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)()' [-Wincompatible-pointer-types]
+   43 |   empty_function(p);
       |                  ^
 sema-parameter-note-abstract-clang.c:16:26: note: passing argument to parameter here
    16 | void empty_function(int ());
       |                          ^
-sema-parameter-note-abstract-clang.c:37:20: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)(double)' [-Wincompatible-pointer-types]
-   37 |   function_pointer(p);
+sema-parameter-note-abstract-clang.c:44:20: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)(double)' [-Wincompatible-pointer-types]
+   44 |   function_pointer(p);
       |                    ^
 sema-parameter-note-abstract-clang.c:17:29: note: passing argument to parameter here
    17 | void function_pointer(int (*)(double));
       |                             ^
-sema-parameter-note-abstract-clang.c:38:29: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)(void)' [-Wincompatible-pointer-types]
-   38 |   constant_function_pointer(p);
+sema-parameter-note-abstract-clang.c:45:29: error: incompatible pointer types passing 'int *' to parameter of type 'int (*)(void)' [-Wincompatible-pointer-types]
+   45 |   constant_function_pointer(p);
       |                             ^
 sema-parameter-note-abstract-clang.c:18:43: note: passing argument to parameter here
    18 | void constant_function_pointer(int (*const)(void));
       |                                           ^
-sema-parameter-note-abstract-clang.c:39:30: error: incompatible pointer types passing 'int *' to parameter of type 'int (**)(void)' [-Wincompatible-pointer-types]
-   39 |   array_of_function_pointers(p);
+sema-parameter-note-abstract-clang.c:46:30: error: incompatible pointer types passing 'int *' to parameter of type 'int (**)(void)' [-Wincompatible-pointer-types]
+   46 |   array_of_function_pointers(p);
       |                              ^
 sema-parameter-note-abstract-clang.c:19:39: note: passing argument to parameter here
    19 | void array_of_function_pointers(int (*[2])(void));
       |                                       ^
-sema-parameter-note-abstract-clang.c:40:10: error: incompatible pointer types passing 'int *' to parameter of type 'int (*(*)(int))(char)' [-Wincompatible-pointer-types]
-   40 |   nested(p);
+sema-parameter-note-abstract-clang.c:47:10: error: incompatible pointer types passing 'int *' to parameter of type 'int (*(*)(int))(char)' [-Wincompatible-pointer-types]
+   47 |   nested(p);
       |          ^
 sema-parameter-note-abstract-clang.c:20:21: note: passing argument to parameter here
    20 | void nested(int (*(*)(int))(char));
       |                     ^
-sema-parameter-note-abstract-clang.c:41:17: error: incompatible pointer types passing 'int (*)[4]' to parameter of type 'int (*)[3]' [-Wincompatible-pointer-types]
-   41 |   array_pointer(a);
+sema-parameter-note-abstract-clang.c:48:17: error: incompatible pointer types passing 'int (*)[4]' to parameter of type 'int (*)[3]' [-Wincompatible-pointer-types]
+   48 |   array_pointer(a);
       |                 ^
 sema-parameter-note-abstract-clang.c:21:26: note: passing argument to parameter here
    21 | void array_pointer(int (*)[3]);
       |                          ^
-sema-parameter-note-abstract-clang.c:42:22: error: incompatible pointer types passing 'int (*)[4]' to parameter of type 'int (*)[3]' [-Wincompatible-pointer-types]
-   42 |   grouped_attributes(a);
+sema-parameter-note-abstract-clang.c:49:22: error: incompatible pointer types passing 'int (*)[4]' to parameter of type 'int (*)[3]' [-Wincompatible-pointer-types]
+   49 |   grouped_attributes(a);
       |                      ^
 sema-parameter-note-abstract-clang.c:22:55: note: passing argument to parameter here
    22 | void grouped_attributes(int (__attribute__((unused)) *)[3]);
       |                                                       ^
-sema-parameter-note-abstract-clang.c:43:19: error: incompatible pointer types passing 'int *' to parameter of type 'int *(*)(void)' [-Wincompatible-pointer-types]
-   43 |   returns_pointer(p);
+sema-parameter-note-abstract-clang.c:50:19: error: incompatible pointer types passing 'int *' to parameter of type 'int *(*)(void)' [-Wincompatible-pointer-types]
+   50 |   returns_pointer(p);
       |                   ^
 sema-parameter-note-abstract-clang.c:23:29: note: passing argument to parameter here
    23 | void returns_pointer(int *(*)(void));
       |                             ^
-sema-parameter-note-abstract-clang.c:44:13: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
-   44 |   second(0, c, 0);
+sema-parameter-note-abstract-clang.c:51:13: warning: passing 'const int *' to parameter of type 'int *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+   51 |   second(0, c, 0);
       |             ^
 sema-parameter-note-abstract-clang.c:24:23: note: passing argument to parameter here
    24 | void second(char, int [4], char);
       |                       ^
-7 warnings and 12 errors generated.
+sema-parameter-note-abstract-clang.c:52:12: error: incompatible pointer types passing 'const int *' to parameter of type 'int *const *' [-Wincompatible-pointer-types]
+   52 |   repeated(c);
+      |            ^
+sema-parameter-note-abstract-clang.c:25:32: note: passing argument to parameter here
+   25 | void repeated(int *const const [3]);
+      |                                ^
+sema-parameter-note-abstract-clang.c:53:21: error: incompatible pointer types passing 'const int *' to parameter of type 'int *const volatile *' [-Wincompatible-pointer-types]
+   53 |   repeated_volatile(c);
+      |                     ^
+sema-parameter-note-abstract-clang.c:26:53: note: passing argument to parameter here
+   26 | void repeated_volatile(int *volatile const volatile [3]);
+      |                                                     ^
+sema-parameter-note-abstract-clang.c:54:21: error: incompatible pointer types passing 'const int *' to parameter of type 'int *const restrict *' [-Wincompatible-pointer-types]
+   54 |   repeated_restrict(c);
+      |                     ^
+sema-parameter-note-abstract-clang.c:27:64: note: passing argument to parameter here
+   27 | void repeated_restrict(int *restrict __restrict const restrict [3]);
+      |                                                                ^
+sema-parameter-note-abstract-clang.c:55:10: error: incompatible pointer types passing 'const int *' to parameter of type 'int *const *volatile *const restrict *' [-Wincompatible-pointer-types]
+   55 |   levels(c);
+      |          ^
+sema-parameter-note-abstract-clang.c:28:68: note: passing argument to parameter here
+   28 | void levels(int *const *volatile volatile *restrict const restrict [3]);
+      |                                                                    ^
+sema-parameter-note-abstract-clang.c:56:10: error: incompatible pointer types passing 'const int *' to parameter of type 'const _Atomic(int *) *' [-Wincompatible-pointer-types]
+   56 |   atomic(c);
+      |          ^
+sema-parameter-note-abstract-clang.c:29:38: note: passing argument to parameter here
+   29 | void atomic(int *const _Atomic const [3]);
+      |                                      ^
+sema-parameter-note-abstract-clang.c:57:24: error: incompatible pointer types passing 'const int *' to parameter of type 'int *const *' [-Wincompatible-pointer-types]
+   57 |   qualified_attributes(c);
+      |                        ^
+sema-parameter-note-abstract-clang.c:30:68: note: passing argument to parameter here
+   30 | void qualified_attributes(int *const __attribute__((unused)) const [3]);
+      |                                                                    ^
+sema-parameter-note-abstract-clang.c:58:20: error: incompatible pointer types passing 'const int *' to parameter of type 'int *const *const *' [-Wincompatible-pointer-types]
+   58 |   attribute_levels(c);
+      |                    ^
+sema-parameter-note-abstract-clang.c:31:71: note: passing argument to parameter here
+   31 | void attribute_levels(int *__attribute__((unused)) const *const const [3]);
+      |                                                                       ^
+16 warnings and 19 errors generated.
