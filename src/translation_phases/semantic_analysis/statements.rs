@@ -377,11 +377,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         None,
                     );
                 }
-            } else if !self.assignment_conversion_for(
-                result,
-                info,
-                super::compiler_wording::ConversionSite::Return,
-            ) {
+            } else if !self.with_conversion_context(source, |analyzer| {
+                // Clang's context for the converted value is `return`.
+                analyzer.assignment_conversion_for(
+                    result,
+                    info,
+                    super::compiler_wording::ConversionSite::Return,
+                )
+            }) {
                 self.error(
                     SemanticErrorKind::InvalidReturnConversion,
                     e.source_vectors,

@@ -2244,6 +2244,11 @@ struct Analyzer<'a, 'tu, 's> {
     /// The operands Clang underlines beside the caret of what is reported
     /// now; see [`Self::with_highlights`].
     highlights:              [SourceVectors; 2],
+    /// The expression or token whose location Clang takes as the context of
+    /// the implicit conversion checked now (`CC` in `CheckImplicitConversion`),
+    /// or an empty range when none is known; see
+    /// [`Self::with_conversion_context`].
+    conversion_context:      SourceVectors,
     /// Where a diagnostic reported now falls among the others; see
     /// [`Self::with_report_order`].
     report_order:            ReportOrder,

@@ -506,13 +506,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .expression_info(vector_callee)
                     .binding
                     .is_some_and(|id| self.bindings[id].origin.is_intrinsic());
-                info = if intrinsic
-                    && let Some(info) = self.common_builtin_call(e, function_expression, arguments)
-                {
-                    info
-                } else {
-                    self.type_call(e, self.expression_info(function_expression), arguments)
-                };
+                // Clang's context for each argument's conversion is the
+                // call, which begins where its callee does.
+                info = self.with_conversion_context(e.source_vectors, |analyzer| {
+                    if intrinsic
+                        && let Some(info) =
+                            analyzer.common_builtin_call(e, function_expression, arguments)
+                    {
+                        info
+                    } else {
+                        analyzer.type_call(
+                            e,
+                            analyzer.expression_info(function_expression),
+                            arguments,
+                        )
+                    }
+                });
             },
             | E::Builtin(b) => {
                 info = self.type_builtin(e, b);

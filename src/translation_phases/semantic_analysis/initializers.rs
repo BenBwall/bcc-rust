@@ -228,7 +228,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         plan.unmodeled(destination, site.source);
                         continue;
                     }
-                    let bit_field = site.bits.is_some();
                     let completion =
                         self.completion(target, std::ptr::eq(init, initializer), &site);
                     match init.kind {
@@ -272,13 +271,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 continue;
                             }
                             let errors_before_conversion = self.semantic_errors;
+                            // Clang's context for the conversion is the
+                            // declarator, or the list the element belongs to.
+                            let context = if std::ptr::eq(init, initializer) {
+                                declaration_site.unwrap_or(e.source_vectors)
+                            } else {
+                                site.context
+                            };
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
-                                || !self.initializer_conversion(
-                                    target,
-                                    info,
-                                    diagnostic_site,
-                                    site.braced,
-                                )
+                                || !self.with_conversion_context(context, |analyzer| {
+                                    analyzer.initializer_conversion(
+                                        target,
+                                        info,
+                                        diagnostic_site,
+                                        site.braced,
+                                    )
+                                })
                             {
                                 self.invalid_initializer(target, info, diagnostic_site);
                                 continue;
@@ -289,43 +297,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 continue;
                             }
                             self.convert(e, target.unqualified(), ConversionKind::Assignment);
-                            // GNU: a static object's compound literal of its
-                            // type gives it the literal's bytes, so the plan
-                            // takes the literal from inside the wrappers GCC
-                            // folds away, fewer of them inside braces, where
-                            // Clang's evaluator still reads through them.
-                            let (literal, converted) = if static_storage {
-                                self.static_literal(target, e, std::ptr::eq(init, initializer))
-                            } else {
-                                (None, None)
-                            };
-                            // C99 §6.7.8p13: a structure or union initialized
-                            // by an expression of its type is copied whole, as
-                            // is a static scalar's compound literal of its
-                            // type (GNU), whose bytes are the literal's own.
-                            if matches!(
-                                self.types.nodes[self.types.non_atomic(target).index],
-                                TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
-                            ) || (literal.is_some() && !bit_field)
-                            {
-                                plan.copy(
-                                    literal.unwrap_or(e),
-                                    destination,
-                                    self.enclosing_unions(&site),
-                                );
-                            } else {
-                                plan.store(
-                                    literal.or(converted).unwrap_or(e),
-                                    destination,
-                                    site.bits,
-                                    site.scalar_source.unwrap_or(e.source_vectors),
-                                );
-                            }
-                            if let Some(literal) = literal.or(converted) {
-                                self.check_static_compound_literal(e, literal);
-                            } else if static_storage {
-                                self.check_static_initializer(target, info, e, site.bits);
-                            }
+                            let root = std::ptr::eq(init, initializer);
+                            self.plan_expression_value(
+                                plan,
+                                target,
+                                info,
+                                &site,
+                                static_storage,
+                                root,
+                            );
                         },
                         | InitializerType::InitializerList(list) => {
                             // GNU vector extension of C99 §6.7.8p13: a single
@@ -349,6 +329,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                         scalar_source: Some(
                                             site.scalar_source.unwrap_or(site.source),
                                         ),
+                                        context: init.source_vectors,
                                         ..site
                                     },
                                 ));
@@ -705,7 +686,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     if let Some(flexible) = &mut flexible {
                         self.extend_flexible(flexible, &cursor, ty);
                     }
-                    let node = self.record_write(writes, base, &cursor, &starts, range, element);
+                    let (node, context) =
+                        self.record_write(writes, base, &cursor, &starts, range, element);
                     // A braced scalar's element initializes the scalar itself.
                     let site = match scalar {
                         | Some(site) => site,
@@ -725,6 +707,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 },
                             },
                     };
+                    // Clang's context for the element's conversion is the
+                    // place of the list that holds it.
+                    let site = Site { context, ..site };
                     let next = self.advance_current(cursor);
                     work.push(next_task(self.scratch.alloc(next), repeats));
                     work.push(InitWork::Value(target, element.initializer, node, site));
@@ -748,6 +733,59 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .insert(std::ptr::from_ref(initializer).addr(), plan);
         }
         (ty, flexible)
+    }
+
+    /// Plans what the expression `info`, already converted, stores in the
+    /// subobject `target` at `site`, and checks a static object's value;
+    /// `root` when the expression is the object's own initializer.
+    /// C99: §6.7.8p4, p. 125; PDF p. 137; §6.7.8p13, p. 126; PDF p. 138.
+    fn plan_expression_value(
+        &mut self,
+        plan: &mut PlanBuilder<'tu, 's>,
+        target: TypeId,
+        info: super::ExpressionInfo<'tu>,
+        site: &Site<'s>,
+        static_storage: bool,
+        root: bool,
+    ) {
+        let e = info.expression;
+        let destination = site.destination(target);
+        let bit_field = site.bits.is_some();
+        // GNU: a static object's compound literal of its type gives it the
+        // literal's bytes, so the plan takes the literal from inside the
+        // wrappers GCC folds away, fewer of them inside braces, where Clang's
+        // evaluator still reads through them.
+        let (literal, converted) = if static_storage {
+            self.static_literal(target, e, root)
+        } else {
+            (None, None)
+        };
+        // C99 §6.7.8p13: a structure or union initialized by an expression
+        // of its type is copied whole, as is a static scalar's compound
+        // literal of its type (GNU), whose bytes are the literal's own.
+        if matches!(
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
+        ) || (literal.is_some() && !bit_field)
+        {
+            plan.copy(
+                literal.unwrap_or(e),
+                destination,
+                self.enclosing_unions(site),
+            );
+        } else {
+            plan.store(
+                literal.or(converted).unwrap_or(e),
+                destination,
+                site.bits,
+                site.scalar_source.unwrap_or(e.source_vectors),
+            );
+        }
+        if let Some(literal) = literal.or(converted) {
+            self.check_static_compound_literal(e, literal);
+        } else if static_storage {
+            self.check_static_initializer(target, info, e, site.bits);
+        }
     }
 
     /// Reports the expression `info` that cannot initialize a `target`: a
@@ -1813,9 +1851,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `base`; `inner` holds where writes inside each subobject the
     /// element's designation names begin. Reports what the write overrides
     /// as Clang's `-Winitializer-overrides` does, and returns the
-    /// subobject's node. A range of more than [`RANGE_WRITES`] elements
-    /// records only its last.
-    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+    /// subobject's node and the place of the list that holds it, Clang's
+    /// context for the element's conversion. A range of more than
+    /// [`RANGE_WRITES`] elements records only its last.
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139; §6.7.8 paragraph 20,
+    /// p. 127; PDF p. 139.
     fn record_write(
         &mut self,
         writes: &mut Writes<'_>,
@@ -1824,7 +1864,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         inner: &[SourceVectors],
         range: Option<(usize, u64)>,
         element: &InitializerElement<'tu>,
-    ) -> u32 {
+    ) -> (u32, SourceVectors) {
         let mut steps = ArenaVec::new_in(self.scratch);
         let mut path = Some(cursor);
         while let Some(current) = path {
@@ -1852,7 +1892,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .get(step)
                 .is_some_and(|upper| upper.index - lower < RANGE_WRITES)
         });
-        let (node, found) = writes.write(base, &steps, range, kind, source);
+        let (node, found, list) = writes.write(base, &steps, range, kind, source);
         // Clang reports a replaced union member at the element's
         // designation, a partly replaced expression where the element
         // enters it, and a replaced subobject at the new initializer.
@@ -1880,7 +1920,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 Some(previous),
             );
         }
-        node
+        (node, list)
     }
 
     /// An initializer reached the flexible array member of type `member`.

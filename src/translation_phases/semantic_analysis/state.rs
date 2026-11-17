@@ -74,6 +74,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             wide: super::WideIntegers::new(tu),
             tainted: false,
             highlights: Default::default(),
+            conversion_context: crate::translation_phases::SourceVectors::default(),
             report_order: super::ReportOrder::AtSite,
             function_name: None,
             old_parameter_mode: false,

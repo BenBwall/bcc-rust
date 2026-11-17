@@ -377,6 +377,9 @@ pub(super) struct Site<'s> {
     /// ([`Analyzer::initializer_conversion`]).
     /// C99: §6.7.8p20, p. 127; PDF p. 139.
     pub(super) braced:        bool,
+    /// Clang's context location for the element's conversion: where the
+    /// list it belongs to begins.
+    pub(super) context:       SourceVectors,
 }
 
 impl Site<'_> {
@@ -390,6 +393,7 @@ impl Site<'_> {
             scalar_source: None,
             own_flexible: false,
             braced: false,
+            context: SourceVectors::default(),
         }
     }
 
@@ -464,6 +468,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             scalar_source: None,
             own_flexible: false,
             braced: false,
+            context: SourceVectors::default(),
         })
     }
 

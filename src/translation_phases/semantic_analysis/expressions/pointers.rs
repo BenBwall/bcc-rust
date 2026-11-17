@@ -64,6 +64,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         )
     }
 
+    /// [`Self::assignment_conversion`] of the right operand of the simple
+    /// assignment `e`, reported at its operator, which is also Clang's
+    /// context for the conversion.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    pub(in crate::translation_phases::semantic_analysis) fn assigned_value_conversion(
+        &mut self,
+        target: TypeId,
+        source: ExpressionInfo<'tu>,
+        e: &'tu Expression<'tu>,
+    ) -> bool {
+        let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
+        self.with_conversion_context(operator, |analyzer| {
+            analyzer.assignment_conversion_at(
+                target,
+                source,
+                operator,
+                ConversionSite::Assignment,
+                false,
+            )
+        })
+    }
+
     /// [`Self::assignment_conversion`] of an initializer, reported at
     /// `diagnostic_site`; `braced` when it is an element of a brace-enclosed
     /// list written for the subobject that holds it, not one brace elision
@@ -353,10 +375,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             preprocessing::FloatTokenType,
         };
         // Clang checks builtin integer targets only, not an enumeration or
-        // an atomic type.
+        // an atomic type, and not where a system macro wrote the context.
         if self.context.configuration.float_conversion_rules() == crate::configuration::RuleSet::Gcc
             || !matches!(self.types.nodes[target.index], TypeKind::Scalar(_))
             || self.integer_type(target).is_none()
+            || self.conversion_in_system_macro()
         {
             return;
         }

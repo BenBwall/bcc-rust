@@ -23,6 +23,16 @@
 //! `{ .p.x = 1, .p = q }`, refers back to where its writes begin, the
 //! designator `.x`, as Clang's implicit list for it does.
 //!
+//! The nodes are also Clang's structured initializer lists
+//! (`InitListChecker::getStructuredSubobjectInit`), whose place is Clang's
+//! context for the conversions of the elements they hold. A list keeps the
+//! place it was made at when a later designator or brace elision enters it
+//! again: in `{ .p.a = 1, .p.b = 300 }` the list for `p` begins at `.a`,
+//! and `.b` writes inside that list. A written list is placed at its `{`, a
+//! subobject written only inside where its first write inside begins, and
+//! one an expression wrote where the first write inside it begins, as
+//! Clang's `DesignatedInitUpdateExpr` is.
+//!
 //! C99: §6.7.8 paragraph 19, p. 127; PDF p. 139 (each initializer overrides
 //! any previously listed initializer for the same subobject); §6.7.8
 //! paragraph 17, pp. 126-127; PDF pp. 138-139 (a union's current member).
@@ -60,8 +70,8 @@ impl<'s> Writes<'s> {
     /// written by `kind` at `source`. With `range`, the step it names holds
     /// a range designator's first index and the step's own index its last,
     /// and every element of the range is written. Returns the written node,
-    /// to which the elements of a brace-enclosed list belong, and the
-    /// earlier writes it overrides.
+    /// to which the elements of a brace-enclosed list belong, the earlier
+    /// writes it overrides, and the place of the list that holds it.
     pub(super) fn write(
         &mut self,
         base: u32,
@@ -69,10 +79,10 @@ impl<'s> Writes<'s> {
         range: Option<(usize, u64)>,
         kind: Write,
         source: SourceVectors,
-    ) -> (u32, Overrides) {
+    ) -> (u32, Overrides, SourceVectors) {
         let mut found = Overrides::default();
         let Some(last) = steps.len().checked_sub(1) else {
-            return (base, found);
+            return (base, found, self.list_place((base, source)));
         };
         let state = match kind {
             | Write::List => State::Written,
@@ -85,6 +95,7 @@ impl<'s> Writes<'s> {
             node = self.enter(node, step, &mut found);
         }
         let range_step = steps[at];
+        let mut holder = source;
         for index in lower..=range_step.index {
             let step = Step {
                 index,
@@ -96,8 +107,10 @@ impl<'s> Writes<'s> {
                 for &step in &steps[at + 1..last] {
                     parent = self.enter(parent, step, &mut found);
                 }
+                holder = self.list_place(parent);
                 self.place(parent, steps[last], written, &mut found);
             } else {
+                holder = self.list_place(parent);
                 self.place(parent, step, written, &mut found);
             }
         }
@@ -105,7 +118,14 @@ impl<'s> Writes<'s> {
         if lower < range_step.index {
             self.nodes[written as usize].shared = true;
         }
-        (written, found)
+        (written, found, holder)
+    }
+
+    /// The place of the list that holds what is written inside `node`, whose
+    /// writes begin at `at`: the place it was made at, or `at` when this is
+    /// the first write inside it.
+    fn list_place(&mut self, (node, at): (u32, SourceVectors)) -> SourceVectors {
+        *self.nodes[node as usize].list.get_or_insert(at)
     }
 
     /// Enters subobject `step` of `node`, whose writes begin at `at`:
@@ -119,6 +139,10 @@ impl<'s> Writes<'s> {
         step: Step,
         found: &mut Overrides,
     ) -> (u32, SourceVectors) {
+        // A list the write only passes through is made here too, so a later
+        // designator that re-enters it keeps this place: in
+        // `{ .p.q.a = 1, .p.b = 300 }` the list for `p` begins at `.q`.
+        let _ = self.list_place((node, at));
         self.pass(node, at, found);
         self.select(node, step, found);
         let child = match self.children.get(&(node, step.index)).copied() {
@@ -224,6 +248,7 @@ impl<'s> Writes<'s> {
         let copied = &mut self.nodes[copy as usize];
         copied.member = data.member;
         copied.shared = shared;
+        copied.list = data.list;
         copy
     }
 
@@ -247,6 +272,9 @@ impl<'s> Writes<'s> {
             member: None,
             shared: false,
             edges: None,
+            // A written list is placed at itself; any other node, at the
+            // first write inside it.
+            list: (state == State::Written).then_some(source),
         });
         index
     }
@@ -318,6 +346,9 @@ struct Node {
     shared: bool,
     /// The latest of the node's edges.
     edges:  Option<u32>,
+    /// Where Clang places the list that holds what is written inside the
+    /// node, once something is.
+    list:   Option<SourceVectors>,
 }
 
 /// One entry of [`Writes::children`]: subobject `index` of the edge list's
