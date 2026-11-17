@@ -40,4 +40,7 @@ struct holder elided_once = { 1, HIGH };
 #define DECLARE_CHAR(name, value) char name = value
 DECLARE_CHAR(SYSTEM_CAT(paste, d), 322);
 DECLARE_CHAR(CAT(paste, e), 323);
+/* A list the first designator only passed through keeps its place. */
+struct outer { struct holder holder; };
+struct outer deep = { .holder.pair.low = 1, DEEP_LAST };
 int following_valid;

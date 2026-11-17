@@ -139,6 +139,10 @@ impl<'s> Writes<'s> {
         step: Step,
         found: &mut Overrides,
     ) -> (u32, SourceVectors) {
+        // A list the write only passes through is made here too, so a later
+        // designator that re-enters it keeps this place: in
+        // `{ .p.q.a = 1, .p.b = 300 }` the list for `p` begins at `.q`.
+        let _ = self.list_place((node, at));
         self.pass(node, at, found);
         self.select(node, step, found);
         let child = match self.children.get(&(node, step.index)).copied() {

@@ -58,4 +58,10 @@ system-headers/conversion-macros.h:17:27: note: expanded from macro 'HIGH'
 sema-constant-conversion-system-macro-clang.c:42:29: warning: implicit conversion from 'int' to 'char' changes value from 323 to 67 [-Wconstant-conversion]
    42 | DECLARE_CHAR(CAT(paste, e), 323);
       |                             ^~~
-14 warnings generated.
+sema-constant-conversion-system-macro-clang.c:45:45: warning: implicit conversion from 'int' to 'char' changes value from 324 to 68 [-Wconstant-conversion]
+   45 | struct outer deep = { .holder.pair.low = 1, DEEP_LAST };
+      |                                             ^~~~~~~~~
+system-headers/conversion-macros.h:18:34: note: expanded from macro 'DEEP_LAST'
+   18 | #define DEEP_LAST .holder.last = 324
+      |                                  ^~~
+15 warnings generated.

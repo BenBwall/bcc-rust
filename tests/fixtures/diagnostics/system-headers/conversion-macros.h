@@ -15,5 +15,6 @@ int printf(const char *format, ...);
 #define EXTRA_ARGUMENT 3
 #define SYSTEM_COMMA(value) (0, value)
 #define HIGH .pair.high = 321
+#define DEEP_LAST .holder.last = 324
 #define SYSTEM_NAME CAT(immedi, ate)
 #define SYSTEM_CAT(a, b) a##b
