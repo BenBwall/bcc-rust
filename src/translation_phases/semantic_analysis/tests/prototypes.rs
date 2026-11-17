@@ -107,11 +107,31 @@ fn builtins_and_implicit_declarations_have_prototypes() {
 fn calls_take_their_declarations_builtin_status() {
     let gnu = || clang().with_gnu_extensions(true);
     for (source, configuration, deprecated) in [
-        ("void *alloca(); void use(void) { (void)alloca(8UL); }", gnu(), false),
-        ("void *alloca(); void use(void) { (void)alloca(8UL); }", clang(), true),
-        ("long labs(); void use(void) { (void)labs(1L); }", clang(), false),
-        ("static long labs(); long g(void) { return labs(1L); }", clang(), true),
-        ("static long labs(); long g(void) { return labs(1L); }", gnu(), true),
+        (
+            "void *alloca(); void use(void) { (void)alloca(8UL); }",
+            gnu(),
+            false,
+        ),
+        (
+            "void *alloca(); void use(void) { (void)alloca(8UL); }",
+            clang(),
+            true,
+        ),
+        (
+            "long labs(); void use(void) { (void)labs(1L); }",
+            clang(),
+            false,
+        ),
+        (
+            "static long labs(); long g(void) { return labs(1L); }",
+            clang(),
+            true,
+        ),
+        (
+            "static long labs(); long g(void) { return labs(1L); }",
+            gnu(),
+            true,
+        ),
         (
             "static char *index(); void use(void) { (void)index(\"x\", 120); }",
             gnu(),
