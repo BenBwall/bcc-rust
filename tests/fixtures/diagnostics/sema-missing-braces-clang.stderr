@@ -1,0 +1,137 @@
+sema-missing-braces-clang.c:9:16: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+    9 | struct S s1 = {1, 2, 3};
+      |                ^~~~
+      |                {   }
+sema-missing-braces-clang.c:11:17: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   11 | struct S s00 = {0, 0};
+      |                 ^~~~
+      |                 {   }
+sema-missing-braces-clang.c:12:19: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   12 | struct S szero = {(0), 1};
+      |                   ^~~~~~
+      |                   {     }
+sema-missing-braces-clang.c:13:16: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   13 | int a[2][2] = {1, 2, 3, 4};
+      |                ^~~~
+      |                {   }
+sema-missing-braces-clang.c:13:22: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   13 | int a[2][2] = {1, 2, 3, 4};
+      |                      ^~~~
+      |                      {   }
+sema-missing-braces-clang.c:15:28: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   15 | int mixed[2][2] = {{1, 2}, 3, 4};
+      |                            ^~~~
+      |                            {   }
+sema-missing-braces-clang.c:16:21: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   16 | struct S s2 = {.p = 1, 2};
+      |                     ^~~~
+      |                     {   }
+sema-missing-braces-clang.c:18:16: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   18 | struct S s4 = {1, 2, .z = 3};
+      |                ^~~~
+      |                {   }
+sema-missing-braces-clang.c:19:16: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   19 | struct S s5 = {1, .p.y = 2};
+      |                ^
+      |                {}
+sema-missing-braces-clang.c:21:14: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   21 | union U u = {1, 2};
+      |              ^~~~
+      |              {   }
+sema-missing-braces-clang.c:24:16: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   24 | struct Q q2 = {'a', 'b', 'c', 0, 1};
+      |                ^~~~~~~~~~~~~~~~
+      |                {               }
+sema-missing-braces-clang.c:31:15: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   31 | struct R r = {1, 2, 3, 4};
+      |               ^~~~
+      |               {   }
+sema-missing-braces-clang.c:31:21: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   31 | struct R r = {1, 2, 3, 4};
+      |                     ^~~~
+      |                     {   }
+sema-missing-braces-clang.c:32:17: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   32 | struct R r2 = {{1, 2, 3, 4}};
+      |                 ^~~~
+      |                 {   }
+sema-missing-braces-clang.c:32:23: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   32 | struct R r2 = {{1, 2, 3, 4}};
+      |                       ^~~~
+      |                       {   }
+sema-missing-braces-clang.c:33:19: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   33 | struct S s6[2] = {1, 2, 3, 4, 5, 6};
+      |                   ^~~~
+      |                   {   }
+sema-missing-braces-clang.c:33:19: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   33 | struct S s6[2] = {1, 2, 3, 4, 5, 6};
+      |                   ^~~~~~~
+      |                   {      }
+sema-missing-braces-clang.c:33:28: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   33 | struct S s6[2] = {1, 2, 3, 4, 5, 6};
+      |                            ^~~~
+      |                            {   }
+sema-missing-braces-clang.c:33:28: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   33 | struct S s6[2] = {1, 2, 3, 4, 5, 6};
+      |                            ^~~~~~~
+      |                            {      }
+sema-missing-braces-clang.c:34:21: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   34 | struct S partial = {1};
+      |                     ^
+      |                     {}
+sema-missing-braces-clang.c:36:3: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   36 |   1,
+      |   ^~
+      |   {
+   37 |   2, 3 };
+      |   ~
+      |    }
+sema-missing-braces-clang.c:39:23: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   39 | struct S from_macro = INIT;
+      |                       ^~~~
+sema-missing-braces-clang.c:38:15: note: expanded from macro 'INIT'
+   38 | #define INIT {1, 2, 3}
+      |               ^~~~
+sema-missing-braces-clang.c:41:23: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   41 | struct S from_list = {ONE, 3};
+      |                       ^~~
+      |                       {  }
+sema-missing-braces-clang.c:40:13: note: expanded from macro 'ONE'
+   40 | #define ONE 1, 2
+      |             ^~~~
+sema-missing-braces-clang.c:43:24: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   43 | struct S from_first = {FIRST, 2, 3};
+      |                        ^~~~~~~~
+      |                        {       }
+sema-missing-braces-clang.c:42:15: note: expanded from macro 'FIRST'
+   42 | #define FIRST 1
+      |               ^
+sema-missing-braces-clang.c:45:23: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   45 | struct S from_last = {1, LAST};
+      |                       ^~~~~~~
+      |                       {
+sema-missing-braces-clang.c:46:24: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   46 | struct S from_system = SYS_INIT;
+      |                        ^~~~~~~~
+system-headers/brace-macros.h:6:19: note: expanded from macro 'SYS_INIT'
+    6 | #define SYS_INIT {1, 2, 3}
+      |                   ^~~~
+sema-missing-braces-clang.c:47:30: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   47 | struct S from_system_list = {SYS_PAIR, 3};
+      |                              ^~~~~~~~
+      |                              {       }
+system-headers/brace-macros.h:7:18: note: expanded from macro 'SYS_PAIR'
+    7 | #define SYS_PAIR 1, 2
+      |                  ^~~~
+sema-missing-braces-clang.c:49:21: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   49 |   struct S local = {1, 2, 3};
+      |                     ^~~~
+      |                     {   }
+sema-missing-braces-clang.c:50:22: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   50 |   int cells[2][3] = {1, 2, 3, 4, 5, 6};
+      |                      ^~~~~~~
+      |                      {      }
+sema-missing-braces-clang.c:50:31: warning: suggest braces around initialization of subobject [-Wmissing-braces]
+   50 |   int cells[2][3] = {1, 2, 3, 4, 5, 6};
+      |                               ^~~~~~~
+      |                               {      }
+30 warnings generated.
