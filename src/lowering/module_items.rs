@@ -762,6 +762,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             result,
             variadic && prototype,
             self.target_vector_abi(binding) && !self.own_avx(binding),
+            self.function_vectors(binding).arguments,
         )
     }
 
@@ -1124,10 +1125,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// option bcc only warns about gives it YMM or ZMM registers bcc doesn't
     /// use, and under GCC's convention a variadic function's named one in YMM,
     /// since LLVM keeps such a function's named vectors on the stack, as
-    /// Clang's convention says (`CC_X86_64_C` has `CCIfNotVarArg`). An internal
-    /// function whose address nothing takes has only bcc's callers and keeps
-    /// bcc's convention.
-    /// GCC `classify_argument` and `function_arg_64`; System V AMD64 psABI
+    /// Clang's convention says (`CC_X86_64_C` has `CCIfNotVarArg`). `avx`
+    /// says whether the function's convention passes vectors whole, from the
+    /// command line or from its own `target` attribute
+    /// ([`Self::function_vectors`]). An internal function whose address
+    /// nothing takes has only bcc's callers and keeps bcc's convention.
+    /// C99 §6.7.5.3p9 (a variadic function's named parameters); GCC
+    /// `classify_argument` and `function_arg_64`; System V AMD64 psABI
     /// §3.2.3.
     pub(super) fn check_foreign_vectors(
         &self,
@@ -1135,6 +1139,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         result: TypeId,
         variadic: bool,
         target_attribute: bool,
+        avx: bool,
     ) -> Result<(), LoweringErrorKind> {
         let types = &self.sema.types;
         let unknown = self
@@ -1154,7 +1159,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         if variadic && self.rules() == crate::configuration::RuleSet::Gcc {
             for ty in named {
-                if self.travels_whole(ty)? {
+                if self.travels_whole_with(ty, avx)? {
                     return Err(LoweringErrorKind::Unsupported(
                         Construct::VariadicNamedVector,
                     ));
@@ -1165,16 +1170,20 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     }
 
     /// Whether an argument of type `ty` travels whole in a YMM register when it
-    /// is named and one is free.
-    pub(super) fn travels_whole(&self, ty: TypeId) -> Result<bool, LoweringErrorKind> {
+    /// is named and one is free, in a function whose convention has AVX when
+    /// `avx` says so.
+    pub(super) fn travels_whole_with(
+        &self,
+        ty: TypeId,
+        avx: bool,
+    ) -> Result<bool, LoweringErrorKind> {
         let types = &self.sema.types;
-        if !self.avx() || crate::abi::Convention::of(self.target) != crate::abi::Convention::SystemV
-        {
+        if !avx || crate::abi::Convention::of(self.target) != crate::abi::Convention::SystemV {
             return Ok(false);
         }
         if super::vectors::shape(types, ty).is_some() {
             return Ok(self
-                .vector_abi_layout(ty, false, self.avx(), self.tables)?
+                .vector_abi_layout(ty, false, avx, self.tables)?
                 .flags
                 .contains(AggregateFlags::WIDE));
         }

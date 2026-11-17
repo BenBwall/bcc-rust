@@ -332,6 +332,34 @@ fn foreign_vector_conventions_are_refused() {
     refused(variadic, CompilerIdentity::Gcc, &["-mavx2"], named);
     accepted(variadic, CompilerIdentity::Clang, &["-mavx2"]);
     accepted(variadic, CompilerIdentity::Gcc, &[]);
+    // A `target` attribute that turns AVX on gives GCC's named vector YMM0
+    // as the command line does, in the definition and in each call.
+    let variadic = "__attribute__((target(\"avx\"))) V f(V a, int n, ...) { return a; }";
+    refused(variadic, CompilerIdentity::Gcc, &[], named);
+    accepted(variadic, CompilerIdentity::Clang, &[]);
+    let call = "__attribute__((target(\"avx\"))) V f(V, int, ...); \
+                __attribute__((target(\"avx\"))) void g(V *p) { *p = f(*p, 1, *p); }";
+    refused(call, CompilerIdentity::Gcc, &[], named);
+    accepted(call, CompilerIdentity::Clang, &[]);
+    let pointer =
+        "__attribute__((target(\"avx\"))) void g(V (*f)(V, int, ...), V *p) { *p = f(*p, 0); }";
+    refused(pointer, CompilerIdentity::Gcc, &[], named);
+    accepted(pointer, CompilerIdentity::Clang, &[]);
+    // Without a prototype every argument is named: GCC's caller with AVX
+    // passes the vector in YMM0, as a callee whose attribute turns AVX on
+    // takes it.
+    accepted(
+        "__attribute__((target(\"avx\"))) V f(); __attribute__((target(\"avx\"))) void g(V \
+         *p) { *p = f(*p); }",
+        CompilerIdentity::Gcc,
+        &[],
+    );
+    refused(
+        "V e(); __attribute__((target(\"avx\"))) void g(V *p) { *p = e(*p); }",
+        CompilerIdentity::Gcc,
+        &[],
+        "ignores, changes how it travels",
+    );
     accepted(
         "static int f(int n, V a, ...) { return a[n]; } int g(V *p) { return f(0, *p); }",
         CompilerIdentity::Gcc,

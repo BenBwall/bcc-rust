@@ -11,7 +11,8 @@
 //! and PCLMULQDQ intrinsics whose builtins lowering expands, against both
 //! GCC's and the pinned Clang's builds, and `avx_target_abi_callee.c` with
 //! `avx_target_abi_caller.c` the vectors of functions whose `target`
-//! attribute turns AVX on, linked with either compiler's half.
+//! attribute turns AVX on, linked with either compiler's half, as
+//! `avx_target_variadic.c` does for a variadic one.
 
 #[cfg(test)]
 #[expect(
@@ -171,6 +172,62 @@ mod tests {
                     std::fs::remove_file(object).unwrap();
                     assert_lines(&output, &expected, &context);
                 }
+            }
+        }
+    }
+
+    /// A variadic function whose `target` attribute turns AVX on, with a
+    /// named 32-byte vector: Clang's convention passes it in memory, as LLVM
+    /// does, so each half bcc builds links with Clang's build of the other;
+    /// GCC's passes it in YMM0, where LLVM cannot, so bcc refuses both the
+    /// definition and the call under GCC's identity.
+    #[test]
+    fn avx_target_variadic_functions_follow_each_convention() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let source = fixture("avx_target_variadic.c");
+        let clang = "target/llvm/bin/clang";
+        let callee = temporary("variadic-callee.o");
+        let built = Command::new(clang)
+            .args(["-DCALLEE", "-c", "-O0", "-w", &source, "-o"])
+            .arg(&callee)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let expected = build_and_run(clang, &source, &[callee.to_str().unwrap()]);
+        std::fs::remove_file(&callee).unwrap();
+        for flags in [&["-O0"][..], &["-O2"]] {
+            for (ours, theirs) in [(&["-DCALLEE"][..], &[][..]), (&[], &["-DCALLEE"])] {
+                let context = format!("{flags:?} {ours:?}");
+                let object = temporary("variadic-part.o");
+                let object = object.to_str().unwrap();
+                let built = bcc(&[
+                    &["--compiler-identity=clang", "-w", "-c", &source, "-o", object][..],
+                    ours,
+                    flags,
+                ]
+                .concat());
+                assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+                let output = build_and_run(clang, &source, &[theirs, &[object]].concat());
+                std::fs::remove_file(object).unwrap();
+                assert_lines(&output, &expected, &context);
+                let refused = bcc(&[
+                    &["--compiler-identity=gcc", "-w", "-c", &source, "-o", object][..],
+                    ours,
+                    flags,
+                ]
+                .concat());
+                assert!(!refused.status.success(), "{context}: GCC identity accepted");
+                assert!(
+                    text(&refused.stderr).contains("a named 32-byte vector parameter of a variadic"),
+                    "{context}: {}",
+                    text(&refused.stderr)
+                );
             }
         }
     }

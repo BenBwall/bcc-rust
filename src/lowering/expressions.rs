@@ -2580,21 +2580,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ty:      items[0].ty,
             });
         }
-        // A vector AVX passes whole travels as a named one, since the callee
-        // has no `...` to read it from; Clang's `isNoProtoCallVariadic` makes
-        // such a call an ordinary one as well.
-        let open_variadic = open_external
-            && !items
-                .iter()
-                .any(|item| self.unit.travels_whole(item.ty).unwrap_or(false));
-        let fixed = if open_variadic {
-            0
-        } else if open_external {
-            items.len()
-        } else {
-            call.fixed + hidden_count + usize::from(frame_argument)
-        };
-        let variadic = open_variadic || (call.prototype && call.variadic);
         // A direct callee whose own `target` attribute turns AVX on takes its
         // vectors as its definition does (`Unit::function_vectors`), which a
         // caller whose attribute turns AVX on as well passes alike; such a
@@ -2605,6 +2590,29 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .record
             .binding
             .is_some_and(|binding| self.unit.turns_avx_on(binding));
+        let command_line = self.unit.command_line_vectors();
+        let vectors = match own_avx {
+            | Some(binding) => self.unit.function_vectors(binding),
+            | None if caller_avx && direct.is_none() => self.unit.avx_vectors(),
+            | None => command_line,
+        };
+        // A vector AVX passes whole travels as a named one, since the callee
+        // has no `...` to read it from; Clang's `isNoProtoCallVariadic` makes
+        // such a call an ordinary one as well.
+        let open_variadic = open_external
+            && !items.iter().any(|item| {
+                self.unit
+                    .travels_whole_with(item.ty, vectors.arguments)
+                    .unwrap_or(false)
+            });
+        let fixed = if open_variadic {
+            0
+        } else if open_external {
+            items.len()
+        } else {
+            call.fixed + hidden_count + usize::from(frame_argument)
+        };
+        let variadic = open_variadic || (call.prototype && call.variadic);
         let target_attribute = self
             .record
             .binding
@@ -2620,12 +2628,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .binding
             .is_some_and(|binding| self.unit.moves_vector_registers(binding))
         {
+            // Each argument of a call without a prototype is one the callee
+            // names (C99 §6.5.2.2p6), whatever `fixed` passes as variadic.
+            let named = if open_external { items.len() } else { fixed };
             self.unit
                 .check_foreign_vectors(
-                    items[..fixed].iter().map(|item| item.ty),
+                    items[..named].iter().map(|item| item.ty),
                     result,
-                    variadic,
+                    variadic && !open_external,
                     target_attribute,
+                    vectors.arguments,
                 )
                 .map_err(|kind| at(kind, source))?;
         }
@@ -2638,12 +2650,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let parameters = items[..if described { items.len() } else { fixed }]
             .iter()
             .map(|item| item.ty);
-        let command_line = self.unit.command_line_vectors();
-        let vectors = match own_avx {
-            | Some(binding) => self.unit.function_vectors(binding),
-            | None if caller_avx && direct.is_none() => self.unit.avx_vectors(),
-            | None => command_line,
-        };
         let mut signature = self
             .unit
             .signature_of(parameters.clone(), result, variadic, vectors, self.scratch)
