@@ -211,4 +211,52 @@ sema-uninitialized-clang.c:79:32: warning: variable 'x' is uninitialized when us
 sema-uninitialized-clang.c:79:25: note: initialize the variable 'x' to silence this warning
    79 | int order(int a) { int x, y; g(x); if (a) g(1); return y; }
       |                         ^
-24 warnings generated.
+sema-uninitialized-clang.c:96:65: warning: variable 'x' is uninitialized when passed as a const pointer argument here [-Wuninitialized-const-pointer]
+   96 | void cast_empty(void) { int x; ((void (*)(const int *))ignore)(&x); }
+      |                                                                 ^
+sema-uninitialized-clang.c:100:52: warning: variable 'x' is used uninitialized whenever '?:' condition is true [-Wsometimes-uninitialized]
+  100 | int discarded_same(int a) { int x; (void)(a ? 0 : (a ? x : (x = 2))); return x; }
+      |                                                    ^
+sema-uninitialized-clang.c:100:78: note: uninitialized use occurs here
+  100 | int discarded_same(int a) { int x; (void)(a ? 0 : (a ? x : (x = 2))); return x; }
+      |                                                                              ^
+sema-uninitialized-clang.c:100:52: note: remove the '?:' if its condition is always false
+  100 | int discarded_same(int a) { int x; (void)(a ? 0 : (a ? x : (x = 2))); return x; }
+      |                                                    ^~~~~~~
+sema-uninitialized-clang.c:100:43: warning: variable 'x' is used uninitialized whenever '?:' condition is true [-Wsometimes-uninitialized]
+  100 | int discarded_same(int a) { int x; (void)(a ? 0 : (a ? x : (x = 2))); return x; }
+      |                                           ^
+sema-uninitialized-clang.c:100:78: note: uninitialized use occurs here
+  100 | int discarded_same(int a) { int x; (void)(a ? 0 : (a ? x : (x = 2))); return x; }
+      |                                                                              ^
+sema-uninitialized-clang.c:100:43: note: remove the '?:' if its condition is always false
+  100 | int discarded_same(int a) { int x; (void)(a ? 0 : (a ? x : (x = 2))); return x; }
+      |                                           ^~~~~~~
+sema-uninitialized-clang.c:100:34: note: initialize the variable 'x' to silence this warning
+  100 | int discarded_same(int a) { int x; (void)(a ? 0 : (a ? x : (x = 2))); return x; }
+      |                                  ^
+sema-uninitialized-clang.c:101:57: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+  101 | int discarded_long(int a) { int x; (void)(a ? 0L : (a ? x : (x = 2))); return x; }
+      |                                                         ^
+sema-uninitialized-clang.c:101:34: note: initialize the variable 'x' to silence this warning
+  101 | int discarded_long(int a) { int x; (void)(a ? 0L : (a ? x : (x = 2))); return x; }
+      |                                  ^
+sema-uninitialized-clang.c:102:67: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+  102 | int discarded_unsigned(int a) { int x; (void)(a ? 0u : x); return x; }
+      |                                                                   ^
+sema-uninitialized-clang.c:102:38: note: initialize the variable 'x' to silence this warning
+  102 | int discarded_unsigned(int a) { int x; (void)(a ? 0u : x); return x; }
+      |                                      ^
+sema-uninitialized-clang.c:103:59: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+  103 | int discarded_nested(int a) { int x; (void)(a ? 0u : (a ? x : (x = 2))); return x; }
+      |                                                           ^
+sema-uninitialized-clang.c:103:36: note: initialize the variable 'x' to silence this warning
+  103 | int discarded_nested(int a) { int x; (void)(a ? 0u : (a ? x : (x = 2))); return x; }
+      |                                    ^
+sema-uninitialized-clang.c:104:52: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+  104 | int discarded_cast(int a) { int x; (void)(int)(a ? x : (x = 2)); return x; }
+      |                                                    ^
+sema-uninitialized-clang.c:104:34: note: initialize the variable 'x' to silence this warning
+  104 | int discarded_cast(int a) { int x; (void)(int)(a ? x : (x = 2)); return x; }
+      |                                  ^
+31 warnings generated.

@@ -84,3 +84,21 @@ int quiet(int a) {
   (void)z;
   return x + *p;
 }
+/* A call through '*' or '&' names the function, whose attributes and empty
+   body count; a cast hides it. */
+void panic(void) __attribute__((analyzer_noreturn));
+int twice(void) __attribute__((returns_twice));
+int vfork(void);
+int deref_noreturn(int a) { int x; if (a) (*panic)(); else x = 1; return x; }
+int deref_twice(void) { int x; (*twice)(); return x; }
+int address_vfork(void) { int x; (&vfork)(); return x; }
+void deref_empty(void) { int x; (**ignore)(&x); }
+void cast_empty(void) { int x; ((void (*)(const int *))ignore)(&x); }
+/* A discarded '?:' discards its arms' values only through conversions that
+   change nothing, and a cast passes a discarded value on to a variable
+   alone. */
+int discarded_same(int a) { int x; (void)(a ? 0 : (a ? x : (x = 2))); return x; }
+int discarded_long(int a) { int x; (void)(a ? 0L : (a ? x : (x = 2))); return x; }
+int discarded_unsigned(int a) { int x; (void)(a ? 0u : x); return x; }
+int discarded_nested(int a) { int x; (void)(a ? 0u : (a ? x : (x = 2))); return x; }
+int discarded_cast(int a) { int x; (void)(int)(a ? x : (x = 2)); return x; }
