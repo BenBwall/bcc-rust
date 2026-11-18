@@ -303,6 +303,14 @@ pub(crate) enum FixItPlace {
     /// The range's tokens, from the first to the end of the last, which the
     /// text replaces.
     Replace(SourceVectors),
+    /// The bytes from an edge of one range's tokens to an edge of
+    /// another's, which the text replaces: each the start of the range's
+    /// first token, or with `true` the end of its last, as Clang's character
+    /// ranges run from the end of one statement to the start of the next.
+    Span {
+        from: (SourceVectors, bool),
+        to:   (SourceVectors, bool),
+    },
 }
 
 /// Where a label points: a provenance range, or explicit segments when only

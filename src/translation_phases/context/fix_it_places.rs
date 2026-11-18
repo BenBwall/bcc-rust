@@ -43,7 +43,11 @@ impl Context<'_> {
     pub(crate) fn clang_fix_it_bytes(&self, place: FixItPlace) -> FixItPlacement {
         // `getLocForEndOfToken` follows a token a macro expansion produced
         // out only from the expansion's end.
-        if let FixItPlace::After(source) = place
+        if let FixItPlace::After(source)
+        | FixItPlace::Span {
+            from: (source, true),
+            ..
+        } = place
             && source.length() != 0
             && self
                 .invocation_span(Self::last_source_vector(source))
@@ -58,6 +62,15 @@ impl Context<'_> {
 
     /// [`Self::clang_fix_it_bytes`] for a hint that has a place.
     fn clang_fix_it_place(&self, place: FixItPlace) -> Option<FixItBytes> {
+        if let FixItPlace::Span { from, to } = place {
+            let (from_token, to_token) = (Self::span_edge(from)?, Self::span_edge(to)?);
+            let from = self.clang_edit_point(from_token, from.1, Some(to_token))?;
+            let to = self.clang_edit_point(to_token, to.1, Some(from_token))?;
+            return (from.file == to.file && from.start <= to.start).then_some(FixItBytes {
+                end: to.start,
+                ..from
+            });
+        }
         let (source, start, end) = Self::fix_it_edges(place);
         if source.length() == 0 {
             return None;
@@ -169,6 +182,34 @@ impl Context<'_> {
 
     /// [`Self::gcc_fix_it_bytes`] for a hint GCC keeps.
     fn gcc_fix_it_place(&self, place: FixItPlace) -> Option<FixItBytes> {
+        if let FixItPlace::Span { from, to } = place {
+            let (from_token, to_token) = (Self::span_edge(from)?, Self::span_edge(to)?);
+            if self.produced_by_macro_expansion(from_token)
+                || self.produced_by_macro_expansion(to_token)
+            {
+                return None;
+            }
+            let byte = |vector: &SourceVector, after: bool| {
+                if after {
+                    vector.end()
+                } else {
+                    vector.index as usize
+                }
+            };
+            let (first, last) = (
+                self.first_source_vector(from_token),
+                self.first_source_vector(to_token),
+            );
+            let (start, end) = (byte(first, from.1), byte(last, to.1));
+            return (first.source_file_index == last.source_file_index && start <= end).then_some(
+                FixItBytes {
+                    file: first.source_file_index,
+                    start,
+                    end,
+                    line: first.line,
+                },
+            );
+        }
         let (source, start, end) = Self::fix_it_edges(place);
         if source.length() == 0 {
             return None;
@@ -203,8 +244,23 @@ impl Context<'_> {
         match place {
             | FixItPlace::Before(source) => (source, true, false),
             | FixItPlace::After(source) => (source, false, true),
-            | FixItPlace::Replace(source) => (source, true, true),
+            | FixItPlace::Replace(source)
+            | FixItPlace::Span {
+                from: (source, _), ..
+            } => (source, true, true),
         }
+    }
+
+    /// The token at an edge of [`FixItPlace::Span`]: the range's first, or
+    /// with `true` its last; `None` for an empty range.
+    fn span_edge((source, after): (SourceVectors, bool)) -> Option<SourceVectors> {
+        (source.length() != 0).then(|| {
+            if after {
+                Self::last_source_vector(source)
+            } else {
+                Self::first_token_vector(source)
+            }
+        })
     }
 }
 
