@@ -131,7 +131,18 @@ compiler; each part is captioned with what its lessons share
   callers, or has nothing left, and the page says so. An instruction the
   optimizer moved or merged has no location, which the page says too rather
   than guess. Moving the cursor to a line (with the arrow keys, or a tap on a
-  touch screen) does the same.
+  touch screen) does the same. The lines it became come into view: in the
+  output at once, and on the page once the pointer or the cursor rests, as
+  little as shows them, but never while the reader is scrolling, nor so far
+  that the line they point at moves away (under a hovering pointer the
+  source pane must be stuck beside the output, as on a wide screen; a line
+  chosen with a tap or the keyboard must stay on screen); with reduced
+  motion both jump rather than glide. Another level, another stage or an
+  edit keeps the reader's place in the code rather than the scroll offset:
+  the output opens with the same source line's code at the same height
+  (`pipeline::Place`), or the nearest line of the same function that has
+  code there. Function names in the IRs and the assembly (`@main`, `main:`)
+  have a colour of their own.
 
 - **WebAssembly.** The program compiled to WebAssembly by bcc, in the
   browser, executed one
@@ -430,6 +441,14 @@ reimplements none):
   place in the source links to it: every scope with its declarations (type,
   linkage, storage duration, size and alignment), then each expression's
   type and value category, then the implicit conversions applied to them.
+- **bcc IR**, **ABI-lowered IR** and **LLVM IR** open with the lines that
+  name their target: its triple (`x86_64-unknown-linux-gnu`) and its data
+  layout string, and in LLVM IR the module's names. They fold into one line
+  (`pipeline/target.rs`) that says what they are, so the first function
+  comes first; its hover reads the triple's parts and the layout's
+  commonest entries, the reading under the pointer or cursor says what the
+  line stands for, and **Show target** puts the lines back. The glossary
+  explains both terms.
 
 The page receives at most 20,000 phase-3 entries and 2,000 expansions and
 says how many more there were; source columns are mapped line by line, so a
@@ -657,7 +676,7 @@ the lessons, and `pipeline.rs` the compiler stages, their explanations and
 citations, the source-to-output links, why a compilation stopped, the
 optimizer comparison and the bundled LLVM IR; `pipeline/front_end.rs` holds
 the front-end phases' data, the folded preprocessed text and its line
-links. `engine.rs` proxies both Workers over the messages in
+links, and `pipeline/target.rs` the IRs' folded target lines. `engine.rs` proxies both Workers over the messages in
 `protocol.rs`. In the abstract machine's Worker, `machine.rs` drives an engine
 `Session` and turns each state into a snapshot (UTF-8 byte ranges become
 UTF-16 editor columns); in the compiler's, `explorer.rs` runs bcc and turns
@@ -673,7 +692,8 @@ waiting frames; diagnostics and recovery; UTF-16 columns; colouring; every
 lesson compiling live at both levels; placed compiler diagnostics and the
 stop explanation; the machine-code listing; the LLVM IR's sync with the
 lessons; the source-to-output links, the folded headers and gutter labels of
-the front-end stages, and the optimizer comparison; prerendering; every
+the front-end stages, the IRs' folded target lines, the reader's place kept
+across views, and the optimizer comparison; prerendering; every
 lesson stepped through its WebAssembly with a placed, narrated state at each
 instruction; and every lesson compiled by bcc for `wasm32-wasip1`, stepped
 through bcc's own text to the exit status Clang's module returns, the
