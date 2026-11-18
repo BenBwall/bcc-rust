@@ -2183,9 +2183,17 @@ ordinary stores; `_mm_getcsr`, `_mm_setcsr`, the fences, `_mm_pause`,
 `_mm_clflush`, `_mm_monitor` and `_mm_mwait` are inline assembly, which the
 interpreter cannot run. The AVX, AVX2, AES, PCLMUL, 3DNow!, ADX and CPUID
 headers are still Clang 23.1.1's (Apache-2.0 WITH LLVM-exception,
-`src/headers/LICENSE-LLVM`): they type-check, and their intrinsics that are
-generic vector code run, but those that call `__builtin_ia32_*` builtins are
-refused by lowering. The headers are x86 only, as GCC's and Clang's are.
+`src/headers/LICENSE-LLVM`): they type-check, and their intrinsics run on
+every back end but WebAssembly (see `middle-end.md`, "x86 intrinsics").
+`<xsaveintrin.h>` declares `_xgetbv` alone, in each identity's form:
+Clang's macro over `__builtin_ia32_xgetbv` under the Clang identity, and
+GCC's `always_inline` function with `target("xsave")`, returning `long
+long`, under the GCC identity, where `<x86gprintrin.h>` includes it too, as
+GCC's does; both identities find it in `<immintrin.h>`. A caller without
+XSAVE hears Clang's "'__builtin_ia32_xgetbv' needs target feature xsave" or
+GCC's "inlining failed in call to 'always_inline' '_xgetbv': target
+specific option mismatch". The headers are x86 only, as GCC's and Clang's
+are.
 
 ### Common GCC scalar intrinsics (2026-10-12)
 

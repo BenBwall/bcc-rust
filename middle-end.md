@@ -3397,7 +3397,9 @@ a feature only permits instructions, so both run a `target` function's code as a
 other: the native back end writes baseline code for it, which is correct on every
 processor that has the features, and the interpreter computes it. What the features
 would change otherwise stays refused: the native back end's refusal of a signature with
-a YMM register, and of the named x86 instructions ("x86 intrinsics" below).
+a YMM register. The named x86 instructions are the exception: the native back end emits
+each as the instruction itself, in its VEX form in a function with AVX ("x86 intrinsics"
+below).
 
 **Evidence.** `src/target/x86_features/tests.rs` covers each compiler's reading;
 `tests/integration/target_attribute.rs` the diagnostics (against the pinned Clang
@@ -3518,7 +3520,8 @@ instruction and the LLVM intrinsic Clang calls for it: the AES rounds and key
 assist, `PCLMULQDQ`, `ROUNDPS` and its kin, `VCVTPS2DQ`/`VCVTPD2DQ` (in MXCSR's
 mode, with the integer indefinite for NaN and out-of-range lanes) and their
 truncating forms, `VRCPPS`, `VRSQRTPS`, `VZEROUPPER`, `VZEROALL`, the SSE4.2
-string comparisons, and the scalar square roots behind `__builtin_elementwise_sqrt`.
+string comparisons, the scalar square roots behind `__builtin_elementwise_sqrt`, and
+`XGETBV` behind `_xgetbv`.
 Its vector operands are `ptr` values to their bytes and a vector result goes
 through a destination `ptr`, its first operand; a scalar result is its value,
 and an immediate is part of the record. The verifier checks the operands
@@ -3532,8 +3535,22 @@ writes memory it does not name, and it is never removed.
   FIPS 197, the carry-less product, the rounding modes, the conversions and
   the string comparisons (Intel SDM Vol. 1, §12.10) from the operand bytes,
   and stops on `VRCPPS` and `VRSQRTPS`, whose results each processor
-  approximates its own way, as unsupported.
-- The native and WebAssembly back ends refuse the instruction by name.
+  approximates its own way, as unsupported. `XGETBV` of XCR0 reads the
+  modeled processor's: x87, SSE and AVX state, the registers whose
+  instructions the interpreter computes; another register stops the run.
+- The native back end (`backend/native/isel/vector.rs`) emits the
+  instruction itself: it loads each vector operand into a precolored
+  `%xmm0`/`%xmm1` (`movups`, any alignment), runs the instruction and stores
+  the result, so no virtual register holds a vector; a string comparison
+  takes `%xmm1`/`%xmm2`, with its lengths in `%eax`/`%edx` and its index in
+  `%ecx` or mask in `%xmm0`, and `XGETBV` reads `%ecx` and writes
+  `%edx:%eax`. A function whose features (its `target` attribute, else the
+  command line's) include AVX gets the VEX forms, as GCC and Clang emit
+  there, and a 32-byte instruction, which needs VEX, is followed by
+  `VZEROUPPER`, since nothing else keeps a value in the upper halves and the
+  SSE code after it would pay for the transition. The in-process encoder
+  writes the VEX prefixes (`object/encoder/vector.rs`).
+- The WebAssembly back end refuses the instruction by name.
 
 **A function whose `target` attribute turns AVX on.** Such a function, when
 another object can call it (it is external, or its designator is used other
@@ -3561,11 +3578,21 @@ registers and Clang refuses.
 AVX2, AES-NI and PCLMULQDQ intrinsic of bcc's headers that calls these
 builtins (functions and macros, every `_mm256_cmp_ps` predicate, shift counts
 from 0 past the width, gathers with masks) on six generated input sets of
-random bytes, special `float` and `double` values and boundary integers;
-`tests/integration/x86_intrinsics.rs` compares its output under both
-identities through LLVM at `-O0` and `-O2` with the builds of the host GCC and
-the pinned Clang, and the interpreter (without the approximations) and the
-native back end (without the named instructions), each with and without
-bcc's optimizer, with builds of the same subset. `lowering/tests/x86.rs`
-pins the lane code and the named instructions, `ir/tests/intrinsics.rs` the
-textual form and the verifier.
+random bytes, special `float` and `double` values and boundary integers, and
+`tests/fixtures/programs/x86_named_instructions.c` runs the 16-byte named
+instructions (AES-NI, PCLMULQDQ, the roundings and every string comparison,
+called as the builtins both compilers share) in a function without AVX and
+one with it, and `_xgetbv`. `tests/integration/x86_intrinsics.rs` compares
+their output under both identities through LLVM at `-O0` and `-O2`, the
+interpreter (without the approximations) and the native back end, with and
+without bcc's optimizer and as a direct object, with the builds of the host
+GCC and the pinned Clang; the second is skipped where `/proc/cpuinfo` lacks
+AES, PCLMULQDQ, SSE4.2, AVX or XSAVE. `backend/difftest/named.rs` generates
+programs of the instructions on random and special vectors, which the LLVM
+(A0, A1) and native (B0, B1) oracles check against the interpreter.
+`lowering/tests/x86.rs` pins the lane code and the named instructions,
+`ir/tests/intrinsics.rs` the textual form and the verifier, and the native
+back end's `tests/operands.rs` each instruction's registers and
+`tests/object.rs` its encodings, byte for byte against the pinned
+assembler. xz 5.6.3's CLMUL CRC32 and CRC64 and zlib-ng 2.2.2's SSE4.2 and
+PCLMULQDQ paths build with the native back end and pass their test suites.
