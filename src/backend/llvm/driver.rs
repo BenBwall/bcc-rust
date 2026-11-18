@@ -18,6 +18,7 @@ use std::{
         Output,
     },
     sync::atomic::{
+        AtomicBool,
         AtomicU8,
         AtomicU64,
         Ordering,
@@ -117,19 +118,26 @@ pub(crate) fn compile_module_checked(
     if stack {
         _ = command.arg(EXECUTABLE_STACK);
     }
-    finish(run(&mut command)?, out_path).map(|()| true)
+    finish(run_link(&mut command)?, out_path).map(|()| true)
 }
 
 /// Finishes a clang job that wrote `out_path`: its diagnostics are the error
 /// when it failed. For `-`, clang wrote the object, or LLD the executable, to
 /// the stdout that `run` captured, which goes to bcc's own, as Clang writes
-/// `-o -`.
+/// `-o -`. Otherwise what the job printed there goes to bcc's stdout, as
+/// GCC's and Clang's drivers leave the linker's: Meson names the linker from
+/// what `-Wl,--version` prints, and `CMake` from `-Wl,-v`.
 fn finish(output: Output, out_path: &Path) -> io::Result<()> {
     if !output.status.success() {
         return Err(io::Error::other(ClangError(output)));
     }
     if out_path == Path::new("-") {
         return crate::backend::write_object(out_path, &output.stdout);
+    }
+    if !output.stdout.is_empty() {
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(&output.stdout)?;
+        stdout.flush()?;
     }
     Ok(())
 }
@@ -186,16 +194,41 @@ pub(crate) fn print_commands(style: Option<CommandStyle>) {
     PRINT_COMMANDS.store(style.map_or(0, |style| style as u8), Ordering::Relaxed);
 }
 
-/// Runs `command` to completion, first printing it when
-/// [`print_commands`] asked for that.
-fn run(command: &mut Command) -> io::Result<Output> {
-    let style = match PRINT_COMMANDS.load(Ordering::Relaxed) {
+/// Whether a hosted Linux executable links the C library's math functions
+/// (`-lm`) without being asked: bcc's own driver does, so that `sqrt`
+/// links, while GCC's, Clang's and TCC's drivers link only what `-lm` asks
+/// for, which Autoconf's `AC_SEARCH_LIBS([sqrt], [m])` tells apart.
+static LINK_MATH_LIBRARY: AtomicBool = AtomicBool::new(true);
+
+/// Makes a hosted Linux link add `-lm` (`true`, the default) or leave it to
+/// the command line, as the personalities ask.
+pub(crate) fn link_math_library(link: bool) {
+    LINK_MATH_LIBRARY.store(link, Ordering::Relaxed);
+}
+
+/// The option that links the math library into an executable for `target`,
+/// if [`link_math_library`] asks for it there. C99 §7.12 real math is
+/// provided by a separate library on Linux.
+fn math_library(target: Target) -> Option<&'static str> {
+    (matches!(target, Target::LinuxGnu | Target::LinuxMusl)
+        && LINK_MATH_LIBRARY.load(Ordering::Relaxed))
+    .then_some("-lm")
+}
+
+/// The style [`print_commands`] asked for, if any.
+fn printed_style() -> Option<CommandStyle> {
+    match PRINT_COMMANDS.load(Ordering::Relaxed) {
         | 1 => Some(CommandStyle::Clang),
         | 2 => Some(CommandStyle::GccDryRun),
         | 3 => Some(CommandStyle::GccVerbose),
         | _ => None,
-    };
-    if let Some(style) = style {
+    }
+}
+
+/// Runs `command` to completion, first printing it when
+/// [`print_commands`] asked for that.
+fn run(command: &mut Command) -> io::Result<Output> {
+    if let Some(style) = printed_style() {
         drop(write_command(
             &mut io::stderr().lock(),
             style,
@@ -204,6 +237,68 @@ fn run(command: &mut Command) -> io::Result<Output> {
         ));
     }
     command.output()
+}
+
+/// Runs `command`, a link by the bundled clang, as [`run`] does, and when
+/// [`print_commands`] asked for them also prints the commands clang runs,
+/// the linker's among them, as `clang -###` lists them. GCC's and Clang's
+/// `-v` show the linker's command, from which `CMake` reads the libraries
+/// and directories every link gets (`CMAKE_C_IMPLICIT_LINK_LIBRARIES`) and
+/// which linker it is.
+fn run_link(command: &mut Command) -> io::Result<Output> {
+    if let Some(style) = printed_style() {
+        drop(write_command(
+            &mut io::stderr().lock(),
+            style,
+            command.get_program(),
+            command.get_args(),
+        ));
+        let listed = Command::new(command.get_program())
+            .arg("-###")
+            .args(command.get_args())
+            .output()?;
+        let mut stderr = io::stderr().lock();
+        for line in String::from_utf8_lossy(&listed.stderr).lines() {
+            if let Some(words) = clang_listed_command(line)
+                && let Some((program, arguments)) = words.split_first()
+            {
+                drop(write_command(
+                    &mut stderr,
+                    style,
+                    program.as_ref(),
+                    arguments.iter().map(AsRef::as_ref),
+                ));
+            }
+        }
+    }
+    command.output()
+}
+
+/// The words of a command `clang -###` lists, ` "word" "word"...`, each
+/// quoted with `"`, `\` and `$` escaped by a backslash; `None` for its
+/// other lines (the version, the target, the installed directory).
+#[expect(
+    clippy::disallowed_types,
+    reason = "The words of a startup command line clang printed are owned strings."
+)]
+fn clang_listed_command(line: &str) -> Option<Vec<String>> {
+    let mut rest = line.strip_prefix(' ')?;
+    let mut words = Vec::new();
+    while !rest.is_empty() {
+        let mut word = String::new();
+        let mut characters = rest.strip_prefix('"')?.chars();
+        loop {
+            match characters.next()? {
+                | '"' => break,
+                | '\\' => word.push(characters.next()?),
+                | character => word.push(character),
+            }
+        }
+        words.push(word);
+        rest = characters.as_str();
+        rest = rest.strip_prefix(' ').unwrap_or(rest);
+    }
+    (!words.is_empty()).then_some(words)
 }
 
 /// Writes a command as a compiler driver's `-v` or `-###` prints one, in
@@ -457,7 +552,10 @@ impl Toolchain {
         out_path: &Path,
         options: LlvmOptions,
     ) -> io::Result<()> {
-        finish(run(&mut self.command(object, out_path, options))?, out_path)
+        finish(
+            run_link(&mut self.command(object, out_path, options))?,
+            out_path,
+        )
     }
 
     /// Assembles an assembly file into an object (`OutputKind::Object`) or
@@ -495,11 +593,10 @@ impl Toolchain {
             .arg(operand(assembly).as_os_str())
             .arg("-o")
             .arg(out_path);
-        if kind != OutputKind::Object && matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
-            _ = command.arg("-lm");
-        }
         if kind != OutputKind::Object {
+            _ = command.args(math_library(target));
             _ = command.args(libraries);
+            return finish(run_link(&mut command)?, out_path);
         }
         finish(run(&mut command)?, out_path)
     }
@@ -538,17 +635,14 @@ impl Toolchain {
         if options.fast_math_runtime {
             _ = command.arg(FAST_MATH_RUNTIME);
         }
-        // C99 §7.12 real math is provided by a separate library on Linux.
-        if matches!(options.target, Target::LinuxGnu | Target::LinuxMusl) {
-            _ = command.arg("-lm");
-        }
+        _ = command.args(math_library(options.target));
         if atomic_runtime {
             _ = command.arg("-latomic");
         }
         if executable_stack {
             _ = command.arg(EXECUTABLE_STACK);
         }
-        finish(run(&mut command)?, out_path)
+        finish(run_link(&mut command)?, out_path)
     }
 
     /// Assembles or compiles one input the bundled clang understands, such as
@@ -663,16 +757,16 @@ impl Toolchain {
             .arg(operand(object).as_os_str())
             .arg("-o")
             .arg(out_path);
-        // C99 §7.12 real math is provided by a separate library on Linux.
-        // The CLI links the hosted C runtime, including its math functions.
+        // The CLI links the hosted C runtime, with its math functions unless
+        // `link_math_library` leaves them to the command line.
         if options.kind != OutputKind::Object {
             if options.fast_math_runtime && hosted {
                 _ = command.arg(FAST_MATH_RUNTIME);
             }
-            if !hosted {
+            if hosted {
+                _ = command.args(math_library(options.target));
+            } else {
                 _ = command.arg("-nostdlib");
-            } else if matches!(options.target, Target::LinuxGnu | Target::LinuxMusl) {
-                _ = command.arg("-lm");
             }
         }
         command
@@ -757,3 +851,45 @@ impl fmt::Display for NotFound {
 }
 
 impl std::error::Error for NotFound {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `clang -###` lists each command with every word quoted, as Clang's
+    /// `-v` prints it; the words come back unescaped, and the lines that
+    /// name no command are none.
+    #[test]
+    fn clang_listed_commands_read_back_their_words() {
+        let words = [
+            "/usr/bin/ld.lld",
+            "-o",
+            "a b",
+            "say \"hi\"",
+            "C:\\x",
+            "$HOME",
+        ];
+        let mut line = Vec::new();
+        write_command(
+            &mut line,
+            CommandStyle::Clang,
+            OsStr::new(words[0]),
+            words[1..].iter().map(OsStr::new),
+        )
+        .unwrap();
+        let line = String::from_utf8(line).unwrap();
+        assert_eq!(
+            clang_listed_command(line.trim_end()),
+            Some(words.map(str::to_owned).to_vec())
+        );
+        for other in [
+            "clang version 23.1.5",
+            "Target: x86_64-unknown-linux-gnu",
+            "InstalledDir: /usr/bin",
+            "",
+            " \"unterminated",
+        ] {
+            assert_eq!(clang_listed_command(other), None, "{other}");
+        }
+    }
+}

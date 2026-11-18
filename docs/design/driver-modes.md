@@ -6,8 +6,9 @@ translates it into bcc's own options, and turns on every compatibility feature
 bcc has for that compiler: its predefined identity macros, language mode,
 target, system headers, Microsoft extensions, diagnostic format, output
 names and version banners. Build systems that probe a compiler (Autoconf,
-CMake, Meson, plain Makefiles) should find the compiler they expect, while
-every banner and `__bcc__` still say that bcc is the compiler.
+CMake, Meson, plain Makefiles) find the compiler they expect ([Build
+systems](#build-systems) records what each concludes), while every banner
+and `__bcc__` still say that bcc is the compiler.
 
 This document records the conventions of each mimicked compiler, how bcc
 maps them, the decisions made, and every known deviation. The implementation
@@ -96,6 +97,11 @@ without a personality as well:
   clang as `./-app` and so as files;
 - `-fsyntax-only` (`--syntax-only`), and a failing exit status from every
   mode, the inspection views included, after an error;
+- `--link-only`, a link of the linker inputs and options alone, with no
+  input file, as GCC and Clang link `gcc -Wl,--version` (what the linker
+  prints on stdout reaches bcc's stdout), and `--no-default-libm`, which
+  leaves `libm` to `-lm` as the GCC, Clang and TCC drivers do, where bcc's
+  own driver links it into every hosted Linux program;
 - an input that cannot be read failing its own job alone, reported in the
   words of the compiler whose diagnostic format is selected: GCC's `cc1:
   fatal error: missing.c: No such file or directory` and `compilation
@@ -418,7 +424,8 @@ to the options TCC itself implements; see [TCC](#tcc).
   after the whole command line is read), options that only change
   which programs are accepted (`-fallow-parameterless-variadic-functions`),
   and options for other
-  languages (C++'s `-fno-rtti`).
+  languages (C++'s `-fno-threadsafe-statics`; GCC's `-frtti` and
+  `-fno-rtti` draw its C compiler's warning, which libtool looks for).
 - **Warned and ignored**, for hardening and instrumentation that a correct
   program does not depend on: `-fstack-protector*`,
   `-ftrivial-auto-var-init=`,
@@ -1025,7 +1032,16 @@ clang-cl knows (`personality/options/clang-cl.list`, frozen from its
   D9024 and D9027 for any other input.
 
 `cl` on Windows keeps its own reading: an unknown `/` option draws warning
-D9002, and `--` is an unknown option too.
+D9002, and `--` is an unknown option too. Elsewhere the `cl` personality
+also reads two kinds of argument as `cl.exe` would, since build systems
+drive `cl` as on Windows: CMake gives clang-cl a `--` before its sources
+but not `cl`, and expects `cl`'s warning D9002 for an unknown option.
+
+- A file that exists inside a directory is an input, whatever option its
+  name starts with: CMake's ABI probe `/opt/cmake/.../CMakeCCompilerABI.c`,
+  which clang-cl reads as `/o`, compiles.
+- A name without a directory that names no file is an option, so `/bogus`
+  draws D9002, where clang-cl reports a missing input.
 
 ## TCC
 
@@ -1343,6 +1359,87 @@ clang-cl, `#pragma warning` for `cl` and clang-cl, none for TCC.
 left from each compiler. `-Wfatal-errors` stops the GCC personality at its first
 error, with GCC's `compilation terminated.`; Clang's accepts it and goes on.
 
+## Build systems
+
+What CMake 3.31 (Ninja, with response files forced, and Unix Makefiles),
+Autoconf 2.71 with Automake 1.16 and libtool 2.4.7, and Meson 1.12 conclude
+about each personality was compared with GCC 13.3, the pinned Clang 23.1.5
+and TCC 0.9.27 (Ubuntu's, and the release tag) on x86-64 Linux on
+2026-11-18. `scripts/build_system_probes.py` repeats the comparison for any
+compilers, and `tests/integration/build_system_probes.rs` pins the probes
+that decided it. A personality chosen by flag (`CC="bcc --gcc-mode"`) and
+by executable name (`gcc`, `cc`, `clang`, `tcc`, `cl`, `clang-cl`) lead to
+the same conclusions, except for clang-cl below. zlib 1.3.1 with CMake and
+xz 5.6.3 with Autoconf and libtool build and pass their tests under
+`--gcc-mode` and `--clang-mode`.
+
+- **GCC.** CMake finds `GNU 14.2.0`, GCC's default C17 with extensions,
+  the same compile features (to `c_std_23`), implicit link libraries
+  (`gcc;gcc_s;c;gcc;gcc_s`), library architecture, pointer size, PIC and
+  dependency-file flags, and the same results for its checks
+  (`check_c_compiler_flag(-Wno-bogus)` passes, `-fbogus` fails). Autoconf
+  finds a GNU compiler that needs no option for C11, `gcc3` dependency
+  tracking, `sqrt` in `-lm`, and libtool GCC's PIC flags, `-c -o`, static
+  linking, shared libraries and `-fno-rtti` warning. Meson finds `gcc
+  14.2.0`.
+- **Clang.** The same as with the pinned Clang: `Clang 23.1.5`, the same
+  features, libraries, checks (`-Wno-bogus` fails, as Clang warns) and
+  libtool search path; Meson finds `clang 23.1.5`.
+- **TCC.** CMake finds `TinyCC` with no compile features, so
+  `target_compile_features` fails as with TCC; Meson knows no TCC, as with
+  TCC; Autoconf finds a compiler that is not GNU, `tcc` dependency tracking
+  and `sqrt` in `-lm`.
+- **`cl`.** Off Windows, CMake with a Windows toolchain file and static
+  libraries only (no `link.exe`) finds `MSVC 19.33.0.0`, MSVC-like, C17
+  without extensions, pointer size 8, `/showIncludes` dependencies, and
+  `check_c_compiler_flag(/bogus)` failing on D9002, as `cl.exe` makes it
+  fail. Meson recognizes MSVC 19.33.0 for x64 from `cl /?` and then looks
+  for `link.exe`, which Linux does not have.
+- **clang-cl.** CMake finds `Clang 23.1.5 with MSVC-like command-line`
+  simulating MSVC 19.33, C17 with extensions, as with the pinned Clang's
+  clang-cl.
+
+Before these were measured, Meson stopped on `-Wl,--version` (`no input
+files`) under GCC and Clang; CMake found no implicit link libraries,
+directories, library architecture or linker; Autoconf found `sqrt` without
+`-lm`; libtool kept `-fno-rtti` for GCC and searched `/usr/local/lib`;
+`check_c_compiler_flag(-Wno-bogus)` passed under Clang; CMake read `cl`'s
+probe `/opt/cmake/.../CMakeCCompilerABI.c` as `/o` and found no pointer
+size, and passed `/bogus`; clang-cl's `__STRICT_ANSI__` turned CMake's
+extensions default off; and Meson found no `cl`.
+
+What still differs, and why:
+
+- **Version.** The GCC personality claims GCC 14.2 (the comparison GCC was
+  13.3), so the version, `__GNUC__` and CMake's `gcc-ar-14` search (which
+  settles on `gcc-ar`) follow 14.
+- **The linker is LLD.** bcc links through the bundled clang with LLD, so
+  CMake's `CMAKE_C_COMPILER_LINKER_ID` is `LLD` (GNU with GCC and with the
+  pinned Clang, which runs the system's `ld`), Meson's linker `ld.lld`
+  (`ld.bfd`), and libtool's `LD` the bundled `ld.lld`, which
+  `-print-prog-name=ld` names (GCC prints `ld`). Each passes GNU-style
+  linker options, which LLD reads, and CMake still uses linker dependency
+  files. The implicit link directories and libtool's
+  `sys_lib_search_path_spec` are the bundled clang's.
+- **Embedded headers.** The implicit include directories lack the
+  compilers' own include directory, since bcc's resource headers are no
+  directory on disk; CMake only leaves such directories out of `-I`.
+- **TCC's newer features.** `-std=gnu11` selects C11, as TCC's `mob` does
+  (0.9.27 keeps `__STDC_VERSION__` at 199901), so Autoconf adds
+  `-std=gnu11` to `CC` where 0.9.27 stays in C99; `<stdatomic.h>` exists,
+  so CMake's check for it passes; and LLD links `-static` and writes
+  `RUNPATH`, so libtool uses `-static` and takes `RUNPATH` to override
+  `LD_LIBRARY_PATH`, where TCC's own linker fails a static link and writes
+  `RPATH`.
+- **`--clang-cl-mode` by flag.** CMake tells clang-cl from Clang by running
+  `CC -?` with the compiler's first word alone, so `CC="bcc
+  --clang-cl-mode"` reads as a GNU-like Clang and fails CMake's first
+  compile. Name an executable `clang-cl`, as CMake also needs for the real
+  Clang (`clang --driver-mode=cl` fails the same way).
+- **Other C++ options.** GCC's C compiler warns about every option of
+  another language; bcc warns only about `-frtti` and `-fno-rtti`, which
+  libtool tests, and ignores the others silently.
+
 ## Identity policy
 
 `--compiler-identity=gcc|clang|msvc|clang-cl|tcc`, which each personality
@@ -1613,7 +1710,11 @@ Besides those above:
   link commands. There is no `cc1`, `as` or `collect2` line and no
   `COLLECT_GCC_OPTIONS` (an assembly input's `as` runs under the clang
   command, which shows `-fno-integrated-as`), and GCC's `-v` also passes
-  `-v` to `as`, which prints its version, where bcc's does not; GCC's `-###` quotes the words with characters
+  `-v` to `as`, which prints its version, where bcc's does not. Under `-v`
+  a link also prints the linker's command, as the bundled clang's `-###`
+  lists it (`ld.lld` with its `-L` directories and libraries), where GCC
+  prints `collect2`'s; CMake reads its implicit link libraries and linker
+  from it. GCC's `-###` quotes the words with characters
   other than letters, digits, `_`, `/`, `-` and `.`, and its `-v` none, as
   GCC does. The header search lists every configured directory, without the
   embedded resource headers, which are no directory on disk.
@@ -1680,8 +1781,7 @@ These driver behaviours still differ from the compilers mimicked:
   (`tcc: error: unresolved reference to 'f'`; 0.9.27: `undefined symbol
   'f'`) are its errors, where bcc passes the options to LLD and reports
   its errors in its own words (`tcc: error: cannot build `a.out`: clang
-  failed` with LLD's lines). bcc also links `libm` for a hosted Linux
-  program, so `sqrt` links without `-lm`, and `-static` links where both
+  failed` with LLD's lines). `-static` links where both
   TCCs fail against this host's static glibc (`unresolved reference to
   '_Unwind_GetCFA'`; 0.9.27: `Unknown relocation type for got: 23`).
 - TCC's `-M` lists the headers of its own include directory, where bcc's

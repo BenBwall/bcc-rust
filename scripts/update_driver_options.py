@@ -41,7 +41,10 @@ def clang_options():
         result = subprocess.run([str(CLANG), f"--autocomplete={prefix}"], capture_output=True, text=True, check=True)
         for line in result.stdout.splitlines():
             name = line.split("\t", 1)[0].strip()
-            if name.startswith(prefix) and len(name) > 2:
+            # `-Wno-` is the spelling that turns a warning off, not a
+            # family of options: Clang warns about `-Wno-bogus` as about
+            # `-Wbogus`, which CMake's `check_c_compiler_flag` relies on.
+            if name.startswith(prefix) and len(name) > 2 and name != "-Wno-":
                 names.add(name)
     return names
 

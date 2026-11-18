@@ -970,6 +970,8 @@ impl State {
             // TCC accepts Microsoft's anonymous structure members unless
             // `-fno-ms-extensions` is given.
             "-fms-anonymous-structs".into(),
+            // TCC links `libm` only when `-lm` asks for it.
+            "--no-default-libm".into(),
         ];
         // TCC warns where GCC 14 and Clang stop: an assignment between a
         // pointer and an integer, or between incompatible pointers. Its

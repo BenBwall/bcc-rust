@@ -178,6 +178,10 @@ mod tests {
         assert!(!knows(Compiler::Gcc, "-Wnot-a-gcc-warning"));
         assert!(!knows(Compiler::Gcc, "-fnot-a-gcc-flag"));
         assert!(knows(Compiler::Clang, "-Wshadow"));
+        assert!(knows(Compiler::Clang, "-Wno-shadow"));
+        // Clang warns about an unknown `-Wno-` option, as CMake's
+        // `check_c_compiler_flag(-Wno-bogus)` expects.
+        assert!(!knows(Compiler::Clang, "-Wno-not-a-clang-warning"));
         assert!(knows(Compiler::Clang, "-fcolor-diagnostics"));
         assert!(!knows(Compiler::Clang, "-fnot-a-clang-flag"));
     }

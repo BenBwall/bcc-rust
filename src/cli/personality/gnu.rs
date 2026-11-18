@@ -14,6 +14,7 @@ use std::{
         OsStr,
         OsString,
     },
+    fmt::Write as _,
     path::{
         Path,
         PathBuf,
@@ -110,6 +111,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         preprocessor_dependency_file: false,
         unrecognized: Vec::new(),
         bad_standard: None,
+        other_languages: Vec::new(),
     };
     let expanded = match response_files::expand(&invocation.arguments, compiler) {
         | Ok(arguments) => arguments,
@@ -259,6 +261,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
     }
+    state.warn_other_languages();
     // GCC's `-v` or `-###` without inputs reports the driver and succeeds,
     // even after complaining about an option.
     let has_inputs = state.has_inputs();
@@ -353,6 +356,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         common.push(option);
     }
     let links = state.stages.is_empty() && !state.syntax_only;
+    // Neither driver links `libm` unless `-lm` asks for it, which Autoconf's
+    // `AC_SEARCH_LIBS([sqrt], [m])` tells apart.
+    if links {
+        common.push("--no-default-libm".into());
+    }
     let mut steps = Vec::new();
     let mut temporary = None;
     for job in jobs {
@@ -397,7 +405,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 bcc.push(option);
             }
         }
-        if links && state.outputs.is_empty() && !state.inputs.is_empty() {
+        // A linker input alone is an input that links, as in both drivers
+        // (`gcc -Wl,--version`, which Meson runs to name the linker).
+        if links && state.inputs.is_empty() {
+            bcc.push("--link-only".into());
+        }
+        if links && state.outputs.is_empty() && has_inputs {
             bcc.push("--default-output".into());
             bcc.push("-o".into());
             bcc.push(
@@ -441,17 +454,22 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
         plan.steps.push(Step::Print { text, stderr: true });
-        if state.dry_run || state.inputs.is_empty() {
+        if state.dry_run || !has_inputs {
             return Ok(plan);
         }
     }
-    if state.inputs.is_empty() {
+    if !has_inputs {
         if personality == Personality::Gcc {
             invocation.fatal(format_args!("no input files"));
         } else {
             invocation.error(format_args!("no input files"));
         }
         return Err(MainError::Reported(1));
+    }
+    // Linker inputs alone leave a stage before the link nothing to do: GCC
+    // succeeds silently, and Clang after its unused-input warnings.
+    if state.inputs.is_empty() && !links {
+        return Ok(plan);
     }
     for mut bcc in steps {
         if state.verbose {
@@ -618,6 +636,9 @@ struct State<'a> {
     /// Clang's last `-std=`, when its value is unknown: its compiler, not
     /// its driver, refuses it, so an earlier one and a query go unreported.
     bad_standard: Option<String>,
+    /// The options of other languages GCC's C compiler warns about, with
+    /// the languages it names.
+    other_languages: Vec<(String, &'static str)>,
 }
 
 /// A driver query: an option that prints something about the compiler
@@ -1431,6 +1452,49 @@ impl State<'_> {
         self.out.extend(options.iter().map(Into::into));
     }
 
+    /// Warns, as GCC's C compiler does for each C source it compiles, about
+    /// the options of other languages: `cc1: warning: command-line option
+    /// '-fno-rtti' is valid for C++/D/ObjC++ but not for C`, none under
+    /// `-w`, and errors under `-Werror` that stop the compilation. Under
+    /// `-###` no compiler runs.
+    fn warn_other_languages(&mut self) {
+        if self.other_languages.is_empty()
+            || self.errors != 0
+            || self.dry_run
+            || self.warning_options.iter().any(|option| option == "-w")
+        {
+            return;
+        }
+        let errors = self
+            .warning_options
+            .iter()
+            .rev()
+            .find(|option| matches!(option.as_str(), "-Werror" | "-Wno-error"))
+            .is_some_and(|option| option == "-Werror");
+        let sources = self
+            .inputs
+            .iter()
+            .filter(|input| !input.dropped && input.kind == InputKind::C)
+            .count();
+        for _ in 0..sources {
+            let mut text = String::new();
+            for (option, languages) in &self.other_languages {
+                _ = writeln!(
+                    text,
+                    "cc1: {}: command-line option '{option}' is valid for {languages} but not for \
+                     C{}",
+                    if errors { "error" } else { "warning" },
+                    if errors { " [-Werror]" } else { "" }
+                );
+            }
+            if errors {
+                text.push_str("cc1: all warnings being treated as errors\n");
+                self.errors += 1;
+            }
+            super::print(&text, true);
+        }
+    }
+
     /// Reports a warning of Clang's driver in `group`, which is on by
     /// default: suppressed by `-w` or `-Wno-GROUP`, an error under
     /// `-Werror` or `-Werror=GROUP`. The GCC personality reports none.
@@ -2099,6 +2163,13 @@ impl State<'_> {
     /// Ignores, warns about or refuses a known option bcc does not
     /// implement, as [`treatment`] decides.
     fn treat(&mut self, option: &str, target: Target) {
+        // GCC's C compiler warns about C++'s `-frtti`, which libtool's
+        // `-fno-rtti -fno-exceptions` check looks for.
+        if self.compiler == Compiler::Gcc && matches!(option, "-frtti" | "-fno-rtti") {
+            self.other_languages
+                .push((option.to_owned(), "C++/D/ObjC++"));
+            return;
+        }
         match treatment(option, target) {
             | Treatment::Ignore => {},
             | Treatment::Warn(why) => self
@@ -2177,8 +2248,9 @@ impl State<'_> {
     }
 
     /// What `-print-search-dirs` prints: GCC's `install:` line, which Clang
-    /// has not, then where the programs and libraries are found, starting
-    /// with the directory holding libgcc when the system has one.
+    /// has not, then where the programs are found and the directories the
+    /// bundled clang links from, or, without one, the directory holding
+    /// libgcc when the system has one and the target's library directories.
     fn search_directories(&self, personality: Personality, target: Target) -> String {
         let directory_of = |file: &str| {
             Path::new(file)
@@ -2192,18 +2264,45 @@ impl State<'_> {
                 .map_or_default(|directory| directory.to_string_lossy().into_owned());
             format!("install: {directory}/\n")
         });
-        let libgcc = self.library_file("libgcc.a", target);
-        let libgcc = if libgcc == "libgcc.a" {
-            String::new()
-        } else {
-            format!("{}:", directory_of(&libgcc))
-        };
+        // The directories the link searches are the bundled clang's, which
+        // libtool reads as the system's (`sys_lib_search_path_spec`) and so
+        // gives no run path.
+        let libraries = self
+            .clang_search_line("libraries: =", target)
+            .unwrap_or_else(|| {
+                let libgcc = self.library_file("libgcc.a", target);
+                let libgcc = if libgcc == "libgcc.a" {
+                    String::new()
+                } else {
+                    format!("{}:", directory_of(&libgcc))
+                };
+                format!("{libgcc}/usr/lib/{}:/usr/lib", version::gcc_machine(target))
+            });
         format!(
-            "{}programs: ={}\nlibraries: ={libgcc}/usr/local/lib:/usr/lib/{}:/usr/lib\n",
+            "{}programs: ={}\nlibraries: ={libraries}\n",
             install.unwrap_or_default(),
             directory_of(&version::program_name("ld")),
-            version::gcc_machine(target)
         )
+    }
+
+    /// The rest of the line of the bundled clang's `-print-search-dirs`
+    /// for `target` that starts with `prefix`.
+    fn clang_search_line(&self, prefix: &str, target: Target) -> Option<String> {
+        let mut command = std::process::Command::new(version::program_name("clang"));
+        _ = command
+            .arg(format!("--target={}", target.triple()))
+            .arg("-print-search-dirs");
+        if let Some(sysroot) = &self.sysroot {
+            _ = command.arg("--sysroot").arg(sysroot);
+        }
+        let output = command
+            .output()
+            .ok()
+            .filter(|output| output.status.success())?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .map(str::to_owned)
     }
 
     /// The path the bundled clang finds for the library or start file

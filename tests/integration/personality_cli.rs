@@ -7545,13 +7545,27 @@ mod tests {
             assert_eq!(clang_cl.status.code(), Some(1));
             assert_eq!(stderr(&clang_cl), format!("clang-cl: error: {message}\n"));
         }
-        // `cl` takes it for an object, as any input it does not know.
+        // `cl` reads a name with no directory that is no file as an option,
+        // as `cl.exe` does, and so warns about it (D9002), which CMake's
+        // `check_c_compiler_flag` looks for. A path in a directory is an
+        // input, which it takes for an object, as any input it does not
+        // know.
         let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "/bogus", &plain]);
         succeeds(&cl);
         assert_eq!(
             stderr(&cl),
-            "cl : Command line warning D9024 : unrecognized source file type '/bogus', object \
-             file assumed\ncl : Command line warning D9027 : source file '/bogus' ignored\n"
+            "cl : Command line warning D9002 : ignoring unknown option '/bogus'\n"
+        );
+        let object = absolute("bogus");
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", &object, &plain]);
+        succeeds(&cl);
+        assert_eq!(
+            stderr(&cl),
+            format!(
+                "cl : Command line warning D9024 : unrecognized source file type '{object}', \
+                 object file assumed\ncl : Command line warning D9027 : source file '{object}' \
+                 ignored\n"
+            )
         );
         // Whether an argument is an option is decided before bcc reads it,
         // so no option bcc matches by a prefix reads a path.
