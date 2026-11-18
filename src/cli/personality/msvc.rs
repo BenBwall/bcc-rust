@@ -593,7 +593,7 @@ enum SlashArgument {
 
 /// How the `cl` personality reads `text`, an argument that starts with `/`,
 /// off Windows. `cl.exe` reads every such argument as an option, and build
-/// systems that drive it pass absolute paths bare: CMake gives clang-cl a
+/// systems that drive it pass absolute paths bare: `CMake` gives clang-cl a
 /// `--` before its sources but not `cl`, and `check_c_compiler_flag(/bogus)`
 /// expects `cl`'s warning D9002. So a file that exists inside a directory is
 /// an input even where clang-cl would read an option (`/opt/a.c` as `/o`,
@@ -1472,7 +1472,7 @@ mod tests {
     use super::*;
 
     /// A file inside a directory is a source whatever option its name
-    /// starts with (CMake passes `cl` the absolute path of its probe,
+    /// starts with (`CMake` passes `cl` the absolute path of its probe,
     /// `/opt/cmake/.../CMakeCCompilerABI.c`); a name without a directory
     /// that is no file is an option, as `cl.exe` reads it; the rest is
     /// read as clang-cl reads it.

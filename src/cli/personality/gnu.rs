@@ -1481,8 +1481,8 @@ impl State<'_> {
             for (option, languages) in &self.other_languages {
                 _ = writeln!(
                     text,
-                    "cc1: {}: command-line option '{option}' is valid for {languages} but not \
-                     for C{}",
+                    "cc1: {}: command-line option '{option}' is valid for {languages} but not for \
+                     C{}",
                     if errors { "error" } else { "warning" },
                     if errors { " [-Werror]" } else { "" }
                 );
@@ -2267,18 +2267,17 @@ impl State<'_> {
         // The directories the link searches are the bundled clang's, which
         // libtool reads as the system's (`sys_lib_search_path_spec`) and so
         // gives no run path.
-        let libraries = self.clang_search_line("libraries: =", target).unwrap_or_else(|| {
-            let libgcc = self.library_file("libgcc.a", target);
-            let libgcc = if libgcc == "libgcc.a" {
-                String::new()
-            } else {
-                format!("{}:", directory_of(&libgcc))
-            };
-            format!(
-                "{libgcc}/usr/lib/{}:/usr/lib",
-                version::gcc_machine(target)
-            )
-        });
+        let libraries = self
+            .clang_search_line("libraries: =", target)
+            .unwrap_or_else(|| {
+                let libgcc = self.library_file("libgcc.a", target);
+                let libgcc = if libgcc == "libgcc.a" {
+                    String::new()
+                } else {
+                    format!("{}:", directory_of(&libgcc))
+                };
+                format!("{libgcc}/usr/lib/{}:/usr/lib", version::gcc_machine(target))
+            });
         format!(
             "{}programs: ={}\nlibraries: ={libraries}\n",
             install.unwrap_or_default(),

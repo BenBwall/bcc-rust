@@ -126,7 +126,7 @@ pub(crate) fn compile_module_checked(
 /// the stdout that `run` captured, which goes to bcc's own, as Clang writes
 /// `-o -`. Otherwise what the job printed there goes to bcc's stdout, as
 /// GCC's and Clang's drivers leave the linker's: Meson names the linker from
-/// what `-Wl,--version` prints, and CMake from `-Wl,-v`.
+/// what `-Wl,--version` prints, and `CMake` from `-Wl,-v`.
 fn finish(output: Output, out_path: &Path) -> io::Result<()> {
     if !output.status.success() {
         return Err(io::Error::other(ClangError(output)));
@@ -242,7 +242,7 @@ fn run(command: &mut Command) -> io::Result<Output> {
 /// Runs `command`, a link by the bundled clang, as [`run`] does, and when
 /// [`print_commands`] asked for them also prints the commands clang runs,
 /// the linker's among them, as `clang -###` lists them. GCC's and Clang's
-/// `-v` show the linker's command, from which CMake reads the libraries
+/// `-v` show the linker's command, from which `CMake` reads the libraries
 /// and directories every link gets (`CMAKE_C_IMPLICIT_LINK_LIBRARIES`) and
 /// which linker it is.
 fn run_link(command: &mut Command) -> io::Result<Output> {
@@ -552,7 +552,10 @@ impl Toolchain {
         out_path: &Path,
         options: LlvmOptions,
     ) -> io::Result<()> {
-        finish(run_link(&mut self.command(object, out_path, options))?, out_path)
+        finish(
+            run_link(&mut self.command(object, out_path, options))?,
+            out_path,
+        )
     }
 
     /// Assembles an assembly file into an object (`OutputKind::Object`) or
@@ -858,7 +861,14 @@ mod tests {
     /// name no command are none.
     #[test]
     fn clang_listed_commands_read_back_their_words() {
-        let words = ["/usr/bin/ld.lld", "-o", "a b", "say \"hi\"", "C:\\x", "$HOME"];
+        let words = [
+            "/usr/bin/ld.lld",
+            "-o",
+            "a b",
+            "say \"hi\"",
+            "C:\\x",
+            "$HOME",
+        ];
         let mut line = Vec::new();
         write_command(
             &mut line,

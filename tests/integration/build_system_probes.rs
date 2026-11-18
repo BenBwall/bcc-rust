@@ -1,11 +1,11 @@
 //! The probes build systems run to identify the compiler, against each
-//! driver personality: Meson's `-Wl,--version` linker check, CMake's `-v`
+//! driver personality: Meson's `-Wl,--version` linker check, `CMake`'s `-v`
 //! link line, extension default and `check_c_compiler_flag`, Autoconf's
 //! `AC_SEARCH_LIBS([sqrt], [m])`, and libtool's `-fno-rtti` check and
 //! `-print-search-dirs`. Each test runs the probe as the tool does and
 //! checks what the tool concludes from it, which was compared with GCC 13,
 //! GCC 14's cc1, Clang 23 and TCC 0.9.27 (`docs/design/driver-modes.md`,
-//! "Build systems"). `scripts/build_system_probes.py` runs CMake, Autoconf,
+//! "Build systems"). `scripts/build_system_probes.py` runs `CMake`, Autoconf,
 //! libtool and Meson themselves.
 #![expect(
     clippy::disallowed_types,
@@ -128,10 +128,14 @@ mod tests {
         // `main`.
         let clang = directory.bcc("--clang-mode", &["-z", "now"]);
         assert_eq!(clang.status.code(), Some(1));
-        assert!(stderr(&clang).contains("undefined symbol: main"), "{}", stderr(&clang));
+        assert!(
+            stderr(&clang).contains("undefined symbol: main"),
+            "{}",
+            stderr(&clang)
+        );
     }
 
-    /// CMake links its ABI probe with `-v -Wl,-v` and reads the linker's
+    /// `CMake` links its ABI probe with `-v -Wl,-v` and reads the linker's
     /// command line from what the driver prints: the libraries and
     /// directories every link gets (`CMAKE_C_IMPLICIT_LINK_LIBRARIES`,
     /// `gcc;gcc_s;c;gcc;gcc_s` with GCC and Clang alike) and the linker,
@@ -163,11 +167,22 @@ mod tests {
                 assert!(words.contains(&library), "{mode}: {linker}");
             }
             assert!(!words.contains(&"-lm"), "{mode}: {linker}");
-            assert!(words.iter().any(|word| word.starts_with("-L")), "{mode}: {linker}");
+            assert!(
+                words.iter().any(|word| word.starts_with("-L")),
+                "{mode}: {linker}"
+            );
             // GCC's `-v` quotes no word, Clang's every word.
-            assert_eq!(linker.starts_with(" \""), mode == "--clang-mode", "{linker}");
+            assert_eq!(
+                linker.starts_with(" \""),
+                mode == "--clang-mode",
+                "{linker}"
+            );
             // `-Wl,-v` makes the linker print its version.
-            assert!(stdout(&output).starts_with("LLD "), "{mode}: {}", stdout(&output));
+            assert!(
+                stdout(&output).starts_with("LLD "),
+                "{mode}: {}",
+                stdout(&output)
+            );
         }
     }
 
@@ -189,7 +204,11 @@ mod tests {
         for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
             let without = directory.bcc(mode, &["-o", "conftest", "conftest.c"]);
             assert_eq!(without.status.code(), Some(1), "{mode}");
-            assert!(stderr(&without).contains("sqrt"), "{mode}: {}", stderr(&without));
+            assert!(
+                stderr(&without).contains("sqrt"),
+                "{mode}: {}",
+                stderr(&without)
+            );
             let with = directory.bcc(mode, &["-o", "conftest", "conftest.c", "-lm"]);
             assert_eq!(with.status.code(), Some(0), "{mode}: {}", stderr(&with));
         }
@@ -197,7 +216,7 @@ mod tests {
         assert_eq!(own.status.code(), Some(0), "{}", stderr(&own));
     }
 
-    /// CMake's `check_c_compiler_flag` fails a flag the compiler warns
+    /// `CMake`'s `check_c_compiler_flag` fails a flag the compiler warns
     /// about (`unknown warning option`): Clang warns about an unknown
     /// `-Wno-` option as about any unknown warning option, while GCC
     /// ignores an unknown `-Wno-` option unless another diagnostic follows.
@@ -210,12 +229,14 @@ mod tests {
             (clang.status.code(), stderr(&clang).as_str()),
             (
                 Some(0),
-                "warning: unknown warning option '-Wno-bogus-warning' \
-                 [-Wunknown-warning-option]\n"
+                "warning: unknown warning option '-Wno-bogus-warning' [-Wunknown-warning-option]\n"
             )
         );
         let known = directory.bcc("--clang-mode", &["-Wno-shadow", "-c", "src.c"]);
-        assert_eq!((known.status.code(), stderr(&known).as_str()), (Some(0), ""));
+        assert_eq!(
+            (known.status.code(), stderr(&known).as_str()),
+            (Some(0), "")
+        );
         let gcc = directory.bcc("--gcc-mode", &["-Wno-bogus-warning", "-c", "src.c"]);
         assert_eq!((gcc.status.code(), stderr(&gcc).as_str()), (Some(0), ""));
     }
@@ -229,30 +250,42 @@ mod tests {
         let directory = Directory::new();
         directory.write("conftest.c", "int x;\n");
         directory.write("other.c", "int y;\n");
-        let warning =
-            "cc1: warning: command-line option '-fno-rtti' is valid for C++/D/ObjC++ but not for C\n";
+        let warning = "cc1: warning: command-line option '-fno-rtti' is valid for C++/D/ObjC++ \
+                       but not for C\n";
         let gcc = directory.bcc(
             "--gcc-mode",
-            &["-fno-rtti", "-fno-exceptions", "-c", "conftest.c", "other.c"],
+            &[
+                "-fno-rtti",
+                "-fno-exceptions",
+                "-c",
+                "conftest.c",
+                "other.c",
+            ],
         );
         assert_eq!(gcc.status.code(), Some(0));
         assert_eq!(stderr(&gcc), warning.repeat(2));
         let quiet = directory.bcc("--gcc-mode", &["-fno-rtti", "-w", "-c", "conftest.c"]);
-        assert_eq!((quiet.status.code(), stderr(&quiet).as_str()), (Some(0), ""));
+        assert_eq!(
+            (quiet.status.code(), stderr(&quiet).as_str()),
+            (Some(0), "")
+        );
         let error = directory.bcc("--gcc-mode", &["-frtti", "-Werror", "-c", "conftest.c"]);
         assert_eq!(
             (error.status.code(), stderr(&error).as_str()),
             (
                 Some(1),
-                "cc1: error: command-line option '-frtti' is valid for C++/D/ObjC++ but not for \
-                 C [-Werror]\ncc1: all warnings being treated as errors\n"
+                "cc1: error: command-line option '-frtti' is valid for C++/D/ObjC++ but not for C \
+                 [-Werror]\ncc1: all warnings being treated as errors\n"
             )
         );
         let clang = directory.bcc(
             "--clang-mode",
             &["-fno-rtti", "-fno-exceptions", "-c", "conftest.c"],
         );
-        assert_eq!((clang.status.code(), stderr(&clang).as_str()), (Some(0), ""));
+        assert_eq!(
+            (clang.status.code(), stderr(&clang).as_str()),
+            (Some(0), "")
+        );
     }
 
     /// libtool reads the `libraries:` line of `-print-search-dirs` as the
@@ -290,7 +323,7 @@ mod tests {
         assert_eq!(libraries("--clang-mode"), bundled);
     }
 
-    /// CMake decides a compiler's default extensions from
+    /// `CMake` decides a compiler's default extensions from
     /// `__STRICT_ANSI__`, which neither `cl` nor clang-cl defines in any
     /// mode, while GCC and Clang define it for a strict `-std=`.
     #[test]
@@ -352,10 +385,13 @@ mod tests {
         let quiet = directory.bcc("--msvc-mode", &["--version", "/nologo"]);
         assert!(!stderr(&quiet).contains("Microsoft"), "{}", stderr(&quiet));
         let clang_cl = directory.bcc("--clang-cl-mode", &["/?"]);
-        assert_eq!((clang_cl.status.code(), stderr(&clang_cl).as_str()), (Some(0), ""));
+        assert_eq!(
+            (clang_cl.status.code(), stderr(&clang_cl).as_str()),
+            (Some(0), "")
+        );
     }
 
-    /// CMake's `check_c_compiler_flag(/bogus)` with an MSVC compiler fails
+    /// `CMake`'s `check_c_compiler_flag(/bogus)` with an MSVC compiler fails
     /// on `cl`'s warning D9002. `cl` reads every argument that starts with
     /// `/` as an option; off Windows the `cl` personality reads one as an
     /// option when it names no file and no directory, while clang-cl reads
