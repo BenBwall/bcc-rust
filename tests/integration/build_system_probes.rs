@@ -241,6 +241,48 @@ mod tests {
         assert_eq!((gcc.status.code(), stderr(&gcc).as_str()), (Some(0), ""));
     }
 
+    /// An empty selector is no unknown group to Clang: `-Wno-` names
+    /// nothing and passes silently, and an empty `-Werror=` or
+    /// `-Wno-error=` is `-Werror` or `-Wno-error` itself
+    /// (`ProcessWarningOptions` in Clang's `Warnings.cpp`), so a generated
+    /// list of warning flags with an empty entry still builds under
+    /// `-Werror`.
+    #[test]
+    fn clang_mode_passes_empty_warning_selectors() {
+        let directory = Directory::new();
+        directory.write("src.c", "int main(void) { return 0; }\n");
+        for flag in ["-Wno-", "-Wno-error=", "-Werror="] {
+            let output = directory.bcc("--clang-mode", &[flag, "-Werror", "-c", "src.c"]);
+            assert_eq!(
+                (output.status.code(), stderr(&output).as_str()),
+                (Some(0), ""),
+                "{flag}"
+            );
+        }
+        directory.write("unused.c", "int main(void) { int unused; return 0; }\n");
+        let error = directory.bcc(
+            "--clang-mode",
+            &["-Wunused-variable", "-Werror=", "-c", "unused.c"],
+        );
+        assert_eq!(error.status.code(), Some(1), "{}", stderr(&error));
+        assert!(
+            stderr(&error).contains("[-Werror,-Wunused-variable]"),
+            "{}",
+            stderr(&error)
+        );
+        let warning = directory.bcc(
+            "--clang-mode",
+            &[
+                "-Wunused-variable",
+                "-Werror",
+                "-Wno-error=",
+                "-c",
+                "unused.c",
+            ],
+        );
+        assert_eq!(warning.status.code(), Some(0), "{}", stderr(&warning));
+    }
+
     /// libtool compiles with `-fno-rtti -fno-exceptions` and keeps them
     /// (`no_builtin_flag`) only if the compiler says nothing: GCC's C
     /// compiler warns about C++'s `-fno-rtti` for each C source, which `-w`

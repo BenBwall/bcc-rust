@@ -397,6 +397,11 @@ impl Cli {
         };
         let mut failed = false;
         for option in &self.language_option {
+            // An empty `-Wno-` names no group, and Clang passes it over
+            // without a word.
+            if &**option == "-Wno-" {
+                continue;
+            }
             let unknown = match LanguageFlag::parse(option) {
                 | Some(LanguageFlag::UnknownWarning) => true,
                 | Some(LanguageFlag::WarningGroup(group, _)) =>
@@ -1034,8 +1039,10 @@ impl LanguageFlag {
             | "-pedantic-errors" => return Some(Self::PedanticErrors),
             | "-Werror=pedantic" => return Some(Self::PedanticAsError(true)),
             | "-Wno-error=pedantic" => return Some(Self::PedanticAsError(false)),
-            | "-Werror" => return Some(Self::WarningsAsErrors(true)),
-            | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
+            // Clang reads an empty `-Werror=` specifier as `-Werror` itself
+            // (`ProcessWarningOptions` in `Warnings.cpp`).
+            | "-Werror" | "-Werror=" => return Some(Self::WarningsAsErrors(true)),
+            | "-Wno-error" | "-Wno-error=" => return Some(Self::WarningsAsErrors(false)),
             | "-Wall" => return Some(Self::AllWarnings(true)),
             | "-Wno-all" => return Some(Self::AllWarnings(false)),
             | "-Wextra" | "-W" => return Some(Self::ExtraWarnings(true)),
