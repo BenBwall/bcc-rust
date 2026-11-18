@@ -698,8 +698,7 @@
   .cell.is-undeclared .cell-name { font-style: italic; text-decoration: underline dotted; text-underline-offset: 2px; }
   /* A dangling pointer: its target has ended, so its value is
      indeterminate. */
-  .cell.is-dangling { background-image: repeating-linear-gradient(45deg, transparent 0 5px, color-mix(in srgb, var(--ink-3) 30%, transparent) 5px 6px); }
-  .cell.is-dangling .cell-value { font-style: italic; }
+  .cell.is-dangling .cell-value { align-self: flex-start; padding: 0 3px; font-style: italic; background-image: repeating-linear-gradient(45deg, transparent 0 5px, color-mix(in srgb, var(--ink-3) 30%, transparent) 5px 6px); }
   .cell.is-indeterminate .cell-value { color: transparent; height: 18px; width: 100%; background: repeating-linear-gradient(45deg, var(--ink-3) 0 1px, transparent 1px 5px); }
   .cell.is-ended { background: var(--device-2); opacity: .8; }
   /* Padding: bytes of a structure that no member owns. */
