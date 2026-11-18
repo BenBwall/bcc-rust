@@ -944,6 +944,7 @@
   .evaluation-steps .is-after button { border-style: dashed; background: transparent; color: var(--ink-2); }
   .evaluation-call button { border-width: 3px; border-style: double; background: var(--device-3); box-shadow: none; }
   .evaluation-call.is-current button { border-color: var(--accent-ink); background: var(--accent-soft); font-weight: 700; }
+  .evaluation-call.is-current .evaluation-index { color: var(--ink-2); }
   /* A sequence point: a dashed rule taller than the steps. */
   .evaluation-step.is-point::after, .evaluation-point-key { content: ""; flex: none; align-self: stretch; margin: -5px 0 -5px 6px; border-left: 2px dashed var(--accent-ink); }
   .evaluation-point-key { display: inline-block; height: 1.2em; margin: 0 2px; vertical-align: -.25em; }
