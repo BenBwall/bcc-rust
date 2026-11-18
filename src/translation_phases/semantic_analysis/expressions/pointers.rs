@@ -531,7 +531,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else if self.context.configuration.compiler_identity().rules()
             == crate::configuration::RuleSet::Clang
         {
-            self.clang_pointer_bool_warning(info, site);
+            self.bool_conversion_nonnull(info.expression, site);
         } else {
             self.gcc_address_warning(info.expression, Some(site));
         }
@@ -542,84 +542,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// changes nothing.
     /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
     fn conversion_to_bool_warning(&mut self, info: ExpressionInfo<'tu>) {
-        if self.nullptr_type(info.ty)
-            || self.context.configuration.compiler_identity().rules()
-                == crate::configuration::RuleSet::Clang
-        {
+        if self.nullptr_type(info.ty) {
             self.boolean_conversion_warning(info, info.expression.source_vectors);
+        } else if self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang
+        {
+            // Clang's context location: the declarator, the assignment's
+            // operator, the call or the `return`.
+            let context = if self.conversion_context.length() == 0 {
+                info.expression.source_vectors
+            } else {
+                self.conversion_context
+            };
+            self.boolean_conversion_warning(
+                info,
+                crate::translation_phases::Context::first_token_vector(context),
+            );
         } else {
             self.gcc_address_warning(info.expression, None);
-        }
-    }
-
-    /// Clang's `DiagnoseAlwaysNonNullPointer`, about one name or member: it
-    /// wants the operand of `&` as written, so `&(g)` is silent, leaves the
-    /// address of a function alone as the way to silence it, and says nothing
-    /// about a string literal, a compound literal or a weak entity. It stays
-    /// out of a macro's body, and away from an argument the macro's body
-    /// converts.
-    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.5.3.2p3, pp. 78-79; PDF pp. 90-91.
-    fn clang_pointer_bool_warning(&mut self, info: ExpressionInfo<'tu>, site: SourceVectors) {
-        use crate::translation_phases::parsing::syntax::{
-            ExpressionType as E,
-            UnaryOperator as U,
-        };
-        let expression = Self::without_parentheses(info.expression);
-        let (address, named) = if let E::Unary {
-            operator: U::AddressOf,
-            operand_expression,
-        } = expression.kind
-        {
-            (true, operand_expression)
-        } else {
-            (false, expression)
-        };
-        let located_at = match named.kind {
-            | E::Identifier(name) => {
-                if let Some(binding) = self.expression_info(named).binding
-                    && self.declared_weak(binding)
-                {
-                    return;
-                }
-                if matches!(
-                    self.context.string_cache.at(name.name),
-                    "__func__" | "__FUNCTION__" | "__PRETTY_FUNCTION__"
-                ) {
-                    return;
-                }
-                name.source_vectors
-            },
-            | E::DirectMember { member, .. } | E::IndirectMember { member, .. } =>
-                member.source_vectors,
-            | _ => return,
-        };
-        let located_at = if address {
-            expression.source_vectors
-        } else {
-            located_at
-        };
-        if self.context.produced_by_macro_expansion(located_at)
-            && (self.context.written_by_macro_body(located_at)
-                || self.context.written_by_macro_body(site))
-        {
-            return;
-        }
-        let function =
-            self.expression_info(named).category == super::ValueCategory::FunctionDesignator;
-        let array = matches!(
-            self.types.nodes[self.expression_info(named).ty.index],
-            TypeKind::Array(..)
-        );
-        let known = if address {
-            !function
-        } else {
-            function || array
-        };
-        if known {
-            self.pointer_diagnostic(
-                DiagnosticGroup::PointerBoolConversion,
-                expression.source_vectors,
-            );
         }
     }
 

@@ -693,6 +693,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         ty:                int,
                         array_minimum:     None,
                         original:          int,
+                        nonnull:           None,
                     });
                 }
                 _ = self

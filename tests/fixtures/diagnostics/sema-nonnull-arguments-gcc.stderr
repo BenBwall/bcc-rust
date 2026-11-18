@@ -1,0 +1,61 @@
+sema-nonnull-arguments-gcc.c: In function 'calls':
+sema-nonnull-arguments-gcc.c:13:3: warning: argument 2 null where non-null expected [-Wnonnull]
+   13 |   use(0, 0);
+      |   ^~~
+sema-nonnull-arguments-gcc.c:3:6: note: in a call to function 'use' declared 'nonnull'
+    3 | void use(int *p, int *q);
+      |      ^~~
+sema-nonnull-arguments-gcc.c:14:3: warning: argument 2 null where non-null expected [-Wnonnull]
+   14 |   use(0, (int *)0);
+      |   ^~~
+sema-nonnull-arguments-gcc.c:3:6: note: in a call to function 'use' declared 'nonnull'
+    3 | void use(int *p, int *q);
+      |      ^~~
+sema-nonnull-arguments-gcc.c:16:3: warning: argument 2 null where non-null expected [-Wnonnull]
+   16 |   (use)(0, 0);
+      |   ^
+sema-nonnull-arguments-gcc.c:3:6: note: in a call to function 'use' declared 'nonnull'
+    3 | void use(int *p, int *q);
+      |      ^~~
+sema-nonnull-arguments-gcc.c:17:3: warning: argument 1 null where non-null expected [-Wnonnull]
+   17 |   all(0, 0);
+      |   ^~~
+sema-nonnull-arguments-gcc.c:4:6: note: in a call to function 'all' declared 'nonnull'
+    4 | void all(int *a, int *b) __attribute__((nonnull));
+      |      ^~~
+sema-nonnull-arguments-gcc.c:17:3: warning: argument 2 null where non-null expected [-Wnonnull]
+   17 |   all(0, 0);
+      |   ^~~
+sema-nonnull-arguments-gcc.c:4:6: note: in a call to function 'all' declared 'nonnull'
+    4 | void all(int *a, int *b) __attribute__((nonnull));
+      |      ^~~
+sema-nonnull-arguments-gcc.c:18:3: warning: argument 1 null where non-null expected [-Wnonnull]
+   18 |   defined(0);
+      |   ^~~~~~~
+sema-nonnull-arguments-gcc.c:6:6: note: in a call to function 'defined' declared 'nonnull'
+    6 | void defined(int *p) { (void)p; }
+      |      ^~~~~~~
+sema-nonnull-arguments-gcc.c:19:3: warning: argument 2 null where non-null expected [-Wnonnull]
+   19 |   use(0, (void *)(1 - 1));
+      |   ^~~
+sema-nonnull-arguments-gcc.c:3:6: note: in a call to function 'use' declared 'nonnull'
+    3 | void use(int *p, int *q);
+      |      ^~~
+sema-nonnull-arguments-gcc.c:20:3: warning: argument 2 null where non-null expected [-Wnonnull]
+   20 |   counted(0, 0);
+      |   ^~~~~~~
+sema-nonnull-arguments-gcc.c:7:6: note: in a call to function 'counted' declared 'nonnull'
+    7 | void counted(int n, int *p) __attribute__((nonnull));
+      |      ^~~~~~~
+sema-nonnull-arguments-gcc.c:21:3: warning: argument 1 null where non-null expected [-Wnonnull]
+   21 |   list(0, 0);
+      |   ^~~~
+sema-nonnull-arguments-gcc.c:8:6: note: in a call to function 'list' declared 'nonnull'
+    8 | void list(int *p, ...) __attribute__((nonnull));
+      |      ^~~~
+sema-nonnull-arguments-gcc.c:22:3: warning: argument 1 null where non-null expected [-Wnonnull]
+   22 |   late(0);
+      |   ^~~~
+sema-nonnull-arguments-gcc.c:10:6: note: in a call to function 'late' declared 'nonnull'
+   10 | void late(int *p) __attribute__((nonnull));
+      |      ^~~~

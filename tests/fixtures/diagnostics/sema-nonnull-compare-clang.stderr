@@ -1,0 +1,202 @@
+sema-nonnull-compare-clang.c:4:29: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+    4 | void declared(int *p) { if (p == 0) return; }
+      |                             ^    ~
+sema-nonnull-compare-clang.c:3:38: note: declared 'nonnull' here
+    3 | void declared(int *p) __attribute__((nonnull));
+      |                                      ^
+sema-nonnull-compare-clang.c:7:46: warning: comparison of nonnull parameter 'b' not equal to a null pointer is 'true' on first encounter [-Wtautological-pointer-compare]
+    7 | void indexed(int *a, int *b) { if (a == 0 || b != 0) return; if (0 == b) return; }
+      |                                              ^    ~
+sema-nonnull-compare-clang.c:6:45: note: declared 'nonnull' here
+    6 | void indexed(int *a, int *b) __attribute__((nonnull(2)));
+      |                                             ^
+sema-nonnull-compare-clang.c:7:71: warning: comparison of nonnull parameter 'b' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+    7 | void indexed(int *a, int *b) { if (a == 0 || b != 0) return; if (0 == b) return; }
+      |                                                                  ~    ^
+sema-nonnull-compare-clang.c:6:45: note: declared 'nonnull' here
+    6 | void indexed(int *a, int *b) __attribute__((nonnull(2)));
+      |                                             ^
+sema-nonnull-compare-clang.c:9:57: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+    9 | __attribute__((nonnull(1))) int before(int *p) { return p == (void *)0; }
+      |                                                         ^    ~~~~~~~~~
+sema-nonnull-compare-clang.c:9:16: note: declared 'nonnull' here
+    9 | __attribute__((nonnull(1))) int before(int *p) { return p == (void *)0; }
+      |                ^
+sema-nonnull-compare-clang.c:12:5: warning: a function definition without a prototype is deprecated in all versions of C and is not supported in C23 [-Wdeprecated-non-prototype]
+   12 | int old_style(p) int *p; { return !p; }
+      |     ^
+sema-nonnull-compare-clang.c:12:36: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   12 | int old_style(p) int *p; { return !p; }
+      |                                   ~^
+sema-nonnull-compare-clang.c:11:38: note: declared 'nonnull' here
+   11 | int old_style(int *p) __attribute__((nonnull(1)));
+      |                                      ^
+sema-nonnull-compare-clang.c:14:51: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   14 | int own(int *p __attribute__((nonnull))) { return p == 0; }
+      |                                                   ^    ~
+sema-nonnull-compare-clang.c:14:31: note: declared 'nonnull' here
+   14 | int own(int *p __attribute__((nonnull))) { return p == 0; }
+      |                               ^
+sema-nonnull-compare-clang.c:16:32: warning: comparison of nonnull parameter 'p' not equal to a null pointer is 'true' on first encounter [-Wtautological-pointer-compare]
+   16 | int inherited(int *p) { return p != 0; }
+      |                                ^    ~
+sema-nonnull-compare-clang.c:15:37: note: declared 'nonnull' here
+   15 | int inherited(int *p __attribute__((nonnull)));
+      |                                     ^
+sema-nonnull-compare-clang.c:18:52: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   18 | int both(int *p __attribute__((nonnull))) { return p == 0; }
+      |                                                    ^    ~
+sema-nonnull-compare-clang.c:18:32: note: declared 'nonnull' here
+   18 | int both(int *p __attribute__((nonnull))) { return p == 0; }
+      |                                ^
+sema-nonnull-compare-clang.c:21:28: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   21 | int twice(int *p) { return p == 0; }
+      |                            ^    ~
+sema-nonnull-compare-clang.c:20:34: note: declared 'nonnull' here
+   20 | int twice(int *p) __attribute__((nonnull(1))) __attribute__((nonnull));
+      |                                  ^
+sema-nonnull-compare-clang.c:24:28: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   24 | int first(int *p) { return p == 0; }
+      |                            ^    ~
+sema-nonnull-compare-clang.c:22:34: note: declared 'nonnull' here
+   22 | int first(int *p) __attribute__((nonnull));
+      |                                  ^
+sema-nonnull-compare-clang.c:28:50: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   28 | __attribute__((nonnull)) int later(int *p) { if (p == 0) return 1; p = 0; return p == 0; }
+      |                                                  ^    ~
+sema-nonnull-compare-clang.c:28:16: note: declared 'nonnull' here
+   28 | __attribute__((nonnull)) int later(int *p) { if (p == 0) return 1; p = 0; return p == 0; }
+      |                ^
+sema-nonnull-compare-clang.c:29:68: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   29 | __attribute__((nonnull)) int stepped(int *p) { p++; p += 1; return p == 0; }
+      |                                                                    ^    ~
+sema-nonnull-compare-clang.c:29:16: note: declared 'nonnull' here
+   29 | __attribute__((nonnull)) int stepped(int *p) { p++; p += 1; return p == 0; }
+      |                ^
+sema-nonnull-compare-clang.c:30:70: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   30 | __attribute__((nonnull)) int parenthesized(int *p) { (p) = 0; return p == 0 || (p) == 0; }
+      |                                                                      ^    ~
+sema-nonnull-compare-clang.c:30:16: note: declared 'nonnull' here
+   30 | __attribute__((nonnull)) int parenthesized(int *p) { (p) = 0; return p == 0 || (p) == 0; }
+      |                ^
+sema-nonnull-compare-clang.c:31:53: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   31 | __attribute__((nonnull)) int nulls(int *p) { return p == (0) || p == 0L; }
+      |                                                     ^    ~~~
+sema-nonnull-compare-clang.c:31:16: note: declared 'nonnull' here
+   31 | __attribute__((nonnull)) int nulls(int *p) { return p == (0) || p == 0L; }
+      |                ^
+sema-nonnull-compare-clang.c:31:65: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   31 | __attribute__((nonnull)) int nulls(int *p) { return p == (0) || p == 0L; }
+      |                                                                 ^    ~~
+sema-nonnull-compare-clang.c:31:16: note: declared 'nonnull' here
+   31 | __attribute__((nonnull)) int nulls(int *p) { return p == (0) || p == 0L; }
+      |                ^
+sema-nonnull-compare-clang.c:37:10: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   37 |   return p == NULL_POINTER || IS_NULL(p) || COMPARE(p);
+      |          ^    ~~~~~~~~~~~~
+sema-nonnull-compare-clang.c:36:16: note: declared 'nonnull' here
+   36 | __attribute__((nonnull)) int macros(int *p) {
+      |                ^
+sema-nonnull-compare-clang.c:40:50: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   40 | __attribute__((nonnull)) int truth(int *p) { if (p) return 1; return p ? 2 : 3; }
+      |                                              ~~  ^
+sema-nonnull-compare-clang.c:40:16: note: declared 'nonnull' here
+   40 | __attribute__((nonnull)) int truth(int *p) { if (p) return 1; return p ? 2 : 3; }
+      |                ^
+sema-nonnull-compare-clang.c:40:70: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   40 | __attribute__((nonnull)) int truth(int *p) { if (p) return 1; return p ? 2 : 3; }
+      |                                                                      ^ ~
+sema-nonnull-compare-clang.c:40:16: note: declared 'nonnull' here
+   40 | __attribute__((nonnull)) int truth(int *p) { if (p) return 1; return p ? 2 : 3; }
+      |                ^
+sema-nonnull-compare-clang.c:41:62: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   41 | __attribute__((nonnull)) _Bool converted(int *p) { _Bool b = p; return b; }
+      |                                                          ~   ^
+sema-nonnull-compare-clang.c:41:16: note: declared 'nonnull' here
+   41 | __attribute__((nonnull)) _Bool converted(int *p) { _Bool b = p; return b; }
+      |                ^
+sema-nonnull-compare-clang.c:42:67: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   42 | __attribute__((nonnull)) int operand(int *p, int c) { return c && p; }
+      |                                                                ~~ ^
+sema-nonnull-compare-clang.c:42:16: note: declared 'nonnull' here
+   42 | __attribute__((nonnull)) int operand(int *p, int c) { return c && p; }
+      |                ^
+sema-nonnull-compare-clang.c:47:7: warning: comparison of nonnull function call 'made()' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   47 |   if (made() == 0)
+      |       ^~~~~~    ~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:49:8: warning: nonnull function call 'made()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   49 |   if (!made())
+      |       ~^~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:51:10: warning: comparison of nonnull function call '(made_from(x + 1, 'a'))' not equal to a null pointer is 'true' on first encounter [-Wtautological-pointer-compare]
+   51 |   return (made_from(x + 1, 'a')) != 0;
+      |          ^~~~~~~~~~~~~~~~~~~~~~~    ~
+sema-nonnull-compare-clang.c:45:41: note: declared 'returns_nonnull' here
+   45 | int *made_from(int, int) __attribute__((returns_nonnull));
+      |                                         ^
+sema-nonnull-compare-clang.c:61:72: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   61 | void prototype(int *q) { void g(int *p __attribute__((nonnull)), int a[p == 0]); }
+      |                                                                        ^    ~
+sema-nonnull-compare-clang.c:61:55: note: declared 'nonnull' here
+   61 | void prototype(int *q) { void g(int *p __attribute__((nonnull)), int a[p == 0]); }
+      |                                                       ^
+sema-nonnull-compare-clang.c:66:8: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   66 |   if ((p))
+      |   ~~   ^
+sema-nonnull-compare-clang.c:65:16: note: declared 'nonnull' here
+   65 | __attribute__((nonnull)) int converted_parentheses(int *p) {
+      |                ^
+sema-nonnull-compare-clang.c:70:12: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   70 |   return !(p);
+      |          ~ ^
+sema-nonnull-compare-clang.c:65:16: note: declared 'nonnull' here
+   65 | __attribute__((nonnull)) int converted_parentheses(int *p) {
+      |                ^
+sema-nonnull-compare-clang.c:73:9: warning: nonnull function call 'made()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   73 |   if (((made())))
+      |   ~~    ^~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:75:7: warning: comparison of nonnull function call '(made())' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   75 |   if ((made()) == 0)
+      |       ^~~~~~~~    ~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:77:12: warning: nonnull function call 'made()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   77 |   return !(made());
+      |          ~ ^~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:84:7: warning: nonnull function call '(*made)()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   84 |   if ((*made)())
+      |   ~~  ^~~~~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:86:7: warning: comparison of nonnull function call '(**made)()' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   86 |   if ((**made)() == 0)
+      |       ^~~~~~~~~~    ~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:88:7: warning: nonnull function call '(&made)()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   88 |   if ((&made)())
+      |   ~~  ^~~~~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:92:10: warning: comparison of nonnull function call '(*&made)()' not equal to a null pointer is 'true' on first encounter [-Wtautological-pointer-compare]
+   92 |   return (*&made)() != 0;
+      |          ^~~~~~~~~~    ~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+34 warnings generated.

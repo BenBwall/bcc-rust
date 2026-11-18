@@ -548,3 +548,45 @@ fn clang_conversion_options_apply_in_order_to_their_children() {
         Some(Warning)
     );
 }
+
+/// Clang's `-Wtautological-compare` holds its constant and pointer groups,
+/// so `-Wno-tautological-compare` silences both and a later child's option
+/// turns that one on again (probed with Clang 23.1.5). GCC's group of that
+/// name holds neither.
+#[test]
+fn clang_tautological_compare_holds_its_groups() {
+    use DiagnosticGroup::{
+        TautologicalCompare as Parent,
+        TautologicalConstantOutOfRangeCompare as Constant,
+        TautologicalPointerCompare as Pointer,
+    };
+    use WarningOption::Enable;
+
+    use crate::translation_phases::ErrorSeverity::Warning;
+    let severity = |identity, group, options: &[(DiagnosticGroup, WarningOption)]| {
+        options
+            .iter()
+            .fold(
+                CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                    .with_compiler_identity(identity),
+                |configuration, &(group, option)| configuration.with_warning_option(group, option),
+            )
+            .diagnostic_severity(group)
+    };
+    let clang = CompilerIdentity::Clang;
+    assert_eq!(severity(clang, Pointer, &[]), Some(Warning));
+    assert_eq!(severity(clang, Pointer, &[(Parent, Enable(false))]), None);
+    assert_eq!(severity(clang, Constant, &[(Parent, Enable(false))]), None);
+    assert_eq!(
+        severity(
+            clang,
+            Pointer,
+            &[(Parent, Enable(false)), (Pointer, Enable(true))]
+        ),
+        Some(Warning)
+    );
+    assert_eq!(
+        severity(CompilerIdentity::Gcc, Pointer, &[(Parent, Enable(true))]),
+        None
+    );
+}

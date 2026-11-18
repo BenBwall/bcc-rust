@@ -376,6 +376,9 @@ impl Renderer {
                 let point = format == DiagnosticFormat::Clang
                     && (diagnostic.point || diagnostic.related_points);
                 self.render_related_note(&mut out, (label, &[]), point, context, scratch, true);
+                // A note is a diagnostic of its own, at another place, so
+                // the next one at the same place quotes its source again.
+                self.last_place.set(None);
             }
             return out.into_str();
         }
