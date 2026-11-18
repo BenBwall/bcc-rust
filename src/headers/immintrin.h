@@ -1,5 +1,6 @@
 /* bcc x86 intrinsic resource umbrella. SSE2 baseline; declarations and
- * target-attributed bodies through AVX2 are available to the front end. */
+ * target-attributed bodies through AVX2 are available to the front end,
+ * with `_xgetbv` of XSAVE. */
 #ifndef __IMMINTRIN_H
 #define __IMMINTRIN_H
 #include <mmintrin.h>
@@ -12,4 +13,5 @@
 #include <wmmintrin.h>
 #include <avxintrin.h>
 #include <avx2intrin.h>
+#include <xsaveintrin.h>
 #endif

@@ -930,6 +930,7 @@ pub(crate) enum BuiltinId {
     CpuInit = 911,
     CpuSupports = 912,
     CpuIs = 913,
+    X86Xgetbv = 914,
 }
 
 impl BuiltinId {
@@ -1850,6 +1851,7 @@ impl BuiltinId {
             | Self::X86Vtestzps256 => &x86::BUILTINS[381],
             | Self::X86Vzeroall => &x86::BUILTINS[382],
             | Self::X86Vzeroupper => &x86::BUILTINS[383],
+            | Self::X86Xgetbv => &x86::BUILTINS[384],
         }
     }
 }
@@ -2555,6 +2557,7 @@ const NAMES: &[(&str, BuiltinId)] = &[
     ("__builtin_ia32_vtestzps256", BuiltinId::X86Vtestzps256),
     ("__builtin_ia32_vzeroall", BuiltinId::X86Vzeroall),
     ("__builtin_ia32_vzeroupper", BuiltinId::X86Vzeroupper),
+    ("__builtin_ia32_xgetbv", BuiltinId::X86Xgetbv),
     ("__builtin_ilogb", BuiltinId::LibraryIlogb),
     ("__builtin_ilogbf", BuiltinId::LibraryIlogbf),
     ("__builtin_ilogbl", BuiltinId::LibraryIlogbl),

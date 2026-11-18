@@ -245,6 +245,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             | B::X86Cvttps2dq256 => named(Intrinsic::CvttPs2dq256),
             | B::X86Cvttpd2dq256 => named(Intrinsic::CvttPd2dq256),
             | B::X86Vzeroupper => named(Intrinsic::Vzeroupper),
+            | B::X86Xgetbv => named(Intrinsic::Xgetbv),
             | B::X86Vzeroall => named(Intrinsic::Vzeroall),
             | B::X86Pcmpistri128 => named(Intrinsic::Pcmpistri128),
             | B::X86Pcmpistrm128 => named(Intrinsic::Pcmpistrm128),
@@ -576,6 +577,7 @@ pub(crate) const fn expands(id: BuiltinId) -> bool {
             | B::X86Vtestzps256
             | B::X86Vzeroall
             | B::X86Vzeroupper
+            | B::X86Xgetbv
     )
 }
 

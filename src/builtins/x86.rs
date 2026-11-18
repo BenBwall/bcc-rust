@@ -480,6 +480,7 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     x86(Id::X86Vtestzps256, "__builtin_ia32_vtestzps256", INT, &[V8_FLOAT, V8_FLOAT], &[P, P]),
     x86(Id::X86Vzeroall, "__builtin_ia32_vzeroall", VOID, &[], &[]),
     x86(Id::X86Vzeroupper, "__builtin_ia32_vzeroupper", VOID, &[], &[]),
+    x86(Id::X86Xgetbv, "__builtin_ia32_xgetbv", ULLONG, &[UINT], &[P]),
 ];
 
 /// Header calls owned by the scalar shard, with the Clang signature each
