@@ -5,12 +5,28 @@ use crate::snapshot::Position;
 #[cfg(feature = "worker")]
 fn tour() -> (Vec<Snapshot>, &'static str) {
     let source = crate::demos::find("tour").unwrap().source;
+    (run(source), source)
+}
+
+/// Every snapshot of a run of `source`.
+#[cfg(feature = "worker")]
+fn run(source: &str) -> Vec<Snapshot> {
     let mut machine = crate::machine::Machine::default();
     let mut states = vec![machine.load(source.to_owned())];
     while states.last().is_some_and(Snapshot::can_step) {
-        states.push(machine.step().expect("the lesson steps"));
+        states.push(machine.step().expect("the program steps"));
     }
-    (states, source)
+    assert_eq!(states.last().unwrap().status, "finished", "{source}");
+    states
+}
+
+/// Where Over, pressed at `from`, stops.
+#[cfg(feature = "worker")]
+fn over(states: &[Snapshot], from: usize) -> usize {
+    let mut over = Over::new(states, from);
+    (from + 1..states.len())
+        .find_map(|cursor| over.stepped(states, cursor))
+        .unwrap_or(states.len() - 1)
 }
 
 #[cfg(feature = "worker")]
@@ -165,4 +181,122 @@ fn source_text_joins_lines_and_cuts_long_text() {
         48
     );
     assert!(source_text(&long, range((1, 5), (1, 80))).ends_with('…'));
+}
+
+/// Two calls to a function without parameters, spelled alike.
+#[cfg(feature = "worker")]
+const TWO_CALLS: &str = "int f(void) { return 2; }\nint main(void) { f(); f(); return 0; }\n";
+
+#[cfg(feature = "worker")]
+#[test]
+fn a_call_without_arguments_is_its_own_expression() {
+    let states = run(TWO_CALLS);
+    // Nothing of the expression comes before the call: no argument, no
+    // destination.
+    let call = at(&states, "Call f (frame #2)");
+    let shown = group(&states, call, TWO_CALLS).unwrap();
+    assert_eq!(shown.text, "f()");
+    assert_eq!(shown.function, "main");
+    assert_eq!(
+        titles(&shown),
+        ["call f", "Return 2 from f", "Discard the result"]
+    );
+    assert!(matches!(shown.parts[0], Part::Call { index, current: true, .. } if index == call));
+    assert!(shown.complete);
+    // Over runs through f to the expression's last step.
+    let last = at(&states, "Discard the result");
+    assert_eq!(over(&states, call), last);
+}
+
+#[cfg(feature = "worker")]
+#[test]
+fn calls_spelled_alike_are_two_expressions() {
+    let states = run(TWO_CALLS);
+    let first = at(&states, "Call f (frame #2)");
+    let second = at(&states, "Call f (frame #3)");
+    let indices = |group: &Group| {
+        group
+            .parts
+            .iter()
+            .map(|part| match part {
+                | Part::Step { index, .. } | Part::Call { index, .. } => *index,
+            })
+            .collect::<Vec<_>>()
+    };
+    let earlier = group(&states, first, TWO_CALLS).unwrap();
+    let later = group(&states, second, TWO_CALLS).unwrap();
+    assert_eq!(later.text, "f()");
+    assert_eq!(titles(&later), titles(&earlier));
+    // The first expression ends before the second call; the second's steps
+    // start at it.
+    assert!(indices(&earlier).iter().all(|&index| index < second));
+    assert_eq!(indices(&later)[0], second);
+    // From the first expression's last step, Over finishes the second.
+    let ends = |from: usize| {
+        (from..states.len())
+            .find(|&index| states[index].event.title == "Discard the result")
+            .unwrap()
+    };
+    assert_eq!(over(&states, ends(first)), ends(second));
+}
+
+#[cfg(feature = "worker")]
+#[test]
+fn a_call_holds_the_calls_it_makes_in_turn() {
+    let source = concat!(
+        "int g(int x) { return x + 1; }\n",
+        "int f(int x) { int y = g(x); return y; }\n",
+        "int main(void) { int r = f(1); return r; }\n",
+    );
+    let states = run(source);
+    let outer = at(&states, "Call f (frame #2)");
+    let inner = at(&states, "Call g (frame #3)");
+    // In main, the call to f folds every step of f and of g.
+    let shown = group(&states, outer, source).unwrap();
+    assert_eq!(shown.text, "r = f(1)");
+    let calls = shown
+        .parts
+        .iter()
+        .filter(|part| matches!(part, Part::Call { .. }))
+        .count();
+    assert_eq!(calls, 1);
+    let Some(&Part::Call { last, .. }) = shown
+        .parts
+        .iter()
+        .find(|part| matches!(part, Part::Call { .. }))
+    else {
+        panic!("the call to f is folded");
+    };
+    assert!(last >= states[inner].step);
+    assert_eq!(states[last + 1].event.title, "Return 2 from f");
+    // In f, the call to g is f's own expression's.
+    let nested = group(&states, inner, source).unwrap();
+    assert_eq!(
+        (nested.text.as_str(), nested.function.as_str()),
+        ("y = g(x)", "f")
+    );
+    assert_eq!(nested.calling(), Some("g"));
+    assert_eq!(over(&states, inner), at(&states, "Initialize y = 2"));
+    assert_eq!(over(&states, outer), at(&states, "Initialize r = 2"));
+    // f's return lands in main's expression.
+    let returned = group(&states, at(&states, "Return 2 from f"), source).unwrap();
+    assert_eq!(returned.text, "r = f(1)");
+}
+
+#[cfg(feature = "worker")]
+#[test]
+fn a_call_a_return_statement_makes_shows_the_whole_statement() {
+    let source = "int f(void) { return 2; }\nint main(void) { return f(); }\n";
+    let states = run(source);
+    let call = at(&states, "Call f (frame #2)");
+    let shown = group(&states, call, source).unwrap();
+    // The call's first step knows only the call; the steps after it hold
+    // the whole statement.
+    assert_eq!(shown.text, "return f()");
+    assert_eq!(titles(&shown)[..2], ["call f", "Return 2 from f"]);
+    let last = match shown.parts.last().unwrap() {
+        | Part::Step { index, .. } | Part::Call { index, .. } => *index,
+    };
+    assert!(last > call + 1);
+    assert_eq!(over(&states, call), last);
 }

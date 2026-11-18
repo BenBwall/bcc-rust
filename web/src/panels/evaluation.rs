@@ -7,7 +7,8 @@
 //!
 //! The grouping reads only what the engine reported: a step belongs to the
 //! expression whose tree it shows, in the same call, and the steps of a call
-//! that expression is waiting on belong to it too.
+//! that expression is waiting on belong to it too. Calls are told apart by
+//! where they are in the source, so two calls spelled alike stay two.
 
 use leptos::prelude::*;
 
@@ -87,12 +88,12 @@ pub enum Part {
     /// The steps of a call the expression made, from the call to the last
     /// step before it returned.
     Call {
-        index:    usize,
-        function: String,
-        first:    usize,
-        last:     usize,
-        current:  bool,
-        after:    bool,
+        index:          usize,
+        function:       String,
+        first:          usize,
+        last:           usize,
+        current:        bool,
+        after:          bool,
     },
 }
 
@@ -104,8 +105,9 @@ impl Part {
     }
 }
 
-/// The expression a step evaluates: the call that evaluates it, and its
-/// full expression's source range.
+/// The expression a step evaluates: the call that evaluates it, and a source
+/// range in its full expression, which is the full expression's own range or,
+/// at a call's first step, the call's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Key {
     frame: usize,
@@ -130,36 +132,89 @@ fn key(snapshot: &Snapshot) -> Option<Key> {
     Some(Key { frame, root })
 }
 
-/// Whether `snapshot`'s step belongs to the expression `key` names.
+/// Whether `snapshot`'s step belongs to the expression `key` names. Full
+/// expressions do not overlap, so the one whose range holds `key`'s is it.
 pub fn member(snapshot: &Snapshot, key: Key) -> Option<Member> {
-    if self::key(snapshot) == Some(key) {
+    if self::key(snapshot).is_some_and(|own| own.frame == key.frame && within(key.root, own.root)) {
         return Some(Member::Own);
     }
     // A call the expression made is still running: its frame is below the
-    // innermost one. The call itself is the first such step.
+    // innermost one, waiting on a call inside the expression. The call
+    // itself is the first such step.
     snapshot
         .stack
         .iter()
         .skip(1)
-        .any(|frame| frame.id == key.frame)
+        .any(|frame| frame.id == key.frame && frame.call.is_some_and(|call| within(call, key.root)))
         .then_some(Member::InCall)
 }
 
 /// The expression the step at `index` belongs to. A call's first step
 /// shows the called function, which has no expression yet: it belongs to
-/// the caller's, which the step before it evaluated.
+/// the caller's, which holds the call the caller waits on.
 pub fn key_at(history: &[Snapshot], index: usize) -> Option<Key> {
     let snapshot = history.get(index)?;
     key(snapshot).or_else(|| {
-        let before = key(history.get(index.checked_sub(1)?)?)?;
-        (member(snapshot, before) == Some(Member::InCall)).then_some(before)
+        let caller = snapshot.stack.get(1)?;
+        Some(Key {
+            frame: caller.id,
+            root:  caller.call?,
+        })
     })
+}
+
+/// Step over's walk: to the last step of the expression the step it starts
+/// at belongs to, through any call it makes. At that last step, or at a step
+/// that evaluates no expression, it walks to the last step of the next one
+/// instead (a step that evaluates none is its own last step).
+#[derive(Clone, Copy, Debug)]
+pub struct Over {
+    finishing: Option<Key>,
+    steps:     usize,
+}
+
+impl Over {
+    /// A walk from the step at `cursor`.
+    pub fn new(history: &[Snapshot], cursor: usize) -> Self {
+        Self {
+            finishing: key_at(history, cursor),
+            steps:     0,
+        }
+    }
+
+    /// Take the step the walk has reached, at `cursor`: `None` to go on,
+    /// or the step to stop at.
+    pub fn stepped(&mut self, history: &[Snapshot], cursor: usize) -> Option<usize> {
+        self.steps += 1;
+        let inside = self.finishing.is_some_and(|finishing| {
+            history
+                .get(cursor)
+                .and_then(|snapshot| member(snapshot, finishing))
+                .is_some()
+        });
+        if inside {
+            return None;
+        }
+        if self.steps > 1 {
+            // One step past the expression's last: show its last.
+            return Some(cursor.saturating_sub(1));
+        }
+        // The first step left the expression: finish the next one.
+        self.finishing = key_at(history, cursor);
+        self.finishing.is_none().then_some(cursor)
+    }
+}
+
+/// Whether `inner` lies within `outer`.
+fn within(inner: Range, outer: Range) -> bool {
+    let at = |position: crate::snapshot::Position| (position.line, position.column);
+    at(inner.start) >= at(outer.start) && at(inner.end) <= at(outer.end)
 }
 
 /// The group of the step at `cursor`, with what the history has recorded
 /// before and after it; `None` for a step that evaluates no expression.
 pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group> {
-    let key = key_at(history, cursor)?;
+    let mut key = key_at(history, cursor)?;
     let mut first = cursor;
     while first > 0 && member(&history[first - 1], key).is_some() {
         first -= 1;
@@ -167,6 +222,15 @@ pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group>
     let mut last = cursor;
     while last + 1 < history.len() && member(&history[last + 1], key).is_some() {
         last += 1;
+    }
+    // At a call's first step the key holds only the call; a step of the
+    // expression's own holds the whole of it.
+    if let Some(own) = history[first..=last]
+        .iter()
+        .filter(|snapshot| member(snapshot, key) == Some(Member::Own))
+        .find_map(self::key)
+    {
+        key = own;
     }
     let complete =
         last + 1 < history.len() || !history[last].can_step() || ends(&history[last], key);
@@ -234,12 +298,10 @@ pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group>
 /// Whether the expression `key` names is done at `snapshot`'s step: the
 /// step is the expression's own, and the next operation lies outside it.
 fn ends(snapshot: &Snapshot, key: Key) -> bool {
-    let within = |range: Range| {
-        let at = |position: crate::snapshot::Position| (position.line, position.column);
-        at(range.start) >= at(key.root.start) && at(range.end) <= at(key.root.end)
-    };
     member(snapshot, key) == Some(Member::Own)
-        && snapshot.location.is_some_and(|next| !within(next))
+        && snapshot
+            .location
+            .is_some_and(|next| !within(next, key.root))
 }
 
 /// The source of `range`, its whitespace runs closed up to one space, cut
@@ -399,19 +461,7 @@ fn part_view(part: &Part, on_jump: Callback<usize>) -> AnyView {
         } => {
             let count = last + 1 - first;
             let plural = if count == 1 { "" } else { "s" };
-            let steps = if first == last {
-                format!("step {first}")
-            } else {
-                format!("steps {first}–{last}")
-            };
-            let label = format!(
-                "The call to {function}, {steps}{}",
-                if current {
-                    " (the step shown is one of them)"
-                } else {
-                    ""
-                }
-            );
+            let label = call_label(&function, first, last, current);
             view! {
                 <li class="evaluation-call" class:is-current=current class:is-after=after>
                     <button type="button" aria-label=label title=format!("Jump to the call to {function}()") on:click=move |_| on_jump.run(index)>
@@ -423,6 +473,23 @@ fn part_view(part: &Part, on_jump: Callback<usize>) -> AnyView {
             .into_any()
         },
     }
+}
+
+/// What a folded call's entry announces.
+fn call_label(function: &str, first: usize, last: usize, current: bool) -> String {
+    let steps = if first == last {
+        format!("step {first}")
+    } else {
+        format!("steps {first}–{last}")
+    };
+    format!(
+        "The call to {function}, {steps}{}",
+        if current {
+            " (the step shown is one of them)"
+        } else {
+            ""
+        }
+    )
 }
 
 #[cfg(test)]

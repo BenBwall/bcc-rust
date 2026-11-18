@@ -422,6 +422,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
                     .waiting
                     .and_then(|range| source.get(range.start..range.end))
                     .map(str::to_owned),
+                call:    frame.waiting.and_then(|waiting| range(waiting, source)),
             })
             .collect(),
         objects:      state

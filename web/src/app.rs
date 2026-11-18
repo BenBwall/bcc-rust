@@ -606,12 +606,10 @@ impl State {
         self.running.set(true);
         self.pause_requested.set(false);
         spawn_local(async move {
-            let key = || {
-                let cursor = self.cursor.get_untracked()?;
-                self.history
-                    .with_untracked(|history| evaluation::key_at(history, cursor))
-            };
-            let mut finishing = key();
+            let cursor = self.cursor.get_untracked().unwrap_or(0);
+            let mut over = self
+                .history
+                .with_untracked(|history| evaluation::Over::new(history, cursor));
             let mut steps = 0;
             let mut result = Ok(());
             while !self.pause_requested.get_untracked()
@@ -623,27 +621,16 @@ impl State {
                     break;
                 }
                 steps += 1;
-                let inside = finishing.is_some_and(|finishing| {
-                    self.current.with_untracked(|state| {
-                        state
-                            .as_ref()
-                            .and_then(|state| evaluation::member(state, finishing))
-                            .is_some()
-                    })
-                });
-                if inside {
-                    continue;
-                }
-                if steps > 1 {
-                    // One step past the expression's last: show its last.
-                    if let Some(cursor) = self.cursor.get_untracked() {
-                        self.cursor.set(Some(cursor.saturating_sub(1)));
-                    }
+                let Some(cursor) = self.cursor.get_untracked() else {
                     break;
-                }
-                // The first step left the expression: finish the next one.
-                finishing = key();
-                if finishing.is_none() {
+                };
+                if let Some(stop) = self
+                    .history
+                    .with_untracked(|history| over.stepped(history, cursor))
+                {
+                    if stop != cursor {
+                        self.cursor.set(Some(stop));
+                    }
                     break;
                 }
             }

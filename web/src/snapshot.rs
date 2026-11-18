@@ -227,6 +227,8 @@ pub struct Frame {
     pub name:    String,
     /// The source of the call this frame is waiting on.
     pub waiting: Option<String>,
+    /// Where that call is: two calls spelled alike are told apart by it.
+    pub call:    Option<Range>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
