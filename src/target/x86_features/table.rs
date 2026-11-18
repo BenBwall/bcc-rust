@@ -396,7 +396,7 @@ pub(super) const PROCESSORS: [Processor; 120] = [
 
 /// The x86 builtins that need a feature in Clang, by name.
 #[rustfmt::skip]
-pub(super) const BUILTINS: [(&str, u128); 245] = [
+pub(super) const BUILTINS: [(&str, u128); 246] = [
     ("__builtin_ia32_addsubpd", SSE3),
     ("__builtin_ia32_addsubpd256", AVX),
     ("__builtin_ia32_addsubps", SSE3),
@@ -642,4 +642,5 @@ pub(super) const BUILTINS: [(&str, u128); 245] = [
     ("__builtin_ia32_vtestzps256", AVX),
     ("__builtin_ia32_vzeroall", AVX),
     ("__builtin_ia32_vzeroupper", AVX),
+    ("__builtin_ia32_xgetbv", XSAVE),
 ];

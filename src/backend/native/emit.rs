@@ -71,6 +71,7 @@ use super::{
         ShiftAmount,
         SymbolRef,
         TlsOffset,
+        VectorForm,
         Width,
     },
     through_stub,
@@ -1007,6 +1008,12 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                         at(Operand::Mem(mem), Width::B64)
                     )
                 },
+            | MInst::Vector { .. }
+            | MInst::VZero { .. }
+            | MInst::StringCompare { .. }
+            | MInst::Xgetbv => vector_instruction(out, *inst, None),
+            | MInst::VectorMove { mem, .. } =>
+                vector_instruction(out, *inst, Some(&at(Operand::Mem(mem), Width::B64))),
             | MInst::XStore { width, dst, src } => writeln!(
                 out,
                 "\t{}\t{}, {}",
@@ -1862,6 +1869,84 @@ fn write_asm_operand(
 impl fmt::Display for RegName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "%{}", self.0.name(self.1))
+    }
+}
+
+/// A vector instruction of the x86 intrinsics, with the text of its memory
+/// operand when it has one.
+fn vector_instruction(
+    out: &mut dyn Write,
+    inst: MInst,
+    mem: Option<&dyn fmt::Display>,
+) -> fmt::Result {
+    let v = |form: VectorForm| if form.vex() { "v" } else { "" };
+    match inst {
+        | MInst::Vector {
+            op,
+            form,
+            imm,
+            dst,
+            src,
+        } => {
+            write!(out, "\t{}{}\t", v(form), op.name())?;
+            if op.has_immediate() {
+                write!(out, "${imm}, ")?;
+            }
+            // `vcvtpd2dq` narrows four doubles in a YMM register to four
+            // integers in an XMM one.
+            let to = if op.narrows() {
+                VectorForm::Vex128
+            } else {
+                form
+            };
+            write!(out, "{}, {}", vector(src, form), vector(dst, to))?;
+            if form.vex() && op.reads_destination() {
+                write!(out, ", {}", vector(dst, to))?;
+            }
+            writeln!(out)
+        },
+        | MInst::VectorMove {
+            form, load, reg, ..
+        } => {
+            let mem = mem.ok_or(fmt::Error)?;
+            if load {
+                writeln!(out, "\t{}movups\t{mem}, {}", v(form), vector(reg, form))
+            } else {
+                writeln!(out, "\t{}movups\t{}, {mem}", v(form), vector(reg, form))
+            }
+        },
+        | MInst::VZero { all } =>
+            writeln!(out, "\t{}", if all { "vzeroall" } else { "vzeroupper" }),
+        | MInst::StringCompare {
+            op,
+            form,
+            imm,
+            lhs,
+            rhs,
+        } => writeln!(
+            out,
+            "\t{}{}\t${imm}, {}, {}",
+            v(form),
+            op.name(),
+            vector(rhs, form),
+            vector(lhs, form)
+        ),
+        | MInst::Xgetbv => writeln!(out, "\txgetbv"),
+        | _ => Err(fmt::Error),
+    }
+}
+
+/// An SSE register's name as a vector of `form`'s width: `%xmm3` or `%ymm3`.
+const fn vector(reg: Reg, form: VectorForm) -> VectorName {
+    VectorName(reg, form)
+}
+
+struct VectorName(Reg, VectorForm);
+
+impl fmt::Display for VectorName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let index = self.0.phys().index() - PReg::Xmm0.index();
+        write!(f, "%{}{index}", self.1.register())
     }
 }
 

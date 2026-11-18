@@ -7,4 +7,8 @@
 #endif
 #include <popcntintrin.h>
 #include <uintrintrin.h>
+/* GCC's umbrella declares `_xgetbv`; Clang's leaves it to <immintrin.h>. */
+#if defined(__GNUC__) && !defined(__clang__)
+#include <xsaveintrin.h>
+#endif
 #endif

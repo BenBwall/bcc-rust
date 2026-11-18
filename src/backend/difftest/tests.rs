@@ -3,7 +3,12 @@
 //! more.
 
 use super::{
-    super::interpreter::Trap,
+    super::interpreter::{
+        Outcome,
+        RuntimeValue,
+        Termination,
+        Trap,
+    },
     generate::generate,
     native::{
         check_native,
@@ -11,6 +16,7 @@ use super::{
     },
     oracle::{
         Pipeline,
+        Reference,
         observe_text,
         optimized,
     },
@@ -199,6 +205,62 @@ fn check_native_backend_sweep(first: u64, cases: u64) {
         failures[0]
     );
     assert_eq!(refused, 0, "generated programs are refused");
+}
+
+/// Generated programs of the named x86 instructions print the same through
+/// the LLVM back end (arms A0 and A1) and the native back end (B0 and B1)
+/// as in the interpreter, on a processor with AES, PCLMULQDQ, SSE4.2, AVX
+/// and XSAVE; elsewhere the test says so and checks nothing.
+#[test]
+fn named_x86_instructions_match_the_interpreter() {
+    #[cfg(target_arch = "x86_64")]
+    let capable = std::is_x86_feature_detected!("aes")
+        && std::is_x86_feature_detected!("pclmulqdq")
+        && std::is_x86_feature_detected!("sse4.2")
+        && std::is_x86_feature_detected!("avx")
+        && std::is_x86_feature_detected!("xsave");
+    #[cfg(not(target_arch = "x86_64"))]
+    let capable = false;
+    if !capable {
+        eprintln!("skipping the named x86 instructions: the processor lacks a feature they need");
+        return;
+    }
+    let cases: Vec<Reference> = (0..setting("BCC_DIFFTEST_NAMED_CASES", 6))
+        .map(|index| {
+            let seed = first_seed().wrapping_add(index);
+            let text = super::named::generate_named(seed);
+            let observation = observe_text(&text);
+            assert!(
+                matches!(
+                    observation.result,
+                    Ok(Outcome {
+                        termination: Termination::Returned(Some(RuntimeValue::Int(0))),
+                        ..
+                    })
+                ),
+                "seed {seed:#x}: the interpreter says the program {observation}\n{text}"
+            );
+            Reference {
+                seed,
+                text,
+                observation,
+                rewrites: 0,
+            }
+        })
+        .collect();
+    let mut failures = check_native(&cases);
+    let (backend, refused) = check_native_backend(&cases);
+    failures.extend(backend);
+    assert!(
+        failures.is_empty(),
+        "{} runs disagreed; the first:\n{}",
+        failures.len(),
+        failures[0]
+    );
+    assert_eq!(
+        refused, 0,
+        "the native back end refused a named instruction"
+    );
 }
 
 /// `main` returning `value` (an `i32` constant or `poison`) after printing
@@ -459,7 +521,7 @@ fn native_backend_matches_the_interpreter_on_wide_conversions() {
             );
         }
     }
-    let reference = super::oracle::Reference {
+    let reference = Reference {
         seed:        0,
         text:        WIDE_CONVERSIONS.to_string(),
         observation: observe_text(WIDE_CONVERSIONS),

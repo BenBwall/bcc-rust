@@ -561,6 +561,11 @@ pub(crate) struct CodeFeatures {
 }
 
 impl CodeFeatures {
+    /// Whether the code may use AVX instructions.
+    pub(crate) const fn avx(&self) -> bool {
+        self.enabled & AVX != 0
+    }
+
     /// Whether this function's code may use everything `callee`'s does, so
     /// that the callee may be expanded into it, as LLVM's `areInlineCompatible`
     /// compares the subtargets' features.

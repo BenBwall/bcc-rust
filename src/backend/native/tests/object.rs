@@ -877,6 +877,139 @@ fn x87_register_indices_and_directions_are_preserved() {
     }
 }
 
+/// The vector instructions of the x86 intrinsics in every register pair,
+/// with the VEX first source a third register so that `vvvv` takes every
+/// value: SSE and VEX forms, 16 and 32 bytes, immediates, and memory
+/// operands whose base or index needs VEX's `B` or `X` (the three-byte
+/// prefix) or a RIP-relative displacement with an immediate after it.
+#[test]
+fn vector_extension_encodings() {
+    let mut text = String::from(".text\n");
+    let plain = [
+        "aesenc",
+        "aesenclast",
+        "aesdec",
+        "aesdeclast",
+        "aesimc",
+        "cvtps2dq",
+        "cvttps2dq",
+        "cvtpd2dq",
+        "cvttpd2dq",
+        "rcpps",
+        "rsqrtps",
+        "sqrtss",
+        "sqrtsd",
+    ];
+    let immediate = [
+        "aeskeygenassist",
+        "pclmulqdq",
+        "roundps",
+        "roundpd",
+        "roundss",
+        "roundsd",
+        "pcmpistri",
+        "pcmpistrm",
+        "pcmpestri",
+        "pcmpestrm",
+    ];
+    let binary = ["aesenc", "aesenclast", "aesdec", "aesdeclast"];
+    let binary_immediate = ["pclmulqdq", "roundss", "roundsd"];
+    let unary_vex = [
+        "aesimc",
+        "cvtps2dq",
+        "cvttps2dq",
+        "cvtpd2dq",
+        "cvttpd2dq",
+        "rcpps",
+        "rsqrtps",
+    ];
+    let unary_vex_immediate = [
+        "aeskeygenassist",
+        "roundps",
+        "roundpd",
+        "pcmpistri",
+        "pcmpistrm",
+        "pcmpestri",
+        "pcmpestrm",
+    ];
+    for a in 0..16 {
+        for b in 0..16 {
+            let c = (a + b + 5) % 16;
+            for op in plain {
+                writeln!(&mut text, "{op} %xmm{a},%xmm{b}").unwrap();
+            }
+            for op in immediate {
+                writeln!(&mut text, "{op} $27,%xmm{a},%xmm{b}").unwrap();
+            }
+            for op in binary {
+                writeln!(&mut text, "v{op} %xmm{a},%xmm{c},%xmm{b}").unwrap();
+            }
+            for op in binary_immediate {
+                writeln!(&mut text, "v{op} $17,%xmm{a},%xmm{c},%xmm{b}").unwrap();
+            }
+            for op in unary_vex {
+                writeln!(&mut text, "v{op} %xmm{a},%xmm{b}").unwrap();
+            }
+            for op in unary_vex_immediate {
+                writeln!(&mut text, "v{op} $255,%xmm{a},%xmm{b}").unwrap();
+            }
+            for op in ["roundps", "roundpd"] {
+                writeln!(&mut text, "v{op} $9,%ymm{a},%ymm{b}").unwrap();
+            }
+            for op in ["cvtps2dq", "cvttps2dq", "rcpps", "rsqrtps"] {
+                writeln!(&mut text, "v{op} %ymm{a},%ymm{b}").unwrap();
+            }
+            for op in ["cvtpd2dq", "cvttpd2dq"] {
+                writeln!(&mut text, "v{op} %ymm{a},%xmm{b}").unwrap();
+            }
+        }
+    }
+    for x in 0..16 {
+        for mem in [
+            "128(%r13)",
+            "(%rax)",
+            "-8(%rsp,%r10,4)",
+            "(%r12,%rbp,2)",
+            "g(%rip)",
+        ] {
+            write!(
+                &mut text,
+                "movups {mem},%xmm{x}\nmovups %xmm{x},{mem}\nvmovups {mem},%xmm{x}\nvmovups \
+                 %xmm{x},{mem}\nvmovups {mem},%ymm{x}\nvmovups %ymm{x},{mem}\naesenc \
+                 {mem},%xmm{x}\npclmulqdq $1,{mem},%xmm{x}\nvaesdec \
+                 {mem},%xmm3,%xmm{x}\nvpclmulqdq $16,{mem},%xmm{x},%xmm11\nvroundpd \
+                 $4,{mem},%ymm{x}\nvpcmpestri $8,{mem},%xmm{x}\n"
+            )
+            .unwrap();
+        }
+    }
+    text.push_str("vzeroupper\nvzeroall\nxgetbv\n");
+    equivalent(&text).unwrap();
+    for text in [
+        "vaesenc %ymm0,%ymm1,%ymm2",
+        "aesenc %ymm0,%ymm1",
+        "roundps $256,%xmm0,%xmm1",
+        "roundps %xmm0,%xmm1",
+        "vsqrtss %xmm0,%xmm1",
+        "vaesenc %xmm0,%xmm1",
+        "aesenc %xmm0,%xmm1,%xmm2",
+        "vroundps $1,%ymm0,%xmm1",
+        "vcvtps2dq %ymm0,%xmm1",
+        "vcvtpd2dq %ymm0,%ymm1",
+        "vcvtpd2dq (%rax),%xmm1",
+        "vmovups %ymm0,%xmm1",
+        "vmovups %xmm0,%xmm1",
+        "vmovups (%rax),%rax",
+        "aesenc %rax,%xmm1",
+        "vzeroupper %xmm0",
+        "vpclmulqdq $1,%xmm0,%ymm1,%xmm2",
+        "movq %rax,%rbx,%rcx,%rdx",
+        "aesenc %xmm16,%xmm1",
+    ] {
+        refuses(text, "native object emission");
+    }
+}
+
 #[test]
 fn operand_counts_classes_and_widths_are_checked() {
     equivalent("retq $8\nshldl $3,%eax,%ebx\nshldw %cl,%ax,%bx\nshrdq %cl,%rax,%rbx\n").unwrap();

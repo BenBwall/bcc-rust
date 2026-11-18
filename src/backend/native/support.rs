@@ -219,7 +219,6 @@ impl Checker<'_, '_> {
                 opcode: Opcode::ReadTimestamp,
                 ..
             } => Err(Construct::Opcode(opcode)),
-            | InstData::Intrinsic { intrinsic, .. } => Err(Construct::Intrinsic(intrinsic)),
             | InstData::Load { ty: Type::I1, .. } | InstData::Store { ty: Type::I1, .. } =>
                 Err(Construct::Type(Type::I1)),
             | InstData::Call { func, args } => {
@@ -421,8 +420,6 @@ pub(crate) enum Construct {
     /// A GNU nested function's static chain on `x86_64-pc-windows-msvc`,
     /// whose stack probe `__chkstk` clobbers the `%r10` it arrives in.
     StaticChain,
-    /// A named x86 instruction the back end has no sequence for.
-    Intrinsic(crate::ir::Intrinsic),
 }
 
 impl fmt::Display for Unsupported<'_> {
@@ -466,7 +463,6 @@ impl fmt::Display for Unsupported<'_> {
             )?,
             | Construct::StaticChain =>
                 write!(f, "the static chain of a nested function on MSVC targets")?,
-            | Construct::Intrinsic(intrinsic) => write!(f, "the instruction `{intrinsic}`")?,
         }
         if let Some(function) = self.function {
             write!(f, " (in @{function})")?;

@@ -375,6 +375,9 @@ fn emit<'m>(
                     indirect_returns_twice,
                     track_sources,
                     keep_frame_pointer: code.hardening.keep_frame_pointer,
+                    avx: function
+                        .target
+                        .map_or(code.x86_features.avx(), |features| features.avx()),
                 },
                 arena,
             )

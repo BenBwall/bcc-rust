@@ -22,7 +22,8 @@
 //! Read [`sweep`] first, then `oracle.rs` for the comparison and
 //! minimization, then `generate.rs` for the programs.
 //!
-//! - Programs: `generate.rs` writes a random, verifier-clean module for a seed.
+//! - Programs: `generate.rs` writes a random, verifier-clean module for a seed;
+//!   `named.rs` one of the named x86 instructions, for the native oracles.
 //! - Oracles: `oracle.rs` checks the optimizer with the interpreter;
 //!   `native.rs` checks the LLVM back end against the interpreter.
 //! - `tests.rs` holds the tests, whose sizes the environment can raise:
@@ -32,6 +33,7 @@
 
 // Programs
 mod generate;
+mod named;
 
 // Oracles
 mod native;

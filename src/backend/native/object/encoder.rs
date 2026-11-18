@@ -1,8 +1,13 @@
-//! x86-64 v1 encodings for the native emitter (Intel SDM volume 2).
+//! x86-64 v1 encodings for the native emitter (Intel SDM volume 2), and the
+//! SSE4, AVX, AES-NI and PCLMULQDQ instructions of the x86 intrinsics
+//! (`vector.rs`).
 //!
-//! `instruction` selects an opcode; `Code::rm` owns REX, `ModRM`, SIB and
-//! displacements. Fixups retain the instruction-end bias, including any
-//! immediate after the displacement. Branches are relaxed by the parent.
+//! `instruction` selects an opcode; `Code::rm` owns REX, `Code::modrm` the
+//! `ModRM`, SIB and displacements. Fixups retain the instruction-end bias,
+//! including any immediate after the displacement. Branches are relaxed by the
+//! parent.
+
+mod vector;
 
 use super::{
     Error,
@@ -17,12 +22,11 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
     if name == "lock" {
         return locked(args);
     }
-    let mut code = Code {
-        bytes: [0; 15],
-        len:   0,
-        fixup: None,
-    };
-    let [a, b, d] = operands(name, args)?;
+    if vector::encodes(name) {
+        return vector::instruction(name, args);
+    }
+    let mut code = Code::empty();
+    let [a, b, d, _] = operands(name, args)?;
     match name {
         | "retq" | "callq" | "jmpq" | "iretq" | "uiret" => code.control_transfer(name, args, a)?,
         | "ud2" => code.raw(&[0x0F, 0x0B])?,
@@ -510,12 +514,7 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
             }
         },
     }
-    if let Some(fixup) = &mut code.fixup
-        && matches!(fixup.kind, 2 | 4 | 9 | 19 | 20 | 22 | 41 | 42)
-    {
-        fixup.bias = i64::from(fixup.at) - i64::from(code.len);
-    }
-    Ok(code)
+    Ok(code.biased())
 }
 
 /// A `lock`-prefixed instruction: a read-modify-write of a memory
@@ -549,15 +548,15 @@ fn locked(args: &str) -> Result<Code<'_>> {
     Ok(code)
 }
 
-fn operands<'a>(name: &str, args: &'a str) -> Result<[Operand<'a>; 3]> {
+fn operands<'a>(name: &str, args: &'a str) -> Result<[Operand<'a>; 4]> {
     if !name.is_ascii() {
         return Err(Error("unknown machine instruction"));
     }
-    let mut operands = [Operand::Empty; 3];
+    let mut operands = [Operand::Empty; 4];
     let mut count = 0;
     if name != "rep" && !args.is_empty() {
         for (i, arg) in split(args).enumerate() {
-            if i >= 3 {
+            if i >= 4 {
                 return Err(Error("too many instruction operands"));
             }
             if arg.starts_with('*') && (i != 0 || !matches!(name, "callq" | "jmpq")) {
@@ -605,6 +604,13 @@ fn validate(name: &str, args: &str, operands: &[Operand<'_>]) -> Result<()> {
     };
     let a = operands.first().copied().unwrap_or(Operand::Empty);
     let b = operands.get(1).copied().unwrap_or(Operand::Empty);
+    // Only the vector instructions take four operands.
+    if vector::encodes(name) {
+        return vector::validate(name, operands);
+    }
+    if operands.len() > 3 {
+        return Err(Error("too many instruction operands"));
+    }
     match name {
         | "rep" =>
             if matches!(args, "movsb" | "stosb") {
@@ -749,6 +755,8 @@ enum Shape {
     Label,
     Xmm,
     Xm,
+    Ymm,
+    Ym,
     St,
     Count,
 }
@@ -766,14 +774,17 @@ impl Shape {
             | Self::Label => matches!(op, Operand::Label),
             | Self::Xmm => op.xmm(),
             | Self::Xm => op.xmm() || matches!(op, Operand::Mem { .. }),
+            | Self::Ymm => op.ymm(),
+            | Self::Ym => op.ymm() || matches!(op, Operand::Mem { .. }),
             | Self::St => matches!(op, Operand::St(_)),
             | Self::Count => matches!(
                 op,
                 Operand::Imm(0..=255)
                     | Operand::Reg(Register {
-                        id:   1,
+                        id: 1,
                         bits: 8,
-                        xmm:  false,
+                        xmm: false,
+                        ..
                     })
             ),
         }
@@ -814,6 +825,25 @@ pub(super) struct Fixup<'a> {
 }
 
 impl<'a> Code<'a> {
+    const fn empty() -> Self {
+        Self {
+            bytes: [0; 15],
+            len:   0,
+            fixup: None,
+        }
+    }
+
+    /// The code with a PC-relative fixup's bias: the distance from its
+    /// field to the instruction's end, past any immediate after it.
+    fn biased(mut self) -> Self {
+        if let Some(fixup) = &mut self.fixup
+            && matches!(fixup.kind, 2 | 4 | 9 | 19 | 20 | 22 | 41 | 42)
+        {
+            fixup.bias = i64::from(fixup.at) - i64::from(self.len);
+        }
+        self
+    }
+
     /// Inserts a prefix byte at `at`, among the legacy prefixes before
     /// any REX prefix, opcode or fixup.
     fn insert(&mut self, at: usize, byte: u8) -> Result<()> {
@@ -882,6 +912,13 @@ impl<'a> Code<'a> {
         self.rex(wide, reg, index.unwrap_or(0), base.unwrap_or(0), force)?;
         let has_rex = self.len != before_rex;
         self.raw(opcode)?;
+        self.modrm(reg, rm, has_rex)
+    }
+
+    /// The `ModRM` byte of `reg` and `rm`, with the SIB byte, displacement
+    /// and fixup a memory `rm` needs; `has_rex` picks the GOT relocation
+    /// the linker may relax.
+    fn modrm(&mut self, reg: u8, rm: Operand<'a>, has_rex: bool) -> Result<()> {
         if let Operand::Reg(r) = rm {
             self.byte(0xC0 | ((reg & 7) << 3) | (r.id & 7))?;
             return Ok(());
@@ -1099,7 +1136,10 @@ enum Operand<'a> {
 struct Register {
     id:   u8,
     bits: u8,
+    /// A vector register: `%xmm0`-`%xmm15`, or with `ymm` their 32-byte
+    /// `%ymm` forms (whose `bits` stay 128, the width the field can hold).
     xmm:  bool,
+    ymm:  bool,
 }
 
 impl Operand<'_> {
@@ -1128,7 +1168,18 @@ impl Operand<'_> {
     }
 
     fn xmm(self) -> bool {
-        matches!(self, Self::Reg(Register { xmm: true, .. }))
+        matches!(
+            self,
+            Self::Reg(Register {
+                xmm: true,
+                ymm: false,
+                ..
+            })
+        )
+    }
+
+    fn ymm(self) -> bool {
+        matches!(self, Self::Reg(Register { ymm: true, .. }))
     }
 
     fn imm(self) -> Result<i64> {
@@ -1229,16 +1280,21 @@ fn register(text: &str) -> Result<Register> {
     let name = text
         .strip_prefix('%')
         .ok_or(Error("expected register name"))?;
-    if let Some(n) = name.strip_prefix("xmm") {
-        let id: u8 = n.parse().map_err(|_| Error("invalid XMM register"))?;
+    let vector = name
+        .strip_prefix("xmm")
+        .map(|n| (n, false))
+        .or_else(|| name.strip_prefix("ymm").map(|n| (n, true)));
+    if let Some((n, ymm)) = vector {
+        let id: u8 = n.parse().map_err(|_| Error("invalid vector register"))?;
         return if id < 16 {
             Ok(Register {
                 id,
                 bits: 128,
                 xmm: true,
+                ymm,
             })
         } else {
-            Err(Error("XMM register outside baseline ISA"))
+            Err(Error("vector register outside the AVX register file"))
         };
     }
     let names = [
@@ -1253,6 +1309,7 @@ fn register(text: &str) -> Result<Register> {
                 id:   u8::try_from(id).map_err(|_| Error("register too large"))?,
                 bits: 8 << w,
                 xmm:  false,
+                ymm:  false,
             });
         }
     }
@@ -1272,6 +1329,7 @@ fn register(text: &str) -> Result<Register> {
                 id,
                 bits,
                 xmm: false,
+                ymm: false,
             });
         }
     }

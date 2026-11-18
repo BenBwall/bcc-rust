@@ -605,6 +605,7 @@ __builtin_ia32_vtestzps has=1111 intrinsic int(V4(float),V4(float)) [TooFewArgum
 __builtin_ia32_vtestzps256 has=1111 intrinsic int(V8(float),V8(float)) [TooFewArguments] +0
 __builtin_ia32_vzeroall has=1111 intrinsic void() [] +0
 __builtin_ia32_vzeroupper has=1111 intrinsic void() [] +0
+__builtin_ia32_xgetbv has=1111 intrinsic unsigned long long(unsigned int) [TooFewArguments] +0
 __builtin_ilogb has=1111 intrinsic int(double) [TooFewArguments] +0
 __builtin_ilogbf has=1111 intrinsic int(float) [TooFewArguments] +0
 __builtin_ilogbl has=1111 intrinsic int(long double) [TooFewArguments] +0

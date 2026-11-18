@@ -59,7 +59,13 @@ description (registers, shadow space, red zone) and in the unwind directives.
 The baseline instruction set is x86-64 v1 (SSE2, no POPCNT, LZCNT, BMI or
 CMOV-free fallbacks needed: CMOV is baseline). Bit counts use BSR/BSF with a
 zero check; population count expands to the SWAR sequence. A `-march` option
-can later enable v2/v3 forms.
+can later enable v2/v3 forms. The exception is the IR's named x86
+instructions (`ir/intrinsics.rs`), which the intrinsic headers reach only in
+functions whose features allow them: each is emitted as itself (AES-NI,
+PCLMULQDQ, SSE4.1 and AVX roundings and conversions, SSE4.2 string
+comparisons, `XGETBV`), in its VEX form in a function with AVX, on vectors
+loaded into precolored `%xmm0`-`%xmm2` around it (`isel/vector.rs`;
+`middle-end.md`, "x86 intrinsics").
 
 ### References
 
@@ -983,7 +989,7 @@ Following [CONTRIBUTING.md](../../CONTRIBUTING.md#source-layout):
 | `native/support.rs` | the up-front support check and `Unsupported` |
 | `native/conv.rs` | `CallConv`: argument and result registers, saved sets, shadow space |
 | `native/mir.rs` | the machine IR: registers, operands, instructions, blocks |
-| `native/isel.rs` | instruction selection, with `isel/calls.rs` (calls, returns, entry, `va_start`), `isel/edges.rs` (terminators and parallel copies), `isel/memory.rs` (addresses, loads, stores, `copy`, `fill`), `isel/float.rs` (SSE), `isel/wide.rs` (`i128` pairs), `isel/x87.rs` (`f80`), `isel/quad.rs` (`f128` and the conversions that call the runtime) and `isel/stack.rs` (dynamic allocation) |
+| `native/isel.rs` | instruction selection, with `isel/calls.rs` (calls, returns, entry, `va_start`), `isel/edges.rs` (terminators and parallel copies), `isel/memory.rs` (addresses, loads, stores, `copy`, `fill`), `isel/float.rs` (SSE), `isel/wide.rs` (`i128` pairs), `isel/x87.rs` (`f80`), `isel/quad.rs` (`f128` and the conversions that call the runtime), `isel/stack.rs` (dynamic allocation) and `isel/vector.rs` (the named x86 instructions) |
 | `native/regalloc.rs` | the allocator's entry and `Allocation`, with `regalloc/edges.rs` (critical edges, jump threading, loop rotation), `regalloc/liveness.rs` (liveness, dead code, intervals, fixed ranges), `regalloc/intervals.rs`, `regalloc/coalesce.rs`, `regalloc/scan.rs` (the split-interval scan), `regalloc/resolve.rs` (pieces and moves), `regalloc/rewrite.rs` (physical rewrite and parallel moves), `regalloc/checker.rs` (the symbolic checker) and `regalloc/peephole.rs` (`lea` combining) |
 | `native/frame.rs` | frame layout, prologue and epilogue |
 | `native/emit.rs` | AT&T text: instructions, functions, globals, symbols |

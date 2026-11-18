@@ -3,7 +3,8 @@
 //! writes a vector result's bytes or returns a scalar one. A poison byte in
 //! an operand makes the whole result poison. `vrcpps` and `vrsqrtps` are
 //! approximations each processor computes its own way, so they stop the run
-//! as unsupported rather than give one processor's values.
+//! as unsupported rather than give one processor's values; `xgetbv` reads
+//! the modeled processor's XCR0.
 
 use super::{
     Machine,
@@ -24,6 +25,15 @@ use crate::ir::{
 /// A vector operand's bytes, up to 32.
 type Bytes = [u8; 32];
 
+/// XCR0 of the processor the interpreter models, as `xgetbv` with index 0
+/// reads it: the operating system manages the x87, SSE and AVX state (bits
+/// 0, 1 and 2), the registers whose instructions the interpreter computes.
+/// That is what a program checks before it takes an AVX path; another
+/// register, which a processor may lack, stops the run as unsupported.
+/// Intel SDM Vol. 1, §13.3, "Enabling the XSAVE Feature Set and
+/// XSAVE-Enabled Features".
+const MODELED_XCR0: u128 = 0b111;
+
 impl Machine<'_, '_, '_> {
     /// Executes `intrinsic` with immediate `immediate` on `args`, and
     /// returns its scalar result, if it has one.
@@ -40,6 +50,15 @@ impl Machine<'_, '_, '_> {
         } else {
             (None, args)
         };
+        if intrinsic == Intrinsic::Xgetbv {
+            return match self.value(operands[0]) {
+                | RuntimeValue::Int(bits) if low_i32(bits) == 0 =>
+                    Ok(Some(RuntimeValue::Int(MODELED_XCR0))),
+                | RuntimeValue::Int(_) =>
+                    Err(Fault::Unsupported(Unsupported::Intrinsic(intrinsic))),
+                | _ => Ok(Some(RuntimeValue::Poison)),
+            };
+        }
         if let Intrinsic::SqrtF32 | Intrinsic::SqrtF64 = intrinsic {
             return Ok(Some(match self.value(operands[0]) {
                 | RuntimeValue::F32(x) => RuntimeValue::F32(x.sqrt()),
@@ -75,7 +94,8 @@ impl Machine<'_, '_, '_> {
             | Intrinsic::RcpPs256 | Intrinsic::RsqrtPs256 =>
                 return Err(Fault::Unsupported(Unsupported::Intrinsic(intrinsic))),
             | Intrinsic::Vzeroupper | Intrinsic::Vzeroall => return Ok(None),
-            | Intrinsic::SqrtF32 | Intrinsic::SqrtF64 => unreachable!("computed above"),
+            | Intrinsic::SqrtF32 | Intrinsic::SqrtF64 | Intrinsic::Xgetbv =>
+                unreachable!("computed above"),
             | Intrinsic::AesEnc => aes_round(&a, &b, Direction::Encrypt, true),
             | Intrinsic::AesEncLast => aes_round(&a, &b, Direction::Encrypt, false),
             | Intrinsic::AesDec => aes_round(&a, &b, Direction::Decrypt, true),

@@ -9,12 +9,9 @@
  *
  * The test functions have a `target` attribute, so `main` needs no AVX and
  * prints only "skip" on a processor without AVX2, AES, PCLMULQDQ or
- * SSE4.2 (ALWAYS_FAST runs them unasked, for the interpreter). NO_NAMED
- * leaves out the intrinsics lowering keeps as named instructions (AES,
- * PCLMULQDQ, rounding, conversions, square roots, approximate reciprocals,
- * VZEROUPPER), which the native back end refuses; NO_APPROX leaves out the
- * approximate reciprocals, whose values each processor chooses, which the
- * interpreter does not compute. */
+ * SSE4.2 (ALWAYS_FAST runs them unasked, for the interpreter). NO_APPROX
+ * leaves out the approximate reciprocals, whose values each processor
+ * chooses, which the interpreter does not compute. */
 #include <immintrin.h>
 #include <stdio.h>
 #include <string.h>
@@ -266,7 +263,6 @@ T static void avx2(const unsigned char *pa, const unsigned char *pb, const unsig
   }
 }
 
-#ifndef NO_NAMED
 T static void named(const unsigned char (*in)[32]) {
   __m256 a = _mm256_loadu_ps((const float *)in[1]), b = _mm256_loadu_ps((const float *)in[4]);
   __m256d d = _mm256_loadu_pd((const double *)in[2]);
@@ -291,11 +287,12 @@ T static void named(const unsigned char (*in)[32]) {
   (void)a4; (void)b4; (void)d2; (void)e2;
   _mm256_zeroupper();
   P("after_zeroupper", x4);
+  _mm256_zeroall();
+  P("after_zeroall", y4);
 #ifndef NO_APPROX
   P("rcp_ps", _mm256_rcp_ps(a)); P("rsqrt_ps", _mm256_rsqrt_ps(b));
 #endif
 }
-#endif
 
 int main(void) {
 #ifndef ALWAYS_FAST
@@ -319,9 +316,7 @@ int main(void) {
     avx((const unsigned char (*)[32])in, round);
     avx2(in[0], in[3], in[4]);
     avx2(in[3], in[0], in[5][0] & 1 ? in[0] : in[4]);
-#ifndef NO_NAMED
     named((const unsigned char (*)[32])in);
-#endif
   }
   return 0;
 }
