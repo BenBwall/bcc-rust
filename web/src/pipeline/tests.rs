@@ -31,7 +31,7 @@ fn links_token_and_syntax_lines_to_source_lines() {
         ),
         ..Compilation::default()
     };
-    let exact = links(Stage::Tokens, &tokens, "", false);
+    let exact = links(Stage::Tokens, &tokens, "", Unfolded::default());
     assert!(exact.is_exact());
     assert_eq!(exact.outputs_for(12), [1]);
     assert_eq!(exact.sources_for(2), [3]);
@@ -43,7 +43,7 @@ fn links_token_and_syntax_lines_to_source_lines() {
         ),
         ..Compilation::default()
     };
-    let exact = links(Stage::SyntaxTree, &tree, "", false);
+    let exact = links(Stage::SyntaxTree, &tree, "", Unfolded::default());
     assert_eq!(exact.outputs_for(7), [1, 3]);
     assert_eq!(exact.sources_for(2), Vec::<usize>::new());
     let semantic = Compilation {
@@ -58,7 +58,7 @@ expression 0 type=int category=rvalue value=0 ice constant=arithmetic @2:17"
         ),
         ..Compilation::default()
     };
-    let exact = links(Stage::SemanticTypes, &semantic, "", false);
+    let exact = links(Stage::SemanticTypes, &semantic, "", Unfolded::default());
     assert_eq!(exact.outputs_for(2), [4, 6]);
     // A function's `__func__` is placed at the function's name.
     assert_eq!(exact.outputs_for(1), [2, 5]);
@@ -126,7 +126,7 @@ fn links_the_other_stages_per_function() {
         ],
         ..Compilation::default()
     };
-    let ir = links(Stage::Ir, &compilation, source, false);
+    let ir = links(Stage::Ir, &compilation, source, Unfolded::default());
     assert!(!ir.is_exact() && !ir.is_empty());
     assert_eq!(ir.outputs_for(2), [2, 3, 4]);
     assert_eq!(ir.sources_for(6), [5, 6, 7]);
@@ -135,7 +135,7 @@ fn links_the_other_stages_per_function() {
         Vec::<usize>::new(),
         "a blank line links nowhere"
     );
-    let llvm = links(Stage::Llvm, &compilation, source, false);
+    let llvm = links(Stage::Llvm, &compilation, source, Unfolded::default());
     assert_eq!(llvm.outputs_for(1), [2, 3, 4]);
     assert_eq!(llvm.sources_for(7), [5, 6, 7]);
     // Before the live compilation arrives, LLVM IR finds the definitions in
@@ -145,10 +145,10 @@ fn links_the_other_stages_per_function() {
         ..Compilation::default()
     };
     assert_eq!(
-        links(Stage::Llvm, &precomputed, source, false).outputs_for(6),
+        links(Stage::Llvm, &precomputed, source, Unfolded::default()).outputs_for(6),
         [6, 7, 8]
     );
-    assert!(links(Stage::Asm, &compilation, source, false).is_empty());
+    assert!(links(Stage::Asm, &compilation, source, Unfolded::default()).is_empty());
 }
 
 /// Where each line came from, given its source line: 0 for a line that is not
@@ -192,7 +192,7 @@ fn back_end_stages_link_line_by_line() {
         }],
         ..Compilation::default()
     };
-    let asm = links(Stage::Asm, &compilation, source, false);
+    let asm = links(Stage::Asm, &compilation, source, Unfolded::default());
     assert!(asm.is_exact() && asm.has_origins());
     assert_eq!(asm.outputs_for(2), [4, 6]);
     assert_eq!(asm.sources_for(2), [1, 2, 3], "the label stands for the function");
@@ -200,7 +200,7 @@ fn back_end_stages_link_line_by_line() {
     assert_eq!(asm.sources_for(4), [2]);
     assert_eq!(asm.sources_for(5), Vec::<usize>::new());
     assert_eq!(asm.unclaimed().collect::<Vec<_>>(), [5]);
-    let machine = links(Stage::MachineCode, &compilation, source, false);
+    let machine = links(Stage::MachineCode, &compilation, source, Unfolded::default());
     assert_eq!(machine.sources_for(4), [2], "the last instruction keeps its line");
     assert_eq!(machine.sources_for(1), [1, 2, 3]);
     assert_eq!(machine.outputs_for(2), [2, 4]);
@@ -240,12 +240,77 @@ fn inlined_copies_link_to_their_line_and_their_call() {
         ],
         ..Compilation::default()
     };
-    let ir = links(Stage::Ir, &compilation, source, false);
+    let ir = links(Stage::Ir, &compilation, source, Unfolded::default());
     assert_eq!(ir.outputs_for(2), [3, 4, 8], "the line, in place and inlined");
     assert_eq!(ir.outputs_for(5), [8, 9], "the call, with the copy made for it");
     assert_eq!(ir.sources_for(8), [2], "the copy's own line");
     assert_eq!(ir.origin(8).call, 5);
     assert_eq!(ir.first_output_for(5), Some(9), "scroll to the call's own code");
+}
+
+/// `f` in bcc IR, opening with its target lines.
+fn targeted() -> Compilation {
+    let none = LineOrigin::default();
+    let code = LineOrigin {
+        line: 2,
+        call: 0,
+        code: true,
+    };
+    Compilation {
+        ir: Some(
+            "target triple = \"x86_64-unknown-linux-gnu\"\ntarget datalayout = \
+             \"e-S128\"\n\nfunction @f(i32) -> i32 {\nblock0(v0: i32):\n    v1 = imul v0, v0\n    \
+             return v1\n}\n"
+                .into(),
+        ),
+        ir_lines: vec![none, none, none, none, none, code, code, none],
+        functions: vec![FunctionLines {
+            name: "f".into(),
+            source: (1, 3),
+            ir: Some((4, 8)),
+            ..FunctionLines::default()
+        }],
+        ..Compilation::default()
+    }
+}
+
+const TARGETED_SOURCE: &str = "int f(int x) {\n    return x * x;\n}\n";
+
+/// The IR's target lines fold into one line that links nowhere, and every
+/// link below them moves up with the text.
+#[test]
+fn folded_target_lines_keep_the_links_below_them() {
+    let compilation = targeted();
+    let (text, _) = displayed(Stage::Ir, &compilation, Unfolded::default()).unwrap();
+    assert!(target::is_summary(text.lines().next().unwrap()), "{text}");
+    assert_eq!(text.lines().nth(2), Some("function @f(i32) -> i32 {"));
+    let folded = links(
+        Stage::Ir,
+        &compilation,
+        TARGETED_SOURCE,
+        Unfolded::default(),
+    );
+    assert_eq!(folded.outputs_for(2), [5, 6]);
+    assert_eq!(
+        folded.sources_for(3),
+        [1, 2, 3],
+        "the header stands for the function"
+    );
+    assert_eq!(
+        folded.sources_for(1),
+        Vec::<usize>::new(),
+        "no source line made the target"
+    );
+    let shown = Unfolded {
+        target: true,
+        ..Unfolded::default()
+    };
+    let (text, _) = displayed(Stage::Ir, &compilation, shown).unwrap();
+    assert_eq!(Some(text.as_str()), compilation.ir.as_deref());
+    assert_eq!(
+        links(Stage::Ir, &compilation, TARGETED_SOURCE, shown).outputs_for(2),
+        [6, 7]
+    );
 }
 
 /// Each lesson's recorded lines match its LLVM IR, name lines of its source,
@@ -291,7 +356,7 @@ fn links_ir_instructions_to_their_lines() {
         functions: vec![function((3, 7))],
         ..Compilation::default()
     };
-    let ir = links(Stage::Ir, &compilation, source, false);
+    let ir = links(Stage::Ir, &compilation, source, Unfolded::default());
     assert!(ir.is_exact());
     assert_eq!(
         ir.outputs_for(2),
@@ -326,7 +391,7 @@ fn links_ir_instructions_to_their_lines() {
         ir_lines: origins(&[0; 7]),
         ..compilation
     };
-    let rebuilt = links(Stage::Ir, &rebuilt, source, false);
+    let rebuilt = links(Stage::Ir, &rebuilt, source, Unfolded::default());
     assert_eq!(rebuilt.sources_for(5), [1, 2, 3, 4]);
     assert!(
         !rebuilt.is_exact(),

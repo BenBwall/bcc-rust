@@ -629,14 +629,20 @@ mod tests {
     #[test]
     fn bundled_headers_fold_and_link_to_their_include() {
         use crate::pipeline::{
+            Unfolded,
             displayed,
             is_folded,
             links,
         };
         let source = "int a;\n#include <stdint.h>\nint32_t x;\n";
         let compilation = compile(source, false);
-        let (full, _) = displayed(Stage::Preprocessor, &compilation, true).unwrap();
-        let (folded, lines) = displayed(Stage::Preprocessor, &compilation, false).unwrap();
+        let headers = Unfolded {
+            headers: true,
+            ..Unfolded::default()
+        };
+        let (full, _) = displayed(Stage::Preprocessor, &compilation, headers).unwrap();
+        let (folded, lines) =
+            displayed(Stage::Preprocessor, &compilation, Unfolded::default()).unwrap();
         assert!(full.contains("typedef"), "{full}");
         assert!(!folded.contains("typedef"), "{folded}");
         let summary = folded
@@ -645,7 +651,12 @@ mod tests {
             .unwrap_or_else(|| panic!("{folded}"));
         assert!(folded.contains("<stdint.h>: "), "{folded}");
         assert_eq!(lines.unwrap()[summary + 1], Some((2, 2)));
-        let folded_links = links(Stage::Preprocessor, &compilation, source, false);
+        let folded_links = links(
+            Stage::Preprocessor,
+            &compilation,
+            source,
+            Unfolded::default(),
+        );
         assert_eq!(folded_links.outputs_for(2), [summary + 1]);
         assert!(
             folded_links
@@ -654,7 +665,7 @@ mod tests {
                 .all(|&line| line > summary + 1)
         );
         // With the headers shown, each of their lines links to the include.
-        let shown = links(Stage::Preprocessor, &compilation, source, true);
+        let shown = links(Stage::Preprocessor, &compilation, source, headers);
         let typedef = full
             .lines()
             .position(|line| line.starts_with("typedef"))

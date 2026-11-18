@@ -31,12 +31,14 @@ use crate::{
         CompileDiagnostic,
         Links,
         Stage,
+        Unfolded,
         displayed,
         gutter,
         is_folded,
         linked_terms,
         optimizer_changes,
         optimizer_measures,
+        target,
     },
 };
 
@@ -72,8 +74,8 @@ pub fn PipelineView(
     /// The lines linked between the source and the output.
     pointing: Pointing,
     /// Whether the preprocessed text shows the headers' text, not a folded
-    /// line for each.
-    headers: RwSignal<bool>,
+    /// line for each, and the IRs their target lines, not one line for them.
+    unfolded: RwSignal<Unfolded>,
     filename: ReadSignal<String>,
     /// The source the compilation came from.
     source: Signal<String>,
@@ -85,10 +87,10 @@ pub fn PipelineView(
 ) -> impl IntoView {
     let output = Memo::new(move |_| {
         let stage = stage.get();
-        let headers = headers.get();
+        let unfolded = unfolded.get();
         shown.with(|compilation| {
             let compilation = compilation.as_ref()?;
-            displayed(stage, compilation, headers).map(|(text, _)| text)
+            displayed(stage, compilation, unfolded).map(|(text, _)| text)
         })
     });
     let text = Signal::derive(move || output.get().unwrap_or_default());
@@ -96,11 +98,11 @@ pub fn PipelineView(
     let language = Signal::derive(move || stage.get().language());
     let line_numbers = Signal::derive(move || {
         let stage = stage.get();
-        let headers = headers.get();
+        let unfolded = unfolded.get();
         shown.with(|compilation| {
             compilation
                 .as_ref()
-                .map_or_else(Vec::new, |compilation| gutter(stage, compilation, headers))
+                .map_or_else(Vec::new, |compilation| gutter(stage, compilation, unfolded))
         })
     });
     let links_of = move |compilation: Memo<Option<Compilation>>| {
@@ -110,7 +112,7 @@ pub fn PipelineView(
                     .as_ref()
                     .map_or_default(|compilation| {
                         source.with(|source| {
-                            crate::pipeline::links(stage.get(), compilation, source, headers.get())
+                            crate::pipeline::links(stage.get(), compilation, source, unfolded.get())
                         })
                     })
             })
@@ -166,6 +168,17 @@ pub fn PipelineView(
             .then(|| links.with(|links| links.first_output_for(hovered)))
             .flatten()
     });
+    // Whether the stage's output opens with target lines to fold.
+    let has_target = Memo::new(move |_| {
+        let stage = stage.get();
+        shown.with(|compilation| {
+            compilation
+                .as_ref()
+                .and_then(|compilation| compilation.output(stage))
+                .and_then(|output| target::opening(stage, output))
+                .is_some()
+        })
+    });
     // Whether the source is the lesson that follows one program through
     // every stage.
     let on_path = move || {
@@ -193,11 +206,11 @@ pub fn PipelineView(
     // that failed, it is still worth comparing.
     let other_output = Memo::new(move |_| {
         let stage = stage.get();
-        let headers = headers.get();
+        let unfolded = unfolded.get();
         other.with(|compilation| {
             compilation
                 .as_ref()
-                .is_some_and(|compilation| displayed(stage, compilation, headers).is_some())
+                .is_some_and(|compilation| displayed(stage, compilation, unfolded).is_some())
         })
     });
     let outputs_hidden = Memo::new(move |_| {
@@ -297,12 +310,23 @@ pub fn PipelineView(
                         type="button"
                         class="toggle-chip"
                         hidden=move || stage.get() != Stage::Preprocessor || output.with(Option::is_none)
-                        aria-pressed=move || headers.get().to_string()
+                        aria-pressed=move || unfolded.get().headers.to_string()
                         title="Show the text each #include brought in, or fold it into one line"
-                        on:click=move |_| headers.update(|headers| *headers = !*headers)
+                        on:click=move |_| unfolded.update(|unfolded| unfolded.headers = !unfolded.headers)
                     >
                         <span class="toggle-chip-dot" aria-hidden="true"></span>
                         "Show headers"
+                    </button>
+                    <button
+                        type="button"
+                        class="toggle-chip"
+                        hidden=move || !has_target.get()
+                        aria-pressed=move || unfolded.get().target.to_string()
+                        title="Show the lines that name the target machine and its data layout, or fold them into one line"
+                        on:click=move |_| unfolded.update(|unfolded| unfolded.target = !unfolded.target)
+                    >
+                        <span class="toggle-chip-dot" aria-hidden="true"></span>
+                        "Show target"
                     </button>
                     <button
                         type="button"
@@ -364,7 +388,7 @@ pub fn PipelineView(
                     </div>
                     </div>
                     {move || side_by_side.get().then(|| view! {
-                        <Beside stage optimize other other_links lesson theme pointing headers />
+                        <Beside stage optimize other other_links lesson theme pointing unfolded />
                     })}
                     <footer class="link-legend" hidden=move || !shown_links.with(Links::has_origins)>
                         <span><i class="swatch swatch-link"></i>"came from the line you point at"</span>
@@ -454,26 +478,26 @@ fn Beside(
     lesson: Memo<bool>,
     theme: Signal<&'static str>,
     pointing: Pointing,
-    headers: RwSignal<bool>,
+    unfolded: RwSignal<Unfolded>,
 ) -> impl IntoView {
     let output = Memo::new(move |_| {
         let stage = stage.get();
-        let headers = headers.get();
+        let unfolded = unfolded.get();
         other.with(|compilation| {
             compilation
                 .as_ref()
-                .and_then(|compilation| displayed(stage, compilation, headers))
+                .and_then(|compilation| displayed(stage, compilation, unfolded))
                 .map(|(text, _)| text)
         })
     });
     let text = Signal::derive(move || output.get().unwrap_or_default());
     let line_numbers = Signal::derive(move || {
         let stage = stage.get();
-        let headers = headers.get();
+        let unfolded = unfolded.get();
         other.with(|compilation| {
             compilation
                 .as_ref()
-                .map_or_else(Vec::new, |compilation| gutter(stage, compilation, headers))
+                .map_or_else(Vec::new, |compilation| gutter(stage, compilation, unfolded))
         })
     });
     let layers = Signal::derive(move || -> Vec<Layer> {
@@ -507,7 +531,11 @@ fn Beside(
                 })
                 .collect()
         });
-        vec![("links", linked), ("unclaimed", unclaimed)]
+        vec![
+            ("links", linked),
+            ("stage", output_marks(stage.get(), other, text)),
+            ("unclaimed", unclaimed),
+        ]
     });
     let reveal = Signal::derive(move || {
         let hovered = pointing.line(Side::Source);
@@ -682,7 +710,8 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
 }
 
 /// The marks the output of `stage` carries: where phase 2 spliced each
-/// logical line, and the folded headers of the preprocessed text.
+/// logical line, the folded headers of the preprocessed text, and the IRs'
+/// folded target lines, with what they say on hover.
 fn output_marks(
     stage: Stage,
     compilation: Memo<Option<Compilation>>,
@@ -727,6 +756,23 @@ fn output_marks(
                 .map(|(index, _)| Decoration::line(index + 1, "folded-line"))
                 .collect()
         }),
+        | Stage::Ir | Stage::IrAbi | Stage::Llvm => {
+            let folded = text.with(|text| text.lines().next().is_some_and(target::is_summary));
+            let hover = compilation.with(|compilation| {
+                compilation
+                    .as_ref()?
+                    .output(stage)
+                    .and_then(|output| target::opening(stage, output))
+                    .map(|opening| target::explanation(&opening))
+            });
+            match (folded, hover) {
+                | (true, Some(hover)) => vec![Decoration {
+                    hover: Some(hover),
+                    ..Decoration::line(1, "folded-line")
+                }],
+                | _ => Vec::new(),
+            }
+        },
         | _ => Vec::new(),
     }
 }
@@ -1050,6 +1096,7 @@ mod tests {
     use crate::pipeline::{
         Compilation,
         CompileDiagnostic,
+        Unfolded,
     };
 
     #[test]
@@ -1157,7 +1204,7 @@ mod tests {
                     live=Signal::stored(live)
                     theme=Signal::stored("dark")
                     pointing=Pointing::new()
-                    headers=RwSignal::new(false)
+                    unfolded=RwSignal::new(Unfolded::default())
                     filename=RwSignal::new("program.c".to_owned()).read_only()
                     source=Signal::stored("int main(void) { return 0; }\n".to_owned())
                     on_reveal=Callback::new(|_: usize| {})
