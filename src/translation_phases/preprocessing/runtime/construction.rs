@@ -284,9 +284,13 @@ const PREDEFINED_MACRO_NAMES: [&str; 14] = [
 /// have every extension here; Microsoft's list has only `__TIMESTAMP__` and
 /// TCC has none of these three. Microsoft Learn, "Predefined macros". TCC
 /// also leaves out the optional `__STDC_MB_MIGHT_NEQ_WC__` (`tcc_new` in
-/// TCC 0.9.27's `libtcc.c`).
+/// TCC 0.9.27's `libtcc.c`). Neither `cl` nor clang-cl defines GCC's
+/// `__STRICT_ANSI__` in any mode, and `CMake` reads it to decide whether
+/// the compiler's default language has extensions.
 fn identity_defines(identity: CompilerIdentity, name: &str) -> bool {
     match name {
+        | "__STRICT_ANSI__" =>
+            !matches!(identity, CompilerIdentity::Msvc | CompilerIdentity::ClangCl),
         | "__FILE_NAME__" | "__INCLUDE_LEVEL__" =>
             !matches!(identity, CompilerIdentity::Msvc | CompilerIdentity::Tcc),
         | "__TIMESTAMP__" | "__STDC_MB_MIGHT_NEQ_WC__" =>

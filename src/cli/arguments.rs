@@ -397,6 +397,11 @@ impl Cli {
         };
         let mut failed = false;
         for option in &self.language_option {
+            // An empty `-Wno-` names no group, and Clang passes it over
+            // without a word.
+            if &**option == "-Wno-" {
+                continue;
+            }
             let unknown = match LanguageFlag::parse(option) {
                 | Some(LanguageFlag::UnknownWarning) => true,
                 | Some(LanguageFlag::WarningGroup(group, _)) =>
@@ -1034,8 +1039,10 @@ impl LanguageFlag {
             | "-pedantic-errors" => return Some(Self::PedanticErrors),
             | "-Werror=pedantic" => return Some(Self::PedanticAsError(true)),
             | "-Wno-error=pedantic" => return Some(Self::PedanticAsError(false)),
-            | "-Werror" => return Some(Self::WarningsAsErrors(true)),
-            | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
+            // Clang reads an empty `-Werror=` specifier as `-Werror` itself
+            // (`ProcessWarningOptions` in `Warnings.cpp`).
+            | "-Werror" | "-Werror=" => return Some(Self::WarningsAsErrors(true)),
+            | "-Wno-error" | "-Wno-error=" => return Some(Self::WarningsAsErrors(false)),
             | "-Wall" => return Some(Self::AllWarnings(true)),
             | "-Wno-all" => return Some(Self::AllWarnings(false)),
             | "-Wextra" | "-W" => return Some(Self::ExtraWarnings(true)),
@@ -1320,6 +1327,11 @@ pub(super) struct CliInput {
     /// archives and libraries to link.
     #[clap(conflicts_with = "input")]
     pub(super) input_files: Vec<PathBuf>,
+    /// Link the linker inputs and options alone (-lLIB, -Wl,ARGS), with no
+    /// input file, as GCC and Clang link when the command line names no
+    /// other input (`gcc -Wl,--version`); the personalities pass it.
+    #[clap(long, hide = true)]
+    pub(super) link_only:   bool,
 }
 
 /// The seconds since the Unix epoch that `__DATE__` and `__TIME__` spell,
