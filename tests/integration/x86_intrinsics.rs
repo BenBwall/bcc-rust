@@ -9,7 +9,9 @@
 //! interpreted and compiled through LLVM and the native back end, and must
 //! print GCC's output. `x86_intrinsics_avx2.c` covers the AVX, AVX2, AES-NI
 //! and PCLMULQDQ intrinsics whose builtins lowering expands, against both
-//! GCC's and the pinned Clang's builds, and `avx_target_abi_callee.c` with
+//! GCC's and the pinned Clang's builds, `x86_named_instructions.c` the
+//! named instructions in their SSE and VEX forms and `_xgetbv`, and
+//! `avx_target_abi_callee.c` with
 //! `avx_target_abi_caller.c` the vectors of functions whose `target`
 //! attribute turns AVX on, linked with either compiler's half, as
 //! `avx_target_variadic.c` does for a variadic one.
@@ -65,12 +67,13 @@ mod tests {
     }
 
     /// The AVX, AVX2, AES-NI and PCLMULQDQ intrinsics print what GCC's and
-    /// the pinned Clang's builds print, through LLVM at -O0 and -O2. The
-    /// interpreter runs all but the approximate reciprocals, and the native
-    /// back end all but the named instructions it refuses; each such arm is
-    /// compared with references built with the same macros. A processor
-    /// without AVX2, AES, PCLMULQDQ or SSE4.2 prints "skip" in every build,
-    /// and runs no interpreter comparison, whose reference could not run.
+    /// the pinned Clang's builds print, through LLVM at -O0 and -O2 and
+    /// through the native back end, with and without bcc's optimizer and as
+    /// a direct object. The interpreter runs all but the approximate
+    /// reciprocals, compared with references built without them. A
+    /// processor without AVX2, AES, PCLMULQDQ or SSE4.2 prints "skip" in
+    /// every build, and runs no interpreter comparison, whose reference
+    /// could not run.
     #[test]
     fn avx2_intrinsics_match_gcc_and_clang() {
         if !cfg!(all(
@@ -89,15 +92,7 @@ mod tests {
             let expected = build_and_run(compiler, &source, &[]);
             let skipped = expected == "skip\n";
             let interpreted = ["-DALWAYS_FAST", "-DNO_APPROX"];
-            let arms: [(&[&str], &[&str]); 6] = [
-                (&[], &["-O0"]),
-                (&[], &["-O2"]),
-                (&interpreted, &["--interpret", "--opt=none"]),
-                (&interpreted, &["--interpret", "--opt=bcc"]),
-                (&["-DNO_NAMED"], &["--backend=native"]),
-                (&["-DNO_NAMED"], &["--backend=native", "--opt=bcc"]),
-            ];
-            for (defines, flags) in arms {
+            for (defines, flags) in arms(&interpreted) {
                 let interpreting = flags[0] == "--interpret";
                 if interpreting && skipped {
                     continue;
@@ -108,32 +103,166 @@ mod tests {
                     build_and_run(compiler, &source, defines)
                 };
                 let context = format!("{identity} {defines:?} {flags:?}");
-                let stdout = if interpreting {
-                    let output = bcc(&[&[identity, "-w", &source][..], defines, flags].concat());
-                    assert_eq!(
-                        output.status.code(),
-                        Some(0),
-                        "{context}: {}",
-                        text(&output.stderr)
-                    );
-                    text(&output.stdout)
-                } else {
-                    let executable = temporary("avx2.exe");
-                    let built = bcc(&[
-                        &[identity, "-w", &source, "-o", executable.to_str().unwrap()][..],
-                        defines,
-                        flags,
-                    ]
-                    .concat());
-                    assert!(built.status.success(), "{context}: {}", text(&built.stderr));
-                    let run = run_native(&mut Command::new(&executable)).unwrap();
-                    std::fs::remove_file(&executable).unwrap();
-                    assert_eq!(run.status.code(), Some(0), "{context}");
-                    text(&run.stdout)
-                };
+                let stdout = run_arm(identity, &source, defines, flags, &context);
                 assert_lines(&stdout, &expected, &context);
             }
         }
+    }
+
+    /// The named instructions in their SSE and VEX forms, and `_xgetbv`,
+    /// print what GCC's and the pinned Clang's builds print, in every arm
+    /// of [`arms`]. Without a processor feature they need, which
+    /// `/proc/cpuinfo` lists, the test says so and checks nothing.
+    #[test]
+    fn named_instructions_match_gcc_and_clang() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let flags = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+        let flags: Vec<&str> = flags
+            .lines()
+            .find_map(|line| line.strip_prefix("flags"))
+            .map(|line| line.split_whitespace().collect())
+            .unwrap_or_default();
+        let missing: Vec<&str> = ["aes", "pclmulqdq", "sse4_2", "avx", "xsave"]
+            .into_iter()
+            .filter(|feature| !flags.contains(feature))
+            .collect();
+        if !missing.is_empty() {
+            eprintln!("note: the processor lacks {missing:?}; skipping the named instructions");
+            return;
+        }
+        let source = fixture("x86_named_instructions.c");
+        let mut references = vec![("--compiler-identity=clang", "target/llvm/bin/clang")];
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            references.push(("--compiler-identity=gcc", "gcc"));
+        }
+        for (identity, compiler) in references {
+            let expected = build_and_run(compiler, &source, &[]);
+            for (defines, flags) in arms(&["-DALWAYS_FAST"]) {
+                let context = format!("{identity} {defines:?} {flags:?}");
+                let stdout = run_arm(identity, &source, defines, flags, &context);
+                assert_lines(&stdout, &expected, &context);
+            }
+        }
+    }
+
+    /// The bcc arms of the intrinsic programs, with their extra macros:
+    /// LLVM at -O0 and -O2, the interpreter with `interpreted` (with and
+    /// without bcc's optimizer), and the native back end, with and without
+    /// it and as a direct object.
+    fn arms<'a>(interpreted: &'a [&'a str]) -> [(&'a [&'a str], &'static [&'static str]); 7] {
+        [
+            (&[], &["-O0"]),
+            (&[], &["-O2"]),
+            (interpreted, &["--interpret", "--opt=none"]),
+            (interpreted, &["--interpret", "--opt=bcc"]),
+            (&[], &["--backend=native"]),
+            (&[], &["--backend=native", "--opt=bcc"]),
+            (&[], &["--backend=native", "--native-object"]),
+        ]
+    }
+
+    /// The output of `source` in one arm of [`arms`].
+    fn run_arm(
+        identity: &str,
+        source: &str,
+        defines: &[&str],
+        flags: &[&str],
+        context: &str,
+    ) -> String {
+        if flags[0] == "--interpret" {
+            let output = bcc(&[&[identity, "-w", source][..], defines, flags].concat());
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{context}: {}",
+                text(&output.stderr)
+            );
+            return text(&output.stdout);
+        }
+        let executable = temporary("arm.exe");
+        let built = bcc(&[
+            &[identity, "-w", source, "-o", executable.to_str().unwrap()][..],
+            defines,
+            flags,
+        ]
+        .concat());
+        assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&executable)).unwrap();
+        std::fs::remove_file(&executable).unwrap();
+        assert_eq!(run.status.code(), Some(0), "{context}");
+        text(&run.stdout)
+    }
+
+    /// `_xgetbv` under each identity: Clang's macro names the builtin a
+    /// caller without XSAVE may not call, and GCC's function fails to be
+    /// inlined there; with XSAVE both compile, GCC's returning `long long`
+    /// and Clang's `unsigned long long`. GCC declares it in
+    /// <x86gprintrin.h> as well.
+    #[test]
+    fn xgetbv_follows_each_identity() {
+        let source = temporary("xgetbv.c");
+        std::fs::write(
+            &source,
+            "#include <immintrin.h>
+#ifdef GATED
+unsigned long long f(void) { return              _xgetbv(0); }
+#endif
+__attribute__((target("xsave"))) unsigned long long              g(void) { return _xgetbv(0); }
+#ifdef __clang__
+_Static_assert(             __builtin_types_compatible_p(__typeof__(_xgetbv(0)), unsigned long long),              \"\");
+#else
+_Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)),              long long), \"\");
+#endif
+",
+        )
+        .unwrap();
+        let source = source.to_str().unwrap();
+        for (flags, expected) in [
+            (&["--compiler-identity=gcc"][..], None),
+            (&["--compiler-identity=clang"], None),
+            (&["--compiler-identity=gcc", "-mxsave", "-DGATED"], None),
+            (
+                &["--compiler-identity=gcc", "-DGATED"],
+                Some(
+                    "inlining failed in call to 'always_inline' '_xgetbv': target specific \
+                     option mismatch",
+                ),
+            ),
+            (
+                &["--compiler-identity=clang", "-DGATED"],
+                Some("'__builtin_ia32_xgetbv' needs target feature xsave"),
+            ),
+        ] {
+            let output = bcc(&[&["-c", source, "-o", "/dev/null"][..], flags].concat());
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.success(), expected.is_none(), "{flags:?}: {stderr}");
+            assert!(stderr.contains(expected.unwrap_or("")), "{flags:?}: {stderr}");
+        }
+        let gpr = temporary("xgetbv-gpr.c");
+        std::fs::write(
+            &gpr,
+            "#include <x86gprintrin.h>
+__attribute__((target("xsave"))) long long h(void) {              return _xgetbv(0); }
+",
+        )
+        .unwrap();
+        let gpr = gpr.to_str().unwrap();
+        let gcc = bcc(&["--compiler-identity=gcc", "-c", gpr, "-o", "/dev/null"]);
+        assert!(gcc.status.success(), "{}", text(&gcc.stderr));
+        let clang = bcc(&["--compiler-identity=clang", "-c", gpr, "-o", "/dev/null"]);
+        assert!(
+            text(&clang.stderr).contains("_xgetbv"),
+            "{}",
+            text(&clang.stderr)
+        );
+        std::fs::remove_file(source).unwrap();
+        std::fs::remove_file(gpr).unwrap();
     }
 
     /// External functions whose `target` attribute turns AVX on, in units
