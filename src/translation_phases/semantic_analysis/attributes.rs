@@ -22,6 +22,8 @@
 //! - `written.rs` splits a specifier into attribute entries;
 //! - `catalog.rs` gives every known name its rule;
 //! - `entities.rs` applies entity attributes and finalizes them;
+//! - `nonnull.rs` keeps GNU `nonnull` as GCC and Clang read it, and checks the
+//!   arguments of calls against it;
 //! - `function_target.rs` reads x86 `target` as GCC and Clang do;
 //! - `jumps.rs` forbids jumps into cleanup scopes and indirect jumps across
 //!   them;
@@ -55,6 +57,7 @@ mod layout;
 mod machine_entry;
 mod mangling;
 mod msvc_mangling;
+mod nonnull;
 mod overloads;
 mod predicates;
 mod storage_order;
@@ -344,6 +347,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             if !specifier.recovered {
                 self.entity_attribute_list(subject, specifier);
             }
+        }
+        if let (Subject::Function { binding, .. }, Some(declarator)) = (subject, declarator) {
+            self.keep_parameter_nonnull(binding, declarator);
         }
     }
 

@@ -236,6 +236,11 @@ impl CompilerConfiguration {
             ],
             | DiagnosticGroup::TautologicalConstantCompare =>
                 &[DiagnosticGroup::TautologicalConstantOutOfRangeCompare],
+            | DiagnosticGroup::TautologicalCompare if clang => &[
+                DiagnosticGroup::TautologicalConstantCompare,
+                DiagnosticGroup::TautologicalConstantOutOfRangeCompare,
+                DiagnosticGroup::TautologicalPointerCompare,
+            ],
             | DiagnosticGroup::Shadow => &[
                 DiagnosticGroup::ShadowLocal,
                 DiagnosticGroup::ShadowCompatibleLocal,
@@ -1086,6 +1091,12 @@ diagnostic_groups! {
     TautologicalUnsignedZeroCompare => Some("tautological-unsigned-zero-compare"), Ignored, false;
     /// Clang's constant at the limit of the operand type's range.
     TautologicalTypeLimitCompare => Some("tautological-type-limit-compare"), Ignored, false;
+    /// Clang's pointer that is never null compared with a null pointer, on
+    /// by default.
+    TautologicalPointerCompare => Some("tautological-pointer-compare"), ClangWarning, false;
+    /// Clang's, on by default: holds the constant and pointer groups. GCC's
+    /// group of the same name (`x == x`) has no diagnostic in bcc.
+    TautologicalCompare => Some("tautological-compare"), ClangWarning, false;
     /// A declaration that hides another one in an enclosing scope.
     Shadow => Some("shadow"), Ignored, false;
     /// GCC's `-Wshadow=local`: one that hides a local declaration.
