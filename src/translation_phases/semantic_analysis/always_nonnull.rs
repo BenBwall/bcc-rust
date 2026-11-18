@@ -156,10 +156,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang's check of the pointer `e` converted to `_Bool`, at the token
-    /// `site` the conversion takes its location from.
-    /// C99: §6.3.1.2p1, p. 43; PDF p. 55.
+    /// `site` the conversion takes its location from. Clang looks through
+    /// the parentheses around a converted operand (`CheckBoolLikeConversion`
+    /// and `AnalyzeImplicitConversions` take `IgnoreParenImpCasts`), though
+    /// not around a compared one, so `(p) ? 1 : 0` warns at `p`.
+    /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.5.1p5, p. 69; PDF p. 81.
     pub(super) fn bool_conversion_nonnull(&mut self, e: &'tu Expression<'tu>, site: SourceVectors) {
-        self.always_nonnull(e, None, site);
+        self.always_nonnull(Self::without_parentheses(e), None, site);
     }
 
     /// Clang's `DiagnoseAlwaysNonNullPointer` for the pointer operand `e` of

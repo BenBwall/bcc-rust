@@ -145,4 +145,34 @@ sema-nonnull-compare-clang.c:61:72: warning: comparison of nonnull parameter 'p'
 sema-nonnull-compare-clang.c:61:55: note: declared 'nonnull' here
    61 | void prototype(int *q) { void g(int *p __attribute__((nonnull)), int a[p == 0]); }
       |                                                       ^
-25 warnings generated.
+sema-nonnull-compare-clang.c:66:8: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   66 |   if ((p))
+      |   ~~   ^
+sema-nonnull-compare-clang.c:65:16: note: declared 'nonnull' here
+   65 | __attribute__((nonnull)) int converted_parentheses(int *p) {
+      |                ^
+sema-nonnull-compare-clang.c:70:12: warning: nonnull parameter 'p' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   70 |   return !(p);
+      |          ~ ^
+sema-nonnull-compare-clang.c:65:16: note: declared 'nonnull' here
+   65 | __attribute__((nonnull)) int converted_parentheses(int *p) {
+      |                ^
+sema-nonnull-compare-clang.c:73:9: warning: nonnull function call 'made()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   73 |   if (((made())))
+      |   ~~    ^~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:75:7: warning: comparison of nonnull function call '(made())' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   75 |   if ((made()) == 0)
+      |       ^~~~~~~~    ~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:77:12: warning: nonnull function call 'made()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   77 |   return !(made());
+      |          ~ ^~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+30 warnings generated.

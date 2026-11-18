@@ -79,4 +79,13 @@ sema-null-compare-clang.c:46:10: note: suffix with parentheses to turn this into
 sema-null-compare-clang.c:51:59: warning: comparison of array 'array' equal to a null pointer is always false [-Wtautological-pointer-compare]
    51 | int macros(void) { return ARRAY == 0 || IS_NULL(array) || array == ((void *)0); }
       |                                                           ^~~~~    ~~~~~~~~~~~
-16 warnings generated.
+sema-null-compare-clang.c:55:8: warning: address of array 'array' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   55 |   if ((array))
+      |   ~~   ^~~~~
+sema-null-compare-clang.c:57:10: warning: address of 's' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   57 |   if (!(&s))
+      |       ~  ^
+sema-null-compare-clang.c:59:16: warning: address of array 'sp->member' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   59 |   return ((sp->member)) ? 3 : 4;
+      |            ~~~~^~~~~~   ~
+19 warnings generated.

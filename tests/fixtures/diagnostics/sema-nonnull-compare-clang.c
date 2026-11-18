@@ -60,3 +60,19 @@ int other(int *p, int *q) { return q == 0; }
 __attribute__((nonnull)) void shadowed(int *p) { void g(int *p, int a[p == 0]); }
 void prototype(int *q) { void g(int *p __attribute__((nonnull)), int a[p == 0]); }
 void file_scope(int *p __attribute__((nonnull)), int a[p == 0]);
+
+/* A conversion to _Bool looks through parentheses; a comparison only to a call. */
+__attribute__((nonnull)) int converted_parentheses(int *p) {
+  if ((p))
+    return 1;
+  if ((p) == 0)
+    return 2;
+  return !(p);
+}
+int parenthesized_calls(void) {
+  if (((made())))
+    return 1;
+  if ((made()) == 0)
+    return 2;
+  return !(made());
+}

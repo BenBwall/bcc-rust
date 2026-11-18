@@ -49,3 +49,12 @@ _Bool converted(void) {
 #define ARRAY array
 #define IS_NULL(x) ((x) == 0)
 int macros(void) { return ARRAY == 0 || IS_NULL(array) || array == ((void *)0); }
+
+/* A conversion to _Bool looks through parentheses. */
+int parenthesized(void) {
+  if ((array))
+    return 1;
+  if (!(&s))
+    return 2;
+  return ((sp->member)) ? 3 : 4;
+}
