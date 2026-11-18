@@ -357,6 +357,13 @@ fn a_return_ends_objects_whose_declarations_were_never_reached() {
         })
         .collect();
     assert_eq!(ended, [("c", true), ("a", true), ("b", false)]);
+    assert!(
+        returned.event.explanation.contains(
+            "`b` existed from its block's opening brace, though its declaration was never reached."
+        ),
+        "{}",
+        returned.event.explanation
+    );
 }
 
 #[test]

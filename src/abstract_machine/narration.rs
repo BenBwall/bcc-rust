@@ -4291,6 +4291,25 @@ impl Machine {
                 " Frame #{frame} is destroyed, ending the lifetime of {names}."
             );
         }
+        // An object whose block began but whose declaration was never
+        // reached ends too: it lived from the brace (C99 §6.2.4p5).
+        let unreached: Vec<usize> = ended
+            .iter()
+            .copied()
+            .filter(|&id| !self.state.objects[id - 1].declared)
+            .collect();
+        if !unreached.is_empty() {
+            let (from, was) = if unreached.len() == 1 {
+                ("its block's opening brace", "its declaration was")
+            } else {
+                ("their blocks' opening braces", "their declarations were")
+            };
+            let _ = write!(
+                text,
+                " {} existed from {from}, though {was} never reached.",
+                self.names(&unreached)
+            );
+        }
         let mut cited = if call.is_some() {
             vec![clauses::RETURN, clauses::AUTOMATIC_LIFETIME]
         } else {
