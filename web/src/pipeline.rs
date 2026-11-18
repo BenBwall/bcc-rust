@@ -193,6 +193,14 @@ impl FunctionLines {
 }
 
 impl Compilation {
+    /// The source lines of the function definition holding `line`, if any.
+    pub fn function_around(&self, line: usize) -> Option<(usize, usize)> {
+        self.functions
+            .iter()
+            .map(|function| function.source)
+            .find(|&(first, last)| (first..=last).contains(&line))
+    }
+
     /// Where each line of a back-end `stage`'s output came from; empty for
     /// the stages that place their lines otherwise.
     pub fn origins(&self, stage: Stage) -> &[LineOrigin] {
@@ -1168,7 +1176,70 @@ impl Links {
         self.exact.is_some() && !self.origins.is_empty()
     }
 
+    /// The run of output lines to bring into view for `line` of the source:
+    /// from the one [`Links::first_output_for`] picks, through the linked
+    /// lines that follow it without a gap.
+    pub fn run_for(&self, line: usize) -> Option<(usize, usize)> {
+        let first = self.first_output_for(line)?;
+        let outputs = self.outputs_for(line);
+        let mut last = first;
+        while outputs.contains(&(last + 1)) {
+            last += 1;
+        }
+        Some((first, last))
+    }
+
+    /// The reader's place in a view whose first line in view is `top`, read
+    /// at `line` (the top, or the line under the pointer): the first source
+    /// line it came from, or that of the nearest line below it that has one
+    /// (a label, a directive, a blank line has none). At the view's start,
+    /// the place is the start. `None` when nothing near links to the source.
+    pub fn place(&self, top: usize, line: usize) -> Option<Place> {
+        if top <= 1 && line <= 1 {
+            return Some(Place::default());
+        }
+        (line..line + PLACE_LOOKAHEAD).find_map(|at| {
+            let source = *self.sources_for(at).first()?;
+            Some(Place {
+                source,
+                row: at.saturating_sub(top),
+            })
+        })
+    }
+
+    /// The line to show first so that `place` keeps its row: above the first
+    /// output line here from its source line, or, where this view has none
+    /// (a line the optimizer removed, a declaration with no code), from the
+    /// nearest source line after it, then before it, in `function`, the
+    /// source lines of the function holding it. The view's start when none
+    /// of them has a line here.
+    pub fn top_for(&self, place: Place, function: Option<(usize, usize)>) -> usize {
+        if place.source == 0 {
+            return 1;
+        }
+        let (first, last) = function.unwrap_or((place.source, place.source));
+        (place.source..=last.max(place.source))
+            .chain((first..place.source).rev())
+            .find_map(|line| self.first_output_for(line))
+            .map_or(1, |line| line.saturating_sub(place.row).max(1))
+    }
 }
+
+/// Where the reader is in an output view, in terms that hold in any other
+/// view of the same source: a source line that the view shows `row` lines
+/// below its first line in view. A `source` of 0 is the view's start. The
+/// page keeps it when the view changes under the reader (another level,
+/// another stage, an edit), so they stay in the same code rather than at the
+/// same scroll offset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Place {
+    pub source: usize,
+    pub row:    usize,
+}
+
+/// How far below its first line in view a place looks for a line linked to
+/// the source: about a screenful.
+const PLACE_LOOKAHEAD: usize = 24;
 
 /// What the reader unfolded of the views that fold lines they rarely read.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -30,6 +30,7 @@ use crate::{
         Compilation,
         CompileDiagnostic,
         Links,
+        Place,
         Stage,
         Unfolded,
         displayed,
@@ -165,9 +166,13 @@ pub fn PipelineView(
     let reveal = Signal::derive(move || {
         let hovered = pointing.line(Side::Source);
         (hovered > 0)
-            .then(|| links.with(|links| links.first_output_for(hovered)))
+            .then(|| links.with(|links| links.run_for(hovered)))
             .flatten()
     });
+    // Where the reader is in the code, which the outputs keep as the level,
+    // the stage or the program changes under them.
+    let place = StoredValue::new(None::<Place>);
+    let keeper = PlaceKeeper::new(place, shown_links, shown);
     // Whether the stage's output opens with target lines to fold.
     let has_target = Memo::new(move |_| {
         let stage = stage.get();
@@ -199,7 +204,10 @@ pub fn PipelineView(
             }),
         }
     };
-    let on_hover = Callback::new(move |line| pointing.hover(Side::Output, line));
+    let on_hover = Callback::new(move |line| {
+        pointing.hover(Side::Output, line);
+        keeper.pointer(line);
+    });
     let on_cursor = Callback::new(move |line| pointing.cursor(Side::Output, line));
     let side_by_side = Memo::new(move |_| compare.get() && stage.get().differs_by_level());
     // Whether the stage has output at the other level: shown beside a level
@@ -382,13 +390,15 @@ pub fn PipelineView(
                         decorations=layers
                         on_hover_line=on_hover
                         on_cursor_line=on_cursor
-                        reveal
+                        reveal_linked=reveal
+                        on_top_line=Callback::new(move |line| keeper.top_line(line))
+                        keep_place=Callback::new(move |()| keeper.first_line())
                         line_numbers
                     />
                     </div>
                     </div>
                     {move || side_by_side.get().then(|| view! {
-                        <Beside stage optimize other other_links lesson theme pointing unfolded />
+                        <Beside stage optimize other other_links lesson theme pointing unfolded place />
                     })}
                     <footer class="link-legend" hidden=move || !shown_links.with(Links::has_origins)>
                         <span><i class="swatch swatch-link"></i>"came from the line you point at"</span>
@@ -479,6 +489,8 @@ fn Beside(
     theme: Signal<&'static str>,
     pointing: Pointing,
     unfolded: RwSignal<Unfolded>,
+    /// The reader's place, which this level's output keeps too.
+    place: StoredValue<Option<Place>>,
 ) -> impl IntoView {
     let output = Memo::new(move |_| {
         let stage = stage.get();
@@ -540,10 +552,14 @@ fn Beside(
     let reveal = Signal::derive(move || {
         let hovered = pointing.line(Side::Source);
         (hovered > 0)
-            .then(|| other_links.with(|links| links.first_output_for(hovered)))
+            .then(|| other_links.with(|links| links.run_for(hovered)))
             .flatten()
     });
-    let on_hover = Callback::new(move |line| pointing.hover_beside(line));
+    let keeper = PlaceKeeper::new(place, other_links, other);
+    let on_hover = Callback::new(move |line| {
+        pointing.hover_beside(line);
+        keeper.pointer(line);
+    });
     let on_cursor = Callback::new(move |line| pointing.cursor_beside(line));
     // An editor disposed under the pointer or with the focus reports no
     // leaving.
@@ -578,11 +594,99 @@ fn Beside(
                     decorations=layers
                     on_hover_line=on_hover
                     on_cursor_line=on_cursor
-                    reveal
+                    reveal_linked=reveal
+                    on_top_line=Callback::new(move |line| keeper.top_line(line))
+                    keep_place=Callback::new(move |()| keeper.first_line())
                     line_numbers
                 />
             </div>
         </div>
+    }
+}
+
+/// Where the reader is in one output editor: its first line in view and the
+/// line under the pointer, from which it keeps the reader's place, shared
+/// by both levels' outputs. When the editor's text changes (another level,
+/// another stage, an edit), it opens at that place in the new text.
+#[derive(Clone, Copy)]
+struct PlaceKeeper {
+    place:       StoredValue<Option<Place>>,
+    top:         StoredValue<usize>,
+    pointed:     StoredValue<usize>,
+    /// Whether the editor just scrolled to the place itself: its report of
+    /// that scroll leaves the place as it was, so that a round trip through
+    /// a view without the place's line (`-O2` folded it away) comes back to
+    /// it, not to where the other view had to stand in for it.
+    placed:      StoredValue<bool>,
+    /// The links of the text on screen, and its compilation.
+    links:       Memo<Links>,
+    compilation: Memo<Option<Compilation>>,
+}
+
+impl PlaceKeeper {
+    fn new(
+        place: StoredValue<Option<Place>>,
+        links: Memo<Links>,
+        compilation: Memo<Option<Compilation>>,
+    ) -> Self {
+        Self {
+            place,
+            top: StoredValue::new(1),
+            pointed: StoredValue::new(0),
+            placed: StoredValue::new(false),
+            links,
+            compilation,
+        }
+    }
+
+    /// The editor scrolled: `line` is its first line in view.
+    fn top_line(self, line: usize) {
+        self.top.set_value(line.max(1));
+        if self.placed.get_value() {
+            self.placed.set_value(false);
+            return;
+        }
+        self.note();
+    }
+
+    /// The pointer moved over `line` of the editor (0 when it left).
+    fn pointer(self, line: usize) {
+        self.pointed.set_value(line);
+        self.note();
+    }
+
+    /// Read the place from what the editor shows: the line under the
+    /// pointer, else the first line in view.
+    fn note(self) {
+        let top = self.top.get_value();
+        let line = match self.pointed.get_value() {
+            | 0 => top,
+            | line => line.max(top),
+        };
+        if let Some(place) = self.links.with_untracked(|links| links.place(top, line)) {
+            self.place.set_value(Some(place));
+        }
+    }
+
+    /// The line the editor shows first in its new text (0: keep the scroll
+    /// offset, before the reader has a place). The pointer's line in the old
+    /// text means nothing in the new one, so it is forgotten until the
+    /// pointer moves.
+    fn first_line(self) -> usize {
+        self.pointed.set_value(0);
+        let Some(place) = self.place.get_value() else {
+            return 0;
+        };
+        let function = self.compilation.with_untracked(|compilation| {
+            compilation
+                .as_ref()
+                .and_then(|compilation| compilation.function_around(place.source))
+        });
+        let top = self
+            .links
+            .with_untracked(|links| links.top_for(place, function));
+        self.placed.set_value(true);
+        top
     }
 }
 

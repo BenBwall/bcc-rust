@@ -313,6 +313,100 @@ fn folded_target_lines_keep_the_links_below_them() {
     );
 }
 
+/// A view that changes under the reader opens at the same code: a place read
+/// in one view (a source line and its row below the first line in view) puts
+/// that source line's output at the same row in the other.
+#[test]
+fn a_place_in_one_view_opens_the_same_code_in_another() {
+    let compilation = targeted();
+    let shown = Unfolded {
+        target: true,
+        ..Unfolded::default()
+    };
+    let full = links(Stage::Ir, &compilation, TARGETED_SOURCE, shown);
+    let folded = links(
+        Stage::Ir,
+        &compilation,
+        TARGETED_SOURCE,
+        Unfolded::default(),
+    );
+    let function = compilation.function_around(2);
+    assert_eq!(function, Some((1, 3)));
+    // `v1 = imul` first in view: line 6 here, line 5 there.
+    let place = full.place(6, 6).unwrap();
+    assert_eq!(
+        place,
+        Place {
+            source: 2,
+            row:    0,
+        }
+    );
+    assert_eq!(folded.top_for(place, function), 5);
+    // A label first in view has no source line: the line below it places it,
+    // one row down.
+    let place = full.place(5, 5).unwrap();
+    assert_eq!(
+        place,
+        Place {
+            source: 2,
+            row:    1,
+        }
+    );
+    assert_eq!(folded.top_for(place, function), 4);
+    // The line under the pointer keeps its row.
+    let place = full.place(4, 7).unwrap();
+    assert_eq!(
+        place,
+        Place {
+            source: 2,
+            row:    3,
+        }
+    );
+    assert_eq!(folded.top_for(place, function), 2);
+    // At the start, the other view opens at its start.
+    assert_eq!(full.place(1, 1), Some(Place::default()));
+    assert_eq!(folded.top_for(Place::default(), function), 1);
+    // Nothing near links: no place.
+    assert_eq!(Links::default().place(3, 3), None);
+}
+
+/// A source line with no output in the other view (a declaration, a line the
+/// optimizer removed) opens at the nearest line of its function that has one.
+#[test]
+fn a_place_without_code_falls_to_the_next_line_of_its_function() {
+    let source = "int f(int x) {\n    int y = x;\n    return x;\n}\n";
+    let none = LineOrigin::default();
+    let code = LineOrigin {
+        line: 3,
+        call: 0,
+        code: true,
+    };
+    let compilation = Compilation {
+        ir: Some(
+            "function @f(i32) -> i32 {\nblock0(v0: i32):\n    v1 = copy v0\n    return v1\n}\n"
+                .into(),
+        ),
+        ir_lines: vec![none, none, code, code, none],
+        functions: vec![FunctionLines {
+            name: "f".into(),
+            source: (1, 4),
+            ir: Some((1, 5)),
+            ..FunctionLines::default()
+        }],
+        ..Compilation::default()
+    };
+    let ir = links(Stage::Ir, &compilation, source, Unfolded::default());
+    assert_eq!(ir.outputs_for(2), Vec::<usize>::new());
+    let place = Place {
+        source: 2,
+        row:    1,
+    };
+    assert_eq!(ir.top_for(place, compilation.function_around(2)), 2);
+    // The run of linked lines to bring into view for line 3.
+    assert_eq!(ir.run_for(3), Some((3, 4)));
+    assert_eq!(ir.run_for(2), None);
+}
+
 /// Each lesson's recorded lines match its LLVM IR, name lines of its source,
 /// and mark exactly the instructions as code.
 #[test]
