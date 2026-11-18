@@ -99,15 +99,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             let binding = cfg.vars[var as usize];
             let self_init = uses.self_init[var as usize];
-            let mut sorted: ArenaVec<'_, Use<'tu>> = ArenaVec::new_in(self.scratch);
+            // Each use with its place in the order the pass found them.
+            let mut sorted: ArenaVec<'_, (usize, Use<'tu>)> = ArenaVec::new_in(self.scratch);
             sorted.extend(
                 uses.found
                     .iter()
                     .filter(|&&(v, _)| v == var)
-                    .map(|&(_, u)| u),
+                    .map(|&(_, u)| u)
+                    .enumerate(),
             );
             if self_init
-                && sorted.iter().any(|u| u.kind >= Kind::AfterDecl)
+                && sorted.iter().any(|(_, u)| u.kind >= Kind::AfterDecl)
                 && let Some(user) = declared
                     .initializer
                     .and_then(|initializer| self.self_initializer(initializer, binding))
@@ -129,17 +131,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     continue;
                 }
             }
-            // Direct uses first, the most certain first, then by place.
-            sorted.sort_by_key(|u| {
+            // Direct uses first, the most certain first, then by place, and
+            // uses at one place in the order found. The standard library's
+            // stable sort would take its scratch space from the global heap.
+            sorted.sort_unstable_by_key(|&(found, u)| {
                 let at = self.context.expansion_location(u.user.source_vectors);
                 (
                     u.const_ptr,
                     std::cmp::Reverse(u.kind),
                     at.source_file_index,
                     at.index,
+                    found,
                 )
             });
-            for u in &sorted {
+            for (_, u) in &sorted {
                 let reported = if u.const_ptr {
                     let text = self.variable_words(
                         binding,

@@ -1,0 +1,13 @@
+sema-uninitialized-many-uses-clang.c:6:7: warning: variable 'x' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+    6 |   if (a) x = 1;
+      |       ^
+sema-uninitialized-many-uses-clang.c:7:7: note: uninitialized use occurs here
+    7 |   use(x); use(x); use(x); use(x); use(x); use(x); use(x); use(x); use(x); use(x); use(x); use(x);
+      |       ^
+sema-uninitialized-many-uses-clang.c:6:3: note: remove the 'if' if its condition is always true
+    6 |   if (a) x = 1;
+      |   ^~~~~~
+sema-uninitialized-many-uses-clang.c:5:8: note: initialize the variable 'x' to silence this warning
+    5 |   int x;
+      |        ^
+1 warning generated.

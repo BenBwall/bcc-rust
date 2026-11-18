@@ -359,6 +359,34 @@ mod tests {
         );
     }
 
+    /// Compiling every golden fixture under its own options, before the
+    /// diagnostics are reported, allocates only in arenas: this reaches the
+    /// analyses that run only when a fixture's warnings are on, which the
+    /// measured benchmark inputs leave off.
+    #[test]
+    fn compiling_golden_fixtures_makes_no_global_allocations() {
+        let mut failures = Vec::new();
+        for fixture in golden_fixtures() {
+            for (_, (calls, bytes)) in compile(&fixture, &[CompileStep::Parse], sites_requested()) {
+                if calls != 0 {
+                    failures.push(format!(
+                        "{}: {calls} global allocations, {bytes} bytes",
+                        fixture.display()
+                    ));
+                }
+            }
+        }
+        for (site, (calls, _)) in take_sites() {
+            println!("{calls:>6}  {site}");
+        }
+        assert!(
+            failures.is_empty(),
+            "compiling allocated outside the arenas; rerun with BCC_ALLOCATION_SITES=1 and \
+             --nocapture to print their sites:\n{}",
+            failures.join("\n")
+        );
+    }
+
     /// Prints where global allocations come from, per compile step, when
     /// `BCC_ALLOCATION_SITES=1`; otherwise does nothing.
     #[test]
