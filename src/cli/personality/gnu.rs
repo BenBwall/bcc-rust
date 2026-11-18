@@ -353,6 +353,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         common.push(option);
     }
     let links = state.stages.is_empty() && !state.syntax_only;
+    // Neither driver links `libm` unless `-lm` asks for it, which Autoconf's
+    // `AC_SEARCH_LIBS([sqrt], [m])` tells apart.
+    if links {
+        common.push("--no-default-libm".into());
+    }
     let mut steps = Vec::new();
     let mut temporary = None;
     for job in jobs {
@@ -397,7 +402,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 bcc.push(option);
             }
         }
-        if links && state.outputs.is_empty() && !state.inputs.is_empty() {
+        // A linker input alone is an input that links, as in both drivers
+        // (`gcc -Wl,--version`, which Meson runs to name the linker).
+        if links && state.inputs.is_empty() {
+            bcc.push("--link-only".into());
+        }
+        if links && state.outputs.is_empty() && has_inputs {
             bcc.push("--default-output".into());
             bcc.push("-o".into());
             bcc.push(
@@ -441,17 +451,22 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
         plan.steps.push(Step::Print { text, stderr: true });
-        if state.dry_run || state.inputs.is_empty() {
+        if state.dry_run || !has_inputs {
             return Ok(plan);
         }
     }
-    if state.inputs.is_empty() {
+    if !has_inputs {
         if personality == Personality::Gcc {
             invocation.fatal(format_args!("no input files"));
         } else {
             invocation.error(format_args!("no input files"));
         }
         return Err(MainError::Reported(1));
+    }
+    // Linker inputs alone leave a stage before the link nothing to do: GCC
+    // succeeds silently, and Clang after its unused-input warnings.
+    if state.inputs.is_empty() && !links {
+        return Ok(plan);
     }
     for mut bcc in steps {
         if state.verbose {

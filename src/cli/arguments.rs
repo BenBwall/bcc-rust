@@ -1320,6 +1320,11 @@ pub(super) struct CliInput {
     /// archives and libraries to link.
     #[clap(conflicts_with = "input")]
     pub(super) input_files: Vec<PathBuf>,
+    /// Link the linker inputs and options alone (-lLIB, -Wl,ARGS), with no
+    /// input file, as GCC and Clang link when the command line names no
+    /// other input (`gcc -Wl,--version`); the personalities pass it.
+    #[clap(long, hide = true)]
+    pub(super) link_only:   bool,
 }
 
 /// The seconds since the Unix epoch that `__DATE__` and `__TIME__` spell,

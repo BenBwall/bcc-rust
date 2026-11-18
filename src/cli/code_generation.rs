@@ -398,6 +398,11 @@ pub(super) struct CodeGeneration {
     /// the personalities pass it.
     #[arg(long, hide = true)]
     pub(super) link_fast_math_runtime: bool,
+    /// Link the C library's math functions into a Linux executable only
+    /// when -lm asks for them, as the GCC, Clang and TCC drivers do, rather
+    /// than always; the personalities pass it.
+    #[arg(long, hide = true)]
+    pub(super) no_default_libm: bool,
     /// Select the code generator for -o and --emit=asm: LLVM through its C
     /// API, or bcc's own x86-64 back end, which refuses what it does not
     /// support yet.

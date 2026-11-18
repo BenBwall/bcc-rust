@@ -168,10 +168,12 @@ pub(super) fn ordered_inputs<'a>(
             }),
         }
     }
-    if inputs.iter().all(|input| {
-        matches!(input, Input::Link(option)
-        if option.to_string_lossy().starts_with('-'))
-    }) {
+    if !args.input.link_only
+        && inputs.iter().all(|input| {
+            matches!(input, Input::Link(option)
+            if option.to_string_lossy().starts_with('-'))
+        })
+    {
         return Err(MainError::Driver("no input files"));
     }
     Ok(inputs)
