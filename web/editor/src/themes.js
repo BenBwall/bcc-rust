@@ -3,8 +3,8 @@
 // themes are dark; the low-light screen is a shade deeper. Each token kind
 // has one colour in every language, few and muted, as on a hardware
 // sequencer's screen: keywords and instructions warm, types blue, values
-// teal, numbers ochre, strings green, labels khaki, registers pink, the rest
-// off-white and grey. Kinds that sit side by side in a listing (a type and
+// teal, numbers ochre, strings green, labels khaki, registers pink, the
+// names of functions in the listings orchid, the rest off-white and grey. Kinds that sit side by side in a listing (a type and
 // the value it types, a register and a jump's label, a label and a number)
 // differ in hue, at least 12 apart in CIEDE2000, and every colour is at
 // least 6.8:1 on the screen.
@@ -18,6 +18,9 @@ const screen = {
   number: '#e8b45c',
   string: '#9fd49a',
   function: '#f2f2ec',
+  // A function's name where a listing defines or calls it (`@main`,
+  // `main:`): at least 18 apart from every other colour, 7.8:1 on the screen.
+  functionName: '#ee78d6',
   variable: '#7fd9d9',
   slot: '#c9b3ff',
   label: '#f0e68c',
@@ -51,6 +54,7 @@ function rules(palette) {
     { token: 'string', foreground: strip(palette.string) },
     { token: 'string.escape', foreground: strip(palette.number) },
     { token: 'function', foreground: strip(palette.function) },
+    { token: 'function.name', foreground: strip(palette.functionName) },
     { token: 'variable', foreground: strip(palette.variable) },
     { token: 'variable.slot', foreground: strip(palette.slot) },
     { token: 'label', foreground: strip(palette.label) },

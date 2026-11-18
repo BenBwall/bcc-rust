@@ -86,6 +86,10 @@ const bccIr = {
     root: [
       [/;.*$/, 'comment'],
       [/"([^"\\]|\\.)*"/, 'string'],
+      // A function's name, where it is defined, declared or called
+      // (`function @main(`, `call @bump(v15)`), stands out; a global's
+      // (`@counter`) does not.
+      [/@[\w.$]+(?=\()/, 'function.name'],
       [/@[\w.$]+/, 'function'],
       [/\bblock\d+\b/, 'label'],
       [/\bslot\d+\b/, 'variable.slot'],
@@ -128,6 +132,7 @@ const llvm = {
       [/;.*$/, 'comment'],
       [/"([^"\\]|\\.)*"/, 'string'],
       [/![\w.]+/, 'keyword.metadata'],
+      [/@[\w.$]+(?=\()/, 'function.name'],
       [/@[\w.$]+/, 'function'],
       // A block named as a branch's target, or as a phi's predecessor
       // (`[ %v1, %block0 ]`), is a label, as where it is defined.
@@ -150,10 +155,12 @@ const llvm = {
 };
 
 // AT&T syntax: `movl $2, 0(%rsp)`, `.LBB1_0:`, `.cfi_offset %rbx, -16`.
-// Monarch keeps state across lines, so these grammars use one root state and
-// anchor the line-leading forms with `^`. A symbol an instruction names (a
-// jump's `.LBB1_4`, a call's `bump`) is the label it stands for, coloured as
-// where that label is defined.
+// Monarch keeps state across lines, so these grammars anchor the
+// line-leading forms with `^`. A symbol an instruction names (a jump's
+// `.LBB1_4`) is the label it stands for, coloured as where that label is
+// defined; a function's name (`main:`, a call's `bump`) has a colour of its
+// own, as in the IR.
+const callee = /[A-Za-z_][\w.$]*(?:@[A-Za-z]+)?/.source;
 const operands = [
   [/%[a-z0-9]+/, 'register'],
   [/\$-?(0x[0-9a-fA-F]+|\d+)/, 'number.immediate'],
@@ -169,12 +176,22 @@ const asm = {
   tokenizer: {
     root: [
       [/#.*$/, 'comment'],
+      // A data object's label is named by the `.type` line before it
+      // (Monarch reads `@@` as a literal `@`).
+      [/^\s*\.type\s+[\w.$]+\s*,\s*@@object.*$/, { token: 'keyword.directive', next: '@object' }],
+      // Local labels start with a dot; any other is a function's.
+      [/^[A-Za-z_][\w$]*:/, 'function.name'],
       [/^[\w.$]+:/, 'label'],
       // An assembler directive (`.cfi_offset %rbp, -16`) is muted whole, so
       // the instructions stand out.
       [/^\s*\.\w+.*$/, 'keyword.directive'],
+      [new RegExp(`^(\\s*)(callq?)(\\s+)(${callee})`), ['', 'keyword.instruction', '', 'function.name']],
       [/^\s*[a-z][a-z0-9]*/, 'keyword.instruction'],
       ...operands,
+    ],
+    object: [
+      [/^[\w.$]+:/, { token: 'label', next: '@pop' }],
+      { include: '@root' },
     ],
   },
 };
@@ -185,7 +202,11 @@ const objdump = {
   defaultToken: '',
   tokenizer: {
     root: [
-      [/^<[^>]+>:/, 'label'],
+      [/^<[^>]+>:/, 'function.name'],
+      [
+        new RegExp(`^(\\s*[0-9a-f]+)(\\s+)((?:[0-9a-f]{2} )*[0-9a-f]{2})(\\s+)(callq?)(\\s+)(${callee})`),
+        ['comment.address', '', 'number.bytes', '', 'keyword.instruction', '', 'function.name'],
+      ],
       [
         /^(\s*[0-9a-f]+)(\s+)((?:[0-9a-f]{2} )*[0-9a-f]{2})(\s+)([a-z][a-z0-9]*)/,
         ['comment.address', '', 'number.bytes', '', 'keyword.instruction'],
