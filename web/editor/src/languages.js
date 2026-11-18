@@ -72,9 +72,14 @@ const bccIr = {
   defaultToken: '',
   brackets,
   keywords: [
-    'function', 'external', 'internal', 'target', 'triple', 'datalayout', 'abi', 'lowered',
-    'align', 'noundef', 'nsw', 'nuw', 'inbounds', 'exact', 'signext', 'zeroext', 'sret',
-    'byval', 'global', 'constant', 'declare',
+    'function', 'target', 'triple', 'datalayout', 'abi', 'lowered', 'global', 'constant',
+    'declare', 'bytes',
+  ],
+  // What qualifies a function or an instruction, set back from the
+  // instruction itself.
+  modifiers: [
+    'external', 'internal', 'align', 'noundef', 'nsw', 'nuw', 'inbounds', 'exact', 'signext',
+    'zeroext', 'sret', 'byval',
   ],
   instructions: ['return', 'jump', 'brif', 'br_table', 'call', 'unreachable', 'trap'],
   tokenizer: {
@@ -85,11 +90,13 @@ const bccIr = {
       [/\bblock\d+\b/, 'label'],
       [/\bslot\d+\b/, 'variable.slot'],
       [/\bv\d+\b/, 'variable'],
-      [/(=\s*)([a-z_]+)((?:\.[a-z0-9]+)?)/, ['operator', 'keyword.instruction', 'type']],
-      [/^(\s+)([a-z_]+)((?:\.[a-z0-9]+)?)(?=\s)/, ['', 'keyword.instruction', 'type']],
+      [/(=\s*)([a-z_]+)((?:\.[a-z0-9]+)?)/, ['operator', { cases: { '@keywords': 'keyword', '@modifiers': 'keyword.modifier', '@default': 'keyword.instruction' } }, 'type']],
+      [/^(\s+)([a-z_]+)((?:\.[a-z0-9]+)?)(?=\s)/, ['', { cases: { '@keywords': 'keyword', '@modifiers': 'keyword.modifier', '@default': 'keyword.instruction' } }, 'type']],
       [/\b(i1|i8|i16|i32|i64|i128|f32|f64|ptr|void)\b/, 'type'],
-      [/\b(eq|ne|slt|sle|sgt|sge|ult|ule|ugt|uge)\b/, 'keyword.condition'],
-      [/[a-z_]\w*/, { cases: { '@instructions': 'keyword.instruction', '@keywords': 'keyword', '@default': 'identifier' } }],
+      [/\b(eq|ne|slt|sle|sgt|sge|ult|ule|ugt|uge|oeq|one|olt|ole|ogt|oge|ord|uno|ueq|une)\b/, 'keyword.condition'],
+      // A floating constant's bits, `0x401C000000000000`.
+      [/-?0x[0-9a-fA-F]+/, 'number'],
+      [/[a-z_]\w*/, { cases: { '@instructions': 'keyword.instruction', '@keywords': 'keyword', '@modifiers': 'keyword.modifier', '@default': 'identifier' } }],
       [/-?\d+/, 'number'],
       [/->|[=:,]/, 'operator'],
       [/[{}()[\]]/, '@brackets'],
@@ -102,15 +109,19 @@ const llvm = {
   brackets: [...brackets, { open: '<', close: '>', token: 'delimiter.angle' }],
   keywords: [
     'define', 'declare', 'target', 'triple', 'datalayout', 'source_filename', 'global',
-    'constant', 'private', 'internal', 'external', 'dso_local', 'noundef', 'nsw', 'nuw',
-    'inbounds', 'align', 'label', 'to', 'x', 'zeroinitializer', 'undef', 'poison', 'null',
-    'true', 'false', 'signext', 'zeroext', 'nonnull', 'tail', 'attributes', 'unnamed_addr',
+    'constant', 'label', 'to', 'x', 'zeroinitializer', 'undef', 'poison', 'null', 'true',
+    'false', 'attributes',
+  ],
+  modifiers: [
+    'private', 'internal', 'external', 'dso_local', 'noundef', 'nsw', 'nuw', 'inbounds',
+    'align', 'signext', 'zeroext', 'nonnull', 'tail', 'unnamed_addr',
   ],
   instructions: [
     'ret', 'br', 'switch', 'unreachable', 'add', 'sub', 'mul', 'sdiv', 'udiv', 'srem', 'urem',
     'shl', 'lshr', 'ashr', 'and', 'or', 'xor', 'alloca', 'load', 'store', 'getelementptr',
     'trunc', 'zext', 'sext', 'ptrtoint', 'inttoptr', 'bitcast', 'icmp', 'fcmp', 'phi', 'call',
-    'select', 'freeze', 'fadd', 'fsub', 'fmul', 'fdiv',
+    'select', 'freeze', 'fadd', 'fsub', 'fmul', 'fdiv', 'frem', 'fneg', 'sitofp', 'uitofp',
+    'fptosi', 'fptoui', 'fpext', 'fptrunc',
   ],
   tokenizer: {
     root: [
@@ -118,12 +129,19 @@ const llvm = {
       [/"([^"\\]|\\.)*"/, 'string'],
       [/![\w.]+/, 'keyword.metadata'],
       [/@[\w.$]+/, 'function'],
+      // A block named as a branch's target, or as a phi's predecessor
+      // (`[ %v1, %block0 ]`), is a label, as where it is defined.
+      [/(label)(\s+)(%[\w.$]+)/, ['keyword', '', 'label']],
+      [/%[\w.$]+(?=\s*\])/, 'label'],
       [/%[\w.$]+/, 'variable'],
       [/^[\w.$]+:/, 'label'],
       [/\b(i\d+|ptr|void|half|float|double)\b/, 'type'],
-      [/\b(eq|ne|slt|sle|sgt|sge|ult|ule|ugt|uge)\b/, 'keyword.condition'],
+      [/\b(eq|ne|slt|sle|sgt|sge|ult|ule|ugt|uge|oeq|one|olt|ole|ogt|oge|ord|uno|ueq|une)\b/, 'keyword.condition'],
       [/#\d+/, 'keyword.metadata'],
-      [/[a-z_][\w.]*/, { cases: { '@instructions': 'keyword.instruction', '@keywords': 'keyword', '@default': 'identifier' } }],
+      // Floating constants: `3.000000e-01`, and bits as `0x3FD3333333333334`.
+      [/-?\d+\.\d+(e[-+]?\d+)?/, 'number'],
+      [/f?0x[0-9a-fA-F]+/, 'number'],
+      [/[a-z_][\w.]*/, { cases: { '@instructions': 'keyword.instruction', '@keywords': 'keyword', '@modifiers': 'keyword.modifier', '@default': 'identifier' } }],
       [/-?\d+/, 'number'],
       [/[=,*]/, 'operator'],
       [/[{}()[\]<>]/, '@brackets'],
@@ -133,14 +151,16 @@ const llvm = {
 
 // AT&T syntax: `movl $2, 0(%rsp)`, `.LBB1_0:`, `.cfi_offset %rbx, -16`.
 // Monarch keeps state across lines, so these grammars use one root state and
-// anchor the line-leading forms with `^`.
+// anchor the line-leading forms with `^`. A symbol an instruction names (a
+// jump's `.LBB1_4`, a call's `bump`) is the label it stands for, coloured as
+// where that label is defined.
 const operands = [
   [/%[a-z0-9]+/, 'register'],
   [/\$-?(0x[0-9a-fA-F]+|\d+)/, 'number.immediate'],
   [/-?(0x[0-9a-fA-F]+|\d+)/, 'number'],
   [/"([^"\\]|\\.)*"/, 'string'],
   [/<[^>]+>/, 'label'],
-  [/\.?[A-Za-z_][\w.$]*/, 'function'],
+  [/\.?[A-Za-z_][\w.$]*(@[A-Za-z]+)?/, 'label'],
   [/[(),+]/, 'delimiter'],
 ];
 
@@ -150,7 +170,9 @@ const asm = {
     root: [
       [/#.*$/, 'comment'],
       [/^[\w.$]+:/, 'label'],
-      [/^\s*\.\w+/, 'keyword.directive'],
+      // An assembler directive (`.cfi_offset %rbp, -16`) is muted whole, so
+      // the instructions stand out.
+      [/^\s*\.\w+.*$/, 'keyword.directive'],
       [/^\s*[a-z][a-z0-9]*/, 'keyword.instruction'],
       ...operands,
     ],
