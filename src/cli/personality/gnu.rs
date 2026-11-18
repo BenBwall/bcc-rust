@@ -2192,8 +2192,9 @@ impl State<'_> {
     }
 
     /// What `-print-search-dirs` prints: GCC's `install:` line, which Clang
-    /// has not, then where the programs and libraries are found, starting
-    /// with the directory holding libgcc when the system has one.
+    /// has not, then where the programs are found and the directories the
+    /// bundled clang links from, or, without one, the directory holding
+    /// libgcc when the system has one and the target's library directories.
     fn search_directories(&self, personality: Personality, target: Target) -> String {
         let directory_of = |file: &str| {
             Path::new(file)
@@ -2207,18 +2208,46 @@ impl State<'_> {
                 .map_or_default(|directory| directory.to_string_lossy().into_owned());
             format!("install: {directory}/\n")
         });
-        let libgcc = self.library_file("libgcc.a", target);
-        let libgcc = if libgcc == "libgcc.a" {
-            String::new()
-        } else {
-            format!("{}:", directory_of(&libgcc))
-        };
+        // The directories the link searches are the bundled clang's, which
+        // libtool reads as the system's (`sys_lib_search_path_spec`) and so
+        // gives no run path.
+        let libraries = self.clang_search_line("libraries: =", target).unwrap_or_else(|| {
+            let libgcc = self.library_file("libgcc.a", target);
+            let libgcc = if libgcc == "libgcc.a" {
+                String::new()
+            } else {
+                format!("{}:", directory_of(&libgcc))
+            };
+            format!(
+                "{libgcc}/usr/lib/{}:/usr/lib",
+                version::gcc_machine(target)
+            )
+        });
         format!(
-            "{}programs: ={}\nlibraries: ={libgcc}/usr/local/lib:/usr/lib/{}:/usr/lib\n",
+            "{}programs: ={}\nlibraries: ={libraries}\n",
             install.unwrap_or_default(),
             directory_of(&version::program_name("ld")),
-            version::gcc_machine(target)
         )
+    }
+
+    /// The rest of the line of the bundled clang's `-print-search-dirs`
+    /// for `target` that starts with `prefix`.
+    fn clang_search_line(&self, prefix: &str, target: Target) -> Option<String> {
+        let mut command = std::process::Command::new(version::program_name("clang"));
+        _ = command
+            .arg(format!("--target={}", target.triple()))
+            .arg("-print-search-dirs");
+        if let Some(sysroot) = &self.sysroot {
+            _ = command.arg("--sysroot").arg(sysroot);
+        }
+        let output = command
+            .output()
+            .ok()
+            .filter(|output| output.status.success())?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .map(str::to_owned)
     }
 
     /// The path the bundled clang finds for the library or start file
