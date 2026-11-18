@@ -1015,7 +1015,7 @@ and why one line of C takes several steps. It fixes what it found on
 
 The site was built with `web/build.sh` from `main` at `a3d8da99a` (before)
 and from this branch (after), and served from `web/dist`, as in Part 5:
-Trunk without `--release`, the dev profile at `opt-level=s`. Two Playwright
+Trunk without `--release`, the dev profile at `opt-level=s`. Playwright
 scripts drove Chromium:
 
 - **the walk:** at 1440x900 in the light theme with reduced motion, every
@@ -1030,7 +1030,12 @@ scripts drove Chromium:
   5, 15, 31, 37, 45 and 59, and at step 35 after stepping back from 59; a
   store into a cell, with the animations running on it; the WCAG contrast of
   every text node in the new panel against its composited background; and a
-  keyboard focus on its first entry.
+  keyboard focus on its first entry;
+- **after the review** (item 4 below): the review's own probes, a program
+  of two `f();` calls stepped and stepped over, and step 37 of the first
+  lesson; and Over pressed from the first note of every lesson to its end,
+  recording the panel's heading at each stop. The walk and the steps of a
+  line ran again on the fixed build.
 
 The screenshots are in
 [`screenshots/machine-steps/`](screenshots/machine-steps/), named
@@ -1060,7 +1065,9 @@ reader stepped back) are dashed; each entry jumps to its step. A call the
 expression made folds into one double-ruled entry, "bump() runs: 21 steps",
 so the six steps of `next = bump(cursor)` read as one line with a call in
 it; the steps inside `bump` show `bump`'s own expressions. A dashed vermilion
-rule after a step marks a sequence point, and a key under the steps says
+rule after a step marks a sequence point, and one leading a folded call marks
+the sequence point after its arguments are evaluated and before the call
+(C99 §6.5.2.2p10), however many steps the call folds. A key under the steps says
 what one is (every side effect before it is complete, C99 §5.1.2.3p2, linked
 to N1256) and that the tape's clock pulse stands taller there, which it
 already did without saying so. While the run has not recorded the rest, the
@@ -1070,12 +1077,19 @@ is done, so its last step reads "step 3 of 3" before the run goes past it.
 
 The grouping reads only what the engine reports: a step belongs to the
 expression whose tree it shows (its root's source range) in the same call,
-and the steps of a call that call's frame is waiting on belong to it too. A
+and the steps of a call belong to it while its frame waits on a call inside
+that range. A call's first step shows the called function, which has no
+expression yet: it belongs to the expression that holds the call its caller
+waits on, which the engine reports by its source range, so the two calls of
+`f(); f();` are two expressions however alike they are spelled. A
 declaration creating its object, a block's entry and exit, and a jump
-evaluate no expression, and show no panel. Its unit tests run the first
-lesson on the real engine (`panels/evaluation/tests.rs`). Of the walk's
-1,254 notes, 1,027 show the panel; at the 192 steps where the next note
-belongs to another expression, none says "so far".
+evaluate no expression, and show no panel, in a called function as well.
+Its unit tests run the first lesson and small programs on the real engine
+(`panels/evaluation/tests.rs`): a call without arguments, two calls spelled
+alike, calls nested through frames, a call a `return` statement makes, the
+sequence point before a call, and where Over stops. Of the walk's 1,254
+notes, 1,027 show the panel; at the 192 steps where the next note belongs
+to another expression, none says "so far".
 
 **Over** (O), beside Step, runs to the last step of the current expression,
 through any call it makes, as the WebAssembly view's Over runs a call to its
@@ -1133,6 +1147,34 @@ and still: the motion run found `cell-lit` and `cell-stamp` running on the
 stored cell, the reduced-motion runs none.
 [`cells-1440-dark-motion`](screenshots/machine-steps/cells-1440-dark-motion-after.png).
 
+#### 4. What the review of the panel found
+
+A review of this branch found two gaps in the panel itself, both fixed here.
+
+- **The sequence point before a call was dropped.** The engine marks a
+  call's first step as a sequence point, but the folded entry had no field
+  for it: at step 37 the panel showed the argument read, then
+  `bump() runs`, with no rule between them, and the entry's label did not
+  say so. The entry now leads with the dashed rule (across the rail on a
+  phone) and its label opens "A sequence point, then the call to bump".
+  [`call-point-1440-light`](screenshots/machine-steps/call-point-1440-light-before.png)
+  ([after](screenshots/machine-steps/call-point-1440-light-after.png),
+  [phone](screenshots/machine-steps/call-point-390-light-after.png)).
+- **A call without arguments lost its expression.** The panel took a call's
+  expression from the step before it, and `f();` has none of its own: in
+  `int main(void) { f(); f(); return 0; }` the first call showed no panel
+  and Over stopped inside `f` at its block's entry, and the second call was
+  grouped with the first call's steps, since the caller's frame was still
+  on the stack. The caller's frame now carries the source range of the call
+  it waits on (the engine already reported it, as the text Figure 2 shows),
+  and the call's expression is the one that holds it. Over from the first
+  call stops at step 6, "Discard the result", and the second call's steps
+  begin at its own entry, step 7.
+  [`empty-call-1440-light`](screenshots/machine-steps/empty-call-1440-light-before.png)
+  ([after](screenshots/machine-steps/empty-call-1440-light-after.png)),
+  [`empty-second-call-1440-light`](screenshots/machine-steps/empty-second-call-1440-light-before.png)
+  ([after](screenshots/machine-steps/empty-second-call-1440-light-after.png)).
+
 #### Checks
 
 - **Contrast:** the panel's lowest is 5.25:1 (a step's number on the
@@ -1145,14 +1187,20 @@ stored cell, the reduced-motion runs none.
 - **Keyboard and screen readers:** each entry is a button with a visible
   focus ring (the page's 2 px vermilion outline) and a label that says the
   step, its title, a sequence point after it and whether it is the step
-  shown (`aria-current`); a call's says its steps. The panel is a section
+  shown (`aria-current`); a call's says its steps, after the sequence
+  point that leads it. The panel is a section
   named by its heading. O presses Over, and Over announces the step it
   stops at as Step does.
 - **No sideways scroll** at any step of any lesson at 1440, or at the
   checked steps at 390, in either theme.
 - **The notes are unchanged:** the walk's step counts and every title and
   lead are the same before and after in all twelve lessons, and no page
-  logged an error.
+  logged an error. Each of the eleven call entries the walk passes shows
+  the panel with the sequence point leading its call.
+- **Over stops where it should:** pressed from the first note of each of
+  the twelve lessons to its end (335 presses), it stops each time at a
+  step that evaluates no expression or at the last step of a complete
+  expression, never inside a call, and reaches every lesson's last state.
 
 ### Left for later
 
