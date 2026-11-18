@@ -22,7 +22,10 @@ compiler; each part is captioned with what its lessons share
   to the char `-56`, stored into `narrow`). The exact source range is
   highlighted. The run so far is recorded as a multitrack tape (Figure 1):
   every object is a lane over the steps, its values written in hexagonal
-  bus segments as in a timing diagram, cross-hatched while indeterminate;
+  bus segments as in a timing diagram, cross-hatched while indeterminate
+  (a pointer whose target has ended too); a block's objects begin at its
+  opening brace, before their declarations, a notch marks where each
+  declaration is reached, and a tick where each lifetime ends;
   each call is a rule over its objects' lanes, dashed while it waits on a
   call of its own; and what a store or a call took its value from is a
   slanted line between lanes, as in Marey's train graph. A playhead marks

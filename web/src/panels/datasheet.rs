@@ -2,7 +2,9 @@
 //! it lives in (or static storage), the step it was created at and its
 //! value. A structure's members follow it, one row each, with their byte
 //! offsets and the padding between them. The objects the step used are lit;
-//! those whose lifetime has ended are struck through.
+//! those whose lifetime has ended are struck through. An object that entry
+//! into its block created, before execution reached its declaration, says
+//! so under its name; a pointer to an ended object reads as dangling.
 
 use leptos::prelude::*;
 
@@ -77,21 +79,30 @@ pub fn Datasheet(
                                     let value = if let (true, Value::Struct { size, .. }) = (object.alive, &object.value) {
                                         // Its members' rows hold the values.
                                         format!("{size} bytes")
+                                    } else if let (true, Value::Pointer { ended: true, .. }) = (object.alive, &object.value) {
+                                        // Its value became indeterminate
+                                        // when its target ended (C99
+                                        // §6.2.4p2).
+                                        "dangling".to_owned()
                                     } else if object.alive {
                                         value_text(&object.value).unwrap_or_else(|| "indeterminate".to_owned())
                                     } else {
                                         "lifetime over".to_owned()
                                     };
+                                    let dangling = object.alive && matches!(object.value, Value::Pointer { ended: true, .. });
                                     let place = place(object);
                                     let row = view! {
-                                        <tr class:is-used=used class:is-ended=!object.alive>
+                                        <tr class:is-used=used class:is-ended=!object.alive class:is-undeclared=object.alive && !object.declared>
                                             <th scope="row" class=palette::class(&object.name) title=object.literal.then(|| object.name.clone())>
                                                 <span class="sheet-swatch" aria-hidden="true"></span>{reel.with(|reel| reel.label_of(object.id)).unwrap_or_else(|| object.name.clone())}
+                                                {(object.alive && !object.declared).then(|| view! {
+                                                    <span class="sheet-undeclared" title="Entry into its block created it; its name can be used from its declaration on">"not declared yet"</span>
+                                                })}
                                             </th>
                                             <td>{object.ty.clone()}<span class="sheet-bytes" title="its size in bytes on x86-64">{format!("{} B", object.size)}</span></td>
                                             <td>{place}</td>
                                             <td>{born.get(&object.id).map_or_default(ToString::to_string)}</td>
-                                            <td class="sheet-value">{value}</td>
+                                            <td class="sheet-value" title=dangling.then_some("The object it pointed to has ended, so its value is indeterminate")>{value}</td>
                                         </tr>
                                     };
                                     let members = if object.alive { members(object) } else { Vec::new() };

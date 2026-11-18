@@ -158,8 +158,9 @@ pub struct Access {
     /// The element of an array, or 0 for another object; `None` when the
     /// operation used the whole object.
     pub cell:   Option<usize>,
-    /// `read`, `write`, `create`, `end`, `designate`, or `address` (`&` or
-    /// an array's decay took its address).
+    /// `read`, `write`, `create`, `declare` (execution reached its
+    /// declaration), `end`, `designate`, or `address` (`&` or an array's
+    /// decay took its address).
     pub kind:   String,
 }
 
@@ -232,6 +233,10 @@ pub struct Frame {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact the engine reports about an object."
+)]
 pub struct Object {
     pub id:        usize,
     pub name:      String,
@@ -240,6 +245,10 @@ pub struct Object {
     /// `automatic` or `static`.
     pub storage:   String,
     pub alive:     bool,
+    /// Whether execution has reached its declaration: entry into its block
+    /// creates an automatic object before that (C99 §6.2.4p5), and its
+    /// name designates it only from there (C99 §6.2.1p7).
+    pub declared:  bool,
     /// The owning call, or 0 for an object with static storage duration.
     pub frame_id:  usize,
     /// The owning function, or empty once its frame has returned (and for

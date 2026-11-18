@@ -143,16 +143,23 @@ pub struct Lane {
     pub segments: Vec<Segment>,
     /// Steps at which an object of the lane ended.
     pub ends:     Vec<usize>,
+    /// Steps at which execution reached the declaration of an object of
+    /// the lane that entry into its block had created earlier (C99
+    /// §6.2.4p5, §6.2.1p7).
+    pub declared: Vec<usize>,
 }
 
 /// A run of steps over which one object held one value; `None` while it was
 /// indeterminate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Segment {
-    pub from:   usize,
-    pub to:     usize,
-    pub object: usize,
-    pub value:  Option<String>,
+    pub from:     usize,
+    pub to:       usize,
+    pub object:   usize,
+    pub value:    Option<String>,
+    /// Whether the value is a pointer to an object whose lifetime has
+    /// ended, which makes the pointer's value indeterminate (C99 §6.2.4p2).
+    pub dangling: bool,
 }
 
 /// The values read (object, step) that a store or a call's parameter took
@@ -181,6 +188,9 @@ impl Reel {
         // address, not a value.
         let mut reads: Vec<(usize, usize, Option<Range>)> = Vec::new();
         let mut addresses: Vec<Range> = Vec::new();
+        // Objects a block's entry created whose declarations are still to
+        // come.
+        let mut undeclared: Vec<usize> = Vec::new();
         for (step, snapshot) in history.iter().enumerate() {
             reel.steps
                 .push((snapshot.step, snapshot.event.sequence_point));
@@ -260,9 +270,18 @@ impl Reel {
                 if !lane.objects.contains(&object.id) {
                     lane.objects.push(object.id);
                 }
+                if !object.declared {
+                    if !undeclared.contains(&object.id) {
+                        undeclared.push(object.id);
+                    }
+                } else if let Some(at) = undeclared.iter().position(|&id| id == object.id) {
+                    undeclared.swap_remove(at);
+                    lane.declared.push(step);
+                }
                 let last = lane.segments.last_mut();
                 if object.alive {
                     let value = value_text(&object.value);
+                    let dangling = matches!(object.value, Value::Pointer { ended: true, .. });
                     match last {
                         | Some(segment)
                             if segment.to == step
@@ -274,6 +293,7 @@ impl Reel {
                             to: step + 1,
                             object: object.id,
                             value,
+                            dangling,
                         }),
                     }
                 } else if last
@@ -421,6 +441,7 @@ impl Group {
             objects: Vec::new(),
             segments: Vec::new(),
             ends: Vec::new(),
+            declared: Vec::new(),
         });
         self.lanes.len() - 1
     }
@@ -1615,7 +1636,15 @@ fn tape_svg(
                     let ends = lane.ends.iter().map(|&end| view! {
                         <line class=format!("tape-end {}", ahead(end)) x1=x(end) y1=y - 8.0 x2=x(end) y2=y + 8.0 />
                     }).collect_view();
-                    view! { <g class=palette::class(&lane.name)>{segments}{ends}</g> }
+                    // Where the name comes into scope: a notch over the bus
+                    // at the step that reached the declaration.
+                    let declared = lane.declared.iter().map(|&at| {
+                        let left = x(at) + 1.5;
+                        view! {
+                            <path class=format!("tape-declared {}", ahead(at)) d=format!("M{left:.1} {:.1}h8l-4 5z", y - BUS - 6.0) />
+                        }
+                    }).collect_view();
+                    view! { <g class=palette::class(&lane.name)>{segments}{ends}{declared}</g> }
                 })
                 .collect_view();
             let flows = slants(reel, &objects, &folded, step)
@@ -1889,6 +1918,9 @@ fn bus_class(segment: &Segment, cursor: usize) -> String {
     if segment.value.is_none() {
         class.push_str(" is-indeterminate");
     }
+    if segment.dangling {
+        class.push_str(" is-dangling");
+    }
     if segment.from <= cursor && cursor < segment.to {
         class.push_str(" is-now");
     }
@@ -2102,6 +2134,45 @@ mod tests {
             history.push(snapshot(machine.run(Command::Step)));
         }
         history
+    }
+
+    // C99 §6.2.4p5 and §6.2.1p7: a block's object begins at the block's
+    // brace and is named from its declaration; §6.2.4p2: a pointer to it is
+    // indeterminate once it ends.
+    #[test]
+    fn a_lane_begins_at_its_block_notes_its_declaration_and_dangles_after() {
+        let history =
+            execute("int main(void) { int *p = 0; { int x = 1; p = &x; } int y = 0; return y; }");
+        let reel = Reel::record(&history);
+        let lane = |name: &str| {
+            reel.groups[0]
+                .lanes
+                .iter()
+                .find(|lane| lane.name == name)
+                .expect("a lane")
+        };
+        let step = |title: &str| {
+            history
+                .iter()
+                .position(|snapshot| snapshot.event.title.replace('`', "").starts_with(title))
+                .expect("a step")
+        };
+        let entry = step("Begin the lifetime of x");
+        assert_eq!(lane("x").segments[0].from, entry, "x begins at its brace");
+        assert_eq!(lane("x").declared, [step("Declare x")]);
+        assert_eq!(lane("y").declared, [step("Declare y")]);
+        assert!(
+            lane("y").segments[0].from < lane("x").segments[0].from,
+            "y begins with main's block, before x's"
+        );
+        assert_eq!(lane("x").ends, [step("End the lifetime of x")]);
+        let dangling: Vec<bool> = lane("p").segments.iter().map(|segment| segment.dangling).collect();
+        assert_eq!(dangling.last(), Some(&true), "p outlives x");
+        assert!(dangling.contains(&false), "p pointed at x while it lived");
+        let last = &history[history.len() - 1];
+        let p = last.objects.iter().find(|object| object.name == "p").expect("p");
+        assert!(matches!(p.value, Value::Pointer { ended: true, .. }));
+        assert_eq!(value_text(&p.value).as_deref(), Some("→ ended"));
     }
 
     #[test]

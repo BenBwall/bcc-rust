@@ -1214,7 +1214,7 @@ A review of this branch found two gaps in the panel itself, both fixed here.
   each at its declaration, and its note says C has it exist from the start
   of the block. Marking the block's objects at its `{` (and their end at its
   `}`, which "Leave a block" already names) needs the engine to report the
-  block's objects at entry.
+  block's objects at entry. Done in Part 7.
 - **An initializer list is split by element.** The tree the engine reports
   is one element's, so `int values[3] = {2, 4, 6};` shows three expressions
   ("Evaluating 2", "4", "6"), with the sequence point after the last.
@@ -1223,3 +1223,223 @@ A review of this branch found two gaps in the panel itself, both fixed here.
   entry says "more to come". The engine's next operation could name it.
 - **The tape keeps its clock unexplained** except by this panel's key; its
   caption could say what the taller pulses are.
+
+## Part 7: lifetimes at a block's braces (2026-11)
+
+Part 6 left one thing about objects untold: when they begin. C99 §6.2.4p5
+gives an automatic object (one without a variable-length array type, which
+the machine leaves out) a lifetime "from entry into the block with which it
+is associated until execution of that block ends in any way". Its initial
+value is indeterminate, and its initializer runs "each time the declaration
+is reached" (§6.2.4p5, §6.8p3). Its name, though, is in scope only "just
+after the completion of its declarator" (§6.2.1p7). So the object exists
+before its name can be used. The machine created each object at its
+declaration, and its note said so ("The machine draws `total` here; C has
+it exist from the start of its block"). This part makes the machine do what
+C says, and the page show it.
+
+### Method
+
+The site was built with `web/build.sh` from `main` at `8275dac74` (before)
+and from this branch (after), as in Part 6: Trunk without `--release`, the
+dev profile at `opt-level=s`. Playwright scripts drove Chromium:
+
+- **the walk:** every step of the twelve machine lessons from the first note
+  to the last (1,254 notes), recording each note's title, lead, value flow,
+  clauses and "Why it matters", and whether the page scrolled sideways. The
+  after build was walked at 1440x900 and 390x844, in the light and dark
+  themes, with and without reduced motion: eight runs. The before build was
+  walked at 1440x900 light and 390x844 dark, both with reduced motion. Each
+  run took screenshots at every lesson's first block entry, first
+  declaration and first end of a lifetime. The two phone runs with motion
+  allowed were stopped by the memory watchdog after eight lessons and after
+  none, so they ran again in four groups of lessons, each in a fresh browser;
+- **workbench probes:** eight programs loaded into the workbench and stepped
+  to their end, with screenshots at every block entry, declaration, end of
+  a lifetime and return, before and after, at 1440x900 light and 390x844
+  dark; the dangling-pointer probe also at 1440x900 dark, with motion
+  allowed. The programs are below;
+- **contrast:** the WCAG contrast of every new text node against its
+  composited background, at both widths in both themes.
+
+The screenshots are in [`screenshots/lifetimes/`](screenshots/lifetimes/),
+named `<item>-<width>-<theme>-before.png` and `…-after.png`.
+
+### Findings
+
+#### 1. A block's objects begin at its brace
+
+**Fixed.** On entry to a block, the engine now creates every automatic
+object the block declares, each indeterminate, and the step names them:
+"Begin the lifetime of `total`, `values` and `cursor`", leading "Entering
+the block creates `total`, `values` and `cursor`: each exists from here,
+indeterminate until something is stored." Its explanation adds that the
+names cannot be used yet, and that entering a nested block or calling a
+function suspends the block without ending it. It cites §6.2.4p5, §6.2.1p7,
+§6.7.8p10 and §6.8.2p2. A block that declares nothing still says "Enter a
+block". The value flow lists the objects as chips, "`total` `values`
+`cursor` begin, holding ?". Their cells are stamped vermilion, as a store's
+are, and their tape lanes start at the brace, cross-hatched. Table 1 dates
+them from this step.
+
+The engine change is small (`parser.rs` lists each block's objects on its
+`Enter` instruction, and `machine.rs` creates them there), and the step
+counts are the same: the step that created an object now reaches its
+declaration instead.
+
+[`entry-1440-light`](screenshots/lifetimes/entry-1440-light-before.png)
+([after](screenshots/lifetimes/entry-1440-light-after.png),
+[dark](screenshots/lifetimes/entry-1440-dark-after.png)),
+[`entry-390-dark`](screenshots/lifetimes/entry-390-dark-before.png)
+([after](screenshots/lifetimes/entry-390-dark-after.png)).
+
+#### 2. Reaching a declaration is a step of its own
+
+**Fixed.** The step that used to read "Create `total` (int)" now reads
+"Declare `total` (int)". Its lead is "`total`, an int object that has
+existed since its block began, is declared here: its name can be used from
+now on, and its initializer runs next" (or "with no initializer it stays
+indeterminate"). It cites §6.8p3 and §6.2.1p7 first. The initializer's
+steps follow it as before, so the object's birth, its declaration and its
+first value are three distinct moments. The value flow reads "`total` in
+scope, holds ?". The cell is outlined in solid ink, where a designated
+cell's outline is dashed. A notch over the object's tape lane marks the
+step.
+
+Until its declaration, an object's cell names it in italic, underlined with
+dots, and its row in Table 1 says "not declared yet". The engine reports
+this as each object's new `declared` field: the page's `Object` carries it,
+and the JSON trace, now schema version 8, encodes it.
+
+The name lookup changed with it. An object that a block's entry created
+does not hide an outer object of the same name until its own declaration,
+so the shadowing probe reads the outer `x` into `y` before the inner `x` is
+declared.
+[`declare-1440-light`](screenshots/lifetimes/declare-1440-light-before.png)
+([after](screenshots/lifetimes/declare-1440-light-after.png)),
+[`shadow-1440-light`](screenshots/lifetimes/shadow-1440-light-before.png)
+([after](screenshots/lifetimes/shadow-1440-light-after.png)).
+
+#### 3. Each pass through a loop body begins new objects
+
+**Fixed.** A loop body is a block of its own (§6.8.5p5), so each pass
+enters it and creates its objects anew. Entering a loop body now leads
+"Each pass through the loop body creates a new `t`: it exists from here,
+indeterminate until something is stored". Its explanation adds that the
+objects of the last pass ended at the closing brace, and it cites §6.8.5p5.
+On the tape each pass's `t` is a new segment on the same lane, after the
+end tick of the one before.
+[`loop-1440-light`](screenshots/lifetimes/loop-1440-light-before.png)
+([after](screenshots/lifetimes/loop-1440-light-after.png)).
+
+#### 4. Lifetimes end at `}` and at `return`, declared or not
+
+Leaving a block already named the objects that end ("End the lifetime of
+`t`"), and a return named its frame's objects. Leaving a block now also
+shows them as chips ("`t` ends"). A return can end an object whose
+declaration was never reached. In the early-return probe, `b` begins at
+`pick`'s brace, and `return a + k;` runs before `int b = 2;`. Its tape lane
+is hatched from the brace to the return, with no notch, and the return's
+explanation adds "`b` existed from its block's opening brace, though its
+declaration was never reached." Before, `b` never appeared at all.
+[`early-1440-light`](screenshots/lifetimes/early-1440-light-before.png)
+([after](screenshots/lifetimes/early-1440-light-after.png)),
+[`early-390-dark`](screenshots/lifetimes/early-390-dark-before.png)
+([after](screenshots/lifetimes/early-390-dark-after.png)).
+
+#### 5. A dangling pointer looks dangling
+
+The engine already ended the pointer's target and stopped the read through
+it ("Use of a dangling pointer"). The page showed the pointer's value as
+"→ ended" in plain type, and Table 1 gave nothing more. When its target
+ends, a pointer's value becomes indeterminate (§6.2.4p2). Now the
+pointer's tape lane is cross-hatched from that step, as an indeterminate
+value is, its cell's value is italic over the same hatch, and its row in
+Table 1 reads "dangling", with the reason in its tooltip. The cell's
+label for screen readers says "dangling: the object it pointed to has
+ended, so its value is indeterminate".
+[`dangling-1440-light`](screenshots/lifetimes/dangling-1440-light-before.png)
+([after](screenshots/lifetimes/dangling-1440-light-after.png),
+[dark](screenshots/lifetimes/dangling-1440-dark-after.png)),
+[`dangling-390-dark`](screenshots/lifetimes/dangling-390-dark-before.png)
+([after](screenshots/lifetimes/dangling-390-dark-after.png)).
+
+#### Intended changes to the text
+
+Of the walk's 1,254 notes, these changed, and nothing else in any title or
+lead:
+
+- the 29 entries of blocks that declare objects: the title "Enter a block"
+  became "Begin the lifetime of …", with a new lead, clauses and value
+  flow. Three of these are loop bodies (`next` in "Objects, loops and
+  calls"), whose lead begins "Each pass through the loop body";
+- the 56 declarations: "Create `x` (T)" became "Declare `x` (T)", with a
+  new lead, clauses and value flow;
+- the value flow of seven block exits, which now name what ends;
+- two "Why it matters" notes, at the step where each lesson first shows
+  them (twelve times each). Scope: "a name
+  declared inside it can be used from its declaration up to the closing
+  brace … created when execution enters the block". Indeterminate: "The
+  object exists from entry into its block, before its declaration is
+  reached", replacing "this machine draws it when the declaration is
+  reached";
+- the explanations behind the disclosure, for the entries and declarations
+  above and for a return that ends an undeclared object;
+- the category hint for lifetime steps, now "a block begins or ends,
+  creating or ending its objects, or a declaration is reached", and the
+  empty cells' line, now "Entering a block puts the objects it declares on
+  the tape".
+
+#### Workbench probes
+
+| Probe | What it shows |
+| --- | --- |
+| nested blocks, `a`, then `b`, then `c` | each block's object begins at its own brace; `c` and `b` end at their braces, innermost first |
+| `for` with `int t` in its body | `i` begins with the `for`; a new `t` on each of three passes, each ended at the body's `}` |
+| `goto` out of a block | rejected: `goto` is outside the machine's subset |
+| early `return` inside an `if` | `b` begins and ends without its declaration being reached |
+| an inner `x` shadowing an outer one | `int y = x;` reads the outer `x` (1); the inner `x` is `x #2` on the tape |
+| `int b = a; int a = 1;` | rejected as outside the subset: `a` is not declared where it is used |
+| `int x = x + 1;` | `x` is in scope in its own initializer, still indeterminate: the run stops at the read |
+| `p = &x;` in an inner block, `*p` after it | `p` turns hatched and "dangling" when `x` ends; the read through it stops |
+
+#### Checks
+
+- **Step counts and text:** every lesson has the same number of notes
+  before and after, in all twelve lessons, and every title and lead is the
+  same in all eight configurations. The only differences from the before
+  build are those listed above. No page logged an error.
+- **No sideways scroll** at any step of any lesson in any of the eight
+  configurations, or at any step of the probes.
+- **Contrast:** the lowest new text is 4.99:1, "not declared yet" in the
+  accent ink of a row the step used (`#b33a0b` on `#ecebe6`, the colour
+  Table 1 already uses for such rows). Elsewhere: 5.89:1 for that line in
+  grey (light theme) and 6.22:1 (dark), 5.25:1 for an undeclared cell's
+  name on the vermilion stamp, at least 5.47:1 for a dangling cell's type
+  and name, and 11.7:1 or more for its value, at both widths. The hatch
+  was first across the whole dangling cell, where its lines left the small
+  grey type at about 3.2:1 in the dark theme. It now sits behind the value
+  alone, which keeps at least 6.9:1 against a hatch line (computed from
+  the hatch's colour). The notch on the
+  tape is the tape's ink on its black screen.
+- **Reduced motion:** the declaration's outline draws in only with motion
+  allowed, in the same `prefers-reduced-motion: no-preference` block as a
+  designated cell's. The notch and the hatch do not move.
+- **Tests:** the engine's tests cover a block's entry creating its objects
+  and not a nested block's, a block of six objects whose lead names two and
+  "the rest", the name lookup before an inner declaration, a
+  self-initializing read, a new `t` on each pass, and a return ending an
+  undeclared object. The site's tests cover the chips and accesses of an
+  entry and a declaration, the tape's notch and its dangling segment, and
+  the screen-reader summary of an entry.
+
+### Left for later
+
+- **`goto` is outside the subset,** so a jump out of a block, or into one
+  past a declaration (where §6.2.4p5's "each time the declaration is
+  reached" matters most), cannot be shown yet.
+- **A name used before its declaration** is reported as outside the subset,
+  not as the error it is in C: the name is not in scope there.
+- **A shadowing object's title** says "Begin the lifetime of `y` and `x`"
+  for the inner `x`, which the tape and Table 1 call `x #2`; the engine does
+  not know the page's lane numbers.

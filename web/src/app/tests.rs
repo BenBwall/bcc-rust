@@ -213,7 +213,10 @@ fn each_step_announces_what_it_did_on_the_tape() {
     }
     let summaries: Vec<String> = states.iter().filter_map(tape_summary).collect();
     for expected in [
-        "Tape: track side begins, indeterminate.",
+        // A block's entry begins both of its objects, before either
+        // declaration is reached.
+        "Tape: track side begins, indeterminate; track area begins, indeterminate.",
+        "Tape: side declared, indeterminate.",
         "Tape: track side now 3.",
         "Tape: track side read, 3.",
         "Tape: track n begins, 4.",

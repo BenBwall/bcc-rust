@@ -88,7 +88,7 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{toggle.announcement}</p>
             {move || snapshot.with(|snapshot| match snapshot {
                 | Some(snapshot) if !snapshot.objects.is_empty() => strip(snapshot, toggle).into_any(),
-                | Some(_) => view! { <p class="cells-empty">"No objects yet. Each declaration that runs puts one on the tape."</p> }.into_any(),
+                | Some(_) => view! { <p class="cells-empty">"No objects yet. Entering a block puts the objects it declares on the tape."</p> }.into_any(),
                 | None => view! { <p class="cells-empty">"The objects of the run appear here as cells, under the playhead."</p> }.into_any(),
             })}
         </section>
@@ -592,19 +592,31 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                             | _ => None,
                         };
                         let plural = if bytes == 1 { "" } else { "s" };
+                        // A pointer whose target's lifetime has ended is
+                        // dangling: its value is indeterminate (C99
+                        // §6.2.4p2).
+                        let dangling = matches!(value, Value::Pointer { ended: true, .. });
+                        let shown = if dangling {
+                            "dangling: the object it pointed to has ended, so its value is indeterminate"
+                        } else {
+                            text.as_deref().unwrap_or("indeterminate")
+                        };
                         let description = format!(
-                            "{name}, {ty}, {bytes} byte{plural}: {}{}{}",
-                            text.as_deref().unwrap_or("indeterminate"),
+                            "{name}, {ty}, {bytes} byte{plural}: {shown}{}{}{}",
                             raw.as_deref().map_or_default(|raw| format!(", stored as the bytes {raw}")),
-                            kind.as_deref().map_or_default(|kind| format!(", {}", verb(kind)))
+                            kind.as_deref().map_or_default(|kind| format!(", {}", verb(kind))),
+                            if object.declared { "" } else { UNDECLARED }
                         );
                         view! {
                             <li
                                 class=format!("cell {}", palette::class(&object.name))
                                 class:is-indeterminate=indeterminate
+                                class:is-dangling=dangling
+                                class:is-undeclared=!object.declared
                                 class:is-long=long
                                 data-access=kind
                                 aria-label=description
+                                title=(!object.declared).then_some(UNDECLARED_TITLE)
                                 style=format!("--bytes: {bytes}")
                             >
                                 <span class="cell-type" aria-hidden="true">{ty}<span class="cell-bytes">{format!("{bytes}B")}</span></span>
@@ -639,7 +651,10 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                                 (!marks.is_empty()).then(|| format!("{marks} at [{index}]"))
                             })
                             .collect();
-                        let description = text_description(object, &glyphs, &kinds, &marks, values);
+                        let mut description = text_description(object, &glyphs, &kinds, &marks, values);
+                        if !object.declared {
+                            description.push_str(UNDECLARED);
+                        }
                         let count = glyphs.len();
                         let key = (object.id, object.name.clone());
                         let (unit, open, title) = if values {
@@ -685,6 +700,7 @@ fn strip(snapshot: &Snapshot, toggle: Toggle) -> impl IntoView {
                             <li
                                 class=format!("cell is-string {}", palette::class(&object.name))
                                 class:is-values=values
+                                class:is-undeclared=!object.declared
                                 data-access=whole(object.id)
                                 aria-label=description
                             >
@@ -864,12 +880,22 @@ pub(super) fn tally<'a>(names: impl Iterator<Item = &'a str>) -> String {
         .join(" ")
 }
 
+/// What a cell's label adds for an object whose block has begun but whose
+/// declaration execution has not reached: it exists, and its name cannot
+/// be used yet (C99 §6.2.4p5, §6.2.1p7).
+const UNDECLARED: &str = ", created on entry to its block; its declaration is not reached yet";
+
+/// The tooltip of such a cell.
+const UNDECLARED_TITLE: &str =
+    "Created when execution entered its block; its name can be used from its declaration on";
+
 /// What a step did to a cell, in words.
 fn verb(kind: &str) -> &'static str {
     match kind {
         | "read" => "read by this step",
         | "write" => "written by this step",
         | "create" => "created by this step",
+        | "declare" => "its declaration reached by this step",
         | "end" => "its lifetime ends",
         | "address" => "its address taken",
         | _ => "designated by this step",
@@ -981,6 +1007,7 @@ mod tests {
             ty:        format!("int[{length}]"),
             storage:   "automatic".to_owned(),
             alive:     true,
+            declared:  true,
             frame_id:  1,
             function:  "main".to_owned(),
             scope:     None,
