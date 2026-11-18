@@ -132,6 +132,23 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             return Err(MainError::Reported(1));
         },
     };
+    // `cl` prints its banner before anything it says about the command
+    // line, unless `/nologo` stands anywhere before `/link`. Meson reads the
+    // banner `cl /?` prints to recognize `cl` and its version.
+    let nologo = expanded
+        .iter()
+        .take_while(|argument| !matches!(argument.to_str(), Some("/link" | "-link" | "--")))
+        .any(|argument| matches!(argument.to_str(), Some("/nologo" | "-nologo")));
+    if !clang_cl && !nologo {
+        super::print(
+            &version::banner(
+                invocation.personality,
+                &invocation.name,
+                crate::target::Target::WindowsMsvc,
+            ),
+            true,
+        );
+    }
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
@@ -346,8 +363,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         keep_going: !clang_cl,
         ..Plan::default()
     };
-    let banner = (!state.nologo && !clang_cl)
-        .then(|| version::banner(invocation.personality, &invocation.name, target));
     if state.sources.is_empty() {
         // clang-cl refuses a command line without inputs, as Clang does.
         // `cl` alone prints its usage to stdout after its banner; with
@@ -362,9 +377,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if clang_cl {
             invocation.error(format_args!("no input files"));
             return Err(MainError::Reported(error_status(invocation.personality)));
-        }
-        if let Some(banner) = banner {
-            super::print(&banner, true);
         }
         if expanded.is_empty() {
             super::print(
@@ -382,12 +394,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             format_args!("missing source filename"),
         );
         return Err(MainError::Reported(ERROR_STATUS));
-    }
-    if let Some(banner) = banner {
-        plan.steps.push(Step::Print {
-            text:   banner,
-            stderr: true,
-        });
     }
     let c_sources: Vec<&Source> = state
         .sources

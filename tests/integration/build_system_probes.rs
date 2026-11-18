@@ -318,6 +318,43 @@ mod tests {
         }
     }
 
+    /// Meson recognizes `cl` by `Microsoft` in what `cl /?` prints and
+    /// reads its version and target from the first line that has a version
+    /// (`19.33.0`, `x64`), which `cl` prints before anything it says about
+    /// the command line, unless `/nologo` stands before `/link`.
+    #[test]
+    fn meson_reads_cl_from_its_banner() {
+        let directory = Directory::new();
+        let help = directory.bcc("--msvc-mode", &["/?"]);
+        assert_eq!(help.status.code(), Some(0));
+        let banner = stderr(&help);
+        assert!(
+            banner.starts_with(&format!(
+                "bcc {}, compatible with Microsoft (R) C/C++ Optimizing Compiler Version 19.33.0 \
+                 for x64;",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{banner}"
+        );
+        assert!(stdout(&help).starts_with("usage: cl "), "{}", stdout(&help));
+        let version = directory.bcc("--msvc-mode", &["--version"]);
+        assert_eq!(version.status.code(), Some(2));
+        let lines: Vec<String> = stderr(&version).lines().map(str::to_owned).collect();
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(format!("{}\n", lines[0]), banner);
+        assert_eq!(
+            lines[1..],
+            [
+                "cl : Command line warning D9002 : ignoring unknown option '--version'",
+                "cl : Command line error D8003 : missing source filename"
+            ]
+        );
+        let quiet = directory.bcc("--msvc-mode", &["--version", "/nologo"]);
+        assert!(!stderr(&quiet).contains("Microsoft"), "{}", stderr(&quiet));
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/?"]);
+        assert_eq!((clang_cl.status.code(), stderr(&clang_cl).as_str()), (Some(0), ""));
+    }
+
     /// CMake's `check_c_compiler_flag(/bogus)` with an MSVC compiler fails
     /// on `cl`'s warning D9002. `cl` reads every argument that starts with
     /// `/` as an option; off Windows the `cl` personality reads one as an
