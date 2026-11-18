@@ -723,7 +723,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     // place of the list that holds it.
                     let site = Site { context, ..site };
                     let next = self.advance_current(cursor);
-                    let written = Some(&*self.scratch.alloc(cursor));
+                    let written = self.written_for_missing_braces(cursor);
                     work.push(next_task(self.scratch.alloc(next), repeats, written));
                     work.push(InitWork::Value(target, element.initializer, node, site));
                 },
@@ -1719,6 +1719,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// all that remain ([`Self::missing_braces`]).
     /// C99: §6.7.8 paragraph 20, p. 127; PDF p. 139.
     fn complete_elided(&mut self, task: &ListWork<'tu, 's>) {
+        if !self.missing_braces_may_warn() {
+            return;
+        }
         if let Some(written) = task.pending {
             self.missing_braces(task.list, written, Some(task.cursor), task.last_written);
         }
@@ -1752,34 +1755,35 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         to: Option<&Current<'s>>,
         final_position: usize,
     ) {
-        if self.context.configuration.compiler_identity().rules()
-            != crate::configuration::RuleSet::Clang
-            || self.idiomatic_zero(list)
-        {
+        if self.idiomatic_zero(list) {
             return;
         }
         let elements = list.elements.as_slice();
         let depth = |mut current: &Current<'_>| {
-            let mut depth = 0;
+            let mut depth = 0_usize;
             while let Some(parent) = current.parent {
                 current = parent;
                 depth += 1;
             }
             depth
         };
-        let mut level = Some(from);
-        while let Some(current) = level {
-            level = current.parent;
+        // The two paths are walked together, each level of `from` beside
+        // the level of `to` at its depth, so that a deep path costs no more
+        // than its length.
+        let mut level = Some((from, depth(from)));
+        let mut open = to.map(|to| (to, depth(to)));
+        while let Some((current, at)) = level {
+            level = current.parent.map(|parent| (parent, at - 1));
+            while let Some((other, other_at)) = open
+                && other_at > at
+            {
+                open = other.parent.map(|parent| (parent, other_at - 1));
+            }
             let Some(opener) = current.elided else {
                 continue;
             };
-            let at = depth(current);
-            let mut open = to;
-            let mut still_open = false;
-            while let Some(other) = open {
-                still_open |= other.elided == Some(opener) && depth(other) == at;
-                open = other.parent;
-            }
+            let still_open = open
+                .is_some_and(|(other, other_at)| other_at == at && other.elided == Some(opener));
             let only_member = current.parent.is_some_and(|parent| {
                 matches!(
                     self.types.nodes[parent.container.index],
@@ -1817,6 +1821,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 );
             });
         }
+    }
+
+    /// Where an element was written, kept for [`Self::complete_elided`]
+    /// only when `-Wmissing-braces` may report anything.
+    fn written_for_missing_braces(&self, cursor: Current<'s>) -> Option<&'s Current<'s>> {
+        self.missing_braces_may_warn()
+            .then(|| &*self.scratch.alloc(cursor))
+    }
+
+    /// Whether `-Wmissing-braces` may report anything, as only Clang's
+    /// rules do: the command line turns it on, or a diagnostic pragma may.
+    /// Without it, brace elision is not followed for the warning.
+    fn missing_braces_may_warn(&self) -> bool {
+        self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Clang
+            && (self.context.has_diagnostic_pragmas()
+                || self
+                    .context
+                    .configuration
+                    .diagnostic_severity(crate::configuration::DiagnosticGroup::MissingBraces)
+                    .is_some())
     }
 
     /// Whether `list` is `{0}`, Clang's idiom for a zeroed object, which no
