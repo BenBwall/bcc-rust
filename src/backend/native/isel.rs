@@ -28,7 +28,8 @@
 //! register pairs in `isel/wide.rs`; `f80` through
 //! the x87 unit in `isel/x87.rs`; `f128` through runtime routines in
 //! `isel/quad.rs`; dynamic stack allocation in `isel/stack.rs`; inline
-//! assembly in `isel/asm.rs`; atomic operations in `isel/atomic.rs`.
+//! assembly in `isel/asm.rs`; atomic operations in `isel/atomic.rs`; the
+//! named x86 instructions in `isel/vector.rs`.
 //!
 //! `i128`, `f80` and `f128` values all live in pairs of general registers,
 //! the low eight bytes first: block parameters, spills and copies treat them
@@ -49,6 +50,7 @@ mod half;
 mod memory;
 mod quad;
 mod stack;
+mod vector;
 mod wide;
 mod x87;
 
@@ -126,6 +128,7 @@ pub(crate) fn select<'a>(
     let mut selector = Selector::new(module, function, body, target, options.tls_model, arena);
     selector.pic = options.pic;
     selector.indirect_returns_twice = options.indirect_returns_twice;
+    selector.avx = options.avx;
     selector.func.tracks_sources = options.track_sources;
     for (_, slot) in body.stack_slots() {
         // An object aligned above the stack's 16 bytes gets room to round
@@ -302,6 +305,9 @@ pub(crate) struct SelectOptions {
     /// `-fno-omit-frame-pointer`: every function but a naked one keeps a
     /// frame pointer. GCC manual, "Optimize Options", `-fomit-frame-pointer`.
     pub(crate) keep_frame_pointer:     bool,
+    /// Whether the function's features include AVX, so that its 16-byte
+    /// vector instructions take their VEX forms (`isel/vector.rs`).
+    pub(crate) avx:                    bool,
 }
 
 /// How the selector represents an IR value.
@@ -380,6 +386,8 @@ pub(super) struct Selector<'a, 'm, 'ir> {
     /// The symbols indexed operands use as a base, with the register the
     /// entry block loads each address into.
     pub(super) bases:                  ArenaVec<'a, (Symbol, Reg)>,
+    /// [`SelectOptions::avx`].
+    pub(super) avx:                    bool,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -417,6 +425,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             incoming: ArenaVec::new_in(arena),
             scratch: None,
             bases: ArenaVec::new_in(arena),
+            avx: false,
         }
     }
 
@@ -854,6 +863,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             | InstData::Atomic { .. } => self.atomic(inst, data),
             | InstData::Call { .. } | InstData::CallIndirect { .. } => self.call(inst, data)?,
             | InstData::InlineAsm { .. } => self.inline_asm(data)?,
+            | InstData::Intrinsic {
+                intrinsic,
+                immediate,
+                args,
+            } => self.intrinsic(intrinsic, immediate, self.body.value_list(args), result),
             | InstData::Nullary {
                 opcode: Opcode::Trap,
                 ..

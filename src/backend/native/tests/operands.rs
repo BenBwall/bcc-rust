@@ -35,10 +35,13 @@ use crate::{
         Role,
         ShiftAmount,
         ShiftOp,
+        StringOp,
         SymbolRef,
         TlsOffset,
         UnaryOp,
         VReg,
+        VectorForm,
+        VectorOp,
         Width,
         X87Format,
         X87Op,
@@ -496,6 +499,80 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
         },
         // `fucomip` sets ZF, PF and CF like `ucomis*`.
         | MInst::X87Compare => Flags::Written,
+        // `xgetbv` loads %edx:%eax from the control register %ecx names,
+        // clearing both upper halves.
+        | MInst::Xgetbv => {
+            at.phys(PReg::Rcx, Read);
+            at.phys(PReg::Rax, Write);
+            at.phys(PReg::Rdx, Write);
+            Flags::Untouched
+        },
+        // `aesenc src, dst` (and `vaesenc src, dst, dst`) combines the state
+        // in dst with the round key in src; `pclmulqdq` multiplies a
+        // quadword of each; `roundss` rounds src's low lane into dst and
+        // keeps dst's others. `aesimc`, `aeskeygenassist`, the packed
+        // roundings, the conversions and the approximate reciprocals compute
+        // all of dst from src. `sqrtss` writes dst's low lane and keeps the
+        // rest. None touches the flags.
+        | MInst::Vector { op, dst, src, .. } => {
+            at.reg(src, Read);
+            at.reg(
+                dst,
+                match op {
+                    | VectorOp::AesEnc
+                    | VectorOp::AesEncLast
+                    | VectorOp::AesDec
+                    | VectorOp::AesDecLast
+                    | VectorOp::Pclmulqdq
+                    | VectorOp::RoundSs
+                    | VectorOp::RoundSd => ReadWrite,
+                    | VectorOp::SqrtSs | VectorOp::SqrtSd => Merge,
+                    | VectorOp::AesImc
+                    | VectorOp::AesKeygenAssist
+                    | VectorOp::RoundPs
+                    | VectorOp::RoundPd
+                    | VectorOp::CvtPs2dq
+                    | VectorOp::CvttPs2dq
+                    | VectorOp::CvtPd2dq
+                    | VectorOp::CvttPd2dq
+                    | VectorOp::RcpPs
+                    | VectorOp::RsqrtPs => Write,
+                },
+            );
+            Flags::Untouched
+        },
+        | MInst::VectorMove { load, reg, mem, .. } => {
+            at.mem(mem);
+            at.reg(reg, if load { Write } else { Read });
+            Flags::Untouched
+        },
+        // `vzeroupper` zeroes bits 128 and up of every vector register,
+        // where no value lives; `vzeroall` zeroes them whole.
+        | MInst::VZero { all } => {
+            if all {
+                for register in PReg::ALL.into_iter().skip(16) {
+                    at.phys(register, Write);
+                }
+            }
+            Flags::Untouched
+        },
+        // `pcmpestri $imm, rhs, lhs` reads the lengths in %eax and %edx;
+        // the `i` forms write the index to %ecx, zero-extended, the `m`
+        // forms the mask to %xmm0. CF, ZF, SF and OF report the result, and
+        // AF and PF are cleared.
+        | MInst::StringCompare { op, lhs, rhs, .. } => {
+            at.reg(lhs, Read);
+            at.reg(rhs, Read);
+            if matches!(op, StringOp::ExplicitIndex | StringOp::ExplicitMask) {
+                at.phys(PReg::Rax, Read);
+                at.phys(PReg::Rdx, Read);
+            }
+            match op {
+                | StringOp::ImplicitIndex | StringOp::ExplicitIndex => at.phys(PReg::Rcx, Write),
+                | StringOp::ImplicitMask | StringOp::ExplicitMask => at.phys(PReg::Xmm0, Write),
+            }
+            Flags::Written
+        },
         // The epilogue may or may not adjust %rsp before `ret`; nothing
         // follows it.
         | MInst::Ret { uses } => {
@@ -561,6 +638,7 @@ fn forms() -> Vec<MInst> {
     let sources = || [Operand::Reg(v()), Operand::Imm(7), Operand::Mem(mem())];
     let all = [Width::B8, Width::B16, Width::B32, Width::B64];
     let wide = [Width::B32, Width::B64];
+    let vector_forms = [VectorForm::Sse, VectorForm::Vex128, VectorForm::Vex256];
     let conds = [
         Cond::E,
         Cond::Ne,
@@ -715,6 +793,43 @@ fn forms() -> Vec<MInst> {
         }).collect::<Vec<_>>(),
         Move128 => [true, false].map(|load| MInst::Move128 { load, reg: v(), mem: mem() }),
         XStore => wide.map(|width| MInst::XStore { width, dst: mem(), src: v() }),
+        Vector => [
+            VectorOp::AesEnc,
+            VectorOp::AesEncLast,
+            VectorOp::AesDec,
+            VectorOp::AesDecLast,
+            VectorOp::AesImc,
+            VectorOp::AesKeygenAssist,
+            VectorOp::Pclmulqdq,
+            VectorOp::RoundPs,
+            VectorOp::RoundPd,
+            VectorOp::RoundSs,
+            VectorOp::RoundSd,
+            VectorOp::CvtPs2dq,
+            VectorOp::CvttPs2dq,
+            VectorOp::CvtPd2dq,
+            VectorOp::CvttPd2dq,
+            VectorOp::RcpPs,
+            VectorOp::RsqrtPs,
+            VectorOp::SqrtSs,
+            VectorOp::SqrtSd,
+        ].into_iter().flat_map(|op| {
+            vector_forms.map(|form| MInst::Vector { op, form, imm: 9, dst: v(), src: v() })
+        }).collect::<Vec<_>>(),
+        VectorMove => vector_forms.into_iter().flat_map(|form| {
+            [true, false].map(|load| MInst::VectorMove { form, load, reg: v(), mem: mem() })
+        }).collect::<Vec<_>>(),
+        VZero => [false, true].map(|all| MInst::VZero { all }),
+        Xgetbv => [MInst::Xgetbv],
+        StringCompare => [
+            StringOp::ImplicitIndex,
+            StringOp::ImplicitMask,
+            StringOp::ExplicitIndex,
+            StringOp::ExplicitMask,
+        ].into_iter().flat_map(|op| {
+            [VectorForm::Sse, VectorForm::Vex128]
+                .map(|form| MInst::StringCompare { op, form, imm: 12, lhs: v(), rhs: v() })
+        }).collect::<Vec<_>>(),
         XZero => [MInst::XZero { dst: v() }],
         XAlu => [XOp::Add, XOp::Sub, XOp::Mul, XOp::Div, XOp::Xor].into_iter().flat_map(|op| {
             wide.into_iter().flat_map(move |width| {

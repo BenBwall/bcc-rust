@@ -20,8 +20,9 @@
 //!
 //! The LLVM back end calls the LLVM intrinsic of [`IntrinsicSignature::llvm`]
 //! on the loaded vectors; the interpreter computes the instructions it
-//! models (`backend/interpreter/intrinsics.rs`); the native and WebAssembly
-//! back ends refuse the instruction by name.
+//! models (`backend/interpreter/intrinsics.rs`); the native back end emits
+//! each instruction (`backend/native/isel/vector.rs`); the WebAssembly back
+//! end refuses the instruction by name.
 
 use super::types::Type;
 
@@ -230,6 +231,11 @@ intrinsics! {
     Vzeroupper = "x86.vzeroupper" => sig(None, &[], None, "llvm.x86.avx.vzeroupper"),
     /// Zeroes the YMM registers (`vzeroall`).
     Vzeroall = "x86.vzeroall" => sig(None, &[], None, "llvm.x86.avx.vzeroall"),
+    /// The extended control register its operand selects (`xgetbv`):
+    /// XCR0, the state components the operating system manages, for 0.
+    /// Intel SDM Vol. 2C, "XGETBV"; Clang `BuiltinsX86.td`,
+    /// `__builtin_ia32_xgetbv`.
+    Xgetbv = "x86.xgetbv" => sig(Some(S(Type::I64)), &[I32], None, "llvm.x86.xgetbv"),
     /// SSE4.2 string comparisons of implicit length, which end at the first
     /// zero element (`pcmpistri`, `pcmpistrm`): the immediate selects the
     /// element type, the aggregation and the polarity, and each builtin

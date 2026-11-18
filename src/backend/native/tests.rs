@@ -152,6 +152,7 @@ fn with_selection<R>(
             indirect_returns_twice: module.returns_twice_escapes(),
             track_sources:          false,
             keep_frame_pointer:     false,
+            avx:                    false,
         },
         &scratch,
     )

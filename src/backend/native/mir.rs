@@ -14,6 +14,9 @@
 //!
 //! Registers come in two classes: general-purpose registers for integers
 //! and pointers, and SSE registers (`%xmm0`-`%xmm15`) for `f32` and `f64`.
+//! The vector instructions of the x86 intrinsics hold their 16- and 32-byte
+//! operands in precolored SSE registers only, loaded and stored around the
+//! instruction, so no virtual register holds more than a scalar.
 //! Each virtual register has one class, recorded in [`MFunction::classes`].
 //! `i128`, `f80` and `f128` values live in pairs of general registers; the
 //! x87 instructions that compute on `f80` read and write memory only.
@@ -922,6 +925,154 @@ impl XOp {
     }
 }
 
+/// How a vector instruction is encoded: the SSE form on 16 bytes, or the
+/// VEX form on 16 or 32 bytes. A function whose features include AVX uses
+/// VEX for 16 bytes too, as GCC and Clang do there; 32 bytes need it. VEX
+/// zeroes the destination's bits above the vector, SSE keeps them. Intel SDM
+/// Vol. 2A, §2.3, "Intel Advanced Vector Extensions (Intel AVX)".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum VectorForm {
+    Sse,
+    Vex128,
+    Vex256,
+}
+
+impl VectorForm {
+    pub(crate) const fn vex(self) -> bool {
+        !matches!(self, Self::Sse)
+    }
+
+    /// The register name prefix of the vectors: `xmm` or `ymm`.
+    pub(crate) const fn register(self) -> &'static str {
+        match self {
+            | Self::Vex256 => "ymm",
+            | Self::Sse | Self::Vex128 => "xmm",
+        }
+    }
+}
+
+/// A named vector operation of the x86 intrinsics (`isel/vector.rs`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum VectorOp {
+    AesEnc,
+    AesEncLast,
+    AesDec,
+    AesDecLast,
+    AesImc,
+    AesKeygenAssist,
+    Pclmulqdq,
+    RoundPs,
+    RoundPd,
+    RoundSs,
+    RoundSd,
+    CvtPs2dq,
+    CvttPs2dq,
+    CvtPd2dq,
+    CvttPd2dq,
+    RcpPs,
+    RsqrtPs,
+    SqrtSs,
+    SqrtSd,
+}
+
+impl VectorOp {
+    /// The SSE mnemonic; the VEX one adds `v`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            | Self::AesEnc => "aesenc",
+            | Self::AesEncLast => "aesenclast",
+            | Self::AesDec => "aesdec",
+            | Self::AesDecLast => "aesdeclast",
+            | Self::AesImc => "aesimc",
+            | Self::AesKeygenAssist => "aeskeygenassist",
+            | Self::Pclmulqdq => "pclmulqdq",
+            | Self::RoundPs => "roundps",
+            | Self::RoundPd => "roundpd",
+            | Self::RoundSs => "roundss",
+            | Self::RoundSd => "roundsd",
+            | Self::CvtPs2dq => "cvtps2dq",
+            | Self::CvttPs2dq => "cvttps2dq",
+            | Self::CvtPd2dq => "cvtpd2dq",
+            | Self::CvttPd2dq => "cvttpd2dq",
+            | Self::RcpPs => "rcpps",
+            | Self::RsqrtPs => "rsqrtps",
+            | Self::SqrtSs => "sqrtss",
+            | Self::SqrtSd => "sqrtsd",
+        }
+    }
+
+    /// Whether the instruction combines its destination with its source
+    /// (`dst ← dst op src`), rather than computing from the source alone:
+    /// the AES rounds, the carry-less product, and the scalar roundings,
+    /// which keep the destination's other lanes.
+    pub(crate) const fn reads_destination(self) -> bool {
+        matches!(
+            self,
+            Self::AesEnc
+                | Self::AesEncLast
+                | Self::AesDec
+                | Self::AesDecLast
+                | Self::Pclmulqdq
+                | Self::RoundSs
+                | Self::RoundSd
+        )
+    }
+
+    /// Whether the instruction takes an 8-bit immediate.
+    pub(crate) const fn has_immediate(self) -> bool {
+        matches!(
+            self,
+            Self::AesKeygenAssist
+                | Self::Pclmulqdq
+                | Self::RoundPs
+                | Self::RoundPd
+                | Self::RoundSs
+                | Self::RoundSd
+        )
+    }
+
+    /// Whether a 32-byte source gives a 16-byte result (`vcvtpd2dq`).
+    pub(crate) const fn narrows(self) -> bool {
+        matches!(self, Self::CvtPd2dq | Self::CvttPd2dq)
+    }
+}
+
+/// An SSE4.2 string comparison (`pcmpestri` and its kin), comparing the
+/// first operand's elements with the second's as the immediate asks. Intel
+/// SDM Vol. 1, §12.10, "SSE4.2 String and Text Instructions".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StringOp {
+    /// `pcmpistri`: implicit lengths (each string ends at its first zero
+    /// element), the index in `%ecx`.
+    ImplicitIndex,
+    /// `pcmpistrm`: implicit lengths, the mask in `%xmm0`.
+    ImplicitMask,
+    /// `pcmpestri`: the lengths in `%eax` and `%edx`, the index in `%ecx`.
+    ExplicitIndex,
+    /// `pcmpestrm`: the lengths in `%eax` and `%edx`, the mask in `%xmm0`.
+    ExplicitMask,
+}
+
+impl StringOp {
+    /// The SSE mnemonic; the VEX one adds `v`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            | Self::ImplicitIndex => "pcmpistri",
+            | Self::ImplicitMask => "pcmpistrm",
+            | Self::ExplicitIndex => "pcmpestri",
+            | Self::ExplicitMask => "pcmpestrm",
+        }
+    }
+
+    pub(crate) const fn explicit(self) -> bool {
+        matches!(self, Self::ExplicitIndex | Self::ExplicitMask)
+    }
+
+    pub(crate) const fn mask(self) -> bool {
+        matches!(self, Self::ImplicitMask | Self::ExplicitMask)
+    }
+}
+
 /// The memory format of an x87 load or store.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum X87Format {
@@ -1268,6 +1419,42 @@ pub(crate) enum MInst {
         dst:   Reg,
         src:   Reg,
     },
+    /// A named vector operation on whole SSE or AVX registers: `dst ← dst
+    /// op src` when [`VectorOp::reads_destination`], else `dst ← op src`,
+    /// with `imm` when [`VectorOp::has_immediate`].
+    Vector {
+        op:   VectorOp,
+        form: VectorForm,
+        imm:  u8,
+        dst:  Reg,
+        src:  Reg,
+    },
+    /// `movups`/`vmovups`: a whole vector register, 16 or 32 bytes by
+    /// `form`, loaded from or stored to memory at any alignment.
+    VectorMove {
+        form: VectorForm,
+        load: bool,
+        reg:  Reg,
+        mem:  Mem,
+    },
+    /// `vzeroupper` (`all` false), which zeroes the YMM registers' upper
+    /// halves, where no value lives, or `vzeroall`, which zeroes them whole.
+    VZero {
+        all: bool,
+    },
+    /// An SSE4.2 string comparison of `lhs` with `rhs`: reads `%eax` and
+    /// `%edx` for the explicit lengths, writes the index to `%ecx` or the
+    /// mask to `%xmm0`, and sets CF, ZF, SF and OF (clearing AF and PF).
+    StringCompare {
+        op:   StringOp,
+        form: VectorForm,
+        imm:  u8,
+        lhs:  Reg,
+        rhs:  Reg,
+    },
+    /// `xgetbv`: `%edx:%eax ←` the extended control register `%ecx`
+    /// selects.
+    Xgetbv,
     /// `shld`/`shrd` of 64-bit registers: `dst` shifted, filled from `src`.
     ShiftDouble {
         left:   bool,
@@ -1399,9 +1586,38 @@ impl MInst {
                 memory(dst, &mut visit);
                 visit(src, Role::Use);
             },
-            | Self::Move128 { load, reg, mem } => {
+            | Self::Move128 { load, reg, mem } | Self::VectorMove { load, reg, mem, .. } => {
                 memory(mem, &mut visit);
                 visit(reg, if *load { Role::Def } else { Role::Use });
+            },
+            | Self::Vector { op, dst, src, .. } => {
+                visit(src, Role::Use);
+                visit(
+                    dst,
+                    if op.reads_destination() {
+                        Role::UseDef
+                    } else {
+                        Role::Def
+                    },
+                );
+            },
+            | Self::VZero { all } =>
+                if *all {
+                    for register in PReg::ALL {
+                        if register.class() == RegClass::Xmm {
+                            phys(register, Role::Def, &mut visit);
+                        }
+                    }
+                },
+            | Self::StringCompare { op, lhs, rhs, .. } => {
+                visit(lhs, Role::Use);
+                visit(rhs, Role::Use);
+                if op.explicit() {
+                    phys(PReg::Rax, Role::Use, &mut visit);
+                    phys(PReg::Rdx, Role::Use, &mut visit);
+                }
+                let result = if op.mask() { PReg::Xmm0 } else { PReg::Rcx };
+                phys(result, Role::Def, &mut visit);
             },
             | Self::ShiftDouble {
                 dst, src, amount, ..
@@ -1531,6 +1747,11 @@ impl MInst {
                 }
             },
             | Self::SjljLongjmp => phys(PReg::Rdi, Role::Use, &mut visit),
+            | Self::Xgetbv => {
+                phys(PReg::Rcx, Role::Use, &mut visit);
+                phys(PReg::Rax, Role::Def, &mut visit);
+                phys(PReg::Rdx, Role::Def, &mut visit);
+            },
             | Self::X87Arith { .. }
             | Self::X87Pop
             | Self::X87Compare
@@ -1629,6 +1850,7 @@ impl MInst {
             | Self::LockCmpxchg { mem, .. }
             | Self::Lea { addr: mem, .. }
             | Self::Move128 { mem, .. }
+            | Self::VectorMove { mem, .. }
             | Self::X87Load { mem, .. }
             | Self::X87Store { mem, .. }
             | Self::X87ControlWord { mem, .. } => Some(mem),
@@ -1687,6 +1909,7 @@ impl MInst {
             | Self::SjljSetjmp { .. }
             | Self::InlineAsm { .. }
             | Self::X87Compare
+            | Self::StringCompare { .. }
             | Self::LockXadd { .. }
             | Self::LockAlu { .. }
             | Self::LockCmpxchg { .. }
