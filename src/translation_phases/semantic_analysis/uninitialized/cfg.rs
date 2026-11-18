@@ -200,6 +200,10 @@ enum Context {
     Use,
     /// The value is discarded.
     Ignore,
+    /// The value is discarded if the expression is a reference through
+    /// parentheses and casts that change nothing (Clang's `findVar`), as
+    /// after such a conversion of a discarded value; otherwise it is read.
+    IgnoreVariable,
     /// The initializer of the variable's own declaration.
     SelfInit,
     /// The operand of `&` in an argument of pointer-to-`const` type.
@@ -1187,21 +1191,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => return None,
         };
         let confluence = cfg.block.unwrap_or_else(|| cfg.create_block(true));
-        let arm = if context == Context::Ignore {
-            Context::Ignore
-        } else {
-            Context::Use
-        };
         cfg.succ = Some(confluence);
         cfg.block = None;
         let then_block = if omitted {
             Some(confluence)
         } else {
+            let arm = self.arm_context(e, c.then_expression, context);
             let block = self.cfg_expression(cfg, c.then_expression, arm);
             cfg.block = None;
             block
         };
         cfg.succ = Some(confluence);
+        let arm = self.arm_context(e, c.else_expression, context);
         let else_block = self.cfg_expression(cfg, c.else_expression, arm);
         if cfg.bad || cfg.unsupported {
             return None;
@@ -1232,6 +1233,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
         );
         self.cfg_expression(cfg, c.condition_expression, Context::Use)
+    }
+
+    /// The context in which an arm `arm` of the conditional `conditional`
+    /// in `context` is evaluated. Clang's `ClassifyRefs::classify` passes a
+    /// discarded value on to an arm that its conversion to the result's
+    /// type leaves as it is; through a conversion that `stripCasts` steps
+    /// through it finds only a variable, and through any other it finds
+    /// nothing, so the arm's value is read.
+    /// C99: §6.5.15p5, p. 90; PDF p. 102; §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
+    fn arm_context(
+        &self,
+        conditional: &'tu Expression<'tu>,
+        arm: &'tu Expression<'tu>,
+        context: Context,
+    ) -> Context {
+        if context != Context::Ignore {
+            return Context::Use;
+        }
+        let to = self.expression_info(conditional).ty;
+        let from = self.expression_info(arm).ty;
+        if from.unqualified() == to.unqualified() {
+            Context::Ignore
+        } else if self.noop_conversion(from, to) {
+            Context::IgnoreVariable
+        } else {
+            Context::Use
+        }
     }
 
     /// Clang's `VisitDeclStmt`: each declarator on its own, the last first.
@@ -1530,8 +1558,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let class = match context {
                             | Context::Plain => Class::Init,
                             | Context::Use | Context::ConstPtrArgument { .. } => Class::Use,
-                            | Context::Ignore | Context::ConstPtr { trivial: true } =>
-                                Class::Ignore,
+                            | Context::Ignore
+                            | Context::IgnoreVariable
+                            | Context::ConstPtr { trivial: true } => Class::Ignore,
                             | Context::SelfInit => Class::SelfInit,
                             | Context::ConstPtr { trivial: false } => Class::ConstPtrUse,
                         };
@@ -1635,14 +1664,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let left = self.cfg_expression(cfg, left_expression, left_context);
                 left.or(right)
             },
-            | E::Conditional(_) | E::OmittedConditional(_) => {
-                let context = if context == Context::Ignore {
-                    Context::Ignore
-                } else {
-                    Context::Use
-                };
-                self.cfg_conditional(cfg, e, context)
-            },
+            | E::Conditional(_) | E::OmittedConditional(_) => self.cfg_conditional(cfg, e, context),
             | E::Unary {
                 operator,
                 operand_expression,
@@ -1668,9 +1690,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Context::Ignore
                 } else if self.noop_cast(e, operand_expression) {
                     match context {
-                        | Context::Ignore
-                        | Context::SelfInit
-                        | Context::ConstPtrArgument { .. } => context,
+                        | Context::Ignore | Context::IgnoreVariable => Context::IgnoreVariable,
+                        | Context::SelfInit | Context::ConstPtrArgument { .. } => context,
                         | _ => Context::Use,
                     }
                 } else {
