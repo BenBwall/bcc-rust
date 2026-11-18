@@ -1,6 +1,7 @@
 //! The workbench's insight panels. In abstract-machine mode: the run as a
 //! multitrack tape (`tape`), the cells under its playhead, the note on the
-//! step (`narration`, with the rank picture of a conversion in `ranks`), the
+//! step (`narration`, with the rank picture of a conversion in `ranks` and
+//! the steps of the expression it belongs to in `evaluation`), the
 //! expression being evaluated as a schematic, what
 //! the program has written to standard output (`output`), and the objects'
 //! datasheet.
@@ -11,6 +12,7 @@
 
 mod cells;
 mod datasheet;
+pub mod evaluation;
 mod front_end;
 mod knob;
 mod narration;

@@ -14,6 +14,10 @@ use leptos::prelude::*;
 use super::{
     category_hint,
     category_label,
+    evaluation::{
+        Evaluation,
+        Group,
+    },
     ranks::Ranks,
 };
 use crate::{
@@ -37,6 +41,8 @@ pub fn Narration(
     snapshot: Memo<Option<Snapshot>>,
     /// Recent steps before the current one: history index, title, category.
     recent: Memo<Vec<(usize, String, String)>>,
+    /// The steps of the expression the step belongs to.
+    group: Memo<Option<Group>>,
     on_jump: Callback<usize>,
     /// Open the compiler pipeline at its Preprocessor stage, from the step
     /// that ran `#include <stdio.h>`.
@@ -127,6 +133,7 @@ pub fn Narration(
             <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
                 {move || event.with(|event| event.as_ref().map(|event| flow_groups(&event.flow)))}
             </p>
+            <Evaluation group on_jump />
             <Bits event /><Ranks event /><aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
                 <h3>"Why it matters"</h3>
                 <p>

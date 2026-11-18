@@ -82,7 +82,7 @@ impl Machine {
 
     /// Compile `source`, replacing any previous session. Rejected source is a
     /// snapshot with an error status, not an `Err`.
-    fn load(&mut self, source: String) -> Snapshot {
+    pub(crate) fn load(&mut self, source: String) -> Snapshot {
         self.session = None;
         self.source = source;
         match abstract_machine::compile(&self.source) {
@@ -125,7 +125,7 @@ impl Machine {
     }
 
     /// Execute one operation. A terminal state is returned unchanged.
-    fn step(&mut self) -> Result<Snapshot, String> {
+    pub(crate) fn step(&mut self) -> Result<Snapshot, String> {
         let session = self
             .session
             .as_mut()

@@ -47,6 +47,7 @@ use crate::{
         Cells,
         Datasheet,
         Deck,
+        evaluation,
         Knob,
         LiveCompile,
         Narration,
@@ -266,6 +267,8 @@ pub(crate) struct State {
     reveal:          RwSignal<Option<usize>>,
     current:         Memo<Option<Snapshot>>,
     recent:          Memo<Vec<(usize, String, String)>>,
+    /// The steps of the expression the current step belongs to.
+    group:           Memo<Option<evaluation::Group>>,
     edited:          Memo<bool>,
     /// The editor's text compiled at the selected level, with the
     /// precomputed LLVM IR for a lesson.
@@ -352,6 +355,12 @@ impl State {
                     .collect()
             })
         });
+        let group = Memo::new(move |_| {
+            let cursor = cursor.get()?;
+            source.with(|source| {
+                history.with(|history| evaluation::group(history, cursor, source))
+            })
+        });
         Self {
             engine: StoredValue::new_local(None),
             has_engine: RwSignal::new(false),
@@ -387,6 +396,7 @@ impl State {
             reveal: RwSignal::new(None),
             current,
             recent,
+            group,
             edited: Memo::new(move |_| {
                 editor_text.with(|text| source.with(|source| text != source))
             }),
@@ -580,6 +590,71 @@ impl State {
                     },
                     | _ => self.announce_state(),
                 },
+            }
+            self.running.set(false);
+        });
+    }
+
+    /// Step over: run to the last step of the expression the current step
+    /// belongs to, through any call it makes. At that last step, or at a
+    /// step that evaluates no expression, run to the last step of the next
+    /// one instead (a step that evaluates none is its own last step).
+    fn over(self) {
+        if self.locked() || !self.can_step_untracked() {
+            return;
+        }
+        self.running.set(true);
+        self.pause_requested.set(false);
+        spawn_local(async move {
+            let key = || {
+                let cursor = self.cursor.get_untracked()?;
+                self.history
+                    .with_untracked(|history| evaluation::key_at(history, cursor))
+            };
+            let mut finishing = key();
+            let mut steps = 0;
+            let mut result = Ok(());
+            while !self.pause_requested.get_untracked()
+                && self.can_step_untracked()
+                && steps < RUN_LIMIT
+            {
+                result = self.step_forward().await;
+                if result.is_err() {
+                    break;
+                }
+                steps += 1;
+                let inside = finishing.is_some_and(|finishing| {
+                    self.current.with_untracked(|state| {
+                        state
+                            .as_ref()
+                            .and_then(|state| evaluation::member(state, finishing))
+                            .is_some()
+                    })
+                });
+                if inside {
+                    continue;
+                }
+                if steps > 1 {
+                    // One step past the expression's last: show its last.
+                    if let Some(cursor) = self.cursor.get_untracked() {
+                        self.cursor.set(Some(cursor.saturating_sub(1)));
+                    }
+                    break;
+                }
+                // The first step left the expression: finish the next one.
+                finishing = key();
+                if finishing.is_none() {
+                    break;
+                }
+            }
+            match result {
+                | Err(error) => self.show_error(&error),
+                | Ok(()) if steps == RUN_LIMIT && self.can_step_untracked() => {
+                    self.report(format!(
+                        "Paused after {RUN_LIMIT} operations. Step over again to continue."
+                    ));
+                },
+                | Ok(()) => self.after_step(),
             }
             self.running.set(false);
         });
@@ -885,6 +960,7 @@ impl State {
         match event.key().as_str() {
             | "ArrowRight" | "j" => self.step(),
             | "ArrowLeft" | "k" => self.back(),
+            | "o" => self.over(),
             | "r" => self.toggle_run(),
             | "R" => self.reset(),
             | _ => return,
@@ -1919,6 +1995,18 @@ fn Toolbar(state: State) -> impl IntoView {
                     "Step"
                     <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M8 5l5 5-5 5" /></svg>
                 </button>
+                // Keeps its word on phones, as the WebAssembly view's Over
+                // does: its icon alone would not say what it does.
+                <button
+                    type="button"
+                    class="button labelled"
+                    title="Step over: run to the last step of this expression, through any call it makes (O)"
+                    disabled=move || state.locked_tracked() || !state.can_step()
+                    on:click=move |_| state.over()
+                >
+                    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4 13a6 6 0 0 1 11-3M15 6v4h-4" /></svg>
+                    <span class="button-label">"Over"</span>
+                </button>
                 <button
                     type="button"
                     class="button"
@@ -2310,6 +2398,7 @@ fn MachineView(state: State) -> impl IntoView {
                 <Narration
                     snapshot=state.current
                     recent=state.recent
+                    group=state.group
                     on_jump=Callback::new(move |index| state.jump(index))
                     on_preprocessor=Callback::new(move |()| state.open_view(Mode::Pipeline, Some(Stage::Preprocessor)))
                     placeholder=state.placeholder
