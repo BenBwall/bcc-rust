@@ -1051,7 +1051,9 @@
   /* Table 1: the datasheet. */
   .sheet-scroll { overflow-x: auto; }
   .datasheet table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
-  .datasheet thead th { font-size: 10px; font-weight: 400; letter-spacing: .1em; text-transform: uppercase; text-align: left; color: var(--ink-3); border-bottom: 1px solid var(--ink); padding: 3px 8px 3px 0; }
+  /* A heading keeps to one line ("Lives in" beside a "not declared yet"
+     row); a narrow table scrolls instead. */
+  .datasheet thead th { font-size: 10px; font-weight: 400; letter-spacing: .1em; text-transform: uppercase; text-align: left; color: var(--ink-3); border-bottom: 1px solid var(--ink); padding: 3px 8px 3px 0; white-space: nowrap; }
   .datasheet td, .datasheet tbody th { border-bottom: 1px solid var(--seam); padding: 5px 8px 5px 0; text-align: left; white-space: nowrap; font-weight: 400; }
   /* A structure's members, under it: offsets in bytes, padding hatched. */
   .datasheet tr.is-member th, .datasheet tr.is-member td { border-bottom-style: dotted; color: var(--ink-2); font-size: 11px; }
