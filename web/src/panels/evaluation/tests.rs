@@ -300,3 +300,46 @@ fn a_call_a_return_statement_makes_shows_the_whole_statement() {
     assert!(last > call + 1);
     assert_eq!(over(&states, call), last);
 }
+
+#[cfg(feature = "worker")]
+#[test]
+fn a_folded_call_keeps_the_sequence_point_before_it() {
+    let (states, source) = tour();
+    let call = at(&states, "Call bump (frame #2)");
+    assert!(states[call].event.sequence_point);
+    let done = group(&states, at(&states, "Initialize next = 3"), source).unwrap();
+    // After the argument is read, before the call: not after the call's
+    // folded body.
+    let place = done
+        .parts
+        .iter()
+        .position(|part| matches!(part, Part::Call { .. }))
+        .unwrap();
+    assert!(matches!(
+        done.parts[place - 1],
+        Part::Step {
+            sequence_point: false,
+            ..
+        }
+    ));
+    assert!(matches!(
+        done.parts[place],
+        Part::Call {
+            sequence_point: true,
+            ..
+        }
+    ));
+    let Part::Call {
+        ref function,
+        first,
+        last,
+        ..
+    } = done.parts[place]
+    else {
+        unreachable!()
+    };
+    assert!(
+        call_label(function, first, last, true, false)
+            .starts_with("A sequence point, then the call to bump, steps ")
+    );
+}

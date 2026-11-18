@@ -92,6 +92,9 @@ pub enum Part {
         function:       String,
         first:          usize,
         last:           usize,
+        /// Whether a sequence point comes before the call, after its
+        /// function designator and arguments are evaluated (C99 §6.5.2.2p10).
+        sequence_point: bool,
         current:        bool,
         after:          bool,
     },
@@ -258,6 +261,7 @@ pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group>
                     function,
                     first: snapshot.step,
                     last: history[index].step,
+                    sequence_point: snapshot.event.sequence_point,
                     current: (start..=index).contains(&cursor),
                     after: start > cursor,
                 });
@@ -456,14 +460,16 @@ fn part_view(part: &Part, on_jump: Callback<usize>) -> AnyView {
             function,
             first,
             last,
+            sequence_point,
             current,
             after,
         } => {
             let count = last + 1 - first;
             let plural = if count == 1 { "" } else { "s" };
-            let label = call_label(&function, first, last, current);
+            let label = call_label(&function, first, last, sequence_point, current);
             view! {
-                <li class="evaluation-call" class:is-current=current class:is-after=after>
+                <li class="evaluation-call" class:is-current=current class:is-after=after class:is-point=sequence_point>
+                    {sequence_point.then(|| view! { <span class="evaluation-point" aria-hidden="true"></span> })}
                     <button type="button" aria-label=label title=format!("Jump to the call to {function}()") on:click=move |_| on_jump.run(index)>
                         <span class="evaluation-index" aria-hidden="true">{first}</span>
                         <span class="evaluation-name" aria-hidden="true">{format!("{function}() runs: {count} step{plural}")}</span>
@@ -475,15 +481,28 @@ fn part_view(part: &Part, on_jump: Callback<usize>) -> AnyView {
     }
 }
 
-/// What a folded call's entry announces.
-fn call_label(function: &str, first: usize, last: usize, current: bool) -> String {
+/// What a folded call's entry announces. The sequence point comes after the
+/// arguments, before the call: it leads the entry, however many steps the
+/// call folds.
+fn call_label(
+    function: &str,
+    first: usize,
+    last: usize,
+    sequence_point: bool,
+    current: bool,
+) -> String {
     let steps = if first == last {
         format!("step {first}")
     } else {
         format!("steps {first}–{last}")
     };
     format!(
-        "The call to {function}, {steps}{}",
+        "{} to {function}, {steps}{}",
+        if sequence_point {
+            "A sequence point, then the call"
+        } else {
+            "The call"
+        },
         if current {
             " (the step shown is one of them)"
         } else {
