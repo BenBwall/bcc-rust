@@ -26,7 +26,10 @@
 //! `/tmp/a.c` is a source. `cl` on Windows, where paths do not start with
 //! `/`, warns about it as an unknown option; elsewhere the `cl` personality
 //! reads it as clang-cl does, except for the few `cl` options clang-cl does
-//! not know (`/Zf`, `/analyze`). Both read every argument after
+//! not know (`/Zf`, `/analyze`), a file inside a directory, which is an
+//! input whatever option its name starts with, and a name without a
+//! directory that is no file, which is an option (`cl_slash_argument`).
+//! Both read every argument after
 //! `--` as an input there, for a path that clang-cl would read as an option
 //! (`/Users/a.c` is `/U`).
 
@@ -155,10 +158,17 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         // Whether the argument is an option at all is decided first, so no
         // handler below that matches a prefix reads a path.
         let known = known::clang_cl_option(option);
-        if slash_paths
-            && text.starts_with('/')
-            && known.is_none()
-            && (clang_cl || !is_cl_only_option(option))
+        let slash = if slash_paths && text.starts_with('/') && !clang_cl {
+            cl_slash_argument(text)
+        } else {
+            SlashArgument::AsClangCl
+        };
+        if slash == SlashArgument::Input
+            || (slash == SlashArgument::AsClangCl
+                && slash_paths
+                && text.starts_with('/')
+                && known.is_none()
+                && (clang_cl || !is_cl_only_option(option)))
         {
             // clang-cl's option parser reads an argument that starts with
             // `/` and matches no option as an input file.
@@ -561,6 +571,39 @@ fn clang_cl_query(invocation: &Invocation, text: &str) -> Option<Plan> {
 /// start with `/` (clang-cl reads `/Zf` as a file).
 fn is_cl_only_option(option: &str) -> bool {
     matches!(option, "Qpar-" | "Qspectre-" | "Zf" | "analyze") || option.starts_with("analyze:")
+}
+
+/// How the `cl` personality reads an argument that starts with `/` where
+/// paths do: see [`cl_slash_argument`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SlashArgument {
+    /// A file to compile or link, whatever option its name starts with.
+    Input,
+    /// An option, known or not: `cl.exe` warns about an unknown one (D9002).
+    Option,
+    /// As clang-cl reads it ([`known::clang_cl_option`]).
+    AsClangCl,
+}
+
+/// How the `cl` personality reads `text`, an argument that starts with `/`,
+/// off Windows. `cl.exe` reads every such argument as an option, and build
+/// systems that drive it pass absolute paths bare: CMake gives clang-cl a
+/// `--` before its sources but not `cl`, and `check_c_compiler_flag(/bogus)`
+/// expects `cl`'s warning D9002. So a file that exists inside a directory is
+/// an input even where clang-cl would read an option (`/opt/a.c` as `/o`,
+/// `/Users/a.c` as `/U`), and a name with no directory that is no file is
+/// an option, which D9002 reports if `cl` does not know it. Any other
+/// argument is read as clang-cl reads it.
+fn cl_slash_argument(text: &str) -> SlashArgument {
+    let in_directory = text[1..].contains('/');
+    let path = Path::new(text);
+    if in_directory && path.is_file() {
+        SlashArgument::Input
+    } else if !in_directory && !path.exists() {
+        SlashArgument::Option
+    } else {
+        SlashArgument::AsClangCl
+    }
 }
 
 /// The status `cl` exits with after any error, its own or a compiler's;
@@ -1416,4 +1459,31 @@ fn help(name: &str) -> String {
          that bcc does not implement are ignored when they cannot change the program and refused \
          otherwise; see docs/design/driver-modes.md.\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file inside a directory is a source whatever option its name
+    /// starts with (CMake passes `cl` the absolute path of its probe,
+    /// `/opt/cmake/.../CMakeCCompilerABI.c`); a name without a directory
+    /// that is no file is an option, as `cl.exe` reads it; the rest is
+    /// read as clang-cl reads it.
+    #[test]
+    fn cl_reads_existing_files_and_unknown_names_as_cl_exe_would() {
+        let directory = std::env::temp_dir().join(format!("bcc-cl-slash-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("a.c");
+        std::fs::write(&file, "int x;\n").unwrap();
+        let file = file.to_str().unwrap();
+        if file.starts_with('/') {
+            assert_eq!(cl_slash_argument(file), SlashArgument::Input);
+            let missing = format!("{}/missing.c", directory.to_str().unwrap());
+            assert_eq!(cl_slash_argument(&missing), SlashArgument::AsClangCl);
+        }
+        assert_eq!(cl_slash_argument("/bogus-flag"), SlashArgument::Option);
+        assert_eq!(cl_slash_argument("/nologo"), SlashArgument::Option);
+        drop(std::fs::remove_dir_all(&directory));
+    }
 }
