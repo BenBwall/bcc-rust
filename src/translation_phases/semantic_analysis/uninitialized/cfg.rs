@@ -1938,7 +1938,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 generic
                     .associations
                     .iter()
-                    .find(|association| std::ptr::from_ref(association.expression).addr() == selected)
+                    .find(|association| {
+                        std::ptr::from_ref(association.expression).addr() == selected
+                    })
                     .map(|association| association.expression)
             },
             | E::Builtin(builtin) if builtin.keyword == KeywordTokenType::BuiltinChooseExpr => {
@@ -1988,7 +1990,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `IgnoreParenNoopCasts` steps through: to the same type, or between
     /// integer and pointer types of the same width.
     fn noop_cast(&self, cast: &'tu Expression<'tu>, operand: &'tu Expression<'tu>) -> bool {
-        self.noop_conversion(self.expression_info(operand).ty, self.expression_info(cast).ty)
+        self.noop_conversion(
+            self.expression_info(operand).ty,
+            self.expression_info(cast).ty,
+        )
     }
 
     /// Whether a conversion from type `from` to type `to` is one Clang's
