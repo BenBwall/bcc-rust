@@ -192,7 +192,8 @@ impl Analyzer<'_, '_, '_> {
         let parameter = self.argument_parameter_note(kind);
         let highlights = self.format_highlights();
         let mut related = self.related_notes;
-        for (site, _) in related.0.iter_mut().flatten() {
+        // The notes' fix-its keep their ranges, which the renderer places.
+        for (site, _) in related.notes.iter_mut().flatten() {
             *site = self.context.file_location(*site);
         }
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);

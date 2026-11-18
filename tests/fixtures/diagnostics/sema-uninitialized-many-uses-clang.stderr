@@ -10,4 +10,5 @@ sema-uninitialized-many-uses-clang.c:6:3: note: remove the 'if' if its condition
 sema-uninitialized-many-uses-clang.c:5:8: note: initialize the variable 'x' to silence this warning
     5 |   int x;
       |        ^
+      |         = 0
 1 warning generated.

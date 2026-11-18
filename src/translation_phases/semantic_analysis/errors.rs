@@ -83,9 +83,50 @@ pub(crate) enum ConversionEdit {
 }
 
 /// Up to three notes that follow a diagnostic, each a place and its words,
-/// as Clang writes `note:` lines after the warnings of its analyses.
+/// as Clang writes `note:` lines after the warnings of its analyses, and
+/// up to three edits Clang suggests with them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct RelatedNotes(pub(crate) [Option<(SourceVectors, StringCacheId)>; 3]);
+pub(crate) struct RelatedNotes {
+    pub(crate) notes: [Option<(SourceVectors, StringCacheId)>; 3],
+    pub(crate) edits: [Option<NoteEdit>; 3],
+}
+
+/// An edit Clang suggests with the note `note` of [`RelatedNotes`], which
+/// it prints under the note's source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NoteEdit {
+    pub(crate) note:  u8,
+    pub(crate) place: FixItPlace,
+    pub(crate) text:  EditText,
+}
+
+/// The text of a [`NoteEdit`]: a byte, where a string would add sixteen to
+/// every diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditText {
+    /// A removal.
+    Nothing,
+    /// The condition `0` or `1`.
+    Zero,
+    One,
+    /// An initializer: ` = 0`, ` = 0.0` or ` = '\0'`.
+    IntegerInitializer,
+    FloatingInitializer,
+    CharacterInitializer,
+}
+
+impl EditText {
+    pub(crate) const fn text(self) -> &'static str {
+        match self {
+            | Self::Nothing => "",
+            | Self::Zero => "0",
+            | Self::One => "1",
+            | Self::IntegerInitializer => " = 0",
+            | Self::FloatingInitializer => " = 0.0",
+            | Self::CharacterInitializer => " = '\\0'",
+        }
+    }
+}
 
 /// Where the declaration of a call's function declares the parameter an
 /// argument converts to, and its name, for Clang's `note: passing argument
@@ -3682,9 +3723,20 @@ impl ToDiagnostic for SemanticError {
                 diagnostic.related_points = true;
             }
         }
-        for &(site, words) in self.related.0.iter().flatten() {
+        for (index, &(site, words)) in self
+            .related
+            .notes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, note)| Some((index, note.as_ref()?)))
+        {
             let label = arena.alloc_str(context.string_cache.at(words));
             diagnostic = diagnostic.secondary(site, label);
+            for edit in self.related.edits.iter().flatten() {
+                if usize::from(edit.note) == index {
+                    diagnostic = diagnostic.note_fix_it(edit.place, edit.text.text());
+                }
+            }
         }
         if let Some(parameter) = self.parameter {
             let label = match parameter.name {

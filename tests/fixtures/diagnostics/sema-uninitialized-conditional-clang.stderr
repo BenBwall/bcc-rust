@@ -4,6 +4,7 @@ sema-uninitialized-conditional-clang.c:5:55: warning: variable 'x' may be uninit
 sema-uninitialized-conditional-clang.c:5:24: note: initialize the variable 'x' to silence this warning
     5 | int loop(int n) { int x; while (n--) x = g(n); return x; }
       |                        ^
+      |                         = 0
 sema-uninitialized-conditional-clang.c:6:57: warning: variable 'x' may be uninitialized when used here [-Wconditional-uninitialized]
     6 | int deliberate(int a) { int x = x; if (a) x = 2; return x; }
       |                                                         ^
@@ -25,4 +26,5 @@ sema-uninitialized-conditional-clang.c:8:26: note: remove the 'if' if its condit
 sema-uninitialized-conditional-clang.c:8:24: note: initialize the variable 'x' to silence this warning
     8 | int tied(int a) { int x; if (a) x = 1; return x; }
       |                        ^
+      |                         = 0
 4 warnings generated.

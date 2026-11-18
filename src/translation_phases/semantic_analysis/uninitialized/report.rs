@@ -13,10 +13,16 @@
 use super::{
     super::{
         Analyzer,
+        EditText,
         ExpressionType as E,
+        NoteEdit,
         RelatedNotes,
         SemanticErrorKind,
-        types::TypeKind,
+        types::{
+            Scalar,
+            TypeId,
+            TypeKind,
+        },
     },
     cfg::{
         Cfg,
@@ -33,7 +39,10 @@ use super::{
 };
 use crate::{
     configuration::DiagnosticGroup as G,
-    diagnostics::format_in,
+    diagnostics::{
+        FixItPlace,
+        format_in,
+    },
     translation_phases::{
         Context,
         SourceVectors,
@@ -76,10 +85,29 @@ struct Warning {
     notes:     RelatedNotes,
 }
 
+/// The edits Clang suggests with a note, each a place and its text.
+type NoteFixIts = [Option<(FixItPlace, EditText)>; 2];
+
+/// The note suggesting a branch's removal, with its edits.
+type RemoveNote = (SourceVectors, StringCacheId, NoteFixIts);
+
 impl Warning {
-    fn note(&mut self, site: SourceVectors, text: StringCacheId) {
-        if let Some(slot) = self.notes.0.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some((site, text));
+    fn note(&mut self, site: SourceVectors, words: StringCacheId, fix_its: NoteFixIts) {
+        let Some((index, note)) = (0_u8..)
+            .zip(&mut self.notes.notes)
+            .find(|(_, note)| note.is_none())
+        else {
+            return;
+        };
+        *note = Some((site, words));
+        for (place, text) in fix_its.into_iter().flatten() {
+            if let Some(slot) = self.notes.edits.iter_mut().find(|slot| slot.is_none()) {
+                *slot = Some(NoteEdit {
+                    note: index,
+                    place,
+                    text,
+                });
+            }
         }
     }
 }
@@ -250,17 +278,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     text:      self.variable_words(binding, words),
                     notes:     RelatedNotes::default(),
                 };
-                warning.note(u.user.source_vectors, use_note);
+                warning.note(u.user.source_vectors, use_note, [None; 2]);
                 warnings.push(warning);
             },
             | Kind::Maybe | Kind::Sometimes => {
                 let (start, count) = u.branches;
                 for branch in &branches[start as usize..(start + count) as usize] {
-                    if let Some(mut warning) = self.branch_warning(cfg, binding, *branch) {
-                        let remove = warning.notes.0[0].take();
-                        warning.note(u.user.source_vectors, use_note);
-                        if let Some((site, text)) = remove {
-                            warning.note(site, text);
+                    if let Some((mut warning, remove)) = self.branch_warning(cfg, binding, *branch)
+                    {
+                        warning.note(u.user.source_vectors, use_note, [None; 2]);
+                        if let Some((site, words, fix_its)) = remove {
+                            warning.note(site, words, fix_its);
                         }
                         warnings.push(warning);
                     }
@@ -277,9 +305,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
         }
-        let (site, text) = self.variable_note(binding, declared);
+        let (site, text, fix_it) = self.variable_note(binding, declared);
         if let Some(last) = warnings.last_mut() {
-            last.note(site, text);
+            last.note(site, text, [fix_it, None]);
         }
         let mut reported = false;
         for warning in &warnings {
@@ -289,20 +317,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The warning for one branch after which a use is uninitialized, with
-    /// the note that suggests removing it as its first note, or `None` for a
+    /// the note that suggests removing the branch, or `None` for a
     /// terminator Clang does not name.
     fn branch_warning(
         &mut self,
         cfg: &Cfg<'_, 'tu>,
         binding: usize,
         branch: Branch,
-    ) -> Option<Warning> {
+    ) -> Option<(Warning, Option<RemoveNote>)> {
         let output = branch.output;
         let condition_words = |true_branch: bool| if true_branch { "true" } else { "false" };
-        let (words, range, remove): (&str, SourceVectors, Option<(SourceVectors, &str)>) = match cfg
-            .blocks[branch.block as usize]
-            .terminator?
-        {
+        // Clang's condition replacements read the branch's output.
+        let value = if output == 1 {
+            EditText::One
+        } else {
+            EditText::Zero
+        };
+        let (words, range, remove): (
+            &str,
+            SourceVectors,
+            Option<(SourceVectors, &str, NoteFixIts)>,
+        ) = match cfg.blocks[branch.block as usize].terminator? {
             | Terminator::If(statement) => {
                 let S::If {
                     condition_expression: ExpressionSlot::Parsed(condition),
@@ -323,6 +358,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | None => Some(clang_statement_range(statement)),
                     }
                 };
+                let fix_its = Self::if_fix_its(
+                    output == 1,
+                    statement.source_vectors,
+                    clang_statement_range(then_statement),
+                    else_statement.map(clang_statement_range),
+                    clang_statement_range(statement),
+                );
                 (
                     &*format_in!(
                         self.scratch,
@@ -330,7 +372,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         condition_words(output == 0)
                     ),
                     condition.source_vectors,
-                    Some((removed?, "remove the 'if' if its condition")),
+                    Some((removed?, "remove the 'if' if its condition", fix_its)),
                 )
             },
             | Terminator::Conditional(e) => {
@@ -352,6 +394,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some((
                         Context::span_before(e.source_vectors, kept.source_vectors)?,
                         "remove the '?:' if its condition",
+                        Self::if_fix_its(
+                            output == 1,
+                            e.source_vectors,
+                            c.then_expression.source_vectors,
+                            Some(c.else_expression.source_vectors),
+                            e.source_vectors,
+                        ),
                     )),
                 )
             },
@@ -372,10 +421,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // `true && y` and `false || y` remove the left operand
                 // and the operator, otherwise the operator becomes
                 // its value.
-                let removed = if (operator == B::LogicalAnd) == (output == 1) {
-                    Context::span_before(e.source_vectors, right_expression.source_vectors)?
+                let (removed, text) = if (operator == B::LogicalAnd) == (output == 1) {
+                    (
+                        Context::span_before(e.source_vectors, right_expression.source_vectors)?,
+                        EditText::Nothing,
+                    )
                 } else {
-                    e.source_vectors
+                    (e.source_vectors, value)
                 };
                 (
                     &*format_in!(
@@ -391,6 +443,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         } else {
                             "remove the '||' if its condition"
                         },
+                        [Some((FixItPlace::Replace(removed), text)), None],
                     )),
                 )
             },
@@ -406,6 +459,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     },
                     | _ => return None,
                 };
+                // A `for` loop that is exited loses its condition.
+                let text = if keyword == "for" && output == 1 {
+                    EditText::Nothing
+                } else {
+                    value
+                };
                 (
                     &*format_in!(
                         self.scratch,
@@ -417,7 +476,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         }
                     ),
                     condition.source_vectors,
-                    Some((condition.source_vectors, "remove the condition if it")),
+                    Some((
+                        condition.source_vectors,
+                        "remove the condition if it",
+                        [
+                            Some((FixItPlace::Replace(condition.source_vectors), text)),
+                            None,
+                        ],
+                    )),
                 )
             },
             | Terminator::Do(statement) => {
@@ -435,7 +501,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         "'do' loop exits because its condition is false"
                     },
                     condition.source_vectors,
-                    Some((condition.source_vectors, "remove the condition if it")),
+                    Some((
+                        condition.source_vectors,
+                        "remove the condition if it",
+                        [
+                            Some((FixItPlace::Replace(condition.source_vectors), value)),
+                            None,
+                        ],
+                    )),
                 )
             },
             | Terminator::Switch => match cfg.blocks[branch.successor as usize].label {
@@ -453,22 +526,55 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             binding,
             format_in!(self.scratch, "is used uninitialized whenever {words}"),
         );
-        let mut warning = Warning {
+        let warning = Warning {
             group: G::SometimesUninitialized,
             site: range,
             highlight: SourceVectors::default(),
             text,
             notes: RelatedNotes::default(),
         };
-        if let Some((removed, words)) = remove {
+        let remove = remove.map(|(removed, words, fix_its)| {
             // The condition the branch needs, which the other branch's
             // removal assumes.
             let assumed = if output == 0 { "false" } else { "true" };
             let words = format_in!(self.scratch, "{words} is always {assumed}");
-            let words = self.context.string_cache.intern(words);
-            warning.note(removed, words);
+            // Clang's note names the removal's start; its edits underline
+            // the rest.
+            (
+                Context::first_token_vector(removed),
+                self.context.string_cache.intern(words),
+                fix_its,
+            )
+        });
+        Some((warning, remove))
+    }
+
+    /// Clang's `CreateIfFixit` for an `if` statement or a `?:`, `whole`,
+    /// assumed to take its `then` arm when `kept_then`: up to the start of
+    /// the `then` arm and from its end to the end of the `else` arm, or
+    /// with the other assumption up to the start of the `else` arm, or the
+    /// whole statement when it has none.
+    fn if_fix_its(
+        kept_then: bool,
+        whole: SourceVectors,
+        then: SourceVectors,
+        otherwise: Option<SourceVectors>,
+        statement: SourceVectors,
+    ) -> NoteFixIts {
+        let removal = |from: (SourceVectors, bool), to: (SourceVectors, bool)| {
+            Some((FixItPlace::Span { from, to }, EditText::Nothing))
+        };
+        match (kept_then, otherwise) {
+            | (true, otherwise) => [
+                removal((whole, false), (then, false)),
+                otherwise.and_then(|otherwise| removal((then, true), (otherwise, true))),
+            ],
+            | (false, Some(otherwise)) => [removal((whole, false), (otherwise, false)), None],
+            | (false, None) => [
+                Some((FixItPlace::Replace(statement), EditText::Nothing)),
+                None,
+            ],
         }
-        Some(warning)
     }
 
     /// "variable 'x' " followed by `words`, interned.
@@ -489,7 +595,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         binding: usize,
         declared: Declared<'tu>,
-    ) -> (SourceVectors, StringCacheId) {
+    ) -> (SourceVectors, StringCacheId, Option<(FixItPlace, EditText)>) {
         let ty = self.bindings[binding].ty;
         let zero = !matches!(
             self.types.nodes[ty.index],
@@ -512,11 +618,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.scratch,
                 "initialize the variable '{name}' to silence this warning"
             );
-            return (site, self.context.string_cache.intern(text));
+            let fix_it = self
+                .zero_initializer(ty)
+                .map(|zero| (FixItPlace::After(end), zero));
+            return (site, self.context.string_cache.intern(text), fix_it);
         }
         let start = Context::first_token_vector(declared.declaration.source_vectors);
         let site = self.context.retain_source_start(start);
-        (site, self.variable_words(binding, "is declared here"))
+        (site, self.variable_words(binding, "is declared here"), None)
+    }
+
+    /// The initializer Clang suggests for a scalar of type `ty`
+    /// (`Sema::getFixItZeroInitializerForType`), or `None` where it depends
+    /// on whether `NULL` or `false` is a macro where the variable is
+    /// declared, which bcc does not keep past preprocessing: a pointer
+    /// takes ` = NULL` and a `_Bool` ` = false` when it is, ` = 0` when not.
+    fn zero_initializer(&self, ty: TypeId) -> Option<EditText> {
+        match self.types.nodes[ty.index] {
+            | TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar) =>
+                Some(EditText::CharacterInitializer),
+            | TypeKind::Scalar(Scalar::Bool) | TypeKind::Pointer(_) => None,
+            | TypeKind::Scalar(scalar) if scalar.floating() && !scalar.complex() =>
+                Some(EditText::FloatingInitializer),
+            | TypeKind::Scalar(_) | TypeKind::BitInt { .. } => Some(EditText::IntegerInitializer),
+            | _ => None,
+        }
     }
 
     /// The last token of the declarator, without its attributes and `asm`
