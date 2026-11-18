@@ -91,6 +91,7 @@ mod sign_compare;
 mod statements;
 mod traversal;
 mod type_limits;
+mod uninitialized;
 mod unused;
 mod value_warnings;
 
@@ -132,8 +133,11 @@ use collection::Collection;
 pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
+    EditText,
     MachineEntryFault,
+    NoteEdit,
     ParameterNote,
+    RelatedNotes,
     ReportOrder,
     SemanticError,
     SemanticErrorKind,
@@ -2265,6 +2269,9 @@ struct Analyzer<'a, 'tu, 's> {
     /// The operands Clang underlines beside the caret of what is reported
     /// now; see [`Self::with_highlights`].
     highlights:              [SourceVectors; 2],
+    /// The notes that follow what is reported now; see
+    /// [`Self::with_related_notes`].
+    related_notes:           RelatedNotes,
     /// The range GCC underlines around the caret of what is reported now;
     /// see [`Self::with_gcc_extent`].
     gcc_extent:              SourceVectors,
@@ -2377,6 +2384,7 @@ struct Analyzer<'a, 'tu, 's> {
     statements:              statements::State<'tu, 's>,
     unused:                  unused::UnusedState<'s>,
     reachability:            reachability::ReachabilityState<'s>,
+    uninitialized:           uninitialized::UninitializedState<'s>,
     control:                 builder::Builder<'tu, 's>,
     function_extensions:     FunctionExtensions<'tu>,
     /// Checked statement-level `asm` facts, by statement identity.

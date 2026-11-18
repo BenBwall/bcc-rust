@@ -1,0 +1,4 @@
+sema-uninitialized-gcc.c: In function 'unused':
+sema-uninitialized-gcc.c:8:24: warning: unused variable 'y' [-Wunused-variable]
+    8 | int unused(void) { int y; return 0; }
+      |                        ^

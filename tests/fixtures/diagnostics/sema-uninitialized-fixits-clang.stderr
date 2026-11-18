@@ -1,0 +1,120 @@
+sema-uninitialized-fixits-clang.c:6:35: warning: variable 'x' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+    6 | int then_kept(int a) { int x; if (a) x = 1; else g(0); return x; }
+      |                                   ^
+sema-uninitialized-fixits-clang.c:6:63: note: uninitialized use occurs here
+    6 | int then_kept(int a) { int x; if (a) x = 1; else g(0); return x; }
+      |                                                               ^
+sema-uninitialized-fixits-clang.c:6:31: note: remove the 'if' if its condition is always true
+    6 | int then_kept(int a) { int x; if (a) x = 1; else g(0); return x; }
+      |                               ^~~~~~      ~~~~~~~~~~~
+fix-it:"sema-uninitialized-fixits-clang.c":{6:31-6:38}:""
+fix-it:"sema-uninitialized-fixits-clang.c":{6:43-6:54}:""
+sema-uninitialized-fixits-clang.c:6:29: note: initialize the variable 'x' to silence this warning
+    6 | int then_kept(int a) { int x; if (a) x = 1; else g(0); return x; }
+      |                             ^
+      |                              = 0
+fix-it:"sema-uninitialized-fixits-clang.c":{6:29-6:29}:" = 0"
+sema-uninitialized-fixits-clang.c:7:35: warning: variable 'x' is used uninitialized whenever 'if' condition is true [-Wsometimes-uninitialized]
+    7 | int else_kept(int a) { int x; if (a) g(0); else x = 1; return x; }
+      |                                   ^
+sema-uninitialized-fixits-clang.c:7:63: note: uninitialized use occurs here
+    7 | int else_kept(int a) { int x; if (a) g(0); else x = 1; return x; }
+      |                                                               ^
+sema-uninitialized-fixits-clang.c:7:31: note: remove the 'if' if its condition is always false
+    7 | int else_kept(int a) { int x; if (a) g(0); else x = 1; return x; }
+      |                               ^~~~~~~~~~~~~~~~~
+fix-it:"sema-uninitialized-fixits-clang.c":{7:31-7:49}:""
+sema-uninitialized-fixits-clang.c:7:29: note: initialize the variable 'x' to silence this warning
+    7 | int else_kept(int a) { int x; if (a) g(0); else x = 1; return x; }
+      |                             ^
+      |                              = 0
+fix-it:"sema-uninitialized-fixits-clang.c":{7:29-7:29}:" = 0"
+sema-uninitialized-fixits-clang.c:8:51: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+    8 | int whole(int a) { int x; if (a) return 0; return x; }
+      |                                                   ^
+sema-uninitialized-fixits-clang.c:8:25: note: initialize the variable 'x' to silence this warning
+    8 | int whole(int a) { int x; if (a) return 0; return x; }
+      |                         ^
+      |                          = 0
+fix-it:"sema-uninitialized-fixits-clang.c":{8:25-8:25}:" = 0"
+sema-uninitialized-fixits-clang.c:9:31: warning: variable 'x' is used uninitialized whenever '?:' condition is false [-Wsometimes-uninitialized]
+    9 | double arm(int a) { double x; a ? (x = 1) : 0; return x; }
+      |                               ^
+sema-uninitialized-fixits-clang.c:9:55: note: uninitialized use occurs here
+    9 | double arm(int a) { double x; a ? (x = 1) : 0; return x; }
+      |                                                       ^
+sema-uninitialized-fixits-clang.c:9:31: note: remove the '?:' if its condition is always true
+    9 | double arm(int a) { double x; a ? (x = 1) : 0; return x; }
+      |                               ^~~         ~~~
+fix-it:"sema-uninitialized-fixits-clang.c":{9:31-9:35}:""
+fix-it:"sema-uninitialized-fixits-clang.c":{9:42-9:46}:""
+sema-uninitialized-fixits-clang.c:9:29: note: initialize the variable 'x' to silence this warning
+    9 | double arm(int a) { double x; a ? (x = 1) : 0; return x; }
+      |                             ^
+      |                              = 0.0
+fix-it:"sema-uninitialized-fixits-clang.c":{9:29-9:29}:" = 0.0"
+sema-uninitialized-fixits-clang.c:10:43: warning: variable 'x' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+   10 | char and_kept(int a, int b) { char x; if (a && b) x = 1; return x; }
+      |                                           ^~~~~~
+sema-uninitialized-fixits-clang.c:10:65: note: uninitialized use occurs here
+   10 | char and_kept(int a, int b) { char x; if (a && b) x = 1; return x; }
+      |                                                                 ^
+sema-uninitialized-fixits-clang.c:10:39: note: remove the 'if' if its condition is always true
+   10 | char and_kept(int a, int b) { char x; if (a && b) x = 1; return x; }
+      |                                       ^~~~~~~~~~~
+fix-it:"sema-uninitialized-fixits-clang.c":{10:39-10:51}:""
+sema-uninitialized-fixits-clang.c:10:43: warning: variable 'x' is used uninitialized whenever '&&' condition is false [-Wsometimes-uninitialized]
+   10 | char and_kept(int a, int b) { char x; if (a && b) x = 1; return x; }
+      |                                           ^
+sema-uninitialized-fixits-clang.c:10:65: note: uninitialized use occurs here
+   10 | char and_kept(int a, int b) { char x; if (a && b) x = 1; return x; }
+      |                                                                 ^
+sema-uninitialized-fixits-clang.c:10:43: note: remove the '&&' if its condition is always true
+   10 | char and_kept(int a, int b) { char x; if (a && b) x = 1; return x; }
+      |                                           ^~~~
+fix-it:"sema-uninitialized-fixits-clang.c":{10:43-10:47}:""
+sema-uninitialized-fixits-clang.c:10:37: note: initialize the variable 'x' to silence this warning
+   10 | char and_kept(int a, int b) { char x; if (a && b) x = 1; return x; }
+      |                                     ^
+      |                                      = '\0'
+fix-it:"sema-uninitialized-fixits-clang.c":{10:37-10:37}:" = '\\0'"
+sema-uninitialized-fixits-clang.c:11:68: warning: variable 'x' is uninitialized when used here [-Wuninitialized]
+   11 | long or_value(int a, int b) { long x; if (a || b) return 0; return x; }
+      |                                                                    ^
+sema-uninitialized-fixits-clang.c:11:37: note: initialize the variable 'x' to silence this warning
+   11 | long or_value(int a, int b) { long x; if (a || b) return 0; return x; }
+      |                                     ^
+      |                                      = 0
+fix-it:"sema-uninitialized-fixits-clang.c":{11:37-11:37}:" = 0"
+sema-uninitialized-fixits-clang.c:13:39: warning: variable 'x' is used uninitialized whenever 'for' loop exits because its condition is false [-Wsometimes-uninitialized]
+   13 | int for_exited(int n) { int x; for (; n;) { x = 1; break; } return x; }
+      |                                       ^
+sema-uninitialized-fixits-clang.c:13:68: note: uninitialized use occurs here
+   13 | int for_exited(int n) { int x; for (; n;) { x = 1; break; } return x; }
+      |                                                                    ^
+sema-uninitialized-fixits-clang.c:13:39: note: remove the condition if it is always true
+   13 | int for_exited(int n) { int x; for (; n;) { x = 1; break; } return x; }
+      |                                       ^
+fix-it:"sema-uninitialized-fixits-clang.c":{13:39-13:40}:""
+sema-uninitialized-fixits-clang.c:13:30: note: initialize the variable 'x' to silence this warning
+   13 | int for_exited(int n) { int x; for (; n;) { x = 1; break; } return x; }
+      |                              ^
+      |                               = 0
+fix-it:"sema-uninitialized-fixits-clang.c":{13:30-13:30}:" = 0"
+sema-uninitialized-fixits-clang.c:14:73: warning: variable 'x' is used uninitialized whenever 'do' loop exits because its condition is false [-Wsometimes-uninitialized]
+   14 | int do_exited(int n) { int x; do { if (g(n)) { x = 1; break; } } while (n--); return x; }
+      |                                                                         ^~~
+sema-uninitialized-fixits-clang.c:14:86: note: uninitialized use occurs here
+   14 | int do_exited(int n) { int x; do { if (g(n)) { x = 1; break; } } while (n--); return x; }
+      |                                                                                      ^
+sema-uninitialized-fixits-clang.c:14:73: note: remove the condition if it is always true
+   14 | int do_exited(int n) { int x; do { if (g(n)) { x = 1; break; } } while (n--); return x; }
+      |                                                                         ^~~
+      |                                                                         1
+fix-it:"sema-uninitialized-fixits-clang.c":{14:73-14:76}:"1"
+sema-uninitialized-fixits-clang.c:14:29: note: initialize the variable 'x' to silence this warning
+   14 | int do_exited(int n) { int x; do { if (g(n)) { x = 1; break; } } while (n--); return x; }
+      |                             ^
+      |                              = 0
+fix-it:"sema-uninitialized-fixits-clang.c":{14:29-14:29}:" = 0"
+9 warnings generated.

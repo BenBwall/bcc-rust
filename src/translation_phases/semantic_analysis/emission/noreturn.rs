@@ -342,6 +342,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 _ = self.functions.emission.pure_functions.insert(binding, ());
             }
         }
+        // Clang accepts `analyzer_noreturn` on a function and on a pointer
+        // to one, whose declaration a call then names.
+        if matches!(data.kind, BindingKind::Function | BindingKind::Object) {
+            let analyzer_noreturn = previous
+                .is_some_and(|b| self.functions.emission.analyzer_noreturn.contains_key(&b))
+                || self
+                    .declaration_attribute_lists(spec.extensions, Some(declarator))
+                    .iter()
+                    .any(|list| {
+                        super::super::attributes::known_names(list, self.context)
+                            .any(|(_, name)| name == "analyzer_noreturn")
+                    });
+            if analyzer_noreturn {
+                _ = self
+                    .functions
+                    .emission
+                    .analyzer_noreturn
+                    .insert(binding, ());
+            }
+        }
         if data.kind == BindingKind::Typedef && self.scopes[data.scope].kind == ScopeKind::File {
             match self.context.string_cache.at(data.name.name) {
                 | "jmp_buf" => self.functions.emission.jmp_buf = true,

@@ -249,6 +249,11 @@ impl CompilerConfiguration {
             | DiagnosticGroup::ShadowAll => &[DiagnosticGroup::Shadow],
             | DiagnosticGroup::UnusedLocalTypedefs if clang =>
                 &[DiagnosticGroup::UnusedLocalTypedef],
+            | DiagnosticGroup::Uninitialized if clang => &[
+                DiagnosticGroup::UninitializedSelfReference,
+                DiagnosticGroup::SometimesUninitialized,
+                DiagnosticGroup::UninitializedConstPointer,
+            ],
             | _ => &[],
         };
         for &child in children {
@@ -331,6 +336,13 @@ impl CompilerConfiguration {
         self.warning_options[DiagnosticGroup::Format as usize].apply_all(enabled);
         if self.identity.rules() == super::RuleSet::Clang {
             for &group in DiagnosticGroup::CLANG_FORMAT {
+                self.warning_options[group as usize].apply_all(enabled);
+            }
+            for group in [
+                DiagnosticGroup::Uninitialized,
+                DiagnosticGroup::SometimesUninitialized,
+                DiagnosticGroup::UninitializedConstPointer,
+            ] {
                 self.warning_options[group as usize].apply_all(enabled);
             }
         }
@@ -1141,6 +1153,20 @@ diagnostic_groups! {
     /// Clang's subscript of plain `char` type, under `-Wall`; GCC's form of
     /// the group is not modeled.
     CharSubscripts => Some("char-subscripts"), Ignored, false;
+    /// Clang's read of a local variable before any store to it, under
+    /// `-Wall`; it holds the sometimes and const-pointer groups. GCC's group
+    /// of this name comes from its optimizer and is not modeled.
+    Uninitialized => Some("uninitialized"), Ignored, false;
+    /// Clang's read of a variable in its own initializer, which the group
+    /// holds but which is on whenever the analysis runs.
+    UninitializedSelfReference => Some("uninitialized"), ClangWarning, false;
+    /// Clang's read that a branch leaves uninitialized.
+    SometimesUninitialized => Some("sometimes-uninitialized"), Ignored, false;
+    /// Clang's `&x` of an uninitialized `x` passed as a pointer to `const`.
+    UninitializedConstPointer => Some("uninitialized-const-pointer"), Ignored, false;
+    /// Clang's read that may be uninitialized on a path it cannot name,
+    /// which `-Wall` leaves off.
+    ConditionalUninitialized => Some("conditional-uninitialized"), Ignored, false;
     /// Clang's array, structure or union initialized by elements whose
     /// braces were left out, under `-Wall`; GCC's form of the group, which
     /// its `-Wall` holds too, is not modeled.
@@ -1322,6 +1348,9 @@ impl DiagnosticGroup {
         Self::Switch,
         Self::BoolOperation,
         Self::CharSubscripts,
+        Self::Uninitialized,
+        Self::SometimesUninitialized,
+        Self::UninitializedConstPointer,
         Self::MissingBraces,
         Self::ReturnType,
         Self::ImplicitFunctionDeclaration,

@@ -155,6 +155,9 @@ pub(super) struct State<'tu, 's> {
     weak_values: ArenaMap<'s, StringCacheId, usize>,
     /// Direct calls annotated pure or const, inherited by redeclarations.
     pure_functions: ArenaMap<'s, usize, ()>,
+    /// Functions declared `analyzer_noreturn`, which Clang's control-flow
+    /// graph ends a block at a direct call of (`isAnalyzerNoReturn`).
+    pub(in crate::translation_phases::semantic_analysis) analyzer_noreturn: ArenaMap<'s, usize, ()>,
     /// The output-token ordinal past the root being analyzed.
     pub(super) root_end: usize,
     /// The weak names that apply to the code being analyzed: those before
@@ -270,6 +273,7 @@ impl<'s> State<'_, 's> {
             weak_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             weak_values: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             pure_functions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            analyzer_noreturn: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             root_end: usize::MAX,
             weak_horizon: usize::MAX,
             weak_read: false,

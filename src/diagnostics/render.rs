@@ -565,7 +565,11 @@ impl Renderer {
     /// beside the caret (`DiagnosticRenderer::emitDiagnostic`): a
     /// replacement's range with `~`, and an insertion's empty range, which
     /// draws nothing but reaches the caret line out to its column unless
-    /// a blank stands on either side of it (`highlightRange`).
+    /// a blank stands on either side of it (`highlightRange`). A range is
+    /// underlined on each line it spans, without the blanks at either end
+    /// of its part of the line, and a part that is blank draws nothing, as
+    /// a removal from the end of one statement to the start of the next
+    /// has them.
     fn push_edit_marks(
         edits: &[Edit<'_>],
         context: &Context<'_>,
@@ -578,29 +582,59 @@ impl Renderer {
             ) else {
                 continue;
             };
-            let (line, _, line_end) = Self::locate(starts, text, edit.start);
             let blank = |byte: Option<&u8>| byte.is_none_or(|&byte| byte == b' ' || byte == b'\t');
             let insertion = edit.start == edit.end;
-            if insertion
-                && (blank(text.as_bytes().get(edit.start)) && edit.start < line_end
+            if insertion {
+                let (line, _, line_end) = Self::locate(starts, text, edit.start);
+                if blank(text.as_bytes().get(edit.start)) && edit.start < line_end
                     || blank(
                         edit.start
                             .checked_sub(1)
                             .and_then(|at| text.as_bytes().get(at)),
-                    ))
-            {
+                    )
+                {
+                    continue;
+                }
+                marks.push(Mark {
+                    file: edit.file,
+                    line,
+                    start: edit.start,
+                    end: edit.start,
+                    primary: false,
+                    label: None,
+                    order: marks.len(),
+                    insertion,
+                });
                 continue;
             }
-            marks.push(Mark {
-                file: edit.file,
-                line,
-                start: edit.start,
-                end: edit.end.min(line_end),
-                primary: false,
-                label: None,
-                order: marks.len(),
-                insertion,
-            });
+            // A range over several lines is underlined on each.
+            let mut at = edit.start;
+            loop {
+                let (line, _, line_end) = Self::locate(starts, text, at);
+                let (mut start, mut end) = (at, edit.end.min(line_end));
+                while start < end && blank(text.as_bytes().get(start)) {
+                    start += 1;
+                }
+                while end > start && blank(text.as_bytes().get(end - 1)) {
+                    end -= 1;
+                }
+                if start < end {
+                    marks.push(Mark {
+                        file: edit.file,
+                        line,
+                        start,
+                        end,
+                        primary: false,
+                        label: None,
+                        order: marks.len(),
+                        insertion,
+                    });
+                }
+                match starts.get(line) {
+                    | Some(&next) if next < edit.end => at = next,
+                    | _ => break,
+                }
+            }
         }
     }
 

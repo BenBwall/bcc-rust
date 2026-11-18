@@ -54,6 +54,8 @@ pub(crate) struct SemanticError {
     /// The parameter an argument converts to, which Clang notes after a
     /// diagnostic of the conversion.
     pub(crate) parameter:          Option<ParameterNote>,
+    /// The notes that follow it, in order.
+    pub(crate) related:            RelatedNotes,
     /// The edit Clang suggests for a conversion it refuses.
     pub(crate) fix_it:             Option<ConversionFixIt>,
 }
@@ -78,6 +80,52 @@ pub(crate) enum ConversionEdit {
     Parenthesize(&'static str),
     /// Removes the value's first token, its unary `&` or `*`.
     RemoveOperator,
+}
+
+/// Up to three notes that follow a diagnostic, each a place and its words,
+/// as Clang writes `note:` lines after the warnings of its analyses, and
+/// up to three edits Clang suggests with them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct RelatedNotes {
+    pub(crate) notes: [Option<(SourceVectors, StringCacheId)>; 3],
+    pub(crate) edits: [Option<NoteEdit>; 3],
+}
+
+/// An edit Clang suggests with the note `note` of [`RelatedNotes`], which
+/// it prints under the note's source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NoteEdit {
+    pub(crate) note:  u8,
+    pub(crate) place: FixItPlace,
+    pub(crate) text:  EditText,
+}
+
+/// The text of a [`NoteEdit`]: a byte, where a string would add sixteen to
+/// every diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditText {
+    /// A removal.
+    Nothing,
+    /// The condition `0` or `1`.
+    Zero,
+    One,
+    /// An initializer: ` = 0`, ` = 0.0` or ` = '\0'`.
+    IntegerInitializer,
+    FloatingInitializer,
+    CharacterInitializer,
+}
+
+impl EditText {
+    pub(crate) const fn text(self) -> &'static str {
+        match self {
+            | Self::Nothing => "",
+            | Self::Zero => "0",
+            | Self::One => "1",
+            | Self::IntegerInitializer => " = 0",
+            | Self::FloatingInitializer => " = 0.0",
+            | Self::CharacterInitializer => " = '\\0'",
+        }
+    }
 }
 
 /// Where the declaration of a call's function declares the parameter an
@@ -188,6 +236,10 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
     ValueWarning(crate::configuration::DiagnosticGroup),
+    /// A read of a local variable no store may have reached, in Clang's
+    /// words, which are the diagnostic's name.
+    /// C99: §6.2.4p5, p. 32; PDF p. 44; §6.7.8p10, p. 126; PDF p. 138.
+    Uninitialized(crate::configuration::DiagnosticGroup),
     /// C99: §6.5.8p6, p. 86; PDF p. 98.
     TypeLimits(crate::configuration::DiagnosticGroup),
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42; §6.8.3p3, p. 132; PDF p. 144.
@@ -1277,6 +1329,7 @@ impl SemanticErrorKind {
             | Self::Main(_) => "nonportable declaration of main",
             | Self::SignCompare => "signed operand converts to unsigned",
             | Self::ValueWarning(_) => "this value is not what it seems",
+            | Self::Uninitialized(_) => "this may read an indeterminate value",
             | Self::TypeLimits(_) => "the types decide this comparison",
             | Self::ShadowOrBody(_) => "this may not be what it looks like",
             | Self::Parentheses(_) => "this may not group as written",
@@ -1586,6 +1639,11 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::UnusedComparison
                     | crate::configuration::DiagnosticGroup::BoolOperation
                     | crate::configuration::DiagnosticGroup::CharSubscripts
+                    | crate::configuration::DiagnosticGroup::Uninitialized
+                    | crate::configuration::DiagnosticGroup::UninitializedSelfReference
+                    | crate::configuration::DiagnosticGroup::SometimesUninitialized
+                    | crate::configuration::DiagnosticGroup::UninitializedConstPointer
+                    | crate::configuration::DiagnosticGroup::ConditionalUninitialized
                     | crate::configuration::DiagnosticGroup::MissingBraces
                     | crate::configuration::DiagnosticGroup::Main
                     | crate::configuration::DiagnosticGroup::MainExtension
@@ -2020,6 +2078,11 @@ impl SemanticErrorKind {
                 "constant changed by conversion",
                 "C99 §6.3.1.3p3: converting a value the new type cannot represent gives an \
                  implementation-defined result",
+            ),
+            | Self::Uninitialized(_) => (
+                "variable read before it is initialized",
+                "C99 §6.2.4p5 and §6.7.8p10: an automatic object without an initializer has an \
+                 indeterminate value until something is stored in it",
             ),
             | Self::TypeLimits(_) => (
                 "comparison decided by type",
@@ -3011,6 +3074,7 @@ impl SemanticErrorKind {
         match self {
             | Self::PointerConstraint(group)
             | Self::ValueWarning(group)
+            | Self::Uninitialized(group)
             | Self::TypeLimits(group)
             | Self::ShadowOrBody(group)
             | Self::Parentheses(group)
@@ -3480,6 +3544,7 @@ impl ToDiagnostic for SemanticError {
             SemanticErrorKind::SignCompare
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ValueWarning(_)
+                | SemanticErrorKind::Uninitialized(_)
                 | SemanticErrorKind::TypeLimits(_)
                 | SemanticErrorKind::ShadowOrBody(_)
                 | SemanticErrorKind::Parentheses(_)
@@ -3656,6 +3721,21 @@ impl ToDiagnostic for SemanticError {
                 }
                 // Clang's notes name places.
                 diagnostic.related_points = true;
+            }
+        }
+        for (index, &(site, words)) in self
+            .related
+            .notes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, note)| Some((index, note.as_ref()?)))
+        {
+            let label = arena.alloc_str(context.string_cache.at(words));
+            diagnostic = diagnostic.secondary(site, label);
+            for edit in self.related.edits.iter().flatten() {
+                if usize::from(edit.note) == index {
+                    diagnostic = diagnostic.note_fix_it(edit.place, edit.text.text());
+                }
             }
         }
         if let Some(parameter) = self.parameter {
