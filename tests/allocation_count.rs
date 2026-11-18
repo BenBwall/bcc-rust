@@ -362,8 +362,16 @@ mod tests {
     /// Compiling every golden fixture under its own options, before the
     /// diagnostics are reported, allocates only in arenas: this reaches the
     /// analyses that run only when a fixture's warnings are on, which the
-    /// measured benchmark inputs leave off.
+    /// measured benchmark inputs leave off. Not on Windows, where every
+    /// path the standard library opens or inspects is first copied to a
+    /// heap buffer as UTF-16 (`sys::path::windows::maybe_verbatim`), so the
+    /// fixtures that search for headers allocate outside the compiler; on
+    /// Unix a path shorter than 384 bytes is converted on the stack.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "std's Windows file-system calls copy each path to a heap UTF-16 buffer"
+    )]
     fn compiling_golden_fixtures_makes_no_global_allocations() {
         let mut failures = Vec::new();
         for fixture in golden_fixtures() {
