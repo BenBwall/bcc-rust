@@ -300,9 +300,14 @@ impl Renderer {
             let Some(source) = label.source.range() else {
                 continue;
             };
+            // A range that ends outside the expansion, in the file after
+            // the invocation, cannot be brought into the definition, and
+            // Clang's note draws none of it (`mapDiagnosticRanges`).
             if let Some((_, site)) = context.macro_body_expansion(source)
                 && site.source_file_index == expansion.site.source_file_index
                 && site.index == expansion.site.index
+                && context.invocation_span(Context::last_source_vector(source))
+                    == context.invocation_span(source)
             {
                 // The definition holds the range; what the arguments wrote
                 // of it is in the invocation, which Clang's note does not
