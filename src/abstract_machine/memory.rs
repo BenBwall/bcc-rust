@@ -187,6 +187,7 @@ impl Machine {
             },
             function,
             lifetime: "alive",
+            declared: true,
             parameter,
             literal,
             value,
@@ -221,7 +222,10 @@ impl Machine {
     }
 
     /// The object a name designates: an automatic object of the innermost
-    /// call, or a static object, which the program created before `main`.
+    /// call whose declaration has been reached, since its scope begins
+    /// there (C99 §6.2.1p7), or a static object, which the program created
+    /// before `main`. A block's `x` that entry into the block created
+    /// leaves an outer `x` visible until its own declaration.
     pub fn named(&self, place: &Place) -> Result<usize, Diagnostic> {
         let name = match place {
             | Place::Static(index) => return Ok(index + 1),
@@ -236,6 +240,7 @@ impl Machine {
                 object.name == *name
                     && object.frame_id == self.activations[top].id
                     && object.lifetime == "alive"
+                    && object.declared
             })
             .map(|object| object.id)
             .ok_or_else(|| self.error("identifier has no live object in this activation"))

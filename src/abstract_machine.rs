@@ -167,7 +167,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 7.
+    /// Encodes the current observation using schema version 8.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()

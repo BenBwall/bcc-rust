@@ -216,6 +216,149 @@ fn shadowing_ends_inner_lifetimes_and_preserves_outer_object() {
     );
 }
 
+/// The state after the first step of `kind` in `source`'s run.
+fn first(source: &str, kind: EventKind) -> State {
+    states(source)
+        .into_iter()
+        .find(|state| state.event.kind == kind)
+        .expect("the run has a step of this kind")
+}
+
+// C99 §6.2.4p5: an automatic object lives from entry into its block, before
+// its declaration is reached; C99 §6.2.1p7: its name's scope begins only
+// after its declarator.
+#[test]
+fn entering_a_block_begins_the_lifetimes_of_its_objects() {
+    let entered = first(
+        "int main(void) { int a = 1; { int b; b = 2; } int c = a; return c; }",
+        EventKind::EnterBlock,
+    );
+    let names: Vec<&str> = entered
+        .event
+        .objects
+        .iter()
+        .map(|&id| entered.objects[id - 1].name.as_str())
+        .collect();
+    assert_eq!(names, ["a", "c"], "only the block's own objects, not b");
+    assert_eq!(entered.event.title, "Begin the lifetime of `a` and `c`");
+    assert!(
+        entered
+            .objects
+            .iter()
+            .all(|object| object.value == Value::Indeterminate
+                && object.lifetime == "alive"
+                && !object.declared)
+    );
+    assert!(
+        entered
+            .event
+            .clauses
+            .iter()
+            .any(|clause| clause.id == "6.2.4p5")
+    );
+    let states = states("int main(void) { int a = 1; int c; return a; }");
+    let declared: Vec<&State> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Declare)
+        .collect();
+    assert_eq!(declared.len(), 2);
+    assert_eq!(declared[0].event.title, "Declare `a` (int)");
+    assert!(declared[0].objects[0].declared && !declared[0].objects[1].declared);
+    assert!(
+        declared[0].event.summary.contains("initializer runs next"),
+        "{}",
+        declared[0].event.summary
+    );
+    assert!(
+        declared[1].event.summary.contains("no initializer"),
+        "{}",
+        declared[1].event.summary
+    );
+    assert_eq!(
+        declared[0].objects.len(),
+        2,
+        "reaching a declaration creates nothing"
+    );
+    assert_eq!(states.last().map(|state| state.status), Some("finished"));
+    let many = first(
+        "int main(void) { int a; int b; int c; int d; int e; int f; return 0; }",
+        EventKind::EnterBlock,
+    );
+    assert!(
+        many.event
+            .summary
+            .contains("its 6 objects, `a`, `b` and the rest")
+            && many.event.title.contains("`e` and `f`"),
+        "{} / {}",
+        many.event.title,
+        many.event.summary
+    );
+    let empty = first("int main(void) { return 0; }", EventKind::EnterBlock);
+    assert_eq!(empty.event.title, "Enter a block");
+    assert!(empty.event.objects.is_empty());
+}
+
+#[test]
+fn a_name_designates_an_outer_object_until_the_inner_declaration() {
+    // The inner `x` exists from the inner brace, but `y = x` still reads
+    // the outer one.
+    let session =
+        run("int main(void) { int x = 1; { int y = x; int x = 2; y = y + x; return y; } }");
+    assert_eq!(session.state().return_value, Some(Value::Integer(3)));
+    // `int x = x;` reads the object being declared, still indeterminate.
+    let session = run("int main(void) { int x = x; return x; }");
+    assert_eq!(session.state().status, "error");
+    assert_eq!(session.state().diagnostics[0].kind, "indeterminate");
+}
+
+// C99 §6.8.5p5: a loop body is a block, entered anew on each iteration.
+#[test]
+fn each_iteration_begins_a_new_lifetime() {
+    let states = states(
+        "int main(void) { int s = 0; for (int i = 0; i < 3; i++) { int t = i; s = s + t; } return \
+         s; }",
+    );
+    let begun: Vec<usize> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::EnterBlock)
+        .flat_map(|state| state.event.objects.clone())
+        .collect();
+    let named = |name: &str| {
+        let last = states.last().expect("a final state");
+        begun
+            .iter()
+            .filter(|&&id| last.objects[id - 1].name == name)
+            .count()
+    };
+    assert_eq!((named("s"), named("i"), named("t")), (1, 1, 3));
+    assert_eq!(
+        states.last().map(|state| state.return_value.clone()),
+        Some(Some(Value::Integer(3)))
+    );
+}
+
+#[test]
+fn a_return_ends_objects_whose_declarations_were_never_reached() {
+    let states = states(
+        "int f(int c) { int a = 1; if (c) return a; int b = 2; return a + b; } int main(void) { \
+         return f(1); }",
+    );
+    let returned = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Return)
+        .expect("f returns");
+    let ended: Vec<(&str, bool)> = returned
+        .event
+        .objects
+        .iter()
+        .map(|&id| {
+            let object = &returned.objects[id - 1];
+            (object.name.as_str(), object.declared)
+        })
+        .collect();
+    assert_eq!(ended, [("c", true), ("a", true), ("b", false)]);
+}
+
 #[test]
 fn array_partial_initialization_and_scalar_pointer_arithmetic() {
     returned(
@@ -463,7 +606,7 @@ fn snapshots_use_schema_ranges_pointer_ids_and_escaped_source() {
                   a; return *p; }";
     let session = run(source);
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":7"), "versioned schema");
+    assert!(json.contains("\"schema_version\":8"), "versioned schema");
     assert!(
         json.contains(
             "\"kind\":\"pointer\",\"target\":1,\"offset\":0,\"first\":0,\"length\":1,\"structure\"\
@@ -995,7 +1138,7 @@ fn loop_conditions_and_exit_statuses_say_what_happens() {
         .expect("a declaration")
         .event;
     assert!(
-        declared.summary.contains("from the start of its block"),
+        declared.summary.contains("existed since its block began"),
         "{}",
         declared.summary
     );
@@ -1281,7 +1424,7 @@ fn storing_zero_into_a_pointer_explains_the_null_pointer() {
 fn schema_three_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":7"));
+    assert!(json.contains("\"schema_version\":8"));
     assert!(
         json.contains("\"kind\":\"return\",\"category\":\"call\""),
         "{json}"
@@ -1477,7 +1620,7 @@ fn structures_are_laid_out_with_padding_on_x86_64() {
             break state;
         }
     };
-    assert_eq!(declared.event.title, "Create `e` (struct entry)");
+    assert_eq!(declared.event.title, "Declare `e` (struct entry)");
     assert!(
         declared
             .event
@@ -2478,7 +2621,7 @@ fn the_constants_lesson_narrates_define_const_cast_and_compound_assignment() {
     assert_eq!(step.r#type, "const int");
     let declared = states
         .iter()
-        .find(|state| state.event.title == "Create `step` (const int)")
+        .find(|state| state.event.title == "Declare `step` (const int)")
         .expect("step is declared");
     assert!(declared.event.explanation.contains("defined const"));
     assert!(
@@ -2942,7 +3085,7 @@ fn integer_types_have_their_x86_64_sizes_and_say_what_c_promises() {
     );
     let declared = states
         .iter()
-        .find(|state| state.event.title == "Create `e` (unsigned int)")
+        .find(|state| state.event.title == "Declare `e` (unsigned int)")
         .expect("e is declared");
     assert!(
         declared
@@ -3516,7 +3659,7 @@ fn an_object_declared_size_t_keeps_the_typedef_name() {
     assert_eq!(ty("plain"), Some("unsigned long"));
     let declared = steps
         .iter()
-        .find(|state| state.event.title == "Create `size` (size_t)")
+        .find(|state| state.event.title == "Declare `size` (size_t)")
         .expect("size is declared");
     assert!(
         declared.event.summary.contains("a size_t object"),
@@ -4366,7 +4509,7 @@ int main(void) {
 fn floating_values_and_types_reach_the_json() {
     let session = run("int main(void) { double d = 0.1; float f = d; return 0; }");
     let json = session.trace_json();
-    assert!(json.starts_with("{\"schema_version\":7,"), "{json}");
+    assert!(json.starts_with("{\"schema_version\":8,"), "{json}");
     assert!(json.contains(
         "{\"kind\":\"floating\",\"type\":\"double\",\"value\":\"0.1\",\"exact\":\"0.\
          1000000000000000055511151231257827021181583404541015625\",\"bytes\":[154,153,153,153,153,\

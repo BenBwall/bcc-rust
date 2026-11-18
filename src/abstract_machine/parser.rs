@@ -20,6 +20,7 @@ use super::{
     },
     model::{
         Arithmetic,
+        BlockObject,
         Diagnostic,
         Directive,
         DirectiveKind,
@@ -69,6 +70,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         declaration_macros: Vec::new(),
         returns: Type::INT,
         updates: false,
+        blocks: Vec::new(),
     };
     let mut functions: Vec<Function> = Vec::new();
     let mut total_code = 0;
@@ -277,6 +279,9 @@ pub(super) struct Parser<'a> {
     /// Whether the expression being parsed is a condition, which may
     /// contain one `++` or `--` (see `check_update`).
     pub updates:            bool,
+    /// The `Enter` instruction of each open block, innermost last, which
+    /// lists the automatic objects the block declares.
+    pub blocks:             Vec<usize>,
 }
 
 impl<'a> Parser<'a> {
@@ -284,7 +289,7 @@ impl<'a> Parser<'a> {
         let opening = self.current();
         self.expect("{")?;
         self.scope += 1;
-        self.emit(Op::Enter, opening.range)?;
+        self.enter(opening.range)?;
         while !self.at("}") {
             if self.at("") {
                 return Err(self.error("expected closing brace"));
@@ -303,10 +308,24 @@ impl<'a> Parser<'a> {
         }
         let closing = self.current();
         self.expect("}")?;
-        self.emit(Op::Leave, closing.range)?;
+        self.leave(closing.range)?;
         self.symbols.retain(|symbol| symbol.scope < self.scope);
         self.scope -= 1;
         Ok(())
+    }
+
+    /// Enter a block at `range`. Its automatic objects are added to the
+    /// instruction as their declarations are parsed: entry into the block
+    /// creates them all (C99 §6.2.4p5).
+    fn enter(&mut self, range: SourceRange) -> Result<(), Diagnostic> {
+        self.blocks.push(self.code.len());
+        self.emit(Op::Enter(Vec::new()), range)
+    }
+
+    /// Leave the innermost block at `range`, ending its objects' lifetimes.
+    fn leave(&mut self, range: SourceRange) -> Result<(), Diagnostic> {
+        let _block = self.blocks.pop();
+        self.emit(Op::Leave, range)
     }
 
     fn statement(&mut self) -> Result<(), Diagnostic> {
@@ -384,9 +403,9 @@ impl<'a> Parser<'a> {
         }
         let range = self.current().range;
         self.scope += 1;
-        self.emit(Op::Enter, range)?;
+        self.enter(range)?;
         self.statement()?;
-        self.emit(Op::Leave, range)?;
+        self.leave(range)?;
         self.symbols.retain(|symbol| symbol.scope < self.scope);
         self.scope -= 1;
         Ok(())
@@ -397,7 +416,7 @@ impl<'a> Parser<'a> {
         self.position += 1;
         self.expect("(")?;
         self.scope += 1;
-        self.emit(Op::Enter, token.range)?;
+        self.enter(token.range)?;
         if self.at_type() || self.at("const") {
             self.declaration()?;
         } else {
@@ -432,7 +451,7 @@ impl<'a> Parser<'a> {
         self.code.extend(iteration);
         self.emit(Op::Jump(head), token.range)?;
         self.patch(branch, self.code.len());
-        self.emit(Op::Leave, token.range)?;
+        self.leave(token.range)?;
         self.symbols.retain(|symbol| symbol.scope < self.scope);
         self.scope -= 1;
         Ok(())
@@ -512,8 +531,9 @@ impl<'a> Parser<'a> {
         Ok(true)
     }
 
-    /// Emit the creation of the automatic object `name`, noting a macro
-    /// in its array size.
+    /// List the automatic object `name` on its block's entry, which
+    /// creates it, and emit the step that reaches its declaration, noting a
+    /// macro in its array size.
     fn declare(
         &mut self,
         name: Token<'a>,
@@ -521,12 +541,21 @@ impl<'a> Parser<'a> {
         specified: Specified,
     ) -> Result<(), Diagnostic> {
         self.add_symbol(name, ty, self.scope, None, specified.constant)?;
-        self.emit(
-            Op::Declare {
+        if let Some(&block) = self.blocks.last()
+            && let Op::Enter(objects) = &mut self.code[block].op
+        {
+            objects.push(BlockObject {
                 name: String::from(name.text),
                 ty,
                 constant: specified.constant,
                 typedef: specified.typedef,
+            });
+        }
+        self.emit(
+            Op::Declare {
+                name: String::from(name.text),
+                ty,
+                initialized: self.at("="),
             },
             name.range,
         )?;

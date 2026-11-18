@@ -469,6 +469,11 @@ pub struct Object {
     pub function:         Option<String>,
     /// `alive` or `ended`.
     pub lifetime:         &'static str,
+    /// Whether execution has reached the object's declaration, from which
+    /// its name designates it (C99 §6.2.1p7). An automatic object exists
+    /// from entry into its block (C99 §6.2.4p5), before its declaration;
+    /// parameters and static objects are declared when they are created.
+    pub declared:         bool,
     /// Whether this object is a function parameter.
     pub parameter:        bool,
     /// Whether this object is the array a string literal denotes, which
@@ -702,17 +707,32 @@ pub(super) struct Instruction {
     pub macro_use: Option<usize>,
 }
 
+/// An automatic object a block declares, which entry into the block
+/// creates: `constant` when it is defined `const`, `typedef` the typedef
+/// name its type was spelled with.
+#[derive(Debug, Clone)]
+pub(super) struct BlockObject {
+    pub name:     String,
+    pub ty:       Type,
+    pub constant: bool,
+    pub typedef:  Option<&'static str>,
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum Op {
-    Enter,
+    /// Enter a block, creating the automatic objects declared directly in
+    /// it: each lives from here to the block's end, indeterminate until
+    /// something is stored (C99 §6.2.4p5).
+    Enter(Vec<BlockObject>),
     Leave,
-    /// Create an automatic object; `constant` when it is defined `const`,
-    /// `typedef` the typedef name its type was spelled with.
+    /// Reach the declaration of the automatic object `name`, which entry
+    /// into its block created: its name is in scope from here (C99
+    /// §6.2.1p7), and `initialized` when an initializer stores its first
+    /// value next (C99 §6.8p3).
     Declare {
-        name:     String,
-        ty:       Type,
-        constant: bool,
-        typedef:  Option<&'static str>,
+        name:        String,
+        ty:          Type,
+        initialized: bool,
     },
     /// Reaching the declaration of block-scope static `index`: nothing to do.
     StaticLocal(usize),

@@ -128,10 +128,10 @@ impl Topic {
                  that behaves the same way, which is why the compiler pipeline can look so \
                  different from these steps.",
             | Self::Scope =>
-                "A block is a scope: names declared inside it exist only up to its closing brace. \
-                 Its automatic variables (locals not declared static) are created for this run of \
-                 the block and destroyed when execution leaves it, so a loop body gets fresh \
-                 locals on every iteration.",
+                "A block is a scope: a name declared inside it can be used from its declaration up \
+                 to the closing brace. Its automatic variables (locals not declared static) are \
+                 created when execution enters the block and destroyed when it leaves, so a loop \
+                 body, itself a block, gets fresh locals on every iteration.",
             | Self::Lifetime =>
                 "After an object's lifetime ends, a pointer that still holds its address is \
                  dangling. Using it is undefined behavior, the classic dangling-pointer bug: the \
@@ -139,8 +139,8 @@ impl Topic {
             | Self::Indeterminate =>
                 "C does not set automatic local variables to zero (static ones start at zero). \
                  Until something is stored, the object's value is indeterminate, and reading it is \
-                 a bug. Strictly, C creates the object on entry to its block; this machine draws \
-                 it when the declaration is reached.",
+                 a bug. The object exists from entry into its block, before its declaration is \
+                 reached.",
             | Self::Lvalue =>
                 "An lvalue names a place, not a value. The operator around it decides what happens \
                  next: most operators read the value stored there, while the left side of `=`, the \
@@ -947,6 +947,73 @@ impl Machine {
         }
     }
 
+    /// Execution entered a block, which created the objects `begun`.
+    pub(super) fn enter_block(&self, range: SourceRange, begun: Vec<usize>) -> Event {
+        if begun.is_empty() {
+            return noted(
+                explained(
+                    Event::new(EventKind::EnterBlock, range, String::from("Enter a block")),
+                    "Execution enters a { … } block, a new scope: names declared inside belong to \
+                     it.",
+                    "A { … } compound statement is a block, and a block is a scope: a name \
+                     declared in it can be used from its declaration up to the closing brace, and \
+                     nowhere outside it. This block declares no objects of its own, so no \
+                     lifetimes begin here.",
+                    &[clauses::COMPOUND_STATEMENT, clauses::BLOCK_SCOPE],
+                ),
+                Topic::Scope,
+            );
+        }
+        let names = self.names(&begun);
+        let (verb, each, them) = if begun.len() == 1 {
+            ("begins", "it", "its")
+        } else {
+            ("begin", "each", "their")
+        };
+        // The lead names a few; the title and the explanation name them all.
+        let created = if begun.len() > 4 {
+            format!(
+                "its {} objects, {} and the rest",
+                begun.len(),
+                self.names(&begun[..2]).replace(" and ", ", ")
+            )
+        } else {
+            names.clone()
+        };
+        let summary = format!(
+            "Entering the block creates {created}: {each} exists from here, indeterminate until \
+             something is stored."
+        );
+        let text = format!(
+            "An automatic object (a local that is not static, and not a variable-length array, \
+             which this machine leaves out) lives from entry into its block until the block's \
+             execution ends. So {names} {verb} {them} lifetime at this brace, before the \
+             declaration is reached, and {each} holds an indeterminate value. The name cannot be \
+             used yet: a name's scope begins just after its declarator. Entering a nested block \
+             or calling a function suspends this block without ending it."
+        );
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::EnterBlock,
+                    range,
+                    format!("Begin the lifetime of {names}"),
+                ),
+                &summary,
+                &text,
+                &[
+                    clauses::AUTOMATIC_LIFETIME,
+                    clauses::SCOPE_START,
+                    clauses::INDETERMINATE,
+                    clauses::COMPOUND_STATEMENT,
+                ],
+            ),
+            Topic::Scope,
+        );
+        event.objects = begun;
+        event
+    }
+
     pub(super) fn leave_block(&self, range: SourceRange, ended: Vec<usize>) -> Event {
         let names = self.names(&ended);
         let mut event = if ended.is_empty() {
@@ -990,7 +1057,15 @@ impl Machine {
         event
     }
 
-    pub(super) fn declare(&self, range: SourceRange, id: usize, ty: Type) -> Event {
+    /// Execution reached the declaration of `id`, which entry into its
+    /// block created; `initialized` when its initializer runs next.
+    pub(super) fn declare(
+        &self,
+        range: SourceRange,
+        id: usize,
+        ty: Type,
+        initialized: bool,
+    ) -> Event {
         let object = &self.state.objects[id - 1];
         let function = self.function_name(object.frame_id);
         // A type spelled with a typedef name keeps it; the explanation says
@@ -1064,18 +1139,36 @@ impl Machine {
             | Type::Integer(integer) => format!("{} object", article(integer.spelling())),
             | Type::Floating(floating) => format!("{} object", article(floating.spelling())),
         };
+        let then = if initialized {
+            "its initializer runs next"
+        } else {
+            "with no initializer it stays indeterminate"
+        };
         let summary = format!(
-            "The machine draws `{name}` here, {kind} in {function}'s frame; C has it exist from \
-             the start of its block, with no value until one is stored.",
+            "`{name}`, {kind} that has existed since its block began, is declared here: its name \
+             can be used from now on, and {then}.",
             name = object.name,
         );
         let mut text = format!(
-            "The declaration of `{name}` is reached, so the machine creates {what} indeterminate \
-             until something is stored. The object lives in {function}'s frame: it has automatic \
-             storage duration.",
+            "`{name}` has existed since execution entered its block, which created {what} \
+             indeterminate until something is stored. The object lives in {function}'s frame: it \
+             has automatic storage duration. Its name can be used only from here on: a name's \
+             scope begins just after its declarator.",
             name = object.name,
         );
-        let mut cited = vec![clauses::AUTOMATIC_LIFETIME, clauses::INDETERMINATE];
+        text.push_str(if initialized {
+            " The initializer is evaluated and stored next, as it is each time execution reaches \
+             this declaration."
+        } else {
+            " Reaching a declaration without an initializer stores an indeterminate value: the \
+             object still has no value to read."
+        });
+        let mut cited = vec![
+            clauses::DECLARATION_REACHED,
+            clauses::SCOPE_START,
+            clauses::AUTOMATIC_LIFETIME,
+            clauses::INDETERMINATE,
+        ];
         let constant = self.metadata[id - 1].constant;
         if constant {
             let _ = write!(
@@ -1123,7 +1216,7 @@ impl Machine {
                 Event::new(
                     EventKind::Declare,
                     range,
-                    format!("Create `{}` ({})", object.name, object.r#type),
+                    format!("Declare `{}` ({})", object.name, object.r#type),
                 ),
                 &summary,
                 &text,
@@ -4443,19 +4536,6 @@ impl Machine {
                 |frame| frame.function.clone(),
             )
     }
-}
-
-pub(super) fn enter_block(range: SourceRange) -> Event {
-    noted(
-        explained(
-            Event::new(EventKind::EnterBlock, range, String::from("Enter a block")),
-            "Execution enters a { … } block, a new scope: names declared inside belong to it.",
-            "A { … } compound statement is a block, and a block is a scope: a name declared in it \
-             can be used from its declaration up to the closing brace, and nowhere outside it.",
-            &[clauses::COMPOUND_STATEMENT, clauses::BLOCK_SCOPE],
-        ),
-        Topic::Scope,
-    )
 }
 
 /// A character constant, spelled `spelling`, evaluates to `integer`.

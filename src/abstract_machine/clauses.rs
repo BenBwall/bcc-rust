@@ -56,6 +56,10 @@ clauses! {
     FILE_SCOPE = "6.2.1p4", "pp. 29-30; PDF pp. 41-42", "Scopes of identifiers",
         "A name declared outside every function has file scope: it can be used from its \
          declaration to the end of the file, in every function after it.";
+    /// C99: §6.2.1 paragraph 7, p. 30; PDF p. 42.
+    SCOPE_START = "6.2.1p7", "p. 30; PDF p. 42", "Scopes of identifiers",
+        "A name's scope begins just after its declarator: before its declaration, the name \
+         cannot be used, even where its object already exists.";
     /// C99: §6.2.4 paragraph 2, p. 32; PDF p. 44.
     LIFETIME = "6.2.4p2", "p. 32; PDF p. 44", "Storage durations of objects",
         "An object exists only during its lifetime; using it, or a pointer to it, after the \
@@ -414,6 +418,11 @@ clauses! {
     FULL_EXPRESSION = "6.8p4", "p. 131; PDF p. 143", "Statements and blocks",
         "The end of a full expression (an initializer, an expression statement, a condition, a \
          return value) is a sequence point: all its side effects are complete.";
+    /// C99: §6.8 paragraph 3, p. 131; PDF p. 143.
+    DECLARATION_REACHED = "6.8p3", "p. 131; PDF p. 143", "Statements and blocks",
+        "A local's initializer is evaluated and stored each time execution reaches its \
+         declaration, as if the declaration were a statement; a local without one gets an \
+         indeterminate value there.";
     /// C99: §6.8.2 paragraph 2, p. 132; PDF p. 144.
     COMPOUND_STATEMENT = "6.8.2p2", "p. 132; PDF p. 144", "Compound statement",
         "A { ... } compound statement is a block, with its own scope for declarations.";

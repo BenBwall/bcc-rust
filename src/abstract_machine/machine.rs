@@ -154,9 +154,26 @@ impl Machine {
         let range = instruction.range;
         let source = &program.source;
         Ok(match &instruction.op {
-            | Op::Enter => {
+            // Entry into a block creates every automatic object it declares,
+            // indeterminate; their names come into scope only at their
+            // declarations (C99 §6.2.4p5, §6.2.1p7).
+            | Op::Enter(objects) => {
                 self.activations[top].scope += 1;
-                narration::enter_block(range)
+                let scope = self.activations[top].scope;
+                let mut begun = Vec::with_capacity(objects.len());
+                for object in objects {
+                    let id =
+                        self.allocate(&object.name, object.ty, scope, Value::Indeterminate, false)?;
+                    if let Some(typedef) = object.typedef {
+                        self.name_type(id, typedef);
+                    }
+                    if object.constant {
+                        self.make_const(id);
+                    }
+                    self.state.objects[id - 1].declared = false;
+                    begun.push(id);
+                }
+                self.enter_block(range, begun)
             },
             | Op::Leave => {
                 let frame = &self.activations[top];
@@ -173,26 +190,35 @@ impl Machine {
                 self.activations[top].scope -= 1;
                 self.leave_block(range, ended)
             },
+            // The object exists already; from here its name designates it.
+            // Without an initializer, reaching the declaration stores an
+            // indeterminate value (C99 §6.8p3): this subset reaches each
+            // declaration once per entry into its block, when nothing has
+            // been stored yet, so the value is unchanged.
             | &Op::Declare {
                 ref name,
                 ty,
-                constant,
-                typedef,
+                initialized,
             } => {
-                let id = self.allocate(
-                    name,
-                    ty,
-                    self.activations[top].scope,
-                    Value::Indeterminate,
-                    false,
-                )?;
-                if let Some(typedef) = typedef {
-                    self.name_type(id, typedef);
-                }
-                if constant {
-                    self.make_const(id);
-                }
-                self.declare(range, id, ty)
+                let frame = &self.activations[top];
+                let id = self
+                    .state
+                    .objects
+                    .iter()
+                    .rev()
+                    .find(|object| {
+                        object.name == *name
+                            && object.frame_id == frame.id
+                            && object.lifetime == "alive"
+                            && !object.declared
+                            && self.metadata[object.id - 1].scope == frame.scope
+                    })
+                    .map(|object| object.id)
+                    .ok_or_else(|| {
+                        self.error("declaration of an object its block did not create")
+                    })?;
+                self.state.objects[id - 1].declared = true;
+                self.declare(range, id, ty, initialized)
             },
             | &Op::StaticLocal(index) => self.static_local(range, index + 1),
             | &Op::Push(integer, ty) => {
@@ -851,7 +877,7 @@ impl Machine {
         let Some(node) = instruction.node else {
             if matches!(
                 instruction.op,
-                Op::Enter | Op::Leave | Op::Declare { .. } | Op::Jump(_)
+                Op::Enter(_) | Op::Leave | Op::Declare { .. } | Op::Jump(_)
             ) {
                 activation.evaluation = None;
             } else if let Some(evaluation) = &mut activation.evaluation {
