@@ -1,0 +1,91 @@
+sema-null-compare-clang.c:13:7: warning: comparison of array 'array' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   13 |   if (array == 0)
+      |       ^~~~~    ~
+sema-null-compare-clang.c:15:12: warning: comparison of function 'function' not equal to a null pointer is always true [-Wtautological-pointer-compare]
+   15 |   if (0 != function)
+      |       ~    ^~~~~~~~
+sema-null-compare-clang.c:15:12: note: prefix with the address-of operator to silence this warning
+   15 |   if (0 != function)
+      |            ^
+sema-null-compare-clang.c:17:8: warning: comparison of address of 's' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   17 |   if (&s == (void *)0)
+      |        ^    ~~~~~~~~~
+sema-null-compare-clang.c:19:9: warning: comparison of array 's.member' not equal to a null pointer is always true [-Wtautological-pointer-compare]
+   19 |   if (s.member != 0)
+      |       ~~^~~~~~    ~
+sema-null-compare-clang.c:21:11: warning: comparison of array 'sp->member' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   21 |   if (sp->member == 0)
+      |       ~~~~^~~~~~    ~
+sema-null-compare-clang.c:23:7: warning: comparison of function 'pointer' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   23 |   if (pointer == 0)
+      |       ^~~~~~~    ~
+sema-null-compare-clang.c:23:7: note: prefix with the address-of operator to silence this warning
+   23 |   if (pointer == 0)
+      |       ^
+sema-null-compare-clang.c:23:7: note: suffix with parentheses to turn this into a function call
+   23 |   if (pointer == 0)
+      |       ^
+sema-null-compare-clang.c:25:7: warning: comparison of function 'counter' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   25 |   if (counter == 0)
+      |       ^~~~~~~    ~
+sema-null-compare-clang.c:25:7: note: prefix with the address-of operator to silence this warning
+   25 |   if (counter == 0)
+      |       ^
+sema-null-compare-clang.c:25:7: note: suffix with parentheses to turn this into a function call
+   25 |   if (counter == 0)
+      |       ^
+sema-null-compare-clang.c:27:7: warning: comparison of function 'counter' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   27 |   if (counter == (void *)0)
+      |       ^~~~~~~    ~~~~~~~~~
+sema-null-compare-clang.c:27:7: note: prefix with the address-of operator to silence this warning
+   27 |   if (counter == (void *)0)
+      |       ^
+sema-null-compare-clang.c:27:7: note: suffix with parentheses to turn this into a function call
+   27 |   if (counter == (void *)0)
+      |       ^
+sema-null-compare-clang.c:29:7: warning: comparison of function 'with_parameter' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   29 |   if (with_parameter == 0)
+      |       ^~~~~~~~~~~~~~    ~
+sema-null-compare-clang.c:29:7: note: prefix with the address-of operator to silence this warning
+   29 |   if (with_parameter == 0)
+      |       ^
+sema-null-compare-clang.c:36:32: warning: comparison of address of 'sp->p' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   36 |       || array[0] == 0 || &sp->p == 0 || weak_array == 0 || "text" == 0;
+      |                            ~~~~^    ~
+sema-null-compare-clang.c:40:13: warning: address of array 'array' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   40 |   _Bool b = array;
+      |         ~   ^~~~~
+sema-null-compare-clang.c:41:7: warning: address of function 'function' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   41 |   b = function;
+      |     ~ ^~~~~~~~
+sema-null-compare-clang.c:41:7: note: prefix with the address-of operator to silence this warning
+   41 |   b = function;
+      |       ^
+sema-null-compare-clang.c:42:8: warning: address of 's' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   42 |   if (&s)
+      |   ~~   ^
+sema-null-compare-clang.c:44:12: warning: address of array 'sp->member' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   44 |   if (!sp->member)
+      |       ~~~~~^~~~~~
+sema-null-compare-clang.c:46:10: warning: address of function 'truth' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   46 |   return truth;
+      |   ~~~~~~ ^~~~~
+sema-null-compare-clang.c:46:10: note: prefix with the address-of operator to silence this warning
+   46 |   return truth;
+      |          ^
+sema-null-compare-clang.c:46:10: note: suffix with parentheses to turn this into a function call
+   46 |   return truth;
+      |          ^
+sema-null-compare-clang.c:51:59: warning: comparison of array 'array' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   51 | int macros(void) { return ARRAY == 0 || IS_NULL(array) || array == ((void *)0); }
+      |                                                           ^~~~~    ~~~~~~~~~~~
+sema-null-compare-clang.c:55:8: warning: address of array 'array' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   55 |   if ((array))
+      |   ~~   ^~~~~
+sema-null-compare-clang.c:57:10: warning: address of 's' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   57 |   if (!(&s))
+      |       ~  ^
+sema-null-compare-clang.c:59:16: warning: address of array 'sp->member' will always evaluate to 'true' [-Wpointer-bool-conversion]
+   59 |   return ((sp->member)) ? 3 : 4;
+      |            ~~~~^~~~~~   ~
+19 warnings generated.

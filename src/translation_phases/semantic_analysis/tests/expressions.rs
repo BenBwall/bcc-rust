@@ -421,7 +421,7 @@ fn static_storage_arithmetic_and_address_constants() {
             let diagnostics = context.take_pending_errors();
             assert!(
                 matches!(diagnostics.as_slice(), [TranslationError::Semantic(error)]
-            if error.kind == SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::PointerBoolConversion)),
+            if error.kind.group() == Some(crate::configuration::DiagnosticGroup::PointerBoolConversion)),
                 "{diagnostics:?}"
             );
             assert_eq!(unit.errors, 0);

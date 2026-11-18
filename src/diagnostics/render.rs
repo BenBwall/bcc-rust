@@ -407,6 +407,9 @@ impl Renderer {
                     scratch,
                     true,
                 );
+                // A note is a diagnostic of its own, at another place, so
+                // the next one at the same place quotes its source again.
+                self.last_place.set(None);
             }
             return out.into_str();
         }
