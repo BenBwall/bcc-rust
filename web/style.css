@@ -908,6 +908,75 @@
   .recent-index { color: var(--ink-3); text-align: right; }
   .recent-title { min-width: 0; line-height: 1.45; overflow-wrap: anywhere; }
 
+  /* The steps of the expression the step belongs to, wired in the order
+     the machine took them; the step shown is vermilion ("now"), a call the
+     expression made is one double-ruled entry, and a dashed rule after a
+     step is a sequence point (C99 §5.1.2.3p2), as is one leading a call:
+     the point after its arguments, before the call (§6.5.2.2p10). */
+  .evaluation { margin-top: 14px; padding: 10px 12px 9px; border: 1px solid var(--seam); background: var(--device-2); }
+  .evaluation[hidden] { display: none; }
+  .evaluation-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 11.5px; font-weight: 400; line-height: 1.4; }
+  .evaluation-label { font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+  .evaluation-text { padding: 1px 6px; background: var(--cell); font: 700 13px/1.35 var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+  .evaluation-count { color: var(--ink-3); }
+  .evaluation-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; margin: 9px 0 0; padding: 0; list-style: none; }
+  .evaluation-steps > li { display: flex; align-items: center; min-width: 0; }
+  /* The wire from one step to the next. */
+  .evaluation-steps > li + li::before { content: ""; flex: none; width: 10px; border-top: 1.5px solid var(--ink-3); }
+  .evaluation-step { --cat: var(--ink-3); }
+  .evaluation-step[data-category="evaluate"] { --cat: var(--cat-evaluate); }
+  .evaluation-step[data-category="convert"] { --cat: var(--cat-convert); }
+  .evaluation-step[data-category="memory"] { --cat: var(--cat-memory); }
+  .evaluation-step[data-category="lifetime"] { --cat: var(--cat-lifetime); }
+  .evaluation-step[data-category="call"] { --cat: var(--cat-call); }
+  .evaluation-steps button {
+    display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 25ch; min-height: 30px; padding: 4px 8px;
+    border: 1.5px solid var(--ink); background: var(--cell); box-shadow: inset 3px 0 0 var(--cat, var(--ink-3));
+    font: 12px/1.35 var(--font-mono); color: var(--ink); text-align: left; cursor: pointer;
+  }
+  .evaluation-steps button:hover { background: var(--device-3); }
+  .evaluation-index { flex: none; font-size: 10.5px; color: var(--ink-3); }
+  /* A long title takes a second line, then stops short; its button's
+     title holds it whole. */
+  .evaluation-name { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+  .evaluation-step.is-current button { border-color: var(--accent); background: var(--accent); box-shadow: none; color: var(--on-accent); font-weight: 700; }
+  .evaluation-step.is-current .evaluation-index { color: #3a1406; }
+  /* Steps after the one shown, which the reader stepped back from. */
+  .evaluation-steps .is-after button { border-style: dashed; background: transparent; color: var(--ink-2); }
+  .evaluation-call button { border-width: 3px; border-style: double; background: var(--device-3); box-shadow: none; }
+  .evaluation-call.is-current button { border-color: var(--accent-ink); background: var(--accent-soft); font-weight: 700; }
+  .evaluation-call.is-current .evaluation-index { color: var(--ink-2); }
+  /* A sequence point: a dashed rule taller than the steps. */
+  .evaluation-step.is-point::after, .evaluation-point-key { content: ""; flex: none; align-self: stretch; margin: -5px 0 -5px 6px; border-left: 2px dashed var(--accent-ink); }
+  .evaluation-point-key { display: inline-block; height: 1.2em; margin: 0 2px; vertical-align: -.25em; }
+  .evaluation-point { flex: none; align-self: stretch; margin: -5px 6px -5px 0; border-left: 2px dashed var(--accent-ink); }
+  .evaluation-next { min-height: 30px; padding: 4px 8px; border: 1.5px dashed var(--ink-3); font-size: 12px; line-height: 1.35; color: var(--ink-2); gap: 6px; }
+  .evaluation-key { margin-top: 9px; font-size: 11px; line-height: 1.5; color: var(--ink-3); }
+  .evaluation-key a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+
+  /* What a step did, in motion: a stored value lands in its cell, a read
+     cell flashes its data-flow blue, a designated one is drawn in, and the
+     value-flow wire is drawn from operand to result. Reduced motion keeps
+     the same marks, still. */
+  @media (prefers-reduced-motion: no-preference) {
+    .cell:is([data-access="write"], [data-access="create"]) { animation: cell-lit 520ms var(--ease) both; }
+    .cell:is([data-access="write"], [data-access="create"]) .cell-value { animation: cell-stamp 380ms var(--ease) both; }
+    .cell[data-access="read"] { animation: cell-read 700ms var(--ease) both; }
+    .cell:is([data-access="designate"], [data-access="address"]) { animation: cell-aim 360ms var(--ease) both; }
+    .flow-arrow::after { transform-origin: left center; animation: wire-draw 320ms var(--ease) both; }
+    .flow-arrow ~ .flow-chip { animation: flow-arrive 260ms 200ms var(--ease) both; }
+    .evaluation-step.is-current button { animation: flow-arrive 240ms var(--ease) both; }
+  }
+  @keyframes cell-lit { from { background-color: var(--cell); } }
+  @keyframes cell-stamp { from { opacity: 0; transform: translateY(-.4em) scale(1.35); } }
+  @keyframes cell-read {
+    from { box-shadow: inset 0 0 0 var(--flow-ink), 0 0 0 5px color-mix(in srgb, var(--flow-ink) 60%, transparent); }
+    to { box-shadow: inset 0 -4px 0 var(--flow-ink), 0 0 0 0 transparent; }
+  }
+  @keyframes cell-aim { from { outline-offset: 3px; outline-color: transparent; } }
+  @keyframes wire-draw { from { transform: scaleX(0); } }
+  @keyframes flow-arrive { from { opacity: 0; transform: translateX(-6px); } }
+
   /* The standard's terms, with their definitions on hover or focus. */
   .nowrap { white-space: nowrap; }
   .term {
@@ -1566,6 +1635,19 @@
   /* Phones: short labels; the note leads right under the listing, so the
      line that ran and what it did share the first screen; the tape and the
      cells follow. */
+  @media (max-width: 600px) {
+    /* On a phone the steps run down a rail, a sequence point a dashed rule
+       across it. */
+    .evaluation { padding: 9px 10px 8px; }
+    .evaluation-steps { display: grid; gap: 5px; margin-left: 4px; padding-left: 10px; border-left: 1.5px solid var(--ink-3); }
+    .evaluation-steps > li + li::before { display: none; }
+    .evaluation-steps button, .evaluation-next { width: 100%; max-width: none; min-height: 32px; }
+    .evaluation-step.is-point { flex-direction: column; align-items: stretch; }
+    .evaluation-step.is-point::after { margin: 6px 0 1px; border-left: 0; border-top: 2px dashed var(--accent-ink); }
+    .evaluation-call.is-point { flex-direction: column; align-items: stretch; }
+    .evaluation-point { margin: 1px 0 6px; border-left: 0; border-top: 2px dashed var(--accent-ink); }
+    .evaluation-point-key { width: 1.4em; height: 0; vertical-align: .3em; border-left: 0; border-top: 2px dashed var(--accent-ink); }
+  }
   @media (max-width: 600px) {
     /* The three ways in, one under another, alike. */
     .hero-steps li { flex: 1 1 100%; }

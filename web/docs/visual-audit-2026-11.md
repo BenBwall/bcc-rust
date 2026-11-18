@@ -1001,3 +1001,225 @@ and no run logged an error.
 - LLVM IR still ends with its attribute groups and module flags
   (`attributes #0 = { "frame-pointer"="all" }`, `!llvm.module.flags`), which
   a newcomer cannot read either; the same fold could take them.
+
+## Part 6: the abstract machine's steps (2026-11)
+
+Parts 4 and 5 read the compiler's stages as a newcomer meets them. This part
+reads the abstract machine's stepper the same way: every lesson, every step,
+as a programmer who knows some C but not how the standard specifies it,
+asking at each step what just happened, why C requires it, what to look at,
+and why one line of C takes several steps. It fixes what it found on
+`agent/site-machine-steps`.
+
+### Method
+
+The site was built with `web/build.sh` from `main` at `a3d8da99a` (before)
+and from this branch (after), and served from `web/dist`, as in Part 5:
+Trunk without `--release`, the dev profile at `opt-level=s`. Playwright
+scripts drove Chromium:
+
+- **the walk:** at 1440x900 in the light theme with reduced motion, every
+  step of the twelve machine lessons from the first note to the last (1,254
+  notes), recording each note's title, kind, sequence point, lead, value
+  flow, clauses and "Why it matters", the source the step lit, and whether
+  the page scrolled sideways; screenshots at chosen steps of "Objects, loops
+  and calls";
+- **the steps of a line:** "Objects, loops and calls" at 1440x900 and
+  390x844 in both themes with reduced motion, and at 1440x900 dark with
+  motion allowed: fourteen presses of Over from the start; the note at steps
+  5, 15, 31, 37, 45 and 59, and at step 35 after stepping back from 59; a
+  store into a cell, with the animations running on it; the WCAG contrast of
+  every text node in the new panel against its composited background; and a
+  keyboard focus on its first entry;
+- **after the review** (item 4 below): the review's own probes, a program
+  of two `f();` calls stepped and stepped over, and step 37 of the first
+  lesson; and Over pressed from the first note of every lesson to its end,
+  recording the panel's heading at each stop. The walk and the steps of a
+  line ran again on the fixed build.
+
+The screenshots are in
+[`screenshots/machine-steps/`](screenshots/machine-steps/), named
+`<item>-<width>-<theme>-before.png` and `…-after.png`.
+
+### Findings
+
+#### 1. Why one line takes several steps
+
+The notes are good one by one: every step has a title, a kind, a plain lead,
+its values as chips and its clauses, and the walk found no step without a
+lead and no page that scrolled sideways. What a newcomer cannot see is how
+they add up. `int total = 0;` takes four notes (create `total`, designate
+it, evaluate `0`, store), `int values[3] = {2, 4, 6};` takes ten, and
+`int next = bump(cursor);` takes six of main's own and 21 inside `bump`. Nothing on the page said which line or expression a step
+belonged to, how far along it was, or when it was done; the "Earlier steps"
+list shows the last four titles, whatever they belonged to. The engine also
+reported what the next step stores ("Next: store into `total`") on every
+snapshot, and the page never showed it.
+
+**Fixed.** The note now shows the steps of the expression the current step
+belongs to, in the order the machine took them (`panels/evaluation.rs`):
+"Evaluating `next = bump(cursor)` · step 5 of 5 · in main()", then one
+entry per step with its number and title, wired left to right. The step
+shown is vermilion, the page's colour for "now"; steps after it (when the
+reader stepped back) are dashed; each entry jumps to its step. A call the
+expression made folds into one double-ruled entry, "bump() runs: 21 steps",
+so the six steps of `next = bump(cursor)` read as one line with a call in
+it; the steps inside `bump` show `bump`'s own expressions. A dashed vermilion
+rule after a step marks a sequence point, and one leading a folded call marks
+the sequence point after its arguments are evaluated and before the call
+(C99 §6.5.2.2p10), however many steps the call folds. A key under the steps says
+what one is (every side effect before it is complete, C99 §5.1.2.3p2, linked
+to N1256) and that the tape's clock pulse stands taller there, which it
+already did without saying so. While the run has not recorded the rest, the
+last entry is what the engine says comes next, "next: store into total", or
+"more to come"; the engine's next operation also tells when the expression
+is done, so its last step reads "step 3 of 3" before the run goes past it.
+
+The grouping reads only what the engine reports: a step belongs to the
+expression whose tree it shows (its root's source range) in the same call,
+and the steps of a call belong to it while its frame waits on a call inside
+that range. A call's first step shows the called function, which has no
+expression yet: it belongs to the expression that holds the call its caller
+waits on, which the engine reports by its source range, so the two calls of
+`f(); f();` are two expressions however alike they are spelled. A
+declaration creating its object, a block's entry and exit, and a jump
+evaluate no expression, and show no panel, in a called function as well.
+Its unit tests run the first lesson and small programs on the real engine
+(`panels/evaluation/tests.rs`): a call without arguments, two calls spelled
+alike, calls nested through frames, a call a `return` statement makes, the
+sequence point before a call, and where Over stops. Of the walk's 1,254
+notes, 1,027 show the panel; at the 192 steps where the next note belongs
+to another expression, none says "so far".
+
+**Over** (O), beside Step, runs to the last step of the current expression,
+through any call it makes, as the WebAssembly view's Over runs a call to its
+return; at that last step, or at a step that evaluates no expression, it
+runs to the last step of the next one. From the start of the first lesson,
+fourteen presses visit steps 1, 2, 5, 6, 9, 12, 15, 16, 21, 22, 23, 26, 31
+and 32: `total = 0`, each element of `values`, `cursor = &values[0]`, `i =
+0`, the loop's condition, with the declarations' own steps between them.
+It shows "Pause" on Run while it runs, and stops after Run's 1,000-step
+budget.
+
+On a phone the steps run down a rail at full width, a sequence point a
+dashed rule across it.
+
+[`expression-1440-light`](screenshots/machine-steps/expression-1440-light-before.png)
+([after](screenshots/machine-steps/expression-1440-light-after.png)),
+[`back-1440-light`](screenshots/machine-steps/back-1440-light-before.png)
+([after](screenshots/machine-steps/back-1440-light-after.png)),
+[`expression-1440-dark`](screenshots/machine-steps/expression-1440-dark-before.png)
+([after](screenshots/machine-steps/expression-1440-dark-after.png)),
+[`expression-390-dark`](screenshots/machine-steps/expression-390-dark-before.png)
+([after](screenshots/machine-steps/expression-390-dark-after.png),
+[light](screenshots/machine-steps/back-390-light-after.png)).
+
+#### 2. A call's first step was "not part of an expression"
+
+At step 37, "Call bump (frame #2)", Figure 2 said "This step is not part of
+an expression": the engine shows the called function's state, which has no
+expression yet. It is part of one, `next = bump(cursor)`, which waits for
+the call.
+
+**Fixed.** At a call's first step Figure 2 now says "The call
+`bump(cursor)` is part of an expression in main(), which waits for it to
+return. bump()'s own expressions are wired up here as they run.", from the
+frame the engine reports as waiting on that call.
+[`call-1440-light`](screenshots/machine-steps/call-1440-light-before.png)
+([after](screenshots/machine-steps/call-1440-light-after.png)).
+
+#### 3. A step's effect did not move
+
+Each step marks what it did, still: the cell it stored into is vermilion,
+the one it read underlined in blue, the one it designated outlined, and the
+value flow draws an arrow from operands to result. Stepping quickly, the
+marks jump from cell to cell, and a store looks the same as a cell that was
+vermilion a step ago.
+
+**Fixed, with motion allowed.** A stored value now lands in its cell (the
+value drops in as the vermilion comes up, 380 to 520 ms), a read cell
+flashes a ring of the data-flow blue that settles into its underline
+(700 ms), a designated cell's outline draws in, and the value-flow wire
+draws from the operands to the result, which arrives after it. The current
+step's entry among the expression's steps arrives the same way. With
+reduced motion (`prefers-reduced-motion: reduce`) the marks are the same
+and still: the motion run found `cell-lit` and `cell-stamp` running on the
+stored cell, the reduced-motion runs none.
+[`cells-1440-dark-motion`](screenshots/machine-steps/cells-1440-dark-motion-after.png).
+
+#### 4. What the review of the panel found
+
+A review of this branch found two gaps in the panel itself, both fixed here.
+
+- **The sequence point before a call was dropped.** The engine marks a
+  call's first step as a sequence point, but the folded entry had no field
+  for it: at step 37 the panel showed the argument read, then
+  `bump() runs`, with no rule between them, and the entry's label did not
+  say so. The entry now leads with the dashed rule (across the rail on a
+  phone) and its label opens "A sequence point, then the call to bump".
+  [`call-point-1440-light`](screenshots/machine-steps/call-point-1440-light-before.png)
+  ([after](screenshots/machine-steps/call-point-1440-light-after.png),
+  [phone](screenshots/machine-steps/call-point-390-light-after.png)).
+- **A call without arguments lost its expression.** The panel took a call's
+  expression from the step before it, and `f();` has none of its own: in
+  `int main(void) { f(); f(); return 0; }` the first call showed no panel
+  and Over stopped inside `f` at its block's entry, and the second call was
+  grouped with the first call's steps, since the caller's frame was still
+  on the stack. The caller's frame now carries the source range of the call
+  it waits on (the engine already reported it, as the text Figure 2 shows),
+  and the call's expression is the one that holds it. Over from the first
+  call stops at step 6, "Discard the result", and the second call's steps
+  begin at its own entry, step 7.
+  [`empty-call-1440-light`](screenshots/machine-steps/empty-call-1440-light-before.png)
+  ([after](screenshots/machine-steps/empty-call-1440-light-after.png)),
+  [`empty-second-call-1440-light`](screenshots/machine-steps/empty-second-call-1440-light-before.png)
+  ([after](screenshots/machine-steps/empty-second-call-1440-light-after.png)).
+
+#### Checks
+
+- **Contrast:** the panel's lowest is 5.25:1 (a step's number on the
+  vermilion entry, `#3a1406` on `#ff5a1f`) in both themes and both widths;
+  plain text on the panel is at least 5.36:1 in the light theme and 5.47:1
+  in the dark one. The current call's entry, whose tint the measured step
+  does not show, was computed: its title 12.3:1 and 11.9:1, its number
+  8.3:1 and 8.4:1 (the plainer grey of the other numbers would have been
+  4.6:1 in the light theme).
+- **Keyboard and screen readers:** each entry is a button with a visible
+  focus ring (the page's 2 px vermilion outline) and a label that says the
+  step, its title, a sequence point after it and whether it is the step
+  shown (`aria-current`); a call's says its steps, after the sequence
+  point that leads it. The panel is a section
+  named by its heading. O presses Over, and Over announces the step it
+  stops at as Step does.
+- **No sideways scroll** at any step of any lesson at 1440, or at the
+  checked steps at 390, in either theme.
+- **The notes are unchanged:** the walk's step counts and every title and
+  lead are the same before and after in all twelve lessons, and no page
+  logged an error. Each of the eleven call entries the walk passes shows
+  the panel with the sequence point leading its call.
+- **Over stops where it should:** pressed from the first note of each of
+  the twelve lessons to its end (335 presses), it stops each time at a
+  step that evaluates no expression or at the last step of a complete
+  expression, never inside a call, and reaches every lesson's last state.
+
+### Left for later
+
+- **The note is below the fold at 1440x900** with the workbench at the top
+  of the window, as the 2026-10-30 audit found: at step 40 of the first
+  lesson, with seven lanes on the tape, the note's title is at y = 783, and
+  the new panel sits below it. A phone
+  already puts the note first.
+- **A block's entry does not say which objects begin.** C99 §6.2.4p5 starts
+  every automatic object of a block at the block's `{`; the engine creates
+  each at its declaration, and its note says C has it exist from the start
+  of the block. Marking the block's objects at its `{` (and their end at its
+  `}`, which "Leave a block" already names) needs the engine to report the
+  block's objects at entry.
+- **An initializer list is split by element.** The tree the engine reports
+  is one element's, so `int values[3] = {2, 4, 6};` shows three expressions
+  ("Evaluating 2", "4", "6"), with the sequence point after the last.
+- **What comes next** is known only for a store, an update and a library
+  call (the engine's pending effect); for a read or an operator the last
+  entry says "more to come". The engine's next operation could name it.
+- **The tape keeps its clock unexplained** except by this panel's key; its
+  caption could say what the taller pulses are.
