@@ -928,11 +928,14 @@ function's start looked like any block's.
 
 **Fixed.** Where a listing defines, declares or calls a function (`function
 @main(`, `define i32 @main(`, `call @bump(`, `main:`, `callq bump`,
-`<main>:`), its name is orchid, `#ee78d6`: 7.8:1 on the light theme's
-screen and 8.1:1 on the dark one's, measured on every name on screen in the
-five listings in all four configurations, and at least 18 in CIEDE2000 from
-every other token colour (the nearest are the slots' lavender and the
-registers' pink). A global's name keeps the plain colour (`@calls`,
+`<main>:`), its name is orchid, `#ff88e2`: 9.2:1 on the light theme's
+screen and 9.6:1 on the dark one's, and at least 17 in CIEDE2000 from every
+other token colour (the nearest is the slots' lavender). The first orchid,
+`#ee78d6` (7.8:1 and 8.1:1, measured on every name on screen in the five
+listings in all four configurations), fell to 3.9:1 and 4.2:1 where a
+selection and a linked line's fill overlap under a name (`rgb(93,57,55)` and
+`rgb(90,53,51)`, measured by review); `#ff88e2` keeps 4.7:1 and 5.0:1
+there. A global's name keeps the plain colour (`@calls`,
 `@moved.total` in "Structs and static storage", whose `@moved` and
 `@llvm.memcpy` calls are orchid), and a local label (`.LBB1_2:`) keeps its
 khaki. The C source keeps its plain names.

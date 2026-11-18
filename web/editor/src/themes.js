@@ -19,8 +19,9 @@ const screen = {
   string: '#9fd49a',
   function: '#f2f2ec',
   // A function's name where a listing defines or calls it (`@main`,
-  // `main:`): at least 18 apart from every other colour, 7.8:1 on the screen.
-  functionName: '#ee78d6',
+  // `main:`): at least 17 apart from every other colour, 9.2:1 on the screen,
+  // and 4.6:1 where a selection and a linked line's fill overlap under it.
+  functionName: '#ff88e2',
   variable: '#7fd9d9',
   slot: '#c9b3ff',
   label: '#f0e68c',
