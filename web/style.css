@@ -533,8 +533,10 @@
   .empty-state { color: var(--ink-3); font-size: 12.5px; line-height: 1.6; }
 
   /* The machine view: deck, cells under the head, then the note beside the
-     schematic and the datasheet. */
-  .machine-view { display: grid; gap: 1px; background: var(--seam); min-width: 0; }
+     schematic and the datasheet (on a wide screen the note has a column of
+     its own; see the responsive layer). The hanger finds the playhead past
+     the left reel and the lane names (none on a compact deck, below). */
+  .machine-view { --spool-width: 96px; --labels-width: 168px; display: grid; gap: 1px; background: var(--seam); min-width: 0; }
   .machine-view > * { background: var(--device); min-width: 0; }
 
   .deck {
@@ -665,7 +667,7 @@
 
   /* Under the head. */
   .head-row { position: relative; padding: 12px 16px 14px; }
-  .hanger { position: absolute; top: -1px; bottom: -1px; left: calc(var(--deck-offset, 264px) + var(--head-x, 0px) - 1px); width: 2px; background: var(--accent); z-index: 2; pointer-events: none; }
+  .hanger { position: absolute; top: -1px; bottom: -1px; left: calc(var(--spool-width) + var(--labels-width) + var(--head-x, 0px) - 1px); width: 2px; background: var(--accent); z-index: 2; pointer-events: none; }
   .hanger::after { content: ""; position: absolute; left: -5px; bottom: -6px; border: 6px solid transparent; border-top: 7px solid var(--accent); border-bottom: 0; }
   .head-cells .module-caption { position: relative; z-index: 3; width: fit-content; max-width: 100%; border: 0; padding: 0 8px 0 0; margin-bottom: 7px; background: var(--device); }
   .cells-empty { color: var(--ink-3); font-size: 12px; }
@@ -771,7 +773,7 @@
   .note.narration, .machine-side { background: var(--device); }
   .machine-side { display: grid; gap: 22px; align-content: start; padding: 16px 18px 20px; }
 
-  .note.narration { position: relative; padding: 16px 20px 20px; overflow-wrap: anywhere; }
+  .note.narration { position: relative; padding: 16px 20px 20px; overflow-wrap: anywhere; container: note / inline-size; }
   .note-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 2px; font-size: 11.5px; font-weight: 700; letter-spacing: .02em; color: var(--ink); }
   .note-title:focus { outline: none; }
   .note-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -1494,9 +1496,9 @@
 }
 
 @layer responsive {
-  /* Below 1360 px the mode keys take their short names, so the control
-     strip keeps to one row on a 1280 px laptop. */
-  @media (max-width: 1360px) {
+  /* Below 1440 px the mode keys take their short names, so the control
+     strip keeps to one row on a 1280 or 1366 px laptop. */
+  @media (max-width: 1439px) {
     .mode-label-long { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .mode-label-short { display: inline; }
     .toolbar { gap: 10px 14px; }
@@ -1508,12 +1510,34 @@
     .deck { grid-template-columns: 72px minmax(0, 1fr) 72px; }
     .spool svg { width: 60px; height: 60px; }
     .deck-body { grid-template-columns: 152px max-content; }
-    .hanger { --deck-offset: 224px; }
+    .machine-view { --spool-width: 72px; --labels-width: 152px; }
   }
   /* The channel keys drop their CH where the strip is narrow. */
   @media (max-width: 1500px) {
     .stage-index::before { content: ""; }
     .stage-index { min-width: 22px; }
+  }
+  /* Wide screens: the note takes a column of its own beside the tape, the
+     cells and the figures, and stays in the window as the page scrolls,
+     under the control strip (it scrolls on its own when it is longer than
+     the window). The line that ran, what it did and the objects it touched
+     then share one screen however many lanes the tape has. The reels give
+     the tape their width, and a vermilion rule under the cells leads from
+     the playhead to the note. */
+  @media (min-width: 1181px) {
+    .machine-view { --spool-width: 0px; grid-template-columns: minmax(0, 1fr) clamp(360px, 31%, 460px); grid-template-rows: auto auto 1fr; }
+    .machine-view::after { content: ""; grid-area: 1 / 2 / -1; background: var(--device); }
+    .machine-view > .deck { grid-area: 1 / 1; grid-template-columns: minmax(0, 1fr); }
+    .machine-view > .head-row { grid-area: 2 / 1; border-bottom: 3px solid var(--accent); }
+    .notes-row { display: contents; }
+    .machine-side { grid-area: 3 / 1; }
+    .note.narration {
+      grid-area: 1 / 2 / -1; z-index: 1; align-self: start;
+      position: sticky; top: var(--sticky-bottom); max-height: calc(100svh - var(--sticky-bottom)); overflow-y: auto;
+      border-top: 3px solid var(--accent); scrollbar-width: thin;
+    }
+    .note .narration-lead { font-size: 22px; }
+    .spool { display: none; }
   }
   /* Laptops: the listing narrows; the side column of the notes drops under
      the note where the machine column is narrow. */
@@ -1648,12 +1672,10 @@
     .note .narration-lead { font-size: 22px; }
     .machine-side { padding: 14px 14px 18px; }
   }
-  /* Phones: short labels; the note leads right under the listing, so the
-     line that ran and what it did share the first screen; the tape and the
-     cells follow. */
-  @media (max-width: 600px) {
-    /* On a phone the steps run down a rail, a sequence point a dashed rule
-       across it. */
+  /* In a narrow note (a phone's, whose text is at most 572 px wide in a
+     600 px window, or the note's own column beside the tape) the steps run
+     down a rail, a sequence point a dashed rule across it. */
+  @container note (max-width: 572px) {
     .evaluation { padding: 9px 10px 8px; }
     .evaluation-steps { display: grid; gap: 5px; margin-left: 4px; padding-left: 10px; border-left: 1.5px solid var(--ink-3); }
     .evaluation-steps > li + li::before { display: none; }
@@ -1664,6 +1686,9 @@
     .evaluation-point { margin: 1px 0 6px; border-left: 0; border-top: 2px dashed var(--accent-ink); }
     .evaluation-point-key { width: 1.4em; height: 0; vertical-align: .3em; border-left: 0; border-top: 2px dashed var(--accent-ink); }
   }
+  /* Phones: short labels; the note leads right under the listing, so the
+     line that ran and what it did share the first screen; the tape and the
+     cells follow. */
   @media (max-width: 600px) {
     /* The three ways in, one under another, alike. */
     .hero-steps li { flex: 1 1 100%; }
@@ -1786,6 +1811,7 @@
      strip. The names let the tape be dragged through them; only the fold
      keys take a tap. */
   .deck.is-compact .deck-body { grid-template-columns: 0 max-content; }
+  .machine-view:has(> .deck.is-compact) { --labels-width: 0px; }
   .deck.is-compact .deck-labels { width: 0; overflow: visible; border-right: 0; background: none; pointer-events: none; font-size: 10px; }
   .deck.is-compact .deck-label {
     width: max-content; max-width: calc(100vw - 24px); height: 13px; margin-bottom: calc(var(--lane, 40px) - 13px);

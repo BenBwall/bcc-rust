@@ -200,7 +200,13 @@ The page has light and dark themes (the device in daylight and under low
 light; its screens stay black in both) and works down to phone width. At
 almost every size the line that runs and the note on what it did are on
 screen together: down to 821 px the source stays beside the machine (a sticky
-column, sized to fit under the control strip); narrower, the device becomes a
+column, sized to fit under the control strip). From 1181 px the note has a
+sticky column of its own beside the tape, so on a laptop (1280x800,
+1366x768, 1440x900) the line, the note with its expression's steps and the
+cells the step touched share the window however many lanes the tape has;
+the note scrolls on its own when it is longer than the window, and each
+step starts it at its top. Narrower, the note sits under the cells, and
+narrower still, below 821 px, the device becomes a
 stack of modules with the source sized so the note follows it on the same
 screen, then the tape and the cells, and the transport keys docked at the
 bottom of the window. In the compiler pipeline a phone shows each stage's

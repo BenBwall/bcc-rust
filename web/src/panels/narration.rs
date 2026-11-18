@@ -84,6 +84,14 @@ pub fn Narration(
         tip.set(None);
     });
     let card = NodeRef::<leptos::html::Article>::new();
+    // Beside the tape the card is a column of its own that scrolls when the
+    // note is longer than the window: each step's note starts at its top.
+    Effect::new(move || {
+        event.track();
+        if let Some(card) = card.get_untracked() {
+            card.set_scroll_top(0);
+        }
+    });
     // Each note shows on the first step the learner sees it at (by step
     // number, so Back to that step shows it again); steps Run passes through
     // do not use it up. The run starts over at step 0.
@@ -719,16 +727,20 @@ fn placement(
         .dyn_into::<web_sys::Element>()
         .ok()?
         .get_bounding_client_rect();
-    let card = card.get_untracked()?.get_bounding_client_rect();
+    let card = card.get_untracked()?;
+    // Beside the tape the card scrolls on its own; the tip scrolls with its
+    // text, from the card's padding.
+    let (scrolled, border) = (f64::from(card.scroll_top()), f64::from(card.client_top()));
+    let card = card.get_bounding_client_rect();
     let width = (card.width() - 24.0).clamp(0.0, 340.0);
     let left = (term.left() - card.left()).clamp(12.0, (card.width() - width - 12.0).max(12.0));
     let window = window();
     let height = window.inner_height().ok()?.as_f64()?;
     let above = term.bottom() + 170.0 > height && term.top() > 190.0;
     let offset = if above {
-        card.bottom() - term.top() + 6.0
+        card.bottom() - term.top() + 6.0 - scrolled
     } else {
-        term.bottom() - card.top() + 6.0
+        term.bottom() - card.top() - border + 6.0 + scrolled
     };
     Some(Placement {
         left,
