@@ -202,7 +202,9 @@ mod tests {
     /// caller without XSAVE may not call, and GCC's function fails to be
     /// inlined there; with XSAVE both compile, GCC's returning `long long`
     /// and Clang's `unsigned long long`. GCC declares it in
-    /// <x86gprintrin.h> as well.
+    /// <x86gprintrin.h> as well. Freestanding, as
+    /// [`immediates_and_m64_follow_each_identity`] is, so `<mm_malloc.h>`
+    /// needs no C library on a Windows host.
     #[test]
     fn xgetbv_follows_each_identity() {
         let source = temporary("xgetbv.c");
@@ -240,7 +242,8 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
                 Some("'__builtin_ia32_xgetbv' needs target feature xsave"),
             ),
         ] {
-            let output = bcc(&[&["-c", source, "-o", object][..], flags].concat());
+            let output =
+                bcc(&[&["-ffreestanding", "-c", source, "-o", object][..], flags].concat());
             let stderr = text(&output.stderr);
             assert_eq!(
                 output.status.success(),
@@ -260,10 +263,24 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
         )
         .unwrap();
         let gpr = gpr.to_str().unwrap();
-        let gcc = bcc(&["--compiler-identity=gcc", "-c", gpr, "-o", object]);
+        let gcc = bcc(&[
+            "--compiler-identity=gcc",
+            "-ffreestanding",
+            "-c",
+            gpr,
+            "-o",
+            object,
+        ]);
         assert!(gcc.status.success(), "{}", text(&gcc.stderr));
         std::fs::remove_file(object).unwrap();
-        let clang = bcc(&["--compiler-identity=clang", "-c", gpr, "-o", object]);
+        let clang = bcc(&[
+            "--compiler-identity=clang",
+            "-ffreestanding",
+            "-c",
+            gpr,
+            "-o",
+            object,
+        ]);
         assert!(
             !clang.status.success() && text(&clang.stderr).contains("_xgetbv"),
             "{}",
