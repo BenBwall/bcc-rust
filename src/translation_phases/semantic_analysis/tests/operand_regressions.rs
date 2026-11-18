@@ -121,9 +121,11 @@ fn rejects(source: &str, kind: SemanticErrorKind) {
 #[test]
 fn null_pointer_alternatives_precede_pointer_pair_rules() {
     clean("void f(int *p) { *(1 ? p : (void *)0)=2; *(1 ? (void *)0 : p)=2; }");
+    // Comparing `f` itself with a null pointer is Clang's
+    // `-Wtautological-pointer-compare`.
     clean(
         "int f(void); int (*p)(void)=1 ? f : (void *)0; int (*q)(void)=1 ? (void *)0 : f; int \
-         g(void) { return f==(void *)0 || (void *)0!=f; }",
+         g(void) { return p==(void *)0 || (void *)0!=q; }",
     );
     with_source(
         "void f(const int *p) { 1 ? p : (void *)0; }",

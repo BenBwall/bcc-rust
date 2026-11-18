@@ -170,8 +170,9 @@ fn atomic_bool_accepts_static_address_initializers() {
     check(
         ATOMIC_BOOL_ADDRESS,
         CStandard::C11,
-        &[SemanticErrorKind::PointerConstraint(
+        &[SemanticErrorKind::Nonnull(
             crate::configuration::DiagnosticGroup::PointerBoolConversion,
+            always_nonnull::NonnullNote::Plain,
         )],
     );
 }

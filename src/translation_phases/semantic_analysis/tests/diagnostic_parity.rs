@@ -92,7 +92,7 @@ fn warning_groups_cover_null_constants_casts_void_and_old_style_calls() {
             let errors = context.take_pending_errors();
             assert_eq!(errors.len(), 1, "{source}: {errors:?}");
             assert!(
-                matches!(errors[0], TranslationError::Semantic(error) if error.kind==SemanticErrorKind::PointerConstraint(group)),
+                matches!(errors[0], TranslationError::Semantic(error) if error.kind.group()==Some(group)),
                 "{source}: {errors:?}"
             );
             assert_eq!(unit.errors, 0);
@@ -145,10 +145,77 @@ fn nonnull_operands_and_redeclarations_retain_parameter_positions() {
         |context, unit| {
             let errors = context.take_pending_errors();
             assert_eq!(errors.len(), 4, "{errors:?}");
-            assert!(errors.iter().all(|error|matches!(error,TranslationError::Semantic(error) if error.kind==SemanticErrorKind::PointerConstraint(G::Nonnull))),"{errors:?}");
+            assert!(errors.iter().all(|error|matches!(error,TranslationError::Semantic(error) if error.kind.group()==Some(G::Nonnull))),"{errors:?}");
             assert_eq!(unit.errors, 0);
         },
     );
+}
+
+/// The groups of the semantic diagnostics `source` gives under `identity`.
+fn groups_under(source: &str, identity: crate::configuration::CompilerIdentity) -> Vec<Option<G>> {
+    let mut groups = Vec::new();
+    with_configuration(
+        source,
+        CompilerConfiguration::default().with_compiler_identity(identity),
+        |context, _| {
+            groups = context
+                .take_pending_errors()
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Semantic(error) => Some(error.kind.group()),
+                    | _ => None,
+                })
+                .collect();
+        },
+    );
+    groups
+}
+
+/// Clang 23.1.5 takes a `nonnull` whose indices all name parameters that
+/// are no pointers for every pointer parameter (`handleNonNullAttr`); GCC
+/// 14.2 drops an attribute with any index it refuses, valid ones too.
+#[test]
+fn nonnull_indices_of_other_parameters_follow_each_compiler() {
+    use crate::configuration::CompilerIdentity as I;
+    for (source, clang, gcc) in [
+        (
+            "void f(int *p, int n) __attribute__((nonnull(2))); void g(void){f(0,0);}",
+            1,
+            0,
+        ),
+        (
+            "void f(int *p, int n) __attribute__((nonnull(2,1))); void g(void){f(0,0);}",
+            1,
+            0,
+        ),
+    ] {
+        for (identity, expected) in [(I::Clang, clang), (I::Gcc, gcc)] {
+            let groups = groups_under(source, identity);
+            let nulls = groups
+                .iter()
+                .filter(|&&group| group == Some(G::Nonnull))
+                .count();
+            assert_eq!(nulls, expected, "{identity:?} {source}: {groups:?}");
+        }
+    }
+}
+
+/// Only Clang compares a `nonnull` parameter with a null pointer in its front
+/// end; GCC 14.2's `-Wnonnull-compare` comes from its middle end, which bcc
+/// does not model, and GCC ignores the attribute on a parameter.
+#[test]
+fn nonnull_parameter_comparisons_are_clangs() {
+    use crate::configuration::CompilerIdentity as I;
+    let source = "int f(int *p) __attribute__((nonnull)); int f(int *p){return p==0;} int g(int \
+                  *p __attribute__((nonnull))){return p!=0;}";
+    let compared = |identity| {
+        groups_under(source, identity)
+            .iter()
+            .filter(|&&group| group == Some(G::TautologicalPointerCompare))
+            .count()
+    };
+    assert_eq!(compared(I::Clang), 2);
+    assert_eq!(compared(I::Gcc), 0);
 }
 
 #[test]
@@ -199,10 +266,8 @@ fn pointer_bool_warnings(
                 .filter(|error| {
                     matches!(
                         error,
-                        TranslationError::Semantic(SemanticError {
-                            kind: SemanticErrorKind::PointerConstraint(G::PointerBoolConversion),
-                            ..
-                        })
+                        TranslationError::Semantic(SemanticError { kind, .. })
+                            if kind.group() == Some(G::PointerBoolConversion)
                     )
                 })
                 .count();
