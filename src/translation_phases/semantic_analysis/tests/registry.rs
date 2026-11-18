@@ -43,7 +43,7 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
             .unwrap();
         }
     }
-    assert_eq!(ids.len(), 914);
+    assert_eq!(ids.len(), 915);
     source.push_str("int following;\n");
     for target in [
         Target::LinuxGnu,
@@ -404,7 +404,7 @@ fn m6_family_descriptors_retain_no_instance_and_keep_their_contracts() {
             });
         }
     }
-    assert_eq!((x86, immediates), (384, 111));
+    assert_eq!((x86, immediates), (385, 111));
 }
 
 /// The generated x86 shard merges header calls that name a scalar spelling;
@@ -542,7 +542,7 @@ fn m6_x86_signatures_project_identically_on_every_target() {
                         builtin_names::spell(unit, context, binding.ty)
                     ));
                 }
-                assert_eq!(types.len(), 384);
+                assert_eq!(types.len(), 385);
                 match &expected {
                     | Some(expected) => assert_eq!(&types, expected, "{target:?}"),
                     | None => expected = Some(types),

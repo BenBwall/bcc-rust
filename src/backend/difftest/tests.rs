@@ -257,7 +257,10 @@ fn named_x86_instructions_match_the_interpreter() {
         failures.len(),
         failures[0]
     );
-    assert_eq!(refused, 0, "the native back end refused a named instruction");
+    assert_eq!(
+        refused, 0,
+        "the native back end refused a named instruction"
+    );
 }
 
 /// `main` returning `value` (an `i32` constant or `poison`) after printing

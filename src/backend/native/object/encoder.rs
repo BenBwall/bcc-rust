@@ -3,8 +3,9 @@
 //! (`vector.rs`).
 //!
 //! `instruction` selects an opcode; `Code::rm` owns REX, `Code::modrm` the
-//! `ModRM`, SIB and displacements. Fixups retain the instruction-end bias, including any
-//! immediate after the displacement. Branches are relaxed by the parent.
+//! `ModRM`, SIB and displacements. Fixups retain the instruction-end bias,
+//! including any immediate after the displacement. Branches are relaxed by the
+//! parent.
 
 mod vector;
 
@@ -21,22 +22,12 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
     if name == "lock" {
         return locked(args);
     }
-    let mut code = Code {
-        bytes: [0; 15],
-        len:   0,
-        fixup: None,
-    };
-    let operands = operands(name, args)?;
-    let [a, b, d, _] = operands;
+    if vector::encodes(name) {
+        return vector::instruction(name, args);
+    }
+    let mut code = Code::empty();
+    let [a, b, d, _] = operands(name, args)?;
     match name {
-        | name if let Some(spec) = vector::spec(name) => {
-            let count = operands.iter().take_while(|op| !matches!(op, Operand::Empty)).count();
-            code.vector(spec, &operands[..count])?;
-        },
-        | "vmovups" => code.vector_move(a, b)?,
-        | "vzeroupper" => code.raw(&[0xC5, 0xF8, 0x77])?,
-        | "vzeroall" => code.raw(&[0xC5, 0xFC, 0x77])?,
-        | "xgetbv" => code.raw(&[0x0F, 0x01, 0xD0])?,
         | "retq" | "callq" | "jmpq" | "iretq" | "uiret" => code.control_transfer(name, args, a)?,
         | "ud2" => code.raw(&[0x0F, 0x0B])?,
         | "cld" => code.byte(0xFC)?,
@@ -523,12 +514,7 @@ pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
             }
         },
     }
-    if let Some(fixup) = &mut code.fixup
-        && matches!(fixup.kind, 2 | 4 | 9 | 19 | 20 | 22 | 41 | 42)
-    {
-        fixup.bias = i64::from(fixup.at) - i64::from(code.len);
-    }
-    Ok(code)
+    Ok(code.biased())
 }
 
 /// A `lock`-prefixed instruction: a read-modify-write of a memory
@@ -602,7 +588,6 @@ fn validate(name: &str, args: &str, operands: &[Operand<'_>]) -> Result<()> {
         St,
         Xm,
         Xmm,
-        Ymm,
     };
     let form = |shapes: &[Shape]| -> Result<()> {
         if shapes.len() != operands.len()
@@ -620,18 +605,13 @@ fn validate(name: &str, args: &str, operands: &[Operand<'_>]) -> Result<()> {
     let a = operands.first().copied().unwrap_or(Operand::Empty);
     let b = operands.get(1).copied().unwrap_or(Operand::Empty);
     // Only the vector instructions take four operands.
-    if operands.len() > 3 && vector::spec(name).is_none() {
+    if vector::encodes(name) {
+        return vector::validate(name, operands);
+    }
+    if operands.len() > 3 {
         return Err(Error("too many instruction operands"));
     }
     match name {
-        | name if let Some(spec) = vector::spec(name) => spec.validate(operands),
-        | "vmovups" =>
-            if matches!(b, Operand::Reg(_)) {
-                form(&[Mem, Xmm]).or_else(|_| form(&[Mem, Ymm]))
-            } else {
-                form(&[Xmm, Mem]).or_else(|_| form(&[Ymm, Mem]))
-            },
-        | "vzeroupper" | "vzeroall" | "xgetbv" => form(&[]),
         | "rep" =>
             if matches!(args, "movsb" | "stosb") {
                 Ok(())
@@ -801,9 +781,9 @@ impl Shape {
                 op,
                 Operand::Imm(0..=255)
                     | Operand::Reg(Register {
-                        id:   1,
+                        id: 1,
                         bits: 8,
-                        xmm:  false,
+                        xmm: false,
                         ..
                     })
             ),
@@ -845,6 +825,25 @@ pub(super) struct Fixup<'a> {
 }
 
 impl<'a> Code<'a> {
+    const fn empty() -> Self {
+        Self {
+            bytes: [0; 15],
+            len:   0,
+            fixup: None,
+        }
+    }
+
+    /// The code with a PC-relative fixup's bias: the distance from its
+    /// field to the instruction's end, past any immediate after it.
+    fn biased(mut self) -> Self {
+        if let Some(fixup) = &mut self.fixup
+            && matches!(fixup.kind, 2 | 4 | 9 | 19 | 20 | 22 | 41 | 42)
+        {
+            fixup.bias = i64::from(fixup.at) - i64::from(self.len);
+        }
+        self
+    }
+
     /// Inserts a prefix byte at `at`, among the legacy prefixes before
     /// any REX prefix, opcode or fixup.
     fn insert(&mut self, at: usize, byte: u8) -> Result<()> {

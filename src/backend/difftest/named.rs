@@ -22,7 +22,7 @@ use crate::ir::{
 };
 
 /// Vector slots per function.
-const SLOTS: usize = 6;
+const SLOTS: u32 = 6;
 
 /// The program for `seed`: its `main` calls both functions.
 pub(super) fn generate_named(seed: u64) -> String {
@@ -45,22 +45,32 @@ pub(super) fn generate_named(seed: u64) -> String {
 /// Special lanes, as their bits: zeros, halves, infinities, NaNs with
 /// payloads, and values at the edges of the integer conversions.
 const FLOATS: [u32; 12] = [
-    0x0000_0000, 0x8000_0000, 0x3f00_0000, 0xbfc0_0000, 0x4020_0000, 0x7f80_0000, 0xff80_0000,
-    0x7fc0_1234, 0xffa0_0001, 0x4f00_0000, 0xcf00_0000, 0x4b7f_ffff,
+    0x0000_0000,
+    0x8000_0000,
+    0x3F00_0000,
+    0xBFC0_0000,
+    0x4020_0000,
+    0x7F80_0000,
+    0xFF80_0000,
+    0x7FC0_1234,
+    0xFFA0_0001,
+    0x4F00_0000,
+    0xCF00_0000,
+    0x4B7F_FFFF,
 ];
 const DOUBLES: [u64; 12] = [
     0x0000_0000_0000_0000,
     0x8000_0000_0000_0000,
-    0x3fe0_0000_0000_0000,
-    0xbff8_0000_0000_0000,
+    0x3FE0_0000_0000_0000,
+    0xBFF8_0000_0000_0000,
     0x4004_0000_0000_0000,
-    0x7ff0_0000_0000_0000,
-    0xfff0_0000_0000_0000,
-    0x7ff8_0000_0000_1234,
-    0xfff4_0000_0000_0001,
-    0x41e0_0000_0000_0000,
-    0xc1e0_0000_0020_0000,
-    0x432f_ffff_ffff_ffff,
+    0x7FF0_0000_0000_0000,
+    0xFFF0_0000_0000_0000,
+    0x7FF8_0000_0000_1234,
+    0xFFF4_0000_0000_0001,
+    0x41E0_0000_0000_0000,
+    0xC1E0_0000_0020_0000,
+    0x432F_FFFF_FFFF_FFFF,
 ];
 
 struct Function<'r> {
@@ -76,7 +86,7 @@ impl<'r> Function<'r> {
             rng,
             avx,
             body: String::new(),
-            value: SLOTS as u32,
+            value: SLOTS,
         }
     }
 
@@ -150,7 +160,7 @@ impl<'r> Function<'r> {
     /// Stores 32 bytes into slot `slot`: random bytes, special `float`
     /// lanes or special `double` lanes, or small letters for the string
     /// comparisons.
-    fn fill(&mut self, slot: usize) {
+    fn fill(&mut self, slot: u32) {
         let kind = self.rng.index(4);
         for word in 0..4 {
             let bits = match kind {
@@ -177,8 +187,8 @@ impl<'r> Function<'r> {
     }
 
     /// The address of 8-byte word `word` of slot `slot`.
-    fn word(&mut self, slot: usize, word: usize) -> u32 {
-        let base = slot as u32;
+    fn word(&mut self, slot: u32, word: usize) -> u32 {
+        let base = slot;
         if word == 0 {
             return base;
         }
@@ -186,20 +196,23 @@ impl<'r> Function<'r> {
         self.def(format_args!("ptr_add inbounds v{base}, v{offset}"))
     }
 
+    /// A random slot.
+    fn slot(&mut self) -> u32 {
+        u32::try_from(self.rng.below(u64::from(SLOTS))).expect("a slot index is small")
+    }
+
     /// Runs `intrinsic` on random slots and prints its result.
     fn instruction(&mut self, intrinsic: Intrinsic, format: u32) {
         let signature = intrinsic.signature();
         let mut operands = Vec::new();
-        let destination = signature
-            .has_destination()
-            .then(|| self.rng.index(SLOTS));
+        let destination = signature.has_destination().then(|| self.slot());
         if let Some(slot) = destination {
             operands.push(format!("v{slot}"));
         }
         for operand in signature.operands {
             match operand {
                 | IntrinsicOperand::Vector(..) => {
-                    operands.push(format!("v{}", self.rng.index(SLOTS)));
+                    operands.push(format!("v{}", self.slot()));
                 },
                 | IntrinsicOperand::Scalar(_) => {
                     let length = self.rng.int(40) - 12;

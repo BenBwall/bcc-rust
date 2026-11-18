@@ -66,9 +66,8 @@ impl Selector<'_, '_, '_> {
             VectorForm::Sse
         };
         let (destination, operands) = if signature.has_destination() {
-            let (&destination, operands) = args
-                .split_first()
-                .expect("the verifier checked the arity");
+            let (&destination, operands) =
+                args.split_first().expect("the verifier checked the arity");
             (Some(destination), operands)
         } else {
             (None, args)

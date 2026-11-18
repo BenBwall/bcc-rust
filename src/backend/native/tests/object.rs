@@ -886,18 +886,51 @@ fn x87_register_indices_and_directions_are_preserved() {
 fn vector_extension_encodings() {
     let mut text = String::from(".text\n");
     let plain = [
-        "aesenc", "aesenclast", "aesdec", "aesdeclast", "aesimc", "cvtps2dq", "cvttps2dq",
-        "cvtpd2dq", "cvttpd2dq", "rcpps", "rsqrtps", "sqrtss", "sqrtsd",
+        "aesenc",
+        "aesenclast",
+        "aesdec",
+        "aesdeclast",
+        "aesimc",
+        "cvtps2dq",
+        "cvttps2dq",
+        "cvtpd2dq",
+        "cvttpd2dq",
+        "rcpps",
+        "rsqrtps",
+        "sqrtss",
+        "sqrtsd",
     ];
     let immediate = [
-        "aeskeygenassist", "pclmulqdq", "roundps", "roundpd", "roundss", "roundsd", "pcmpistri",
-        "pcmpistrm", "pcmpestri", "pcmpestrm",
+        "aeskeygenassist",
+        "pclmulqdq",
+        "roundps",
+        "roundpd",
+        "roundss",
+        "roundsd",
+        "pcmpistri",
+        "pcmpistrm",
+        "pcmpestri",
+        "pcmpestrm",
     ];
     let binary = ["aesenc", "aesenclast", "aesdec", "aesdeclast"];
     let binary_immediate = ["pclmulqdq", "roundss", "roundsd"];
-    let unary_vex = ["aesimc", "cvtps2dq", "cvttps2dq", "cvtpd2dq", "cvttpd2dq", "rcpps", "rsqrtps"];
+    let unary_vex = [
+        "aesimc",
+        "cvtps2dq",
+        "cvttps2dq",
+        "cvtpd2dq",
+        "cvttpd2dq",
+        "rcpps",
+        "rsqrtps",
+    ];
     let unary_vex_immediate = [
-        "aeskeygenassist", "roundps", "roundpd", "pcmpistri", "pcmpistrm", "pcmpestri", "pcmpestrm",
+        "aeskeygenassist",
+        "roundps",
+        "roundpd",
+        "pcmpistri",
+        "pcmpistrm",
+        "pcmpestri",
+        "pcmpestrm",
     ];
     for a in 0..16 {
         for b in 0..16 {
@@ -932,13 +965,20 @@ fn vector_extension_encodings() {
         }
     }
     for x in 0..16 {
-        for mem in ["128(%r13)", "(%rax)", "-8(%rsp,%r10,4)", "(%r12,%rbp,2)", "g(%rip)"] {
+        for mem in [
+            "128(%r13)",
+            "(%rax)",
+            "-8(%rsp,%r10,4)",
+            "(%r12,%rbp,2)",
+            "g(%rip)",
+        ] {
             write!(
                 &mut text,
                 "movups {mem},%xmm{x}\nmovups %xmm{x},{mem}\nvmovups {mem},%xmm{x}\nvmovups \
                  %xmm{x},{mem}\nvmovups {mem},%ymm{x}\nvmovups %ymm{x},{mem}\naesenc \
-                 {mem},%xmm{x}\npclmulqdq $1,{mem},%xmm{x}\nvaesdec {mem},%xmm3,%xmm{x}\nvpclmulqdq \
-                 $16,{mem},%xmm{x},%xmm11\nvroundpd $4,{mem},%ymm{x}\nvpcmpestri $8,{mem},%xmm{x}\n"
+                 {mem},%xmm{x}\npclmulqdq $1,{mem},%xmm{x}\nvaesdec \
+                 {mem},%xmm3,%xmm{x}\nvpclmulqdq $16,{mem},%xmm{x},%xmm11\nvroundpd \
+                 $4,{mem},%ymm{x}\nvpcmpestri $8,{mem},%xmm{x}\n"
             )
             .unwrap();
         }

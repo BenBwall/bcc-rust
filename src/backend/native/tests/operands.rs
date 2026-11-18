@@ -401,7 +401,8 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
             at.reg(dst, Write);
             Flags::Untouched
         },
-        | MInst::Move128 { load, reg, mem } => {
+        // `movups` and `vmovups` load or store a whole register.
+        | MInst::Move128 { load, reg, mem } | MInst::VectorMove { load, reg, mem, .. } => {
             at.mem(mem);
             at.reg(reg, if load { Write } else { Read });
             Flags::Untouched
@@ -539,11 +540,6 @@ fn x86(inst: MInst) -> (Vec<(Reg, Access)>, Flags) {
                     | VectorOp::RsqrtPs => Write,
                 },
             );
-            Flags::Untouched
-        },
-        | MInst::VectorMove { load, reg, mem, .. } => {
-            at.mem(mem);
-            at.reg(reg, if load { Write } else { Read });
             Flags::Untouched
         },
         // `vzeroupper` zeroes bits 128 and up of every vector register,

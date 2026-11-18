@@ -12,22 +12,80 @@ use super::{
     Shape,
 };
 
-/// An instruction's encoding: the mandatory prefix as VEX's `pp` field
-/// (none, `66`, `F3`, `F2`), the opcode map as VEX's `mmmmm` (`0F`, `0F38`,
-/// `0F3A`) and the opcode.
+/// Whether `name` is one of these instructions, which [`instruction`]
+/// encodes: those of [`spec`], `vmovups`, `vzeroupper`, `vzeroall` and
+/// `xgetbv`.
+pub(super) fn encodes(name: &str) -> bool {
+    matches!(name, "vmovups" | "vzeroupper" | "vzeroall" | "xgetbv") || spec(name).is_some()
+}
+
+/// Encodes the instruction `name` with the operands `args`, after checking
+/// them as [`validate`] does.
+pub(super) fn instruction<'a>(name: &str, args: &'a str) -> Result<Code<'a>> {
+    let operands = super::operands(name, args)?;
+    let count = operands
+        .iter()
+        .take_while(|op| !matches!(op, Operand::Empty))
+        .count();
+    let mut code = Code::empty();
+    match name {
+        | "vmovups" => code.vector_move(operands[0], operands[1])?,
+        | "vzeroupper" => code.raw(&[0xC5, 0xF8, 0x77])?,
+        | "vzeroall" => code.raw(&[0xC5, 0xFC, 0x77])?,
+        | "xgetbv" => code.raw(&[0x0F, 0x01, 0xD0])?,
+        | _ => {
+            let spec = spec(name).ok_or(Error("unknown machine instruction"))?;
+            code.vector(spec, &operands[..count])?;
+        },
+    }
+    Ok(code.biased())
+}
+
+/// Checks the operands of the instruction `name`: a load or store for
+/// `vmovups`, none for `vzeroupper`, `vzeroall` and `xgetbv`, and
+/// [`Spec::validate`]'s forms for the rest.
+pub(super) fn validate(name: &str, operands: &[Operand<'_>]) -> Result<()> {
+    let accepted = match (name, operands) {
+        | ("vmovups", &[a, b]) =>
+            matches!(a, Operand::Mem { .. }) && (b.xmm() || b.ymm())
+                || matches!(b, Operand::Mem { .. }) && (a.xmm() || a.ymm()),
+        | ("vzeroupper" | "vzeroall" | "xgetbv", operands) => operands.is_empty(),
+        | (name, operands) => match spec(name) {
+            | Some(spec) => return spec.validate(operands),
+            | None => false,
+        },
+    };
+    if accepted {
+        Ok(())
+    } else {
+        Err(Error(
+            "unsupported instruction operand count, kind or width",
+        ))
+    }
+}
+
+/// An opcode: the mandatory prefix as VEX's `pp` field (none, `66`, `F3`,
+/// `F2`), the opcode map as VEX's `mmmmm` (`0F`, `0F38`, `0F3A`) and the
+/// opcode byte.
 #[derive(Clone, Copy)]
-pub(super) struct Spec {
-    vex:      bool,
-    pp:       u8,
-    map:      u8,
-    opcode:   u8,
+struct Opcode {
+    pp:   u8,
+    map:  u8,
+    byte: u8,
+}
+
+/// An instruction's encoding and operand forms.
+#[derive(Clone, Copy)]
+struct Spec {
+    vex:    bool,
+    opcode: Opcode,
     /// Whether an 8-bit immediate comes first.
-    imm:      bool,
+    imm:    bool,
     /// Whether the VEX form names the first source in `vvvv`, as an operand
     /// before the destination: `vaesenc %xmm2, %xmm1, %xmm0`.
-    binary:   bool,
+    binary: bool,
     /// What a 32-byte (`L` = 1) form does, if it has one.
-    long:     Long,
+    long:   Long,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -39,9 +97,14 @@ enum Long {
     Narrow,
 }
 
+/// A row of [`TABLE`]: the SSE mnemonic, `pp`, map and opcode, whether the
+/// instruction takes an immediate and names a first source, its 32-byte
+/// form, and whether it has a VEX form here.
+type Row = (&'static str, u8, u8, u8, bool, bool, Long, bool);
+
 /// The instructions by their SSE mnemonic.
 #[rustfmt::skip]
-const TABLE: [(&str, u8, u8, u8, bool, bool, Long, bool); 23] = [
+const TABLE: [Row; 23] = [
     // name, pp, map, opcode, imm, binary, long, has_vex
     ("aesenc",          1, 2, 0xDC, false, true,  Long::None,   true),
     ("aesenclast",      1, 2, 0xDD, false, true,  Long::None,   true),
@@ -69,7 +132,7 @@ const TABLE: [(&str, u8, u8, u8, bool, bool, Long, bool); 23] = [
 ];
 
 /// The instruction `name` names, if it is one of these.
-pub(super) fn spec(name: &str) -> Option<Spec> {
+fn spec(name: &str) -> Option<Spec> {
     let (vex, stem) = match name.strip_prefix('v') {
         | Some(stem) => (true, stem),
         | None => (false, name),
@@ -78,9 +141,11 @@ pub(super) fn spec(name: &str) -> Option<Spec> {
         TABLE.iter().find(|row| row.0 == stem)?;
     (!vex || has_vex).then_some(Spec {
         vex,
-        pp,
-        map,
-        opcode,
+        opcode: Opcode {
+            pp,
+            map,
+            byte: opcode,
+        },
         imm,
         binary: binary && vex,
         long,
@@ -93,8 +158,12 @@ impl Spec {
     /// registers (a narrowing one an XMM destination, and a register source
     /// in either VEX width, since only the source's width tells them
     /// apart).
-    pub(super) fn validate(self, operands: &[Operand<'_>]) -> Result<()> {
-        let fail = || Err(Error("unsupported instruction operand count, kind or width"));
+    fn validate(self, operands: &[Operand<'_>]) -> Result<()> {
+        let fail = || {
+            Err(Error(
+                "unsupported instruction operand count, kind or width",
+            ))
+        };
         let registers = 2 + usize::from(self.binary);
         let count = registers + usize::from(self.imm);
         if operands.len() != count {
@@ -118,15 +187,15 @@ impl Spec {
             | (true, Long::Narrow) => (Shape::Ymm, Shape::Xmm),
             | (true, _) => (Shape::Ym, Shape::Ymm),
         };
-        let accepted = source.accepts(src)
-            && operands[1..].iter().all(|&op| destination.accepts(op));
+        let accepted =
+            source.accepts(src) && operands[1..].iter().all(|&op| destination.accepts(op));
         if accepted { Ok(()) } else { fail() }
     }
 }
 
 impl<'a> Code<'a> {
     /// Encodes a validated instruction of [`spec`].
-    pub(super) fn vector(&mut self, spec: Spec, operands: &[Operand<'a>]) -> Result<()> {
+    fn vector(&mut self, spec: Spec, operands: &[Operand<'a>]) -> Result<()> {
         let imm = if spec.imm {
             Some(operands[0].imm()?)
         } else {
@@ -136,24 +205,21 @@ impl<'a> Code<'a> {
         let src = operands[0];
         let dst = operands[operands.len() - 1];
         if spec.vex {
-            let first = if spec.binary {
-                operands[1].reg()?
-            } else {
-                0
-            };
+            let first = if spec.binary { operands[1].reg()? } else { 0 };
             let long = src.ymm() || dst.ymm();
-            self.vex(spec.pp, spec.map, long, first, spec.opcode, dst.reg()?, src)?;
+            self.vex(spec.opcode, long, first, dst.reg()?, src)?;
         } else {
-            let prefix: &[u8] = match spec.pp {
+            let prefix: &[u8] = match spec.opcode.pp {
                 | 0 => &[],
                 | 1 => &[0x66],
                 | 2 => &[0xF3],
                 | _ => &[0xF2],
             };
-            let opcode: &[u8] = match spec.map {
-                | 1 => &[0x0F, spec.opcode],
-                | 2 => &[0x0F, 0x38, spec.opcode],
-                | _ => &[0x0F, 0x3A, spec.opcode],
+            let byte = spec.opcode.byte;
+            let opcode: &[u8] = match spec.opcode.map {
+                | 1 => &[0x0F, byte],
+                | 2 => &[0x0F, 0x38, byte],
+                | _ => &[0x0F, 0x3A, byte],
             };
             self.rm(prefix, false, false, opcode, dst.reg()?, src)?;
         }
@@ -164,27 +230,30 @@ impl<'a> Code<'a> {
     }
 
     /// `vmovups`: a load (`b` the register) or a store of 16 or 32 bytes.
-    pub(super) fn vector_move(&mut self, a: Operand<'a>, b: Operand<'a>) -> Result<()> {
+    fn vector_move(&mut self, a: Operand<'a>, b: Operand<'a>) -> Result<()> {
         let load = matches!(b, Operand::Reg(_));
         let (reg, mem) = if load { (b, a) } else { (a, b) };
-        let opcode = if load { 0x10 } else { 0x11 };
-        self.vex(0, 1, reg.ymm(), 0, opcode, reg.reg()?, mem)
+        let opcode = Opcode {
+            pp:   0,
+            map:  1,
+            byte: if load { 0x10 } else { 0x11 },
+        };
+        self.vex(opcode, reg.ymm(), 0, reg.reg()?, mem)
     }
 
     /// A VEX instruction: the two-byte prefix `C5` when the map is `0F` and
     /// the r/m operand needs neither `X` nor `B` (W is always 0 here), else
     /// the three-byte `C4`; then the opcode and the operands as
     /// [`Code::rm`] writes them. `R`, `X`, `B` and `vvvv` are inverted.
-    pub(super) fn vex(
+    fn vex(
         &mut self,
-        pp: u8,
-        map: u8,
+        opcode: Opcode,
         long: bool,
         vvvv: u8,
-        opcode: u8,
         reg: u8,
         rm: Operand<'a>,
     ) -> Result<()> {
+        let Opcode { pp, map, byte } = opcode;
         let (base, index) = match rm {
             | Operand::Reg(r) => (r.id, 0),
             | Operand::Mem {
@@ -204,7 +273,7 @@ impl<'a> Code<'a> {
         } else {
             self.raw(&[0xC4, (r << 7) | (x << 6) | (b << 5) | map, tail])?;
         }
-        self.byte(opcode)?;
+        self.byte(byte)?;
         self.modrm(reg, rm, false)
     }
 }

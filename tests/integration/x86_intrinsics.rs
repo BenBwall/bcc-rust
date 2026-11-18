@@ -126,8 +126,7 @@ mod tests {
         let flags: Vec<&str> = flags
             .lines()
             .find_map(|line| line.strip_prefix("flags"))
-            .map(|line| line.split_whitespace().collect())
-            .unwrap_or_default();
+            .map_or_else(Vec::new, |line| line.split_whitespace().collect());
         let missing: Vec<&str> = ["aes", "pclmulqdq", "sse4_2", "avx", "xsave"]
             .into_iter()
             .filter(|feature| !flags.contains(feature))
@@ -209,20 +208,22 @@ mod tests {
         let source = temporary("xgetbv.c");
         std::fs::write(
             &source,
-            "#include <immintrin.h>
+            r#"#include <immintrin.h>
 #ifdef GATED
-unsigned long long f(void) { return              _xgetbv(0); }
+unsigned long long f(void) { return _xgetbv(0); }
 #endif
-__attribute__((target("xsave"))) unsigned long long              g(void) { return _xgetbv(0); }
+__attribute__((target("xsave"))) unsigned long long g(void) { return _xgetbv(0); }
 #ifdef __clang__
-_Static_assert(             __builtin_types_compatible_p(__typeof__(_xgetbv(0)), unsigned long long),              \"\");
+_Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), unsigned long long), "");
 #else
-_Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)),              long long), \"\");
+_Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), "");
 #endif
-",
+"#,
         )
         .unwrap();
         let source = source.to_str().unwrap();
+        let object = temporary("xgetbv.o");
+        let object = object.to_str().unwrap();
         for (flags, expected) in [
             (&["--compiler-identity=gcc"][..], None),
             (&["--compiler-identity=clang"], None),
@@ -230,8 +231,8 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)),             
             (
                 &["--compiler-identity=gcc", "-DGATED"],
                 Some(
-                    "inlining failed in call to 'always_inline' '_xgetbv': target specific \
-                     option mismatch",
+                    "inlining failed in call to 'always_inline' '_xgetbv': target specific option \
+                     mismatch",
                 ),
             ),
             (
@@ -239,25 +240,32 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)),             
                 Some("'__builtin_ia32_xgetbv' needs target feature xsave"),
             ),
         ] {
-            let output = bcc(&[&["-c", source, "-o", "/dev/null"][..], flags].concat());
+            let output = bcc(&[&["-c", source, "-o", object][..], flags].concat());
             let stderr = text(&output.stderr);
-            assert_eq!(output.status.success(), expected.is_none(), "{flags:?}: {stderr}");
-            assert!(stderr.contains(expected.unwrap_or("")), "{flags:?}: {stderr}");
+            assert_eq!(
+                output.status.success(),
+                expected.is_none(),
+                "{flags:?}: {stderr}"
+            );
+            assert!(
+                stderr.contains(expected.unwrap_or("")),
+                "{flags:?}: {stderr}"
+            );
         }
         let gpr = temporary("xgetbv-gpr.c");
         std::fs::write(
             &gpr,
-            "#include <x86gprintrin.h>
-__attribute__((target("xsave"))) long long h(void) {              return _xgetbv(0); }
-",
+            "#include <x86gprintrin.h>\n__attribute__((target(\"xsave\"))) long long h(void) { \
+             return _xgetbv(0); }\n",
         )
         .unwrap();
         let gpr = gpr.to_str().unwrap();
-        let gcc = bcc(&["--compiler-identity=gcc", "-c", gpr, "-o", "/dev/null"]);
+        let gcc = bcc(&["--compiler-identity=gcc", "-c", gpr, "-o", object]);
         assert!(gcc.status.success(), "{}", text(&gcc.stderr));
-        let clang = bcc(&["--compiler-identity=clang", "-c", gpr, "-o", "/dev/null"]);
+        std::fs::remove_file(object).unwrap();
+        let clang = bcc(&["--compiler-identity=clang", "-c", gpr, "-o", object]);
         assert!(
-            text(&clang.stderr).contains("_xgetbv"),
+            !clang.status.success() && text(&clang.stderr).contains("_xgetbv"),
             "{}",
             text(&clang.stderr)
         );
