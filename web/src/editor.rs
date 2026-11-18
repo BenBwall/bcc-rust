@@ -105,6 +105,19 @@ pub fn CodeEditor(
     /// A line to scroll into view.
     #[prop(optional)]
     reveal: Option<Signal<Option<usize>>>,
+    /// The first and last of a run of lines linked to the line the reader
+    /// points at in another editor: brought into view in the editor at once,
+    /// and on the page once the pointer or cursor rests, gently (see
+    /// `showLinked` in `web/editor/src/main.js`).
+    #[prop(optional)]
+    reveal_linked: Option<Signal<Option<(usize, usize)>>>,
+    /// Called with the first line wholly in view after each scroll.
+    #[prop(optional)]
+    on_top_line: Option<Callback<usize>>,
+    /// The line to show first when the text changes (0: keep the scroll
+    /// offset), so the reader keeps their place in the code.
+    #[prop(optional)]
+    keep_place: Option<Callback<(), usize>>,
     /// Also scroll the page to a revealed line, when part of the editor is
     /// on screen, so it never sits under the sticky toolbar or below the
     /// window: for the views that follow execution, not for hover links.
@@ -133,11 +146,17 @@ pub fn CodeEditor(
         on_cursor_line,
         on_gutter_click,
         reveal,
+        reveal_linked,
+        on_top_line,
+        keep_place,
         follow_on_page,
         line_numbers,
     });
     #[cfg(not(feature = "hydrate"))]
     let _ = (
+        reveal_linked,
+        on_top_line,
+        keep_place,
         follow_on_page,
         theme,
         read_only,
@@ -235,7 +254,13 @@ mod monaco {
         /// One Monaco editor.
         pub type Editor;
         #[wasm_bindgen(method, js_name = setValue)]
-        fn set_value(this: &Editor, text: &str);
+        fn set_value(this: &Editor, text: &str, top: usize);
+        #[wasm_bindgen(method, js_name = placeTop)]
+        fn place_top(this: &Editor, line: usize);
+        #[wasm_bindgen(method, js_name = showLinked)]
+        fn show_linked(this: &Editor, first: usize, last: usize);
+        #[wasm_bindgen(method, js_name = onTopLine)]
+        fn on_top_line(this: &Editor, callback: &js_sys::Function);
         #[wasm_bindgen(method, js_name = setLanguage)]
         fn set_language(this: &Editor, language: &str);
         #[wasm_bindgen(method, js_name = setDecorations)]
@@ -378,6 +403,9 @@ mod monaco {
         pub on_cursor_line:  Option<Callback<usize>>,
         pub on_gutter_click: Option<Callback<usize>>,
         pub reveal:          Option<Signal<Option<usize>>>,
+        pub reveal_linked:   Option<Signal<Option<(usize, usize)>>>,
+        pub on_top_line:     Option<Callback<usize>>,
+        pub keep_place:      Option<Callback<(), usize>>,
         pub follow_on_page:  Option<Signal<bool>>,
         pub line_numbers:    Option<Signal<Vec<String>>>,
     }
@@ -497,6 +525,15 @@ mod monaco {
                 },
             ));
         }
+        if let Some(callback) = mount.on_top_line {
+            listeners.push(listen(
+                &instance,
+                Editor::on_top_line,
+                move |line: JsValue| {
+                    callback.run(line_number(&line));
+                },
+            ));
+        }
         if let Some(callback) = mount.on_gutter_click {
             listeners.push(listen(
                 &instance,
@@ -523,6 +560,8 @@ mod monaco {
             decorations,
             markers,
             reveal,
+            reveal_linked,
+            keep_place,
             follow_on_page,
             line_numbers,
             ..
@@ -534,10 +573,20 @@ mod monaco {
                 }
             });
         };
+        // The editor starts with the text it was created with, so the first
+        // time only the place applies.
+        let fresh = StoredValue::new(true);
         Effect::new(move || {
             let value = text.get();
             if ready.get() {
-                with(&|editor| editor.set_value(&value));
+                let top = keep_place.map_or(0, |keep| untrack(|| keep.run(())));
+                with(&|editor| {
+                    editor.set_value(&value, top);
+                    if fresh.get_value() {
+                        editor.place_top(top);
+                    }
+                });
+                fresh.set_value(false);
             }
         });
         Effect::new(move || {
@@ -577,6 +626,14 @@ mod monaco {
                     && let Ok(labels) = serde_wasm_bindgen::to_value(&labels)
                 {
                     with(&|editor| editor.set_line_numbers(&labels));
+                }
+            });
+        }
+        if let Some(reveal_linked) = reveal_linked {
+            Effect::new(move || {
+                let (first, last) = reveal_linked.get().unwrap_or_default();
+                if ready.get() {
+                    with(&|editor| editor.show_linked(first, last));
                 }
             });
         }

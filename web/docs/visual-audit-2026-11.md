@@ -811,3 +811,193 @@ four configurations now measure no failure.
 - **Function names are the colour of plain text** in the C source and the IR
   (`@main`), as the theme intends for the source; the IR could set them
   apart.
+
+## Part 5: the stage views' follow-ups (2026-11)
+
+Part 4 left four items: the output's scroll position followed pixels, not
+code; linked lines could sit under the window's edge; the IR opened with two
+lines a newcomer cannot read; and function names had no colour of their own.
+This part fixes them on `agent/site-stage-followups` and then reads the stage
+views once more as a newcomer meets them.
+
+### Method
+
+The site was built with `web/build.sh` from `main` at `99f9b655d` (before)
+and from this branch (after), and served from `web/dist`. On this machine the
+build ran Trunk without `--release` (the release profile's link-time
+optimization is off limits here) and with the dev profile at `opt-level=s`,
+which keeps the Wasm small enough for one browser within the memory limit;
+the sources, the editor bundle and the page are those CI builds. A
+Playwright script drove "Objects, loops and calls" in Chromium at 1440x900
+and 390x844, in both themes, with reduced motion, and once more at 1440x900
+light with motion allowed. Each run recorded:
+
+- **the place:** the output of bcc IR, the assembly, the machine code and
+  LLVM IR scrolled into `main`, then the first line in view after switching
+  to `-O2`, back to `-O0`, to another stage and back, with the source line
+  the reading names for it (read by pointing at it, which makes it the
+  reader's place); and both levels side by side;
+- **the linked lines:** with the stage card at the top of the window and the
+  output at its start, the pointer resting on a source line, the page's
+  scroll sampled every 100 ms for 1.4 s and where the linked lines end up;
+  then the pointer swept across nine lines without resting, and the wheel
+  turned just before resting, with how far the page moved; and a line chosen
+  with the keyboard (1440) or a tap (390);
+- **the IR's opening lines:** the first lines of bcc IR, the ABI-lowered IR
+  and LLVM IR, the reading and the screen-reader announcement for line 1,
+  and **Show target** pressed with the keyboard;
+- **function names:** the colour and WCAG contrast of every function name
+  on screen in the five listings;
+- sideways scroll of the page at all eleven stages.
+
+The screenshots are in
+[`screenshots/stage-followups/`](screenshots/stage-followups/), named
+`<item>-<width>-<theme>-before.png` and `…-after.png`.
+
+### Findings
+
+#### 1. The output keeps the reader's place in the code
+
+Monaco kept the output's scroll offset in pixels when the text changed under
+it. With bcc IR scrolled to line 28, `v9 = iconst.i64 8` (the second
+element's offset in `int values[3] = {2, 4, 6};`, source line 9), the
+assembly then opened at its line 28, `.type main,@function`, a directive
+before `main`'s first instruction. With the levels side by side, the other
+level's pane opened at its first line, `.text`, whatever the selected one
+showed.
+
+**Fixed.** The output editor reports its first line in view to Rust, which
+keeps the reader's place as a source line and its row on screen
+(`pipeline::Place`): the source line of the first line in view, or of the
+line under the pointer, or, for a label or directive, of the nearest line
+below it that has one. When the text changes (another level, another stage,
+an edit), the editor opens with that source line's first output line at the
+same row, or, where the new text has none (a declaration whose value lives
+in a register, a line `-O2` folded away), with the nearest line of the same
+function that has code. A scroll the editor makes itself to reach the place
+leaves the place as it was, so a round trip through `-O2` comes back to the
+same code. Now bcc IR at line 28 (source line 9) opens `-O2` at line 16, `v1
+= iconst.i32 2`, the same statement, and the assembly at line 44, `movl $2,
+0(%rsp)`, its first store; the other level's pane, beside the selected one,
+opens at the same statement too, as far down as its shorter text allows
+(at `-O2` the loop with `bump` inlined, beside `-O0`'s `total + next`).
+[`place-ir-to-asm-1440-light`](screenshots/stage-followups/place-ir-to-asm-1440-light-before.png)
+([after](screenshots/stage-followups/place-ir-to-asm-1440-light-after.png)),
+[`place-compare-asm-1440-light`](screenshots/stage-followups/place-compare-asm-1440-light-before.png)
+([after](screenshots/stage-followups/place-compare-asm-1440-light-after.png)).
+
+#### 2. Linked lines come into view, gently
+
+With the stage card at the top of a 1440x900 window and the output at its
+start, pointing at source line 9 marked three lines of the machine code at
+y 969 to 1035 and five of the thirteen lines of bcc IR it became at 932 to
+1042: all under the window's edge, where they stayed. On a phone, a tap on
+source line 3 marked assembly lines 15 and 16 at y 820 to 864, under the
+844 px window.
+
+**Fixed.** Pointing at a source line (or moving the cursor to it) still
+brings the lines it became into the output editor's view, now the whole run
+of them when it fits, and then, once the pointer or the cursor has rested
+for 400 ms, scrolls the page as little as shows them clear of the sticky
+header and above the window's edge. It leaves the page alone when the
+reader turned the wheel, touched or dragged the page, or pressed a scroll
+key in the last 1.5 s; when no part of the output is on screen; and when
+the scroll would slide another line under a hovering pointer: on a wide
+screen the source pane is stuck beside the output, so the pointer stays on
+its line, and on a phone the page scrolls for a tap or the keyboard only as
+far as keeps the chosen line in view. A run the reader scrolled away from
+with the wheel is not brought back when the pointer leaves and the cursor's
+link returns. With reduced motion both scrolls jump; otherwise they glide.
+Now the machine code's three lines move to 826 to 892 (the page scrolled
+143 px, about 400 ms after the pointer came to rest), bcc IR's thirteen
+lines to 606 to 892 (52 px), and the phone's to 792 to 836 (28 px), with the
+tapped line still on screen. Sweeping the pointer across nine lines without
+resting, and resting just after a turn of the wheel, moved the page by
+0 px in every configuration.
+[`linked-machine-code-1440-light`](screenshots/stage-followups/linked-machine-code-1440-light-before.png)
+([after](screenshots/stage-followups/linked-machine-code-1440-light-after.png)),
+[`selected-line-390-light`](screenshots/stage-followups/selected-line-390-light-before.png)
+([after](screenshots/stage-followups/selected-line-390-light-after.png)).
+
+#### 3. The IRs open with their first function
+
+bcc IR opened with `target triple = "x86_64-unknown-linux-gnu"` and `target
+datalayout = "e-m:e-p270:32:32-…"`, LLVM IR with `; ModuleID = 'bcc'`,
+`source_filename = "bcc"` and the same two lines, and the reading said only
+"Line 1 of the bcc IR has no source line."
+
+**Fixed.** These lines fold into one comment that says what they are,
+`; x86_64-unknown-linux-gnu: the target and its data layout, folded (Show
+target to read them)`, as the preprocessed text folds each header
+(`pipeline/target.rs`); the first function is on line 3. The line is
+marked as a fold, and its hover reads the triple's parts (processor
+x86_64, vendor unknown, operating system linux, environment gnu) and the
+data layout's commonest entries (`e`: little-endian; `i64:64`: a 64-bit
+integer aligned to 64 bits; `S128`: the stack aligned to 128 bits). The
+reading, and for the cursor the announcement, say "Line 1 of the bcc IR
+stands for the lines that name the machine the code is for
+(x86_64-unknown-linux-gnu), and how that machine stores data (its data
+layout). No source line made them; Show target puts them back." **Show
+target**, beside **Compare -O0 with -O2**, is a toggle button
+(`aria-pressed`), and pressed with the keyboard it puts the lines back. The
+links below the fold move up with the text. The glossary's compiler terms
+gain *Target triple* and *Data layout*.
+[`target-bcc-ir-1440-light`](screenshots/stage-followups/target-bcc-ir-1440-light-before.png)
+([after](screenshots/stage-followups/target-bcc-ir-1440-light-after.png),
+[hover](screenshots/stage-followups/target-ir-hover-1440-light-after.png)),
+[`target-llvm-ir-1440-dark`](screenshots/stage-followups/target-llvm-ir-1440-dark-before.png)
+([after](screenshots/stage-followups/target-llvm-ir-1440-dark-after.png)),
+[`target-bcc-ir-390-dark`](screenshots/stage-followups/target-bcc-ir-390-dark-before.png)
+([after](screenshots/stage-followups/target-bcc-ir-390-dark-after.png)).
+
+#### 4. Function names have their own colour
+
+A function's name was the near-white of plain text in the IRs (`@main`,
+17.5:1 and 18.1:1 in the two themes) and the khaki of a jump's label in the
+assembly and the machine code (`main:`, `<main>:`, 15.4:1 and 15.9:1), so a
+function's start looked like any block's.
+
+**Fixed.** Where a listing defines, declares or calls a function (`function
+@main(`, `define i32 @main(`, `call @bump(`, `main:`, `callq bump`,
+`<main>:`), its name is orchid, `#ff88e2`: 9.2:1 on the light theme's
+screen and 9.6:1 on the dark one's, and at least 17 in CIEDE2000 from every
+other token colour (the nearest is the slots' lavender). The first orchid,
+`#ee78d6` (7.8:1 and 8.1:1, measured on every name on screen in the five
+listings in all four configurations), fell to 3.9:1 and 4.2:1 where a
+selection and a linked line's fill overlap under a name (`rgb(93,57,55)` and
+`rgb(90,53,51)`, measured by review); `#ff88e2` keeps 4.7:1 and 5.0:1
+there. A global's name keeps the plain colour (`@calls`,
+`@moved.total` in "Structs and static storage", whose `@moved` and
+`@llvm.memcpy` calls are orchid), and a local label (`.LBB1_2:`) keeps its
+khaki. The C source keeps its plain names.
+[`names-assembly-1440-dark`](screenshots/stage-followups/names-assembly-1440-dark-before.png)
+([after](screenshots/stage-followups/names-assembly-1440-dark-after.png)),
+[`names-bcc-ir-1440-light`](screenshots/stage-followups/names-bcc-ir-1440-light-before.png)
+([after](screenshots/stage-followups/names-bcc-ir-1440-light-after.png)),
+[`names-machine-code-1440-light`](screenshots/stage-followups/names-machine-code-1440-light-before.png)
+([after](screenshots/stage-followups/names-machine-code-1440-light-after.png)).
+
+#### 5. A newcomer's pass
+
+Read again as a newcomer meets them, the stage views showed one more thing
+worth fixing, and the new scrolling one more thing to settle:
+
+- **A hover on the first line was cut off.** Monaco opened the folded line's
+  explanation above it, under the editor's top edge, so only its last line
+  showed. Hovers now open below their line where they fit.
+- **The editors' own smooth scrolling was always on.** It now follows the
+  reader's reduced-motion preference, also when that changes, as does the
+  caret's animation, so the editor's reveal jumps when the page's scroll
+  does.
+
+No stage scrolled the page sideways in any configuration, before or after,
+and no run logged an error.
+
+### Left for later
+
+- On a phone, where the output editor is shorter, the folded line's hover
+  has no room below it and still opens above, cut off; a touch screen does
+  not hover, and the reading under the output says the same.
+- LLVM IR still ends with its attribute groups and module flags
+  (`attributes #0 = { "frame-pointer"="all" }`, `!llvm.module.flags`), which
+  a newcomer cannot read either; the same fold could take them.

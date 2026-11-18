@@ -44,6 +44,85 @@ let usingKeyboard = false;
 addEventListener('keydown', () => { usingKeyboard = true; }, true);
 addEventListener('pointerdown', () => { usingKeyboard = false; }, true);
 
+// Whether the reader asked for reduced motion: the editors then jump to a
+// line rather than glide there.
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const editors = new Set();
+reducedMotion.addEventListener?.('change', () => {
+  for (const editor of editors) editor.applyMotion();
+});
+
+function motionOptions() {
+  return {
+    smoothScrolling: !reducedMotion.matches,
+    cursorSmoothCaretAnimation: reducedMotion.matches ? 'off' : 'on',
+  };
+}
+
+// What the reader last did, so the page never scrolls against them: when
+// they last scrolled themselves (a wheel, a touch, a scroll key outside the
+// editors, the scroll bar), and whether the pointer or the keyboard moved
+// last, and where the pointer is.
+let userScrolled = -Infinity;
+let lastKey = -Infinity;
+let pointer = null;
+let pointerHeld = false;
+const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', ' ', 'ArrowUp', 'ArrowDown']);
+const noteUserScroll = () => { userScrolled = performance.now(); };
+addEventListener('wheel', noteUserScroll, { capture: true, passive: true });
+addEventListener('touchmove', noteUserScroll, { capture: true, passive: true });
+addEventListener('keydown', (event) => {
+  lastKey = performance.now();
+  // The arrow keys in an editor move its cursor, which is how a reader
+  // selects a line, not a scroll.
+  if (SCROLL_KEYS.has(event.key) && !event.target?.closest?.('.monaco-editor')) noteUserScroll();
+}, true);
+addEventListener('pointermove', (event) => {
+  // A finger leaves nothing under the pointer once it lifts.
+  pointer = { x: event.clientX, y: event.clientY, time: performance.now(), hovers: event.pointerType === 'mouse' };
+}, { capture: true, passive: true });
+addEventListener('pointerdown', (event) => {
+  pointerHeld = true;
+  pointer = { x: event.clientX, y: event.clientY, time: performance.now(), hovers: event.pointerType === 'mouse' };
+}, true);
+addEventListener('pointerup', () => { pointerHeld = false; }, true);
+addEventListener('pointercancel', () => { pointerHeld = false; }, true);
+// Dragging the page's scroll bar, or the page under a finger.
+addEventListener('scroll', () => { if (pointerHeld) noteUserScroll(); }, { passive: true });
+
+/** How long after the reader's own scrolling the page leaves the scrolling
+ * to them. */
+const USER_SCROLL_GRACE_MS = 1500;
+/** How long the pointer or the cursor must rest on a line before the page
+ * scrolls to what it links to, so sweeping across lines moves nothing. */
+const LINK_REST_MS = 400;
+
+/**
+ * How far the page may scroll by `by` without moving what the reader points
+ * at out of reach: all of it when that is in a sticky pane stuck to the
+ * window (beside the output on a wide screen), which scrolling leaves where
+ * it is; else, for a line the mouse hovers, none, since the page would slide
+ * another line under the pointer; and for the cursor's line, chosen with the
+ * keyboard or a tap, as far as keeps it in view (the editor's text area
+ * sits on that line).
+ */
+function allowedScroll(by) {
+  const byPointer = pointer && pointer.time >= lastKey && pointer.hovers;
+  const node = byPointer ? document.elementFromPoint(pointer.x, pointer.y) : document.activeElement;
+  if (!node || node === document.body || node === document.documentElement) {
+    return 0;
+  }
+  if (isStuck(node)) {
+    return by;
+  }
+  if (byPointer || !node.closest('.monaco-editor')) {
+    return 0;
+  }
+  const { clear, bottom } = visibleBand();
+  const line = node.getBoundingClientRect();
+  return by > 0 ? Math.max(0, Math.min(by, line.top - clear)) : Math.min(0, Math.max(by, line.bottom - bottom));
+}
+
 /** The key that switches what Tab does in an editor: Alt+M (Option+M on a
  * Mac). Monaco's own Ctrl+M (Ctrl+Shift+M on a Mac) cannot undo the
  * `tabFocusMode` option, and Firefox takes Ctrl+M to mute the tab. */
@@ -170,10 +249,12 @@ class Editor {
       lineNumbersMinChars: options.language === 'wat' ? 4 : 3,
       lineDecorationsWidth: 10,
       folding: !!options.readOnly,
-      smoothScrolling: true,
-      cursorSmoothCaretAnimation: 'on',
+      ...motionOptions(),
       padding: { top: 14, bottom: 14 },
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
+      // A hover opens below its line, so the first line's (a folded line's
+      // explanation) is not cut off by the editor's top edge.
+      hover: { above: false },
       overviewRulerBorder: false,
       overviewRulerLanes: 0,
       hideCursorInOverviewRuler: true,
@@ -196,6 +277,11 @@ class Editor {
       tabFocusMode: true,
     });
     this.tabHint = new TabHint(this.editor);
+    editors.add(this);
+    // The time the reader last turned the wheel over this editor.
+    this.wheeled = -Infinity;
+    this.onWheel = () => { this.wheeled = performance.now(); };
+    host.addEventListener('wheel', this.onWheel, { capture: true, passive: true });
     this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
       if (event.source === 'keyboard') showCursorOnPage(this.editor);
     }));
@@ -220,10 +306,164 @@ class Editor {
     return this.editor.getValue();
   }
 
-  /** Replace the text, keeping the undo stack and the view when unchanged. */
-  setValue(text) {
-    if (this.editor.getValue() !== text) {
+  /** Follow the reader's reduced-motion preference, which can change. */
+  applyMotion() {
+    this.editor.updateOptions(motionOptions());
+  }
+
+  /**
+   * Replace the text, keeping the undo stack and the view when unchanged.
+   * With `top`, the new text opens with that line first in view (1: at its
+   * start), so a view that changes under the reader keeps their place in
+   * the code rather than their scroll offset in pixels.
+   */
+  setValue(text, top = 0) {
+    if (this.editor.getValue() === text) {
+      return;
+    }
+    this.placing = true;
+    try {
       this.editor.setValue(text);
+      this.scrollToTop(top);
+    } finally {
+      this.placing = false;
+    }
+    this.reportTop?.();
+  }
+
+  /** Scroll, at once, so `line` is the first line in view (0: stay). */
+  placeTop(line) {
+    if (line <= 0) {
+      return;
+    }
+    this.placing = true;
+    try {
+      this.scrollToTop(line);
+    } finally {
+      this.placing = false;
+    }
+    this.reportTop?.();
+  }
+
+  scrollToTop(line) {
+    if (line <= 0) {
+      return;
+    }
+    const top = line <= 1 ? 0 : this.editor.getTopForLineNumber(line);
+    this.editor.setScrollTop(top, monaco.editor.ScrollType.Immediate);
+  }
+
+  /** The first line wholly in view, past the one Monaco half-shows. */
+  topLine() {
+    const visible = this.editor.getVisibleRanges();
+    if (!visible.length) {
+      return 1;
+    }
+    const top = visible[0].startLineNumber;
+    const hidden = this.editor.getTopForLineNumber(top) < this.editor.getScrollTop();
+    return hidden ? Math.min(top + 1, visible[0].endLineNumber) : top;
+  }
+
+  /**
+   * Call `callback(line)` with the first line wholly in view after each
+   * scroll, once per frame; a new editor is at line 1 until it scrolls. The
+   * page keeps the reader's place in the code with it (see `setValue`).
+   */
+  onTopLine(callback) {
+    let frame = 0;
+    let current = 0;
+    const report = () => {
+      frame = 0;
+      const line = this.topLine();
+      if (line !== current) {
+        current = line;
+        callback(line);
+      }
+    };
+    // After new text, the same line number is another line: report it again.
+    this.reportTop = () => {
+      current = 0;
+      frame ||= requestAnimationFrame(report);
+    };
+    this.listeners.push(this.editor.onDidScrollChange((event) => {
+      if (event.scrollTopChanged && !this.placing) frame ||= requestAnimationFrame(report);
+    }));
+    this.listeners.push({ dispose: () => cancelAnimationFrame(frame) });
+  }
+
+  /**
+   * Bring `first` to `last`, the run of lines linked to the line the reader
+   * points at in the other editor, into view (0 cancels): inside this
+   * editor at once, unless the reader is turning the wheel over it; and,
+   * once the pointer or the cursor has rested on its line, on the page, as
+   * little as shows them clear of the sticky header and above the window's
+   * bottom, provided part of this editor is on screen and the reader has not
+   * just scrolled themselves, and only as far as keeps the line they point
+   * at where they can see it (see `allowedScroll`). Both glide, unless the
+   * reader asked for reduced motion.
+   */
+  showLinked(first, last) {
+    clearTimeout(this.linkTimer);
+    this.linkTimer = 0;
+    if (first <= 0) {
+      return;
+    }
+    last = Math.max(first, last);
+    // The same run again, as when the pointer leaves this editor and the
+    // cursor's link in the other is back, after the reader turned the wheel
+    // here since it was shown: they scrolled away from it on purpose.
+    const again = this.linked?.[0] === first && this.linked?.[1] === last;
+    if (again && this.wheeled > this.linkedAt) {
+      return;
+    }
+    this.linked = [first, last];
+    this.linkedAt = performance.now();
+    const editor = this.editor;
+    const smooth = monaco.editor.ScrollType.Smooth;
+    if (performance.now() - this.wheeled > USER_SCROLL_GRACE_MS) {
+      const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+      if ((last - first + 1) * lineHeight <= editor.getLayoutInfo().height - 2 * lineHeight) {
+        editor.revealLinesInCenterIfOutsideViewport(first, last, smooth);
+      } else {
+        editor.revealLineInCenterIfOutsideViewport(first, smooth);
+      }
+    }
+    this.linkTimer = setTimeout(() => {
+      this.linkTimer = 0;
+      this.showLinkedOnPage(first, last);
+    }, LINK_REST_MS);
+  }
+
+  showLinkedOnPage(first, last) {
+    const node = this.editor.getContainerDomNode();
+    if (!node.isConnected || isStuck(node) || performance.now() - userScrolled < USER_SCROLL_GRACE_MS) {
+      return;
+    }
+    const { clear, bottom } = visibleBand();
+    const host = node.getBoundingClientRect();
+    if (host.bottom <= clear || host.top >= bottom) {
+      return;
+    }
+    // The run as it sits in the window, cut to what the editor shows.
+    const editor = this.editor;
+    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+    const scrollTop = editor.getScrollTop();
+    const top = Math.max(host.top, host.top + editor.getTopForLineNumber(first) - scrollTop);
+    const end = Math.min(host.bottom, host.top + editor.getTopForLineNumber(last) + lineHeight - scrollTop);
+    if (end <= top) {
+      return;
+    }
+    let by = 0;
+    if (top < clear) {
+      by = top - clear;
+    } else if (end > bottom) {
+      // As much as shows the run's end, never pushing its start under the
+      // header.
+      by = Math.min(end - bottom, top - clear);
+    }
+    by = allowedScroll(by);
+    if (Math.abs(by) >= 1) {
+      scrollBy({ top: by, behavior: reducedMotion.matches ? 'instant' : 'smooth' });
     }
   }
 
@@ -448,6 +688,9 @@ class Editor {
    */
   dispose() {
     following.delete(this);
+    editors.delete(this);
+    clearTimeout(this.linkTimer);
+    this.editor.getContainerDomNode().removeEventListener('wheel', this.onWheel, { capture: true });
     for (const listener of this.listeners.splice(0)) {
       listener.dispose();
     }

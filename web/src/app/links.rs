@@ -249,10 +249,14 @@ impl State {
     /// links to in the source.
     fn describe_beside(self, line: usize) -> Option<String> {
         let stage = self.stage.get();
-        let headers = self.headers.get();
+        let unfolded = self.unfolded.get();
         let optimized = !self.optimize.get();
         self.other_level.with(|compilation| {
             let compilation = compilation.as_ref()?;
+            let name = format!("{} {}", level_name(optimized), stage.view_name());
+            if let Some(text) = folded_target(stage, compilation, unfolded, line, &name) {
+                return Some(text);
+            }
             self.other_links.with(|links| {
                 let linked = links.sources_for(line);
                 let view = View {
@@ -260,7 +264,7 @@ impl State {
                     level:    Some(level_name(optimized)),
                     exact:    links.is_exact(),
                     numbered: stage != Stage::MachineCode
-                        && pipeline::gutter(stage, compilation, headers).is_empty(),
+                        && pipeline::gutter(stage, compilation, unfolded).is_empty(),
                 };
                 let origins = Origins::of_output_line(links, line, stage, optimized);
                 Some(describe(Side::Output, line, &linked, view, origins))
@@ -275,10 +279,24 @@ impl State {
             | Mode::Machine => None,
             | Mode::Pipeline => {
                 let stage = self.stage.get();
-                let headers = self.headers.get();
+                let unfolded = self.unfolded.get();
                 let optimized = self.optimize.get();
+                // With both levels on screen, the sentence names which one
+                // it reads.
+                let compared = self.compare.get() && stage.differs_by_level();
                 self.compilation.with(|compilation| {
                     let compilation = compilation.as_ref()?;
+                    if side == Side::Output {
+                        let name = if compared {
+                            format!("{} {}", level_name(optimized), stage.view_name())
+                        } else {
+                            stage.view_name().to_owned()
+                        };
+                        let folded = folded_target(stage, compilation, unfolded, line, &name);
+                        if folded.is_some() {
+                            return folded;
+                        }
+                    }
                     self.links.with(|links| {
                         if links.is_empty() {
                             return None;
@@ -291,10 +309,7 @@ impl State {
                         // lines with source lines show no line numbers to
                         // refer to.
                         let numbered = stage != Stage::MachineCode
-                            && pipeline::gutter(stage, compilation, headers).is_empty();
-                        // With both levels on screen, the sentence names
-                        // which one it reads.
-                        let compared = self.compare.get() && stage.differs_by_level();
+                            && pipeline::gutter(stage, compilation, unfolded).is_empty();
                         let view = View {
                             name: stage.view_name(),
                             level: compared.then(|| level_name(optimized)),
@@ -337,6 +352,31 @@ impl State {
             }),
         }
     }
+}
+
+/// What line 1 of `stage`'s view, `name`, is when it stands for the folded
+/// target lines (`pipeline::target`); `None` for any other line.
+fn folded_target(
+    stage: Stage,
+    compilation: &pipeline::Compilation,
+    unfolded: pipeline::Unfolded,
+    line: usize,
+    name: &str,
+) -> Option<String> {
+    if unfolded.target || line != 1 {
+        return None;
+    }
+    let opening = pipeline::target::opening(stage, compilation.output(stage)?)?;
+    let layout = if opening.data_layout.is_some() {
+        ", and how that machine stores data (its data layout)"
+    } else {
+        ""
+    };
+    Some(format!(
+        "Line 1 of the {name} stands for the lines that name the machine the code is for \
+         ({}){layout}. No source line made them; Show target puts them back.",
+        opening.triple
+    ))
 }
 
 /// The optimization level `optimized` names, as a link sentence says it.

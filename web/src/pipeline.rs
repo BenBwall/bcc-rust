@@ -16,6 +16,7 @@
 
 mod example;
 mod front_end;
+pub mod target;
 
 // Only the compiler Worker builds these, from the compiler's output.
 pub use example::example;
@@ -192,6 +193,14 @@ impl FunctionLines {
 }
 
 impl Compilation {
+    /// The source lines of the function definition holding `line`, if any.
+    pub fn function_around(&self, line: usize) -> Option<(usize, usize)> {
+        self.functions
+            .iter()
+            .map(|function| function.source)
+            .find(|&(first, last)| (first..=last).contains(&line))
+    }
+
     /// Where each line of a back-end `stage`'s output came from; empty for
     /// the stages that place their lines otherwise.
     pub fn origins(&self, stage: Stage) -> &[LineOrigin] {
@@ -1166,33 +1175,124 @@ impl Links {
     pub fn has_origins(&self) -> bool {
         self.exact.is_some() && !self.origins.is_empty()
     }
+
+    /// The run of output lines to bring into view for `line` of the source:
+    /// from the one [`Links::first_output_for`] picks, through the linked
+    /// lines that follow it without a gap.
+    pub fn run_for(&self, line: usize) -> Option<(usize, usize)> {
+        let first = self.first_output_for(line)?;
+        let outputs = self.outputs_for(line);
+        let mut last = first;
+        while outputs.contains(&(last + 1)) {
+            last += 1;
+        }
+        Some((first, last))
+    }
+
+    /// The reader's place in a view whose first line in view is `top`, read
+    /// at `line` (the top, or the line under the pointer): the first source
+    /// line it came from, or that of the nearest line below it that has one
+    /// (a label, a directive, a blank line has none). At the view's start,
+    /// the place is the start. `None` when nothing near links to the source.
+    pub fn place(&self, top: usize, line: usize) -> Option<Place> {
+        if top <= 1 && line <= 1 {
+            return Some(Place::default());
+        }
+        (line..line + PLACE_LOOKAHEAD).find_map(|at| {
+            let source = *self.sources_for(at).first()?;
+            Some(Place {
+                source,
+                row: at.saturating_sub(top),
+            })
+        })
+    }
+
+    /// The line to show first so that `place` keeps its row: above the first
+    /// output line here from its source line, or, where this view has none
+    /// (a line the optimizer removed, a declaration with no code), from the
+    /// nearest source line after it, then before it, in `function`, the
+    /// source lines of the function holding it. The view's start when none
+    /// of them has a line here.
+    pub fn top_for(&self, place: Place, function: Option<(usize, usize)>) -> usize {
+        if place.source == 0 {
+            return 1;
+        }
+        let (first, last) = function.unwrap_or((place.source, place.source));
+        (place.source..=last.max(place.source))
+            .chain((first..place.source).rev())
+            .find_map(|line| self.first_output_for(line))
+            .map_or(1, |line| line.saturating_sub(place.row).max(1))
+    }
+}
+
+/// Where the reader is in an output view, in terms that hold in any other
+/// view of the same source: a source line that the view shows `row` lines
+/// below its first line in view. A `source` of 0 is the view's start. The
+/// page keeps it when the view changes under the reader (another level,
+/// another stage, an edit), so they stay in the same code rather than at the
+/// same scroll offset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Place {
+    pub source: usize,
+    pub row:    usize,
+}
+
+/// How far below its first line in view a place looks for a line linked to
+/// the source: about a screenful.
+const PLACE_LOOKAHEAD: usize = 24;
+
+/// What the reader unfolded of the views that fold lines they rarely read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Unfolded {
+    /// Whether the preprocessed text shows the headers' text, not a line for
+    /// each `#include`.
+    pub headers: bool,
+    /// Whether the IRs show the lines naming their target, not one line
+    /// for them ([`target`]).
+    pub target:  bool,
 }
 
 /// What the view shows for `stage`: its output, with the preprocessor's
-/// headers folded unless `headers`, and each output line's source lines
-/// when the view rewrites the output.
+/// headers and the IRs' target lines folded unless `unfolded`, and each
+/// output line's source lines when the view rewrites the output line by
+/// line.
 pub fn displayed(
     stage: Stage,
     compilation: &Compilation,
-    headers: bool,
+    unfolded: Unfolded,
 ) -> Option<(String, Option<LineLinks>)> {
     let output = compilation.output(stage)?;
     if stage != Stage::Preprocessor {
-        return Some((output.to_owned(), None));
+        let folded = (!unfolded.target)
+            .then(|| target::fold(stage, output))
+            .flatten();
+        let text = folded.map_or_else(|| output.to_owned(), |(text, _)| text);
+        return Some((text, None));
     }
     let view = front_end::preprocessed_view(
         output,
         &compilation.preprocessed_lines,
         &compilation.preprocessing.includes,
-        !headers,
+        !unfolded.headers,
     );
     Some((view.text, Some(view.links)))
+}
+
+/// How many lines folding the target lines takes out of `stage`'s view.
+fn target_removed(stage: Stage, compilation: &Compilation, unfolded: Unfolded) -> usize {
+    if unfolded.target {
+        return 0;
+    }
+    compilation
+        .output(stage)
+        .and_then(|output| target::opening(stage, output))
+        .map_or(0, |opening| opening.lines - 1)
 }
 
 /// The gutter labels of `stage`'s view: the physical lines of each logical
 /// line, and the source line of each preprocessed line. Other views number
 /// their lines.
-pub fn gutter(stage: Stage, compilation: &Compilation, headers: bool) -> Vec<String> {
+pub fn gutter(stage: Stage, compilation: &Compilation, unfolded: Unfolded) -> Vec<String> {
     match stage {
         | Stage::Lines => line_labels(&compilation.logical_lines),
         | Stage::Preprocessor => compilation.output(stage).map_or_else(Vec::new, |output| {
@@ -1200,7 +1300,7 @@ pub fn gutter(stage: Stage, compilation: &Compilation, headers: bool) -> Vec<Str
                 output,
                 &compilation.preprocessed_lines,
                 &compilation.preprocessing.includes,
-                !headers,
+                !unfolded.headers,
             )
             .labels
         }),
@@ -1209,15 +1309,15 @@ pub fn gutter(stage: Stage, compilation: &Compilation, headers: bool) -> Vec<Str
 }
 
 /// The links between `source` and `stage`'s output in `compilation`, as
-/// the view shows it (`headers` for the preprocessor's). Every front-end
+/// the view shows it (folded unless `unfolded`). Every front-end
 /// stage places each line: the logical lines by the physical lines they
 /// were spliced from, preprocessing tokens by their exact range, the
 /// preprocessed text by its line markers, and tokens and the syntax tree by
 /// their location. Each back-end stage links each instruction to the line its
 /// debug location names ([`origin_links`]), the LLVM IR of a lesson by the
 /// table recorded with it. A program with no located line links per function.
-pub fn links(stage: Stage, compilation: &Compilation, source: &str, headers: bool) -> Links {
-    let Some((output, rewritten)) = displayed(stage, compilation, headers) else {
+pub fn links(stage: Stage, compilation: &Compilation, source: &str, unfolded: Unfolded) -> Links {
+    let Some((output, rewritten)) = displayed(stage, compilation, unfolded) else {
         return Links::default();
     };
     let exact = match stage {
@@ -1243,8 +1343,12 @@ pub fn links(stage: Stage, compilation: &Compilation, source: &str, headers: boo
         ),
         | Stage::Preprocessor => rewritten,
         | Stage::Ir | Stage::IrAbi | Stage::Llvm | Stage::Asm | Stage::MachineCode => {
-            let functions = function_lines(stage, compilation, source, &output);
+            // The folded target lines are one line, which no source line
+            // claims.
+            let removed = target_removed(stage, compilation, unfolded);
+            let functions = function_lines(stage, compilation, source, &output, removed);
             let origins = compilation.origins(stage);
+            let origins = origins.get(removed..).unwrap_or_default();
             return match origin_links(origins, &functions) {
                 | Some(exact) => Links::exact(exact, Vec::new(), origins.to_vec()),
                 | None => Links {
@@ -1271,7 +1375,8 @@ pub fn links(stage: Stage, compilation: &Compilation, source: &str, headers: boo
     exact.map_or_else(Links::default, |exact| Links::exact(exact, ranges, Vec::new()))
 }
 
-/// Each function's source lines and lines in `output`, `stage`'s text. The
+/// Each function's source lines and lines in `output`, `stage`'s text as
+/// the view shows it, `removed` lines shorter than the compiler's. The
 /// compiler's line map places them, and for a lesson's LLVM IR its function
 /// headers do: without a live compilation (still loading), the definitions
 /// are found in the source.
@@ -1280,12 +1385,17 @@ fn function_lines(
     compilation: &Compilation,
     source: &str,
     output: &str,
+    removed: usize,
 ) -> FunctionSpans {
     if stage != Stage::Llvm {
+        let shift = |line: usize| line.saturating_sub(removed).max(1);
         return compilation
             .functions
             .iter()
-            .filter_map(|function| Some((function.source, function.output(stage)?)))
+            .filter_map(|function| {
+                let (first, last) = function.output(stage)?;
+                Some((function.source, (shift(first), shift(last))))
+            })
             .collect();
     }
     let defined: Vec<(String, (usize, usize))> = if compilation.functions.is_empty() {

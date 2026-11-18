@@ -62,6 +62,7 @@ use crate::{
         Compilation,
         CompileDiagnostic,
         Stage,
+        Unfolded,
     },
     snapshot::{
         Diagnostic,
@@ -150,7 +151,7 @@ pub fn App() -> impl IntoView {
                                             live=state.live_status.into()
                                             theme=state.theme_name
                                             pointing=state.pointing
-                                            headers=state.headers
+                                            unfolded=state.unfolded
                                             filename=state.filename.read_only()
                                             source=state.editor_text.into()
                                             on_reveal=Callback::new(move |line| state.show_source_line(line))
@@ -243,8 +244,9 @@ pub(crate) struct State {
     announcement:    RwSignal<String>,
     mode:            RwSignal<Mode>,
     stage:           RwSignal<Stage>,
-    /// Whether the preprocessed text shows the headers' text.
-    headers:         RwSignal<bool>,
+    /// What the reader unfolded: the preprocessed text's headers, the IRs'
+    /// target lines.
+    unfolded:        RwSignal<Unfolded>,
     theme:           RwSignal<&'static str>,
     theme_name:      Signal<&'static str>,
     /// bcc's compiler Worker, started on the first compilation.
@@ -314,7 +316,7 @@ impl State {
         let pending = RwSignal::new(false);
         let theme = RwSignal::new("dark");
         let mode = RwSignal::new(Mode::Machine);
-        let (stage, headers) = (RwSignal::new(Stage::Ir), RwSignal::new(false));
+        let (stage, unfolded) = (RwSignal::new(Stage::Ir), RwSignal::new(Unfolded::default()));
         let compare = RwSignal::new(false);
         let wasm_checks = RwSignal::new(wasm::Checks::default());
         let live = LiveViews::new(
@@ -370,7 +372,7 @@ impl State {
             announcement: RwSignal::new(String::new()),
             mode,
             stage,
-            headers,
+            unfolded,
             theme,
             theme_name: Signal::derive(move || theme.get()),
             compiler: StoredValue::new_local(None),
@@ -389,11 +391,11 @@ impl State {
                 editor_text.with(|text| source.with(|source| text != source))
             }),
             compilation: live.compilation,
-            links: links_memo(live.compilation, stage, headers, editor_text),
+            links: links_memo(live.compilation, stage, unfolded, editor_text),
             shown: live.shown,
             other_level: live.other_level,
             compare,
-            other_links: other_links_memo(live.other_level, compare, stage, headers, editor_text),
+            other_links: other_links_memo(live.other_level, compare, stage, unfolded, editor_text),
             markers: markers(mode, editor_text, wasm_checks, live.markers),
             placeholder: Memo::new(move |_| {
                 editor_text.with(|text| demos::matching(text).map_or("", |demo| demo.summary))
@@ -1323,10 +1325,10 @@ fn compiler_failure(error: String) -> String {
 fn links_memo(
     compilation: Memo<Option<Compilation>>,
     stage: RwSignal<Stage>,
-    headers: RwSignal<bool>,
+    unfolded: RwSignal<Unfolded>,
     source: RwSignal<String>,
 ) -> Memo<crate::pipeline::Links> {
-    Memo::new(move |_| links_memo_value(compilation, stage, headers, source))
+    Memo::new(move |_| links_memo_value(compilation, stage, unfolded, source))
 }
 
 /// The links between the source and the output of `stage` at the other
@@ -1335,14 +1337,14 @@ fn other_links_memo(
     other: Memo<Option<Compilation>>,
     compare: RwSignal<bool>,
     stage: RwSignal<Stage>,
-    headers: RwSignal<bool>,
+    unfolded: RwSignal<Unfolded>,
     source: RwSignal<String>,
 ) -> Memo<crate::pipeline::Links> {
     Memo::new(move |_| {
         if !compare.get() || !stage.get().differs_by_level() {
             return crate::pipeline::Links::default();
         }
-        links_memo_value(other, stage, headers, source)
+        links_memo_value(other, stage, unfolded, source)
     })
 }
 
@@ -1350,16 +1352,16 @@ fn other_links_memo(
 fn links_memo_value(
     compilation: Memo<Option<Compilation>>,
     stage: RwSignal<Stage>,
-    headers: RwSignal<bool>,
+    unfolded: RwSignal<Unfolded>,
     source: RwSignal<String>,
 ) -> crate::pipeline::Links {
     let stage = stage.get();
-    let headers = headers.get();
+    let unfolded = unfolded.get();
     compilation.with(|compilation| {
         compilation
             .as_ref()
             .map_or_default(|compilation| {
-                source.with(|source| crate::pipeline::links(stage, compilation, source, headers))
+                source.with(|source| crate::pipeline::links(stage, compilation, source, unfolded))
             })
     })
 }

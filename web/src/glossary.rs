@@ -535,7 +535,7 @@ pub struct CompilerTerm {
 }
 
 /// The compiler pipeline's words, in the order of its stages.
-pub static COMPILER_TERMS: [CompilerTerm; 13] = [
+pub static COMPILER_TERMS: [CompilerTerm; 15] = [
     CompilerTerm {
         id:         "logical-line",
         name:       "Logical source line",
@@ -589,6 +589,27 @@ pub static COMPILER_TERMS: [CompilerTerm; 13] = [
                      machine code: a few simple operations that depend neither on C's syntax nor \
                      on one processor. The optimizer works on it. bcc has its own IR; LLVM has \
                      LLVM IR.",
+        clause:     None,
+        stage:      Stage::Ir,
+    },
+    CompilerTerm {
+        id:         "target-triple",
+        name:       "Target triple",
+        definition: "The name of the machine a compiler makes code for, in parts joined by dashes: \
+                     the processor, the vendor, the operating system and, often, the environment. \
+                     x86_64-unknown-linux-gnu is the x86-64 processor, no vendor in particular, \
+                     Linux and the GNU environment. bcc IR and LLVM IR name it on their first \
+                     lines.",
+        clause:     None,
+        stage:      Stage::Ir,
+    },
+    CompilerTerm {
+        id:         "data-layout",
+        name:       "Data layout",
+        definition: "A line of bcc IR and LLVM IR that records how the target stores data, in \
+                     entries joined by dashes: e for little-endian (a value's least significant \
+                     byte stored first), i64:64 for 64-bit integers aligned to 64 bits, S128 for a \
+                     stack aligned to 128 bits, and the sizes and alignments of other types.",
         clause:     None,
         stage:      Stage::Ir,
     },
