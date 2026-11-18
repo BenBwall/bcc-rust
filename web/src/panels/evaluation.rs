@@ -25,8 +25,9 @@ pub struct Group {
     /// The function whose call evaluates it.
     pub function: String,
     pub parts:    Vec<Part>,
-    /// Whether the run has recorded the step after the group's last, or
-    /// ended there: the group is all there.
+    /// Whether the group is all there: the run has recorded the step after
+    /// its last, or ended there, or the engine's next operation lies outside
+    /// the expression.
     pub complete: bool,
     /// What the engine says the next step does, when the current step is the
     /// last the run has recorded and the group goes on.
@@ -167,7 +168,8 @@ pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group>
     while last + 1 < history.len() && member(&history[last + 1], key).is_some() {
         last += 1;
     }
-    let complete = last + 1 < history.len() || !history[last].can_step();
+    let complete =
+        last + 1 < history.len() || !history[last].can_step() || ends(&history[last], key);
     let mut parts = Vec::new();
     let mut index = first;
     while index <= last {
@@ -229,6 +231,17 @@ pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group>
     })
 }
 
+/// Whether the expression `key` names is done at `snapshot`'s step: the
+/// step is the expression's own, and the next operation lies outside it.
+fn ends(snapshot: &Snapshot, key: Key) -> bool {
+    let within = |range: Range| {
+        let at = |position: crate::snapshot::Position| (position.line, position.column);
+        at(range.start) >= at(key.root.start) && at(range.end) <= at(key.root.end)
+    };
+    member(snapshot, key) == Some(Member::Own)
+        && snapshot.location.is_some_and(|next| !within(next))
+}
+
 /// The source of `range`, its whitespace runs closed up to one space, cut
 /// short past 48 characters.
 fn source_text(source: &str, range: Range) -> String {
@@ -285,6 +298,7 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
                     <span class="evaluation-label">"Evaluating"</span>
                     " "
                     <code class="evaluation-text">{group.text.clone()}</code>
+                    " "
                     <span class="evaluation-count">{format!("{count} · in {}()", group.function)}</span>
                 }
             })
@@ -327,13 +341,13 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
             <h3 class="evaluation-title" id="evaluation-title">{heading}</h3>
             <ol class="evaluation-steps">{parts}</ol>
             <p class="evaluation-key">
-                "One evaluation per step. "
+                "One evaluation per step; "<b>"Over"</b>" (O) runs to the last. "
                 <span class="evaluation-point-key" aria-hidden="true"></span>
                 " marks a "
                 <a href=format!("{N1256_URL}#page=25") target="_blank" rel="noopener" title="C99 §5.1.2.3p2: at a sequence point every earlier side effect is complete">
                     "sequence point"<span class="sr-only">" (C99 §5.1.2.3p2, opens the standard in a new tab)"</span>
                 </a>
-                ": every side effect before it is complete."
+                ": every side effect before it is complete. On the tape its clock pulse stands taller."
             </p>
         </section>
     }

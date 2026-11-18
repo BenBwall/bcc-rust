@@ -929,13 +929,15 @@
   .evaluation-step[data-category="lifetime"] { --cat: var(--cat-lifetime); }
   .evaluation-step[data-category="call"] { --cat: var(--cat-call); }
   .evaluation-steps button {
-    display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 30ch; min-height: 30px; padding: 4px 8px;
+    display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 25ch; min-height: 30px; padding: 4px 8px;
     border: 1.5px solid var(--ink); background: var(--cell); box-shadow: inset 3px 0 0 var(--cat, var(--ink-3));
     font: 12px/1.35 var(--font-mono); color: var(--ink); text-align: left; cursor: pointer;
   }
   .evaluation-steps button:hover { background: var(--device-3); }
   .evaluation-index { flex: none; font-size: 10.5px; color: var(--ink-3); }
-  .evaluation-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A long title takes a second line, then stops short; its button's
+     title holds it whole. */
+  .evaluation-name { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
   .evaluation-step.is-current button { border-color: var(--accent); background: var(--accent); box-shadow: none; color: var(--on-accent); font-weight: 700; }
   .evaluation-step.is-current .evaluation-index { color: #3a1406; }
   /* Steps after the one shown, which the reader stepped back from. */

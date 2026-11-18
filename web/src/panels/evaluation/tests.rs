@@ -125,6 +125,19 @@ fn a_run_cut_short_says_what_comes_next() {
     assert!(!group.complete);
     assert_eq!(group.next.as_deref(), Some("store into total"));
     assert_eq!((group.place(), group.total()), (Some(2), 2));
+    // At its last step the engine's next operation is outside it: done,
+    // though the run has recorded nothing after it.
+    let last = at(&states, "Initialize total = 0");
+    let done = super::group(&states[..=last], last, source).unwrap();
+    assert!(done.complete);
+    assert_eq!(done.next, None);
+    // The call is not the end of the expression that made it.
+    let call = at(&states, "Call bump (frame #2)");
+    assert!(
+        !super::group(&states[..=call], call, source)
+            .unwrap()
+            .complete
+    );
 }
 
 #[test]
