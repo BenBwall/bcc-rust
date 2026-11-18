@@ -28,6 +28,36 @@ errors and its `the conditional began here` note remain bcc's (below).
 with a pre-C23 `gnu` dialect: no report after a group it took, and one at the
 name of an arm it takes.
 
+Fix-it hints (2026-11-17): GCC and Clang print the text a hint suggests on
+a line of its own under the source line it changes. `fixit-conversions-clang`
+pins Clang's hints for a conversion it refuses: `&` or `*` before the value,
+`&(` and `)` around a value that needs parentheses (a parenthesized one
+included, as Clang asks about the expression under its implicit
+conversions), several hints on one line, the value's own `&` or `*` removed
+with `; remove &` or `; remove *`, which draws no text, and none for a null
+pointer, a value that is no lvalue, or a bit-field or vector element, whose
+address cannot be taken (a `register` object still gets its `&`, as in
+Clang); it matches Clang 23 byte for byte.
+`fixit-macros-clang` pins hints at a token a macro expansion produced: one an
+argument wrote stays where the invocation spells it, one a macro's body wrote
+is dropped with every other hint of its diagnostic, and a hint after a tab is
+placed by display column. It matches Clang 23 but for the `expanded from
+macro` notes Clang adds for a token an argument wrote (below).
+`fixit-parseable-clang` (`-fdiagnostics-parseable-fixits
+-fno-diagnostics-fixit-info`) and `fixit-parseable-lines-clang`
+(`-fno-diagnostics-show-line-numbers`) pin Clang's `fix-it:` lines after the
+snippet, with byte columns, a removal's empty text, and the fix-it line hidden
+while the replaced range is still underlined; both match Clang 23 byte for
+byte. `fixit-parseable-gcc` and `fixit-parseable-no-caret-gcc`
+(`-fno-diagnostics-show-caret`) pin GCC's, written after each diagnostic
+whether or not it quotes source, with byte columns and, after `#line`, the
+presumed file name and line; GCC drops a hint at any token a macro expansion
+produced. They match GCC 14 but for its `in definition of macro` notes,
+which bcc does not write for a token an argument wrote. GCC's `-` row under a
+replaced range its caret line did not draw, and its joining of hints whose
+text would overlap, are pinned by unit tests in `src/diagnostics/tests.rs`,
+since no diagnostic bcc reports in GCC's format suggests a replacement.
+
 Context lines (2026-11-08): `context-includes-gcc` and `context-includes-clang`
 pin the include stacks GCC 14 and Clang 23 print before a diagnostic in a
 header: headers nested two deep through `"…"` and through `<…>` with `-I`, a
@@ -106,8 +136,7 @@ as `CALLJ(ID, "%", "d")` (`f (a b)`) and `OF(ID, "%", "d", 1)`
 operand's range, as `-Wpointer-sign` on `J(u8"%", "d")` (`a b`) under
 `-std=gnu2x`, keeps the caret and that range where the tokens are spelled,
 where Clang moves them to the invocation as it does other ranges.
-`context-ranges-clang`'s caret lines match Clang 23's; its messages keep bcc's words for the operator errors,
-and it prints no fix-it lines (`&`). `context-macros-gcc` and
+`context-ranges-clang`'s caret and fix-it lines match Clang 23's; its messages keep bcc's words for the operator errors. `context-macros-gcc` and
 `context-macros-clang` pin the notes about a token a macro's body wrote:
 GCC reports the diagnostic in the body and adds `in expansion of macro
 'X'` at the invocation, Clang reports it at the invocation and adds
@@ -283,8 +312,8 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | Not in a fixture: nonnull | Checked 17 November 2026. Clang's note at an attribute a macro wrote, as glibc's `__nonnull ((1))`, is followed by an `expanded from macro` note for each macro; bcc's notes give none (it notes only the innermost macro, and only for the warning itself). Within one full expression Clang reports a conversion to `_Bool` after the comparisons (`r() == 0 \|\| !r()`), where bcc sorts them by column. When the pointer is a macro's argument and the macro's body writes the comparison (`#define EQ(a, b) a == b`), Clang follows the warning with an `expanded from macro` note that bcc does not give. Clang's own words for the attribute's faults (`'nonnull' attribute only applies to pointer arguments`, `... applied to function with no pointer arguments`, `... parameter 1 is out of bounds`) and its `-Wgcc-compat` for an attribute after a definition's declarator remain bcc's words or absent. A type name in a printed call keeps its tokens without spaces (`(char*)x` for Clang's `(char *)x`). GCC's `-Wnonnull-compare` is left out: GCC 14 reports it from its SSA form after gimplification, so its place, range and order follow the IR (`(p) == 0 ? 3 : 4` underlines the whole conditional, and a function's reports come last line first), which semantic analysis cannot match; so is GCC's `-Waddress` comparison of an address with a null pointer. bcc has no nullability qualifiers (`_Nonnull`), so none of Clang's nullability checks. A `nonnull` on a block-scope declaration of a function stays with the function after the block ends, so bcc also warns (`-Wnonnull`) of a later call through the outer declaration (`{ void f(int *p) __attribute__((nonnull)); } f(0);`), where Clang does not: bcc keeps a function's attributes for the entity, not for each declaration. |
 | [Clang's constant conversions of literals](sema-constant-conversion-literals-clang.stderr) | Checked 16 November 2026 against Clang 23.1.5: the warnings, their lines and their order match. Clang also underlines the whole converted expression and the token the conversion happens at (`~ ^~~` under `*p = 0xdf`, `~~~~~~~   ^~~` under `char decimal = 223`); bcc draws only the caret's range. For a literal pasted by `##`, Clang's caret is on the macro's name (`CAT`, column 23 on line 34) and bcc's on the pasted pieces (column 27). |
 | [Clang's conversions in system macros](sema-constant-conversion-system-macro-clang.stderr) | Checked 17 November 2026 against Clang 23.1.5, also as clang-cl: the warnings, their lines and their order match. Clang drops a conversion warning whose context location (the call, the assignment operator, the `return`, the declarator, the `{` or designator that begins the element's list, or the comma whose right operand converts) a system macro's body wrote, and a format's unused argument that begins in one. A list keeps the place it was made at when a later designator enters it again (`{ .pair.low = 1, HIGH }` warns), and a token `##` formed is in a system macro when a system header defines the macro whose `##` formed it, wherever its pieces are spelled. Clang also underlines the context location (`~` under `immediate(`, `=`, `return`, the declarator, the `{` or the comma); bcc draws only the caret's range. Clang notes `DECLARE_CHAR`'s expansion for the value its argument gives (line 42); bcc gives no note there. Clang reports the elements of one list last first; the fixture reports one element per list, since bcc reports them in source order. |
-| [GCC's `-Wbool-operation`](sema-bool-operation-gcc.stderr) | Checked 17 November 2026 against GCC 14.2: every warning and note matches but for GCC's fix-it line (`!` under the caret of each `did you mean to use logical not?`) and the order on line 13, where GCC reports the comma's left operand before the `~` and bcc's reporter sorts them by column. From line 29 GCC warns in every operand of a `_Generic` and `__builtin_choose_expr`, in the controlling operand, and in the operands of `_Alignof`, `typeof` and `__builtin_constant_p`, as bcc does. For a `~` a macro's body writes, GCC writes the note in the definition and notes the expansion again; bcc writes it at the invocation, so the fixture has none. |
-| [Clang's `-Wbool-operation`](sema-bool-operation-clang.stderr) | Checked 17 November 2026 against Clang 23.1.5: every warning, place and range matches but for Clang's fix-it lines (`!`) and the range of the `expression result unused` warning on line 26, which Clang underlines over the operand (`^~`) where bcc draws only the caret, as in `sema-unused-value-clang`. Clang's arms of a conditional converted to `_Bool` would say `always evaluates to 'true'`; bcc says it only of an assignment, argument, initializer or return. From line 34, Clang warns only in the operand a `_Generic` or `__builtin_choose_expr` selects, never in a controlling operand, and underlines the selection when the `~` is the operand selected; a statement expression's statement warns wherever it is. A brace-enclosed list of `_Bool` (`{~b, ~b}`) is left out: Clang reports its elements last first, each `always evaluates to 'true'`, and bcc reports the first element without those words. |
+| [GCC's `-Wbool-operation`](sema-bool-operation-gcc.stderr) | Checked 17 November 2026 against GCC 14.2: every warning, note and fix-it line (the `!` GCC suggests inserting before each `~` its `did you mean to use logical not?` names) matches but for the order on line 13, where GCC reports the comma's left operand before the `~` and bcc's reporter sorts them by column. From line 29 GCC warns in every operand of a `_Generic` and `__builtin_choose_expr`, in the controlling operand, and in the operands of `_Alignof`, `typeof` and `__builtin_constant_p`, as bcc does. For a `~` a macro's body writes, GCC writes the note in the definition and notes the expansion again; bcc writes it at the invocation, so the fixture has none. |
+| [Clang's `-Wbool-operation`](sema-bool-operation-clang.stderr) | Checked 17 November 2026 against Clang 23.1.5: every warning, place, range and fix-it line (`!` in place of the `~`, dropped for a `~` a macro's body wrote) matches but for the range of the `expression result unused` warning on line 26, which Clang underlines over the operand (`^~`) where bcc draws only the caret, as in `sema-unused-value-clang`. Clang's arms of a conditional converted to `_Bool` would say `always evaluates to 'true'`; bcc says it only of an assignment, argument, initializer or return. From line 34, Clang warns only in the operand a `_Generic` or `__builtin_choose_expr` selects, never in a controlling operand, and underlines the selection when the `~` is the operand selected; a statement expression's statement warns wherever it is. A brace-enclosed list of `_Bool` (`{~b, ~b}`) is left out: Clang reports its elements last first, each `always evaluates to 'true'`, and bcc reports the first element without those words. |
 | [Clang's discarded statement expressions](sema-unused-value-statement-expression-clang.stderr) | Checked 17 November 2026 against Clang 23.1.5: the warnings, their places and their notes match. From line 22, Clang says nothing when a macro's body or argument, a system macro's included, placed the warning of a statement expression's value, as for the comma's left operand on line 32, but warns when parentheses or `__extension__` surround the statement expression (lines 35 and 36). Clang also underlines the operands of `a + 1` and `a == 1` (`~ ^ ~`), which bcc's `-Wunused-value` draws nowhere, and the whole `VALUE(a)` invocation where bcc underlines the macro's name. |
 | [GCC's ranges of discarded values](sema-unused-value-ranges-gcc.stderr) | Checked 17 November 2026 against GCC 14.2 (its `<stdbool.h>` standing in as `#define bool _Bool`): every line matches but for the order on line 41, where GCC reports the comma's left operand before the statement and bcc's reporter sorts the two by column. For an operand in a macro's argument GCC adds `in definition of macro`, which bcc never writes, so the fixture has none. |
 | [Clang's checked integer arithmetic](sema-stdckdint-clang.stderr) | Checked 16 November 2026 against Clang 23.1.5: the errors, their places and their words match. Clang underlines an argument's whole macro invocation (`^~~~~~~~~~~~~~~~~~~` under `ckd_add(&c, 127, 1)`) and the `(R)` it notes in its header (`^~~`), where bcc underlines the macro's name and points at the `(`. Clang's note names its own header (`stdckdint.h:37`); bcc's names `<built-in>/stdckdint.h:18`. For `ADD` around `ckd_add`, Clang also notes `ADD`'s expansion; bcc notes only the innermost macro. |
@@ -1167,4 +1196,6 @@ wording but for GCC's extra `-Wbuiltin-declaration-mismatch` warning for
 old-style definition, Clang's wording of the conditional mismatch, and
 Clang's C23 `use of undeclared identifier`, where bcc keeps its own words;
 the unnamed parameter and GCC's conditional mismatch are reported a few
-columns from the compilers' locations.
+columns from the compilers' locations. Clang's `&` and `*` fix-it lines are
+written; its `int ` fix-it lines for an implicit `int`, and the ranges it
+underlines beside those carets, are not.

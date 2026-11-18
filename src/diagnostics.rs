@@ -14,7 +14,8 @@
 //! Files by role:
 //! - Diagnostic construction: `model.rs`.
 //! - Rendering and color: `render.rs`, `color.rs`; the include stack and
-//!   function lines before a diagnostic: `context_lines.rs`.
+//!   function lines before a diagnostic: `context_lines.rs`; fix-it hints under
+//!   the source: `fix_its.rs`.
 //! - Folding and ordering a compilation's diagnostics: `reporter.rs`.
 //! - Arena text and spelling: `formatting.rs`.
 //! - Test views and fixtures: `owned.rs`, `tests.rs`.
@@ -30,6 +31,7 @@ mod model;
 mod cell_width;
 mod color;
 mod context_lines;
+mod fix_its;
 mod render;
 mod reporter;
 
@@ -53,6 +55,7 @@ pub(crate) use formatting::{
 pub(crate) use model::{
     Diagnostic,
     Explanation,
+    FixItPlace,
     ToDiagnostic,
 };
 #[cfg(test)]

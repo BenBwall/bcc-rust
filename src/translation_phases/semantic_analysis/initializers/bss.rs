@@ -123,6 +123,7 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
             origin: initializer.source_vectors,
             order: ReportOrder::AtSite,
             parameter: None,
+            fix_it: None,
         })]);
     }
 }

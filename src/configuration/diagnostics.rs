@@ -81,6 +81,12 @@ pub(crate) struct DiagnosticPresentation {
     /// Locations in `cl`'s `file(line,col):` form, as Clang's
     /// `-fdiagnostics-format=msvc` writes them for clang-cl.
     pub(crate) msvc_locations: bool,
+    /// The line of suggested text under the source a fix-it hint changes:
+    /// Clang's `-f[no-]diagnostics-fixit-info`. GCC always prints it.
+    pub(crate) fix_its:        bool,
+    /// Each fix-it hint again as a `fix-it:"file":{l:c-l:c}:"text"` line
+    /// for tools to read: `-f[no-]diagnostics-parseable-fixits`.
+    pub(crate) parseable:      bool,
 }
 
 impl Default for DiagnosticPresentation {
@@ -92,6 +98,8 @@ impl Default for DiagnosticPresentation {
             option_names:   true,
             color:          DiagnosticColor::Unset,
             msvc_locations: false,
+            fix_its:        true,
+            parseable:      false,
         }
     }
 }

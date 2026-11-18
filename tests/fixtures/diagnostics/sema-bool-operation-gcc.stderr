@@ -23,30 +23,35 @@ sema-bool-operation-gcc.c:9:7: warning: '~' on a boolean expression [-Wbool-oper
 sema-bool-operation-gcc.c:9:7: note: did you mean to use logical not?
     9 |   b = ~b;
       |       ^
+      |       !
 sema-bool-operation-gcc.c:10:8: warning: '~' on a boolean expression [-Wbool-operation]
    10 |   *r = ~(x > 0);
       |        ^
 sema-bool-operation-gcc.c:10:8: note: did you mean to use logical not?
    10 |   *r = ~(x > 0);
       |        ^
+      |        !
 sema-bool-operation-gcc.c:11:8: warning: '~' on a boolean expression [-Wbool-operation]
    11 |   *r = ~!x;
       |        ^
 sema-bool-operation-gcc.c:11:8: note: did you mean to use logical not?
    11 |   *r = ~!x;
       |        ^
+      |        !
 sema-bool-operation-gcc.c:12:8: warning: '~' on a boolean expression [-Wbool-operation]
    12 |   *r = ~(x && y);
       |        ^
 sema-bool-operation-gcc.c:12:8: note: did you mean to use logical not?
    12 |   *r = ~(x && y);
       |        ^
+      |        !
 sema-bool-operation-gcc.c:13:8: warning: '~' on a boolean expression [-Wbool-operation]
    13 |   *r = ~(x, x > 1);
       |        ^
 sema-bool-operation-gcc.c:13:8: note: did you mean to use logical not?
    13 |   *r = ~(x, x > 1);
       |        ^
+      |        !
 sema-bool-operation-gcc.c:13:11: warning: left-hand operand of comma expression has no effect [-Wunused-value]
    13 |   *r = ~(x, x > 1);
       |           ^
@@ -56,36 +61,42 @@ sema-bool-operation-gcc.c:14:8: warning: '~' on a boolean expression [-Wbool-ope
 sema-bool-operation-gcc.c:14:8: note: did you mean to use logical not?
    14 |   *r = ~(_Bool) x;
       |        ^
+      |        !
 sema-bool-operation-gcc.c:15:8: warning: '~' on a boolean expression [-Wbool-operation]
    15 |   *r = ~(int) (x > 1);
       |        ^
 sema-bool-operation-gcc.c:15:8: note: did you mean to use logical not?
    15 |   *r = ~(int) (x > 1);
       |        ^
+      |        !
 sema-bool-operation-gcc.c:16:8: warning: '~' on a boolean expression [-Wbool-operation]
    16 |   *r = ~(b = x);
       |        ^
 sema-bool-operation-gcc.c:16:8: note: did you mean to use logical not?
    16 |   *r = ~(b = x);
       |        ^
+      |        !
 sema-bool-operation-gcc.c:17:9: warning: '~' on a boolean expression [-Wbool-operation]
    17 |   *r = (~b);
       |         ^
 sema-bool-operation-gcc.c:17:9: note: did you mean to use logical not?
    17 |   *r = (~b);
       |         ^
+      |         !
 sema-bool-operation-gcc.c:24:15: warning: '~' on a boolean expression [-Wbool-operation]
    24 |   *r = sizeof ~b;
       |               ^
 sema-bool-operation-gcc.c:24:15: note: did you mean to use logical not?
    24 |   *r = sizeof ~b;
       |               ^
+      |               !
 sema-bool-operation-gcc.c:25:3: warning: '~' on a boolean expression [-Wbool-operation]
    25 |   ~b;
       |   ^
 sema-bool-operation-gcc.c:25:3: note: did you mean to use logical not?
    25 |   ~b;
       |   ^
+      |   !
 sema-bool-operation-gcc.c:25:3: warning: statement with no effect [-Wunused-value]
    25 |   ~b;
       |   ^~
@@ -96,36 +107,42 @@ sema-bool-operation-gcc.c:30:28: warning: '~' on a boolean expression [-Wbool-op
 sema-bool-operation-gcc.c:30:28: note: did you mean to use logical not?
    30 |   int r = _Generic(b, int: ~b, default: 0);
       |                            ^
+      |                            !
 sema-bool-operation-gcc.c:31:36: warning: '~' on a boolean expression [-Wbool-operation]
    31 |   r += __builtin_choose_expr(1, 0, ~b);
       |                                    ^
 sema-bool-operation-gcc.c:31:36: note: did you mean to use logical not?
    31 |   r += __builtin_choose_expr(1, 0, ~b);
       |                                    ^
+      |                                    !
 sema-bool-operation-gcc.c:32:17: warning: '~' on a boolean expression [-Wbool-operation]
    32 |   r += _Generic(~b, default: 0);
       |                 ^
 sema-bool-operation-gcc.c:32:17: note: did you mean to use logical not?
    32 |   r += _Generic(~b, default: 0);
       |                 ^
+      |                 !
 sema-bool-operation-gcc.c:33:17: warning: '~' on a boolean expression [-Wbool-operation]
    33 |   r += _Alignof(~b);
       |                 ^
 sema-bool-operation-gcc.c:33:17: note: did you mean to use logical not?
    33 |   r += _Alignof(~b);
       |                 ^
+      |                 !
 sema-bool-operation-gcc.c:34:10: warning: '~' on a boolean expression [-Wbool-operation]
    34 |   typeof(~b) t = __builtin_constant_p(~b);
       |          ^
 sema-bool-operation-gcc.c:34:10: note: did you mean to use logical not?
    34 |   typeof(~b) t = __builtin_constant_p(~b);
       |          ^
+      |          !
 sema-bool-operation-gcc.c:34:39: warning: '~' on a boolean expression [-Wbool-operation]
    34 |   typeof(~b) t = __builtin_constant_p(~b);
       |                                       ^
 sema-bool-operation-gcc.c:34:39: note: did you mean to use logical not?
    34 |   typeof(~b) t = __builtin_constant_p(~b);
       |                                       ^
+      |                                       !
 sema-bool-operation-gcc.c: At top level:
 sema-bool-operation-gcc.c:37:40: warning: '~' on a boolean expression [-Wbool-operation]
    37 | int sel_file = _Generic((_Bool)0, int: ~(_Bool)0, default: 0);
@@ -133,3 +150,4 @@ sema-bool-operation-gcc.c:37:40: warning: '~' on a boolean expression [-Wbool-op
 sema-bool-operation-gcc.c:37:40: note: did you mean to use logical not?
    37 | int sel_file = _Generic((_Bool)0, int: ~(_Bool)0, default: 0);
       |                                        ^
+      |                                        !

@@ -1,0 +1,71 @@
+fixit-conversions-clang.c:13:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+   13 |   p = y;
+      |     ^ ~
+      |       &
+fixit-conversions-clang.c:14:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+   14 |   p = s.a;
+      |     ^ ~~~
+      |       &
+fixit-conversions-clang.c:15:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+   15 |   p = ps->a;
+      |     ^ ~~~~~
+      |       &
+fixit-conversions-clang.c:16:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+   16 |   p = arr[1];
+      |     ^ ~~~~~~
+      |       &
+fixit-conversions-clang.c:17:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+   17 |   p = (y);
+      |     ^ ~~~
+      |       &( )
+fixit-conversions-clang.c:18:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; remove * [-Wint-conversion]
+   18 |   p = *p;
+      |     ^ ~~
+fixit-conversions-clang.c:19:5: warning: incompatible pointer to integer conversion assigning to 'int' from 'int *'; dereference with * [-Wint-conversion]
+   19 |   x = p;
+      |     ^ ~
+      |       *
+fixit-conversions-clang.c:20:5: warning: incompatible pointer to integer conversion assigning to 'int' from 'int *'; remove & [-Wint-conversion]
+   20 |   x = &y;
+      |     ^ ~~
+fixit-conversions-clang.c:21:5: warning: incompatible pointer to integer conversion assigning to 'int' from 'int *'; dereference with * [-Wint-conversion]
+   21 |   x = h();
+      |     ^ ~~~
+      |       *
+fixit-conversions-clang.c:22:5: warning: incompatible pointer to integer conversion assigning to 'int' from 'int *'; dereference with * [-Wint-conversion]
+   22 |   x = p + 1;
+      |     ^ ~~~~~
+      |       *(   )
+fixit-conversions-clang.c:23:5: warning: incompatible pointer to integer conversion assigning to 'int' from 'int *' [-Wint-conversion]
+   23 |   x = (int *)0;
+      |     ^ ~~~~~~~~
+fixit-conversions-clang.c:24:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int' [-Wint-conversion]
+   24 |   p = y ? y : y;
+      |     ^ ~~~~~~~~~
+fixit-conversions-clang.c:25:5: warning: incompatible pointer to integer conversion assigning to 'int' from 'int *'; dereference with * [-Wint-conversion]
+   25 |   x = (p);
+      |     ^ ~~~
+      |       *( )
+fixit-conversions-clang.c:26:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int' [-Wint-conversion]
+   26 |   p = x = 1;
+      |     ^ ~~~~~
+fixit-conversions-clang.c:27:5: warning: incompatible pointer to integer conversion assigning to 'int' from 'int *'; dereference with * [-Wint-conversion]
+   27 |   x = *&p;
+      |     ^ ~~~
+fixit-conversions-clang.c:28:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int' [-Wint-conversion]
+   28 |   p = s.b;
+      |     ^ ~~~
+fixit-conversions-clang.c:29:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int' [-Wint-conversion]
+   29 |   p = ps->b;
+      |     ^ ~~~~~
+fixit-conversions-clang.c:30:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int' [-Wint-conversion]
+   30 |   p = (s.b);
+      |     ^ ~~~~~
+fixit-conversions-clang.c:31:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int' [-Wint-conversion]
+   31 |   p = v[1];
+      |     ^ ~~~~
+fixit-conversions-clang.c:32:5: warning: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+   32 |   p = r;
+      |     ^ ~
+      |       &
+20 warnings generated.
