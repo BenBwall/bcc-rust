@@ -36,8 +36,8 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     let calling = Memo::new(move |_| {
         snapshot.with(|state| {
             let state = state.as_ref().filter(|state| state.event.category == "call")?;
-            let (callee, caller) = (state.stack.first()?, state.stack.get(1)?);
-            Some((caller.name.clone(), caller.waiting.clone()?, callee.name.clone()))
+            let (called, waiting) = (state.stack.first()?, state.stack.get(1)?);
+            Some((waiting.name.clone(), waiting.waiting.clone()?, called.name.clone()))
         })
     });
     view! {
@@ -55,10 +55,10 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                     <ol class="sr-only" aria-label="Expression being evaluated">{outline(tree, tree.nodes.len() - 1)}</ol>
                 }.into_any(),
                 | _ if calling.with(Option::is_some) => {
-                    let (caller, call, callee) = calling.get().unwrap_or_default();
+                    let (waiting, call, called) = calling.get().unwrap_or_default();
                     view! {
                         <p class="schematic-empty">
-                            "The call "<code>{call}</code>" is part of an expression in "{caller}"(), which waits for it to return. "{callee}"()'s own expressions are wired up here as they run."
+                            "The call "<code>{call}</code>" is part of an expression in "{waiting}"(), which waits for it to return. "{called}"()'s own expressions are wired up here as they run."
                         </p>
                     }.into_any()
                 },
