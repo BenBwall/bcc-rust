@@ -133,8 +133,7 @@ pub fn Narration(
             <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
                 {move || event.with(|event| event.as_ref().map(|event| flow_groups(&event.flow)))}
             </p>
-            <Evaluation group on_jump />
-            <Bits event /><Ranks event /><aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
+            <Evaluation group on_jump /><Bits event /><Ranks event /><aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
                 <h3>"Why it matters"</h3>
                 <p>
                     {move || note.get().and_then(|note| event.with(|event| event.as_ref().map(|event| {
