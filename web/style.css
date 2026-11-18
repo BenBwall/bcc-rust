@@ -632,12 +632,19 @@
      text, so the value reads whole. */
   .tape-labels > .tape-bus text { paint-order: stroke; stroke: #1d1d1b; stroke-width: 5px; stroke-linejoin: round; }
   .tape-labels > .tape-bus.is-now text { stroke: #2c2c29; }
-  .tape-labels > .tape-bus.is-indeterminate text { stroke: var(--screen); stroke-width: 3px; }
+  .tape-labels > .tape-bus:is(.is-indeterminate, .is-dangling) text { stroke: var(--screen); stroke-width: 3px; }
   /* After the hatch's: a written or created bar is filled with the accent,
      hatched or not. */
   .tape-labels > .tape-bus[data-access="write"] text, .tape-labels > .tape-bus[data-access="create"] text { stroke: var(--accent); stroke-width: 5px; }
   .tape-hatch { stroke: #77776f; stroke-width: 1.2; }
   .tape-end { stroke: var(--screen-dim); stroke-width: 1.5; }
+  /* Where a block's object is declared: its lane began at the block's
+     brace, hatched, and its name comes into scope at this notch. */
+  .tape-declared { fill: var(--screen-ink); }
+  /* A pointer whose target has ended is indeterminate too (C99 §6.2.4p2). */
+  .tape-bus.is-dangling polygon { fill: url(#tape-hatch); }
+  .tape-bus.is-dangling text { fill: #b5b4ac; paint-order: stroke; stroke: var(--screen); stroke-width: 3px; }
+  .tape-bus[data-access="declare"] polygon { stroke: var(--screen-ink); stroke-width: 2; }
   .tape-flow line { stroke: var(--flow); stroke-width: 1.4; }
   .tape-flow circle { fill: var(--flow); }
   .tape-flow-label { fill: var(--flow); font-size: 10px; paint-order: stroke; stroke: var(--screen); stroke-width: 4px; stroke-linejoin: round; }
@@ -685,6 +692,14 @@
   .cell[data-access="write"] .cell-pointers { color: #0d2a6b; }
   .cell[data-access="read"] { box-shadow: inset 0 -4px 0 var(--flow-ink); }
   .cell[data-access="designate"], .cell[data-access="address"] { outline: 2px dashed var(--ink); outline-offset: -5px; }
+  .cell[data-access="declare"] { outline: 2px solid var(--ink); outline-offset: -5px; }
+  /* Created on entry to its block, before its declaration: the name is
+     not in scope yet. */
+  .cell.is-undeclared .cell-name { font-style: italic; text-decoration: underline dotted; text-underline-offset: 2px; }
+  /* A dangling pointer: its target has ended, so its value is
+     indeterminate. */
+  .cell.is-dangling { background-image: repeating-linear-gradient(45deg, transparent 0 5px, color-mix(in srgb, var(--ink-3) 30%, transparent) 5px 6px); }
+  .cell.is-dangling .cell-value { font-style: italic; }
   .cell.is-indeterminate .cell-value { color: transparent; height: 18px; width: 100%; background: repeating-linear-gradient(45deg, var(--ink-3) 0 1px, transparent 1px 5px); }
   .cell.is-ended { background: var(--device-2); opacity: .8; }
   /* Padding: bytes of a structure that no member owns. */
@@ -962,7 +977,7 @@
     .cell:is([data-access="write"], [data-access="create"]) { animation: cell-lit 520ms var(--ease) both; }
     .cell:is([data-access="write"], [data-access="create"]) .cell-value { animation: cell-stamp 380ms var(--ease) both; }
     .cell[data-access="read"] { animation: cell-read 700ms var(--ease) both; }
-    .cell:is([data-access="designate"], [data-access="address"]) { animation: cell-aim 360ms var(--ease) both; }
+    .cell:is([data-access="designate"], [data-access="address"], [data-access="declare"]) { animation: cell-aim 360ms var(--ease) both; }
     .flow-arrow::after { transform-origin: left center; animation: wire-draw 320ms var(--ease) both; }
     .flow-arrow ~ .flow-chip { animation: flow-arrive 260ms 200ms var(--ease) both; }
     .evaluation-step.is-current button { animation: flow-arrive 240ms var(--ease) both; }
@@ -1049,6 +1064,8 @@
   .datasheet tr.is-used td, .datasheet tr.is-used th { color: var(--accent-ink); }
   .datasheet tr.is-used th { box-shadow: inset 3px 0 0 var(--accent); padding-left: 7px; }
   .datasheet tr.is-ended td, .datasheet tr.is-ended th { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .sheet-undeclared { display: block; margin-left: 14px; color: var(--ink-3); font-size: 10.5px; font-weight: 400; font-style: italic; }
+  .datasheet tr.is-used .sheet-undeclared { color: inherit; }
   .datasheet tr.is-folded td, .datasheet tr.is-folded th { text-decoration: none; white-space: normal; }
   .sheet-value { white-space: normal; overflow-wrap: anywhere; }
   .sheet-bytes { margin-left: 6px; color: var(--ink-3); white-space: nowrap; }

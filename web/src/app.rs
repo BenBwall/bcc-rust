@@ -2349,6 +2349,7 @@ fn tape_summary(state: &Snapshot) -> Option<String> {
                 .unwrap_or_else(|| "indeterminate".to_owned());
             Some(match access.kind.as_str() {
                 | "create" => format!("track {} begins, {value}", object.name),
+                | "declare" => format!("{} declared, {value}", object.name),
                 | "write" => format!("track {} now {value}", object.name),
                 | "read" => format!("track {} read, {value}", object.name),
                 | "end" => format!("track {} ends", object.name),

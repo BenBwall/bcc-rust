@@ -112,9 +112,12 @@ pub(super) fn flow(
         | EventKind::Increment => chips.increment(event),
         | EventKind::CompoundAssign => chips.compound(event, operator),
         | EventKind::Cast => chips.cast(event, operator),
+        // Reaching a declaration brings the object's name into scope (C99
+        // §6.2.1p7); its block's entry created it.
+        | EventKind::EnterBlock | EventKind::LeaveBlock => chips.lifetimes(event),
         | EventKind::Declare => vec![
             event.objects.first().map(|&id| chips.whole(id)),
-            Some(arrow("holds")),
+            Some(arrow("in scope, holds")),
             Some(part("value", "?")),
         ],
         | EventKind::Constant => vec![operand(result).map(|chip| typed(chip, to.unwrap_or("int")))],
@@ -220,7 +223,8 @@ pub(super) fn access(event: &Event) -> Vec<Access> {
         | EventKind::Assign
         | EventKind::Increment
         | EventKind::CompoundAssign => at(event.operands.first(), "write"),
-        | EventKind::Declare | EventKind::Call | EventKind::StaticStorage => whole("create"),
+        | EventKind::EnterBlock | EventKind::Call | EventKind::StaticStorage => whole("create"),
+        | EventKind::Declare => whole("declare"),
         | EventKind::LibraryCall => whole("read"),
         | EventKind::LeaveBlock | EventKind::Return => whole("end"),
         | EventKind::Designate
@@ -348,6 +352,28 @@ impl Chips<'_, '_> {
             Some(arrow("counts as")),
             Some(part("label", if truth { "true" } else { "false" })),
         ]
+    }
+
+    /// The objects a block's entry created, indeterminate, or its exit
+    /// ended (C99 §6.2.4p5): nothing for a block without objects.
+    fn lifetimes(&self, event: &Event) -> Vec<Option<FlowPart>> {
+        if event.objects.is_empty() {
+            return Vec::new();
+        }
+        let entry = event.kind == EventKind::EnterBlock;
+        let verb = match (entry, event.objects.len() == 1) {
+            | (true, true) => "begins, holding",
+            | (true, false) => "begin, holding",
+            | (false, true) => "ends",
+            | (false, false) => "end",
+        };
+        let mut parts: Vec<Option<FlowPart>> =
+            event.objects.iter().map(|&id| Some(self.whole(id))).collect();
+        parts.push(Some(arrow(verb)));
+        if entry {
+            parts.push(Some(part("value", "?")));
+        }
+        parts
     }
 
     /// An array and the pointer to its first element it decays to.

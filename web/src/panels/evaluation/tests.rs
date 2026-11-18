@@ -83,13 +83,17 @@ fn an_initialization_is_its_steps_up_to_the_sequence_point() {
 
 #[cfg(feature = "worker")]
 #[test]
-fn a_declaration_creating_its_object_stands_alone() {
+fn a_block_entry_and_a_declaration_stand_alone() {
     let (states, source) = tour();
     assert_eq!(
-        group(&states, at(&states, "Create total (int)"), source),
+        group(&states, at(&states, "Declare total (int)"), source),
         None
     );
-    assert_eq!(group(&states, at(&states, "Enter a block"), source), None);
+    let entry = states
+        .iter()
+        .position(|state| state.event.kind == "enter_block")
+        .expect("main's block");
+    assert_eq!(group(&states, entry, source), None);
 }
 
 #[cfg(feature = "worker")]

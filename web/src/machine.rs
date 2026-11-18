@@ -498,6 +498,7 @@ fn object(
         ty:        object.r#type.clone(),
         storage:   object.storage_duration.to_owned(),
         alive:     object.lifetime == "alive",
+        declared:  object.declared,
         frame_id:  object.frame_id,
         function:  functions
             .get(&object.frame_id)
@@ -988,6 +989,33 @@ mod tests {
         assert_eq!(narrow.flow[2].ty.as_deref(), Some("char"));
         assert_eq!(narrow.access[0].kind, "write");
         assert_eq!(event("declare").access[0].cell, None);
+        // main's brace begins its three objects; each declaration is a
+        // step of its own, after (C99 §6.2.4p5, §6.2.1p7).
+        let entry = event("enter_block");
+        assert_eq!(
+            shape(entry),
+            [
+                "object:small",
+                "object:wide",
+                "object:narrow",
+                "arrow:begin, holding",
+                "value:?"
+            ]
+        );
+        assert!(entry.access.iter().all(|access| access.kind == "create"));
+        assert_eq!(entry.access.len(), 3);
+        let declared = event("declare");
+        assert_eq!(
+            shape(declared),
+            ["object:small", "arrow:in scope, holds", "value:?"]
+        );
+        assert_eq!(declared.access[0].kind, "declare");
+        let left = states
+            .iter()
+            .map(|state| &state.event)
+            .find(|event| event.kind == "return")
+            .expect("main returns");
+        assert_eq!(left.access.len(), 3);
         // The first step of a run explains why the abstract machine matters.
         assert!(
             states[0].event.note.contains("abstract machine"),
