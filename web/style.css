@@ -1633,6 +1633,16 @@
      line that ran and what it did share the first screen; the tape and the
      cells follow. */
   @media (max-width: 600px) {
+    /* On a phone the steps run down a rail, a sequence point a dashed rule
+       across it. */
+    .evaluation { padding: 9px 10px 8px; }
+    .evaluation-steps { display: grid; gap: 5px; margin-left: 4px; padding-left: 10px; border-left: 1.5px solid var(--ink-3); }
+    .evaluation-steps > li + li::before { display: none; }
+    .evaluation-steps button, .evaluation-next { width: 100%; max-width: none; min-height: 32px; }
+    .evaluation-step.is-point { flex-direction: column; align-items: stretch; }
+    .evaluation-step.is-point::after { margin: 6px 0 1px; border-left: 0; border-top: 2px dashed var(--accent-ink); }
+  }
+  @media (max-width: 600px) {
     /* The three ways in, one under another, alike. */
     .hero-steps li { flex: 1 1 100%; }
     .hero-steps a { display: flex; }
