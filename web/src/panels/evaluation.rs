@@ -354,6 +354,18 @@ fn source_text(source: &str, range: Range) -> String {
 /// jump to, with the sequence points between them marked.
 #[component]
 pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl IntoView {
+    let list = NodeRef::<leptos::html::Ol>::new();
+    // Beside the tape the steps of a long expression scroll in a window of
+    // their own: each step brings its entry into it, once the entries are
+    // laid out.
+    Effect::new(move || {
+        group.track();
+        request_animation_frame(move || {
+            if let Some(Some(list)) = list.try_get_untracked() {
+                reveal_current(&list);
+            }
+        });
+    });
     let heading = move || {
         group.with(|group| {
             group.as_ref().map(|group| {
@@ -409,7 +421,7 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
     view! {
         <section class="evaluation" aria-labelledby="evaluation-title" hidden=move || group.with(Option::is_none)>
             <h3 class="evaluation-title" id="evaluation-title">{heading}</h3>
-            <ol class="evaluation-steps">{parts}</ol>
+            <ol class="evaluation-steps" node_ref=list>{parts}</ol>
             <p class="evaluation-key">
                 "One evaluation per step; "<b>"Over"</b>" (O) runs to the last. "
                 <span class="evaluation-point-key" aria-hidden="true"></span>
@@ -421,6 +433,45 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
             </p>
         </section>
     }
+}
+
+/// Scroll `list`, where it scrolls, just far enough that the current entry
+/// and the one after it (the next step, or what comes next) are in its
+/// window, or the current entry alone where both do not fit.
+fn reveal_current(list: &web_sys::Element) {
+    let (height, shown) = (
+        f64::from(list.client_height()),
+        f64::from(list.scroll_top()),
+    );
+    if f64::from(list.scroll_height()) <= height + 1.0 {
+        return;
+    }
+    let Ok(Some(current)) = list.query_selector(":scope > .is-current") else {
+        return;
+    };
+    let origin = list.get_bounding_client_rect().top() - shown;
+    let box_of = |element: &web_sys::Element| {
+        let rect = element.get_bounding_client_rect();
+        (rect.top() - origin, rect.bottom() - origin)
+    };
+    let (top, mut bottom) = box_of(&current);
+    if let Some(after) = current.next_element_sibling() {
+        let (_, below) = box_of(&after);
+        if below - top <= height - 8.0 {
+            bottom = below;
+        }
+    }
+    let target = if top - 4.0 < shown {
+        top - 4.0
+    } else if bottom + 4.0 > shown + height {
+        bottom + 4.0 - height
+    } else {
+        return;
+    };
+    let options = web_sys::ScrollToOptions::new();
+    options.set_top(target.max(0.0));
+    options.set_behavior(web_sys::ScrollBehavior::Instant);
+    list.scroll_to_with_scroll_to_options(&options);
 }
 
 fn part_view(part: &Part, on_jump: Callback<usize>) -> AnyView {

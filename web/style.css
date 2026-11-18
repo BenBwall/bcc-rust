@@ -1539,6 +1539,10 @@
       border-top: 3px solid var(--accent); scrollbar-width: thin;
     }
     .note .narration-lead { font-size: 22px; }
+    /* A long expression's steps scroll in a window of their own, which
+       each step scrolls to its entry (panels/evaluation.rs), so the
+       current step stays in view under a lead of a few lines. */
+    .note .evaluation-steps { max-height: max(150px, calc(100svh - var(--sticky-bottom) - 440px)); overflow-y: auto; padding-block: 3px; padding-right: 3px; scrollbar-width: thin; }
     .spool { display: none; }
   }
   /* Laptops: the listing narrows; the side column of the notes drops under
