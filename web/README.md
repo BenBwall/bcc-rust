@@ -28,7 +28,9 @@ compiler; each part is captioned with what its lessons share
   declaration is reached, and a tick where each lifetime ends;
   each call is a rule over its objects' lanes, dashed while it waits on a
   call of its own; and what a store or a call took its value from is a
-  slanted line between lanes, as in Marey's train graph. A playhead marks
+  slanted line between lanes, as in Marey's train graph. A clock along the
+  tape's top pulses once a step, taller where a step ends at a sequence
+  point, as the caption says. A playhead marks
   the step shown, the cells under it hold the objects at that step by call,
   the step's numbered note hangs off it, the current full expression is
   wired up as a schematic whose wires fill with values (Figure 2), and a
