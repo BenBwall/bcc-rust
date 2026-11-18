@@ -83,12 +83,13 @@ pub fn Datasheet(
                                         // Its value became indeterminate
                                         // when its target ended (C99
                                         // §6.2.4p2).
-                                        "dangling: its target has ended".to_owned()
+                                        "dangling".to_owned()
                                     } else if object.alive {
                                         value_text(&object.value).unwrap_or_else(|| "indeterminate".to_owned())
                                     } else {
                                         "lifetime over".to_owned()
                                     };
+                                    let dangling = object.alive && matches!(object.value, Value::Pointer { ended: true, .. });
                                     let place = place(object);
                                     let row = view! {
                                         <tr class:is-used=used class:is-ended=!object.alive class:is-undeclared=object.alive && !object.declared>
@@ -101,7 +102,7 @@ pub fn Datasheet(
                                             <td>{object.ty.clone()}<span class="sheet-bytes" title="its size in bytes on x86-64">{format!("{} B", object.size)}</span></td>
                                             <td>{place}</td>
                                             <td>{born.get(&object.id).map_or_default(ToString::to_string)}</td>
-                                            <td class="sheet-value">{value}</td>
+                                            <td class="sheet-value" title=dangling.then_some("The object it pointed to has ended, so its value is indeterminate")>{value}</td>
                                         </tr>
                                     };
                                     let members = if object.alive { members(object) } else { Vec::new() };
