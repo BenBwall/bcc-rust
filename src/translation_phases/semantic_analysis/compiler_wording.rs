@@ -510,9 +510,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// address of an lvalue, would give the target type, and the value's own
     /// `&` or `*` is removed rather than another put before it. The edit
     /// itself waits in [`Analyzer::conversion_fix_it`] for the diagnostic.
-    /// A null pointer constant is not dereferenced
+    /// A null pointer constant is not dereferenced, and only an ordinary
+    /// object's address is taken: not a bit-field's or a vector element's,
+    /// though a `register` object's is
     /// (`ConversionFixItGenerator::tryToFixConversion` in
     /// `SemaFixItUtils.cpp`).
+    /// C99: §6.5.3.2p1, p. 78; PDF p. 90 (the objects `&` may address).
     fn clang_conversion_hint(
         &mut self,
         target: TypeId,
@@ -560,7 +563,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else if matches!(
             source.category,
             ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
-        ) && let Some(pointee) = self.pointer_target(target)
+        ) && source.bit_field.is_none()
+            && !source.vector_element
+            && let Some(pointee) = self.pointer_target(target)
             && pointee.qualifiers.contains(source.ty.qualifiers)
             && self
                 .types

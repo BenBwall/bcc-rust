@@ -35,7 +35,9 @@ pins Clang's hints for a conversion it refuses: `&` or `*` before the value,
 included, as Clang asks about the expression under its implicit
 conversions), several hints on one line, the value's own `&` or `*` removed
 with `; remove &` or `; remove *`, which draws no text, and none for a null
-pointer or a value that is no lvalue; it matches Clang 23 byte for byte.
+pointer, a value that is no lvalue, or a bit-field or vector element, whose
+address cannot be taken (a `register` object still gets its `&`, as in
+Clang); it matches Clang 23 byte for byte.
 `fixit-macros-clang` pins hints at a token a macro expansion produced: one an
 argument wrote stays where the invocation spells it, one a macro's body wrote
 is dropped with every other hint of its diagnostic, and a hint after a tab is
