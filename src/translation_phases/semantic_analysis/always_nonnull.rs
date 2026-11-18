@@ -280,11 +280,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// What Clang finds `e` is, the operand of `&` when `address`, if it can
     /// never be null: a call to a `returns_nonnull` function, through
-    /// parentheses; or a name or member as written, other than a weak
-    /// entity, that is a `nonnull` parameter of the function being defined
-    /// that it has not stopped assuming nonnull, or an array, a function or
-    /// the operand of `&`. `&` before a function's name is how to silence
-    /// the warning.
+    /// parentheses, whose callee [`Self::called`] finds; or a name or member
+    /// as written, other than a weak entity, that is a `nonnull` parameter
+    /// Clang still assumes nonnull ([`Self::nonnull_parameter`]), or an
+    /// array, a function or the operand of `&`. `&` before a function's name
+    /// is how to silence the warning.
     fn nonnull_kind(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -296,7 +296,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ..
         } = Self::without_parentheses(e).kind
             && let Some(callee) = self
-                .expression_info(Self::without_parentheses(function_expression))
+                .expression_info(Self::called(function_expression))
                 .binding
             && self.bindings[callee].kind == BindingKind::Function
             && let Some(site) = self.returns_nonnull_site(callee)
@@ -339,6 +339,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         };
         Some((what, None))
+    }
+
+    /// The name a call's function operand `e` designates through
+    /// parentheses, `*` and `&`, as Clang finds its direct callee
+    /// (`Expr::getReferencedDeclOfCallee`): `(*f)()` and `(&f)()` call `f`,
+    /// though a cast hides it.
+    /// C99: §6.5.3.2p4, p. 79; PDF p. 91; §6.3.2.1p4, p. 46; PDF p. 58.
+    fn called(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+        loop {
+            match e.kind {
+                | E::Parenthesized {
+                    expression: operand,
+                }
+                | E::Unary {
+                    operator: U::Indirection | U::AddressOf,
+                    operand_expression: operand,
+                } => e = operand,
+                | _ => return e,
+            }
+        }
     }
 
     /// Whether Clang suggests calling the function of type `ty` instead,

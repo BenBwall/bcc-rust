@@ -175,4 +175,28 @@ sema-nonnull-compare-clang.c:77:12: warning: nonnull function call 'made()' will
 sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
    44 | int *made(void) __attribute__((returns_nonnull));
       |                                ^
-30 warnings generated.
+sema-nonnull-compare-clang.c:84:7: warning: nonnull function call '(*made)()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   84 |   if ((*made)())
+      |   ~~  ^~~~~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:86:7: warning: comparison of nonnull function call '(**made)()' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   86 |   if ((**made)() == 0)
+      |       ^~~~~~~~~~    ~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:88:7: warning: nonnull function call '(&made)()' will evaluate to 'true' on first encounter [-Wpointer-bool-conversion]
+   88 |   if ((&made)())
+      |   ~~  ^~~~~~~~~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+sema-nonnull-compare-clang.c:92:10: warning: comparison of nonnull function call '(*&made)()' not equal to a null pointer is 'true' on first encounter [-Wtautological-pointer-compare]
+   92 |   return (*&made)() != 0;
+      |          ^~~~~~~~~~    ~
+sema-nonnull-compare-clang.c:44:32: note: declared 'returns_nonnull' here
+   44 | int *made(void) __attribute__((returns_nonnull));
+      |                                ^
+34 warnings generated.

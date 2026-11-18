@@ -76,3 +76,18 @@ int parenthesized_calls(void) {
     return 2;
   return !(made());
 }
+
+/* The call's function operand names its callee through *, & and
+   parentheses, not through a cast. */
+typedef int *(*maker)(void);
+int called_through(void) {
+  if ((*made)())
+    return 1;
+  if ((**made)() == 0)
+    return 2;
+  if ((&made)())
+    return 3;
+  if (((maker)made)())
+    return 4;
+  return (*&made)() != 0;
+}
