@@ -1886,44 +1886,80 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn strip_noop(&self, mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
         loop {
             e = match e.kind {
-                | E::Parenthesized { expression }
-                | E::Unary {
-                    operator: U::Extension,
-                    operand_expression: expression,
-                } => expression,
                 | E::Cast {
                     operand_expression, ..
                 } if self.noop_cast(e, operand_expression) => operand_expression,
-                | E::Generic(generic) => {
-                    let selected = self
-                        .reachability
-                        .selected_generic
-                        .get(&std::ptr::from_ref(generic).addr())
-                        .copied();
-                    match generic.associations.iter().find(|association| {
-                        Some(std::ptr::from_ref(association.expression).addr()) == selected
-                    }) {
-                        | Some(association) => association.expression,
-                        | None => return e,
-                    }
+                | _ => match self.parens_step(e) {
+                    | Some(inner) => inner,
+                    | None => return e,
                 },
-                | E::Builtin(builtin) if builtin.keyword == KeywordTokenType::BuiltinChooseExpr => {
-                    let [
-                        SyntaxOperand::Expression(condition),
-                        SyntaxOperand::Expression(yes),
-                        SyntaxOperand::Expression(no),
-                    ] = *builtin.operands.as_slice()
-                    else {
-                        return e;
-                    };
-                    match Self::constant_truth(self.expression_info(condition)) {
-                        | Some(true) => yes,
-                        | Some(false) => no,
-                        | None => return e,
-                    }
-                },
-                | _ => return e,
             };
+        }
+    }
+
+    /// One step of Clang's `IgnoreParens`: the operand of parentheses or
+    /// `__extension__`, a generic selection's selected association, or the
+    /// operand a `__builtin_choose_expr` chooses.
+    /// C11: §6.5.1.1p3, p. 79; PDF p. 97.
+    fn parens_step(&self, e: &'tu Expression<'tu>) -> Option<&'tu Expression<'tu>> {
+        match e.kind {
+            | E::Parenthesized { expression }
+            | E::Unary {
+                operator: U::Extension,
+                operand_expression: expression,
+            } => Some(expression),
+            | E::Generic(generic) => {
+                let selected = self
+                    .reachability
+                    .selected_generic
+                    .get(&std::ptr::from_ref(generic).addr())
+                    .copied()?;
+                generic
+                    .associations
+                    .iter()
+                    .find(|association| std::ptr::from_ref(association.expression).addr() == selected)
+                    .map(|association| association.expression)
+            },
+            | E::Builtin(builtin) if builtin.keyword == KeywordTokenType::BuiltinChooseExpr => {
+                let [
+                    SyntaxOperand::Expression(condition),
+                    SyntaxOperand::Expression(yes),
+                    SyntaxOperand::Expression(no),
+                ] = *builtin.operands.as_slice()
+                else {
+                    return None;
+                };
+                Self::constant_truth(self.expression_info(condition))
+                    .map(|truth| if truth { yes } else { no })
+            },
+            | _ => None,
+        }
+    }
+
+    /// The binding a call's function operand names, as Clang's
+    /// `Expr::getReferencedDeclOfCallee` finds the declaration whose
+    /// attributes and body the analysis consults: through parentheses and
+    /// the implicit conversions, then through `*`, `&` and unary `+`, so
+    /// that `(*f)()` and `(&f)()` call `f`. An explicit cast hides it,
+    /// even one that changes nothing.
+    /// C99: §6.5.2.2p1, p. 71; PDF p. 83; §6.5.3.2p4, p. 79; PDF p. 91.
+    fn callee_binding(&self, callee: &'tu Expression<'tu>) -> Option<usize> {
+        let mut e = callee;
+        loop {
+            e = match e.kind {
+                | E::Unary {
+                    operator: U::Indirection | U::AddressOf | U::Plus,
+                    operand_expression,
+                } => operand_expression,
+                | _ => match self.parens_step(e) {
+                    | Some(inner) => inner,
+                    | None => break,
+                },
+            };
+        }
+        match e.kind {
+            | E::Identifier(_) => self.expression_info(e).binding,
+            | _ => None,
         }
     }
 
@@ -1931,8 +1967,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `IgnoreParenNoopCasts` steps through: to the same type, or between
     /// integer and pointer types of the same width.
     fn noop_cast(&self, cast: &'tu Expression<'tu>, operand: &'tu Expression<'tu>) -> bool {
-        let to = self.expression_info(cast).ty;
-        let from = self.expression_info(operand).ty;
+        self.noop_conversion(self.expression_info(operand).ty, self.expression_info(cast).ty)
+    }
+
+    /// Whether a conversion from type `from` to type `to` is one Clang's
+    /// `IgnoreParenNoopCasts` steps through.
+    fn noop_conversion(&self, from: TypeId, to: TypeId) -> bool {
         if to.unqualified() == from.unqualified() {
             return true;
         }
@@ -2057,8 +2097,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &self,
         callee: &'tu Expression<'tu>,
     ) -> Option<&'static crate::builtins::BuiltinDescriptor> {
-        let designator = self.strip_noop(callee);
-        let binding = self.expression_info(designator).binding?;
+        let binding = self.callee_binding(callee)?;
         match self.bindings[binding].origin {
             | super::super::BindingOrigin::Intrinsic(id) => Some(id.descriptor()),
             | _ => None,
@@ -2067,17 +2106,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Whether a call designates directly a builtin spelled one of `names`.
     fn intrinsic_named(&self, callee: &'tu Expression<'tu>, names: &[&str]) -> bool {
-        let designator = self.strip_noop(callee);
-        let E::Identifier(name) = designator.kind else {
+        let Some(binding) = self.callee_binding(callee) else {
             return false;
         };
-        let Some(binding) = self.expression_info(designator).binding else {
-            return false;
-        };
+        let data = self.bindings[binding];
         !matches!(
-            self.bindings[binding].origin,
+            data.origin,
             super::super::BindingOrigin::User | super::super::BindingOrigin::ImplicitOrdinary
-        ) && names.contains(&self.context.string_cache.at(name.name))
+        ) && names.contains(&self.context.string_cache.at(data.name.name))
     }
 
     /// Whether the call's function is one Clang knows to return twice: one
@@ -2086,11 +2122,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `savectx`, `getcontext` or `vfork` (`ReturnsTwice` in `Builtins.td`).
     /// C99: §7.13.1.1, p. 243; PDF p. 255.
     fn callee_returns_twice(&mut self, callee: &'tu Expression<'tu>) -> bool {
-        let designator = self.strip_noop(callee);
-        if !matches!(designator.kind, E::Identifier(_)) {
-            return false;
-        }
-        let Some(binding) = self.expression_info(designator).binding else {
+        let Some(binding) = self.callee_binding(callee) else {
             return false;
         };
         let data = self.bindings[binding];
@@ -2120,11 +2152,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// return (`FunctionDecl::isAnalyzerNoReturn`), and the analysis forgets
     /// every value after a call through any such declaration.
     fn callee_analyzer_noreturn(&self, callee: &'tu Expression<'tu>) -> Option<BindingKind> {
-        let designator = self.strip_noop(callee);
-        if !matches!(designator.kind, E::Identifier(_)) {
-            return None;
-        }
-        let binding = self.expression_info(designator).binding?;
+        let binding = self.callee_binding(callee)?;
         self.functions
             .emission
             .analyzer_noreturn
@@ -2135,14 +2163,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Whether the call's function is defined with an empty body
     /// (`FunctionDecl::hasTrivialBody`).
     fn trivial_callee(&self, callee: &'tu Expression<'tu>) -> bool {
-        let designator = self.strip_noop(callee);
-        let E::Identifier(name) = designator.kind else {
-            return false;
-        };
-        self.expression_info(designator)
-            .binding
-            .is_some_and(|binding| self.bindings[binding].kind == BindingKind::Function)
-            && self.uninitialized.trivial.contains_key(&name.name)
+        self.callee_binding(callee).is_some_and(|binding| {
+            let data = self.bindings[binding];
+            data.kind == BindingKind::Function
+                && self.uninitialized.trivial.contains_key(&data.name.name)
+        })
     }
 
     /// Whether an input operand with constraint `token` is read as a value,
