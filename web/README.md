@@ -30,7 +30,10 @@ compiler; each part is captioned with what its lessons share
   call of its own; and what a store or a call took its value from is a
   slanted line between lanes, as in Marey's train graph. A clock along the
   tape's top pulses once a step, taller where a step ends at a sequence
-  point, as the caption says. A playhead marks
+  point, as the caption says. An object the tape numbers to tell it from
+  another of its name in the same call (a block's `x` shadowing the
+  function's is `x #2`) keeps that number in Table 1 and in the note's
+  title, lead and value flow. A playhead marks
   the step shown, the cells under it hold the objects at that step by call,
   the step's numbered note hangs off it, the current full expression is
   wired up as a schematic whose wires fill with values (Figure 2), and a
