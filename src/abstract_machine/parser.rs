@@ -71,6 +71,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         returns: Type::INT,
         updates: false,
         blocks: Vec::new(),
+        loop_body: false,
     };
     let mut functions: Vec<Function> = Vec::new();
     let mut total_code = 0;
@@ -282,6 +283,8 @@ pub(super) struct Parser<'a> {
     /// The `Enter` instruction of each open block, innermost last, which
     /// lists the automatic objects the block declares.
     pub blocks:             Vec<usize>,
+    /// Whether the next block entered is a loop body.
+    pub loop_body:          bool,
 }
 
 impl<'a> Parser<'a> {
@@ -319,7 +322,14 @@ impl<'a> Parser<'a> {
     /// creates them all (C99 §6.2.4p5).
     fn enter(&mut self, range: SourceRange) -> Result<(), Diagnostic> {
         self.blocks.push(self.code.len());
-        self.emit(Op::Enter(Vec::new()), range)
+        let iteration = std::mem::take(&mut self.loop_body);
+        self.emit(
+            Op::Enter {
+                objects: Vec::new(),
+                iteration,
+            },
+            range,
+        )
     }
 
     /// Leave the innermost block at `range`, ending its objects' lifetimes.
@@ -374,6 +384,7 @@ impl<'a> Parser<'a> {
                 let (range, node) = self.condition("while")?;
                 let branch = self.code.len();
                 self.emit_node(Op::Branch(0, "while"), range, node)?;
+                self.loop_body = true;
                 self.control_body()?;
                 self.emit(Op::Jump(head), token.range)?;
                 self.patch(branch, self.code.len());
@@ -447,6 +458,7 @@ impl<'a> Parser<'a> {
         }
         self.expect(")")?;
         let iteration = self.code.split_off(iteration_start);
+        self.loop_body = true;
         self.control_body()?;
         self.code.extend(iteration);
         self.emit(Op::Jump(head), token.range)?;
@@ -542,7 +554,7 @@ impl<'a> Parser<'a> {
     ) -> Result<(), Diagnostic> {
         self.add_symbol(name, ty, self.scope, None, specified.constant)?;
         if let Some(&block) = self.blocks.last()
-            && let Op::Enter(objects) = &mut self.code[block].op
+            && let Op::Enter { objects, .. } = &mut self.code[block].op
         {
             objects.push(BlockObject {
                 name: String::from(name.text),

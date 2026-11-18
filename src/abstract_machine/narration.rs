@@ -947,8 +947,14 @@ impl Machine {
         }
     }
 
-    /// Execution entered a block, which created the objects `begun`.
-    pub(super) fn enter_block(&self, range: SourceRange, begun: Vec<usize>) -> Event {
+    /// Execution entered a block, which created the objects `begun`;
+    /// `iteration` when the block is a loop body.
+    pub(super) fn enter_block(
+        &self,
+        range: SourceRange,
+        begun: Vec<usize>,
+        iteration: bool,
+    ) -> Event {
         if begun.is_empty() {
             return noted(
                 explained(
@@ -980,11 +986,18 @@ impl Machine {
         } else {
             names.clone()
         };
-        let summary = format!(
-            "Entering the block creates {created}: {each} exists from here, indeterminate until \
-             something is stored."
-        );
-        let text = format!(
+        let summary = if iteration {
+            format!(
+                "Each pass through the loop body creates a new {created}: {each} exists from \
+                 here, indeterminate until something is stored."
+            )
+        } else {
+            format!(
+                "Entering the block creates {created}: {each} exists from here, indeterminate \
+                 until something is stored."
+            )
+        };
+        let mut text = format!(
             "An automatic object (a local that is not static, and not a variable-length array, \
              which this machine leaves out) lives from entry into its block until the block's \
              execution ends. So {names} {verb} {them} lifetime at this brace, before the \
@@ -992,6 +1005,19 @@ impl Machine {
              used yet: a name's scope begins just after its declarator. Entering a nested block \
              or calling a function suspends this block without ending it."
         );
+        let mut cited = vec![
+            clauses::AUTOMATIC_LIFETIME,
+            clauses::SCOPE_START,
+            clauses::INDETERMINATE,
+            clauses::COMPOUND_STATEMENT,
+        ];
+        if iteration {
+            text.push_str(
+                " A loop body is a block of its own, so each pass enters it anew: the objects of \
+                 the last pass ended at its closing brace, and these are new ones.",
+            );
+            cited.insert(1, clauses::LOOP_BODY);
+        }
         let mut event = noted(
             explained(
                 Event::new(
@@ -1001,12 +1027,7 @@ impl Machine {
                 ),
                 &summary,
                 &text,
-                &[
-                    clauses::AUTOMATIC_LIFETIME,
-                    clauses::SCOPE_START,
-                    clauses::INDETERMINATE,
-                    clauses::COMPOUND_STATEMENT,
-                ],
+                &cited,
             ),
             Topic::Scope,
         );

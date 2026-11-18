@@ -722,8 +722,12 @@ pub(super) struct BlockObject {
 pub(super) enum Op {
     /// Enter a block, creating the automatic objects declared directly in
     /// it: each lives from here to the block's end, indeterminate until
-    /// something is stored (C99 §6.2.4p5).
-    Enter(Vec<BlockObject>),
+    /// something is stored (C99 §6.2.4p5). `iteration` when the block is a
+    /// loop body, entered anew on each pass (C99 §6.8.5p5).
+    Enter {
+        objects:   Vec<BlockObject>,
+        iteration: bool,
+    },
     Leave,
     /// Reach the declaration of the automatic object `name`, which entry
     /// into its block created: its name is in scope from here (C99

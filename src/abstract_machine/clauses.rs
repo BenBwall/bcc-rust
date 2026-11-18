@@ -435,6 +435,10 @@ clauses! {
     /// C99: §6.8.5 paragraph 4, p. 135; PDF p. 147.
     ITERATION = "6.8.5p4", "p. 135; PDF p. 147", "Iteration statements",
         "A loop runs its body repeatedly until its controlling expression compares equal to 0.";
+    /// C99: §6.8.5 paragraph 5, p. 135; PDF p. 147.
+    LOOP_BODY = "6.8.5p5", "p. 135; PDF p. 147", "Iteration statements",
+        "A loop is a block, and its body is a block inside it, so the body's objects begin and \
+         end with each pass.";
     /// C99: §6.8.5.3 paragraph 2, p. 136; PDF p. 148.
     OMITTED_CONDITION = "6.8.5.3p2", "p. 136; PDF p. 148", "The for statement",
         "A for statement's omitted controlling expression is replaced by a nonzero constant.";

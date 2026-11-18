@@ -157,7 +157,7 @@ impl Machine {
             // Entry into a block creates every automatic object it declares,
             // indeterminate; their names come into scope only at their
             // declarations (C99 §6.2.4p5, §6.2.1p7).
-            | Op::Enter(objects) => {
+            | Op::Enter { objects, iteration } => {
                 self.activations[top].scope += 1;
                 let scope = self.activations[top].scope;
                 let mut begun = Vec::with_capacity(objects.len());
@@ -173,7 +173,7 @@ impl Machine {
                     self.state.objects[id - 1].declared = false;
                     begun.push(id);
                 }
-                self.enter_block(range, begun)
+                self.enter_block(range, begun, *iteration)
             },
             | Op::Leave => {
                 let frame = &self.activations[top];
@@ -877,7 +877,7 @@ impl Machine {
         let Some(node) = instruction.node else {
             if matches!(
                 instruction.op,
-                Op::Enter(_) | Op::Leave | Op::Declare { .. } | Op::Jump(_)
+                Op::Enter { .. } | Op::Leave | Op::Declare { .. } | Op::Jump(_)
             ) {
                 activation.evaluation = None;
             } else if let Some(evaluation) = &mut activation.evaluation {

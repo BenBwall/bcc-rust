@@ -331,6 +331,23 @@ fn each_iteration_begins_a_new_lifetime() {
             .count()
     };
     assert_eq!((named("s"), named("i"), named("t")), (1, 1, 3));
+    let body = states
+        .iter()
+        .find(|state| state.event.title == "Begin the lifetime of `t`")
+        .expect("the body's entry");
+    assert!(
+        body.event
+            .summary
+            .starts_with("Each pass through the loop body creates a new `t`")
+            && body.event.clauses[1].id == "6.8.5p5",
+        "{}",
+        body.event.summary
+    );
+    let header = states
+        .iter()
+        .find(|state| state.event.title == "Begin the lifetime of `i`")
+        .expect("the for statement's entry");
+    assert!(header.event.summary.starts_with("Entering the block"));
     assert_eq!(
         states.last().map(|state| state.return_value.clone()),
         Some(Some(Value::Integer(3)))
