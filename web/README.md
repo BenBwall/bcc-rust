@@ -38,7 +38,10 @@ compiler; each part is captioned with what its lessons share
   of more than eight bytes, is one cell: its characters a column per byte
   over an index ruler, the null character boxed as a byte of its own, the
   bytes the step used marked in place, wrapping between words before it
-  outgrows a phone; its key opens it into byte cells named by index. On a
+  outgrows a phone; its key opens it into byte cells named by index. An
+  array of more than eight elements of another type, such as `int a[100]`,
+  folds the same way into one cell of its values, a column per element,
+  two rows high and scrolled to the elements the step used. On a
   phone each call's cells are a row of their own under its name, scrolled to
   the cells the step used, so a step that uses objects of two calls shows
   both. A structure
