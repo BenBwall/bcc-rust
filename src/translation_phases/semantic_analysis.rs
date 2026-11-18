@@ -48,10 +48,11 @@
 //!   retains typeof operand execution at written type sites; `builtins.rs` and
 //!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
 //! - Diagnostics and inspection: `compiler_parity.rs` reports and refuses what
-//!   only GCC or Clang does under a personality; `diagnostics.rs` reports
-//!   constraints and extensions; `errors.rs` defines diagnostic kinds and
-//!   renders them; `inspection.rs` formats retained results. `tests.rs` and
-//!   `tests/` exercise these paths.
+//!   only GCC or Clang does under a personality; `always_nonnull.rs` reports
+//!   Clang's pointers that are never null; `diagnostics.rs` reports constraints
+//!   and extensions; `errors.rs` defines diagnostic kinds and renders them;
+//!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
+//!   these paths.
 //!
 //! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22 (translation phase 7).
 //! C99: §6.2.1-§6.2.4, pp. 29-32; PDF pp. 41-44 (scopes, linkage and duration).
@@ -117,6 +118,7 @@ mod type_generic;
 mod vectors;
 
 // Diagnostics and inspection
+mod always_nonnull;
 mod compiler_wording;
 mod diagnostics;
 mod errors;
@@ -1353,11 +1355,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         BoundEvaluationSite::Parameter(self.next_parameter),
                     );
                 }
+                self.attributes.parameter_nonnull = None;
                 self.declaration_attributes(
                     attributes::Subject::Parameter(binding),
                     p.declaration_specifiers.extensions,
                     p.declarator,
                 );
+                // An unnamed parameter's type is known only here.
+                let nonnull = self
+                    .attributes
+                    .parameter_nonnull
+                    .take()
+                    .filter(|_| self.pointer_target(ty).is_some());
+                if let (Some(binding), Some(site)) = (binding, nonnull) {
+                    _ = self.attributes.own_nonnull.insert(binding, site);
+                }
                 self.next_parameter += 1;
                 params.push(
                     self.scratch,
@@ -1369,6 +1381,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         ty,
                         array_minimum,
                         original,
+                        nonnull,
                     },
                 );
             },
@@ -2255,6 +2268,9 @@ struct Analyzer<'a, 'tu, 's> {
     /// The range GCC underlines around the caret of what is reported now;
     /// see [`Self::with_gcc_extent`].
     gcc_extent:              SourceVectors,
+    /// The edit Clang suggests for the conversion reported now, which its
+    /// words name; see [`Self::clang_conversion_hint`].
+    conversion_fix_it:       Option<errors::ConversionFixIt>,
     /// The expression or token whose location Clang takes as the context of
     /// the implicit conversion checked now (`CC` in `CheckImplicitConversion`),
     /// or an empty range when none is known; see

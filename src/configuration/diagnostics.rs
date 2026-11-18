@@ -81,6 +81,12 @@ pub(crate) struct DiagnosticPresentation {
     /// Locations in `cl`'s `file(line,col):` form, as Clang's
     /// `-fdiagnostics-format=msvc` writes them for clang-cl.
     pub(crate) msvc_locations: bool,
+    /// The line of suggested text under the source a fix-it hint changes:
+    /// Clang's `-f[no-]diagnostics-fixit-info`. GCC always prints it.
+    pub(crate) fix_its:        bool,
+    /// Each fix-it hint again as a `fix-it:"file":{l:c-l:c}:"text"` line
+    /// for tools to read: `-f[no-]diagnostics-parseable-fixits`.
+    pub(crate) parseable:      bool,
 }
 
 impl Default for DiagnosticPresentation {
@@ -92,6 +98,8 @@ impl Default for DiagnosticPresentation {
             option_names:   true,
             color:          DiagnosticColor::Unset,
             msvc_locations: false,
+            fix_its:        true,
+            parseable:      false,
         }
     }
 }
@@ -228,6 +236,11 @@ impl CompilerConfiguration {
             ],
             | DiagnosticGroup::TautologicalConstantCompare =>
                 &[DiagnosticGroup::TautologicalConstantOutOfRangeCompare],
+            | DiagnosticGroup::TautologicalCompare if clang => &[
+                DiagnosticGroup::TautologicalConstantCompare,
+                DiagnosticGroup::TautologicalConstantOutOfRangeCompare,
+                DiagnosticGroup::TautologicalPointerCompare,
+            ],
             | DiagnosticGroup::Shadow => &[
                 DiagnosticGroup::ShadowLocal,
                 DiagnosticGroup::ShadowCompatibleLocal,
@@ -324,6 +337,7 @@ impl CompilerConfiguration {
         self.warning_options[DiagnosticGroup::Switch as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::BoolOperation as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::CharSubscripts as usize].apply_all(enabled);
+        self.warning_options[DiagnosticGroup::MissingBraces as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::ReturnType as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
         // GCC's `-Wunused`, given or refused in either order, outranks
@@ -1077,6 +1091,12 @@ diagnostic_groups! {
     TautologicalUnsignedZeroCompare => Some("tautological-unsigned-zero-compare"), Ignored, false;
     /// Clang's constant at the limit of the operand type's range.
     TautologicalTypeLimitCompare => Some("tautological-type-limit-compare"), Ignored, false;
+    /// Clang's pointer that is never null compared with a null pointer, on
+    /// by default.
+    TautologicalPointerCompare => Some("tautological-pointer-compare"), ClangWarning, false;
+    /// Clang's, on by default: holds the constant and pointer groups. GCC's
+    /// group of the same name (`x == x`) has no diagnostic in bcc.
+    TautologicalCompare => Some("tautological-compare"), ClangWarning, false;
     /// A declaration that hides another one in an enclosing scope.
     Shadow => Some("shadow"), Ignored, false;
     /// GCC's `-Wshadow=local`: one that hides a local declaration.
@@ -1121,6 +1141,10 @@ diagnostic_groups! {
     /// Clang's subscript of plain `char` type, under `-Wall`; GCC's form of
     /// the group is not modeled.
     CharSubscripts => Some("char-subscripts"), Ignored, false;
+    /// Clang's array, structure or union initialized by elements whose
+    /// braces were left out, under `-Wall`; GCC's form of the group, which
+    /// its `-Wall` holds too, is not modeled.
+    MissingBraces => Some("missing-braces"), Ignored, false;
     /// `-Wformat`: a format string a call's arguments do not match. Clang
     /// reports it by default and its group holds the other format groups
     /// but `-Wformat-nonliteral`; GCC's `-Wall` holds it, and the other
@@ -1298,6 +1322,7 @@ impl DiagnosticGroup {
         Self::Switch,
         Self::BoolOperation,
         Self::CharSubscripts,
+        Self::MissingBraces,
         Self::ReturnType,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
@@ -1475,6 +1500,7 @@ impl WarningSettings {
                 | DiagnosticGroup::Switch
                 | DiagnosticGroup::BoolOperation
                 | DiagnosticGroup::CharSubscripts
+                | DiagnosticGroup::MissingBraces
                 | DiagnosticGroup::ReturnType
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction

@@ -205,9 +205,19 @@ impl Renderer {
         vector: &SourceVector,
         segment: Option<u32>,
     ) -> FileName<'c> {
+        Self::file_name_of(context, vector.source_file_index, segment)
+    }
+
+    /// The name a location gives the source file `file`, read in
+    /// `segment`, as [`Self::file_name`] gives it.
+    pub(super) fn file_name_of<'c>(
+        context: &'c Context<'_>,
+        file: u32,
+        segment: Option<u32>,
+    ) -> FileName<'c> {
         let here = context.configuration.diagnostic_format() == DiagnosticFormat::Clang
             && segment.is_some_and(|segment| context.source_map.opening_of(segment).1.here);
-        FileName::new(context, vector.source_file_index, here)
+        FileName::new(context, file, here)
     }
 }
 
@@ -290,9 +300,14 @@ impl Renderer {
             let Some(source) = label.source.range() else {
                 continue;
             };
+            // A range that ends outside the expansion, in the file after
+            // the invocation, cannot be brought into the definition, and
+            // Clang's note draws none of it (`mapDiagnosticRanges`).
             if let Some((_, site)) = context.macro_body_expansion(source)
                 && site.source_file_index == expansion.site.source_file_index
                 && site.index == expansion.site.index
+                && context.invocation_span(Context::last_source_vector(source))
+                    == context.invocation_span(source)
             {
                 // The definition holds the range; what the arguments wrote
                 // of it is in the invocation, which Clang's note does not
@@ -324,7 +339,14 @@ impl Renderer {
             primary: false,
         };
         let point = highlighted || (!gcc && diagnostic.point);
-        self.render_related_note(out, (&label, &highlights), point, context, scratch, !gcc);
+        self.render_related_note(
+            out,
+            (&label, &highlights, &[]),
+            point,
+            context,
+            scratch,
+            !gcc,
+        );
     }
 }
 

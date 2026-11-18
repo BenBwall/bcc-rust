@@ -5,7 +5,10 @@
 
 use leptos::prelude::*;
 
-use crate::snapshot::N1256_URL;
+use crate::{
+    pipeline::Stage,
+    snapshot::N1256_URL,
+};
 
 /// One defined term.
 #[derive(Debug, PartialEq, Eq)]
@@ -516,6 +519,145 @@ pub static TERMS: [Term; 49] = [
     },
 ];
 
+/// A word the compiler pipeline uses, which the narration never marks. The
+/// C standard defines a few of them; the rest are compilers' own words.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CompilerTerm {
+    /// The anchor: the glossary entry is `#term-{id}`.
+    pub id:         &'static str,
+    pub name:       &'static str,
+    pub definition: &'static str,
+    /// The defining paragraph of C99 and its page in N1256, for a word the
+    /// standard defines.
+    pub clause:     Option<(&'static str, u16)>,
+    /// The stage that shows it.
+    pub stage:      Stage,
+}
+
+/// The compiler pipeline's words, in the order of its stages.
+pub static COMPILER_TERMS: [CompilerTerm; 13] = [
+    CompilerTerm {
+        id:         "logical-line",
+        name:       "Logical source line",
+        definition: "A line of source as translation phase 2 leaves it: each backslash that ends \
+                     a physical line is deleted with its new-line, so the next physical line \
+                     continues this one.",
+        clause:     Some(("5.1.1.2p1", 22)),
+        stage:      Stage::Lines,
+    },
+    CompilerTerm {
+        id:         "preprocessing-token",
+        name:       "Preprocessing token",
+        definition: "The unit translation phases 3 and 4 work in: a header name, an identifier, a \
+                     pp-number, a character constant, a string literal, a punctuator, or any \
+                     other single character. There are no keywords yet: int is still an \
+                     identifier.",
+        clause:     Some(("6.4p3", 61)),
+        stage:      Stage::PpTokens,
+    },
+    CompilerTerm {
+        id:         "translation-unit",
+        name:       "Translation unit",
+        definition: "A source file together with every header and file it includes, after \
+                     preprocessing: what one run of the compiler translates. Separately \
+                     translated units are linked into one program.",
+        clause:     Some(("5.1.1.1p1", 21)),
+        stage:      Stage::Preprocessor,
+    },
+    CompilerTerm {
+        id:         "token",
+        name:       "Token",
+        definition: "A keyword, an identifier, a constant, a string literal or a punctuator: the \
+                     units the parser reads. Translation phase 7 converts each preprocessing \
+                     token into one.",
+        clause:     Some(("6.4p1", 61)),
+        stage:      Stage::Tokens,
+    },
+    CompilerTerm {
+        id:         "syntax-tree",
+        name:       "Syntax tree",
+        definition: "The program's structure as a tree: each declaration, statement and \
+                     expression is a node whose children are its parts, so x + y * 2 is an \
+                     addition whose right operand is a multiplication.",
+        clause:     None,
+        stage:      Stage::SyntaxTree,
+    },
+    CompilerTerm {
+        id:         "ir",
+        name:       "Intermediate representation (IR)",
+        definition: "The form a compiler translates a program into on the way from source to \
+                     machine code: a few simple operations that depend neither on C's syntax nor \
+                     on one processor. The optimizer works on it. bcc has its own IR; LLVM has \
+                     LLVM IR.",
+        clause:     None,
+        stage:      Stage::Ir,
+    },
+    CompilerTerm {
+        id:         "ssa",
+        name:       "Static single assignment (SSA)",
+        definition: "An IR in which each value is assigned exactly once, by the instruction that \
+                     defines it. Where control flow joins, a block parameter (in bcc IR) or a phi \
+                     instruction (in LLVM IR) chooses among the values that arrive.",
+        clause:     None,
+        stage:      Stage::Ir,
+    },
+    CompilerTerm {
+        id:         "basic-block",
+        name:       "Basic block",
+        definition: "A run of instructions entered only at its top and left only at its bottom, \
+                     by its last instruction: a jump, a branch or a return. A function's control \
+                     flow is the jumps between its blocks.",
+        clause:     None,
+        stage:      Stage::Ir,
+    },
+    CompilerTerm {
+        id:         "optimizer",
+        name:       "Optimizer",
+        definition: "The part of a compiler that rewrites the IR into a faster or smaller program \
+                     that behaves the same as far as the C standard can tell: it computes \
+                     constants ahead of time, deletes work whose result is unused, and copies \
+                     small functions into their callers. bcc runs its optimizer at -O2.",
+        clause:     None,
+        stage:      Stage::Ir,
+    },
+    CompilerTerm {
+        id:         "abi",
+        name:       "ABI (application binary interface)",
+        definition: "The rules a platform fixes so that separately compiled code fits together: \
+                     where each argument and result is passed, in a register or on the stack, \
+                     which registers a call may change, and each type's size and alignment. \
+                     x86-64 Linux follows the System V ABI.",
+        clause:     None,
+        stage:      Stage::IrAbi,
+    },
+    CompilerTerm {
+        id:         "register",
+        name:       "Register",
+        definition: "A storage place inside the processor, much faster than memory but few: \
+                     x86-64 has 16 general-purpose registers, %rax to %r15, and the %xmm \
+                     registers for floating-point values.",
+        clause:     None,
+        stage:      Stage::Asm,
+    },
+    CompilerTerm {
+        id:         "assembly",
+        name:       "Assembly language",
+        definition: "A processor's instructions written as text, one per line, such as addl %eax, \
+                     %ebx in the AT&T syntax GCC and bcc write. An assembler encodes each \
+                     instruction as machine code.",
+        clause:     None,
+        stage:      Stage::Asm,
+    },
+    CompilerTerm {
+        id:         "machine-code",
+        name:       "Machine code",
+        definition: "The bytes a processor decodes and runs. An x86-64 instruction takes from 1 \
+                     to 15 bytes.",
+        clause:     None,
+        stage:      Stage::MachineCode,
+    },
+];
+
 /// A piece of narration text: plain, or a defined term as written.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Piece<'a> {
@@ -574,7 +716,10 @@ pub fn pieces<'a>(text: &'a str, seen: &mut Vec<&'static str>) -> Vec<Piece<'a>>
 /// The glossary section: every term with its definition and the paragraph
 /// of C99 that defines it.
 #[component]
-pub fn Glossary() -> impl IntoView {
+pub fn Glossary(
+    /// Open the compiler pipeline at a stage, from a compiler term's entry.
+    on_stage: Callback<Stage>,
+) -> impl IntoView {
     view! {
         <section class="glossary" id="glossary" aria-labelledby="glossary-title">
             <div class="section-heading">
@@ -593,6 +738,35 @@ pub fn Glossary() -> impl IntoView {
                             </a>
                         </dd>
                     </div>
+                }).collect_view()}
+            </dl>
+            <h3 class="glossary-part" id="compiler-terms-title">"Compiler terms"</h3>
+            <p class="glossary-part-note">
+                "The words the compiler pipeline uses for what a compiler makes. A few are the \
+                 standard's own and link to it; each names the stage that shows it."
+            </p>
+            <dl class="glossary-list" aria-labelledby="compiler-terms-title">
+                {COMPILER_TERMS.iter().map(|term| {
+                    let stage = term.stage;
+                    let number = Stage::ALL.iter().position(|&each| each == stage).unwrap_or_default() + 1;
+                    view! {
+                        <div class="glossary-entry" id=format!("term-{}", term.id)>
+                            <dt>{term.name}</dt>
+                            <dd>
+                                {term.definition}" "
+                                {term.clause.map(|(clause, page)| view! {
+                                    <a class="glossary-clause" href=format!("{N1256_URL}#page={page}") target="_blank" rel="noopener">
+                                        {format!("C99 §{clause}")}
+                                        <span class="sr-only">" (opens the standard in a new tab)"</span>
+                                    </a>
+                                    " "
+                                })}
+                                <a class="glossary-stage" href="#workbench" on:click=move |_| on_stage.run(stage)>
+                                    {format!("Stage {number}: {}", stage.label())}
+                                </a>
+                            </dd>
+                        </div>
+                    }
                 }).collect_view()}
             </dl>
         </section>
@@ -651,6 +825,49 @@ mod tests {
             })
             .collect();
         assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn compiler_terms_share_no_anchor_and_cover_every_brief_link() {
+        use super::COMPILER_TERMS;
+        use crate::pipeline::{
+            Stage,
+            linked_terms,
+        };
+        for (index, term) in COMPILER_TERMS.iter().enumerate() {
+            assert!(
+                TERMS.iter().all(|other| other.id != term.id)
+                    && COMPILER_TERMS[..index]
+                        .iter()
+                        .all(|other| other.id != term.id),
+                "{}",
+                term.id
+            );
+            assert!(
+                term.clause
+                    .is_none_or(|(_, page)| (15..=560).contains(&page)),
+                "{}",
+                term.id
+            );
+        }
+        for stage in Stage::ALL {
+            let brief = stage.brief();
+            for text in [brief.input, brief.output, brief.why] {
+                for (piece, id) in linked_terms(text) {
+                    assert!(
+                        !piece.contains(['[', ']', '(']),
+                        "{stage:?}: a malformed link in {text}"
+                    );
+                    if let Some(id) = id {
+                        assert!(
+                            COMPILER_TERMS.iter().any(|term| term.id == id)
+                                || TERMS.iter().any(|term| term.id == id),
+                            "{stage:?} links the unknown term {id}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

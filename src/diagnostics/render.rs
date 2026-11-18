@@ -18,6 +18,7 @@ use super::{
     ColorChoice,
     Diagnostic,
     Renderer,
+    fix_its::Edit,
     model::{
         Label,
         LabelSource,
@@ -221,9 +222,13 @@ impl Renderer {
                 around,
             )
         });
+        // A fix-it hint quotes the source again (Clang's
+        // `emitSnippetAndCaret`, GCC's `maybe_show_locus`).
+        let edits = Self::place_fix_its(&diagnostic.fix_its, None, format, context, scratch);
         let repeated = compiler_snippet
             && place.is_some()
             && self.last_place.replace(place) == place
+            && edits.is_empty()
             && (format == DiagnosticFormat::Gcc
                 || diagnostic.point && !diagnostic.labels.iter().any(Label::is_highlight));
         let mut marks = ArenaVec::new_in(scratch);
@@ -262,6 +267,9 @@ impl Renderer {
                 && (diagnostic.point || diagnostic.labels.iter().any(Label::is_highlight));
         if point {
             Self::point_caret(&mut marks, context);
+        }
+        if format == DiagnosticFormat::Clang && presentation.caret && !repeated {
+            Self::push_edit_marks(edits, context, &mut marks);
         }
         if compiler_snippet {
             Self::retain_caret_block(&mut marks, scratch);
@@ -360,11 +368,21 @@ impl Renderer {
                     compiler_snippet,
                     tabs: Tabs::of(format),
                     without_numbers: Self::without_numbers(format, presentation),
+                    fix_its: Self::fix_it_lines(format, presentation, edits),
                 },
                 scratch,
             );
         }
         if compiler_snippet {
+            Self::write_parseable(
+                &mut out,
+                edits,
+                format,
+                presentation,
+                context,
+                segment,
+                scratch,
+            );
             if let Some(expansion) = &expansion {
                 self.render_expansion_note(&mut out, expansion, diagnostic, context, scratch);
             }
@@ -375,7 +393,23 @@ impl Renderer {
             {
                 let point = format == DiagnosticFormat::Clang
                     && (diagnostic.point || diagnostic.related_points);
-                self.render_related_note(&mut out, (label, &[]), point, context, scratch, true);
+                let note = diagnostic
+                    .labels
+                    .iter()
+                    .position(|other| std::ptr::eq(other, label));
+                let edits =
+                    Self::place_fix_its(&diagnostic.fix_its, note, format, context, scratch);
+                self.render_related_note(
+                    &mut out,
+                    (label, &[], edits),
+                    point,
+                    context,
+                    scratch,
+                    true,
+                );
+                // A note is a diagnostic of its own, at another place, so
+                // the next one at the same place quotes its source again.
+                self.last_place.set(None);
             }
             return out.into_str();
         }
@@ -417,7 +451,7 @@ impl Renderer {
     pub(super) fn render_related_note(
         &self,
         out: &mut ArenaString<'_>,
-        (label, highlights): (&Label<'_>, &[Label<'_>]),
+        (label, highlights, edits): (&Label<'_>, &[Label<'_>], &[Edit<'_>]),
         point: bool,
         context: &Context<'_>,
         scratch: &Bump,
@@ -446,6 +480,7 @@ impl Renderer {
             label.message.unwrap_or_default(),
         );
         if !presentation.caret {
+            Self::write_parseable(out, edits, format, presentation, context, segment, scratch);
             return;
         }
         let mut marks = ArenaVec::new_in(scratch);
@@ -459,6 +494,9 @@ impl Renderer {
         }
         for highlight in highlights {
             Self::push_label_marks(highlight, context, &mut marks, scratch);
+        }
+        if format == DiagnosticFormat::Clang {
+            Self::push_edit_marks(edits, context, &mut marks);
         }
         Self::retain_caret_block(&mut marks, scratch);
         let mut files = ArenaVec::new_in(scratch);
@@ -487,9 +525,82 @@ impl Renderer {
                     compiler_snippet: true,
                     tabs:             Tabs::of(format),
                     without_numbers:  Self::without_numbers(format, presentation),
+                    fix_its:          Self::fix_it_lines(format, presentation, edits),
                 },
                 scratch,
             );
+        }
+        Self::write_parseable(out, edits, format, presentation, context, segment, scratch);
+    }
+
+    /// The edits whose lines `format` prints under the source: all of
+    /// GCC's, and Clang's unless `-fno-diagnostics-fixit-info` hides them.
+    fn fix_it_lines<'a>(
+        format: DiagnosticFormat,
+        presentation: DiagnosticPresentation,
+        edits: &'a [Edit<'a>],
+    ) -> (DiagnosticFormat, &'a [Edit<'a>]) {
+        let shown = format == DiagnosticFormat::Gcc || presentation.fix_its;
+        (format, if shown { edits } else { &[] })
+    }
+
+    /// Writes the parseable form of `edits` when asked to: GCC's after the
+    /// diagnostic whether or not it quotes source, Clang's only after
+    /// quoted source.
+    fn write_parseable(
+        out: &mut ArenaString<'_>,
+        edits: &[Edit<'_>],
+        format: DiagnosticFormat,
+        presentation: DiagnosticPresentation,
+        context: &Context<'_>,
+        segment: Option<u32>,
+        scratch: &Bump,
+    ) {
+        if presentation.parseable && (format == DiagnosticFormat::Gcc || presentation.caret) {
+            Self::write_parseable_fix_its(out, edits, format, context, segment, scratch);
+        }
+    }
+
+    /// Adds the marks Clang draws for its edits, whose ranges it underlines
+    /// beside the caret (`DiagnosticRenderer::emitDiagnostic`): a
+    /// replacement's range with `~`, and an insertion's empty range, which
+    /// draws nothing but reaches the caret line out to its column unless
+    /// a blank stands on either side of it (`highlightRange`).
+    fn push_edit_marks(
+        edits: &[Edit<'_>],
+        context: &Context<'_>,
+        marks: &mut ArenaVec<'_, Mark<'_>>,
+    ) {
+        for edit in edits {
+            let (Some(text), Some(starts)) = (
+                context.source_text(edit.file),
+                context.source_line_starts(edit.file),
+            ) else {
+                continue;
+            };
+            let (line, _, line_end) = Self::locate(starts, text, edit.start);
+            let blank = |byte: Option<&u8>| byte.is_none_or(|&byte| byte == b' ' || byte == b'\t');
+            let insertion = edit.start == edit.end;
+            if insertion
+                && (blank(text.as_bytes().get(edit.start)) && edit.start < line_end
+                    || blank(
+                        edit.start
+                            .checked_sub(1)
+                            .and_then(|at| text.as_bytes().get(at)),
+                    ))
+            {
+                continue;
+            }
+            marks.push(Mark {
+                file: edit.file,
+                line,
+                start: edit.start,
+                end: edit.end.min(line_end),
+                primary: false,
+                label: None,
+                order: marks.len(),
+                insertion,
+            });
         }
     }
 
@@ -591,6 +702,13 @@ impl Renderer {
             let mut cells = ArenaVec::new_in(scratch);
             for primary in [false, true] {
                 for mark in on_line.iter().filter(|mark| mark.primary == primary) {
+                    if mark.insertion {
+                        let to = column_of(mark.start);
+                        if cells.len() < to {
+                            cells.resize(to, None);
+                        }
+                        continue;
+                    }
                     let from = column_of(mark.start);
                     let to = column_of(mark.end).max(from + 1);
                     if cells.len() < to {
@@ -673,6 +791,33 @@ impl Renderer {
                         let _ = writeln!(out, "{lead}{row}");
                     }
                 },
+            }
+            let (format, edits) = gutter.fix_its;
+            if !edits.is_empty() {
+                // GCC's margin is its caret line's but for the blank that
+                // starts the caret line's columns.
+                let margin = match gutter.without_numbers {
+                    | Some(_) => "",
+                    | None => crate::diagnostics::format_in!(scratch, "{} {bar}", gutter.pad),
+                };
+                let mut shown = ArenaVec::new_in(scratch);
+                shown.extend(
+                    on_line
+                        .iter()
+                        .filter(|mark| !mark.insertion)
+                        .map(|mark| (column_of(mark.start) + 1, column_of(mark.end))),
+                );
+                let line_end = line_start + source.len();
+                self.write_fix_it_lines(
+                    out,
+                    edits,
+                    format,
+                    (file, source, line_start, line_end),
+                    &column_of,
+                    (lead, margin),
+                    &shown,
+                    scratch,
+                );
             }
         }
     }
@@ -786,6 +931,7 @@ impl Renderer {
                 primary: label.primary,
                 label: label_text.take(),
                 order: marks.len(),
+                insertion: false,
             });
         }
         if label.is_highlight() {
@@ -850,6 +996,7 @@ impl Renderer {
                     primary: primary && line == top,
                     label: label.take(),
                     order: marks.len(),
+                    insertion: false,
                 });
             }
         }
@@ -933,7 +1080,7 @@ impl Renderer {
 
     /// Returns the 1-based physical line containing `offset` and the byte
     /// range of that line, excluding its terminator.
-    fn locate(starts: &[usize], text: &str, offset: usize) -> (usize, usize, usize) {
+    pub(super) fn locate(starts: &[usize], text: &str, offset: usize) -> (usize, usize, usize) {
         let line = starts.partition_point(|&start| start <= offset);
         let start = starts[line - 1];
         let end = starts
@@ -948,7 +1095,7 @@ impl Renderer {
         (line, start, end)
     }
 
-    fn paint<'a>(&self, text: &'a str, style: Style) -> Painted<'a> {
+    pub(super) fn paint<'a>(&self, text: &'a str, style: Style) -> Painted<'a> {
         Painted {
             text,
             style,
@@ -956,7 +1103,7 @@ impl Renderer {
         }
     }
 
-    fn paint_into(&self, out: &mut ArenaString<'_>, text: &str, style: Style) {
+    pub(super) fn paint_into(&self, out: &mut ArenaString<'_>, text: &str, style: Style) {
         let _ = write!(out, "{}", self.paint(text, style));
     }
 
@@ -969,6 +1116,18 @@ impl Renderer {
 
     fn gutter_style() -> Style {
         Style::new().bright_blue().bold()
+    }
+
+    /// The color of a fix-it hint's text: GCC's `fixit-insert` and Clang's
+    /// fix-it color, green.
+    pub(super) fn fix_it_style() -> Style {
+        Style::new().green()
+    }
+
+    /// The color of GCC's `-` under a range a fix-it hint replaces or
+    /// removes: its `fixit-delete`, red.
+    pub(super) fn fix_it_delete_style() -> Style {
+        Style::new().red()
     }
 
     /// Renders a diagnostic with owned text, for tests.
@@ -1005,23 +1164,29 @@ struct Gutter<'a> {
     tabs:             Tabs,
     /// See [`Renderer::without_numbers`].
     without_numbers:  Option<&'static str>,
+    /// The format whose fix-it lines follow the underlines, and the edits
+    /// they show.
+    fix_its:          (DiagnosticFormat, &'a [Edit<'a>]),
 }
 
 /// One underline on one physical source line.
 #[derive(Debug, Clone)]
 struct Mark<'a> {
-    file:    u32,
-    line:    usize,
+    file:      u32,
+    line:      usize,
     /// Byte range within the file, clipped to the line.
-    start:   usize,
-    end:     usize,
-    primary: bool,
-    label:   Option<&'a str>,
+    start:     usize,
+    end:       usize,
+    primary:   bool,
+    label:     Option<&'a str>,
     /// Where the mark was made among the diagnostic's marks.
-    order:   usize,
+    order:     usize,
+    /// The empty range of a Clang insertion, which draws nothing but
+    /// reaches the underline out to its column.
+    insertion: bool,
 }
 
-struct Painted<'a> {
+pub(super) struct Painted<'a> {
     text:  &'a str,
     style: Style,
     color: ColorChoice,
@@ -1059,6 +1224,11 @@ fn visible_source<'scratch>(
         }
     }
     visible
+}
+
+/// The display cells `text`, which holds no tab, takes.
+pub(super) fn text_width(text: &str) -> usize {
+    text.chars().map(char_width).sum()
 }
 
 fn display_width(text: &str, tabs: Tabs) -> usize {

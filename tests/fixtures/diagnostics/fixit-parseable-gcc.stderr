@@ -1,0 +1,18 @@
+fixit-parseable-gcc.c: In function 'f':
+fixit-parseable-gcc.c:6:17: warning: '~' on a boolean expression [-Wbool-operation]
+    6 |         int r = ~b;
+      |                 ^
+fixit-parseable-gcc.c:6:17: note: did you mean to use logical not?
+    6 |         int r = ~b;
+      |                 ^
+      |                 !
+fix-it:"fixit-parseable-gcc.c":{6:10-6:10}:"!"
+fixit-parseable-gcc.c:7:11: warning: '~' on a boolean expression [-Wbool-operation]
+    7 |   r += ID(~b);
+      |           ^
+fixit-parseable-gcc.c:7:11: note: did you mean to use logical not?
+    7 |   r += ID(~b);
+      |           ^
+renamed.c:40:14: warning: '~' on a boolean expression [-Wbool-operation]
+renamed.c:40:14: note: did you mean to use logical not?
+fix-it:"renamed.c":{40:14-40:14}:"!"

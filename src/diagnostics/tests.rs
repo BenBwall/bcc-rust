@@ -150,6 +150,110 @@ fn zero_length_ranges_point_after_the_line() {
     });
 }
 
+/// Renders `build`'s diagnostic about `text`, at the range `caret` spells,
+/// in `format` with `presentation`.
+fn render_fix_its(
+    text: &str,
+    caret: &str,
+    format: crate::configuration::DiagnosticFormat,
+    presentation: crate::configuration::DiagnosticPresentation,
+    build: impl for<'d> FnOnce(Diagnostic<'d>, &mut dyn FnMut(&str) -> SourceVectors) -> Diagnostic<'d>,
+) -> String {
+    with_context(text, |context, file| {
+        context.configuration = context
+            .configuration
+            .with_diagnostic_format(format)
+            .with_diagnostic_presentation(presentation);
+        let primary = span(context, file, text, caret);
+        let arena = Bump::new();
+        let diagnostic = Explanation::new(&arena, "e").at(ErrorSeverity::Error, primary);
+        let diagnostic = build(diagnostic, &mut |needle| span(context, file, text, needle));
+        let mut renderer = Renderer::new(ColorChoice::Plain);
+        renderer.render_text(&diagnostic, context).to_owned()
+    })
+}
+
+#[test]
+fn gcc_underlines_a_replacement_its_caret_line_did_not_draw() {
+    let output = render_fix_its(
+        "int x = foo;\n",
+        "x",
+        crate::configuration::DiagnosticFormat::Gcc,
+        crate::configuration::DiagnosticPresentation::default(),
+        |diagnostic, at| diagnostic.fix_it(FixItPlace::Replace(at("foo")), "bar"),
+    );
+    assert!(
+        output.ends_with(
+            "    1 | int x = foo;\n      |     ^\n      |         ---\n      |         bar\n"
+        ),
+        "{output}"
+    );
+}
+
+#[test]
+fn gcc_joins_hints_whose_text_would_overlap() {
+    // GCC's example in `diagnostic-show-locus.cc`: a C-style cast becomes
+    // a `const_cast`.
+    let output = render_fix_its(
+        "foo *f = (foo *)ptr->field;\n",
+        "field",
+        crate::configuration::DiagnosticFormat::Gcc,
+        crate::configuration::DiagnosticPresentation::default(),
+        |diagnostic, at| {
+            diagnostic
+                .fix_it(FixItPlace::Replace(at("(")), "const_cast<")
+                .fix_it(FixItPlace::Replace(at(")")), "> (")
+                .fix_it(FixItPlace::Before(at(";")), ")")
+        },
+    );
+    assert!(
+        output.ends_with(
+            "      |          -----------------\n      |          const_cast<foo *> (ptr->field)\n"
+        ),
+        "{output}"
+    );
+}
+
+#[test]
+fn clang_moves_a_hint_past_the_text_before_it() {
+    let output = render_fix_its(
+        "int y = x;\n",
+        "y",
+        crate::configuration::DiagnosticFormat::Clang,
+        crate::configuration::DiagnosticPresentation::default(),
+        |diagnostic, at| {
+            diagnostic
+                .fix_it(FixItPlace::Before(at("x")), "abcdef")
+                .fix_it(FixItPlace::After(at("x")), ")")
+        },
+    );
+    // The insertion after `x` reaches the caret line out to its column.
+    assert_eq!(
+        output,
+        "example.c:1:5: error: e\n    1 | int y = x;\n      |     ^    \n      |         abcdef \
+         )\n"
+    );
+}
+
+#[test]
+fn parseable_hints_escape_their_text() {
+    let output = render_fix_its(
+        "int y = x;\n",
+        "y",
+        crate::configuration::DiagnosticFormat::Gcc,
+        crate::configuration::DiagnosticPresentation {
+            caret: false,
+            parseable: true,
+            ..crate::configuration::DiagnosticPresentation::default()
+        },
+        |diagnostic, at| diagnostic.fix_it(FixItPlace::Before(at("x")), "a\"\\\t\u{e9}"),
+    );
+    assert_eq!(
+        output,
+        "example.c:1:5: error: e\nfix-it:\"example.c\":{1:9-1:9}:\"a\\\"\\\\\\t\\303\\251\"\n"
+    );
+}
+
 fn c_quoted(prefix: &str, quote: char, value: &str) -> String {
     let mut out = String::new();
     write_c_quoted(&mut out, prefix, quote, value).expect("writing to a string cannot fail");

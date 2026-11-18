@@ -2,8 +2,12 @@
 // the device's black screens, in daylight and under low light alike, so both
 // themes are dark; the low-light screen is a shade deeper. Each token kind
 // has one colour in every language, few and muted, as on a hardware
-// sequencer's screen: keywords warm, types and variables blue, numbers ochre,
-// strings green, the rest off-white and grey.
+// sequencer's screen: keywords and instructions warm, types blue, values
+// teal, numbers ochre, strings green, labels khaki, registers pink, the rest
+// off-white and grey. Kinds that sit side by side in a listing (a type and
+// the value it types, a register and a jump's label, a label and a number)
+// differ in hue, at least 12 apart in CIEDE2000, and every colour is at
+// least 6.8:1 on the screen.
 
 const screen = {
   background: '#0b0b0b',
@@ -14,9 +18,9 @@ const screen = {
   number: '#e8b45c',
   string: '#9fd49a',
   function: '#f2f2ec',
-  variable: '#a8c7ff',
+  variable: '#7fd9d9',
   slot: '#c9b3ff',
-  label: '#ffb3c8',
+  label: '#f0e68c',
   register: '#ff9ea9',
   operator: '#b5b4ac',
 };
@@ -33,12 +37,17 @@ function rules(palette) {
     { token: 'keyword', foreground: strip(palette.keyword) },
     { token: 'keyword.instruction', foreground: strip(palette.keyword), fontStyle: 'bold' },
     { token: 'keyword.directive', foreground: strip(palette.muted) },
-    { token: 'keyword.condition', foreground: strip(palette.label) },
+    // An attribute that qualifies an instruction (nsw, align, inbounds)
+    // recedes behind the instruction it qualifies.
+    { token: 'keyword.modifier', foreground: strip(palette.operator) },
+    { token: 'keyword.condition', foreground: strip(palette.keyword) },
     { token: 'keyword.metadata', foreground: strip(palette.muted) },
     { token: 'type', foreground: strip(palette.type) },
     { token: 'number', foreground: strip(palette.number) },
     { token: 'number.immediate', foreground: strip(palette.number) },
-    { token: 'number.bytes', foreground: strip(palette.muted) },
+    // The machine code's bytes are what the stage makes, so they read as
+    // plainly as text; the offsets beside them are muted.
+    { token: 'number.bytes', foreground: strip(palette.foreground) },
     { token: 'string', foreground: strip(palette.string) },
     { token: 'string.escape', foreground: strip(palette.number) },
     { token: 'function', foreground: strip(palette.function) },

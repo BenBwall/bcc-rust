@@ -1,0 +1,27 @@
+fixit-macros-clang.c:10:14: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
+   10 |   int r = ID(~b);
+      |              ^~
+      |              !
+fixit-macros-clang.c:11:10: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
+   11 |   r += P(~b);
+      |        ~~^~~
+      |          !
+fixit-macros-clang.c:12:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
+   12 |   r += NB;
+      |        ^~
+fixit-macros-clang.c:7:12: note: expanded from macro 'NB'
+    7 | #define NB ~b
+      |            ^~
+fixit-macros-clang.c:13:12: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
+   13 |   r += TWO(~b, 1);
+      |            ^~
+      |            !
+fixit-macros-clang.c:14:15: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
+   14 |   r += TWO(1, ~b);
+      |               ^~
+      |               !
+fixit-macros-clang.c:15:7: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
+   15 |         r += ~b;
+      |              ^~
+      |              !
+6 warnings generated.

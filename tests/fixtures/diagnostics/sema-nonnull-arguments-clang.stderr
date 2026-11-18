@@ -1,0 +1,37 @@
+sema-nonnull-arguments-clang.c:13:10: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   13 |   use(0, 0);
+      |          ^
+sema-nonnull-arguments-clang.c:14:10: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   14 |   use(0, (int *)0);
+      |          ^~~~~~~~
+sema-nonnull-arguments-clang.c:16:12: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   16 |   (use)(0, 0);
+      |            ^
+sema-nonnull-arguments-clang.c:17:11: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   17 |   all(0, 0);
+      |       ~   ^
+sema-nonnull-arguments-clang.c:17:11: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   17 |   all(0, 0);
+      |          ~^
+sema-nonnull-arguments-clang.c:18:12: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   18 |   defined(0);
+      |           ~^
+sema-nonnull-arguments-clang.c:19:10: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   19 |   use(0, (void *)(1 - 1));
+      |          ^~~~~~~~~~~~~~~
+sema-nonnull-arguments-clang.c:20:15: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   20 |   counted(0, 0);
+      |              ~^
+sema-nonnull-arguments-clang.c:21:12: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   21 |   list(0, 0);
+      |        ~   ^
+sema-nonnull-arguments-clang.c:22:9: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   22 |   late(0);
+      |        ~^
+sema-nonnull-arguments-clang.c:32:10: warning: comparison of array 'array' equal to a null pointer is always false [-Wtautological-pointer-compare]
+   32 |   return array == 0;
+      |          ^~~~~    ~
+sema-nonnull-arguments-clang.c:31:10: warning: null passed to a callee that requires a non-null argument [-Wnonnull]
+   31 |   use(p, 0);
+      |          ^
+12 warnings generated.
