@@ -31,6 +31,15 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     let tree = Memo::new(move |_| {
         snapshot.with(|state| state.as_ref().and_then(|state| state.tree.clone()))
     });
+    // A call's first step shows the called function, which has no
+    // expression yet; the caller's expression waits on the call.
+    let calling = Memo::new(move |_| {
+        snapshot.with(|state| {
+            let state = state.as_ref().filter(|state| state.event.category == "call")?;
+            let (callee, caller) = (state.stack.first()?, state.stack.get(1)?);
+            Some((caller.name.clone(), caller.waiting.clone()?, callee.name.clone()))
+        })
+    });
     view! {
         <figure class="schematic" aria-labelledby="schematic-caption">
             <figcaption class="module-caption" id="schematic-caption">
@@ -45,6 +54,14 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                     <div class="schematic-scroll">{drawing(tree)}</div>
                     <ol class="sr-only" aria-label="Expression being evaluated">{outline(tree, tree.nodes.len() - 1)}</ol>
                 }.into_any(),
+                | _ if calling.with(Option::is_some) => {
+                    let (caller, call, callee) = calling.get().unwrap_or_default();
+                    view! {
+                        <p class="schematic-empty">
+                            "The call "<code>{call}</code>" is part of an expression in "{caller}"(), which waits for it to return. "{callee}"()'s own expressions are wired up here as they run."
+                        </p>
+                    }.into_any()
+                },
                 | _ if snapshot.with(Option::is_none) => view! {
                     <p class="schematic-empty">"The expression being evaluated is drawn here as a circuit, its wires filling with values as the machine evaluates it."</p>
                 }.into_any(),

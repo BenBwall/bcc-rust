@@ -103,6 +103,11 @@ fn a_call_folds_into_the_expression_that_made_it() {
         panic!("the fourth part is the call");
     };
     assert_eq!(index, call);
+    // Figure 2 names the call main() waits on at that step.
+    assert_eq!(
+        states[call].stack[1].waiting.as_deref(),
+        Some("bump(cursor)")
+    );
     assert_eq!(first, states[call].step);
     // The call runs up to the step before its return, which is main's.
     assert_eq!(states[last + 1].event.title, "Return 3 from bump");
