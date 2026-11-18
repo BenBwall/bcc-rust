@@ -139,4 +139,10 @@ sema-nonnull-compare-clang.c:51:10: warning: comparison of nonnull function call
 sema-nonnull-compare-clang.c:45:41: note: declared 'returns_nonnull' here
    45 | int *made_from(int, int) __attribute__((returns_nonnull));
       |                                         ^
-24 warnings generated.
+sema-nonnull-compare-clang.c:61:72: warning: comparison of nonnull parameter 'p' equal to a null pointer is 'false' on first encounter [-Wtautological-pointer-compare]
+   61 | void prototype(int *q) { void g(int *p __attribute__((nonnull)), int a[p == 0]); }
+      |                                                                        ^    ~
+sema-nonnull-compare-clang.c:61:55: note: declared 'nonnull' here
+   61 | void prototype(int *q) { void g(int *p __attribute__((nonnull)), int a[p == 0]); }
+      |                                                       ^
+25 warnings generated.

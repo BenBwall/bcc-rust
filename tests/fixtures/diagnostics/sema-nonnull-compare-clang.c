@@ -54,3 +54,9 @@ int calls(int x) {
 int unrelated(int *p) { return p == 0; }
 int other(int *p, int *q) __attribute__((nonnull(1)));
 int other(int *p, int *q) { return q == 0; }
+
+/* A prototype's parameter is its own: only a nonnull written on it counts,
+   and only within a function's body. */
+__attribute__((nonnull)) void shadowed(int *p) { void g(int *p, int a[p == 0]); }
+void prototype(int *q) { void g(int *p __attribute__((nonnull)), int a[p == 0]); }
+void file_scope(int *p __attribute__((nonnull)), int a[p == 0]);

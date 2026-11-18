@@ -245,11 +245,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         _ = self.attributes.nonnull.insert(entity, all.leak());
     }
 
-    /// Where the `nonnull` that makes `binding`, a parameter of the
-    /// function being defined, nonnull for Clang was written, while Clang
-    /// still assumes so: one on the parameter itself first, else the first
-    /// of the function's that names it or every pointer parameter
-    /// (`DiagnoseAlwaysNonNullPointer` in `SemaChecking.cpp`).
+    /// Where the `nonnull` that makes the parameter `binding` nonnull for
+    /// Clang was written, inside a function body, while Clang still assumes
+    /// so (`DiagnoseAlwaysNonNullPointer` in `SemaChecking.cpp`). For a
+    /// parameter of the function being defined: one on the parameter
+    /// itself first, else the first of the function's that names it or
+    /// every pointer parameter. A parameter of a prototype, such as the
+    /// `p` of `void g(int *p, int a[p == 0]);` in a body, belongs to no
+    /// function yet, so only one written on it counts.
     pub(in crate::translation_phases::semantic_analysis) fn nonnull_parameter(
         &mut self,
         binding: usize,
@@ -258,6 +261,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return None;
         }
         let function = self.functions.current?;
+        // The function's parameters are bound in its own scope, where
+        // their names are distinct.
+        if self.bindings[binding].scope != function.scope {
+            return self.attributes.own_nonnull.get(&binding).copied();
+        }
         let name = self.bindings[binding].name.name;
         let position = function
             .parameters

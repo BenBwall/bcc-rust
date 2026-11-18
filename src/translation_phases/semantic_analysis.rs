@@ -1367,6 +1367,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     .parameter_nonnull
                     .take()
                     .filter(|_| self.pointer_target(ty).is_some());
+                if let (Some(binding), Some(site)) = (binding, nonnull) {
+                    _ = self.attributes.own_nonnull.insert(binding, site);
+                }
                 self.next_parameter += 1;
                 params.push(
                     self.scratch,

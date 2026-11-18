@@ -1751,6 +1751,11 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Where Clang's `nonnull` was first written on the parameter whose
     /// attributes are being applied.
     pub(in crate::translation_phases::semantic_analysis) parameter_nonnull: Option<SourceVectors>,
+    /// Where Clang's `nonnull` was first written on each parameter binding
+    /// itself, which is all that makes the parameter of a prototype
+    /// nonnull: its declaration has no function yet.
+    pub(in crate::translation_phases::semantic_analysis) own_nonnull:
+        ArenaMap<'s, usize, SourceVectors>,
     /// The parameters an assignment writes or whose address `&` takes, as
     /// written, without parentheses: Clang stops calling a `nonnull` one
     /// nonnull from then on (`RecordModifiableNonNullParam` in
@@ -1800,6 +1805,7 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             pointer_formats:     ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             nonnull:             ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             parameter_nonnull:   None,
+            own_nonnull:         ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             modified_parameters: ArenaSet::with_hasher_in(FxBuildHasher, scratch),
         }
     }
