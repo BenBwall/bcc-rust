@@ -154,10 +154,14 @@ pub fn member(snapshot: &Snapshot, key: Key) -> Option<Member> {
 
 /// The expression the step at `index` belongs to. A call's first step
 /// shows the called function, which has no expression yet: it belongs to
-/// the caller's, which holds the call the caller waits on.
+/// the caller's, which holds the call the caller waits on. The called
+/// function's own steps that evaluate no expression stand alone.
 pub fn key_at(history: &[Snapshot], index: usize) -> Option<Key> {
     let snapshot = history.get(index)?;
     key(snapshot).or_else(|| {
+        if snapshot.event.kind != "call" {
+            return None;
+        }
         let caller = snapshot.stack.get(1)?;
         Some(Key {
             frame: caller.id,

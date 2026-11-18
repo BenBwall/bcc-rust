@@ -206,6 +206,12 @@ fn a_call_without_arguments_is_its_own_expression() {
     // Over runs through f to the expression's last step.
     let last = at(&states, "Discard the result");
     assert_eq!(over(&states, call), last);
+    // Inside f, a block's entry evaluates no expression: no panel, and Over
+    // finishes f's next expression without leaving f.
+    let entry = call + 1;
+    assert_eq!(states[entry].event.title, "Enter a block");
+    assert_eq!(group(&states, entry, TWO_CALLS), None);
+    assert_eq!(states[over(&states, entry)].stack[0].name, "f");
 }
 
 #[cfg(feature = "worker")]
