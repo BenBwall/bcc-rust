@@ -270,7 +270,9 @@ def main():
         label, _, command = spec.partition("=")
         words = shlex.split(command)
         if words and os.sep in words[0]:
-            words[0] = str(Path(words[0]).resolve())
+            # Absolute, but not resolved: a compiler picks its driver by the
+            # name it was run as (a `clang-cl` link to bcc or to clang).
+            words[0] = os.path.abspath(words[0])
         compiler = shlex.join(words)
         directory = work / label
         directory.mkdir(parents=True, exist_ok=True)
