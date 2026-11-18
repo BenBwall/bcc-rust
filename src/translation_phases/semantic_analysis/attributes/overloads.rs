@@ -601,7 +601,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 origin: crate::translation_phases::SourceVectors::default(),
                 order: super::super::ReportOrder::AtSite,
                 parameter: None,
-                related: Default::default(),
+                related: super::super::RelatedNotes::default(),
             }),
         ]);
     }

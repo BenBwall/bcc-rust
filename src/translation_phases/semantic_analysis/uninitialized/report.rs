@@ -101,7 +101,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let self_init = uses.self_init[var as usize];
             let mut sorted: ArenaVec<'_, Use<'tu>> = ArenaVec::new_in(self.scratch);
             sorted.extend(
-                uses.uses
+                uses.found
                     .iter()
                     .filter(|&&(v, _)| v == var)
                     .map(|&(_, u)| u),
@@ -241,7 +241,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let mut warning = Warning {
                     group:     G::SometimesUninitialized,
                     site:      name.source_vectors,
-                    highlight: self.declared_range(declared),
+                    highlight: Self::declared_range(declared),
                     text:      self.variable_words(binding, words),
                     notes:     RelatedNotes::default(),
                 };
@@ -446,7 +446,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let text = self.variable_words(
             binding,
-            &format_in!(self.scratch, "is used uninitialized whenever {words}"),
+            format_in!(self.scratch, "is used uninitialized whenever {words}"),
         );
         let mut warning = Warning {
             group: G::SometimesUninitialized,
@@ -490,7 +490,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.types.nodes[ty.index],
             TypeKind::Tag(_) | TypeKind::Vector { .. }
         );
-        let end = self.declarator_end(declared);
+        let end = Self::declarator_end(declared);
         if zero
             && declared.initializer.is_none()
             && let Some(end) = end
@@ -516,7 +516,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The last token of the declarator, without its attributes and `asm`
     /// label (`VarDecl::getEndLoc` without an initializer).
-    fn declarator_end(&self, declared: Declared<'tu>) -> Option<SourceVectors> {
+    fn declarator_end(declared: Declared<'tu>) -> Option<SourceVectors> {
         let declarator = declared.declarator;
         let trailing = declarator.kind.iter().find_map(|direct| match *direct {
             | DirectDeclarator::Attributes(attributes) => Some(attributes.source_vectors),
@@ -531,8 +531,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The declaration from its first token through the declarator
     /// (`VarDecl::getSourceRange` without an initializer).
-    fn declared_range(&self, declared: Declared<'tu>) -> SourceVectors {
-        self.declarator_end(declared)
+    fn declared_range(declared: Declared<'tu>) -> SourceVectors {
+        Self::declarator_end(declared)
             .and_then(|end| Context::span_through(declared.declaration.source_vectors, end))
             .unwrap_or(declared.declarator.source_vectors)
     }

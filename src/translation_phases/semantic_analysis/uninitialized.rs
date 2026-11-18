@@ -110,7 +110,7 @@ impl Analyzer<'_, '_, '_> {
         {
             return;
         }
-        let mut arena = std::mem::replace(&mut self.uninitialized.arena, Bump::new());
+        let mut arena = std::mem::take(&mut self.uninitialized.arena);
         self.analyze_uninitialized(&arena);
         arena.reset();
         self.uninitialized.arena = arena;

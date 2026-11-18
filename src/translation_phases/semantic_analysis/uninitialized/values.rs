@@ -79,7 +79,7 @@ pub(super) struct Walk<'b> {
 pub(super) struct Uses<'b, 'tu> {
     pub(super) order:     ArenaVec<'b, u32>,
     /// Each use and its variable, in the order the pass met them.
-    pub(super) uses:      ArenaVec<'b, (u32, Use<'tu>)>,
+    pub(super) found:     ArenaVec<'b, (u32, Use<'tu>)>,
     pub(super) self_init: &'b mut [bool],
     pub(super) branches:  ArenaVec<'b, Branch>,
 }
@@ -244,7 +244,7 @@ pub(super) fn find_uses<'b, 'tu>(
     let blocks = cfg.blocks.len();
     let mut uses = Uses {
         order:     ArenaVec::new_in(arena),
-        uses:      ArenaVec::new_in(arena),
+        found:     ArenaVec::new_in(arena),
         self_init: arena.alloc_slice_fill_iter(std::iter::repeat_n(false, values.vars)),
         branches:  ArenaVec::new_in(arena),
     };
@@ -292,7 +292,7 @@ pub(super) fn find_uses<'b, 'tu>(
                     frontier(cfg, values, block, var, &mut walk, &mut uses.branches)
                 };
                 let count = uses.branches.len() - start;
-                uses.uses.push((
+                uses.found.push((
                     var,
                     Use {
                         user,
@@ -365,7 +365,7 @@ fn frontier(
     // Only a block the walk reached can be on the frontier; Clang scans
     // them all, in the order they were created.
     walk.touched.sort_unstable();
-    for &candidate in walk.touched.iter() {
+    for &candidate in &walk.touched {
         if values.get(candidate, var) != UNINITIALIZED {
             continue;
         }
@@ -402,7 +402,7 @@ fn frontier(
             }
         }
     }
-    for &touched in walk.touched.iter() {
+    for &touched in &walk.touched {
         walk.visited[touched as usize] = 0;
     }
     if after_call {

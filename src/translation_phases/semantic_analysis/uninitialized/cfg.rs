@@ -1252,13 +1252,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let data = self.bindings[binding];
             let block = match data.kind {
                 | BindingKind::Typedef =>
-                    if !self.types.variably_modified(data.ty) {
-                        cfg.block
-                    } else {
+                    if self.types.variably_modified(data.ty) {
                         _ = cfg.auto_create_block();
                         let mut block = cfg.block;
                         self.cfg_bounds(cfg, Some(init.declarator), data.ty, &mut block);
                         block
+                    } else {
+                        cfg.block
                     },
                 | BindingKind::Object => {
                     let tracked = self.tracked_binding(binding);
@@ -1397,8 +1397,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | InitializerType::AssignmentExpression(e) => self.cfg_expression(cfg, e, context),
             | InitializerType::InitializerList(list) => {
                 _ = cfg.auto_create_block();
-                let mut last = cfg.block;
-                if self.designated(initializer) && self.reads_tracked(initializer) {
+                let mut entry = cfg.block;
+                if designated(initializer) && self.reads_tracked(initializer) {
                     cfg.unsupported = true;
                     return None;
                 }
@@ -1406,21 +1406,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if let Some(block) =
                         self.cfg_initializer(cfg, element.initializer, Context::Use)
                     {
-                        last = Some(block);
+                        entry = Some(block);
                     }
                 }
-                last
+                entry
             },
-        }
-    }
-
-    /// Whether a list in `initializer` has a designator.
-    fn designated(&self, initializer: &'tu Initializer<'tu>) -> bool {
-        match initializer.kind {
-            | InitializerType::AssignmentExpression(_) => false,
-            | InitializerType::InitializerList(list) => list.elements.iter().any(|element| {
-                element.designation.is_some() || self.designated(element.initializer)
-            }),
         }
     }
 
@@ -1540,9 +1530,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let class = match context {
                             | Context::Plain => Class::Init,
                             | Context::Use | Context::ConstPtrArgument { .. } => Class::Use,
-                            | Context::Ignore => Class::Ignore,
+                            | Context::Ignore | Context::ConstPtr { trivial: true } =>
+                                Class::Ignore,
                             | Context::SelfInit => Class::SelfInit,
-                            | Context::ConstPtr { trivial: true } => Class::Ignore,
                             | Context::ConstPtr { trivial: false } => Class::ConstPtrUse,
                         };
                         cfg.append(Element::Reference {
@@ -2205,4 +2195,15 @@ const fn scalar_is_integral(scalar: Scalar) -> bool {
             | Scalar::Int128
             | Scalar::UnsignedInt128
     )
+}
+
+/// Whether a list in `initializer` has a designator.
+fn designated(initializer: &Initializer<'_>) -> bool {
+    match initializer.kind {
+        | InitializerType::AssignmentExpression(_) => false,
+        | InitializerType::InitializerList(list) => list
+            .elements
+            .iter()
+            .any(|element| element.designation.is_some() || designated(element.initializer)),
+    }
 }
