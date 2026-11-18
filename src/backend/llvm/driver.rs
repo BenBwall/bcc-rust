@@ -848,3 +848,38 @@ impl fmt::Display for NotFound {
 }
 
 impl std::error::Error for NotFound {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `clang -###` lists each command with every word quoted, as Clang's
+    /// `-v` prints it; the words come back unescaped, and the lines that
+    /// name no command are none.
+    #[test]
+    fn clang_listed_commands_read_back_their_words() {
+        let words = ["/usr/bin/ld.lld", "-o", "a b", "say \"hi\"", "C:\\x", "$HOME"];
+        let mut line = Vec::new();
+        write_command(
+            &mut line,
+            CommandStyle::Clang,
+            OsStr::new(words[0]),
+            words[1..].iter().map(OsStr::new),
+        )
+        .unwrap();
+        let line = String::from_utf8(line).unwrap();
+        assert_eq!(
+            clang_listed_command(line.trim_end()),
+            Some(words.map(str::to_owned).to_vec())
+        );
+        for other in [
+            "clang version 23.1.5",
+            "Target: x86_64-unknown-linux-gnu",
+            "InstalledDir: /usr/bin",
+            "",
+            " \"unterminated",
+        ] {
+            assert_eq!(clang_listed_command(other), None, "{other}");
+        }
+    }
+}
