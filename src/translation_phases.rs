@@ -59,6 +59,7 @@ pub(crate) use context::{
     ArgumentSubstitution,
     Context,
     FileSystem,
+    FixItPlacement,
     IncludeEntry,
     Inclusion,
     ReadingPosition,

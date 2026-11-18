@@ -124,6 +124,7 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
             order: ReportOrder::AtSite,
             parameter: None,
             related: super::super::RelatedNotes::default(),
+            fix_it: None,
         })]);
     }
 }

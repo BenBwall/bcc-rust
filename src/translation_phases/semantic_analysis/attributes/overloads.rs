@@ -602,6 +602,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 order: super::super::ReportOrder::AtSite,
                 parameter: None,
                 related: super::super::RelatedNotes::default(),
+                fix_it: None,
             }),
         ]);
     }

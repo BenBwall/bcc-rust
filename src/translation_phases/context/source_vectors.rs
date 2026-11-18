@@ -522,6 +522,26 @@ impl Context<'_> {
         arena.encode(end - 1, end)
     }
 
+    /// The range from the first token of `first` through the last token of
+    /// `last`, with every token between them when both are parser tokens in
+    /// order, as the elements of a list are; otherwise the two joined.
+    pub(crate) fn range_through(
+        &mut self,
+        first: SourceVectors,
+        last: SourceVectors,
+    ) -> SourceVectors {
+        if first.length() == 0 || last.length() == 0 {
+            return self.merge_vectors(first, last);
+        }
+        let (arena, start) = SourceArena::decode(first);
+        let (last_arena, last_start) = SourceArena::decode(last);
+        let end = last_start + last.length();
+        if arena == SourceArena::ParserTokens && last_arena == arena && start <= last_start {
+            return arena.encode(start, end);
+        }
+        self.merge_vectors(first, last)
+    }
+
     /// The vector of the token just before `inner` when `outer`, which holds
     /// `inner`, holds that token too: the `)` before a statement's body.
     pub(crate) fn token_before(

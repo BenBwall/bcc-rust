@@ -1,0 +1,1 @@
+--compiler-identity=clang --diagnostic-format=clang -Wno-error=int-conversion

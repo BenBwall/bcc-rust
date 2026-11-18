@@ -216,6 +216,7 @@ impl Analyzer<'_, '_, '_> {
                 order: self.report_order,
                 parameter,
                 related,
+                fix_it: self.conversion_fix_it,
             }),
         );
     }
@@ -270,6 +271,7 @@ impl Analyzer<'_, '_, '_> {
                 order: self.report_order,
                 parameter: self.argument_parameter_note(kind),
                 related: super::RelatedNotes::default(),
+                fix_it: None,
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
             let hard = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
@@ -319,6 +321,7 @@ impl Analyzer<'_, '_, '_> {
                         order,
                         parameter: None,
                         related: super::RelatedNotes::default(),
+                        fix_it: None,
                     })
                 },
             );

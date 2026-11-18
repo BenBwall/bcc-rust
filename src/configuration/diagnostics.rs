@@ -81,6 +81,12 @@ pub(crate) struct DiagnosticPresentation {
     /// Locations in `cl`'s `file(line,col):` form, as Clang's
     /// `-fdiagnostics-format=msvc` writes them for clang-cl.
     pub(crate) msvc_locations: bool,
+    /// The line of suggested text under the source a fix-it hint changes:
+    /// Clang's `-f[no-]diagnostics-fixit-info`. GCC always prints it.
+    pub(crate) fix_its:        bool,
+    /// Each fix-it hint again as a `fix-it:"file":{l:c-l:c}:"text"` line
+    /// for tools to read: `-f[no-]diagnostics-parseable-fixits`.
+    pub(crate) parseable:      bool,
 }
 
 impl Default for DiagnosticPresentation {
@@ -92,6 +98,8 @@ impl Default for DiagnosticPresentation {
             option_names:   true,
             color:          DiagnosticColor::Unset,
             msvc_locations: false,
+            fix_its:        true,
+            parseable:      false,
         }
     }
 }
@@ -341,6 +349,7 @@ impl CompilerConfiguration {
         self.warning_options[DiagnosticGroup::Switch as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::BoolOperation as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::CharSubscripts as usize].apply_all(enabled);
+        self.warning_options[DiagnosticGroup::MissingBraces as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::ReturnType as usize].apply_all(enabled);
         self.warning_options[DiagnosticGroup::Unused as usize].apply_all(enabled);
         // GCC's `-Wunused`, given or refused in either order, outranks
@@ -1158,6 +1167,10 @@ diagnostic_groups! {
     /// Clang's read that may be uninitialized on a path it cannot name,
     /// which `-Wall` leaves off.
     ConditionalUninitialized => Some("conditional-uninitialized"), Ignored, false;
+    /// Clang's array, structure or union initialized by elements whose
+    /// braces were left out, under `-Wall`; GCC's form of the group, which
+    /// its `-Wall` holds too, is not modeled.
+    MissingBraces => Some("missing-braces"), Ignored, false;
     /// `-Wformat`: a format string a call's arguments do not match. Clang
     /// reports it by default and its group holds the other format groups
     /// but `-Wformat-nonliteral`; GCC's `-Wall` holds it, and the other
@@ -1338,6 +1351,7 @@ impl DiagnosticGroup {
         Self::Uninitialized,
         Self::SometimesUninitialized,
         Self::UninitializedConstPointer,
+        Self::MissingBraces,
         Self::ReturnType,
         Self::ImplicitFunctionDeclaration,
         Self::ImplicitLibraryFunction,
@@ -1515,6 +1529,7 @@ impl WarningSettings {
                 | DiagnosticGroup::Switch
                 | DiagnosticGroup::BoolOperation
                 | DiagnosticGroup::CharSubscripts
+                | DiagnosticGroup::MissingBraces
                 | DiagnosticGroup::ReturnType
                 | DiagnosticGroup::Unused
                 | DiagnosticGroup::UnusedFunction

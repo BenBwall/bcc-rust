@@ -1,45 +1,59 @@
 sema-bool-operation-clang.c:5:27: warning: bitwise negation of a boolean expression always evaluates to 'true'; did you mean logical negation? [-Wbool-operation]
     5 | _Bool g(_Bool v) { return ~v; }
       |                           ^~
+      |                           !
 sema-bool-operation-clang.c:8:7: warning: bitwise negation of a boolean expression always evaluates to 'true'; did you mean logical negation? [-Wbool-operation]
     8 |   b = ~b;
       |       ^~
+      |       !
 sema-bool-operation-clang.c:9:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
     9 |   *r = ~(x > 0);
       |        ^~~~~~~~
+      |        !
 sema-bool-operation-clang.c:10:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    10 |   *r = ~!x;
       |        ^~~
+      |        !
 sema-bool-operation-clang.c:11:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    11 |   *r = ~(x && y);
       |        ^~~~~~~~~
+      |        !
 sema-bool-operation-clang.c:12:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    12 |   *r = ~((x == 2) | (y == 1));
       |        ^~~~~~~~~~~~~~~~~~~~~~
+      |        !
 sema-bool-operation-clang.c:13:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    13 |   *r = ~(x ? x > 1 : y < 2);
       |        ^~~~~~~~~~~~~~~~~~~~
+      |        !
 sema-bool-operation-clang.c:14:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    14 |   *r = ~(_Bool) x;
       |        ^~~~~~~~~~
+      |        !
 sema-bool-operation-clang.c:16:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    16 |   *r = ~+(x > 1);
       |        ^~~~~~~~~
+      |        !
 sema-bool-operation-clang.c:17:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    17 |   *r = ~(b = x);
       |        ^~~~~~~~
+      |        !
 sema-bool-operation-clang.c:18:9: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    18 |   *r = (~b);
       |        ~^~~
+      |         !
 sema-bool-operation-clang.c:19:8: warning: bitwise negation of a boolean expression always evaluates to 'true'; did you mean logical negation? [-Wbool-operation]
    19 |   b = (~b);
       |       ~^~~
+      |        !
 sema-bool-operation-clang.c:20:13: warning: bitwise negation of a boolean expression always evaluates to 'true'; did you mean logical negation? [-Wbool-operation]
    20 |   _Bool c = ~!x;
       |             ^~~
+      |             !
 sema-bool-operation-clang.c:21:11: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    21 |   int d = ~(x != 1);
       |           ^~~~~~~~~
+      |           !
 sema-bool-operation-clang.c:22:8: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    22 |   *r = NOT(x > 1);
       |        ^~~~~~~~~~
@@ -49,49 +63,64 @@ sema-bool-operation-clang.c:4:16: note: expanded from macro 'NOT'
 sema-bool-operation-clang.c:23:10: warning: bitwise negation of a boolean expression always evaluates to 'true'; did you mean logical negation? [-Wbool-operation]
    23 |   *r = k(~b) + d + c;
       |          ^~
+      |          !
 sema-bool-operation-clang.c:26:3: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    26 |   ~b;
       |   ^~
+      |   !
 sema-bool-operation-clang.c:26:3: warning: expression result unused [-Wunused-value]
    26 |   ~b;
       |   ^
 sema-bool-operation-clang.c:38:27: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    38 |   r += _Generic(b, _Bool: ~b, default: 0);
       |        ~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~
+      |                           !
 sema-bool-operation-clang.c:39:36: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    39 |   r += __builtin_choose_expr(0, 0, ~b);
       |        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+      |                                    !
 sema-bool-operation-clang.c:41:44: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    41 |   r += _Generic(b, int: (~b) + 1, default: ~(x > 0));
       |        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~
+      |                                            !
 sema-bool-operation-clang.c:43:28: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    43 |   r += _Generic(b, int: ({ ~b; }), default: 0);
       |                            ^~
+      |                            !
 sema-bool-operation-clang.c:44:50: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    44 |   r += _Generic(b, int: ~b, default: ({ 0; })) + ~b;
       |                                                  ^~
+      |                                                  !
 sema-bool-operation-clang.c:45:12: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    45 |   r += 0 ? ~b : 1;
       |            ^~
+      |            !
 sema-bool-operation-clang.c:46:39: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    46 |   typeof(~b) t = __builtin_constant_p(~b);
       |                                       ^~
+      |                                       !
 sema-bool-operation-clang.c:47:7: warning: bitwise negation of a boolean expression always evaluates to 'true'; did you mean logical negation? [-Wbool-operation]
    47 |   two(~b, 0);
       |       ^~
+      |       !
 sema-bool-operation-clang.c:50:74: warning: bitwise negation of a boolean expression always evaluates to 'true'; did you mean logical negation? [-Wbool-operation]
    50 | _Bool sel_bool(_Bool b) { return __extension__ __builtin_choose_expr(1, (~b), 0); }
       |                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+      |                                                                          !
 sema-bool-operation-clang.c:51:57: warning: bitwise negation of a boolean expression always evaluates to 'true'; did you mean logical negation? [-Wbool-operation]
    51 | _Bool sel_generic(_Bool b) { return (_Generic(b, _Bool: ~b, default: 0)); }
       |                                     ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~
+      |                                                         !
 sema-bool-operation-clang.c:55:37: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    55 | int through_generic(int x) { return ~_Generic(x, default: x > 0); }
       |                                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                     !
 sema-bool-operation-clang.c:56:36: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    56 | int through_choose(int x) { return ~__builtin_choose_expr(1, x > 0, 0); }
       |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                    !
 sema-bool-operation-clang.c:57:39: warning: bitwise negation of a boolean expression; did you mean logical negation? [-Wbool-operation]
    57 | int through_extension(int x) { return ~__extension__(x > 0); }
       |                                       ^~~~~~~~~~~~~~~~~~~~~
+      |                                       !
 31 warnings generated.

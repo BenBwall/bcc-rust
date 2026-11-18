@@ -26,6 +26,7 @@ use crate::{
         Layer,
     },
     pipeline::{
+        Brief,
         Compilation,
         CompileDiagnostic,
         Links,
@@ -33,6 +34,7 @@ use crate::{
         displayed,
         gutter,
         is_folded,
+        linked_terms,
         optimizer_changes,
         optimizer_measures,
     },
@@ -60,6 +62,10 @@ pub fn PipelineView(
     reading: Signal<Option<String>>,
     /// Its compilation at the other level, for the optimizer comparison.
     other: Memo<Option<Compilation>>,
+    /// Whether `-O0` and `-O2` are shown side by side.
+    compare: RwSignal<bool>,
+    /// The links between the source and `other`'s output, while they are.
+    other_links: Memo<Links>,
     /// The in-browser compiler's progress on `source` at the selected level.
     live: Signal<LiveCompile>,
     theme: Signal<&'static str>,
@@ -182,6 +188,26 @@ pub fn PipelineView(
     };
     let on_hover = Callback::new(move |line| pointing.hover(Side::Output, line));
     let on_cursor = Callback::new(move |line| pointing.cursor(Side::Output, line));
+    let side_by_side = Memo::new(move |_| compare.get() && stage.get().differs_by_level());
+    // Whether the stage has output at the other level: shown beside a level
+    // that failed, it is still worth comparing.
+    let other_output = Memo::new(move |_| {
+        let stage = stage.get();
+        let headers = headers.get();
+        other.with(|compilation| {
+            compilation
+                .as_ref()
+                .is_some_and(|compilation| displayed(stage, compilation, headers).is_some())
+        })
+    });
+    let outputs_hidden = Memo::new(move |_| {
+        output.with(Option::is_none) && !(side_by_side.get() && other_output.get())
+    });
+    let missing_text = move || {
+        shown.with(|compilation| {
+            missing(stage.get(), lesson.get(), compilation.as_ref(), &live.get())
+        })
+    };
     view! {
         <section class="pipeline" aria-labelledby="pipeline-title">
             <h2 id="pipeline-title" class="sr-only">"Compiler pipeline"</h2>
@@ -217,6 +243,8 @@ pub fn PipelineView(
                         | (None, None) => ().into_any(),
                     }
                 }}
+                <div class="stage-lead">
+                <div class="stage-lead-main">
                 <p class="stage-handoff">
                     <span>{move || stage.get().handoff()}</span>
                     // One button for every stage, so the keyboard focus stays
@@ -245,7 +273,13 @@ pub fn PipelineView(
                     <strong>"In this program: "</strong>
                     {move || path_note().map(|note| super::rich_text(&note))}
                 </p>
-                <StopBanner compilation=shown />
+                </div>
+                <StageBrief stage />
+                </div>
+                <StopBanner
+                    compilation=shown
+                    level=Signal::derive(move || side_by_side.get().then(|| level_name(optimize.get())))
+                />
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
                         {move || if !shown_links.with(Links::is_exact) {
@@ -270,15 +304,51 @@ pub fn PipelineView(
                         <span class="toggle-chip-dot" aria-hidden="true"></span>
                         "Show headers"
                     </button>
+                    <button
+                        type="button"
+                        class="toggle-chip"
+                        hidden=move || {
+                            !stage.get().differs_by_level()
+                                || output.with(Option::is_none) && !other_output.get()
+                        }
+                        aria-pressed=move || compare.get().to_string()
+                        title="Show the -O0 and the -O2 output together: side by side, or one above the other on a narrow screen"
+                        on:click=move |_| {
+                            compare.update(|compare| *compare = !*compare);
+                            pointing.clear_beside();
+                        }
+                    >
+                        <span class="toggle-chip-dot" aria-hidden="true"></span>
+                        "Compare -O0 with -O2"
+                    </button>
                 </div>
                 <p
                     class="link-reading"
                     aria-hidden="true"
-                    hidden=move || shown_links.with(Links::is_empty) || output.with(Option::is_none)
+                    hidden=move || {
+                        let main = output.with(Option::is_some) && !shown_links.with(Links::is_empty);
+                        let beside = side_by_side.get() && !other_links.with(Links::is_empty);
+                        !main && !beside
+                    }
                 >
                     {move || reading.get()}
                 </p>
-                <div class="stage-output" hidden=move || output.with(Option::is_none)>
+                <div
+                    class="stage-output"
+                    class:is-compare=side_by_side
+                    data-level=move || if optimize.get() { "O2" } else { "O0" }
+                    hidden=move || outputs_hidden.get()
+                >
+                    <div class="stage-main">
+                    <p class="stage-level" hidden=move || !side_by_side.get()>
+                        {move || level_caption(optimize.get())}
+                    </p>
+                    // Beside the other level's output, this level's failure
+                    // explains itself in its own place.
+                    <p class="stage-missing stage-pane-missing" hidden=move || output.with(Option::is_some)>
+                        {missing_text}
+                    </p>
+                    <div class="stage-pane-editor" hidden=move || output.with(Option::is_none)>
                     <CodeEditor
                         text
                         language
@@ -291,18 +361,19 @@ pub fn PipelineView(
                         reveal
                         line_numbers
                     />
+                    </div>
+                    </div>
+                    {move || side_by_side.get().then(|| view! {
+                        <Beside stage optimize other other_links lesson theme pointing headers />
+                    })}
                     <footer class="link-legend" hidden=move || !shown_links.with(Links::has_origins)>
                         <span><i class="swatch swatch-link"></i>"came from the line you point at"</span>
                         <span><i class="swatch swatch-inlined"></i>"inlined from another function"</span>
                         <span><i class="swatch swatch-unclaimed"></i>"no single source line"</span>
                     </footer>
                 </div>
-                <div class="stage-missing" hidden=move || output.with(Option::is_some)>
-                    <p>
-                        {move || shown.with(|compilation| {
-                            missing(stage.get(), lesson.get(), compilation.as_ref(), &live.get())
-                        })}
-                    </p>
+                <div class="stage-missing" hidden=move || !outputs_hidden.get()>
+                    <p>{missing_text}</p>
                     <div class="stage-missing-actions" hidden=move || stage.get() != Stage::Llvm || lesson.get()>
                         <button type="button" class="button small" on:click=move |_| show_ir(stage)>
                             "Show bcc IR, compiled live"
@@ -323,6 +394,170 @@ pub fn PipelineView(
     }
 }
 
+/// What goes into the stage, what comes out and why a compiler has it, with
+/// the terms linked to the glossary.
+#[component]
+fn StageBrief(stage: RwSignal<Stage>) -> impl IntoView {
+    let row = move |label: &'static str, part: fn(Brief) -> &'static str| {
+        view! {
+            <div>
+                <dt>{label}</dt>
+                <dd>{move || linked(part(stage.get().brief()))}</dd>
+            </div>
+        }
+    };
+    view! {
+        <dl class="stage-brief" aria-label="What this stage is">
+            {row("In", |brief| brief.input)}
+            {row("Out", |brief| brief.output)}
+            {row("Why", |brief| brief.why)}
+        </dl>
+    }
+}
+
+/// `text` with each `[text](id)` a link to the glossary entry `#term-id`.
+fn linked(text: &'static str) -> impl IntoView {
+    linked_terms(text)
+        .into_iter()
+        .map(|(piece, id)| match id {
+            | Some(id) =>
+                view! { <a class="stage-term" href=format!("#term-{id}")>{piece}</a> }.into_any(),
+            | None => piece.into_any(),
+        })
+        .collect_view()
+}
+
+/// The optimization level `optimized` names.
+const fn level_name(optimized: bool) -> &'static str {
+    if optimized { "-O2" } else { "-O0" }
+}
+
+/// The caption over one level's output when both are side by side.
+fn level_caption(optimized: bool) -> &'static str {
+    if optimized {
+        "-O2: optimized"
+    } else {
+        "-O0: each operation as written"
+    }
+}
+
+/// The other level's output, beside the selected level's: its lines linked
+/// to the source as the selected level's are, so a source line marks what it
+/// became at both levels. When that level has no output for the stage, why
+/// not, as the selected level would say it.
+#[component]
+fn Beside(
+    stage: RwSignal<Stage>,
+    optimize: RwSignal<bool>,
+    other: Memo<Option<Compilation>>,
+    other_links: Memo<Links>,
+    lesson: Memo<bool>,
+    theme: Signal<&'static str>,
+    pointing: Pointing,
+    headers: RwSignal<bool>,
+) -> impl IntoView {
+    let output = Memo::new(move |_| {
+        let stage = stage.get();
+        let headers = headers.get();
+        other.with(|compilation| {
+            compilation
+                .as_ref()
+                .and_then(|compilation| displayed(stage, compilation, headers))
+                .map(|(text, _)| text)
+        })
+    });
+    let text = Signal::derive(move || output.get().unwrap_or_default());
+    let line_numbers = Signal::derive(move || {
+        let stage = stage.get();
+        let headers = headers.get();
+        other.with(|compilation| {
+            compilation
+                .as_ref()
+                .map_or_else(Vec::new, |compilation| gutter(stage, compilation, headers))
+        })
+    });
+    let layers = Signal::derive(move || -> Vec<Layer> {
+        let hovered = pointing.line(Side::Source);
+        let linked = if hovered > 0 {
+            other_links.with(|links| {
+                links
+                    .outputs_for(hovered)
+                    .into_iter()
+                    .map(|line| {
+                        let class = if links.origin(line).call == 0 {
+                            "link-line"
+                        } else {
+                            "link-inlined"
+                        };
+                        Decoration::line(line, class)
+                    })
+                    .collect()
+            })
+        } else {
+            Vec::new()
+        };
+        let unclaimed = other_links.with(|links| {
+            links
+                .unclaimed()
+                .map(|line| Decoration {
+                    start_line: line,
+                    end_line: line,
+                    margin_class: Some("link-unclaimed".to_owned()),
+                    ..Decoration::default()
+                })
+                .collect()
+        });
+        vec![("links", linked), ("unclaimed", unclaimed)]
+    });
+    let reveal = Signal::derive(move || {
+        let hovered = pointing.line(Side::Source);
+        (hovered > 0)
+            .then(|| other_links.with(|links| links.first_output_for(hovered)))
+            .flatten()
+    });
+    let on_hover = Callback::new(move |line| pointing.hover_beside(line));
+    let on_cursor = Callback::new(move |line| pointing.cursor_beside(line));
+    // An editor disposed under the pointer or with the focus reports no
+    // leaving.
+    on_cleanup(move || pointing.clear_beside());
+    let language = Signal::derive(move || stage.get().language());
+    let waiting = Memo::new(move |_| other.with(Option::is_none));
+    let failed = Memo::new(move |_| !waiting.get() && output.with(Option::is_none));
+    let level = Signal::derive(move || Some(level_name(!optimize.get())));
+    view! {
+        <div class="stage-beside">
+            <p class="stage-level">
+                {move || level_caption(!optimize.get())}
+            </p>
+            <p class="stage-beside-waiting" hidden=move || !waiting.get()>
+                {move || format!("Compiling at {}…", level_name(!optimize.get()))}
+            </p>
+            <div class="stage-pane-failure" hidden=move || !failed.get()>
+                <StopBanner compilation=other level />
+                <p class="stage-missing stage-pane-missing">
+                    {move || other.with(|compilation| {
+                        missing(stage.get(), lesson.get(), compilation.as_ref(), &LiveCompile::Compiled)
+                    })}
+                </p>
+            </div>
+            <div class="stage-pane-editor" hidden=move || waiting.get() || failed.get()>
+                <CodeEditor
+                    text
+                    language
+                    theme
+                    label="Compiler output at the other optimization level (read only)"
+                    read_only=true
+                    decorations=layers
+                    on_hover_line=on_hover
+                    on_cursor_line=on_cursor
+                    reveal
+                    line_numbers
+                />
+            </div>
+        </div>
+    }
+}
+
 /// Switches to the bcc IR stage and moves the focus to its tab, since the
 /// button that asked for it disappears with the empty state.
 fn show_ir(stage: RwSignal<Stage>) {
@@ -338,15 +573,21 @@ fn show_ir(stage: RwSignal<Stage>) {
 
 /// Which stage an error stopped bcc in, and why.
 #[component]
-fn StopBanner(compilation: Memo<Option<Compilation>>) -> impl IntoView {
+fn StopBanner(
+    compilation: Memo<Option<Compilation>>,
+    /// The optimization level it names, when both are on screen.
+    #[prop(optional, into)]
+    level: MaybeProp<&'static str>,
+) -> impl IntoView {
     let stop = Memo::new(move |_| {
         compilation.with(|compilation| compilation.as_ref().and_then(Compilation::stop))
     });
+    let at = move || level.get().map_or_default(|level| format!(" at {level}"));
     view! {
         <div class="stop-banner" role="status" hidden=move || stop.with(Option::is_none)>
             <p class="stop-title">
                 <span class="stop-icon" aria-hidden="true">"✕"</span>
-                {move || stop.with(|stop| stop.as_ref().map(|stop| format!("Compilation stopped in the {}", stop.phase.to_lowercase())))}
+                {move || stop.with(|stop| stop.as_ref().map(|stop| format!("Compilation{} stopped in the {}", at(), stop.phase.to_lowercase())))}
             </p>
             <p>{move || stop.with(|stop| stop.as_ref().map(|stop| stop.explanation.clone()))}</p>
         </div>
@@ -878,6 +1119,19 @@ mod tests {
         held: Option<Compilation>,
         other: Option<Compilation>,
     ) -> String {
+        render_stage(Stage::Ir, false, optimize, LiveCompile::Compiling, [current, held, other])
+    }
+
+    /// The same at `stage`, with both levels side by side when `compare`,
+    /// given the compiler's progress.
+    #[cfg(feature = "ssr")]
+    fn render_stage(
+        stage: Stage,
+        compare: bool,
+        optimize: bool,
+        live: LiveCompile,
+        [current, held, other]: [Option<Compilation>; 3],
+    ) -> String {
         use leptos::prelude::*;
 
         use super::{
@@ -891,14 +1145,16 @@ mod tests {
             let other = Memo::new(move |_| other.clone());
             view! {
                 <PipelineView
-                    stage=RwSignal::new(Stage::Ir)
+                    stage=RwSignal::new(stage)
                     optimize=RwSignal::new(optimize)
                     compilation
                     shown
                     links=Memo::new(|_| crate::pipeline::Links::default())
                     reading=Signal::stored(None)
                     other
-                    live=Signal::stored(LiveCompile::Compiling)
+                    compare=RwSignal::new(compare)
+                    other_links=Memo::new(|_| crate::pipeline::Links::default())
+                    live=Signal::stored(live)
                     theme=Signal::stored("dark")
                     pointing=Pointing::new()
                     headers=RwSignal::new(false)
@@ -944,6 +1200,75 @@ mod tests {
         let current = render(false, Some(earlier()), Some(earlier()), None);
         assert!(current.contains("an earlier warning"), "{current}");
         assert!(current.contains("diagnostic-place"), "{current}");
+    }
+
+    /// A compilation whose back end refused the program, so it has IR but
+    /// no assembly.
+    #[cfg(feature = "ssr")]
+    fn refused() -> Compilation {
+        Compilation {
+            tokens: Some(String::new()),
+            ir: Some("function @refused_ir() -> i32 external {\n".into()),
+            diagnostics: vec![CompileDiagnostic {
+                severity: "error".into(),
+                stage: "back-end".into(),
+                message: "no x86-64 lowering for read_timestamp".into(),
+                ..CompileDiagnostic::default()
+            }],
+            ..Compilation::default()
+        }
+    }
+
+    /// A compilation with assembly.
+    #[cfg(feature = "ssr")]
+    fn assembled() -> Compilation {
+        Compilation {
+            tokens: Some(String::new()),
+            ir: Some("function @main() -> i32 external {\n".into()),
+            asm: Some("main:\n    xor eax, eax\n    ret_assembled\n".into()),
+            ..Compilation::default()
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "ssr")]
+    fn a_level_that_failed_explains_itself_beside_the_other() {
+        let why = "This stage did not run: bcc stopped in the back end.";
+        let reason = "no x86-64 lowering for read_timestamp";
+        // -O2 on screen, -O0 beside it failed.
+        let beside = render_stage(
+            Stage::Asm,
+            true,
+            true,
+            LiveCompile::Compiled,
+            [Some(assembled()), Some(assembled()), Some(refused())],
+        );
+        assert!(beside.contains("ret_assembled"), "{beside}");
+        assert!(beside.contains("Compilation at -O0 stopped in the back end"), "{beside}");
+        assert!(beside.contains(reason), "{beside}");
+        assert!(beside.contains(why), "{beside}");
+        // -O0 on screen failed, -O2 beside it did not: its output stays.
+        let selected = render_stage(
+            Stage::Asm,
+            true,
+            false,
+            LiveCompile::Compiled,
+            [Some(refused()), Some(refused()), Some(assembled())],
+        );
+        assert!(selected.contains("ret_assembled"), "{selected}");
+        assert!(selected.contains("Compilation at -O0 stopped in the back end"), "{selected}");
+        assert!(selected.contains(why), "{selected}");
+        assert!(!selected.contains("Compilation at -O2"), "{selected}");
+        // On its own, the failed level names no level.
+        let alone = render_stage(
+            Stage::Asm,
+            false,
+            false,
+            LiveCompile::Compiled,
+            [Some(refused()), Some(refused()), Some(assembled())],
+        );
+        assert!(alone.contains("Compilation stopped in the back end"), "{alone}");
+        assert!(alone.contains(why), "{alone}");
     }
 
     #[test]

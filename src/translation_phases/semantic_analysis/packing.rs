@@ -123,6 +123,7 @@ fn warn(
         order: super::ReportOrder::AtSite,
         parameter: None,
         related: super::RelatedNotes::default(),
+        fix_it: None,
     })]);
 }
 

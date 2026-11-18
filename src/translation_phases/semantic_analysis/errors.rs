@@ -13,6 +13,7 @@ use crate::{
     diagnostics::{
         Diagnostic,
         Explanation,
+        FixItPlace,
         ToDiagnostic,
         format_in,
         quote_spelling,
@@ -55,6 +56,30 @@ pub(crate) struct SemanticError {
     pub(crate) parameter:          Option<ParameterNote>,
     /// The notes that follow it, in order.
     pub(crate) related:            RelatedNotes,
+    /// The edit Clang suggests for a conversion it refuses.
+    pub(crate) fix_it:             Option<ConversionFixIt>,
+}
+
+/// The edit Clang suggests for a conversion it refuses, which its words
+/// name: `&` or `*` before the value, with parentheses around a value that
+/// needs them, or the removal of the value's own `&` or `*`
+/// (`ConversionFixItGenerator::tryToFixConversion` in `SemaFixItUtils.cpp`).
+/// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConversionFixIt {
+    pub(crate) value: SourceVectors,
+    pub(crate) edit:  ConversionEdit,
+}
+
+/// What [`ConversionFixIt`] does to the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConversionEdit {
+    /// Writes the operator before the value.
+    Prefix(&'static str),
+    /// Writes the operator and `(` before the value and `)` after it.
+    Parenthesize(&'static str),
+    /// Removes the value's first token, its unary `&` or `*`.
+    RemoveOperator,
 }
 
 /// Up to three notes that follow a diagnostic, each a place and its words,
@@ -1578,6 +1603,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::SometimesUninitialized
                     | crate::configuration::DiagnosticGroup::UninitializedConstPointer
                     | crate::configuration::DiagnosticGroup::ConditionalUninitialized
+                    | crate::configuration::DiagnosticGroup::MissingBraces
                     | crate::configuration::DiagnosticGroup::Main
                     | crate::configuration::DiagnosticGroup::MainExtension
                     | crate::configuration::DiagnosticGroup::MainReturnType
@@ -3643,6 +3669,11 @@ impl ToDiagnostic for SemanticError {
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
+            if self.kind == SemanticErrorKind::BoolOperation(BoolOperationRule::GccBitwiseNot) {
+                // GCC's note suggests inserting `!` before the `~`
+                // (`build_unary_op` in `c-typeck.cc`).
+                diagnostic = diagnostic.note_fix_it(FixItPlace::Before(self.reported()), "!");
+            }
             if let SemanticErrorKind::Nonnull(_, note) = self.kind {
                 if let Some(label) = note.second_words() {
                     diagnostic = diagnostic.secondary(previous, label);
@@ -3677,7 +3708,54 @@ impl ToDiagnostic for SemanticError {
             diagnostic.reading = Some(self.origin);
         }
         diagnostic.point = self.kind.clang_names_no_range();
+        if let Some(ConversionFixIt { value, edit }) = self.fix_it {
+            diagnostic = match edit {
+                | ConversionEdit::Prefix(operator) =>
+                    diagnostic.fix_it(FixItPlace::Before(value), operator),
+                | ConversionEdit::Parenthesize(operator) => diagnostic
+                    .fix_it(FixItPlace::Before(value), format_in!(arena, "{operator}("))
+                    .fix_it(FixItPlace::After(value), ")"),
+                | ConversionEdit::RemoveOperator =>
+                    diagnostic.fix_it(FixItPlace::Replace(Context::first_token_vector(value)), ""),
+            };
+        }
+        if self.kind
+            == SemanticErrorKind::ValueWarning(crate::configuration::DiagnosticGroup::MissingBraces)
+        {
+            // Clang suggests the braces around the elements, the range
+            // drawn beside the caret (`InitListChecker::CheckImplicitInitList`
+            // in `SemaInit.cpp`).
+            let [elements, _] = self.highlights;
+            diagnostic = diagnostic
+                .fix_it(FixItPlace::Before(elements), "{")
+                .fix_it(FixItPlace::After(elements), "}");
+        }
+        if matches!(
+            self.kind,
+            SemanticErrorKind::BoolOperation(
+                BoolOperationRule::ClangBitwiseNot | BoolOperationRule::ClangBitwiseNotTrue
+            )
+        ) {
+            // Clang suggests `!` for the `~` (`AnalyzeImplicitConversions`
+            // in `SemaChecking.cpp`).
+            diagnostic = diagnostic.fix_it(
+                FixItPlace::Replace(Context::first_token_vector(self.reported())),
+                "!",
+            );
+        }
         diagnostic
+    }
+}
+
+impl SemanticError {
+    /// The range the diagnostic was reported about, before it was moved to
+    /// a place in a file: where a macro wrote it, if one did.
+    fn reported(&self) -> SourceVectors {
+        if self.origin.length() == 0 {
+            self.source_vectors
+        } else {
+            self.origin
+        }
     }
 }
 

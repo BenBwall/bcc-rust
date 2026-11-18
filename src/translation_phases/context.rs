@@ -34,6 +34,7 @@ mod source_text;
 
 // Provenance storage
 mod expansion_sites;
+mod fix_it_places;
 mod merge_anchors;
 mod segmented_vec;
 mod source_map;
@@ -48,6 +49,7 @@ use std::path::Path;
 
 pub(crate) use expansion_sites::ArgumentSubstitution;
 use expansion_sites::ExpansionSites;
+pub(crate) use fix_it_places::FixItPlacement;
 use rustc_hash::FxBuildHasher;
 pub(crate) use source_files::{
     FileSystem,

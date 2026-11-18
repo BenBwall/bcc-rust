@@ -45,6 +45,11 @@ pub struct Pointing {
     cursor_output:    RwSignal<usize>,
     /// Whether the pointer moved after the cursor.
     pointer_latest:   RwSignal<bool>,
+    /// The pointer's line in the other level's output, shown beside the
+    /// selected level's for comparison.
+    hover_beside:     RwSignal<usize>,
+    /// The cursor's line there while that output has the focus.
+    cursor_beside:    RwSignal<usize>,
     /// The text of the links' live region.
     pub announcement: RwSignal<String>,
 }
@@ -64,6 +69,8 @@ impl Pointing {
             cursor_source:  RwSignal::new(0),
             cursor_output:  RwSignal::new(0),
             pointer_latest: RwSignal::new(false),
+            hover_beside:   RwSignal::new(0),
+            cursor_beside:  RwSignal::new(0),
             announcement:   RwSignal::new(String::new()),
         }
     }
@@ -85,17 +92,61 @@ impl Pointing {
         self.signals(side).1.set(line);
     }
 
+    /// The pointer moved over `line` of the other level's output (0 when it
+    /// left).
+    pub fn hover_beside(self, line: usize) {
+        if line > 0 {
+            self.pointer_latest.set(true);
+        }
+        self.hover_beside.set(line);
+    }
+
+    /// The cursor moved to `line` of the other level's output while it had
+    /// the focus (0 when the focus left).
+    pub fn cursor_beside(self, line: usize) {
+        if line > 0 {
+            self.pointer_latest.set(false);
+        }
+        self.cursor_beside.set(line);
+    }
+
     /// The line of `side` whose linked lines on the other side to mark, if
     /// any (0).
     pub fn line(self, side: Side) -> usize {
-        let hovered = (self.hover_source.get(), self.hover_output.get());
-        let cursor = (self.cursor_source.get(), self.cursor_output.get());
-        let pointer = hovered != (0, 0) && (cursor == (0, 0) || self.pointer_latest.get());
-        let (source, output) = if pointer { hovered } else { cursor };
+        let (source, output, _) = self.pointed();
         match side {
             | Side::Source => source,
             | Side::Output => output,
         }
+    }
+
+    /// The line of the other level's output whose source lines to mark, if
+    /// any (0).
+    pub fn beside(self) -> usize {
+        self.pointed().2
+    }
+
+    /// The lines pointed at in the source, the output and the other level's
+    /// output: the pointer's or the cursor's, whichever moved last.
+    fn pointed(self) -> (usize, usize, usize) {
+        let hovered = (
+            self.hover_source.get(),
+            self.hover_output.get(),
+            self.hover_beside.get(),
+        );
+        let cursor = (
+            self.cursor_source.get(),
+            self.cursor_output.get(),
+            self.cursor_beside.get(),
+        );
+        let pointer = hovered != (0, 0, 0) && (cursor == (0, 0, 0) || self.pointer_latest.get());
+        if pointer { hovered } else { cursor }
+    }
+
+    /// Forget the other level's lines, as when its view unmounts.
+    pub fn clear_beside(self) {
+        self.hover_beside.set(0);
+        self.cursor_beside.set(0);
     }
 
     /// Forget the output's lines, as when its view unmounts: an editor
@@ -103,6 +154,7 @@ impl Pointing {
     pub fn clear_output(self) {
         self.hover_output.set(0);
         self.cursor_output.set(0);
+        self.clear_beside();
     }
 
     fn signals(self, side: Side) -> (RwSignal<usize>, RwSignal<usize>) {
@@ -117,14 +169,19 @@ impl Pointing {
 /// cursor's moves are announced (not the pointer's, nor recompilations
 /// while typing on one line), and a link is not repeated while the focus
 /// stays in the editors. A move made before the view has anything to link
-/// (the compiler still loading) is announced when its output arrives.
+/// (the compiler still loading) is announced when its output arrives. The
+/// other level's output, beside the selected one, is announced as the
+/// selected level's is.
 pub(super) fn announce(state: State) {
     let pointing = state.pointing;
     let timer = StoredValue::new_local(None::<Timeout>);
-    let waiting = StoredValue::new(None::<(Side, usize)>);
-    let say = move |side: Side, line: usize| {
-        let text = untrack(|| state.describe_link(side, line));
-        waiting.set_value(text.is_none().then_some((side, line)));
+    let waiting = StoredValue::new(None::<Cursor>);
+    let say = move |cursor: Cursor| {
+        let text = untrack(|| match cursor {
+            | Cursor::Link(side, line) => state.describe_link(side, line),
+            | Cursor::Beside(line) => state.describe_beside(line),
+        });
+        waiting.set_value(text.is_none().then_some(cursor));
         if let Some(text) = text
             && pointing.announcement.get_untracked() != text
         {
@@ -133,27 +190,39 @@ pub(super) fn announce(state: State) {
     };
     Effect::new(move || {
         state.compilation.track();
+        state.other_level.track();
         state.wasm.program.track();
-        if let Some((side, line)) = waiting.get_value() {
-            say(side, line);
+        if let Some(cursor) = waiting.get_value() {
+            say(cursor);
         }
     });
     Effect::new(move || {
         let source = pointing.cursor_source.get();
         let output = pointing.cursor_output.get();
+        let beside = pointing.cursor_beside.get();
         // Dropping the pending timer cancels it.
         timer.set_value(None);
         waiting.set_value(None);
-        let (side, line) = match (source, output) {
-            | (0, 0) => {
+        let cursor = match (source, output, beside) {
+            | (0, 0, 0) => {
                 pointing.announcement.set(String::new());
                 return;
             },
-            | (_, 0) => (Side::Source, source),
-            | _ => (Side::Output, output),
+            | (0, 0, _) => Cursor::Beside(beside),
+            | (_, 0, _) => Cursor::Link(Side::Source, source),
+            | _ => Cursor::Link(Side::Output, output),
         };
-        timer.set_value(Some(Timeout::new(ANNOUNCE_DELAY_MS, move || say(side, line))));
+        timer.set_value(Some(Timeout::new(ANNOUNCE_DELAY_MS, move || say(cursor))));
     });
+}
+
+/// Where a resting cursor is, for its announcement.
+#[derive(Clone, Copy)]
+enum Cursor {
+    /// On `line` of the source or of the view beside it.
+    Link(Side, usize),
+    /// On a line of the other level's output, beside the selected one.
+    Beside(usize),
 }
 
 impl State {
@@ -164,12 +233,39 @@ impl State {
             return None;
         }
         let pointing = self.pointing;
+        let beside = pointing.beside();
+        if beside > 0 {
+            return self.describe_beside(beside);
+        }
         let (side, line) = match (pointing.line(Side::Source), pointing.line(Side::Output)) {
             | (0, 0) => return Some("Point at a line to read what it links to.".to_owned()),
             | (0, output) => (Side::Output, output),
             | (source, _) => (Side::Source, source),
         };
         self.describe_link(side, line)
+    }
+
+    /// What `line` of the other level's output, beside the selected one,
+    /// links to in the source.
+    fn describe_beside(self, line: usize) -> Option<String> {
+        let stage = self.stage.get();
+        let headers = self.headers.get();
+        let optimized = !self.optimize.get();
+        self.other_level.with(|compilation| {
+            let compilation = compilation.as_ref()?;
+            self.other_links.with(|links| {
+                let linked = links.sources_for(line);
+                let view = View {
+                    name:     stage.view_name(),
+                    level:    Some(level_name(optimized)),
+                    exact:    links.is_exact(),
+                    numbered: stage != Stage::MachineCode
+                        && pipeline::gutter(stage, compilation, headers).is_empty(),
+                };
+                let origins = Origins::of_output_line(links, line, stage, optimized);
+                Some(describe(Side::Output, line, &linked, view, origins))
+            })
+        })
     }
 
     /// What `line` of `side` links to in the view on screen, as a sentence,
@@ -196,8 +292,12 @@ impl State {
                         // refer to.
                         let numbered = stage != Stage::MachineCode
                             && pipeline::gutter(stage, compilation, headers).is_empty();
+                        // With both levels on screen, the sentence names
+                        // which one it reads.
+                        let compared = self.compare.get() && stage.differs_by_level();
                         let view = View {
                             name: stage.view_name(),
+                            level: compared.then(|| level_name(optimized)),
                             exact: links.is_exact(),
                             numbered,
                         };
@@ -229,6 +329,7 @@ impl State {
                 };
                 let view = View {
                     name:     "WebAssembly text",
+                    level:    None,
                     exact:    true,
                     numbered: true,
                 };
@@ -238,11 +339,19 @@ impl State {
     }
 }
 
+/// The optimization level `optimized` names, as a link sentence says it.
+const fn level_name(optimized: bool) -> &'static str {
+    if optimized { "-O2" } else { "-O0" }
+}
+
 /// The output view a link sentence names.
 #[derive(Clone, Copy)]
 struct View {
     /// As in "line 3 of the bcc IR".
     name:     &'static str,
+    /// The optimization level it names, when two are on screen: "line 3 of
+    /// the -O2 bcc IR".
+    level:    Option<&'static str>,
     /// Whether its lines link one by one rather than per function.
     exact:    bool,
     /// Whether its gutter numbers its lines, so a sentence can cite them.
@@ -318,9 +427,14 @@ const fn unclaimed_reason(stage: Stage, optimized: bool) -> &'static str {
 fn describe(side: Side, line: usize, linked: &[usize], view: View, origins: Origins) -> String {
     let View {
         name,
+        level,
         exact,
         numbered,
     } = view;
+    let name = match level {
+        | Some(level) => format!("{level} {name}"),
+        | None => name.to_owned(),
+    };
     let lines = line_list(linked);
     let outputs = if numbered {
         lines.clone()
@@ -460,20 +574,46 @@ mod tests {
     }
 
     #[test]
+    fn the_other_levels_output_takes_turns_with_the_rest() {
+        let owner = Owner::new();
+        owner.set();
+        let pointing = Pointing::new();
+        // The arrow keys in the other level's output.
+        pointing.cursor_beside(7);
+        assert_eq!((pointing.beside(), pointing.line(Side::Output)), (7, 0));
+        // The pointer over the selected level's output wins, then leaves.
+        pointing.hover(Side::Output, 3);
+        assert_eq!((pointing.beside(), pointing.line(Side::Output)), (0, 3));
+        pointing.hover(Side::Output, 0);
+        assert_eq!(pointing.beside(), 7);
+        // The pointer over the other level's output wins over its cursor.
+        pointing.hover_beside(2);
+        assert_eq!(pointing.beside(), 2);
+        pointing.hover_beside(0);
+        assert_eq!(pointing.beside(), 7);
+        // The other level's editor goes away with the focus.
+        pointing.clear_beside();
+        assert_eq!(pointing.beside(), 0);
+    }
+
+    #[test]
     fn links_read_as_sentences() {
         let plain = Origins::default();
         let ir = View {
             name:     "bcc IR",
+            level:    None,
             exact:    true,
             numbered: true,
         };
         let asm = View {
             name:     "x86-64 assembly",
+            level:    None,
             exact:    false,
             numbered: true,
         };
         let machine = View {
             name:     "machine code",
+            level:    None,
             exact:    false,
             numbered: false,
         };
@@ -497,6 +637,14 @@ mod tests {
             describe(Side::Source, 7, &[3, 4, 5, 6], asm, plain),
             "Source line 7 is in a function, on lines 3 to 6 of the x86-64 assembly."
         );
+        let beside = View {
+            level: Some("-O2"),
+            ..ir
+        };
+        assert_eq!(
+            describe(Side::Output, 9, &[14], beside, plain),
+            "Line 9 of the -O2 bcc IR came from source line 14."
+        );
         // The machine code shows offsets, not line numbers.
         assert_eq!(
             describe(Side::Output, 8, &[3, 4, 9], machine, plain),
@@ -514,6 +662,7 @@ mod tests {
         let said = |side, line, linked: &[usize], origins| {
             let asm = View {
                 name:     "x86-64 assembly",
+                level:    None,
                 exact:    true,
                 numbered: true,
             };

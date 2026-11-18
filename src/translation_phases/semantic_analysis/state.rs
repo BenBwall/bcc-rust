@@ -76,6 +76,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             highlights: Default::default(),
             related_notes: super::RelatedNotes::default(),
             gcc_extent: crate::translation_phases::SourceVectors::default(),
+            conversion_fix_it: None,
             conversion_context: crate::translation_phases::SourceVectors::default(),
             report_order: super::ReportOrder::AtSite,
             function_name: None,

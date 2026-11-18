@@ -175,6 +175,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None,
                 );
             });
+            // The edit the wording named went with the diagnostic, if one
+            // was reported.
+            self.conversion_fix_it = None;
             // TCC converts the value as a cast converts it, warning about
             // the width too.
             if group == DiagnosticGroup::IntConversion

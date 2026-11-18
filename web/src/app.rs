@@ -145,6 +145,8 @@ pub fn App() -> impl IntoView {
                                             links=state.links
                                             reading=Signal::derive(move || state.link_reading())
                                             other=state.other_level
+                                            compare=state.compare
+                                            other_links=state.other_links
                                             live=state.live_status.into()
                                             theme=state.theme_name
                                             pointing=state.pointing
@@ -171,7 +173,7 @@ pub fn App() -> impl IntoView {
                 </div>
             </section>
             <About />
-            <Glossary />
+            <Glossary on_stage=Callback::new(move |stage| state.open_view(Mode::Pipeline, Some(stage))) />
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.announcement}</p>
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.pointing.announcement}</p>
         </main>
@@ -274,6 +276,11 @@ pub(crate) struct State {
     links:           Memo<crate::pipeline::Links>,
     /// The same at the other level, for the optimizer comparison.
     other_level:     Memo<Option<Compilation>>,
+    /// Whether the pipeline shows `-O0` and `-O2` side by side.
+    compare:         RwSignal<bool>,
+    /// The links between the source and `other_level`'s output for the
+    /// stage, while the two levels are side by side.
+    other_links:     Memo<crate::pipeline::Links>,
     /// bcc's diagnostics as squiggles in the source editor: the pipeline's
     /// compilation's, or in the WebAssembly view that view's.
     markers:         Memo<Vec<Marker>>,
@@ -292,6 +299,7 @@ pub(crate) struct State {
 }
 
 impl State {
+    #[expect(clippy::too_many_lines, reason = "One line per piece of the page's state.")]
     fn new() -> Self {
         let tour = &DEMOS[0];
         let history = RwSignal::new(Vec::<Snapshot>::new());
@@ -307,6 +315,7 @@ impl State {
         let theme = RwSignal::new("dark");
         let mode = RwSignal::new(Mode::Machine);
         let (stage, headers) = (RwSignal::new(Stage::Ir), RwSignal::new(false));
+        let compare = RwSignal::new(false);
         let wasm_checks = RwSignal::new(wasm::Checks::default());
         let live = LiveViews::new(
             editor_text,
@@ -383,6 +392,8 @@ impl State {
             links: links_memo(live.compilation, stage, headers, editor_text),
             shown: live.shown,
             other_level: live.other_level,
+            compare,
+            other_links: other_links_memo(live.other_level, compare, stage, headers, editor_text),
             markers: markers(mode, editor_text, wasm_checks, live.markers),
             placeholder: Memo::new(move |_| {
                 editor_text.with(|text| demos::matching(text).map_or("", |demo| demo.summary))
@@ -1179,11 +1190,18 @@ impl State {
     /// The source lines (and the exact range, for a preprocessing token)
     /// that the pipeline output line under the pointer came from.
     fn hover_links(self) -> Vec<Decoration> {
-        let hovered = self.pointing.line(Side::Output);
+        // A line of the other level's output, beside the selected one, links
+        // through that level's own lines.
+        let beside = self.pointing.beside();
+        let (hovered, links) = if beside > 0 {
+            (beside, self.other_links)
+        } else {
+            (self.pointing.line(Side::Output), self.links)
+        };
         if hovered == 0 {
             return Vec::new();
         }
-        self.links.with(|links| {
+        links.with(|links| {
             let mut marks: Vec<Decoration> = links
                 .sources_for(hovered)
                 .into_iter()
@@ -1308,18 +1326,41 @@ fn links_memo(
     headers: RwSignal<bool>,
     source: RwSignal<String>,
 ) -> Memo<crate::pipeline::Links> {
+    Memo::new(move |_| links_memo_value(compilation, stage, headers, source))
+}
+
+/// The links between the source and the output of `stage` at the other
+/// level, `other`, while the two levels are shown side by side (`compare`).
+fn other_links_memo(
+    other: Memo<Option<Compilation>>,
+    compare: RwSignal<bool>,
+    stage: RwSignal<Stage>,
+    headers: RwSignal<bool>,
+    source: RwSignal<String>,
+) -> Memo<crate::pipeline::Links> {
     Memo::new(move |_| {
-        let stage = stage.get();
-        let headers = headers.get();
-        compilation.with(|compilation| {
-            compilation
-                .as_ref()
-                .map_or_default(|compilation| {
-                    source.with(|source| {
-                        crate::pipeline::links(stage, compilation, source, headers)
-                    })
-                })
-        })
+        if !compare.get() || !stage.get().differs_by_level() {
+            return crate::pipeline::Links::default();
+        }
+        links_memo_value(other, stage, headers, source)
+    })
+}
+
+/// The value of [`links_memo`], tracking what it reads.
+fn links_memo_value(
+    compilation: Memo<Option<Compilation>>,
+    stage: RwSignal<Stage>,
+    headers: RwSignal<bool>,
+    source: RwSignal<String>,
+) -> crate::pipeline::Links {
+    let stage = stage.get();
+    let headers = headers.get();
+    compilation.with(|compilation| {
+        compilation
+            .as_ref()
+            .map_or_default(|compilation| {
+                source.with(|source| crate::pipeline::links(stage, compilation, source, headers))
+            })
     })
 }
 

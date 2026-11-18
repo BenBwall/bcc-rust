@@ -124,6 +124,7 @@ impl OwnedDiagnostic {
             labels,
             notes,
             help,
+            fix_its: ArenaVec::new_in(arena),
             reading: None,
         }
     }

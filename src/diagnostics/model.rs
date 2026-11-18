@@ -48,6 +48,9 @@ pub(crate) struct Diagnostic<'d> {
     pub(super) labels:         ArenaVec<'d, Label<'d>>,
     pub(super) notes:          ArenaVec<'d, &'d str>,
     pub(super) help:           ArenaVec<'d, &'d str>,
+    /// The edits GCC and Clang suggest with it, which they print under the
+    /// source they change.
+    pub(super) fix_its:        ArenaVec<'d, FixIt<'d>>,
     /// The range of the token or syntax that the diagnostic was reported
     /// about, before it was moved to a place in a file, whose order says
     /// which reading of a file read twice it is in.
@@ -84,6 +87,25 @@ impl<'d> Diagnostic<'d> {
             message: None,
             primary: false,
         });
+        self
+    }
+
+    /// Suggests `text` at `place`, which GCC and Clang print under the
+    /// diagnostic's source.
+    pub(crate) fn fix_it(mut self, place: FixItPlace, text: &'d str) -> Self {
+        self.fix_its.push(FixIt {
+            place,
+            text,
+            note: None,
+        });
+        self
+    }
+
+    /// Suggests `text` at `place` with the related note added last, under
+    /// whose source GCC and Clang print it.
+    pub(crate) fn note_fix_it(mut self, place: FixItPlace, text: &'d str) -> Self {
+        let note = self.labels.len().checked_sub(1);
+        self.fix_its.push(FixIt { place, text, note });
         self
     }
 
@@ -187,6 +209,7 @@ impl<'d> Explanation<'d> {
             labels: ArenaVec::new_in(self.arena),
             notes: self.notes,
             help: self.help,
+            fix_its: ArenaVec::new_in(self.arena),
             reading: None,
         }
         .primary(source, self.label)
@@ -256,6 +279,30 @@ impl Label<'_> {
     pub(super) const fn is_highlight(&self) -> bool {
         !self.primary && self.message.is_none()
     }
+}
+
+/// An edit GCC and Clang suggest with a diagnostic, its fix-it hint: `text`
+/// put at `place`, which a removal leaves empty. Each prints it under the
+/// source line it changes, and the formats of bcc, MSVC and TCC drop it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FixIt<'d> {
+    pub(crate) place: FixItPlace,
+    pub(crate) text:  &'d str,
+    /// The label of the related note it is printed with, by its index, or
+    /// `None` for the diagnostic's own snippet.
+    pub(super) note:  Option<usize>,
+}
+
+/// Where a fix-it hint changes the source, by the tokens of a range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FixItPlace {
+    /// Before the first token of the range: an insertion.
+    Before(SourceVectors),
+    /// After the last token of the range: an insertion.
+    After(SourceVectors),
+    /// The range's tokens, from the first to the end of the last, which the
+    /// text replaces.
+    Replace(SourceVectors),
 }
 
 /// Where a label points: a provenance range, or explicit segments when only

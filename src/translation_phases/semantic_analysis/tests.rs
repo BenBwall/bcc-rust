@@ -587,6 +587,7 @@ fn semantic_diagnostic_positions_reject_empty_primary_ranges() {
         order:              ReportOrder::AtSite,
         parameter:          None,
         related:            RelatedNotes::default(),
+        fix_it:             None,
     };
     _ = crate::translation_phases::GetPosition::position(&error, &context);
 }
