@@ -20,8 +20,20 @@ pub(super) enum Compiler {
 
 /// Whether `compiler` knows `option`, a `-W`, `-f` or `-m` option, in its
 /// positive or `no-` form, with or without a value: `-Wno-shadow` is
-/// known when `-Wshadow` is, and `-Wformat=2` when `-Wformat=` is.
+/// known when `-Wshadow` is, and `-Wformat=2` when `-Wformat=` is. A
+/// `no-` form names a positive one: `-Wno-no-shadow` is not known.
 pub(super) fn knows(compiler: Compiler, option: &str) -> bool {
+    knows_name(compiler, option, true)
+}
+
+/// Whether `compiler` knows `option` as it is spelled, not as the `no-`
+/// form of another: GCC's `-Werror=no-shadow` asks for an option
+/// `-Wno-shadow`, which it does not have.
+pub(super) fn knows_exactly(compiler: Compiler, option: &str) -> bool {
+    knows_name(compiler, option, false)
+}
+
+fn knows_name(compiler: Compiler, option: &str, negative: bool) -> bool {
     let Some(kind) = option.get(..2) else {
         return false;
     };
@@ -37,6 +49,7 @@ pub(super) fn knows(compiler: Compiler, option: &str) -> bool {
     let positive = option
         .strip_prefix(kind)
         .and_then(|rest| rest.strip_prefix("no-"))
+        .filter(|rest| negative && !rest.starts_with("no-"))
         .map(|rest| (kind, rest));
     let names = [Some((kind, &option[2..])), positive];
     names.into_iter().flatten().any(|(kind, rest)| {
