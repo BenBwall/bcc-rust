@@ -456,10 +456,12 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 self.module.function_signature(frame.func).result_param()
         {
             for (offset, ty) in registers.parts() {
+                // The area's alignment, as far as the part's offset keeps it:
+                // a whole 64-byte vector's last part is at 48.
                 let align = if offset == 0 {
                     registers.align
                 } else {
-                    Align::from_bytes(registers.align.bytes().min(offset))
+                    Align::from_bytes(registers.align.bytes().min(1 << offset.trailing_zeros()))
                         .expect("a power-of-two alignment")
                 };
                 let offset = RuntimeValue::Int(u128::from(offset));
