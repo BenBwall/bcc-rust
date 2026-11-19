@@ -1,0 +1,3 @@
+$ <scratch>/src/chibicc/chibicc -v -c empty.c -o /dev/null
+unknown argument: -v
+status 1

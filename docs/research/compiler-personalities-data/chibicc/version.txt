@@ -1,0 +1,3 @@
+$ <scratch>/src/chibicc/chibicc --version
+unknown argument: --version
+status 1

@@ -1,0 +1,58 @@
+#define __LONG_MAX__ 0x7fffffffffffffffL
+#define __linux__ 1
+#define __SIZEOF_SIZE_T__ 8
+#define __SIZEOF_LONG_DOUBLE__ 16
+#define __SIZEOF_FLOAT__ 4
+#define __STDC_EMBED_EMPTY__ 2
+#define __SIZEOF_INT__ 4
+#define __SCHAR_MAX__ 0x7f
+#define __gnu_linux__ 1
+#define linux 1
+#define __C99_MACRO_WITH_VA_ARGS 1
+#define __x86_64 1
+#define __USER_LABEL_PREFIX__ 
+#define __amd64__ 1
+#define __BITINT_MAXWIDTH__ 65535
+#define __STDC__ 1
+#define __STDC_UTF_32__ 1
+#define __ORDER_BIG_ENDIAN__ 4321
+#define __SIZEOF_PTRDIFF_T__ 8
+#define __linux 1
+#define __PIE__ 2
+#define __SIZEOF_SHORT__ 2
+#define __SIZEOF_LONG_LONG__ 8
+#define __CHAR_BIT__ 8
+#define __SHRT_MAX__ 0x7fff
+#define __SIZE_TYPE__ long unsigned int
+#define __STDC_NO_COMPLEX__ 1
+#define __LP64__ 1
+#define __ORDER_LITTLE_ENDIAN__ 1234
+#define __PTRDIFF_TYPE__ long int
+#define __STDC_VERSION__ 201710L
+#define __LONG_LONG_MAX__ 0x7fffffffffffffffLL
+#define __STDC_DEFER_TS25755__ 1
+#define __PIC__ 2
+#define __x86_64__ 1
+#define __SIZEOF_DOUBLE__ 8
+#define __INT_MAX__ 0x7fffffff
+#define __unix__ 1
+#define __STDC_EMBED_FOUND__ 1
+#define __SIZEOF_POINTER__ 8
+#define __pie__ 2
+#define __SIZEOF_LONG__ 8
+#define __ELF__ 1
+#define __STDC_UTF_16__ 1
+#define __BYTE_ORDER__ 1234
+#define __amd64 1
+#define __STDC_EMBED_NOT_FOUND__ 0
+#define __pic__ 2
+#define __GNUC_STDC_INLINE__ 1
+#define _LP64 1
+#define __STDC_HOSTED__ 1
+#define __SIZEOF_WCHAR_T__ 4
+#define __UINTMAX_TYPE__ long unsigned int
+#define __slimcc__ 1
+#define __unix 1
+#define __INTMAX_TYPE__ long int
+#define __WCHAR_TYPE__ int
+status 0

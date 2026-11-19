@@ -1,0 +1,50 @@
+== undeclared.c
+undeclared.c:1: error 20: Undefined identifier 'y'
+status 1
+== semicolon.c
+semicolon.c:1: syntax error: token -> 'return' ; column 30
+status 1
+== member.c
+member.c:2: error 26: '_b' not a structure/union member
+status 1
+== args.c
+args.c:2: error 102: too few parameters
+status 1
+== redecl.c
+redecl.c:2: warning 93: types 'double', 'long double' not supported. Assuming 'float'
+redecl.c:2: error 0: Duplicate symbol 'a', symbol IGNORED
+redecl.c:1: error 177: previously defined here
+status 1
+== lvalue.c
+lvalue.c:1: error 33: Attempt to assign value to a constant variable (=)
+status 1
+== header.c
+header.c:1:10: fatal error: nope.h: No such file or directory
+    1 | #include "nope.h"
+      |          ^~~~~~~~
+compilation terminated.
+header.c:1: warning 190: ISO C forbids an empty translation unit
+subprocess error 256
+status 1
+== brk.c
+brk.c:1: error 63: 'break/continue' statement out of context
+status 1
+== gotos.c
+gotos.c:1: error 57: Label undefined 'nowhere'
+status 1
+== warn.c
+warn.c:1: warning 88: cast of LITERAL value to 'generic' pointer
+from type 'const-int literal'
+  to type 'int generic* fixed'
+status 0
+== missing.c
+at 1: error 258: Failed to open input file 'missing.c' (No such file or directory)
+status 1
+== bogus option
+at 1: warning 117: unknown compiler option '-fbogus-option' ignored
+empty.c:1: warning 190: ISO C forbids an empty translation unit
+status 0
+== ok.c (link+run)
+
+?ASlink-Warning-Undefined Global _putchar referenced by module vprintf
+status 1

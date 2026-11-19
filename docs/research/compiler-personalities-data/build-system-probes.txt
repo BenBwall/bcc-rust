@@ -1,0 +1,428 @@
+probing zigcc: <scratch>/inst/zig-x86_64-linux-0.17.1/zig cc
+probing cproc: <scratch>/inst/cproc/bin/cproc
+probing slimcc: <scratch>/src/slimcc/slimcc
+probing pcc: <scratch>/inst/pcc/bin/pcc
+
+## CMake (Ninja)
+
+* configure
+    zigcc: 0
+    cproc: 0
+    slimcc: 0
+    pcc: 1
+* CMAKE_C_COMPILER_ID
+    zigcc: Clang
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_COMPILER_VERSION
+    zigcc: 22.1.8
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_COMPILER_FRONTEND_VARIANT
+    zigcc: GNU
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_SIMULATE_ID
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_SIMULATE_VERSION
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_STANDARD_COMPUTED_DEFAULT
+    zigcc: 17
+    cproc: 17
+    slimcc: 17
+    pcc: 
+* CMAKE_C_EXTENSIONS_COMPUTED_DEFAULT
+    zigcc: ON
+    cproc: OFF
+    slimcc: OFF
+    pcc: 
+* CMAKE_C_COMPILE_FEATURES
+    zigcc: c_std_90;c_function_prototypes;c_std_99;c_restrict;c_variadic_macros;c_std_11;c_static_assert;c_std_17;c_std_23
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_IMPLICIT_LINK_LIBRARIES
+    zigcc: ~/.cache/zig/o/35b61af8d465990f94a86a44d0e1285d/libubsan_rt.a;m;pthread;c;dl;rt;util;~/.cache/zig/o/2660d042f6496050060a6b040ef7f3c3/libcompiler_rt.a
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_IMPLICIT_LINK_DIRECTORIES
+    zigcc: /usr/lib/x86_64-linux-gnu;/
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_LIBRARY_ARCHITECTURE
+    zigcc: x86_64-linux-gnu
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_COMPILER_LINKER_ID
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_SIZEOF_VOID_P
+    zigcc: 8
+    cproc: 8
+    slimcc: 8
+    pcc: 
+* CMAKE_C_BYTE_ORDER
+    zigcc: LITTLE_ENDIAN
+    cproc: LITTLE_ENDIAN
+    slimcc: LITTLE_ENDIAN
+    pcc: 
+* CMAKE_C_COMPILER_ABI
+    zigcc: ELF
+    cproc: 
+    slimcc: ELF
+    pcc: 
+  CMAKE_C_COMPILER_ARCHITECTURE_ID
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_COMPILE_OPTIONS_PIC
+    zigcc: -fPIC
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_DEPFILE_FLAGS_C
+    zigcc: -MD -MT <DEP_TARGET> -MF <DEP_FILE>
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_DEPFILE_FORMAT
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_STANDARD_LATEST
+    zigcc: 23
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_LINKER_DEPFILE_SUPPORTED
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+  MSVC_VERSION
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* HAVE_BUILTIN_EXPECT
+    zigcc: 1
+    cproc: 1
+    slimcc: 1
+    pcc: 
+* HAVE_STDATOMIC
+    zigcc: 1
+    cproc: 
+    slimcc: 1
+    pcc: 
+* SIZEOF_LONG_DOUBLE
+    zigcc: 16
+    cproc: 16
+    slimcc: 16
+    pcc: 
+* HAVE_WALL
+    zigcc: 1
+    cproc: 1
+    slimcc: 1
+    pcc: 
+* HAVE_WNO_BOGUS
+    zigcc: 
+    cproc: 1
+    slimcc: 1
+    pcc: 
+  HAVE_FBOGUS
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+  HAVE_W4
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+  HAVE_SLASH_BOGUS
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* HAVE_SSP
+    zigcc: 1
+    cproc: 
+    slimcc: 
+    pcc: 
+* build
+    zigcc: 0
+    cproc: 1
+    slimcc: 1
+    pcc: 
+* test
+    zigcc: 0
+    cproc: 
+    slimcc: 
+    pcc: 
+
+## CMake (Unix Makefiles)
+
+* configure
+    zigcc: 0
+    cproc: 0
+    slimcc: 0
+    pcc: 1
+* CMAKE_C_COMPILER_ID
+    zigcc: Clang
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_COMPILER_VERSION
+    zigcc: 22.1.8
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_COMPILER_FRONTEND_VARIANT
+    zigcc: GNU
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_SIMULATE_ID
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_SIMULATE_VERSION
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_STANDARD_COMPUTED_DEFAULT
+    zigcc: 17
+    cproc: 17
+    slimcc: 17
+    pcc: 
+* CMAKE_C_EXTENSIONS_COMPUTED_DEFAULT
+    zigcc: ON
+    cproc: OFF
+    slimcc: OFF
+    pcc: 
+* CMAKE_C_COMPILE_FEATURES
+    zigcc: c_std_90;c_function_prototypes;c_std_99;c_restrict;c_variadic_macros;c_std_11;c_static_assert;c_std_17;c_std_23
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_IMPLICIT_LINK_LIBRARIES
+    zigcc: ~/.cache/zig/o/35b61af8d465990f94a86a44d0e1285d/libubsan_rt.a;m;pthread;c;dl;rt;util;~/.cache/zig/o/2660d042f6496050060a6b040ef7f3c3/libcompiler_rt.a
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_IMPLICIT_LINK_DIRECTORIES
+    zigcc: /usr/lib/x86_64-linux-gnu;/
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_LIBRARY_ARCHITECTURE
+    zigcc: x86_64-linux-gnu
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_COMPILER_LINKER_ID
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_SIZEOF_VOID_P
+    zigcc: 8
+    cproc: 8
+    slimcc: 8
+    pcc: 
+* CMAKE_C_BYTE_ORDER
+    zigcc: LITTLE_ENDIAN
+    cproc: LITTLE_ENDIAN
+    slimcc: LITTLE_ENDIAN
+    pcc: 
+* CMAKE_C_COMPILER_ABI
+    zigcc: ELF
+    cproc: 
+    slimcc: ELF
+    pcc: 
+  CMAKE_C_COMPILER_ARCHITECTURE_ID
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_COMPILE_OPTIONS_PIC
+    zigcc: -fPIC
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_DEPFILE_FLAGS_C
+    zigcc: -MD -MT <DEP_TARGET> -MF <DEP_FILE>
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_DEPFILE_FORMAT
+    zigcc: gcc
+    cproc: 
+    slimcc: 
+    pcc: 
+* CMAKE_C_STANDARD_LATEST
+    zigcc: 23
+    cproc: 
+    slimcc: 
+    pcc: 
+  CMAKE_C_LINKER_DEPFILE_SUPPORTED
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+  MSVC_VERSION
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* HAVE_BUILTIN_EXPECT
+    zigcc: 1
+    cproc: 1
+    slimcc: 1
+    pcc: 
+* HAVE_STDATOMIC
+    zigcc: 1
+    cproc: 
+    slimcc: 1
+    pcc: 
+* SIZEOF_LONG_DOUBLE
+    zigcc: 16
+    cproc: 16
+    slimcc: 16
+    pcc: 
+* HAVE_WALL
+    zigcc: 1
+    cproc: 1
+    slimcc: 1
+    pcc: 
+* HAVE_WNO_BOGUS
+    zigcc: 
+    cproc: 1
+    slimcc: 1
+    pcc: 
+  HAVE_FBOGUS
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+  HAVE_W4
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+  HAVE_SLASH_BOGUS
+    zigcc: 
+    cproc: 
+    slimcc: 
+    pcc: 
+* HAVE_SSP
+    zigcc: 1
+    cproc: 
+    slimcc: 
+    pcc: 
+* build
+    zigcc: 0
+    cproc: 2
+    slimcc: 0
+    pcc: 
+* test
+    zigcc: 0
+    cproc: 
+    slimcc: 0
+    pcc: 
+
+## Autoconf
+
+  libtool
+    zigcc: not installed
+    cproc: not installed
+    slimcc: not installed
+    pcc: not installed
+* configure
+    zigcc: 0
+    cproc: 0
+    slimcc: 0
+    pcc: 77
+* ac_cv_c_bigendian
+    zigcc: no
+    cproc: no
+    slimcc: no
+    pcc: 
+* ac_cv_c_compiler_gnu
+    zigcc: yes
+    cproc: no
+    slimcc: no
+    pcc: 
+* ac_cv_c_inline
+    zigcc: inline
+    cproc: inline
+    slimcc: inline
+    pcc: 
+* ac_cv_c_restrict
+    zigcc: __restrict__
+    cproc: restrict
+    slimcc: __restrict__
+    pcc: 
+* ac_cv_prog_cc_c11
+    zigcc: 
+    cproc: no
+    slimcc: 
+    pcc: 
+* ac_cv_prog_cc_g
+    zigcc: yes
+    cproc: yes
+    slimcc: yes
+    pcc: 
+* ac_cv_search_sqrt
+    zigcc: 'none required'
+    cproc: -lm
+    slimcc: 'none required'
+    pcc: 
+* ac_cv_sizeof_long
+    zigcc: 8
+    cproc: 8
+    slimcc: 8
+    pcc: 
+* ac_cv_sys_file_offset_bits
+    zigcc: no
+    cproc: no
+    slimcc: no
+    pcc: 
+* am_cv_CC_dependencies_compiler_type
+    zigcc: gcc3
+    cproc: tcc
+    slimcc: gcc3
+    pcc: 
+* build
+    zigcc: 0
+    cproc: 0
+    slimcc: 0
+    pcc: 
+* test
+    zigcc: 0
+    cproc: 0
+    slimcc: 0
+    pcc: 
+* ac_cv_prog_cc_c99
+    zigcc: 
+    cproc: no
+    slimcc: 
+    pcc: 

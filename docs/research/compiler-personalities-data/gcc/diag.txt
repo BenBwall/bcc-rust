@@ -1,0 +1,76 @@
+== undeclared.c
+undeclared.c: In function ‘f’:
+undeclared.c:1:22: error: ‘y’ undeclared (first use in this function)
+    1 | int f(void) { return y; }
+      |                      ^
+undeclared.c:1:22: note: each undeclared identifier is reported only once for each function it appears in
+status 1
+== semicolon.c
+semicolon.c: In function ‘f’:
+semicolon.c:1:25: error: expected ‘,’ or ‘;’ before ‘return’
+    1 | int f(void) { int x = 1 return x; }
+      |                         ^~~~~~
+status 1
+== member.c
+member.c: In function ‘f’:
+member.c:2:30: error: ‘struct s’ has no member named ‘b’
+    2 | int f(struct s *p) { return p->b; }
+      |                              ^~
+status 1
+== args.c
+args.c: In function ‘f’:
+args.c:2:22: error: too few arguments to function ‘g’
+    2 | int f(void) { return g(1); }
+      |                      ^
+args.c:1:5: note: declared here
+    1 | int g(int, int);
+      |     ^
+status 1
+== redecl.c
+redecl.c:2:8: error: conflicting types for ‘a’; have ‘double’
+    2 | double a;
+      |        ^
+redecl.c:1:5: note: previous declaration of ‘a’ with type ‘int’
+    1 | int a;
+      |     ^
+status 1
+== lvalue.c
+lvalue.c: In function ‘f’:
+lvalue.c:1:17: error: lvalue required as left operand of assignment
+    1 | int f(void) { 1 = 2; return 0; }
+      |                 ^
+status 1
+== header.c
+header.c:1:10: fatal error: nope.h: No such file or directory
+    1 | #include "nope.h"
+      |          ^~~~~~~~
+compilation terminated.
+status 1
+== brk.c
+brk.c: In function ‘f’:
+brk.c:1:16: error: break statement not within loop or switch
+    1 | void f(void) { break; }
+      |                ^~~~~
+status 1
+== gotos.c
+gotos.c: In function ‘f’:
+gotos.c:1:1: error: label ‘nowhere’ used but not defined
+    1 | void f(void) { goto nowhere; }
+      | ^~~~
+status 1
+== warn.c
+warn.c: In function ‘f’:
+warn.c:1:26: warning: assignment to ‘int *’ from ‘int’ makes pointer from integer without a cast [-Wint-conversion]
+    1 | int *p; void f(void) { p = 1; }
+      |                          ^
+status 0
+== missing.c
+cc1: fatal error: missing.c: No such file or directory
+compilation terminated.
+status 1
+== bogus option
+gcc: error: unrecognized command-line option ‘-fbogus-option’
+status 1
+== ok.c (link+run)
+hi
+status 0

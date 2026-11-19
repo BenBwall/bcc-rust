@@ -1,0 +1,25 @@
+#define __SDCC_BITINT_MAXWIDTH 64
+#define __SDCC_mcs51 1
+#define __STDC_VERSION__ 201112L
+#define __STDC_HOSTED__ 1
+#define __SDCCCALL 0
+#define __STDC_UTF_16__ 1
+#define __SIZEOF_FLOAT__ 4
+#define __SDCC_VERSION_MINOR 6
+#define __SDCC_MODEL_SMALL 1
+#define __STDC_ISO_10646__ 201409L
+#define __SDCC_VERSION_PATCH 0
+#define SDCC 460
+#define __SDCC_FLOAT_REENT 1
+#define __SDCC_VERSION_MAJOR 4
+#define __STDC_NO_VLA__ 1
+#define __SDCC 4_6_0
+#define __STDC_UTF_32__ 1
+#define __STDC_NO_THREADS__ 1
+#define __SDCC_CHAR_UNSIGNED 1
+#define __STDC_NO_ATOMICS__ 1
+#define __SIZEOF_DOUBLE__ 4
+#define __STDC__ 1
+#define __SDCC_REVISION 16555
+#define __STDC_NO_COMPLEX__ 1
+status 0
