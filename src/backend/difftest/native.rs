@@ -32,6 +32,7 @@ use crate::{
         emit_module,
     },
     ir::{
+        Module,
         Profile,
         parse_module,
     },
@@ -104,11 +105,12 @@ fn check_arm(
             .text
             .map_err(|error| format!("seed {:#x}: {error}", case.seed))?,
     };
-    let llvm =
-        emit(&text, target).map_err(|error| format!("seed {:#x} {arm:?}: {error}", case.seed))?;
-    let name = format!("case-{:x}-{arm:?}", case.seed);
     let arena = Bump::new();
-    let module = parse_module(&arena, &text).map_err(|error| error.to_string())?;
+    let module = lowered(&arena, &text, target)
+        .map_err(|error| format!("seed {:#x} {arm:?}: {error}", case.seed))?;
+    let llvm =
+        emit(&module, target).map_err(|error| format!("seed {:#x} {arm:?}: {error}", case.seed))?;
+    let name = format!("case-{:x}-{arm:?}", case.seed);
     let executable = directory.join(format!("{name}.exe"));
     let (opt, disable_llvm_passes) = match arm {
         | Arm::A0 => (OptLevel::O0, false),
@@ -155,16 +157,23 @@ fn check_arm(
     ))
 }
 
-/// Parses `text` and prints it as LLVM IR for `target`.
-fn emit(text: &str, target: Target) -> Result<String, String> {
-    let arena = Bump::new();
-    let module = parse_module(&arena, text).map_err(|error| error.to_string())?;
+/// `text` parsed into `arena` and lowered for `target`'s ABI, as the
+/// pipeline hands a module to the back ends: the named programs pass
+/// vectors as aggregates, which ABI lowering puts in YMM registers.
+fn lowered<'a>(arena: &'a Bump, text: &str, target: Target) -> Result<Module<'a>, String> {
+    let mut module = parse_module(arena, text).map_err(|error| error.to_string())?;
+    lower_abi(&mut module, target, &Bump::new()).map_err(|error| error.to_string())?;
     let errors = verify_errors(&module, Profile::PostAbi);
     if !errors.is_empty() {
         return Err(format!("the module does not verify post-ABI:\n{errors}"));
     }
+    Ok(module)
+}
+
+/// `module` printed as LLVM IR for `target`.
+fn emit(module: &Module<'_>, target: Target) -> Result<String, String> {
     let mut out = String::new();
-    emit_module(&module, target, &mut out).map_err(|error| error.to_string())?;
+    emit_module(module, target, &mut out).map_err(|error| error.to_string())?;
     Ok(out)
 }
 
@@ -240,21 +249,12 @@ fn check_backend_arm(
     } else {
         case.text.clone()
     };
-    // The native back end takes a module lowered for its target's ABI, as
-    // the pipeline hands it one. The generator writes no aggregate or
-    // extension, but a hand-written case's `i128` still changes: Win64
-    // passes it by reference.
+    // The random generator writes no aggregate or extension, but the named
+    // programs pass vectors as aggregates, and a hand-written case's `i128`
+    // still changes: Win64 passes it by reference.
     let arena = Bump::new();
-    let mut module = parse_module(&arena, &text).map_err(|error| error.to_string())?;
-    lower_abi(&mut module, target, &Bump::new())
+    let module = lowered(&arena, &text, target)
         .map_err(|error| format!("seed {:#x} {arm}: {error}", case.seed))?;
-    let errors = verify_errors(&module, Profile::PostAbi);
-    if !errors.is_empty() {
-        return Err(format!(
-            "seed {:#x}: not a post-ABI module:\n{errors}",
-            case.seed
-        ));
-    }
     let mut assembly = String::new();
     if crate::backend::native::emit_assembly(&module, target, &mut assembly).is_err() {
         return Ok(false);

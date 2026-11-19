@@ -1715,8 +1715,7 @@ block0:
     let setup = call_setup(caller, "add");
     let loads = setup.find(", %ymm0\n").unwrap_or_else(|| panic!("{caller}"));
     assert!(setup[loads..].contains(", %ymm1\n"), "{caller}");
-    assert!(setup.contains("$5, %edi\n"), "{caller}");
-    assert!(!setup[loads..].contains("%edi"), "{caller}");
+    assert!(setup[..loads].contains("$5, %rdi\n"), "{caller}");
     for (callee, stores) in [("add", 1), ("wide", 2)] {
         let after = &caller[caller
             .find(&format!("callq\t{callee}"))
