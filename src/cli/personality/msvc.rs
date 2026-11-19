@@ -240,6 +240,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                         format_args!("'{text}' is not supported: {why}"),
                     ),
                 }
+            } else if ["-Wl,", "-Wa,", "-Wp,"]
+                .iter()
+                .any(|prefix| text.starts_with(prefix))
+            {
+                // clang-cl's driver has none of these, so its front end
+                // reads each as a warning option it does not know.
+                state.bcc.push(format!("--language-option={text}").into());
             } else {
                 state.bcc.push(argument.into());
             }
@@ -915,9 +922,18 @@ impl State {
                     &[]
                 },
             ),
-            // clang-cl's `/Wall` is `-Weverything`, which bcc does not have;
-            // `/W4`'s options are the nearest.
-            | "W4" | "Wall" => self.set_warning_level(invocation, 4, &["-Wall", "-Wextra"]),
+            | "W4" => self.set_warning_level(invocation, 4, &["-Wall", "-Wextra"]),
+            // clang-cl's `/Wall` is `-Weverything`; `cl`'s is its level 4
+            // and more.
+            | "Wall" => self.set_warning_level(
+                invocation,
+                4,
+                if invocation.personality == Personality::ClangCl {
+                    &["-Weverything"]
+                } else {
+                    &["-Wall", "-Wextra"]
+                },
+            ),
             | "WX" => {
                 self.warnings_error = true;
                 self.bcc.push("-Werror".into());
