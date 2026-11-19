@@ -174,17 +174,17 @@ mod tests {
                     .is_some_and(|line| line.starts_with("InstalledDir: "))
             );
         }
-        // Without a target, zig names the running kernel and glibc.
+        // Without a target, zig names the machine's: on Linux the running
+        // kernel and glibc, on Windows MinGW, whose triple has no version.
         let output = directory.zig(&["--version"]);
         succeeds(&output);
-        assert!(
-            stdout(&output)
-                .lines()
-                .nth(1)
-                .is_some_and(|line| line.starts_with("Target: x86_64-unknown-linux")),
-            "{}",
-            stdout(&output)
-        );
+        let target = stdout(&output).lines().nth(1).map(str::to_owned);
+        if cfg!(windows) {
+            assert_eq!(
+                target.as_deref(),
+                Some("Target: x86_64-unknown-windows-gnu")
+            );
+        }
         let output = directory.zig(&["-dumpversion"]);
         succeeds(&output);
         assert_eq!(stdout(&output), "22.1.8\n");

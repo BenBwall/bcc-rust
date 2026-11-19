@@ -1460,8 +1460,15 @@ mod tests {
         );
         assert_eq!(target("x86_64-linux"), Some(Target::LinuxMusl));
         assert_eq!(target("x86_64-linux-musl"), Some(Target::LinuxMusl));
-        assert_eq!(target("x86_64-native"), Some(Target::LinuxGnu));
-        assert_eq!(target("native"), Some(Target::LinuxGnu));
+        // A native operating system is the machine's, as zig detects it:
+        // glibc on Linux, MinGW on Windows.
+        let native = if cfg!(windows) {
+            Target::WindowsGnu
+        } else {
+            Target::LinuxGnu
+        };
+        assert_eq!(target("x86_64-native"), Some(native));
+        assert_eq!(target("native"), Some(native));
         assert_eq!(target("x86_64-windows"), Some(Target::WindowsGnu));
         assert_eq!(target("x86_64-windows.win7-gnu"), Some(Target::WindowsGnu));
         assert_eq!(target("x86_64-windows-msvc"), Some(Target::WindowsMsvc));
