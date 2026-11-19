@@ -1,4 +1,6 @@
 # usage: survey.sh LABEL CMD...
+# Set S to the scratch directory (recorded as <scratch>) before running.
+# The -v step records "-o /dev/null" in its header but writes $O/empty.o.
 S=<scratch>
 L=$1; shift
 O=$S/out/$L; mkdir -p $O

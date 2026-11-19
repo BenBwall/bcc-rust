@@ -166,8 +166,10 @@ about the command line and defaults, not about identity.
 | Default target | host, baseline CPU | host, **native CPU** (`-target-cpu znver5` here: 58 more macros than the baseline CPU, `__AVX512F__` among them), `-D__GLIBC_MINOR__=39` from the host's glibc; with any `-target`, the baseline CPU |
 | CPU | `-march=x86-64-v3` | `-mcpu=x86_64_v3` (zig's names, with underscores); `-march=x86-64-v3` is `error: unknown CPU: 'x86'` and a list of CPUs |
 | `-O0`, `-Og`, none | nothing added | zig's Debug mode: 17 `-fsanitize=undefined` checks (all but `return` and `unreachable` recoverable), `-stack-protector 2` (`__SSP_STRONG__`), and zig's `libubsan_rt.a` linked |
-| `-O1` to `-O3`, `-Ofast` | `__OPTIMIZE__` | ReleaseFast: also `-DNDEBUG` ([`Compilation.zig`](https://codeberg.org/ziglang/zig/src/tag/0.17.1/src/Compilation.zig#L6107), [`main.zig`](https://codeberg.org/ziglang/zig/src/tag/0.17.1/src/main.zig#L2335)) |
-| `-Os`, `-Oz` | `__OPTIMIZE_SIZE__` | ReleaseSmall: also `-DNDEBUG` |
+| `-O1` to `-O3`, `-Ofast` | `__OPTIMIZE__` | ReleaseFast: also `-DNDEBUG` ([`Compilation.zig`](https://codeberg.org/ziglang/zig/src/tag/0.17.1/src/Compilation.zig#L6379-L6387), [`main.zig`](https://codeberg.org/ziglang/zig/src/tag/0.17.1/src/main.zig#L2335)) |
+| `-O1` to `-O3`, `-Ofast` with `-fsanitize=undefined` or `-fsanitize-trap=undefined` | `__OPTIMIZE__` | ReleaseSafe ([`main.zig`](https://codeberg.org/ziglang/zig/src/tag/0.17.1/src/main.zig#L3078-L3082)): `-O2 -D_FORTIFY_SOURCE=2`, `-stack-protector 2`, no `NDEBUG` |
+| `-Os`, `-Oz` | `__OPTIMIZE_SIZE__` | ReleaseSmall: also `-DNDEBUG`, and no debug information or symbols unless a `-g` option is given ([`Compilation/Config.zig`](https://codeberg.org/ziglang/zig/src/tag/0.17.1/src/Compilation/Config.zig#L495-L500), `root_strip`) |
+| `-fPIE` | PIE | PIC only (no `__PIE__`), linked as a PIE; `-fPIE -fno-PIC` is `error: unable to create module "e": making a Position Independent Executable requires enabling Position Independent Code` ([`Module.zig`](https://codeberg.org/ziglang/zig/src/tag/0.17.1/src/Module.zig#L182-L186)) |
 | Missing source | `clang: error: no such file or directory: 'missing.c'` | `missing.c:1:1: error: checking cache failed: file_open FileNotFound /abs/path/missing.c` |
 | Unknown option | `clang: error: unknown argument: '-fbogus-option'` | `error: unknown clang option: "-fbogus-option"` |
 | `-dumpmachine` | the target triple | `x86_64-unknown-linux-musl` on this glibc host |
@@ -344,8 +346,10 @@ withdrawn helps nobody. **No**; an icx personality covers its users.
 
 ### lcc (not installed)
 
-- **Status.** 4.2, C89 only, unchanged since 2002 apart from documentation
-  ([drh/lcc](https://github.com/drh/lcc)); its licence forbids selling it
+- **Status.** 4.2, C89 only. The last source changes are bug fixes from
+  November 2014 (`etc/lcc.c`, `cpp/unix.c` and four files under `src/`);
+  only documentation has changed since
+  ([drh/lcc](https://github.com/drh/lcc/commits/master)); its licence forbids selling it
   ([CPYRIGHT](https://github.com/drh/lcc/blob/master/CPYRIGHT)). No x86-64
   back end ([`bind.c`](https://github.com/drh/lcc/blob/master/src/bind.c)).
 - **Identity.** `__LCC__` 1 and gcc's `cpp` run with `-U__GNUC__`
@@ -432,7 +436,8 @@ withdrawn helps nobody. **No**; an icx personality covers its users.
   snapshots on `pcc.ludd.ltu.se`, which did not answer during this survey
   (OpenBSD packages a 2023-10-21 snapshot,
   [openports](https://openports.pl/path/lang/pcc/pcc)). The GitHub mirror
-  used here stops at 2018-09-16
+  used here ends at snapshot 20180916, whose last commit (2018-09-21) adds
+  only `COPYING` and `README.md`
   ([IanHarvey/pcc](https://github.com/IanHarvey/pcc)). Building it needed
   `-fcommon` (GCC 10's default broke it) and a yacc and flex built from
   source.
@@ -586,7 +591,7 @@ matter of one macro (CMake 3.31.3,
 | `XLClang` | `__ibmxl__ && __clang__` | `__ibmxl_version__`, ... |
 | `XL` | `__IBMC__ && !__COMPILER_VER__ && __IBMC__ >= 800` | `__IBMC__` |
 | `SunPro` | `__SUNPRO_C` | `__SUNPRO_C`, `0xVRRP` |
-| `ARMClang` | `__clang__ && __ARMCOMPILER_VERSION` | `__ARMCOMPILER_VERSION`, `VVRRPPB` |
+| `ARMClang` | `__clang__ && __ARMCOMPILER_VERSION` | `__ARMCOMPILER_VERSION`, `VRRPPBB` |
 | `ARMCC` | `__ARMCC_VERSION && !__clang__` | `__ARMCC_VERSION` |
 | `OpenWatcom` | `__WATCOMC__` | `(__WATCOMC__ - 1100) / 100` |
 | `TinyCC` | `__TINYC__` | none |
