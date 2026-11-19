@@ -206,6 +206,22 @@ mod tests {
         assert_eq!(cl_expand("--msvc-mode", &["/DX#5", "/DY=6"], "X Y"), "5 6");
     }
 
+    /// `<stdint.h>` gives the `cl` identities' unsigned 16-bit `wchar_t`
+    /// and `wint_t` minimums of 0, as MSVC's own header does.
+    #[test]
+    fn cl_stdint_minimums_follow_the_unsigned_wide_types() {
+        let directory = Directory::new();
+        directory.write(
+            "limits.c",
+            "#include <stdint.h>\n_Static_assert(WCHAR_MIN == 0 && WINT_MIN == 0, \
+             \"minimums\");\n_Static_assert(WCHAR_MAX == 0xffff && WINT_MAX == 0xffff, \
+             \"maximums\");\n",
+        );
+        for mode in ["--msvc-mode", "--clang-cl-mode"] {
+            succeeds(&directory.bcc(mode, &["/nologo", "/std:c11", "/Zs", "limits.c"]));
+        }
+    }
+
     /// Each compiler's `-E` leaves out the pragmas its own preprocessor
     /// carries out: GCC its `#pragma GCC warning`, Clang its `clang`
     /// pragmas and MSVC's `region`; GCC writes a space after an empty
