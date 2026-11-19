@@ -30,6 +30,19 @@ fn executable_names_select_personalities() {
     assert_eq!(named("zig"), Some((Personality::ZigCc, None)));
     assert_eq!(named("bcc-zig-cc"), Some((Personality::ZigCc, None)));
     assert_eq!(named("zig-0.17"), Some((Personality::ZigCc, None)));
+    let host_icx = if cfg!(windows) {
+        Personality::IcxCl
+    } else {
+        Personality::Icx
+    };
+    assert_eq!(named("icx"), Some((host_icx, None)));
+    assert_eq!(named("icx-2026"), Some((host_icx, None)));
+    assert_eq!(named("bcc-icx"), Some((host_icx, None)));
+    assert_eq!(named("icx-cc"), Some((Personality::Icx, None)));
+    assert_eq!(named("icx-cl"), Some((Personality::IcxCl, None)));
+    assert_eq!(named("ICX-CL.EXE"), Some((Personality::IcxCl, None)));
+    assert_eq!(named("bcc-icx-cl"), Some((Personality::IcxCl, None)));
+    assert_eq!(named("icc"), None);
     assert_eq!(named("bcc-rust"), None);
     assert_eq!(named("bcc"), None);
 }
@@ -47,6 +60,10 @@ fn mode_flags_select_personalities_anywhere() {
     assert_eq!(select(&mut arguments), Some(Personality::ClangCl));
     let mut arguments: Vec<OsString> = ["bcc-rust", "--zig-cc-mode"].map(Into::into).into();
     assert_eq!(select(&mut arguments), Some(Personality::ZigCc));
+    let mut arguments: Vec<OsString> = ["bcc-rust", "--icx-mode"].map(Into::into).into();
+    assert_eq!(select(&mut arguments), Some(Personality::Icx));
+    let mut arguments: Vec<OsString> = ["bcc-rust", "--driver-mode=icx-cl"].map(Into::into).into();
+    assert_eq!(select(&mut arguments), Some(Personality::IcxCl));
     let mut arguments: Vec<OsString> = ["bcc-rust", "x.c"].map(Into::into).into();
     assert_eq!(select(&mut arguments), None);
 }
