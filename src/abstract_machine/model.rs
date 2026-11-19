@@ -125,6 +125,9 @@ pub struct State {
     pub objects:         Vec<Object>,
     /// Next writes, if known; writes commit atomically at store operations.
     pub pending_effects: Vec<String>,
+    /// What the next operation will do, described before it runs; `None`
+    /// once the run has ended.
+    pub upcoming:        Option<Upcoming>,
     /// Terminal diagnostic, when present.
     pub diagnostics:     Vec<Diagnostic>,
     /// The value returned by `main` after successful termination.
@@ -139,6 +142,23 @@ impl State {
     pub(super) fn terminal(&self) -> bool {
         !matches!(self.status, "ready" | "running")
     }
+}
+
+/// The next operation, described before it runs: the rule it will apply,
+/// in plain words, and the paragraph of C99 that defines it. The description
+/// holds whatever the operation finds, so it names only what the machine
+/// knows beforehand: the source the operation evaluates and the objects its
+/// operands designate, never the value it will produce.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Upcoming {
+    /// The kind of the event the operation records when it completes; a
+    /// run that stops there records a fault instead.
+    pub kind:   EventKind,
+    /// What it does, lower case, with code in backticks: "read `total`",
+    /// "add `i` and `1`", "call `bump`".
+    pub text:   String,
+    /// The paragraph that defines the rule it applies.
+    pub clause: Clause,
 }
 
 /// One completed operation as structured data: what kind of rule ran, on
