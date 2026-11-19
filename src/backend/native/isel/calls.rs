@@ -272,7 +272,8 @@ impl Selector<'_, '_, '_> {
             let dst = Reg::Virt(vreg);
             match self.signature.param_abi(index) {
                 | Some(ParamAbi::Registers(registers)) if index == 0 => {
-                    let area = self.fresh_object(dst, registers.area_bytes(), registers.align.bytes());
+                    let area =
+                        self.fresh_object(dst, registers.area_bytes(), registers.align.bytes());
                     self.result = ResultArea::Registers { area, registers };
                 },
                 | Some(ParamAbi::VectorRegister(layout)) => {
@@ -623,8 +624,8 @@ impl Selector<'_, '_, '_> {
                     self.emit(MInst::VectorMove {
                         form: VectorForm::Vex256,
                         load: false,
-                        reg: Reg::Phys(register),
-                        mem: mem.offset(offset),
+                        reg:  Reg::Phys(register),
+                        mem:  mem.offset(offset),
                     });
                 }
                 self.emit(MInst::VZero { all: false });
@@ -914,8 +915,8 @@ impl Selector<'_, '_, '_> {
                     self.emit(MInst::VectorMove {
                         form: VectorForm::Vex256,
                         load: true,
-                        reg: Reg::Phys(register),
-                        mem: area.offset(offset),
+                        reg:  Reg::Phys(register),
+                        mem:  area.offset(offset),
                     });
                     uses = uses.with(register);
                 },

@@ -91,8 +91,8 @@ block0(v0: ptr, v1: ptr, v2: i32, v3: ptr):
 }
 
 function @ymm64(ptr result(size 64, align 64, vector, wide), ptr aggregate(size 32, align 32, \
-                           vector, wide), ptr aggregate(size 32, align 32, vector, wide)) internal \
-                           noinline target \"+avx\" {
+                           vector, wide), ptr aggregate(size 32, align 32, vector, wide)) \
+                           internal noinline target \"+avx\" {
 block0(v0: ptr, v1: ptr, v2: ptr):
     v3 = iconst.i64 8
     v4 = iconst.i64 32

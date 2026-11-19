@@ -1654,8 +1654,8 @@ block0(v0: ptr):
 fn vectors_travel_whole_in_ymm_registers() {
     let ir = "abi lowered
 function @add(ptr registers(f128, f128, offset 16, whole 32, align 32), ptr vector_register(size \
-               32, align 32, vector, wide), i32, ptr vector_register(size 32, align 32, vector, \
-               wide)) external {
+              32, align 32, vector, wide), i32, ptr vector_register(size 32, align 32, vector, \
+              wide)) external {
 block0(v0: ptr, v1: ptr, v2: i32, v3: ptr):
     v4 = load.i64 v1, align 8
     v5 = load.i64 v3, align 8
@@ -1698,8 +1698,12 @@ block0:
 ";
     let text = assembly(ir, Target::LinuxGnu);
     let add = function_text(&text, "add");
-    let first = add.find("vmovups\t%ymm0, (").unwrap_or_else(|| panic!("{add}"));
-    let second = add.find("vmovups\t%ymm1, (").unwrap_or_else(|| panic!("{add}"));
+    let first = add
+        .find("vmovups\t%ymm0, (")
+        .unwrap_or_else(|| panic!("{add}"));
+    let second = add
+        .find("vmovups\t%ymm1, (")
+        .unwrap_or_else(|| panic!("{add}"));
     let clear = add.find("vzeroupper").unwrap_or_else(|| panic!("{add}"));
     assert!(first < clear && second < clear, "{add}");
     assert_eq!(add.matches("vzeroupper").count(), 1, "{add}");
@@ -1713,14 +1717,18 @@ block0:
     assert!(low < high && !wide.contains("vzeroupper"), "{wide}");
     let caller = function_text(&text, "caller");
     let setup = call_setup(caller, "add");
-    let loads = setup.find(", %ymm0\n").unwrap_or_else(|| panic!("{caller}"));
+    let loads = setup
+        .find(", %ymm0\n")
+        .unwrap_or_else(|| panic!("{caller}"));
     assert!(setup[loads..].contains(", %ymm1\n"), "{caller}");
     assert!(setup[..loads].contains("$5, %rdi\n"), "{caller}");
     for (callee, stores) in [("add", 1), ("wide", 2)] {
         let after = &caller[caller
             .find(&format!("callq\t{callee}"))
             .unwrap_or_else(|| panic!("{caller}"))..];
-        let clear = after.find("vzeroupper").unwrap_or_else(|| panic!("{caller}"));
+        let clear = after
+            .find("vzeroupper")
+            .unwrap_or_else(|| panic!("{caller}"));
         let stored = after[..clear].matches("vmovups\t%ymm").count();
         assert_eq!(stored, stores, "{callee}:\n{caller}");
     }
@@ -1737,7 +1745,10 @@ block0(v0: ptr):
         Target::WindowsGnu,
     );
     let wide = function_text(&text, "wide");
-    assert!(wide.contains(", %ymm0\n") && !wide.contains("vzeroupper"), "{wide}");
+    assert!(
+        wide.contains(", %ymm0\n") && !wide.contains("vzeroupper"),
+        "{wide}"
+    );
 }
 
 /// A stack object aligned above the stack's 16 bytes gets spare room and

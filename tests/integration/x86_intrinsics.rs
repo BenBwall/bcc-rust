@@ -453,17 +453,18 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
         };
         for (identity, compiler) in references {
             let callee = object(compiler, &["-DCALLEE"]);
-            let expected =
-                build_and_run(compiler, &source, &["-mavx2", callee.to_str().unwrap()]);
+            let expected = build_and_run(compiler, &source, &["-mavx2", callee.to_str().unwrap()]);
             std::fs::remove_file(&callee).unwrap();
             for flags in COMPILED {
                 for (half, other) in [(&["-DCALLEE"][..], &[][..]), (&[], &["-DCALLEE"])] {
                     let context = format!("{identity} {flags:?} {half:?}");
                     let mine = ours(identity, half, flags, &context);
                     let theirs = object(compiler, other);
-                    let output = build_and_run(compiler, mine.to_str().unwrap(), &[theirs
-                        .to_str()
-                        .unwrap()]);
+                    let output = build_and_run(
+                        compiler,
+                        mine.to_str().unwrap(),
+                        &[theirs.to_str().unwrap()],
+                    );
                     std::fs::remove_file(mine).unwrap();
                     std::fs::remove_file(theirs).unwrap();
                     assert_lines(&output, &expected, &context);
@@ -477,9 +478,11 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
                 let context = format!("{identity} callee {callee:?} caller {caller:?}");
                 let definitions = ours(identity, &["-DCALLEE"], callee, &context);
                 let calls = ours(identity, &[], caller, &context);
-                let output = build_and_run(compiler, definitions.to_str().unwrap(), &[calls
-                    .to_str()
-                    .unwrap()]);
+                let output = build_and_run(
+                    compiler,
+                    definitions.to_str().unwrap(),
+                    &[calls.to_str().unwrap()],
+                );
                 std::fs::remove_file(definitions).unwrap();
                 std::fs::remove_file(calls).unwrap();
                 assert_lines(&output, &expected, &context);
