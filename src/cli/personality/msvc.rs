@@ -323,6 +323,23 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         common.push("-fcommon".into());
         common.push("-fno-color-diagnostics".into());
     }
+    // `cl` claims the C11 features it lacks only under `/std:`, where it
+    // defines `__STDC_VERSION__`: atomics, complex types and VLAs, which
+    // bcc has. `<threads.h>` comes with the Visual C++ headers, so
+    // `__STDC_NO_THREADS__` stays undefined.
+    if !clang_cl {
+        if state.standard_given {
+            common.extend(
+                [
+                    "-D__STDC_NO_ATOMICS__=1",
+                    "-D__STDC_NO_COMPLEX__=1",
+                    "-D__STDC_NO_VLA__=1",
+                ]
+                .map(OsString::from),
+            );
+        }
+        common.push("-U__STDC_NO_THREADS__".into());
+    }
     if !state.extensions {
         // `/Za`: ISO C without Microsoft's anonymous tagged members, and
         // without `_MSC_EXTENSIONS`; the `__`-prefixed keywords stay.
@@ -765,6 +782,9 @@ struct State {
     verbose:                 bool,
     ignore_include_variable: bool,
     standard:                &'static str,
+    /// `/std:` named the standard, as `/std:c11` does, rather than `cl`'s
+    /// default dialect.
+    standard_given:          bool,
     diagnostics:             &'static str,
     /// The warning level `/W0`-`/W4` set; `cl`'s own is 1.
     warning_level:           u8,
@@ -811,6 +831,7 @@ impl Default for State {
             verbose:                 false,
             ignore_include_variable: false,
             standard:                "c17",
+            standard_given:          false,
             diagnostics:             "msvc-caret",
             warning_level:           1,
             warning_level_options:   (0, 0),
@@ -943,9 +964,14 @@ impl State {
                 self.warnings_error = false;
                 self.bcc.push("-Wno-error".into());
             },
-            | "std:c11" => self.standard = "c11",
-            | "std:c17" => self.standard = "c17",
-            | "std:clatest" => self.standard = "c23",
+            | "std:c11" | "std:c17" | "std:clatest" => {
+                self.standard = match option {
+                    | "std:c11" => "c11",
+                    | "std:c17" => "c17",
+                    | _ => "c23",
+                };
+                self.standard_given = true;
+            },
             | "MT" => self.runtime = Some(Runtime::Static),
             | "MTd" => self.runtime = Some(Runtime::StaticDebug),
             | "MD" => self.runtime = Some(Runtime::Dll),
