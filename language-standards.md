@@ -535,7 +535,7 @@ MSVC groups are independently opt-in. `-fms-extensions` enables all ten groups;
 | NAME | Spellings / behavior | Phase |
 | --- | --- | --- |
 | `declspec` | `__declspec(...)` | parser |
-| `int-types` | `__int8`, `__int16`, `__int32`, `__int64` | parser |
+| `int-types` | `__int8`, `__int16`, `__int32`, `__int64`; the integer constant suffixes `i8`, `i16`, `i32` and `i64` (or `I`), after an optional `u` or `U`, which give `i64` and `ui64` the types of `ll` and `ull`, and the narrower ones `int`'s or `unsigned int`'s (Clang gives `i8` and `i16` `char`'s and `short`'s) | parser; preprocessor (suffixes) |
 | `calling-conventions` | `__cdecl`, `__stdcall`, `__fastcall`, `__vectorcall`, `__thiscall` | parser |
 | `type-qualifiers` | `__ptr32`, `__ptr64`, `__unaligned`, `__w64`, `__sptr`, `__uptr` | parser |
 | `inline` | `__forceinline`; GNU `__inline` also available independently | parser |
