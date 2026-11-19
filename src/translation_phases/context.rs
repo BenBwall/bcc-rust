@@ -125,6 +125,9 @@ pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
     pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
+    /// What the compiler being mimicked says about its command line with
+    /// the unit's diagnostics.
+    pub(crate) command_line: crate::diagnostics::CommandLineDiagnostics<'tu>,
     /// The library functions code generation may treat as builtins.
     pub(crate) library_builtins: crate::configuration::LibraryBuiltins<'tu>,
     /// What code generation may assume where C leaves the behaviour of

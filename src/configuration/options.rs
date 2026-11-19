@@ -895,9 +895,16 @@ impl CompilerConfiguration {
     }
 
     /// Whether compilation stops at the first error, as GCC's
-    /// `-Wfatal-errors` asks; Clang accepts the option and goes on.
+    /// `-Wfatal-errors` asks; Clang's is [`Self::errors_fatal`].
     pub(crate) fn fatal_errors(self) -> bool {
         self.fatal_errors && self.identity == super::CompilerIdentity::Gcc
+    }
+
+    /// Whether Clang's `-Wfatal-errors` makes every error fatal, which ends
+    /// the compilation as its `#pragma clang diagnostic fatal` does
+    /// (`DiagnosticsEngine::setErrorsAsFatal`).
+    pub(crate) fn errors_fatal(self) -> bool {
+        self.fatal_errors && self.identity.rules() == super::RuleSet::Clang
     }
 
     /// Whether `//` starts a comment when `next` follows it. Clang takes it for
@@ -1176,6 +1183,7 @@ impl CompilerConfiguration {
             general_regs_only: false,
             user_interrupts: false,
             suppress_warnings: false,
+            everything: false,
             syntax_only: false,
             compiler_extensions: false,
             permissive: None,

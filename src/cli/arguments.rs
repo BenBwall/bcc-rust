@@ -26,7 +26,10 @@ use clap::{
     parser::ValueSource,
 };
 
-use super::Cli;
+use super::{
+    Cli,
+    warning_options,
+};
 use crate::{
     configuration::{
         CompilerConfiguration,
@@ -54,7 +57,10 @@ use crate::{
             UndefinedSanitizer,
         },
     },
-    translation_phases::Context,
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+    },
 };
 
 /// Normalize GCC's single-dash long options before clap. Values and tokens
@@ -359,7 +365,16 @@ impl Cli {
         // wherever they appear; GCC reads all of them in order.
         let clang = configuration.compiler_identity().rules() == RuleSet::Clang;
         let first = |option: &str| clang && matches!(option, "-pedantic" | "-pedantic-errors");
-        let options = self.language_option.iter().map(std::ops::Deref::deref);
+        // A warning option Clang's front end does not take has no effect,
+        // under every identity but GCC's (`report_warning_options`).
+        let gcc = self.compiler_identity == Identity::Gcc;
+        let options = self
+            .language_option
+            .iter()
+            .map(std::ops::Deref::deref)
+            .filter(|option| {
+                gcc || !option.starts_with("-W") || warning_options::clang_takes(option)
+            });
         let (format, presentation) = self.diagnostic_style();
         options
             .clone()
@@ -387,39 +402,57 @@ impl Cli {
             .with_max_nesting_depth(self.max_nesting_depth)
     }
 
-    /// Clang diagnoses unsupported warning options at startup and continues.
-    pub(super) fn report_unknown_warning_options(&self) -> bool {
-        let Some(severity) = self
-            .configuration()
+    /// Gives `context` what the compiler says about the warning options
+    /// with each unit it compiles. Clang's front end warns about each
+    /// option it does not take, at the severity `-Wunknown-warning-option`
+    /// has; bcc's other identities read the options as bcc does, warning
+    /// in Clang's words about those it does not implement, GCC's groups
+    /// under any identity but GCC's. GCC's personality passes the `-Wno-`
+    /// options GCC ignores, which it notes.
+    pub(super) fn report_warning_options(&self, context: &mut Context<'_>) {
+        let tu = context.tu_arena();
+        context.command_line.unrecognized = tu.alloc_slice_fill_iter(
+            self.unrecognized_warning_option
+                .iter()
+                .map(|option| &*tu.alloc_str(option)),
+        );
+        let Some(severity) = context
+            .configuration
             .diagnostic_severity(DiagnosticGroup::UnknownWarningOption)
         else {
-            return false;
+            return;
         };
-        let mut failed = false;
+        let identity = CompilerIdentity::from(self.compiler_identity);
+        let suffix = match severity {
+            | ErrorSeverity::Error => "-Werror,-Wunknown-warning-option",
+            | ErrorSeverity::Warning => "-Wunknown-warning-option",
+        };
+        let mut complaints = crate::util::bump::ArenaVec::new_in(tu);
         for option in &self.language_option {
-            // An empty `-Wno-` names no group, and Clang passes it over
-            // without a word.
-            if &**option == "-Wno-" {
-                continue;
-            }
-            let unknown = match LanguageFlag::parse(option) {
-                | Some(LanguageFlag::UnknownWarning) => true,
-                | Some(LanguageFlag::WarningGroup(group, _)) =>
-                    group.gcc_only()
-                        && CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
-                | _ => false,
+            let complaint = if identity == CompilerIdentity::Gcc {
+                match LanguageFlag::parse(option) {
+                    | Some(LanguageFlag::UnknownWarning) => Some(crate::diagnostics::format_in!(
+                        tu,
+                        "unknown warning option '{option}'"
+                    )),
+                    | _ => None,
+                }
+            } else if option.starts_with("-W") {
+                warning_options::clang_complaint(option, tu)
+            } else {
+                None
             };
-            if unknown {
-                let label = if severity == crate::translation_phases::ErrorSeverity::Error {
-                    failed = true;
-                    "error"
-                } else {
-                    "warning"
-                };
-                eprintln!("{label}: unknown warning option '{option}' [-Wunknown-warning-option]");
+            if let Some(complaint) = complaint {
+                complaints.push((
+                    severity,
+                    crate::diagnostics::format_in!(tu, "{complaint} [{suffix}]"),
+                ));
             }
         }
-        failed
+        if severity == ErrorSeverity::Error {
+            context.command_line.errors = complaints.len();
+        }
+        context.command_line.leading.set(complaints.leak());
     }
 
     /// The relocation model of the last `-fpic`-family flag, the TLS model,
@@ -912,6 +945,8 @@ enum LanguageFlag {
     UnknownWarning,
     /// `-Wfatal-errors` or `-Wno-fatal-errors`.
     FatalErrors(bool),
+    /// Clang's `-Weverything` or `-Wno-everything`.
+    Everything(bool),
     /// `-pedantic` or `-Wpedantic` (true), or `-Wno-pedantic` (false).
     Pedantic(bool),
     /// `-pedantic-errors`.
@@ -1050,6 +1085,14 @@ impl LanguageFlag {
             | "-Wno-pedantic" => return Some(Self::Pedantic(false)),
             | "-Wfatal-errors" => return Some(Self::FatalErrors(true)),
             | "-Wno-fatal-errors" => return Some(Self::FatalErrors(false)),
+            | "-Weverything" => return Some(Self::Everything(true)),
+            | "-Wno-everything" => return Some(Self::Everything(false)),
+            // GCC's deprecated spelling, which Clang takes too.
+            | "-Werror-implicit-function-declaration" =>
+                return Some(Self::WarningGroup(
+                    DiagnosticGroup::ImplicitFunctionDeclaration,
+                    WarningOption::Error(true),
+                )),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
@@ -1272,6 +1315,7 @@ impl LanguageFlag {
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::FormatLevel(level) => configuration.with_format_level(level),
             | Self::FatalErrors(enabled) => configuration.with_fatal_errors(enabled),
+            | Self::Everything(enabled) => configuration.with_everything(enabled),
             | Self::Pedantic(enabled) => configuration.with_pedantic(enabled),
             | Self::PedanticErrors => configuration.with_pedantic_errors(),
             | Self::PedanticAsError(true) => configuration.with_werror_pedantic(),

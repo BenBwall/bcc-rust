@@ -229,3 +229,114 @@ fn preprocessed_text_commits_little_more_than_its_text_per_token() {
 /// Keeping every token, its position and its provenance until the end took
 /// 141.
 const MAX_TEXT_BYTES_PER_TOKEN: usize = 16;
+
+/// Clang's front end words what it says about each warning option as
+/// `ProcessWarningOptions` does, with `getNearestOption`'s suggestion
+/// (checked against the pinned Clang 23.1.5 on 2026-11-19).
+#[test]
+fn clang_complains_about_warning_options_in_its_own_words() {
+    let arena = Bump::new();
+    for (option, complaint) in [
+        ("-Wshadow", None),
+        ("-Wno-shadow", None),
+        ("-W", None),
+        ("-Wno-", None),
+        ("-Werror", None),
+        ("-Werror=", None),
+        ("-Werror=shadow", None),
+        ("-Werror-implicit-function-declaration", None),
+        ("-Wformat=0", None),
+        ("-Wformat=2", None),
+        ("-Wno-format=2", None),
+        ("-Wsystem-headers", None),
+        ("-Weverything", None),
+        ("-Wno-everything", None),
+        ("-Wfatal-errors", None),
+        ("-Wfatal-errors=shadow", None),
+        ("-Wfatal-errors-shadow", None),
+        ("-W#warnings", None),
+        ("-Wfoo", Some("unknown warning option '-Wfoo'")),
+        (
+            "-Wshadwo",
+            Some("unknown warning option '-Wshadwo'; did you mean '-Wshadow'?"),
+        ),
+        (
+            "-Wno-no-shadow",
+            Some("unknown warning option '-Wno-no-shadow'; did you mean '-Wno-shadow'?"),
+        ),
+        (
+            "-Wno-error=shadwo",
+            Some("unknown warning option '-Werror=shadwo'; did you mean '-Werror=shadow'?"),
+        ),
+        (
+            "-Wfatal-errors=pass",
+            Some(
+                "unknown warning option '-Wfatal-errors=pass'; did you mean '-Wfatal-errors=asm'?",
+            ),
+        ),
+        (
+            "-Wfatal-errors-=x",
+            Some("unknown warning option '-Wfatal-errors==x'"),
+        ),
+        (
+            "-Wformat=1",
+            Some("unknown warning option '-Wformat=1'; did you mean '-Wformat=2'?"),
+        ),
+        ("-Wformat=", Some("unknown warning option '-Wformat='")),
+        ("-Weverythin", Some("unknown warning option '-Weverythin'")),
+        (
+            "-Wno-everything=",
+            Some("unknown warning option '-Wno-everything='"),
+        ),
+        (
+            "-Werror-",
+            Some("unknown -Werror warning specifier: '-Werror-'"),
+        ),
+        (
+            "-Wno-error-x",
+            Some("unknown -Werror warning specifier: '-Wno-error-x'"),
+        ),
+        (
+            "-Werror-implicit-function-declarationx",
+            Some("unknown -Werror warning specifier: '-Werror-implicit-function-declarationx'"),
+        ),
+        (
+            "-Wfatal-errors=",
+            Some("unknown -Wfatal-errors warning specifier: '-Wfatal-errors='"),
+        ),
+        // A group of remarks alone is no warning option.
+        (
+            "-Wpass",
+            Some("unknown warning option '-Wpass'; did you mean '-Wasm'?"),
+        ),
+        ("-Wl,", Some("unknown warning option '-Wl,'")),
+    ] {
+        assert_eq!(
+            warning_options::clang_complaint(option, &arena),
+            complaint,
+            "{option}"
+        );
+        assert_eq!(
+            warning_options::clang_takes(option),
+            complaint.is_none(),
+            "{option}"
+        );
+    }
+}
+
+/// The groups bcc implements that Clang lacks are GCC's, which bcc's own
+/// command line, reading warning options as Clang does, reports as
+/// unknown.
+#[test]
+fn every_group_clang_lacks_is_gccs() {
+    for &group in crate::configuration::DiagnosticGroup::ALL {
+        let Some(name) = group.name() else {
+            continue;
+        };
+        assert_eq!(
+            warning_options::clang_takes(&format!("-W{name}")),
+            !group.gcc_only(),
+            "-W{name}"
+        );
+    }
+}

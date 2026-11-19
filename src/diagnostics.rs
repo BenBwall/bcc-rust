@@ -63,7 +63,10 @@ pub(crate) use owned::{
     OwnedDiagnostic,
     OwnedExplanation,
 };
-pub(crate) use reporter::DiagnosticReporter;
+pub(crate) use reporter::{
+    CommandLineDiagnostics,
+    DiagnosticReporter,
+};
 
 use crate::{
     translation_phases::Context,
