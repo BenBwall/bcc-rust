@@ -3300,7 +3300,8 @@ impl SemanticError {
     /// worded by `Analyzer::msvc_conversion_wording` and
     /// `Analyzer::msvc_cast_wording`, which leave a type `cl` spells its own
     /// way unworded. Microsoft Learn: "Compiler Error C2065", "Compiler
-    /// Warning (level 3) C4013", "Compiler Warning (level 1) C4047",
+    /// Warning (level 3) C4013", "Compiler Warning (level 1) C4033",
+    /// "Compiler Warning (level 1) C4098", "Compiler Warning (level 1) C4047",
     /// "Compiler Warning (level 1 and level 3) C4133", "Compiler Warning
     /// (level 1) C4311", "Compiler Warning (level 1) C4312".
     fn msvc_message<'d>(
@@ -3324,6 +3325,12 @@ impl SemanticError {
                 "C4013",
                 format_in!(arena, "'{name}' undefined; assuming extern returning int"),
             ),
+            | SemanticErrorKind::VoidReturnMismatch => (
+                "C4098",
+                format_in!(arena, "'{name}': 'void' function returning a value"),
+            ),
+            | SemanticErrorKind::ReturnMismatch =>
+                ("C4033", format_in!(arena, "'{name}' must return a value")),
             | SemanticErrorKind::PointerConstraint(G::IntConversion) =>
                 ("C4047", arena.alloc_str(name)),
             | SemanticErrorKind::PointerConstraint(G::IncompatiblePointerTypes) =>
