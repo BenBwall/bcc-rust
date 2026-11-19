@@ -1527,7 +1527,10 @@
      the tape their width, and a vermilion rule under the cells leads from
      the playhead to the note. */
   @media (min-width: 1181px) {
-    .machine-view { --spool-width: 0px; grid-template-columns: minmax(0, 1fr) clamp(360px, 31%, 460px); grid-template-rows: auto auto 1fr; }
+    /* At least a window tall, so the note can stay under the control strip
+       even beside a short machine column (a lesson of two objects) when
+       the strip wraps at a stop and the page shifts under it. */
+    .machine-view { --spool-width: 0px; grid-template-columns: minmax(0, 1fr) clamp(360px, 31%, 460px); grid-template-rows: auto auto 1fr; min-height: calc(100svh - var(--sticky-top)); }
     .machine-view::after { content: ""; grid-area: 1 / 2 / -1; background: var(--device); }
     .machine-view > .deck { grid-area: 1 / 1; grid-template-columns: minmax(0, 1fr); }
     .machine-view > .head-row { grid-area: 2 / 1; border-bottom: 3px solid var(--accent); }
