@@ -286,9 +286,14 @@ const PREDEFINED_MACRO_NAMES: [&str; 14] = [
 /// also leaves out the optional `__STDC_MB_MIGHT_NEQ_WC__` (`tcc_new` in
 /// TCC 0.9.27's `libtcc.c`). Neither `cl` nor clang-cl defines GCC's
 /// `__STRICT_ANSI__` in any mode, and `CMake` reads it to decide whether
-/// the compiler's default language has extensions.
+/// the compiler's default language has extensions. `cl` defines
+/// `__STDC__` only under `/Za` or `/Zc:__STDC__`, for which its
+/// personality defines it, and the Universal C Runtime's headers declare
+/// POSIX names such as `O_RDONLY` and `open` only where it is undefined.
+/// Microsoft Learn: "/Zc:__STDC__ (Enable __STDC__ macro)".
 fn identity_defines(identity: CompilerIdentity, name: &str) -> bool {
     match name {
+        | "__STDC__" => identity != CompilerIdentity::Msvc,
         | "__STRICT_ANSI__" =>
             !matches!(identity, CompilerIdentity::Msvc | CompilerIdentity::ClangCl),
         | "__FILE_NAME__" | "__INCLUDE_LEVEL__" =>

@@ -339,6 +339,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             );
         }
         common.push("-U__STDC_NO_THREADS__".into());
+        if state.stdc {
+            common.push("-D__STDC__=1".into());
+        }
     }
     if !state.extensions {
         // `/Za`: ISO C without Microsoft's anonymous tagged members, and
@@ -777,6 +780,8 @@ struct State {
     runtime:                 Option<Runtime>,
     /// Microsoft extensions: `/Ze` (the default) or `/Za`, the last wins.
     extensions:              bool,
+    /// `/Za` or `/Zc:__STDC__`, under which `cl` defines `__STDC__`.
+    stdc:                    bool,
     nologo:                  bool,
     /// clang-cl's `-v` or `-###`, which print its version without inputs.
     verbose:                 bool,
@@ -827,6 +832,7 @@ impl Default for State {
             debug_dll:               false,
             runtime:                 None,
             extensions:              true,
+            stdc:                    false,
             nologo:                  false,
             verbose:                 false,
             ignore_include_variable: false,
@@ -982,8 +988,12 @@ impl State {
                 self.dll = true;
                 self.debug_dll = option == "LDd";
             },
-            | "Za" => self.extensions = false,
+            | "Za" => {
+                self.extensions = false;
+                self.stdc = true;
+            },
             | "Ze" => self.extensions = true,
+            | "Zc:__STDC__" => self.stdc = true,
             | "Zp" => self.bcc.push("-fpack-struct=1".into()),
             | "Zp1" | "Zp2" | "Zp4" | "Zp8" | "Zp16" => self
                 .bcc
@@ -1058,7 +1068,6 @@ impl State {
             | "fp:except-"
             | "volatile:iso"
             | "Zc:preprocessor"
-            | "Zc:__STDC__"
             | "analyze-" => {},
             // Hardening and run-time checks a correct program does not
             // depend on.
