@@ -2511,10 +2511,10 @@ fn without_dependency_options(arguments: Vec<OsString>) -> Vec<OsString> {
 
 /// `--help`.
 fn help(personality: Personality, name: &str) -> String {
-    let compiler = if personality == Personality::Gcc {
-        "GCC"
-    } else {
-        "Clang"
+    let compiler = match personality {
+        | Personality::Gcc => "GCC",
+        | Personality::ZigCc => "zig cc",
+        | _ => "Clang",
     };
     format!(
         "Usage: {name} [options] file...\nbcc's {compiler}-compatible driver: it reads \

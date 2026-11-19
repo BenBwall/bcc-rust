@@ -459,6 +459,12 @@ mod tests {
             "error: libc of the specified target requires dynamic linking\n",
         );
         fails_with(&directory.zig(&[]), "zig: error: no input files\n");
+        // zig's linker answers its version as zig reads it, in words Meson
+        // takes for zig's linker.
+        let output = directory.zig(&["-Wl,--version"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "zig ld 0.17.1 (bcc 0.1.0; not zig)\n");
+        assert_eq!(stderr(&output), "");
         let full = |name: &str| directory.0.join(name).display().to_string();
         fails_with(
             &directory.zig(&["missing.c", "other.c"]),

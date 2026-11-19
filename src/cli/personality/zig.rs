@@ -360,7 +360,8 @@ impl Translation {
                 if let Some(options) = text.strip_prefix("-Wl,") {
                     // zig's own linker reads these, and answers `--version`
                     // and `-v` in its own words (`zig ld`), which Meson
-                    // recognizes.
+                    // recognizes; a first line naming LLD would make Meson
+                    // take it for LLD.
                     let kept: Vec<&str> = options
                         .split(',')
                         .filter(|option| {
@@ -369,8 +370,7 @@ impl Translation {
                                 self.linker_version = true;
                                 super::print(
                                     &format!(
-                                        "zig ld {ZIG_VERSION} (bcc {}, which links with LLD; not \
-                                         zig)\n",
+                                        "zig ld {ZIG_VERSION} (bcc {}; not zig)\n",
                                         env!("CARGO_PKG_VERSION")
                                     ),
                                     false,
