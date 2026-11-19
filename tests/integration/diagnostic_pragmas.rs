@@ -287,6 +287,15 @@ int x;
     /// Each stderr and status is Clang 23.1.5's or GCC 14's, byte for byte.
     #[test]
     fn fatal_errors_spare_what_a_pragma_made_an_error() {
+        /// A case's name, flags and source, then Clang's and GCC's exit
+        /// status and stderr.
+        type Case<'a> = (
+            &'a str,
+            &'a [&'a str],
+            &'a str,
+            (i32, String),
+            (i32, String),
+        );
         const ERROR_PRAGMA: &str = "\
 #pragma GCC diagnostic error \"-Wunused-variable\"
 int f(void) { int a; return 0; }
@@ -323,7 +332,7 @@ cc1: {which} warnings being treated as errors
 "
             )
         };
-        let cases: [(&str, &[&str], &str, (i32, String), (i32, String)); 5] = [
+        let cases: [Case<'_>; 5] = [
             (
                 "pragma error",
                 &["-Wfatal-errors"],
