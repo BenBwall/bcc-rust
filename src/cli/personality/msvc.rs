@@ -57,6 +57,7 @@ use super::{
     Plan,
     Step,
     host_target,
+    icx,
     known::{
         self,
         ClOption,
@@ -93,7 +94,7 @@ const CLANG_ONLY_OPTIONS: [&str; 6] = [
 
 /// Translates a `cl.exe` or clang-cl command line.
 pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
-    let clang_cl = invocation.personality == Personality::ClangCl;
+    let clang_cl = invocation.personality.is_clang_cl();
     // Whether an argument that starts with `/` and names no option is a
     // path: always in clang-cl, and in `cl` off Windows.
     let slash_paths = clang_cl || !cfg!(windows);
@@ -152,6 +153,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             true,
         );
     }
+    // `icx-cl` prints its logo first, `/nologo` or not.
+    let intel =
+        (invocation.personality == Personality::IcxCl).then(|| icx::ClDefaults::read(&expanded));
+    if intel.is_some() {
+        super::print(&icx::cl_logo(), true);
+    }
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
@@ -175,6 +182,17 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.sources.push(Source::new(argument, false));
             continue;
         };
+        // Intel's own `/Q` options, which clang-cl would read as paths.
+        if intel.is_some()
+            && let Some(intel) = option.strip_prefix('Q')
+            && let Some(options) = icx::cl_option(intel)
+        {
+            match options {
+                | Ok(options) => state.bcc.extend(options.iter().map(OsString::from)),
+                | Err(why) => state.unsupported(invocation, option, why),
+            }
+            continue;
+        }
         // Whether the argument is an option at all is decided first, so no
         // handler below that matches a prefix reads a path.
         let known = known::clang_cl_option(option);
@@ -379,6 +397,10 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 common.push(directory.into_os_string());
             }
         }
+    }
+    // Intel's defaults come before the command line's own options.
+    if let Some(intel) = &intel {
+        intel.apply(&invocation.name, &mut common, target);
     }
     common.append(&mut state.bcc);
     if X86Features::from_options(&x86_options.iter().copied(), true).unknown_vector_abi()
@@ -656,7 +678,7 @@ pub(super) const ERROR_STATUS: i32 = 2;
 
 /// The status the personality exits with after an error it reports itself.
 fn error_status(personality: Personality) -> i32 {
-    if personality == Personality::ClangCl {
+    if personality.is_clang_cl() {
         1
     } else {
         ERROR_STATUS
@@ -697,7 +719,7 @@ fn check_outputs(
                     output.display(),
                     input.display()
                 );
-                if invocation.personality == Personality::ClangCl {
+                if invocation.personality.is_clang_cl() {
                     invocation.error(message);
                 } else {
                     super::print(
@@ -972,7 +994,7 @@ impl State {
             | "W1" | "W2" | "W3" => self.set_warning_level(
                 invocation,
                 option.as_bytes()[1] - b'0',
-                if invocation.personality == Personality::ClangCl {
+                if invocation.personality.is_clang_cl() {
                     &["-Wall"]
                 } else {
                     &[]
@@ -984,7 +1006,7 @@ impl State {
             | "Wall" => self.set_warning_level(
                 invocation,
                 4,
-                if invocation.personality == Personality::ClangCl {
+                if invocation.personality.is_clang_cl() {
                     &["-Weverything"]
                 } else {
                     &["-Wall", "-Wextra"]
@@ -1258,7 +1280,7 @@ impl State {
     /// with `/`, as a mistyped option's does, and suggests the option one
     /// edit away from a missing input's name.
     fn check_inputs(&mut self, invocation: &Invocation) {
-        let clang_cl = invocation.personality == Personality::ClangCl;
+        let clang_cl = invocation.personality.is_clang_cl();
         let links = !self.compile_only && self.preprocess.is_none() && !self.syntax_only;
         let preprocess = self.preprocess.is_some();
         let mut missing = 0;
@@ -1356,7 +1378,7 @@ impl State {
                 && !is_directory(&path)
             {
                 let option = format!("/{name}{}", path.display());
-                if invocation.personality == Personality::ClangCl {
+                if invocation.personality.is_clang_cl() {
                     invocation.error(format_args!(
                         "cannot specify '{option}' when compiling multiple source files"
                     ));
@@ -1393,7 +1415,7 @@ impl State {
         message: std::fmt::Arguments<'_>,
     ) {
         self.errors += 1;
-        if invocation.personality == Personality::ClangCl {
+        if invocation.personality.is_clang_cl() {
             invocation.error(message);
         } else {
             super::print(
@@ -1518,7 +1540,7 @@ fn switch_class(option: &str) -> Option<(&'static str, &str)> {
 /// Accepts hardening or a run-time check bcc does not implement, with a
 /// warning.
 fn ignored(invocation: &Invocation, option: &str, why: &str) {
-    if invocation.personality == Personality::ClangCl {
+    if invocation.personality.is_clang_cl() {
         invocation.warning(format_args!("'/{option}' is ignored: {why}"));
     } else {
         super::print(
@@ -1566,7 +1588,7 @@ impl State {
     /// and `/W4 /W1` keeps `-Wextra` (Clang Compiler User's Manual,
     /// "clang-cl"; Clang's `CLCompatOptions.td`).
     fn set_warning_level(&mut self, invocation: &Invocation, level: u8, options: &[&str]) {
-        if invocation.personality != Personality::ClangCl {
+        if !invocation.personality.is_clang_cl() {
             let (at, count) = self.warning_level_options;
             drop(self.bcc.drain(at..at + count));
         }
