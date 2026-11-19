@@ -94,6 +94,7 @@ pub use model::{
     State,
     Structure,
     Undefined,
+    Upcoming,
     Value,
 };
 
@@ -167,7 +168,7 @@ impl Session {
         &self.program
     }
 
-    /// Encodes the current observation using schema version 8.
+    /// Encodes the current observation using schema version 9.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()

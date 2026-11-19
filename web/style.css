@@ -810,6 +810,27 @@
   .flow-group { display: inline-flex; align-items: center; gap: 4px; }
   .flow-separator { color: var(--ink-3); margin-right: 10px; }
 
+  /* What the next step will do, said before it runs: dimmed and dashed,
+     like the expression panel's "next" entry, with the colour of the kind
+     of step it will be. */
+  .narration-next {
+    --cat: var(--ink-3);
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; width: fit-content; max-width: 100%; margin-top: 12px; padding: 4px 9px 4px 11px;
+    border: 1.5px dashed var(--ink-3); box-shadow: inset 3px 0 0 var(--cat);
+    font: 12px/1.4 var(--font-mono); color: var(--ink-2);
+  }
+  .narration-next[hidden] { display: none; }
+  .narration-next[data-category="evaluate"] { --cat: var(--cat-evaluate); }
+  .narration-next[data-category="convert"] { --cat: var(--cat-convert); }
+  .narration-next[data-category="memory"] { --cat: var(--cat-memory); }
+  .narration-next[data-category="lifetime"] { --cat: var(--cat-lifetime); }
+  .narration-next[data-category="call"] { --cat: var(--cat-call); }
+  .narration-next-label { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+  .narration-next code { padding: 0 .2em; background: var(--device-3); color: var(--ink); }
+  .narration-next-clause { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+  a.narration-next-clause { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a.narration-next-clause:hover { color: var(--accent-ink); }
+
   .return-callout { margin-top: 14px; padding: 8px 12px; background: var(--ink); color: var(--device); font-size: 12px; letter-spacing: .04em; }
   /* The status sits on a vermilion chip: vermilion text on the inverted
      plate falls below AA in either theme. */
@@ -967,6 +988,17 @@
   .evaluation-point-key { display: inline-block; height: 1.2em; margin: 0 2px; vertical-align: -.25em; }
   .evaluation-point { flex: none; align-self: stretch; margin: -5px 6px -5px 0; border-left: 2px dashed var(--accent-ink); }
   .evaluation-next { min-height: 30px; padding: 4px 8px; border: 1.5px dashed var(--ink-3); font-size: 12px; line-height: 1.35; color: var(--ink-2); gap: 6px; }
+  /* Where Over stops: a tag with the Over key's arrow, on the step, or on
+     a closing entry when the run has not reached that step yet. */
+  .evaluation-over {
+    display: inline-flex; align-items: center; gap: 3px; flex: none; margin-left: 6px; padding: 1px 5px;
+    border: 1.5px solid var(--accent-ink); background: var(--cell); font-size: 10px; font-weight: 700; letter-spacing: .1em; line-height: 1.3; text-transform: uppercase; color: var(--accent-ink);
+  }
+  .evaluation-over svg { stroke-width: 2.4; }
+  .evaluation-over-at { display: contents; }
+  .evaluation-steps button .evaluation-over { align-self: center; margin-left: auto; }
+  .evaluation-end { gap: 0; min-height: 30px; font-size: 12px; line-height: 1.35; color: var(--ink-3); }
+  .evaluation-end .evaluation-over { margin: 0 6px 0 0; }
   .evaluation-key { margin-top: 9px; font-size: 11px; line-height: 1.5; color: var(--ink-3); }
   .evaluation-key a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 
@@ -1556,6 +1588,16 @@
     .hero { grid-template-columns: minmax(0, 1fr); }
     .lesson-card { grid-template-columns: 52px minmax(160px, 1fr) minmax(0, 2fr); }
     .lesson-topics { grid-column: 2 / -1; }
+  }
+  /* Small laptops and tablets held sideways: Reset, Back and Run show
+     their icons alone and the step counter drops its word, as on a phone
+     (both stay for screen readers, the keys' names in their tooltips too),
+     so from 1024 px the status keeps to the strip's first row and the note
+     sits higher under the cells. */
+  @media (min-width: 821px) and (max-width: 1180px) {
+    .transport .button:not(.primary, .labelled) .button-label,
+    .step-counter-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .transport .button:not(.primary, .labelled) { padding-inline: 10px; }
   }
   @container insight (max-width: 760px) {
     .notes-row { grid-template-columns: minmax(0, 1fr); }

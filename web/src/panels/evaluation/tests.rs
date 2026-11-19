@@ -148,7 +148,8 @@ fn a_run_cut_short_says_what_comes_next() {
     let cursor = at(&states, "Evaluate the constant 0");
     let group = group(&states[..=cursor], cursor, source).unwrap();
     assert!(!group.complete);
-    assert_eq!(group.next.as_deref(), Some("store into total"));
+    assert_eq!(group.next.as_deref(), Some("initialize total"));
+    assert_eq!(group.over, Some(OverStop::End));
     assert_eq!((group.place(), group.total()), (Some(2), 2));
     // At its last step the engine's next operation is outside it: done,
     // though the run has recorded nothing after it.
@@ -156,6 +157,7 @@ fn a_run_cut_short_says_what_comes_next() {
     let done = super::group(&states[..=last], last, source).unwrap();
     assert!(done.complete);
     assert_eq!(done.next, None);
+    assert_eq!(done.over, Some(OverStop::Next));
     // The call is not the end of the expression that made it.
     let call = at(&states, "Call bump (frame #2)");
     assert!(
@@ -352,4 +354,52 @@ fn a_folded_call_keeps_the_sequence_point_before_it() {
         call_label(function, first, last, true, false)
             .starts_with("A sequence point, then the call to bump, steps ")
     );
+}
+
+#[cfg(feature = "worker")]
+#[test]
+fn the_panel_marks_where_over_stops() {
+    for demo in crate::demos::DEMOS.iter().filter(|demo| demo.stage.is_none() && !demo.faults) {
+        let states = run(demo.source);
+        for cursor in 0..states.len() - 1 {
+            let Some(shown) = group(&states, cursor, demo.source) else {
+                continue;
+            };
+            let stop = over(&states, cursor);
+            match shown.over.expect("Over can run from every step but the last") {
+                | OverStop::At(index) => assert_eq!(stop, index, "{} at {cursor}", demo.key),
+                | OverStop::Next => assert!(
+                    group(&states, stop, demo.source).is_none_or(|next| next.text != shown.text
+                        || next.parts.first() != shown.parts.first()),
+                    "{} at {cursor}",
+                    demo.key
+                ),
+                | OverStop::End => panic!("a whole run records every step"),
+            }
+            // Cut short at the current step, the group's last is still to come.
+            let cut = group(&states[..=cursor], cursor, demo.source).unwrap();
+            if !cut.complete {
+                assert_eq!(cut.over, Some(OverStop::End));
+                assert!(cut.next.is_some(), "{} at {cursor}", demo.key);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "worker")]
+#[test]
+fn over_has_no_mark_where_the_run_ended() {
+    let (states, source) = tour();
+    let last = states.len() - 1;
+    if let Some(shown) = group(&states, last, source) {
+        assert_eq!(shown.over, None);
+    }
+    let source = crate::demos::find("overflow").unwrap().source;
+    let mut machine = crate::machine::Machine::default();
+    let mut states = vec![machine.load(source.to_owned())];
+    while states.last().is_some_and(Snapshot::can_step) {
+        states.push(machine.step().expect("the program steps"));
+    }
+    let stop = group(&states, states.len() - 1, source).expect("the stop is in an expression");
+    assert_eq!(stop.over, None);
 }

@@ -33,7 +33,14 @@ compiler; each part is captioned with what its lessons share
   point, as the caption says. An object the tape numbers to tell it from
   another of its name in the same call (a block's `x` shadowing the
   function's is `x #2`) keeps that number in Table 1 and in the note's
-  title, lead and value flow. A playhead marks
+  title, lead and value flow. After its lead and value flow, each note says what the next
+  step will do, as the engine describes the operation before running it
+  ("Next: read `total`", "compare `i < 3`", "call `bump`"), in the colour
+  of its kind of step and with the C99 paragraph that defines it; where
+  the note lists its expression's steps, that list's last entry says it
+  instead, and a tag with Over's arrow marks the step **Over** stops at.
+  When the run stops at undefined behavior, the note leads with why. A
+  playhead marks
   the step shown, the cells under it hold the objects at that step by call,
   the step's numbered note hangs off it, the current full expression is
   wired up as a schematic whose wires fill with values (Figure 2), and a
@@ -211,8 +218,10 @@ sticky column of its own beside the tape, so on a laptop (1280x800,
 cells the step touched share the window however many lanes the tape has;
 the note scrolls on its own when it is longer than the window, and each
 step starts it at its top, while a long expression's steps scroll in a
-window of their own that each step keeps on its entry. Narrower, the note sits under the cells, and
-narrower still, below 821 px, the device becomes a
+window of their own that each step keeps on its entry. Narrower, the note sits under the cells; down to
+821 px Reset, Back and Run show their icons alone and the step counter
+drops its word, so from 1024 px the control strip keeps to one row. Narrower still, and
+below 821 px, the device becomes a
 stack of modules with the source sized so the note follows it on the same
 screen, then the tape and the cells, and the transport keys docked at the
 bottom of the window. In the compiler pipeline a phone shows each stage's
@@ -321,7 +330,10 @@ first read-only listing, whose folding arrows use it.
 - Choose a lesson, open a local C file, or edit the source in place and choose
   **Run edited code**.
 - **Step** (`→` or `j`) performs one evaluation; **Back** (`←` or `k`) shows
-  the previous state; **Run** (`r`) steps until the program ends and **Pause**
+  the previous state; **Over** (`o`) runs to the last step of the expression
+  the step belongs to, through any call it makes, or from that last step to
+  the end of the next one (its tag in the note's list of steps marks where);
+  **Run** (`r`) steps until the program ends and **Pause**
   stops it; **Reset** (`Shift+R`) reloads the program. Shortcuts are ignored
   while typing in the editor. Click a line number to set a run target, then
   **Run to line**.

@@ -38,6 +38,7 @@ use crate::{
         StepEvent,
         Tree,
         TreeNode,
+        Upcoming,
         Value,
     },
 };
@@ -281,6 +282,7 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
         stack: Vec::new(),
         objects: Vec::new(),
         effects: Vec::new(),
+        upcoming: None,
         diagnostic: None,
         return_value: None,
         stdout: false,
@@ -343,6 +345,7 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
         stack: Vec::new(),
         objects: Vec::new(),
         effects: Vec::new(),
+        upcoming: None,
         diagnostic: Some(self::diagnostic(diagnostic)),
         return_value: None,
         stdout: false,
@@ -431,6 +434,12 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             .map(|object| self::object(object, &functions, &objects, program))
             .collect(),
         effects:      state.pending_effects.clone(),
+        upcoming:     state.upcoming.as_ref().map(|upcoming| Upcoming {
+            kind:     upcoming.kind.name().to_owned(),
+            category: upcoming.kind.category().to_owned(),
+            text:     upcoming.text.clone(),
+            clause:   clause(Some(&upcoming.clause)).unwrap_or_default(),
+        }),
         diagnostic:   fault.map(diagnostic),
         return_value: state
             .return_value

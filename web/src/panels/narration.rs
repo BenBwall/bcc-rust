@@ -37,6 +37,7 @@ use crate::{
         FlowPart,
         Snapshot,
         StepEvent,
+        Upcoming,
     },
 };
 
@@ -79,6 +80,9 @@ pub fn Narration(
             })
         })
     });
+    let upcoming = Memo::new(move |_| {
+        snapshot.with(|state| state.as_ref().and_then(|state| state.upcoming.clone()))
+    });
     let names = object_names(snapshot);
     let labels = tape_labels(snapshot, reel);
     // Whether the learner opened the details; it stays open (or closed)
@@ -94,7 +98,7 @@ pub fn Narration(
     start_at_top(event, card);
     let note = first_notes(snapshot, running);
     view! {
-        <article class="note narration" data-category=category aria-labelledby="narration-title" node_ref=card>
+        <article class="note narration" data-category=category data-kind=move || event.with(|event| event.as_ref().map(|event| event.kind.clone())) aria-labelledby="narration-title" node_ref=card>
             <h2 id="narration-title" class="note-title" tabindex="-1">
                 <span class="note-number">
                     {move || snapshot.with(|state| state.as_ref().map_or_else(|| "Note".to_owned(), |state| format!("Note {}", state.step)))}
@@ -114,6 +118,15 @@ pub fn Narration(
                     "Sequence point"
                 </span>
             </p>
+            // A stop's explanation leads the note, before its lead and
+            // "Why it matters".
+            <div class="fault-callout" hidden=move || diagnostic.with(Option::is_none)>
+                <p class="fault-kind">{move || diagnostic.with(|d| d.as_ref().map_or_default(crate::snapshot::Diagnostic::kind_label))}</p>
+                <p class="fault-message">{move || diagnostic.with(|d| d.as_ref().map(|d| super::rich_text(&sentence_case(&d.message))))}</p>
+                <p class="fault-note" hidden=move || diagnostic.with(|d| d.as_ref().is_none_or(|d| d.note.is_empty()))>
+                    {move || diagnostic.with(|d| d.as_ref().map_or_default(|d| d.note.clone()))}
+                </p>
+            </div>
             <p class="narration-lead">
                 {move || event.with(|event| match event {
                     | Some(event) => labels.with(|labels| names.with(|names| explained(&relabeled(lead(event), labels), &mut Vec::new(), names, tip, card))),
@@ -123,6 +136,7 @@ pub fn Narration(
             <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
                 {move || event.with(|event| event.as_ref().map(|event| labels.with(|labels| flow_groups(&event.flow, labels))))}
             </p>
+            <Next upcoming group labels />
             <Evaluation group on_jump /><Bits event /><Ranks event /><aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
                 <h3>"Why it matters"</h3>
                 <p>
@@ -138,18 +152,52 @@ pub fn Narration(
             <p class="return-callout" hidden=move || returned.with(Option::is_none)>
                 "Program finished: main returned "<strong>{move || returned.get().unwrap_or_default()}</strong>
             </p>
-            <div class="fault-callout" hidden=move || diagnostic.with(Option::is_none)>
-                <p class="fault-kind">{move || diagnostic.with(|d| d.as_ref().map_or_default(crate::snapshot::Diagnostic::kind_label))}</p>
-                <p class="fault-message">{move || diagnostic.with(|d| d.as_ref().map(|d| super::rich_text(&sentence_case(&d.message))))}</p>
-                <p class="fault-note" hidden=move || diagnostic.with(|d| d.as_ref().is_none_or(|d| d.note.is_empty()))>
-                    {move || diagnostic.with(|d| d.as_ref().map_or_default(|d| d.note.clone()))}
-                </p>
-            </div>
             <Clauses event />
             <Details event note names open=details tip card />
             <Recent recent on_jump />
             <TermTip tip />
         </article>
+    }
+}
+
+/// What the next step will do, as the engine describes it before running
+/// it, dimmed: its kind's colour, its words and the paragraph of C99 that
+/// defines it. The expression panel says it instead where it lists the
+/// next step itself, so a note names the next step once.
+#[component]
+fn Next(
+    upcoming: Memo<Option<Upcoming>>,
+    group: Memo<Option<Group>>,
+    labels: Memo<Vec<(String, String)>>,
+) -> impl IntoView {
+    let hidden = move || {
+        upcoming.with(Option::is_none)
+            || group.with(|group| group.as_ref().is_some_and(|group| group.next.is_some()))
+    };
+    view! {
+        <p
+            class="narration-next"
+            data-category=move || upcoming.with(|upcoming| upcoming.as_ref().map(|upcoming| upcoming.category.clone()))
+            data-kind=move || upcoming.with(|upcoming| upcoming.as_ref().map(|upcoming| upcoming.kind.clone()))
+            hidden=hidden
+        >
+            <span class="narration-next-label">"Next"<span class="sr-only">" step"</span>": "</span>
+            {move || upcoming.with(|upcoming| upcoming.as_ref().map(|upcoming| {
+                let text = labels.with(|labels| super::rich_text(&relabeled(&upcoming.text, labels)));
+                let clause = &upcoming.clause;
+                let id = format!("§{}", clause.id);
+                let cited = match clause.link() {
+                    | Some(link) => view! {
+                        " "
+                        <a class="narration-next-clause" href=link target="_blank" rel="noopener" title=format!("{}: {}; open the standard at this paragraph", clause.citation, clause.title)>
+                            <span class="sr-only">"C99 "</span>{id}<span class="sr-only">" (opens the standard in a new tab)"</span>
+                        </a>
+                    }.into_any(),
+                    | None => view! { " " <span class="narration-next-clause" title=clause.citation.clone()>{id}</span> }.into_any(),
+                };
+                view! { <span class="narration-next-text">{text}</span>{cited} }
+            }))}
+        </p>
     }
 }
 
