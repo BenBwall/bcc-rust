@@ -4725,6 +4725,74 @@ fn the_next_operation_is_described_in_plain_words() {
     }
 }
 
+/// Only the initial call of `main` ends the program, and only `main`
+/// returns 0 from its closing brace (C99 §5.1.2.2.3p1); another
+/// function's closing brace returns no value its caller may use
+/// (§6.9.1p12), where the machine stops.
+#[test]
+fn returns_and_closing_braces_say_what_they_do() {
+    let said = |source: &str| {
+        let program = compile(source).expect("test source compiles");
+        let mut session = program.session();
+        let mut said = Vec::new();
+        while !session.state().terminal() {
+            if let Some(upcoming) = &session.state().upcoming {
+                said.push((upcoming.text.clone(), upcoming.clause.id));
+            }
+            let _state = session.step();
+        }
+        said
+    };
+    let recursive =
+        said("int main(void) { static int n = 0; n++; if (n < 2) { int x = main(); } return 0; }");
+    let returns: Vec<_> = recursive
+        .iter()
+        .filter(|(text, _)| text.starts_with("return from `main`"))
+        .collect();
+    assert_eq!(
+        returns,
+        [
+            &(String::from("return from `main`"), "6.8.6.4p3"),
+            &(
+                String::from("return from `main`, which ends the program"),
+                "5.1.2.2.3p1"
+            ),
+        ],
+        "{recursive:#?}"
+    );
+    let falling = said("int main(void) { static int n = 0; n++; if (n < 2) { int x = main(); } }");
+    let ends: Vec<_> = falling
+        .iter()
+        .filter(|(text, _)| text.starts_with("reach the end of"))
+        .collect();
+    assert_eq!(
+        ends,
+        [
+            &(
+                String::from("reach the end of `main`, which returns 0 to its caller"),
+                "5.1.2.2.3p1"
+            ),
+            &(
+                String::from("reach the end of `main`, which returns 0 and ends the program"),
+                "5.1.2.2.3p1"
+            ),
+        ],
+        "{falling:#?}"
+    );
+    let other = said("int f(void) {} int main(void) { return f(); }");
+    assert!(
+        other.contains(&(
+            String::from("reach the end of `f` without a return statement"),
+            "6.9.1p12"
+        )),
+        "{other:#?}"
+    );
+    assert!(
+        !other.iter().any(|(text, _)| text.contains("returns 0")),
+        "{other:#?}"
+    );
+}
+
 #[test]
 fn conversions_subscripts_and_library_calls_are_described() {
     let said = |source: &str| {

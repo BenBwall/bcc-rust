@@ -412,13 +412,16 @@ impl Machine {
             },
             | Op::Return(_) => {
                 let function = self.current_function(program);
-                if self.in_main(program) {
+                if self.in_initial_main(program) {
                     (
                         EventKind::Return,
                         String::from("return from `main`, which ends the program"),
                         clauses::MAIN_RETURN,
                     )
                 } else {
+                    // A return from a recursive call of `main` goes back to
+                    // its caller like any other: only the initial call ends
+                    // the program (C99 §5.1.2.2.3p1).
                     (
                         EventKind::Return,
                         format!("return from `{function}`"),
@@ -426,14 +429,33 @@ impl Machine {
                     )
                 }
             },
-            | Op::Fallthrough => (
-                EventKind::Return,
-                format!(
-                    "reach the end of `{}`, which returns 0",
-                    self.current_function(program)
-                ),
-                clauses::MAIN_RETURN,
-            ),
+            | Op::Fallthrough => {
+                let function = self.current_function(program);
+                if self.in_initial_main(program) {
+                    (
+                        EventKind::Return,
+                        String::from(
+                            "reach the end of `main`, which returns 0 and ends the program",
+                        ),
+                        clauses::MAIN_RETURN,
+                    )
+                } else if self.in_main(program) {
+                    (
+                        EventKind::Return,
+                        String::from("reach the end of `main`, which returns 0 to its caller"),
+                        clauses::MAIN_RETURN,
+                    )
+                } else {
+                    // Only `main` returns 0 from its closing brace; another
+                    // function's caller must not use the value (C99
+                    // §6.9.1p12), and the machine stops there.
+                    (
+                        EventKind::Return,
+                        format!("reach the end of `{function}` without a return statement"),
+                        clauses::FUNCTION_END,
+                    )
+                }
+            },
         };
         Upcoming { kind, text, clause }
     }
@@ -623,6 +645,12 @@ impl Machine {
         self.activations
             .last()
             .is_some_and(|frame| frame.function == program.entry)
+    }
+
+    /// Whether the running call is the initial call of `main`, whose return
+    /// ends the program (C99 §5.1.2.2.3p1), rather than a recursive one.
+    fn in_initial_main(&self, program: &Program) -> bool {
+        self.activations.len() == 1 && self.in_main(program)
     }
 }
 
