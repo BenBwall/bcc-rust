@@ -15,6 +15,7 @@ use crate::{
         Explanation,
         FixItPlace,
         ToDiagnostic,
+        TreatedAsError,
         format_in,
         quote_spelling,
     },
@@ -3668,6 +3669,15 @@ impl ToDiagnostic for SemanticError {
             | None => explanation,
         };
         let mut diagnostic = explanation.at(self.severity(), source);
+        // The reporter marks the first of these in the unit.
+        if self.severity() == ErrorSeverity::Error
+            && self
+                .kind
+                .group()
+                .is_some_and(|group| context.configuration.cl_treats_as_error(group))
+        {
+            diagnostic.treated_as_error = TreatedAsError::First;
+        }
         if let Some(previous) = self.previous {
             let label = match self.kind {
                 | SemanticErrorKind::DuplicateLabel | SemanticErrorKind::DuplicateCase =>

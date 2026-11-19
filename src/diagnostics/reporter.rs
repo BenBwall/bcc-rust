@@ -13,6 +13,7 @@ use super::{
     Diagnostic,
     Renderer,
     ToDiagnostic,
+    TreatedAsError,
     count_of,
 };
 use crate::{
@@ -67,6 +68,9 @@ pub(crate) struct DiagnosticReporter<'r, 'tu> {
     pub(crate) warnings: usize,
     /// A fatal diagnostic was written, so nothing further is.
     fatal_reported:      bool,
+    /// A warning `cl`'s `/WX` made an error was written, after `cl`'s
+    /// error C2220.
+    treated_as_error:    bool,
 }
 
 impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
@@ -187,7 +191,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         let stops_at_error = context.configuration.diagnostic_format()
             == crate::configuration::DiagnosticFormat::Tcc
             || context.configuration.fatal_errors();
-        for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
+        for PendingDiagnostic { mut diagnostic, .. } in self.pending.drain(..) {
             if diagnostic.severity == ErrorSeverity::Warning
                 && context.configuration.suppress_warnings()
             {
@@ -205,6 +209,14 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             }
             if stopped {
                 continue;
+            }
+            if diagnostic.treated_as_error != TreatedAsError::No {
+                diagnostic.treated_as_error = if self.treated_as_error {
+                    TreatedAsError::Later
+                } else {
+                    TreatedAsError::First
+                };
+                self.treated_as_error = true;
             }
             let text = self.renderer.render_text(&diagnostic, context);
             if let Some(observer) = &mut self.observer {
@@ -328,6 +340,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             errors: 0,
             warnings: 0,
             fatal_reported: false,
+            treated_as_error: false,
         }
     }
 }

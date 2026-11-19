@@ -22,6 +22,7 @@ use super::{
     model::{
         Label,
         LabelSource,
+        TreatedAsError,
     },
 };
 use crate::{
@@ -53,8 +54,14 @@ impl Renderer {
     ) -> &str {
         let scratch = &self.scratch;
         let mut out = ArenaString::new_in(scratch);
-        let severity_style = Self::severity_style(diagnostic.severity);
-        let severity = match diagnostic.severity {
+        // `cl` writes a warning its `/WX` made an error as a warning.
+        let shown = if diagnostic.treated_as_error == TreatedAsError::No {
+            diagnostic.severity
+        } else {
+            ErrorSeverity::Warning
+        };
+        let severity_style = Self::severity_style(shown);
+        let severity = match shown {
             | ErrorSeverity::Error if diagnostic.fatal => "fatal error:",
             | ErrorSeverity::Error => "error:",
             | ErrorSeverity::Warning => "warning:",
@@ -117,11 +124,33 @@ impl Renderer {
                 segment
             };
             let file = Self::file_name(context, vector, segment);
+            // `cl`'s `/WX` announces the first warning it made an error.
+            let repeats = if diagnostic.treated_as_error == TreatedAsError::First {
+                2
+            } else {
+                1
+            };
             let _ = match format {
-                | DiagnosticFormat::Msvc { column: true, .. } =>
-                    write!(out, "{file}({},{}): ", vector.line, vector.column),
-                | DiagnosticFormat::Msvc { column: false, .. } =>
-                    write!(out, "{file}({}): ", vector.line),
+                | DiagnosticFormat::Msvc { column, .. } => (0..repeats).try_for_each(|repeat| {
+                    if column {
+                        write!(out, "{file}({},{}): ", vector.line, vector.column)?;
+                    } else {
+                        write!(out, "{file}({}): ", vector.line)?;
+                    }
+                    if repeat + 1 < repeats {
+                        let error = Self::severity_style(ErrorSeverity::Error);
+                        writeln!(
+                            out,
+                            "{} {}",
+                            self.paint("error C2220:", error),
+                            self.paint(
+                                "the following warning is treated as an error",
+                                Style::new().bold()
+                            ),
+                        )?;
+                    }
+                    Ok(())
+                }),
                 | DiagnosticFormat::Tcc => write!(out, "{file}:{}: ", vector.line),
                 | _ => Self::write_compiler_location(
                     &mut out,

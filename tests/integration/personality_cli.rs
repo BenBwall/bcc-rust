@@ -7901,12 +7901,14 @@ mod tests {
                      from 'char **'",
                 ],
             ),
+            // `/WX` announces the first warning it makes an error (C2220).
             (
                 &["/wd4047", "/WX", "pointers.c"],
                 2,
                 &[
-                    "pointers.c(5): error C4133: '=': incompatible types - from 'float *' to 'int \
-                     *'",
+                    "pointers.c(5): error C2220: the following warning is treated as an error",
+                    "pointers.c(5): warning C4133: '=': incompatible types - from 'float *' to \
+                     'int *'",
                 ],
             ),
             (&["/W0", "pointers.c"], 0, &[]),

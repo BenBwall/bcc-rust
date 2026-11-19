@@ -37,6 +37,10 @@ pub(crate) struct Diagnostic<'d> {
     /// `cl`'s code for the diagnostic (`C2065`), which the MSVC formats
     /// write after the severity under the `cl` identity.
     pub(crate) code:           Option<&'static str>,
+    /// `cl`'s `/WX` made this warning an error, so it is written as a
+    /// warning, after `error C2220: the following warning is treated as an
+    /// error` when it is the first: [`TreatedAsError`].
+    pub(crate) treated_as_error: TreatedAsError,
     /// Clang names a place rather than a range for it, as for its
     /// "expected" errors and some warnings: Clang's snippet marks only where
     /// the primary range starts, with no `~` over the token there, and its
@@ -55,6 +59,18 @@ pub(crate) struct Diagnostic<'d> {
     /// about, before it was moved to a place in a file, whose order says
     /// which reading of a file read twice it is in.
     pub(crate) reading:        Option<SourceVectors>,
+}
+
+/// Whether `cl`'s `/WX` made a warning an error. `cl` then writes `error
+/// C2220: the following warning is treated as an error` before the first
+/// such warning of a translation unit, and every one as a warning.
+/// Microsoft Learn: "Compiler Error C2220".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TreatedAsError {
+    No,
+    /// The first in the translation unit, which C2220 precedes.
+    First,
+    Later,
 }
 
 impl<'d> Diagnostic<'d> {
@@ -204,6 +220,7 @@ impl<'d> Explanation<'d> {
             message: self.message,
             option_suffix: self.option_suffix,
             code: self.code,
+            treated_as_error: TreatedAsError::No,
             point: false,
             related_points: false,
             labels: ArenaVec::new_in(self.arena),
