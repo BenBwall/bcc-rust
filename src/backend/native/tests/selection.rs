@@ -1642,6 +1642,105 @@ block0(v0: ptr):
     );
 }
 
+/// A 32-byte vector argument travels in the next YMM register, around the
+/// scalar arguments: the callee stores each to a fresh copy aligned to 32
+/// and then clears the upper halves, and the caller loads them from their
+/// copies last before the call. A whole result comes back in `%ymm0`, or
+/// `%ymm0` and `%ymm1` for 64 bytes: the callee loads it last before `ret`,
+/// and the caller stores it right after the call, then clears the upper
+/// halves. As `clang -mavx2 -S` passes and returns `__m256` (System V AMD64
+/// psABI §3.2.3).
+#[test]
+fn vectors_travel_whole_in_ymm_registers() {
+    let ir = "abi lowered
+function @add(ptr registers(f128, f128, offset 16, whole 32, align 32), ptr vector_register(size \
+               32, align 32, vector, wide), i32, ptr vector_register(size 32, align 32, vector, \
+               wide)) external {
+block0(v0: ptr, v1: ptr, v2: i32, v3: ptr):
+    v4 = load.i64 v1, align 8
+    v5 = load.i64 v3, align 8
+    v6 = iadd.i64 v4, v5
+    v7 = sext.i64 v2
+    v8 = iadd.i64 v6, v7
+    store.i64 v8, v0, align 8
+    return
+}
+
+function @wide(ptr registers(f128, f128, offset 16, whole 64, align 64)) external {
+block0(v0: ptr):
+    v1 = iconst.i64 7
+    v2 = iconst.i64 48
+    v3 = ptr_add v0, v2
+    store.i64 v1, v3, align 8
+    return
+}
+
+function @caller() -> i64 external {
+    slot0 = stack_slot 32, align 32
+    slot1 = stack_slot 32, align 32
+    slot2 = stack_slot 64, align 64
+block0:
+    v0 = stack_addr slot0
+    v1 = stack_addr slot1
+    v2 = iconst.i64 3
+    store.i64 v2, v0, align 8
+    v3 = iconst.i32 5
+    call @add(v1, v0, v3, v0)
+    v4 = stack_addr slot2
+    call @wide(v4)
+    v5 = load.i64 v1, align 8
+    v6 = iconst.i64 48
+    v7 = ptr_add v4, v6
+    v8 = load.i64 v7, align 8
+    v9 = iadd.i64 v5, v8
+    return v9
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let add = function_text(&text, "add");
+    let first = add.find("vmovups\t%ymm0, (").unwrap_or_else(|| panic!("{add}"));
+    let second = add.find("vmovups\t%ymm1, (").unwrap_or_else(|| panic!("{add}"));
+    let clear = add.find("vzeroupper").unwrap_or_else(|| panic!("{add}"));
+    assert!(first < clear && second < clear, "{add}");
+    assert_eq!(add.matches("vzeroupper").count(), 1, "{add}");
+    assert!(add.contains("andq\t$-32, "), "{add}");
+    let result = add.rfind(", %ymm0\n").unwrap_or_else(|| panic!("{add}"));
+    assert!(add[result..].find("retq").is_some(), "{add}");
+    assert!(add[result..].find("vzeroupper").is_none(), "{add}");
+    let wide = function_text(&text, "wide");
+    let low = wide.find(", %ymm0\n").unwrap_or_else(|| panic!("{wide}"));
+    let high = wide.find("), %ymm1\n").unwrap_or_else(|| panic!("{wide}"));
+    assert!(low < high && !wide.contains("vzeroupper"), "{wide}");
+    let caller = function_text(&text, "caller");
+    let setup = call_setup(caller, "add");
+    let loads = setup.find(", %ymm0\n").unwrap_or_else(|| panic!("{caller}"));
+    assert!(setup[loads..].contains(", %ymm1\n"), "{caller}");
+    assert!(setup.contains("$5, %edi\n"), "{caller}");
+    assert!(!setup[loads..].contains("%edi"), "{caller}");
+    for (callee, stores) in [("add", 1), ("wide", 2)] {
+        let after = &caller[caller
+            .find(&format!("callq\t{callee}"))
+            .unwrap_or_else(|| panic!("{caller}"))..];
+        let clear = after.find("vzeroupper").unwrap_or_else(|| panic!("{caller}"));
+        let stored = after[..clear].matches("vmovups\t%ymm").count();
+        assert_eq!(stored, stores, "{callee}:\n{caller}");
+    }
+    // Win64 returns a whole vector in the same registers.
+    let text = assembly(
+        "abi lowered
+function @wide(ptr registers(f128, f128, offset 16, whole 32, align 32)) external {
+block0(v0: ptr):
+    v1 = iconst.i64 7
+    store.i64 v1, v0, align 8
+    return
+}
+",
+        Target::WindowsGnu,
+    );
+    let wide = function_text(&text, "wide");
+    assert!(wide.contains(", %ymm0\n") && !wide.contains("vzeroupper"), "{wide}");
+}
+
 /// A stack object aligned above the stack's 16 bytes gets spare room and
 /// an address rounded up at run time, in place of a refusal.
 #[test]
