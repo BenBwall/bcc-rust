@@ -450,7 +450,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             step.extend(source.arguments());
             if !clang_cl {
                 plan.steps.push(Step::Print {
-                    text:   format!("{}\n", Path::new(&source.path).display()),
+                    text:   format!("{}\n", source.echoed()),
                     stderr: true,
                 });
             }
@@ -471,7 +471,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             step.extend(source.arguments());
             if !clang_cl {
                 plan.steps.push(Step::Print {
-                    text:   format!("{}\n", Path::new(&source.path).display()),
+                    text:   format!("{}\n", source.echoed()),
                     stderr: false,
                 });
             }
@@ -516,7 +516,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         step.extend(source.arguments());
         if !clang_cl {
             plan.steps.push(Step::Print {
-                text:   format!("{}\n", Path::new(&source.path).display()),
+                text:   format!("{}\n", source.echoed()),
                 stderr: false,
             });
         }
@@ -726,6 +726,13 @@ impl Source {
 
     const fn is_c(&self) -> bool {
         self.c
+    }
+
+    /// The name `cl` prints as it compiles the source: its file name,
+    /// after the last `/` or `\\` (`sub\\s.c` prints `s.c`).
+    fn echoed(&self) -> String {
+        let path = self.path.to_string_lossy();
+        path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned()
     }
 
     /// The source on bcc's command line, as C; a name after `--` that
