@@ -476,11 +476,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             )
                     });
                     // The parser already reports the C23 spelling under a
-                    // pedantic policy. Do not emit the same requirement twice.
+                    // pedantic policy, or wherever Clang's `-Weverything`
+                    // set its class, inside `__extension__` too under Clang's
+                    // rules (GCC's `__extension__` silences it), under the
+                    // policy it asked (`Context::extension_policy_at`). Do
+                    // not emit the same requirement twice.
                     let source = syntax.map_or(f.declarator.source_vectors, |p| p.source_vectors);
+                    let option = crate::translation_phases::ExtensionOption::Everything;
                     if parser_exempt
-                        || self.context.configuration_at(source).extension_policy()
+                        || (self.context.extension_policy_at(option, source)
                             == crate::configuration::ExtensionPolicy::Allow
+                            && self
+                                .context
+                                .everything_class_outside_pedantic(option, source)
+                                .is_none())
                     {
                         self.extension_error(
                             crate::configuration::Feature::UnnamedDefinitionParameters,

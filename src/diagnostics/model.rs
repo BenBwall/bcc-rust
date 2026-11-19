@@ -30,6 +30,10 @@ pub(crate) struct Diagnostic<'d> {
     pub(crate) severity:       ErrorSeverity,
     /// Clang's `#pragma clang diagnostic fatal`, written as a `fatal error`.
     pub(crate) fatal:          bool,
+    /// A diagnostic pragma classified it, which keeps an error from Clang's
+    /// `-Wfatal-errors` (`NoErrorAsFatal`, which
+    /// `DiagnosticsEngine::makeUserMapping` sets on a pragma's mapping).
+    pub(crate) pragma_mapped:  bool,
     pub(crate) message:        &'d str,
     /// The message ends with the ` [-WNAME]` of the warning option that
     /// controls it, which bcc appended (see [`Explanation::option_suffix`]).
@@ -217,6 +221,7 @@ impl<'d> Explanation<'d> {
         Diagnostic {
             severity,
             fatal: false,
+            pragma_mapped: false,
             message: self.message,
             option_suffix: self.option_suffix,
             code: self.code,

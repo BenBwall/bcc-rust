@@ -1,3 +1,4 @@
 sema-main-gcc-werror.c:1:5: error: 'main' takes only zero or two arguments [-Werror=main]
     1 | int main(int argc) { return 0; }
       |     ^~~~
+cc1: all warnings being treated as errors

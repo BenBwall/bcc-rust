@@ -69,7 +69,10 @@ use super::{
 };
 use crate::{
     backend::llvm::operand,
-    cli::arguments::implements_language_option,
+    cli::{
+        arguments::implements_language_option,
+        warning_options,
+    },
     target::{
         UNKNOWN_VECTOR_ABI,
         X86Features,
@@ -240,6 +243,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                         format_args!("'{text}' is not supported: {why}"),
                     ),
                 }
+            } else if text.starts_with("-W") && !warning_options::clang_takes(text) {
+                // Clang's front end warns about the warning options it does
+                // not take, `-Wl,`, `-Wa,` and `-Wp,` among them, which
+                // clang-cl's driver does not have.
+                state
+                    .bcc
+                    .push(format!("--unknown-warning-option={text}").into());
+            } else if text.starts_with("-W") && !implements_language_option(text) {
+                // Taken, and with no effect in bcc.
             } else {
                 state.bcc.push(argument.into());
             }
@@ -966,9 +978,18 @@ impl State {
                     &[]
                 },
             ),
-            // clang-cl's `/Wall` is `-Weverything`, which bcc does not have;
-            // `/W4`'s options are the nearest.
-            | "W4" | "Wall" => self.set_warning_level(invocation, 4, &["-Wall", "-Wextra"]),
+            | "W4" => self.set_warning_level(invocation, 4, &["-Wall", "-Wextra"]),
+            // clang-cl's `/Wall` is `-Weverything`; `cl`'s is its level 4
+            // and more.
+            | "Wall" => self.set_warning_level(
+                invocation,
+                4,
+                if invocation.personality == Personality::ClangCl {
+                    &["-Weverything"]
+                } else {
+                    &["-Wall", "-Wextra"]
+                },
+            ),
             | "WX" => {
                 self.warnings_error = true;
                 self.bcc.push("-Werror".into());

@@ -206,10 +206,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         } else if !self.context.configuration.is_native(Feature::C23Keywords)
             && let Some(token) = token
         {
-            self.extension(
+            self.extension_outside_pedantic(
                 Feature::C23Keywords,
                 "static assertion without message",
-                token,
+                token.source_vectors,
             );
         }
         None

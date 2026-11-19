@@ -134,11 +134,12 @@ pub(super) fn print_preprocessor_output_in<'tu>(
         |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context),
     );
     let mut items = items.into_iter();
-    let (mut errors, mut warnings) = (0, 0);
+    let (mut errors, mut warnings, mut promoted) = (0, 0, 0);
     loop {
         let mut reporter = DiagnosticReporter::new(reporter_arena, context.tu_arena(), color);
         reporter.errors = errors;
         reporter.warnings = warnings;
+        reporter.promoted = promoted;
         let token = loop {
             match items.next() {
                 | Some(Err(error)) => reporter.report(&error, context),
@@ -154,6 +155,7 @@ pub(super) fn print_preprocessor_output_in<'tu>(
         };
         errors = reporter.errors;
         warnings = reporter.warnings;
+        promoted = reporter.promoted;
         drop(reporter);
         // The reporter's copied locations and folding state are gone; only
         // counts survive, and no raw pointer into its arena is retained.

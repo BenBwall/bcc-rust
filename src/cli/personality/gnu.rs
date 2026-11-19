@@ -33,6 +33,7 @@ use super::{
     known::{
         Compiler,
         knows,
+        knows_exactly,
     },
     target_named,
     unimplemented::{
@@ -168,6 +169,7 @@ pub(super) fn plan_translated(
         dependency_file: None,
         preprocessor_dependency_file: false,
         unrecognized: Vec::new(),
+        compiler_option_errors: Vec::new(),
         bad_standard: None,
         other_languages: Vec::new(),
     };
@@ -299,6 +301,7 @@ pub(super) fn plan_translated(
         }
     }
     state.warn_other_languages();
+    state.report_compiler_option_errors();
     // GCC's `-v` or `-###` without inputs reports the driver and succeeds,
     // even after complaining about an option.
     let has_inputs = state.has_inputs();
@@ -688,6 +691,11 @@ struct State<'a> {
     /// read the whole command line, and not at all if a `-dump` query ends
     /// it first.
     unrecognized: Vec<String>,
+    /// GCC's compiler refuses each of these before it compiles a C source:
+    /// a `-Werror=` or `-Wno-error=` naming no warning, with the option it
+    /// looked for, and an empty operand of `-Wp,`, which it takes for a
+    /// second input file (`None`).
+    compiler_option_errors: Vec<Option<(String, String)>>,
     /// Clang's last `-std=`, when its value is unknown: its compiler, not
     /// its driver, refuses it, so an earlier one and a query go unreported.
     bad_standard: Option<String>,
@@ -1557,6 +1565,133 @@ impl State<'_> {
         self.out.extend(options.iter().map(Into::into));
     }
 
+    /// Reads the warning option `text` as GCC's driver and compiler, or
+    /// Clang's front end, do, and returns whether that is all there is to
+    /// it; a warning the compiler knows goes on to be passed or ignored.
+    /// Clang's front end warns about one it does not take, as bcc does with
+    /// the option passed apart. GCC
+    /// refuses an empty `-Wno-`, a joined option's missing or bad value,
+    /// and a name it does not know, Clang's included, except that it
+    /// ignores an unknown `-Wno-` option, which bcc notes after the
+    /// diagnostics as GCC does, and its compiler refuses an unknown
+    /// `-Werror=` group (`report_compiler_option_errors`). GCC 14,
+    /// `gcc/opts-common.cc` (`cmdline_handle_error`) and `gcc/opts.cc`
+    /// (`enable_warning_as_error`).
+    fn read_warning_option(&mut self, text: &str) -> bool {
+        if ["-Wl,", "-Wa,", "-Wp,"]
+            .iter()
+            .any(|prefix| text.starts_with(prefix))
+        {
+            return false;
+        }
+        // Clang's front end reads the warning options: bcc warns as it does
+        // about those it does not take, and applies those it takes and bcc
+        // implements.
+        if self.compiler == Compiler::Clang {
+            if !crate::cli::warning_options::clang_takes(text) {
+                self.out
+                    .push(format!("--unknown-warning-option={text}").into());
+                return true;
+            }
+            return !implements_language_option(text);
+        }
+        if text == "-Wno-" {
+            self.unrecognized.push(text.into());
+            return true;
+        }
+        if text.ends_with('=')
+            && (text == "-Wno-error=" || !text.starts_with("-Wno-"))
+            && knows(Compiler::Gcc, text)
+        {
+            self.error(format_args!("missing argument to '{text}'"));
+            return true;
+        }
+        if let Some((option, value)) = text.split_once('=')
+            && let Some(check) = gcc_value(option, value)
+        {
+            match check {
+                | Err(message) => {
+                    self.error(format_args!("{message}"));
+                    if option == "-Wnormalized" {
+                        super::print(
+                            &format!(
+                                "{}: note: valid arguments to '-Wnormalized=' are: id nfc nfkc \
+                                 none\n",
+                                self.invocation.name
+                            ),
+                            true,
+                        );
+                    }
+                },
+                | Ok(level) => self.out.push(format!("{option}={level}").into()),
+            }
+            return true;
+        }
+        let group = text
+            .strip_prefix("-Werror=")
+            .or_else(|| text.strip_prefix("-Wno-error="));
+        if let Some(group) = group {
+            let looked_for = format!("-W{group}");
+            if !knows_exactly(Compiler::Gcc, &looked_for) {
+                self.compiler_option_errors
+                    .push(Some((text.to_owned(), looked_for)));
+                return true;
+            }
+            return false;
+        }
+        // GCC's joined options and its old `-Werror-implicit-function-
+        // declaration` have no `no-` form (`RejectNegative`), so it refuses
+        // one rather than ignore it as an unknown `-Wno-` option.
+        if let Some(positive) = text.strip_prefix("-Wno-")
+            && (positive.contains('=') || positive == "error-implicit-function-declaration")
+            && knows(Compiler::Gcc, &format!("-W{positive}"))
+        {
+            self.unrecognized.push(text.into());
+            return true;
+        }
+        if knows(Compiler::Gcc, text) {
+            return false;
+        }
+        if text.starts_with("-Wno-") {
+            self.out
+                .push(format!("--unrecognized-warning-option={text}").into());
+        } else {
+            self.unrecognized.push(text.into());
+        }
+        true
+    }
+
+    /// Reports, for each C source GCC's compiler would compile, the options
+    /// it refuses before compiling it (`read_warning_option`, and `-Wp,`'s
+    /// empty operand), as errors that leave nothing compiled. Under `-###`
+    /// no compiler runs, and after a driver error none does.
+    fn report_compiler_option_errors(&mut self) {
+        if self.compiler_option_errors.is_empty() || self.errors != 0 || self.dry_run {
+            return;
+        }
+        let mut text = String::new();
+        for error in &self.compiler_option_errors {
+            match error {
+                | Some((option, looked_for)) =>
+                    _ = writeln!(text, "cc1: error: '{option}': no option '{looked_for}'"),
+                | None =>
+                    _ = writeln!(
+                        text,
+                        "cc1: error: too many filenames given; type 'cc1 --help' for usage"
+                    ),
+            }
+        }
+        let sources = self
+            .inputs
+            .iter()
+            .filter(|input| !input.dropped && input.kind == InputKind::C)
+            .count();
+        for _ in 0..sources {
+            self.errors += 1;
+            super::print(&text, true);
+        }
+    }
+
     /// Warns, as GCC's C compiler does for each C source it compiles, about
     /// the options of other languages: `cc1: warning: command-line option
     /// '-fno-rtti' is valid for C++/D/ObjC++ but not for C`, none under
@@ -1865,6 +2000,9 @@ impl State<'_> {
                     .any(|prefix| text.starts_with(prefix)))
         {
             self.warning_options.push(text.into());
+            if text.starts_with("-W") && self.read_warning_option(text) {
+                return;
+            }
         }
         if text.starts_with("-Wl,") {
             self.linker_word(text.into());
@@ -1932,8 +2070,8 @@ impl State<'_> {
                 self.eval_method = true;
             }
         }
-        // Clang's own floating-point and warning options, which bcc
-        // implements and GCC does not know.
+        // Clang's own floating-point options, which bcc implements and GCC
+        // does not know; its warning options are `read_warning_option`'s.
         let clang_only = self.compiler == Compiler::Gcc
             && matches!(
                 text,
@@ -1943,50 +2081,6 @@ impl State<'_> {
                     | "-fno-honor-infinities"
                     | "-fapprox-func"
                     | "-fno-approx-func"
-                    | "-Wmain-return-type"
-                    | "-Wno-main-return-type"
-                    | "-Wreturn-stack-address"
-                    | "-Wno-return-stack-address"
-                    | "-Wimplicit-const-int-float-conversion"
-                    | "-Wno-implicit-const-int-float-conversion"
-                    | "-Wimplicit-int-float-conversion"
-                    | "-Wno-implicit-int-float-conversion"
-                    | "-Wtautological-constant-compare"
-                    | "-Wno-tautological-constant-compare"
-                    | "-Wtautological-constant-out-of-range-compare"
-                    | "-Wno-tautological-constant-out-of-range-compare"
-                    | "-Wtautological-unsigned-zero-compare"
-                    | "-Wno-tautological-unsigned-zero-compare"
-                    | "-Wtautological-type-limit-compare"
-                    | "-Wno-tautological-type-limit-compare"
-                    | "-Wshadow-all"
-                    | "-Wno-shadow-all"
-                    | "-Wunused-local-typedef"
-                    | "-Wno-unused-local-typedef"
-                    | "-Wlogical-op-parentheses"
-                    | "-Wno-logical-op-parentheses"
-                    | "-Wbitwise-op-parentheses"
-                    | "-Wno-bitwise-op-parentheses"
-                    | "-Wshift-op-parentheses"
-                    | "-Wno-shift-op-parentheses"
-                    | "-Wparentheses-equality"
-                    | "-Wno-parentheses-equality"
-                    | "-Wbitwise-conditional-parentheses"
-                    | "-Wno-bitwise-conditional-parentheses"
-                    | "-Wundefined-internal"
-                    | "-Wno-undefined-internal"
-                    | "-Wformat-invalid-specifier"
-                    | "-Wno-format-invalid-specifier"
-                    | "-Wformat-insufficient-args"
-                    | "-Wno-format-insufficient-args"
-                    | "-Wformat-pedantic"
-                    | "-Wno-format-pedantic"
-                    | "-Wformat-type-confusion"
-                    | "-Wno-format-type-confusion"
-                    | "-Wgcc-compat"
-                    | "-Wno-gcc-compat"
-                    | "-Winvalid-noreturn"
-                    | "-Wno-invalid-noreturn"
             );
         // GCC does not recognize an unknown `-std=`, whichever follows it.
         // Clang's compiler reads only the last `-std=` and refuses an
@@ -2062,6 +2156,16 @@ impl State<'_> {
             let queries = self.queries.len();
             let mut pieces = options.split(',').map(OsStr::new);
             while let Some(piece) = pieces.next() {
+                // GCC passes an empty one on to its compiler as a file name,
+                // which Clang leaves out.
+                if piece.is_empty() {
+                    if self.compiler == Compiler::Gcc
+                        && !self.compiler_option_errors.contains(&None)
+                    {
+                        self.compiler_option_errors.push(None);
+                    }
+                    continue;
+                }
                 if let Some(plan) = self.argument(piece, &mut pieces) {
                     drop(plan);
                 }
@@ -2461,6 +2565,37 @@ impl State<'_> {
         } else {
             self.error(format_args!("unknown argument: '{text}'"));
         }
+    }
+}
+
+/// The value of GCC's joined warning option `option=value`, among those bcc
+/// reads: the level of `-Wformat=` or `-Wunused-const-variable=`, which GCC
+/// takes from 0 to 2 in any decimal spelling, or the form `-Wnormalized=`
+/// names; with GCC's error for any other. `None` for other options.
+/// GCC 14, `gcc/opts-common.cc`: `integral_argument` and
+/// `cmdline_handle_error`.
+fn gcc_value(option: &str, value: &str) -> Option<Result<String, String>> {
+    match option {
+        | "-Wformat" | "-Wunused-const-variable" => Some(
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                Err(format!(
+                    "argument to '{option}=' should be a non-negative integer"
+                ))
+            } else {
+                match value.trim_start_matches('0') {
+                    | "" => Ok("0".into()),
+                    | level @ ("1" | "2") => Ok(level.into()),
+                    | _ => Err(format!("argument to '{option}=' is not between 0 and 2")),
+                }
+            },
+        ),
+        | "-Wnormalized" => Some(match value {
+            | "id" | "nfc" | "nfkc" | "none" => Ok(value.into()),
+            | _ => Err(format!(
+                "argument '{value}' to '-Wnormalized' not recognized"
+            )),
+        }),
+        | _ => None,
     }
 }
 

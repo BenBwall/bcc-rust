@@ -63,6 +63,27 @@ impl Parser<'_, '_, '_> {
         }
     }
 
+    /// [`Self::extension_source`] for syntax Clang warns of by default
+    /// ([`Context::report_extension_outside_pedantic`]). Clang's
+    /// `__extension__` silences only the extension diagnostics it does not
+    /// report by default (`DiagnosticIDs::getDiagnosticSeverity`), so under
+    /// its rules this one reports inside `__extension__` too. GCC files the
+    /// same syntax under `-Wpedantic`, which its `__extension__` silences.
+    pub(super) fn extension_outside_pedantic(
+        &mut self,
+        feature: crate::configuration::Feature,
+        spelling: &'static str,
+        source: SourceVectors,
+    ) {
+        if self.pedantic_suppression == 0
+            || self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang
+        {
+            self.context
+                .report_extension_outside_pedantic(feature, spelling, source);
+        }
+    }
+
     /// Reports the C99 array-parameter syntax feature.
     /// C99: array declarators §6.7.5 paragraph 1, p. 114; PDF p. 126.
     pub(super) fn c99_syntax_extension(&mut self, spelling: &'static str, token: Token) {

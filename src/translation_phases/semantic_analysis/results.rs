@@ -504,13 +504,14 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     }
 
     /// Whether code generation may consume this unit: no phase, this one
-    /// included, has reported an error-severity diagnostic. Warnings do not
+    /// included, has reported an error-severity diagnostic, nor has the
+    /// command line (Clang's `-Werror` unknown warning option). Warnings do not
     /// block lowering. Types that analysis gave up on without a diagnostic
     /// remain possible, so lowering still rejects any type for which
     /// [`Types::unanalyzed`] holds.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     pub(crate) fn lowerable(&self, context: &Context<'_>) -> bool {
-        self.errors == 0 && context.error_count() == 0
+        self.errors == 0 && context.error_count() == 0 && context.command_line.errors == 0
     }
 
     /// Writes the folded integer `value` to `limbs` as little-endian 64-bit

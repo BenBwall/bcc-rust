@@ -9,3 +9,4 @@ sema-unused-order-werror-gcc.c: In function 'second':
 sema-unused-order-werror-gcc.c:9:17: warning: typedef 'U' locally defined but not used [-Wunused-local-typedefs]
     9 |     typedef int U;
       |                 ^
+cc1: some warnings being treated as errors

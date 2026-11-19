@@ -74,6 +74,7 @@ pub(crate) use errors::{
 };
 pub(crate) use extension::{
     DiagnosticPolicy,
+    ExtensionOption,
     policy_severity,
 };
 pub(crate) use interface::{
