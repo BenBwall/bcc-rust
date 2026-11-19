@@ -293,16 +293,20 @@ fn tape_labels(snapshot: Memo<Option<Snapshot>>, reel: Memo<Reel>) -> Memo<Vec<(
 }
 
 /// The names the step's objects share with others that the tape tells
-/// apart (a block's `x` shadowing the function's is `x #2` there), each
-/// with the tape's label for the step's object: none for a name the step
-/// uses for two objects.
+/// apart by number (a block's `x` shadowing the function's is `x #2`
+/// there), each with that numbered name: none for a name the step uses for
+/// two objects. The note keeps a string literal's whole spelling, which
+/// the tape shortens.
 fn lane_labels(reel: &Reel, snapshot: &Snapshot) -> Vec<(String, String)> {
     let mut labels: Vec<(&str, Option<String>)> = Vec::new();
     for &id in &snapshot.event.objects {
         let Some(object) = snapshot.objects.iter().find(|object| object.id == id) else {
             continue;
         };
-        let label = reel.label_of(id).unwrap_or_else(|| object.name.clone());
+        let label = match reel.ordinal_of(id) {
+            | Some(ordinal) if ordinal > 1 => format!("{} #{ordinal}", object.name),
+            | _ => object.name.clone(),
+        };
         match labels.iter_mut().find(|(name, _)| *name == object.name) {
             | Some((_, known)) if known.as_ref() != Some(&label) => *known = None,
             | Some(_) => {},
@@ -1084,5 +1088,43 @@ mod tests {
             titles.iter().all(|title| !title.contains("x #1")),
             "{titles:#?}"
         );
+    }
+
+    // The tape shortens a long string literal's lane name ("Hello, w…");
+    // the note keeps its whole spelling.
+    #[cfg(feature = "worker")]
+    #[test]
+    fn a_string_literal_keeps_its_spelling() {
+        use super::lane_labels;
+        use crate::{
+            demos,
+            machine::Machine,
+            panels::Reel,
+            protocol::{
+                Answer,
+                Command,
+            },
+            snapshot::Snapshot,
+        };
+        let mut machine = Machine::default();
+        let snapshot = |answer| match answer {
+            | Ok(Answer::Snapshot(snapshot)) => *snapshot,
+            | _ => panic!("a snapshot"),
+        };
+        let source = demos::find("hello").expect("a lesson").source.to_owned();
+        let mut history = vec![snapshot(machine.run(Command::Load(source)))];
+        while history.last().is_some_and(Snapshot::can_step) {
+            history.push(snapshot(machine.run(Command::Step)));
+        }
+        let reel = Reel::record(&history);
+        assert!(
+            history
+                .iter()
+                .any(|snapshot| snapshot.event.title.contains("\"Hello, world!\"")),
+            "the lesson names its literal"
+        );
+        for snapshot in &history {
+            assert_eq!(lane_labels(&reel, snapshot), [], "{}", snapshot.event.title);
+        }
     }
 }

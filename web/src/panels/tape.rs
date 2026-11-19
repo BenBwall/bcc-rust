@@ -378,6 +378,16 @@ impl Reel {
             .find(|lane| lane.objects.contains(&object))
             .map(Lane::label)
     }
+
+    /// The number the tape gives `object`'s lane among lanes of its name:
+    /// 1 unless another object of that name has a lane of its own.
+    pub fn ordinal_of(&self, object: usize) -> Option<usize> {
+        self.groups
+            .iter()
+            .flat_map(|group| &group.lanes)
+            .find(|lane| lane.objects.contains(&object))
+            .map(|lane| lane.ordinal)
+    }
 }
 
 impl Group {
