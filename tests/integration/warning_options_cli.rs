@@ -580,6 +580,18 @@ mod tests {
                 (&["-c", "-Weverything", "clean.c"], "", 0),
             ],
         );
+        // Clang has no group for bcc's own `-Wconstant-promotion`, so
+        // `-Weverything` leaves an unsuffixed constant that becomes `long`
+        // alone, even under `-Werror`.
+        std::fs::write(
+            directory.0.join("literal.c"),
+            "int main(void) { return sizeof(2147483648) == 8 ? 0 : 1; }\n",
+        )
+        .unwrap();
+        directory.check(
+            "--clang-mode",
+            &[(&["-c", "-Weverything", "-Werror", "literal.c"], "", 0)],
+        );
     }
 
     /// clang-cl's driver has no `-Wl,`, `-Wa,` or `-Wp,`, so its front end
