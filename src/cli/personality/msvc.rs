@@ -182,7 +182,48 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.sources.push(Source::new(argument, false));
             continue;
         };
-        // Intel's own `/Q` options, which clang-cl would read as paths.
+        // Intel's own options, which clang-cl would refuse or read as
+        // paths: the remark switch (read already), the dependency options
+        // CMake gives `icx-cl` (`-QMD -QMT TARGET -QMF FILE`), options for
+        // the linker (`/Qoption,link,/machine:x64`), and the other `/Q`
+        // options.
+        if intel.is_some() {
+            if matches!(
+                option,
+                "Rno-debug-disables-optimization" | "Rdebug-disables-optimization"
+            ) {
+                continue;
+            }
+            if let Some(dependency) = option.strip_prefix('Q')
+                && matches!(dependency, "MD" | "MMD" | "MT" | "MF" | "MQ")
+            {
+                state.bcc.push(format!("-{dependency}").into());
+                if matches!(dependency, "MT" | "MF" | "MQ")
+                    && let Some(operand) = arguments.next()
+                {
+                    state.bcc.push(operand.into());
+                }
+                continue;
+            }
+            // CMake has `icx-cl` make a static library with
+            // `-fuse-ld=llvm-lib -o NAME.lib OBJECTS`.
+            if option == "fuse-ld=llvm-lib" {
+                state.archive = true;
+                continue;
+            }
+            if option == "o"
+                && let Some(output) = arguments.next()
+            {
+                state.executable = Some(output.into());
+                continue;
+            }
+            if let Some(words) = option.strip_prefix("Qoption,link,") {
+                state
+                    .link
+                    .extend(words.split(',').map(|word| link_option(OsStr::new(word))));
+                continue;
+            }
+        }
         if intel.is_some()
             && let Some(intel) = option.strip_prefix('Q')
             && let Some(options) = icx::cl_option(intel)
@@ -568,6 +609,27 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if state.compile_only {
         return Ok(plan);
     }
+    // Intel's driver runs `llvm-lib`, which writes the archive format
+    // Microsoft's linker reads; `llvm-ar` writes the same in COFF format.
+    if state.archive {
+        let mut arguments: Vec<OsString> = vec!["--format=coff".into(), "rcs".into()];
+        arguments.push(executable.into());
+        arguments.extend(objects.into_iter().map(OsString::from));
+        arguments.extend(
+            state
+                .sources
+                .iter()
+                .filter(|source| !source.is_c())
+                .map(|source| source.path.clone()),
+        );
+        plan.steps.push(Step::Run {
+            program: PathBuf::from(version::program_name("ar")),
+            name: None,
+            arguments,
+            stdin: None,
+        });
+        return Ok(plan);
+    }
     let mut link = common;
     if state.dll {
         link.push("-shared".into());
@@ -809,6 +871,8 @@ struct State {
     /// `/Fo`, `/Fe`, `/Fi`: a file, or a directory ending in a separator.
     object:                  Option<PathBuf>,
     executable:              Option<PathBuf>,
+    /// `icx-cl -fuse-ld=llvm-lib`: archive the objects instead of linking.
+    archive:                 bool,
     preprocessed:            Option<PathBuf>,
     /// `/FA` or `/Fa`, with `/Fa`'s name.
     listing:                 bool,
@@ -866,6 +930,7 @@ impl Default for State {
             preprocess:              None,
             object:                  None,
             executable:              None,
+            archive:                 false,
             preprocessed:            None,
             listing:                 false,
             listing_name:            None,
