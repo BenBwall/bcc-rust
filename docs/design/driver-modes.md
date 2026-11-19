@@ -1359,15 +1359,15 @@ inside `zig` names itself.
 | `-target QUERY`, `--target=QUERY` | the target ([Targets](#zig-cc-targets)); `--target QUERY` is `error: unknown clang option: "--target"`, and `-target` alone `error: expected parameter after "-target"` |
 | `-mcpu=CPU`, and `-march=` and `-mtune=` read the same way | `CPU` is one of zig's processors, `NAME+FEATURE-FEATURE` with zig's spelling of LLVM's names (`x86_64_v3`, `sse4_2`): `-march=` with LLVM's (`x86-64-v3`), and `-mFEATURE` or `-mno-FEATURE` for each feature Clang has an option for; `baseline` and `x86_64` add nothing. GCC's `-march=x86-64-v3` reads as processor `x86` with features, which zig refuses |
 | no `-O`, `-O0`, `-Og` | Debug: `-O0`, UBSan, `-fstack-protector-strong` |
-| `-O1` to `-O4`, `-Ofast` | ReleaseFast: `-O2 -DNDEBUG`; `-Ofast` brings no fast math |
-| `-Os`, `-Oz` | ReleaseSmall: `-Os -DNDEBUG` |
+| `-O1` to `-O4`, `-Ofast` | ReleaseFast: `-O2 -DNDEBUG`; `-Ofast` brings no fast math. With UBSan's checks on (`-fsanitize=undefined` or `-fsanitize-trap=undefined`), ReleaseSafe instead, as zig makes it after reading the command line: `-O2 -D_FORTIFY_SOURCE=2`, the stack protector as in Debug, and no `NDEBUG` |
+| `-Os`, `-Oz` | ReleaseSmall: `-Os -DNDEBUG`, stripped as by `-s` (no DWARF, and a link without symbols) unless a `-g` option keeps the debug information; the checks leave it ReleaseSmall |
 | other `-O` options (`-O`, `-O5`) | Clang's, after zig's level |
-| `-f[no-]sanitize=` naming `undefined`, `thread` or a fuzzer | taken whole, the other names in the list dropped, as zig does: `undefined` turns zig's checks on or off in any mode, `thread` is passed back alone, and a fuzzer is refused |
+| `-f[no-]sanitize=` naming `undefined`, `thread` or a fuzzer | taken whole, the other names in the list dropped, as zig does: `undefined` turns zig's checks on or off in any mode (and makes ReleaseFast ReleaseSafe), `thread` is passed back alone, and a fuzzer is refused |
 | `-f[no-]sanitize-trap=undefined` | trapping checks, or reporting ones; `-fno-sanitize-trap=undefined` alone turns the checks off |
-| `-f[no-]PIC`, `-f[no-]pic`, `-f[no-]PIE`, `-f[no-]pie` | on Linux, `-fPIE` or `-fno-PIE` and then `-fPIC` or `-fno-PIC`, as zig passes them, so Clang's reading makes `-fPIE` PIC alone; PIC by default where zig links glibc dynamically or `-shared`; executables link with `-no-pie` unless `-fPIE` |
+| `-f[no-]PIC`, `-f[no-]pic`, `-f[no-]PIE`, `-f[no-]pie` | on Linux, `-fPIE` or `-fno-PIE` and then `-fPIC` or `-fno-PIC`, as zig passes them, so Clang's reading makes `-fPIE` PIC alone; PIC by default where zig links glibc dynamically, `-shared` or `-fPIE`; executables link with `-no-pie` unless `-fPIE` |
 | `-f[no-]omit-frame-pointer` | frame pointers kept unless `-fomit-frame-pointer` |
 | `-fstack-protector`, `-fstack-protector-strong`, `-fstack-protector-all`, `-fno-stack-protector` | `-fstack-protector-strong` or none |
-| `-g`, `-g1`, `-gline-tables-only`, `-gdwarf32`, `-gdwarf64`, `-s` | DWARF 4 (`-gdwarf-4`) unless `-s` strips, which also strips the symbols; other `-g` options are Clang's after it |
+| `-g`, `-g1`, `-gline-tables-only`, `-gdwarf32`, `-gdwarf64`, `-s` | DWARF 4 (`-gdwarf-4`) unless `-s` strips, which also strips the symbols, or ReleaseSmall does; other `-g` options are Clang's after it |
 | `-x LANGUAGE` | zig's languages (`c`, `c-header`, `assembler`, `assembler-with-cpp` and the C++ and Objective-C ones); another is `error: language not recognized: "bogus"` |
 | `-flto=MODE` | `auto`, `full`, `thin` or `jobserver`; another is `error: invalid -flto mode "bogus"; must be "auto", "full", "thin", or "jobserver"` |
 | `-static`, `-dynamic`, `-shared`, `-nostdlib`, `-nodefaultlibs`, `-nolibc` | the link, and whether zig links the C library at all |
@@ -1417,7 +1417,8 @@ options (`addCCArgs` in `src/Compilation.zig`):
   (`__SIG_ATOMIC_MIN__`, `__SIG_ATOMIC_TYPE__`, `__WCHAR_MIN__`,
   `__WINT_MIN__`); bcc's `<stdint.h>` spells `WCHAR_MIN` and `WINT_MIN`
   without them. `__bcc__` stays.
-- `-DNDEBUG` in the release modes.
+- `-DNDEBUG` in ReleaseFast and ReleaseSmall, `-D_FORTIFY_SOURCE=2` in
+  ReleaseSafe.
 - Where zig links the C library (not under `-nostdlib`, `-nodefaultlibs` or
   `-nolibc`, nor for `wasm32-freestanding`): `-D__GLIBC_MINOR__=N` for glibc,
   the query's minor version, the machine's when zig detects it, or 31; and
@@ -1426,8 +1427,9 @@ options (`addCCArgs` in `src/Compilation.zig`):
   `0x0601`).
 - In Debug, on glibc's targets, UBSan's checks (`-fsanitize=undefined`) that
   stop at the first report, as zig's own library does; the stack protector,
-  where zig links the C library, on Linux; frame pointers; PIC as above; DWARF
-  4; and `-ffreestanding` for `wasm32-freestanding`.
+  in Debug and ReleaseSafe where zig links the C library, on Linux; frame
+  pointers; PIC as above; DWARF 4 outside ReleaseSmall; and `-ffreestanding`
+  for `wasm32-freestanding`.
 
 So `-dM -E` under each mode and target lists what zig cc's does, apart from
 the [Clang personality's own differences from Clang](#deviations) and those
@@ -1442,8 +1444,10 @@ read, `missing.c:1:1: error: checking cache failed: file_open FileNotFound
 object missing.o: FileNotFound`; `-fno-PIC` where zig needs PIC, `error:
 unable to create module "e": the selected target requires position
 independent code` (glibc, Windows) or `dynamic linking requires enabling
-Position Independent Code` (`-shared`), the module named after the first
-source; and `-static` with a glibc target that is not the machine's, `error:
+Position Independent Code` (`-shared`), or with `-fPIE` `making a Position
+Independent Executable requires enabling Position Independent Code` (musl),
+the module named after the first source; `-shared -fPIE` when linking,
+`error: dynamic libraries cannot be position independent executables`; and `-static` with a glibc target that is not the machine's, `error:
 libc of the specified target requires dynamic linking`. Nothing runs after any
 of them. zig hands each source to Clang's compiler itself, so Clang's
 driver warnings about unused arguments and inputs are not printed. With no

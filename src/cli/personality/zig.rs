@@ -134,9 +134,15 @@ enum Mode {
     /// `-O0`, `-Og` or none: `-O0` with `UBSan` and the stack protector.
     #[default]
     Debug,
+    /// ReleaseFast with `UBSan`'s checks on, which zig makes safe after the
+    /// `cc` loop (`main.zig`): `-O2`, `_FORTIFY_SOURCE=2` and the stack
+    /// protector, without `NDEBUG`.
+    ReleaseSafe,
     /// `-O1` to `-O4` and `-Ofast`: `-O2` and `NDEBUG`.
     ReleaseFast,
-    /// `-Os` and `-Oz`: `-Os` and `NDEBUG`.
+    /// `-Os` and `-Oz`: `-Os` and `NDEBUG`, with neither debug information
+    /// nor symbols unless a `-g` option keeps them (`root_strip` in
+    /// `Compilation/Config.zig`).
     ReleaseSmall,
 }
 
@@ -525,11 +531,27 @@ impl Translation {
         // `requiresPIC`: Windows, and glibc wherever zig links it.
         let requires_pic = windows || (target == Target::LinuxGnu && link_libc);
         let module = self.module.clone().unwrap_or_else(|| "a".into());
+        let pie = self.pie.unwrap_or(false);
+        // zig settles PIE for the whole compilation before PIC for the
+        // module (`Compilation/Config.zig`, then `Module.zig`).
+        if pie && self.shared && links {
+            fatal(format_args!(
+                "dynamic libraries cannot be position independent executables"
+            ));
+            return Err(MainError::Reported(1));
+        }
         if self.pic == Some(false) && self.has_sources {
             if requires_pic {
                 fatal(format_args!(
                     "unable to create module \"{module}\": the selected target requires position \
                      independent code"
+                ));
+                return Err(MainError::Reported(1));
+            }
+            if pie {
+                fatal(format_args!(
+                    "unable to create module \"{module}\": making a Position Independent \
+                     Executable requires enabling Position Independent Code"
                 ));
                 return Err(MainError::Reported(1));
             }
@@ -547,9 +569,16 @@ impl Translation {
             ));
             return Err(MainError::Reported(1));
         }
-        let pic = self.pic.unwrap_or(requires_pic || dynamic);
-        let pie = self.pie.unwrap_or(false);
-        let debug = self.mode == Mode::Debug;
+        // A PIE is position-independent code too.
+        let pic = self.pic.unwrap_or(requires_pic || pie || dynamic);
+        // `UBSan`'s checks make ReleaseFast safe, in `-O1` to `-Ofast` alike.
+        let mode = match (self.mode, self.undefined) {
+            | (Mode::ReleaseFast, Some(UndefinedChecks::Full | UndefinedChecks::Trap)) =>
+                Mode::ReleaseSafe,
+            | (mode, _) => mode,
+        };
+        let debug = mode == Mode::Debug;
+        let safe = matches!(mode, Mode::Debug | Mode::ReleaseSafe);
         let mut compile: Vec<OsString> = Vec::new();
         // Clang 22.1.8's identity over the pinned Clang's, which has four
         // macros Clang 22 lacks.
@@ -572,8 +601,11 @@ impl Translation {
         ] {
             compile.push(format!("-U{name}").into());
         }
-        if self.mode != Mode::Debug {
-            compile.push("-DNDEBUG".into());
+        // `addCCArgs` in `Compilation.zig`.
+        match mode {
+            | Mode::Debug => {},
+            | Mode::ReleaseSafe => compile.push("-D_FORTIFY_SOURCE=2".into()),
+            | Mode::ReleaseFast | Mode::ReleaseSmall => compile.push("-DNDEBUG".into()),
         }
         if link_libc {
             if let Some(minor) = query.glibc_minor(target) {
@@ -615,9 +647,9 @@ impl Translation {
                 compile.push("-fsanitize-trap=undefined".into());
             },
         }
-        compile.push(match self.mode {
+        compile.push(match mode {
             | Mode::Debug => "-O0".into(),
-            | Mode::ReleaseFast => "-O2".into(),
+            | Mode::ReleaseSafe | Mode::ReleaseFast => "-O2".into(),
             | Mode::ReleaseSmall => "-Os".into(),
         });
         if linux {
@@ -633,16 +665,17 @@ impl Translation {
                 .into(),
             );
             // The checks call the C library's `__stack_chk_fail`.
-            if self.stack_protector.unwrap_or(debug && link_libc) {
+            if self.stack_protector.unwrap_or(safe && link_libc) {
                 compile.push("-fstack-protector-strong".into());
             }
         }
         if target == Target::Wasm32Unknown {
             compile.push("-ffreestanding".into());
         }
-        // zig writes DWARF 4 unless asked to strip; bcc writes it through the
-        // LLVM back end.
-        if self.strip != Some(true) && !wasm {
+        // zig writes DWARF 4 unless asked to strip, as ReleaseSmall is by
+        // default; bcc writes it through the LLVM back end.
+        let strip = self.strip.unwrap_or(mode == Mode::ReleaseSmall);
+        if !strip && !wasm {
             compile.push(
                 if target == Target::WindowsMsvc {
                     "-g"
@@ -655,6 +688,12 @@ impl Translation {
         let mut link = Vec::new();
         if linux && !pie && !self.shared {
             link.push("-no-pie".into());
+        }
+        // A stripped ReleaseSmall links without symbols too, as `-s` does;
+        // an MSVC target's image has no symbol table without debug
+        // information.
+        if strip && self.strip.is_none() && target != Target::WindowsMsvc {
+            link.push("-Wl,-s".into());
         }
         // zig links its UBSan library into a shared library too, which
         // Clang's driver leaves to the executable; bcc links the bundled

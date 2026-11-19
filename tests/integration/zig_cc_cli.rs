@@ -399,6 +399,150 @@ mod tests {
         assert!(defines(&freestanding, "#define __STDC_HOSTED__ 0"));
     }
 
+    /// `UBSan`'s checks make `-O1` to `-Ofast` ReleaseSafe, as zig 0.17.1
+    /// does after its `cc` loop: no `NDEBUG`, `_FORTIFY_SOURCE=2` and the
+    /// stack protector. ReleaseSmall stays itself.
+    #[test]
+    fn checks_make_release_fast_safe() {
+        let directory = Directory::new();
+        for level in ["-O1", "-O2", "-O3", "-O4", "-Ofast"] {
+            for checks in [
+                &["-fsanitize=undefined"][..],
+                &["-fsanitize-trap=undefined"],
+                &["-fno-sanitize=undefined", "-fsanitize=undefined"],
+            ] {
+                let mut args = vec!["-target", "x86_64-linux-gnu", level];
+                args.extend_from_slice(checks);
+                let macros = directory.macros(&args);
+                for definition in [
+                    "#define _FORTIFY_SOURCE 2",
+                    "#define __SSP_STRONG__ 2",
+                    "#define __OPTIMIZE__ 1",
+                ] {
+                    assert!(defines(&macros, definition), "{args:?}: {definition}");
+                }
+                assert!(!names(&macros, "NDEBUG"), "{args:?}");
+                assert!(!names(&macros, "__OPTIMIZE_SIZE__"), "{args:?}");
+            }
+            for checks in [
+                &["-fsanitize=undefined", "-fno-sanitize=undefined"][..],
+                &["-fno-sanitize-trap=undefined"],
+            ] {
+                let mut args = vec!["-target", "x86_64-linux-gnu", level];
+                args.extend_from_slice(checks);
+                let macros = directory.macros(&args);
+                assert!(defines(&macros, "#define NDEBUG 1"), "{args:?}");
+                assert!(!names(&macros, "_FORTIFY_SOURCE"), "{args:?}");
+                assert!(!names(&macros, "__SSP_STRONG__"), "{args:?}");
+            }
+        }
+        // The order does not matter: zig decides once it has read them all.
+        let macros =
+            directory.macros(&["-target", "x86_64-linux-gnu", "-fsanitize=undefined", "-O2"]);
+        assert!(defines(&macros, "#define _FORTIFY_SOURCE 2"));
+        for level in ["-Os", "-Oz"] {
+            for checks in ["-fsanitize=undefined", "-fsanitize-trap=undefined"] {
+                let macros = directory.macros(&["-target", "x86_64-linux-gnu", level, checks]);
+                assert!(defines(&macros, "#define NDEBUG 1"), "{level} {checks}");
+                assert!(!names(&macros, "_FORTIFY_SOURCE"), "{level} {checks}");
+                assert!(!names(&macros, "__SSP_STRONG__"), "{level} {checks}");
+            }
+        }
+        // Without the C library zig protects no stack.
+        let macros = directory.macros(&[
+            "-target",
+            "x86_64-linux-gnu",
+            "-O2",
+            "-fsanitize-trap=undefined",
+            "-nostdlib",
+        ]);
+        assert!(defines(&macros, "#define _FORTIFY_SOURCE 2") && !names(&macros, "__SSP_STRONG__"));
+    }
+
+    /// zig's ReleaseSmall strips the debug information and the symbols
+    /// unless a `-g` option keeps them; the other modes write DWARF 4.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn release_small_strips_unless_asked_for_debug_information() {
+        let directory = Directory::new();
+        directory.write(
+            "m.c",
+            "int triple(int a) { return a * 3; }
+int main(void) { return triple(0); }
+",
+        );
+        let has = |name: &str, section: &[u8]| {
+            let bytes = std::fs::read(directory.0.join(name)).unwrap();
+            bytes.windows(section.len()).any(|window| window == section)
+        };
+        for (args, debug_info, symbols) in [
+            (&["-Os"][..], false, false),
+            (&["-Oz"], false, false),
+            (&["-Os", "-g"], true, true),
+            (&["-g", "-Oz"], true, true),
+            (&["-Os", "-gdwarf32"], true, true),
+            (&["-O2"], true, true),
+            (&["-O2", "-fsanitize-trap=undefined"], true, true),
+            (&["-O0"], true, true),
+            (&["-O2", "-s"], false, false),
+        ] {
+            let mut all = vec!["-target", "x86_64-linux-gnu"];
+            all.extend_from_slice(args);
+            let mut object = all.clone();
+            object.extend_from_slice(&["-c", "m.c", "-o", "m.o"]);
+            succeeds(&directory.zig(&object));
+            assert_eq!(has("m.o", b".debug_info"), debug_info, "{args:?}");
+            all.extend_from_slice(&["m.c", "-o", "m"]);
+            succeeds(&directory.zig(&all));
+            assert_eq!(has("m", b".debug_info"), debug_info, "{args:?}");
+            assert_eq!(has("m", b".symtab"), symbols, "{args:?}");
+        }
+    }
+
+    /// `-fPIE` makes position-independent code where zig would not
+    /// otherwise (musl), and zig refuses it with `-fno-PIC` or `-shared`.
+    #[test]
+    fn position_independent_executables_need_position_independent_code() {
+        let directory = Directory::new();
+        let musl = ["-target", "x86_64-linux-musl"];
+        for pie in ["-fPIE", "-fpie"] {
+            let macros = directory.macros(&[musl[0], musl[1], pie]);
+            assert!(defines(&macros, "#define __PIC__ 2"), "{pie}");
+            assert!(!names(&macros, "__PIE__"), "{pie}");
+        }
+        let macros = directory.macros(&[musl[0], musl[1], "-fPIE", "-fno-PIE"]);
+        assert!(!names(&macros, "__PIC__"));
+        directory.write(
+            "e.c",
+            "static int x;
+int *f(void) { return &x; }
+",
+        );
+        fails_with(
+            &directory.zig(&[musl[0], musl[1], "-fPIE", "-fno-PIC", "-c", "e.c"]),
+            "error: unable to create module \"e\": making a Position Independent Executable \
+             requires enabling Position Independent Code\n",
+        );
+        // glibc's own requirement is reported first.
+        fails_with(
+            &directory.zig(&[
+                "-target",
+                "x86_64-linux-gnu",
+                "-fPIE",
+                "-fno-PIC",
+                "-c",
+                "e.c",
+            ]),
+            "error: unable to create module \"e\": the selected target requires position \
+             independent code\n",
+        );
+        fails_with(
+            &directory.zig(&[musl[0], musl[1], "-shared", "-fPIE", "e.c", "-o", "e.so"]),
+            "error: dynamic libraries cannot be position independent executables\n",
+        );
+        succeeds(&directory.zig(&[musl[0], musl[1], "-shared", "-fPIE", "-c", "e.c"]));
+    }
+
     /// bcc's `<stdint.h>` spells `WCHAR_MIN` and `WINT_MIN` without the
     /// macros Clang 22 lacks.
     #[test]
@@ -614,6 +758,27 @@ mod tests {
             &["-target", "x86_64-linux-gnu", "-c", "undeclared.c"],
             &["hello.c", "-o", "out"],
             &["-O2", "hello.c", "-o", "out"],
+            &["-Os", "hello.c", "-o", "out"],
+            &["-O2", "-fsanitize=undefined", "assert.c", "-o", "out"],
+            &["-O3", "-fsanitize-trap=undefined", "assert.c", "-o", "out"],
+            &["-Os", "-fsanitize=undefined", "assert.c", "-o", "out"],
+            &[
+                "-target",
+                "x86_64-linux-musl",
+                "-fPIE",
+                "-fno-PIC",
+                "-c",
+                "e.c",
+            ],
+            &[
+                "-target",
+                "x86_64-linux-musl",
+                "-shared",
+                "-fPIE",
+                "e.c",
+                "-o",
+                "e.so",
+            ],
         ];
         let fixtures = [
             ("e.c", "int main(void) { return 0; }\n"),
@@ -621,6 +786,12 @@ mod tests {
             (
                 "hello.c",
                 "#include <stdio.h>\nint main(void) { printf(\"hi\\n\"); return 0; }\n",
+            ),
+            // Prints only when `NDEBUG` takes the assertion away.
+            (
+                "assert.c",
+                "#include <assert.h>\n#include <stdio.h>\nint main(int argc, char **argv) {\n  \
+                 (void)argv;\n  assert(argc == 42);\n  puts(\"asserts off\");\n  return 0;\n}\n",
             ),
         ];
         let normalize = |text: &[u8], program: &Path, directory: &Path| {
