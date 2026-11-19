@@ -659,7 +659,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                             .and_then(Declarator::identifier)
                             .is_none()
                     {
-                        self.extension_source(
+                        self.extension_outside_pedantic(
                             Feature::UnnamedDefinitionParameters,
                             "unnamed parameter in function definition",
                             parameter.source_vectors,

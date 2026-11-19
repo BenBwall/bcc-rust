@@ -52,6 +52,24 @@ impl<'tu> Context<'tu> {
         }
     }
 
+    /// [`Self::report_extension`] for syntax Clang warns of by default (an
+    /// `ExtWarn` of `-Wc23-extensions`, such as a label at the end of a
+    /// block), which its `-Wpedantic` does not hold (`InferPedantic` in
+    /// `ClangDiagnosticsEmitter.cpp`): a pragma naming that option maps none
+    /// of it, so `-Wfatal-errors` makes fatal the error `-pedantic-errors`
+    /// made of it. The extension policy decides it all the same.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) fn report_extension_outside_pedantic(
+        &mut self,
+        feature: Feature,
+        spelling: &str,
+        source: SourceVectors,
+    ) {
+        if !self.configuration.silent_extension(feature) {
+            self.report_extension_in(spelling, feature.origin(), source, false);
+        }
+    }
+
     /// Reports syntax from `origin` under the extension policy. GNU/MSVC
     /// extensions remain non-ISO even when enabled; standard features cease
     /// being extensions in a revision that has them.
@@ -61,12 +79,24 @@ impl<'tu> Context<'tu> {
         origin: FeatureOrigin,
         source_vectors: SourceVectors,
     ) {
+        self.report_extension_in(spelling, origin, source_vectors, true);
+    }
+
+    /// [`Self::report_extension_since`], for a diagnostic of `-Wpedantic`
+    /// where `pedantic` says it is one.
+    fn report_extension_in(
+        &mut self,
+        spelling: &str,
+        origin: FeatureOrigin,
+        source_vectors: SourceVectors,
+        pedantic: bool,
+    ) {
         let Some(severity) =
             self.extension_severity(origin, DiagnosticPolicy::Extension, source_vectors)
         else {
             return;
         };
-        self.emit_extension(spelling, origin, severity, source_vectors);
+        self.emit_extension(spelling, origin, severity, source_vectors, pedantic);
     }
 
     fn extension_severity(
@@ -91,8 +121,9 @@ impl<'tu> Context<'tu> {
         .then_some(severity)
     }
 
-    /// Queues the diagnostic once the policy has asked for one. Callers
-    /// inline only the policy checks above.
+    /// Queues the diagnostic once the policy has asked for one, as one of
+    /// `-Wpedantic` where `pedantic` says it is. Callers inline only the
+    /// policy checks above.
     #[cold]
     #[inline(never)]
     fn emit_extension(
@@ -101,6 +132,7 @@ impl<'tu> Context<'tu> {
         origin: FeatureOrigin,
         severity: ErrorSeverity,
         source_vectors: SourceVectors,
+        pedantic: bool,
     ) {
         let spelling = self.diagnostic_text(spelling);
         let at = source_vectors;
@@ -115,6 +147,7 @@ impl<'tu> Context<'tu> {
                 severity,
                 source_vectors,
             }),
+            pedantic,
         );
     }
 
@@ -134,7 +167,11 @@ impl<'tu> Context<'tu> {
             DiagnosticPolicy::Error
         };
         if let Some(severity) = self.extension_severity(feature.origin(), baseline, source) {
-            self.classified_extension(source, diagnostic(severity));
+            // Clang's `-Wpedantic` holds what it reports only on request,
+            // not what it warns of by default (`InferPedantic` in
+            // `ClangDiagnosticsEmitter.cpp`).
+            let pedantic = matches!(baseline, DiagnosticPolicy::Extension);
+            self.classified_extension(source, diagnostic(severity), pedantic);
         }
     }
 

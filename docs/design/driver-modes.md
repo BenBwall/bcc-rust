@@ -122,7 +122,7 @@ has set, the pedantic ones included, and `-Wno-everything` turns every one
 off, so that a later `-Weverything` leaves them off but their own options
 turn them on again. `-Wfatal-errors` makes the first error a `fatal error`,
 without the `-Werror,` in the option it names, and nothing after it is
-reported or counted. The personality passes the options Clang does not
+reported or counted; an error a diagnostic pragma made stays an error. The personality passes the options Clang does not
 take apart from the others, so they have no effect even where bcc has the
 group (`-Wnormalized`, bcc's own `-Wconstant-promotion`); bcc's own command
 line keeps its groups and warns, in Clang's words, about the options it does

@@ -1375,7 +1375,10 @@ bcc files every extension under `-Wpedantic`, including those each compiler give
 a group of its own: GCC's `-Wlong-long` and `-Wdeclaration-after-statement`, and
 Clang's `-Wc23-extensions` but for its C23 directives, which the Clang
 personality reports under `c23-extensions` (above). A pragma naming
-`-Wpedantic` therefore reaches these in bcc alone. The lexer runs when a file is opened, before any pragma in it, so
+`-Wpedantic` therefore reaches these in bcc alone, though the errors it makes of
+the four Clang warns of by default (a label at the end of a block or before a
+declaration, `_Static_assert` without a message, an unnamed parameter in a
+definition) stay outside its mapping, as below. The lexer runs when a file is opened, before any pragma in it, so
 what `-pedantic-errors` decides there (an unterminated quote's wording, say) does
 not follow a pragma.
 
@@ -1385,8 +1388,11 @@ does not report, and Clang under `-Wunknown-pragmas` or, for an unknown group,
 compiler knows and bcc has no group for is quiet and changes nothing; the lists
 are the driver's (`src/cli/personality/options/`). GCC's `pop` without `push`
 goes back to the command line silently and Clang's keeps the settings and warns.
-Clang's `fatal` reports `fatal error` and ends the compilation, and GCC's
-`-Wfatal-errors`, which Clang accepts and ignores, stops at the first error.
+Clang's `fatal` reports `fatal error` and ends the compilation. GCC's
+`-Wfatal-errors` stops at the first error; Clang's makes an error fatal unless a
+pragma made it one (`NoErrorAsFatal`): the `error` of a group, or of
+`-Wpedantic` or `-Weverything` for the extension diagnostics, stays an error
+even where `-pedantic-errors` made one too.
 
 These warnings gained a group for the pragmas to name, which the command line
 now controls too: `cpp` (`#warnings` in Clang) for `#warning`, Clang's

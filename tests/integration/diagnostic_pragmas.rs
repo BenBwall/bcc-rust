@@ -438,6 +438,248 @@ compilation terminated due to -Wfatal-errors.
         }
     }
 
+    /// A pragma naming `-Wpedantic`, or Clang's `-Weverything`, maps the
+    /// extension diagnostics, which belong to no group of their own, as it
+    /// maps a group's: Clang's `-Wfatal-errors` leaves its `error` an error,
+    /// though `-pedantic-errors` also made one, while its `fatal`, and
+    /// `-pedantic-errors` alone or after a popped pragma, stop at the first.
+    /// GCC 14 ignores Clang's pragma and stops at its first error. Each
+    /// stderr and status is Clang 23.1.5's or GCC 14's, byte for byte.
+    #[test]
+    fn fatal_errors_spare_extension_errors_a_pedantic_pragma_made() {
+        /// A case's name, flags and source, then Clang's and GCC's exit
+        /// status and stderr.
+        type Case<'a> = (&'a str, &'a [&'a str], String, (i32, String), (i32, String));
+        const WARNINGS: &str = "#warning one\n#warning two\nint x;\n";
+        const CLANG_ERRORS: &str = "\
+input.c:2:2: error: #warning is a C23 extension [-Werror,-Wpedantic]
+    2 | #warning one
+      |  ^
+input.c:2:2: warning: one [-W#warnings]
+input.c:3:2: error: #warning is a C23 extension [-Werror,-Wpedantic]
+    3 | #warning two
+      |  ^
+input.c:3:2: warning: two [-W#warnings]
+2 warnings and 2 errors generated.
+";
+        const GCC_WARNINGS: &str = "\
+input.c:2:2: warning: #warning one [-Wcpp]
+    2 | #warning one
+      |  ^~~~~~~
+input.c:3:2: warning: #warning two [-Wcpp]
+    3 | #warning two
+      |  ^~~~~~~
+";
+        let gcc_error = |line: u32| {
+            format!(
+                "\
+input.c:{line}:2: error: #warning before C23 is a GCC extension
+    {line} | #warning one
+      |  ^~~~~~~
+compilation terminated due to -Wfatal-errors.
+"
+            )
+        };
+        let clang_fatal = |line: u32| {
+            format!(
+                "\
+input.c:{line}:2: fatal error: #warning is a C23 extension [-Wpedantic]
+    {line} | #warning one
+      |  ^
+1 error generated.
+"
+            )
+        };
+        let pragma = |class: &str| format!("#pragma clang diagnostic {class}\n{WARNINGS}");
+        let cases: [Case<'_>; 6] = [
+            (
+                "pragma error",
+                &["-Wfatal-errors"],
+                pragma("error \"-Wpedantic\""),
+                (1, CLANG_ERRORS.to_owned()),
+                (0, GCC_WARNINGS.to_owned()),
+            ),
+            (
+                "pragma error over -pedantic-errors",
+                &["-pedantic-errors", "-Wfatal-errors"],
+                pragma("error \"-Wpedantic\""),
+                (1, CLANG_ERRORS.to_owned()),
+                (1, gcc_error(2)),
+            ),
+            (
+                "pragma error -Weverything",
+                &["-Wfatal-errors"],
+                "#pragma clang diagnostic error \"-Weverything\"\n#warning one\n#warning two\nint \
+                 main(void) { return 0; }\n"
+                    .to_owned(),
+                (
+                    1,
+                    "\
+input.c:2:2: error: #warning is a C23 extension [-Werror,-Wpedantic]
+    2 | #warning one
+      |  ^
+input.c:2:2: error: one [-Werror,-W#warnings]
+input.c:3:2: error: #warning is a C23 extension [-Werror,-Wpedantic]
+    3 | #warning two
+      |  ^
+input.c:3:2: error: two [-Werror,-W#warnings]
+4 errors generated.
+"
+                    .to_owned(),
+                ),
+                (0, GCC_WARNINGS.to_owned()),
+            ),
+            (
+                "pragma fatal",
+                &[],
+                pragma("fatal \"-Wpedantic\""),
+                (1, clang_fatal(2)),
+                (0, GCC_WARNINGS.to_owned()),
+            ),
+            (
+                "-pedantic-errors",
+                &["-pedantic-errors", "-Wfatal-errors"],
+                WARNINGS.to_owned(),
+                (1, clang_fatal(1)),
+                (1, gcc_error(1)),
+            ),
+            (
+                "popped pragma",
+                &["-pedantic-errors", "-Wfatal-errors"],
+                format!(
+                    "#pragma clang diagnostic push\n#pragma clang diagnostic error \
+                     \"-Wpedantic\"\n#pragma clang diagnostic pop\n{WARNINGS}"
+                ),
+                (1, clang_fatal(4)),
+                (1, gcc_error(4)),
+            ),
+        ];
+        let root = directory("fatal-pedantic-mapped");
+        for (name, flags, source, clang, gcc) in cases {
+            fs::write(root.join("input.c"), source).unwrap();
+            for (mode, (status, stderr)) in [("--clang-mode", clang), ("--gcc-mode", gcc)] {
+                let mut arguments = vec![mode];
+                arguments.extend(flags);
+                arguments.extend(["-c", "-o", "output.o", "input.c"]);
+                let output = run(&root, &arguments);
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stderr),
+                    stderr,
+                    "{name} {mode}"
+                );
+                assert_eq!(output.status.code(), Some(status), "{name} {mode}");
+            }
+        }
+    }
+
+    /// [`fatal_errors_spare_extension_errors_a_pedantic_pragma_made`] along
+    /// each path an extension diagnostic takes, which bcc words apart from
+    /// Clang: an extension of a declaration (`int a[0]`), a semantic one, the
+    /// parser's empty unit and plain `_Complex`, which only Clang's
+    /// `-Weverything` reaches, and a label at the end of a block, which Clang
+    /// warns of by default, outside `-Wpedantic`, so the pragma leaves the
+    /// error `-pedantic-errors` made of it fatal. Each severity in order, the
+    /// summary and the status are Clang 23.1.5's and GCC 14's.
+    #[test]
+    fn fatal_errors_spare_each_kind_of_pedantic_pragma_error() {
+        /// A case's name, flags and source, then Clang's and GCC's exit
+        /// status, severities and closing line.
+        type Case<'a> = (
+            &'a str,
+            &'a [&'a str],
+            &'a str,
+            (i32, &'a [&'a str], &'a str),
+            (i32, &'a [&'a str], &'a str),
+        );
+        const ZERO: &str = "\
+#pragma clang diagnostic error \"-Wpedantic\"
+int a[0];
+int b[0];
+";
+        const TWO: &[&str] = &["error", "error"];
+        const ONE: &[&str] = &["error"];
+        const FATAL: &[&str] = &["fatal error"];
+        const STOPPED: &str = "compilation terminated due to -Wfatal-errors.";
+        const NONE: (i32, &[&str], &str) = (0, &[], "");
+        let cases: [Case<'_>; 7] = [
+            (
+                "zero-length array",
+                &["-Wfatal-errors"],
+                ZERO,
+                (1, TWO, "2 errors generated."),
+                NONE,
+            ),
+            (
+                "zero-length array, -pedantic-errors",
+                &["-pedantic-errors", "-Wfatal-errors"],
+                ZERO,
+                (1, TWO, "2 errors generated."),
+                (1, ONE, STOPPED),
+            ),
+            (
+                "zero-length array, no pragma",
+                &["-pedantic-errors", "-Wfatal-errors"],
+                "int a[0];\nint b[0];\n",
+                (1, FATAL, "1 error generated."),
+                (1, ONE, STOPPED),
+            ),
+            (
+                "void return",
+                &["-Wfatal-errors"],
+                "#pragma clang diagnostic error \"-Wpedantic\"\nvoid g(void);\nvoid f(void) { \
+                 return g(); }\nvoid h(void) { return g(); }\n",
+                (1, TWO, "2 errors generated."),
+                NONE,
+            ),
+            (
+                "empty unit",
+                &["-Wfatal-errors"],
+                "#pragma clang diagnostic error \"-Wpedantic\"\n",
+                (1, ONE, "1 error generated."),
+                NONE,
+            ),
+            (
+                "plain _Complex",
+                &["-Wfatal-errors"],
+                "#pragma clang diagnostic error \"-Weverything\"\nextern _Complex x;\nextern \
+                 _Complex y;\n",
+                (1, TWO, "2 errors generated."),
+                NONE,
+            ),
+            (
+                "label at end",
+                &["-pedantic-errors", "-Wfatal-errors"],
+                "#pragma clang diagnostic error \"-Wpedantic\"\nvoid f(void) { l: }\nvoid g(void) \
+                 { m: }\n",
+                (1, FATAL, "1 error generated."),
+                (1, ONE, STOPPED),
+            ),
+        ];
+        let root = directory("fatal-pedantic-kinds");
+        for (name, flags, source, clang, gcc) in cases {
+            fs::write(root.join("input.c"), source).unwrap();
+            for (mode, (status, severities, last)) in [("--clang-mode", clang), ("--gcc-mode", gcc)]
+            {
+                let mut arguments = vec![mode];
+                arguments.extend(flags);
+                arguments.extend(["-c", "-o", "output.o", "input.c"]);
+                let output = run(&root, &arguments);
+                let found: Vec<String> = lines(&output)
+                    .iter()
+                    .map(|line| line.split_once(' ').unwrap().1.to_owned())
+                    .collect();
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert_eq!(found, severities, "{name} {mode}: {stderr}");
+                assert_eq!(
+                    stderr.lines().last().unwrap_or(""),
+                    last,
+                    "{name} {mode}: {stderr}"
+                );
+                assert_eq!(output.status.code(), Some(status), "{name} {mode}");
+            }
+        }
+    }
+
     /// `-E` keeps each pragma, `_Pragma` operators as lines, and compiling its
     /// text keeps their effect, around macros expanded in that text.
     #[test]
