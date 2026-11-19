@@ -453,6 +453,7 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
                         view! {
                             <li class="evaluation-end">
                                 {over_tag()}
+                                " "
                                 <span class="evaluation-name">{beyond}</span>
                             </li>
                         }
