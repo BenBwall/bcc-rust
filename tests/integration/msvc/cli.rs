@@ -69,15 +69,15 @@ enum Expect {
     /// Those and every line printed.
     Output,
     /// Those and the diagnostics with a code (`x.c(2): error C2065:
-    /// ...`), which `cl` writes to stdout and bcc to stderr.
+    /// ...`), which both write to stdout.
     Diagnostics,
     /// A difference driver-modes.md records; reported, not checked.
     Documented,
 }
 
 /// Command lines compared, after `/nologo` unless they start with `-`.
-/// `cl` writes compiler diagnostics to stdout and bcc to stderr, and their
-/// messages differ, so only lines without diagnostics are compared.
+/// Both write compiler diagnostics to stdout, where only the coded ones
+/// share their words.
 const CASES: &[(&[&str], Expect)] = &[
     (&["/c", "a.c"], Expect::Output),
     (&["/c", "a.c", "/Foout.obj"], Expect::Output),
@@ -86,7 +86,8 @@ const CASES: &[(&[&str], Expect)] = &[
     (&["a.c", "b.c"], Expect::Output),
     (&["a.c", "b.c", "/Feprog.exe"], Expect::Output),
     (&["a.c", "b.c", "/link", "/OUT:linked.exe"], Expect::Output),
-    // `cl /E` writes `#line` directives and keeps blank lines.
+    // `cl /E` names a header by an absolute path whose spelling (case,
+    // short names) the working directory need not share.
     (&["/E", "pp.c"], Expect::Results),
     (&["/EP", "pp.c"], Expect::Results),
     (&["/P", "pp.c"], Expect::Results),
@@ -212,7 +213,7 @@ fn command_lines_match_cl() {
             differences.compare(
                 &format!("{label}: diagnostics"),
                 &coded(&cl.stdout),
-                &coded(&bcc.stderr),
+                &coded(&bcc.stdout),
             );
         }
     }

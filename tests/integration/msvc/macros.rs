@@ -75,21 +75,14 @@ const OPTIONS: &[&[&str]] = &[
 
 /// Names whose difference driver-modes.md records ("Predefined macros"
 /// under MSVC).
-const DOCUMENTED: [&str; 13] = [
+const DOCUMENTED: [&str; 8] = [
     // bcc claims MSVC 19.33.
     "_MSC_VER",
     "_MSC_FULL_VER",
     // bcc's preprocessor is conforming, as `cl /Zc:preprocessor`'s is.
     "_MSVC_TRADITIONAL",
-    // ISO C requires `__STDC__`, and bcc compiles C17 by default; `cl
-    // /std:clatest` claims `202312L`.
-    "__STDC__",
+    // bcc compiles C17 by default; `cl /std:clatest` claims `202312L`.
     "__STDC_VERSION__",
-    // bcc has atomics, complex types and VLAs, and no `<threads.h>`.
-    "__STDC_NO_ATOMICS__",
-    "__STDC_NO_COMPLEX__",
-    "__STDC_NO_THREADS__",
-    "__STDC_NO_VLA__",
     // Clang's target macros stay.
     "__SSE2__",
     "__x86_64__",
