@@ -98,8 +98,8 @@ fn command_arguments(invocation: &Invocation) -> Result<Vec<OsString>, MainError
     }
 }
 
-/// The commands `zig help` lists besides `cc`.
-const ZIG_COMMANDS: [&str; 25] = [
+/// The commands `zig help` lists besides `cc`, in its order.
+const ZIG_COMMANDS: [&str; 29] = [
     "build",
     "fetch",
     "init",
@@ -117,14 +117,18 @@ const ZIG_COMMANDS: [&str; 25] = [
     "c++",
     "dlltool",
     "lib",
-    "ranlib",
     "objcopy",
+    "objdump",
+    "ranlib",
     "rc",
     "env",
     "help",
+    "cache-cat",
     "std",
     "libc",
     "targets",
+    "version",
+    "zen",
 ];
 
 /// zig's optimization modes, which `zig cc` chooses from the last `-O`
@@ -222,6 +226,19 @@ impl Translation {
             self.input(argument);
             return Ok(());
         };
+        // The response files that could be read are expanded already; zig
+        // stops at one that cannot.
+        if let Some(path) = text.strip_prefix('@') {
+            let name = match std::fs::metadata(path).map_err(|error| error.kind()) {
+                | Err(std::io::ErrorKind::NotFound) => "FileNotFound",
+                | Err(std::io::ErrorKind::PermissionDenied) => "AccessDenied",
+                | _ => "Unexpected",
+            };
+            fatal(format_args!(
+                "unable to read response file \"{path}\": {name}"
+            ));
+            return Err(MainError::Reported(1));
+        }
         if text == "-" || !text.starts_with('-') {
             self.input(argument);
             return Ok(());

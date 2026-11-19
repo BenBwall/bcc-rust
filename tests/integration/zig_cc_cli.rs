@@ -623,6 +623,15 @@ int *f(void) { return &x; }
             &directory.zig(&["e.c", "missing.o"]),
             "error: failed to open object missing.o: FileNotFound\n",
         );
+        fails_with(
+            &directory.zig(&["@missing.rsp", "e.c"]),
+            "error: unable to read response file \"missing.rsp\": FileNotFound\n",
+        );
+        directory.write("outer.rsp", "-c @nested.rsp\n");
+        fails_with(
+            &directory.zig(&["@outer.rsp", "e.c"]),
+            "error: unable to read response file \"nested.rsp\": FileNotFound\n",
+        );
         assert!(!directory.0.join("a.out").exists());
     }
 
@@ -647,6 +656,10 @@ int *f(void) { return &x; }
         fails_with(
             &directory.run(&zig, &["build"]),
             "error: 'zig build' is not supported: bcc implements only 'zig cc'\n",
+        );
+        fails_with(
+            &directory.run(&zig, &["version"]),
+            "error: 'zig version' is not supported: bcc implements only 'zig cc'\n",
         );
         fails_with(
             &directory.run(&zig, &["frobnicate"]),
@@ -779,6 +792,7 @@ int *f(void) { return &x; }
                 "-o",
                 "e.so",
             ],
+            &["@missing.rsp", "e.c"],
         ];
         let fixtures = [
             ("e.c", "int main(void) { return 0; }\n"),

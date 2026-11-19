@@ -1347,7 +1347,8 @@ what follows.
 **Selecting it.** `--zig-cc-mode` (`--driver-mode=zig-cc`), or an executable
 named `zig-cc` or `zigcc`, or one named `zig` whose first argument is `cc`, as
 build systems run it when given `CC="zig cc"`. A `zig` given another command
-says `error: 'zig build' is not supported: bcc implements only 'zig cc'`, or
+`zig help` lists (`build`, `version`, `env`, ...) says `error: 'zig build' is
+not supported: bcc implements only 'zig cc'`, or
 zig's `error: unknown command: foo` or `error: expected command argument`,
 without zig's usage text. The driver's messages say `zig:`, as Clang's driver
 inside `zig` names itself.
@@ -1441,7 +1442,9 @@ stop it at once, so only the first is reported: `error: unknown clang option:
 `unknown argument`); for a missing source, after the whole command line is
 read, `missing.c:1:1: error: checking cache failed: file_open FileNotFound
 /abs/missing.c` for each; for a missing object `error: failed to open
-object missing.o: FileNotFound`; `-fno-PIC` where zig needs PIC, `error:
+object missing.o: FileNotFound`; for a response file it cannot read, at any
+depth, `error: unable to read response file "missing.rsp": FileNotFound`;
+`-fno-PIC` where zig needs PIC, `error:
 unable to create module "e": the selected target requires position
 independent code` (glibc, Windows) or `dynamic linking requires enabling
 Position Independent Code` (`-shared`), or with `-fPIE` `making a Position
