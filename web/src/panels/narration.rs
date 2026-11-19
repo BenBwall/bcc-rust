@@ -7,7 +7,10 @@
 //! focus, and the names of objects take their colour from the memory
 //! diagram.
 
-use std::collections::HashMap;
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+};
 
 use leptos::prelude::*;
 
@@ -19,6 +22,7 @@ use super::{
         Group,
     },
     ranks::Ranks,
+    tape::Reel,
 };
 use crate::{
     glossary::{
@@ -52,6 +56,8 @@ pub fn Narration(
     /// Whether Run is stepping: the steps it passes through flash by, so
     /// they do not count as seen.
     running: Signal<bool>,
+    /// The tape, whose lane names (`x #2`) the note takes.
+    reel: Memo<Reel>,
 ) -> impl IntoView {
     let event =
         Memo::new(move |_| snapshot.with(|state| state.as_ref().map(|state| state.event.clone())));
@@ -74,6 +80,7 @@ pub fn Narration(
         })
     });
     let names = object_names(snapshot);
+    let labels = tape_labels(snapshot, reel);
     // Whether the learner opened the details; it stays open (or closed)
     // from step to step.
     let details = RwSignal::new(false);
@@ -84,25 +91,8 @@ pub fn Narration(
         tip.set(None);
     });
     let card = NodeRef::<leptos::html::Article>::new();
-    // Each note shows on the first step the learner sees it at (by step
-    // number, so Back to that step shows it again); steps Run passes through
-    // do not use it up. The run starts over at step 0.
-    let first_seen = StoredValue::new(HashMap::<String, usize>::new());
-    let note = Memo::new(move |_| {
-        snapshot.with(|state| {
-            let state = state.as_ref()?;
-            let note = &state.event.note;
-            if state.step == 0 {
-                first_seen.update_value(HashMap::clear);
-            }
-            if note.is_empty() || running.get() {
-                return None;
-            }
-            let first = first_seen
-                .try_update_value(|seen| *seen.entry(note.clone()).or_insert(state.step))?;
-            (first == state.step).then(|| note.clone())
-        })
-    });
+    start_at_top(event, card);
+    let note = first_notes(snapshot, running);
     view! {
         <article class="note narration" data-category=category aria-labelledby="narration-title" node_ref=card>
             <h2 id="narration-title" class="note-title" tabindex="-1">
@@ -112,7 +102,7 @@ pub fn Narration(
                 <span class="note-rule" aria-hidden="true">" · "</span>
                 <span class="narration-title">
                     {move || event.with(|event| match event {
-                        | Some(event) => super::rich_text(&event.title),
+                        | Some(event) => labels.with(|labels| super::rich_text(&relabeled(&event.title, labels))),
                         | None => "Loading the abstract machine…".into_any(),
                     })}
                 </span>
@@ -126,12 +116,12 @@ pub fn Narration(
             </p>
             <p class="narration-lead">
                 {move || event.with(|event| match event {
-                    | Some(event) => names.with(|names| explained(lead(event), &mut Vec::new(), names, tip, card)),
+                    | Some(event) => labels.with(|labels| names.with(|names| explained(&relabeled(lead(event), labels), &mut Vec::new(), names, tip, card))),
                     | None => placeholder.get().into_any(),
                 })}
             </p>
             <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
-                {move || event.with(|event| event.as_ref().map(|event| flow_groups(&event.flow)))}
+                {move || event.with(|event| event.as_ref().map(|event| labels.with(|labels| flow_groups(&event.flow, labels))))}
             </p>
             <Evaluation group on_jump /><Bits event /><Ranks event /><aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
                 <h3>"Why it matters"</h3>
@@ -257,6 +247,110 @@ fn StageLink(event: Memo<Option<StepEvent>>, on_preprocessor: Callback<()>) -> i
 
 /// The names of the objects the program has created, so the text can colour
 /// them as the source, the tree and the memory diagram do.
+/// The "Why it matters" note of each step that shows one. Each note shows
+/// on the first step the learner sees it at (by step number, so Back to
+/// that step shows it again); steps Run passes through do not use it up.
+/// The run starts over at step 0.
+fn first_notes(snapshot: Memo<Option<Snapshot>>, running: Signal<bool>) -> Memo<Option<String>> {
+    let first_seen = StoredValue::new(HashMap::<String, usize>::new());
+    Memo::new(move |_| {
+        snapshot.with(|state| {
+            let state = state.as_ref()?;
+            let note = &state.event.note;
+            if state.step == 0 {
+                first_seen.update_value(HashMap::clear);
+            }
+            if note.is_empty() || running.get() {
+                return None;
+            }
+            let first = first_seen
+                .try_update_value(|seen| *seen.entry(note.clone()).or_insert(state.step))?;
+            (first == state.step).then(|| note.clone())
+        })
+    })
+}
+
+/// Beside the tape the card is a column of its own that scrolls when the
+/// note is longer than the window: each step's note starts at its top.
+fn start_at_top(event: Memo<Option<StepEvent>>, card: NodeRef<leptos::html::Article>) {
+    Effect::new(move || {
+        event.track();
+        if let Some(card) = card.get_untracked() {
+            card.set_scroll_top(0);
+        }
+    });
+}
+
+/// The tape's labels for the step's objects, by [`lane_labels`].
+fn tape_labels(snapshot: Memo<Option<Snapshot>>, reel: Memo<Reel>) -> Memo<Vec<(String, String)>> {
+    Memo::new(move |_| {
+        snapshot.with(|state| {
+            state
+                .as_ref()
+                .map_or_else(Vec::new, |state| reel.with(|reel| lane_labels(reel, state)))
+        })
+    })
+}
+
+/// The names the step's objects share with others that the tape tells
+/// apart by number (a block's `x` shadowing the function's is `x #2`
+/// there), each with that numbered name: none for a name the step uses for
+/// two objects. The note keeps a string literal's whole spelling, which
+/// the tape shortens.
+fn lane_labels(reel: &Reel, snapshot: &Snapshot) -> Vec<(String, String)> {
+    let mut labels: Vec<(&str, Option<String>)> = Vec::new();
+    for &id in &snapshot.event.objects {
+        let Some(object) = snapshot.objects.iter().find(|object| object.id == id) else {
+            continue;
+        };
+        let label = match reel.ordinal_of(id) {
+            | Some(ordinal) if ordinal > 1 => format!("{} #{ordinal}", object.name),
+            | _ => object.name.clone(),
+        };
+        match labels.iter_mut().find(|(name, _)| *name == object.name) {
+            | Some((_, known)) if known.as_ref() != Some(&label) => *known = None,
+            | Some(_) => {},
+            | None => labels.push((&object.name, Some(label))),
+        }
+    }
+    labels
+        .into_iter()
+        .filter_map(|(name, label)| {
+            label
+                .filter(|label| label != name)
+                .map(|label| (name.to_owned(), label))
+        })
+        .collect()
+}
+
+/// `text` with each `` `name` `` of `labels` in the tape's words.
+fn relabeled<'a>(text: &'a str, labels: &[(String, String)]) -> Cow<'a, str> {
+    if labels.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    for (index, part) in text.split('`').enumerate() {
+        if index > 0 {
+            out.push('`');
+        }
+        let label = (index % 2 == 1)
+            .then(|| labels.iter().find(|(name, _)| name == part))
+            .flatten();
+        out.push_str(label.map_or(part, |(_, label)| label.as_str()));
+    }
+    Cow::Owned(out)
+}
+
+/// The object `text` names: one of `names`, or the tape's label for one of
+/// several objects of that name (`x #2`).
+fn object_name<'a>(text: &'a str, names: &[String]) -> Option<&'a str> {
+    let name = text
+        .split_once(" #")
+        .filter(|(_, ordinal)| ordinal.parse::<usize>().is_ok())
+        .map_or(text, |(name, _)| name);
+    names.iter().any(|known| known == name).then_some(name)
+}
+
 fn object_names(snapshot: Memo<Option<Snapshot>>) -> Memo<Vec<String>> {
     Memo::new(move |_| {
         snapshot.with(|state| {
@@ -579,10 +673,12 @@ fn explained(
     let mut views = Vec::new();
     while let Some((code, piece)) = pieces.next() {
         views.push(match piece {
-            | Piece::Text(text) if code && names.iter().any(|name| name == text) =>
-                view! { <code class=format!("is-object {}", palette::class(text))>{text.to_owned()}</code> }
-                    .into_any(),
-            | Piece::Text(text) if code => view! { <code>{text.to_owned()}</code> }.into_any(),
+            | Piece::Text(text) if code => match object_name(text, names) {
+                | Some(name) =>
+                    view! { <code class=format!("is-object {}", palette::class(name))>{text.to_owned()}</code> }
+                        .into_any(),
+                | None => view! { <code>{text.to_owned()}</code> }.into_any(),
+            },
             | Piece::Text(text) => prose(text),
             | Piece::Term(written, term) => {
                 let button = term_button(written.to_owned(), term, tip, card);
@@ -719,16 +815,20 @@ fn placement(
         .dyn_into::<web_sys::Element>()
         .ok()?
         .get_bounding_client_rect();
-    let card = card.get_untracked()?.get_bounding_client_rect();
+    let card = card.get_untracked()?;
+    // Beside the tape the card scrolls on its own; the tip scrolls with its
+    // text, from the card's padding.
+    let (scrolled, border) = (f64::from(card.scroll_top()), f64::from(card.client_top()));
+    let card = card.get_bounding_client_rect();
     let width = (card.width() - 24.0).clamp(0.0, 340.0);
     let left = (term.left() - card.left()).clamp(12.0, (card.width() - width - 12.0).max(12.0));
     let window = window();
     let height = window.inner_height().ok()?.as_f64()?;
     let above = term.bottom() + 170.0 > height && term.top() > 190.0;
     let offset = if above {
-        card.bottom() - term.top() + 6.0
+        card.bottom() - term.top() + 6.0 - scrolled
     } else {
-        term.bottom() - card.top() + 6.0
+        term.bottom() - card.top() - border + 6.0 + scrolled
     };
     Some(Placement {
         left,
@@ -773,7 +873,7 @@ fn related_has_class(_event: &leptos::ev::MouseEvent, _class: &str) -> bool {
 
 /// The value flow's chips, each arrow or operator grouped with the chip
 /// after it so a line never ends on an arrow.
-fn flow_groups(flow: &[FlowPart]) -> AnyView {
+fn flow_groups(flow: &[FlowPart], labels: &[(String, String)]) -> AnyView {
     let mut groups: Vec<Vec<&FlowPart>> = Vec::new();
     let mut pending = Vec::new();
     for part in flow {
@@ -787,19 +887,23 @@ fn flow_groups(flow: &[FlowPart]) -> AnyView {
     }
     groups
         .into_iter()
-        .map(|group| view! { <span class="flow-group">{group.into_iter().map(chip).collect_view()}</span> })
+        .map(|group| view! { <span class="flow-group">{group.into_iter().map(|part| chip(part, labels)).collect_view()}</span> })
         .collect_view()
         .into_any()
 }
 
-/// One chip of the value flow.
-fn chip(part: &FlowPart) -> AnyView {
+/// One chip of the value flow; an object's takes the tape's label for it
+/// (`x #2`).
+fn chip(part: &FlowPart, labels: &[(String, String)]) -> AnyView {
     let colour = part
         .object
         .as_deref()
         .map_or_default(palette::class);
     let role = part.role.clone();
-    let text = part.text.clone();
+    let text = labels
+        .iter()
+        .find(|(name, _)| role == "object" && *name == part.text)
+        .map_or_else(|| part.text.clone(), |(_, label)| label.clone());
     let ty = part.ty.clone();
     match role.as_str() {
         | "arrow" => view! {
@@ -825,6 +929,8 @@ mod tests {
         closing_marks,
         explained_pieces,
         lead,
+        object_name,
+        relabeled,
     };
     use crate::{
         glossary::Piece,
@@ -899,5 +1005,126 @@ mod tests {
             terms("An lvalue designates an object.", &mut seen),
             ["object"]
         );
+    }
+
+    #[test]
+    fn a_name_takes_the_tapes_label_only_as_a_whole_code_span() {
+        let labels = [("x".to_owned(), "x #2".to_owned())];
+        assert_eq!(
+            relabeled("Begin the lifetime of `y` and `x`", &labels),
+            "Begin the lifetime of `y` and `x #2`"
+        );
+        assert_eq!(
+            relabeled("Evaluate `x + 1`; x stays", &labels),
+            "Evaluate `x + 1`; x stays"
+        );
+        assert_eq!(relabeled("Read `x`", &[]), "Read `x`");
+    }
+
+    #[test]
+    fn a_tape_label_keeps_its_objects_colour() {
+        let names = ["x".to_owned(), "values".to_owned()];
+        assert_eq!(object_name("x", &names), Some("x"));
+        assert_eq!(object_name("x #2", &names), Some("x"));
+        assert_eq!(object_name("x #b", &names), None);
+        assert_eq!(object_name("values[1]", &names), None);
+    }
+
+    // C99 §6.2.1p4: an inner `x` hides the outer one; the tape gives it a
+    // lane of its own, `x #2`, and the note names it so.
+    #[cfg(feature = "worker")]
+    #[test]
+    fn a_shadowing_object_is_named_as_the_tape_names_it() {
+        use super::lane_labels;
+        use crate::{
+            machine::Machine,
+            panels::Reel,
+            protocol::{
+                Answer,
+                Command,
+            },
+            snapshot::Snapshot,
+        };
+        let mut machine = Machine::default();
+        let snapshot = |answer| match answer {
+            | Ok(Answer::Snapshot(snapshot)) => *snapshot,
+            | _ => panic!("a snapshot"),
+        };
+        let source = "int main(void) {\n    int x = 1;\n    {\n        int y = x;\n        int x \
+                      = y + 1;\n        x = x + 1;\n    }\n    return x;\n}\n";
+        let mut history = vec![snapshot(machine.run(Command::Load(source.to_owned())))];
+        while history.last().is_some_and(Snapshot::can_step) {
+            history.push(snapshot(machine.run(Command::Step)));
+        }
+        let reel = Reel::record(&history);
+        let titles: Vec<String> = history
+            .iter()
+            .map(|snapshot| {
+                relabeled(&snapshot.event.title, &lane_labels(&reel, snapshot)).into_owned()
+            })
+            .collect();
+        for title in [
+            "Begin the lifetime of `y` and `x #2`",
+            "Declare `x #2` (int)",
+        ] {
+            assert!(
+                titles.iter().any(|known| known == title),
+                "{title} in {titles:#?}"
+            );
+        }
+        assert!(
+            titles
+                .iter()
+                .any(|title| title.starts_with("End the lifetime of") && title.contains("`x #2`")),
+            "{titles:#?}"
+        );
+        // The outer `x`, read before the inner one is declared and after
+        // the block, keeps its name.
+        assert!(
+            titles.iter().filter(|title| title.contains("`x`")).count() >= 2,
+            "{titles:#?}"
+        );
+        assert!(
+            titles.iter().all(|title| !title.contains("x #1")),
+            "{titles:#?}"
+        );
+    }
+
+    // The tape shortens a long string literal's lane name ("Hello, w…");
+    // the note keeps its whole spelling.
+    #[cfg(feature = "worker")]
+    #[test]
+    fn a_string_literal_keeps_its_spelling() {
+        use super::lane_labels;
+        use crate::{
+            demos,
+            machine::Machine,
+            panels::Reel,
+            protocol::{
+                Answer,
+                Command,
+            },
+            snapshot::Snapshot,
+        };
+        let mut machine = Machine::default();
+        let snapshot = |answer| match answer {
+            | Ok(Answer::Snapshot(snapshot)) => *snapshot,
+            | _ => panic!("a snapshot"),
+        };
+        let source = demos::find("hello").expect("a lesson").source.to_owned();
+        let mut history = vec![snapshot(machine.run(Command::Load(source)))];
+        while history.last().is_some_and(Snapshot::can_step) {
+            history.push(snapshot(machine.run(Command::Step)));
+        }
+        let reel = Reel::record(&history);
+        assert!(
+            history
+                .iter()
+                .any(|snapshot| snapshot.event.title.contains("\"Hello, world!\"")),
+            "the lesson names its literal"
+        );
+        for snapshot in &history {
+            assert_eq!(lane_labels(&reel, snapshot), [], "{}", snapshot.event.title);
+        }
     }
 }

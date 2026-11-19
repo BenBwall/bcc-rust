@@ -28,7 +28,12 @@ compiler; each part is captioned with what its lessons share
   declaration is reached, and a tick where each lifetime ends;
   each call is a rule over its objects' lanes, dashed while it waits on a
   call of its own; and what a store or a call took its value from is a
-  slanted line between lanes, as in Marey's train graph. A playhead marks
+  slanted line between lanes, as in Marey's train graph. A clock along the
+  tape's top pulses once a step, taller where a step ends at a sequence
+  point, as the caption says. An object the tape numbers to tell it from
+  another of its name in the same call (a block's `x` shadowing the
+  function's is `x #2`) keeps that number in Table 1 and in the note's
+  title, lead and value flow. A playhead marks
   the step shown, the cells under it hold the objects at that step by call,
   the step's numbered note hangs off it, the current full expression is
   wired up as a schematic whose wires fill with values (Figure 2), and a
@@ -200,7 +205,14 @@ The page has light and dark themes (the device in daylight and under low
 light; its screens stay black in both) and works down to phone width. At
 almost every size the line that runs and the note on what it did are on
 screen together: down to 821 px the source stays beside the machine (a sticky
-column, sized to fit under the control strip); narrower, the device becomes a
+column, sized to fit under the control strip). From 1181 px the note has a
+sticky column of its own beside the tape, so on a laptop (1280x800,
+1366x768, 1440x900) the line, the note with its expression's steps and the
+cells the step touched share the window however many lanes the tape has;
+the note scrolls on its own when it is longer than the window, and each
+step starts it at its top, while a long expression's steps scroll in a
+window of their own that each step keeps on its entry. Narrower, the note sits under the cells, and
+narrower still, below 821 px, the device becomes a
 stack of modules with the source sized so the note follows it on the same
 screen, then the tape and the cells, and the transport keys docked at the
 bottom of the window. In the compiler pipeline a phone shows each stage's

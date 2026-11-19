@@ -2391,6 +2391,7 @@ fn MachineView(state: State) -> impl IntoView {
                     on_preprocessor=Callback::new(move |()| state.open_view(Mode::Pipeline, Some(Stage::Preprocessor)))
                     placeholder=state.placeholder
                     running=state.running.into()
+                    reel
                 />
                 <div class="machine-side">
                     <Schematic snapshot=state.current />
