@@ -37,6 +37,7 @@ use crate::{
         FlowPart,
         Snapshot,
         StepEvent,
+        Upcoming,
     },
 };
 
@@ -78,6 +79,9 @@ pub fn Narration(
                 | _ => None,
             })
         })
+    });
+    let upcoming = Memo::new(move |_| {
+        snapshot.with(|state| state.as_ref().and_then(|state| state.upcoming.clone()))
     });
     let names = object_names(snapshot);
     let labels = tape_labels(snapshot, reel);
@@ -123,6 +127,7 @@ pub fn Narration(
             <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
                 {move || event.with(|event| event.as_ref().map(|event| labels.with(|labels| flow_groups(&event.flow, labels))))}
             </p>
+            <Next upcoming group labels />
             <Evaluation group on_jump /><Bits event /><Ranks event /><aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
                 <h3>"Why it matters"</h3>
                 <p>
@@ -150,6 +155,47 @@ pub fn Narration(
             <Recent recent on_jump />
             <TermTip tip />
         </article>
+    }
+}
+
+/// What the next step will do, as the engine describes it before running
+/// it, dimmed: its kind's colour, its words and the paragraph of C99 that
+/// defines it. The expression panel says it instead where it lists the
+/// next step itself, so a note names the next step once.
+#[component]
+fn Next(
+    upcoming: Memo<Option<Upcoming>>,
+    group: Memo<Option<Group>>,
+    labels: Memo<Vec<(String, String)>>,
+) -> impl IntoView {
+    let hidden = move || {
+        upcoming.with(Option::is_none)
+            || group.with(|group| group.as_ref().is_some_and(|group| group.next.is_some()))
+    };
+    view! {
+        <p
+            class="narration-next"
+            data-category=move || upcoming.with(|upcoming| upcoming.as_ref().map(|upcoming| upcoming.category.clone()))
+            data-kind=move || upcoming.with(|upcoming| upcoming.as_ref().map(|upcoming| upcoming.kind.clone()))
+            hidden=hidden
+        >
+            <span class="narration-next-label">"Next"<span class="sr-only">" step"</span>": "</span>
+            {move || upcoming.with(|upcoming| upcoming.as_ref().map(|upcoming| {
+                let text = labels.with(|labels| super::rich_text(&relabeled(&upcoming.text, labels)));
+                let clause = &upcoming.clause;
+                let id = format!("§{}", clause.id);
+                let cited = match clause.link() {
+                    | Some(link) => view! {
+                        " "
+                        <a class="narration-next-clause" href=link target="_blank" rel="noopener" title=format!("{}: {}; open the standard at this paragraph", clause.citation, clause.title)>
+                            <span class="sr-only">"C99 "</span>{id}<span class="sr-only">" (opens the standard in a new tab)"</span>
+                        </a>
+                    }.into_any(),
+                    | None => view! { " " <span class="narration-next-clause" title=clause.citation.clone()>{id}</span> }.into_any(),
+                };
+                view! { <span class="narration-next-text">{text}</span>{cited} }
+            }))}
+        </p>
     }
 }
 

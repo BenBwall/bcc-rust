@@ -33,6 +33,21 @@ pub struct Group {
     /// What the engine says the next step does, when the current step is the
     /// last the run has recorded and the group goes on.
     pub next:     Option<String>,
+    /// Where Over, pressed at the current step, stops.
+    pub over:     OverStop,
+}
+
+/// Where Over stops, as the group can show it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverStop {
+    /// At the recorded step at this index into the history: the group's
+    /// last.
+    At(usize),
+    /// At the group's last step, which the run has not reached yet.
+    End,
+    /// The current step is the group's last, so at the last step of the
+    /// next expression.
+    Next,
 }
 
 impl Group {
@@ -284,12 +299,19 @@ pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group>
     }
     let next = (!complete && last == cursor)
         .then(|| {
-            history[cursor].effects.first().map(|effect| {
-                let effect = effect.strip_prefix("Next: ").unwrap_or(effect);
-                effect.replace('`', "")
-            })
+            history[cursor]
+                .upcoming
+                .as_ref()
+                .map(|upcoming| upcoming.text.replace('`', ""))
         })
         .flatten();
+    // Over's own walk (`Over::stepped`) finishes the expression, or the
+    // next one from its last step.
+    let over = match (complete, last == cursor) {
+        | (false, _) => OverStop::End,
+        | (true, true) => OverStop::Next,
+        | (true, false) => OverStop::At(last),
+    };
     Some(Group {
         text: source_text(source, key.root),
         function: history[cursor]
@@ -300,6 +322,7 @@ pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group>
         parts,
         complete,
         next,
+        over,
     })
 }
 
@@ -389,10 +412,14 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
     let parts = move || {
         group.with(|group| {
             group.as_ref().map(|group| {
+                let stop = match group.over {
+                    | OverStop::At(index) => Some(index),
+                    | OverStop::End | OverStop::Next => None,
+                };
                 let mut views = group
                     .parts
                     .iter()
-                    .map(|part| part_view(part, on_jump))
+                    .map(|part| part_view(part, stop, on_jump))
                     .collect::<Vec<_>>();
                 if let Some(next) = &group.next {
                     views.push(
@@ -414,6 +441,23 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
                         .into_any(),
                     );
                 }
+                // Where Over stops when the panel has no entry for it yet.
+                let beyond = match group.over {
+                    | OverStop::At(_) => None,
+                    | OverStop::End => Some("runs to its last step"),
+                    | OverStop::Next => Some("runs on to the next expression"),
+                };
+                if let Some(beyond) = beyond {
+                    views.push(
+                        view! {
+                            <li class="evaluation-end">
+                                {over_tag()}
+                                <span class="evaluation-name">{beyond}</span>
+                            </li>
+                        }
+                        .into_any(),
+                    );
+                }
                 views.collect_view()
             })
         })
@@ -423,7 +467,7 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
             <h3 class="evaluation-title" id="evaluation-title">{heading}</h3>
             <ol class="evaluation-steps" node_ref=list>{parts}</ol>
             <p class="evaluation-key">
-                "One evaluation per step; "<b>"Over"</b>" (O) runs to the last. "
+                "One evaluation per step; "<b>"Over"</b>" (O) stops where its tag is. "
                 <span class="evaluation-point-key" aria-hidden="true"></span>
                 " marks a "
                 <a href=format!("{N1256_URL}#page=25") target="_blank" rel="noopener" title="C99 §5.1.2.3p2: at a sequence point every earlier side effect is complete">
@@ -474,7 +518,17 @@ fn reveal_current(list: &web_sys::Element) {
     list.scroll_to_with_scroll_to_options(&options);
 }
 
-fn part_view(part: &Part, on_jump: Callback<usize>) -> AnyView {
+/// The tag that marks where Over stops: the Over key's arrow and its name.
+fn over_tag() -> impl IntoView {
+    view! {
+        <span class="evaluation-over">
+            <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true"><path d="M4 13a6 6 0 0 1 11-3M15 6v4h-4" /></svg>
+            "Over"
+        </span>
+    }
+}
+
+fn part_view(part: &Part, stop: Option<usize>, on_jump: Callback<usize>) -> AnyView {
     match part.clone() {
         | Part::Step {
             index,
@@ -485,17 +539,19 @@ fn part_view(part: &Part, on_jump: Callback<usize>) -> AnyView {
             current,
             after,
         } => {
+            let over = stop == Some(index);
             let label = format!(
-                "Step {step}: {title}{}{}",
+                "Step {step}: {title}{}{}{}",
                 if sequence_point {
                     ", then a sequence point"
                 } else {
                     ""
                 },
-                if current { " (this step)" } else { "" }
+                if current { " (this step)" } else { "" },
+                if over { " (Over stops here)" } else { "" }
             );
             view! {
-                <li class="evaluation-step" data-category=category class:is-current=current class:is-after=after class:is-point=sequence_point>
+                <li class="evaluation-step" data-category=category class:is-current=current class:is-after=after class:is-point=sequence_point class:is-over=over>
                     <button
                         type="button"
                         aria-label=label
@@ -505,6 +561,7 @@ fn part_view(part: &Part, on_jump: Callback<usize>) -> AnyView {
                     >
                         <span class="evaluation-index" aria-hidden="true">{step}</span>
                         <span class="evaluation-name" aria-hidden="true">{title.clone()}</span>
+                        {over.then(|| view! { <span class="evaluation-over-at" aria-hidden="true">{over_tag()}</span> })}
                     </button>
                 </li>
             }
