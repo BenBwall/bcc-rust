@@ -1,0 +1,19 @@
+atomics: Enable Atomics
+bulk_memory: Enable bulk memory operations
+bulk_memory_opt: Enable bulk memory optimization operations
+call_indirect_overlong: Enable overlong encoding for call_indirect immediates
+exception_handling: Enable Wasm exception handling
+extended_const: Enable extended const expressions
+fp16: Enable FP16 instructions
+gc: Enable wasm gc
+multimemory: Enable multiple memories
+multivalue: Enable multivalue blocks, instructions, and functions
+mutable_globals: Enable mutable globals
+nontrapping_bulk_memory_len0: Bulk memory operations with a zero length do not trap
+nontrapping_fptoint: Enable non-trapping float-to-int conversion operators
+reference_types: Enable reference types
+relaxed_simd: Enable relaxed-simd instructions
+sign_ext: Enable sign extension operators
+simd128: Enable 128-bit SIMD
+tail_call: Enable tail call instructions
+wide_arithmetic: Enable wide-arithmetic instructions

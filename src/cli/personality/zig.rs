@@ -854,8 +854,9 @@ impl QueryError {
     }
 }
 
-/// zig's architectures (`std.Target.Cpu.Arch`), in its order.
-const ARCHITECTURES: &str = include_str!("zig/architectures.txt");
+/// zig's architectures (`std.Target.Cpu.Arch`), in its order: the list
+/// `zig cc -target bogus-linux` prints, without its indent and `native`.
+const ARCHITECTURES: &str = include_str!("zig/architectures.list");
 /// zig's operating systems (`std.Target.Os.Tag`).
 const OPERATING_SYSTEMS: [&str; 48] = [
     "freestanding",
@@ -1375,11 +1376,12 @@ fn processor_options(cpu: &str, wasm: bool) -> Result<Vec<OsString>, ()> {
 }
 
 /// zig's processors and features for the architectures bcc compiles for
-/// (`std.Target.x86` and `std.Target.wasm`), as `zig cc` lists them.
-const X86_64_CPUS: &str = include_str!("zig/x86_64_cpus.txt");
-const X86_64_FEATURES: &str = include_str!("zig/x86_64_features.txt");
-const WASM32_CPUS: &str = include_str!("zig/wasm32_cpus.txt");
-const WASM32_FEATURES: &str = include_str!("zig/wasm32_features.txt");
+/// (`std.Target.x86` and `std.Target.wasm`), as `zig cc` lists them for an
+/// unknown `-mcpu=bogus` or `-mcpu=baseline+bogus`, without their indent.
+const X86_64_CPUS: &str = include_str!("zig/x86_64_cpus.list");
+const X86_64_FEATURES: &str = include_str!("zig/x86_64_features.list");
+const WASM32_CPUS: &str = include_str!("zig/wasm32_cpus.list");
+const WASM32_FEATURES: &str = include_str!("zig/wasm32_features.list");
 
 /// Prints `error: MESSAGE`, as zig words the errors that stop it
 /// (`std.process.fatal`).
