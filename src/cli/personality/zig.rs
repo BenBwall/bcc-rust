@@ -38,6 +38,8 @@ use crate::target::Target;
 /// The Clang release zig 0.17.1 bundles, which its `--version`,
 /// `-dumpversion` and `__clang_version__` give.
 pub(super) const CLANG_VERSION: &str = "22.1.8";
+/// The zig release whose `zig cc` the personality mimics.
+const ZIG_VERSION: &str = "0.17.1";
 
 /// Translates a `zig cc` command line.
 pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
@@ -47,6 +49,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let mut arguments = expanded.iter();
     while let Some(argument) = arguments.next() {
         translation.argument(argument, &mut arguments)?;
+    }
+    // zig answers its linker's `--version` as it reads it, and with nothing
+    // to build stops there.
+    if translation.linker_version && translation.inputs == 0 {
+        return Ok(Plan::default());
     }
     let defaults = translation.defaults()?;
     gnu::plan_translated(invocation, &translation.out, Some(&defaults))
@@ -191,6 +198,11 @@ struct Translation {
     queries:         bool,
     /// The language `-x` selects, when it is not `none`.
     language:        Option<String>,
+    /// How many input files the command line names.
+    inputs:          usize,
+    /// Whether a linker option asked for the linker's version, which zig
+    /// prints at once.
+    linker_version:  bool,
 }
 
 impl Translation {
@@ -287,7 +299,11 @@ impl Translation {
                     self.stack_protector = Some(true);
                 },
             | "-fno-stack-protector" => self.stack_protector = Some(false),
-            | "-s" => self.strip = Some(true),
+            // zig strips the debug information and the symbols.
+            | "-s" => {
+                self.strip = Some(true);
+                self.out.push(argument.clone());
+            },
             | "-g" => self.strip = Some(false),
             | "-g1" | "-gline-tables-only" => {
                 self.strip = Some(false);
@@ -341,6 +357,33 @@ impl Translation {
                 if text.starts_with("-print-") || text.starts_with("--print-") {
                     self.queries = true;
                 }
+                if let Some(options) = text.strip_prefix("-Wl,") {
+                    // zig's own linker reads these, and answers `--version`
+                    // and `-v` in its own words (`zig ld`), which Meson
+                    // recognizes.
+                    let kept: Vec<&str> = options
+                        .split(',')
+                        .filter(|option| {
+                            let version = matches!(*option, "--version" | "-v");
+                            if version {
+                                self.linker_version = true;
+                                super::print(
+                                    &format!(
+                                        "zig ld {ZIG_VERSION} (bcc {}, which links with LLD; not \
+                                         zig)\n",
+                                        env!("CARGO_PKG_VERSION")
+                                    ),
+                                    false,
+                                );
+                            }
+                            !version
+                        })
+                        .collect();
+                    if !kept.is_empty() {
+                        self.out.push(format!("-Wl,{}", kept.join(",")).into());
+                    }
+                    return Ok(());
+                }
                 self.out.push(argument.clone());
             },
         }
@@ -349,6 +392,7 @@ impl Translation {
 
     /// An input: a source zig compiles names the module after its stem.
     fn input(&mut self, argument: &OsString) {
+        self.inputs += 1;
         let path = Path::new(argument);
         let source = self.language.is_some()
             || path
@@ -478,7 +522,7 @@ impl Translation {
         }
         let links = !self.stops && !self.syntax_only && !self.queries;
         let link_libc = !self.no_libc && !matches!(target, Target::Wasm32Unknown);
-        let dynamic = self.shared || (target == Target::LinuxGnu && !self.static_link);
+        let dynamic = self.shared || (target == Target::LinuxGnu && link_libc && !self.static_link);
         // `requiresPIC`: Windows, and glibc wherever zig links it.
         let requires_pic = windows || (target == Target::LinuxGnu && link_libc);
         let module = self.module.clone().unwrap_or_else(|| "a".into());
@@ -589,9 +633,13 @@ impl Translation {
                 }
                 .into(),
             );
-            if self.stack_protector.unwrap_or(debug) {
+            // The checks call the C library's `__stack_chk_fail`.
+            if self.stack_protector.unwrap_or(debug && link_libc) {
                 compile.push("-fstack-protector-strong".into());
             }
+        }
+        if target == Target::Wasm32Unknown {
+            compile.push("-ffreestanding".into());
         }
         // zig writes DWARF 4 unless asked to strip; bcc writes it through the
         // LLVM back end.
@@ -609,6 +657,21 @@ impl Translation {
         if linux && !pie && !self.shared {
             link.push("-no-pie".into());
         }
+        // zig links its UBSan library into a shared library too, which
+        // Clang's driver leaves to the executable; bcc links the bundled
+        // clang's archive there, its symbols kept local.
+        let mut link_after = Vec::new();
+        if self.shared
+            && target == Target::LinuxGnu
+            && matches!(undefined, UndefinedChecks::Full)
+            && let Some(directory) = gnu::bundled_clang_answer("-print-runtime-dir", target)
+        {
+            let archive = Path::new(&directory).join("libclang_rt.ubsan_standalone.a");
+            if archive.is_file() {
+                link_after.push(archive.into_os_string());
+                link_after.push("-Wl,--exclude-libs,libclang_rt.ubsan_standalone.a".into());
+            }
+        }
         if self.static_link {
             self.out.push("-static".into());
         }
@@ -616,6 +679,7 @@ impl Translation {
             target,
             compile,
             link,
+            link_after,
             triple: query.llvm_triple(target),
             machine: query.clang_triple.clone(),
         })
@@ -624,20 +688,36 @@ impl Translation {
 
 /// What zig gives Clang beside the options it passes on.
 pub(super) struct Defaults {
-    pub(super) target:  Target,
+    pub(super) target:     Target,
     /// bcc's options before the command line's own, in every step.
-    pub(super) compile: Vec<OsString>,
+    pub(super) compile:    Vec<OsString>,
     /// bcc's options in a step that links.
-    pub(super) link:    Vec<OsString>,
+    pub(super) link:       Vec<OsString>,
+    /// bcc's inputs after the command line's own in a step that links.
+    pub(super) link_after: Vec<OsString>,
     /// The LLVM triple of zig's target, which `--version` and `-v` print:
     /// `x86_64-unknown-linux5.10.0-gnu2.31.0`.
-    pub(super) triple:  String,
+    pub(super) triple:     String,
     /// What Clang's own driver, which zig runs for `-dumpmachine`, makes of
     /// the `-target` operand.
-    pub(super) machine: String,
+    pub(super) machine:    String,
 }
 
 impl Defaults {
+    /// Clang's error for a [`Defaults::machine`] whose environment carries
+    /// a version Clang does not read, as zig's glibc version is: `version
+    /// '.2.17' in target triple 'x86_64-unknown-linux-gnu.2.17' is invalid`.
+    pub(super) fn machine_error(&self) -> Option<String> {
+        let environment = self.machine.split('-').nth(3)?;
+        let version = environment.strip_prefix("gnu")?;
+        version.starts_with('.').then(|| {
+            format!(
+                "version '{version}' in target triple '{}' is invalid",
+                self.machine
+            )
+        })
+    }
+
     /// `--version`, and what `-v` prints first: Clang's banner with zig's
     /// target, naming bcc.
     pub(super) fn banner(&self, triple: &str) -> String {

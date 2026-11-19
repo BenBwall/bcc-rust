@@ -198,6 +198,15 @@ pub(super) fn plan_translated(
         .rev()
         .min_by_key(|query| query.rank(compiler))
     {
+        // Clang's driver refuses the version zig's query gives glibc, and
+        // still answers.
+        if let Some(zig) = zig
+            && matches!(query, Query::DumpMachine | Query::Triple)
+            && let Some(message) = zig.machine_error()
+        {
+            state.errors += 1;
+            invocation.error(format_args!("{message}"));
+        }
         let text = state.answer(query);
         if compiler == Compiler::Clang && state.errors != 0 {
             super::print(&text, false);
@@ -430,6 +439,9 @@ pub(super) fn plan_translated(
         }
         let mut bcc = common.clone();
         bcc.extend(state.arguments(job.inputs, links));
+        if links && let Some(zig) = zig {
+            bcc.extend(zig.link_after.iter().cloned());
+        }
         bcc.extend(job.stages.iter().map(OsString::from));
         if job.outputs == Outputs::Named {
             // `--output=` keeps a name such as `-.o` from reading as an
@@ -2453,7 +2465,7 @@ impl State<'_> {
 }
 
 /// What the bundled Clang prints for `query`, when it runs and succeeds.
-fn bundled_clang_answer(query: &str, target: Target) -> Option<String> {
+pub(super) fn bundled_clang_answer(query: &str, target: Target) -> Option<String> {
     let output = std::process::Command::new(version::program_name("clang"))
         .arg(format!("--target={}", target.triple()))
         .arg(query)
