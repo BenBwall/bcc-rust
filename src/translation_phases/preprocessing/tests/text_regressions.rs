@@ -61,7 +61,8 @@ fn text_in(source: &str, configuration: CompilerConfiguration) -> Text {
         .text_events
         .iter()
         .filter_map(|event| match event.kind {
-            | TextEventKind::Pragma(text) => Some((event.position, text.to_owned())),
+            | TextEventKind::Pragma(text) | TextEventKind::PragmaOperator { text, .. } =>
+                Some((event.position, text.to_owned())),
             | TextEventKind::FileEntered
             | TextEventKind::FileReturned
             | TextEventKind::IncludeLine

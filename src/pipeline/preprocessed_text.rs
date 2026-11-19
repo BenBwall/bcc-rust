@@ -69,8 +69,6 @@ impl TextEvents {
                 continue;
             }
             match event.kind {
-                | TextEventKind::Pragma(text) =>
-                    writer.pragma(context, event.file, event.line, text),
                 | TextEventKind::PragmaOperator {
                     text,
                     column,
@@ -80,7 +78,7 @@ impl TextEvents {
                     writer.text.push_str(text);
                     writer.last = PasteClass::Punctuator(b')', 0);
                 },
-                | TextEventKind::PragmaOperator { text, .. } =>
+                | TextEventKind::Pragma(text) | TextEventKind::PragmaOperator { text, .. } =>
                     writer.pragma(context, event.file, event.line, text),
                 | TextEventKind::FileEntered if writer.cl => writer.cl_enter(context, event.file),
                 | TextEventKind::FileEntered =>
