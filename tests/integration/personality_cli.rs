@@ -5296,7 +5296,8 @@ mod tests {
     }
 
     /// With AVX, 32-byte vectors and their wrappers travel in YMM registers, so
-    /// bcc's objects link with GCC's and Clang's both ways, at `-O0` and `-O2`.
+    /// bcc's objects, through LLVM and through the native back end, link with
+    /// GCC's and Clang's and with each other both ways, at `-O0` and `-O2`.
     /// Skipped without AVX on the machine or a reference compiler.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
@@ -5344,18 +5345,25 @@ mod tests {
                         .unwrap();
                     assert!(output.status.success(), "{}", stderr(&output));
                 };
-                let bcc = |source: &str, object: &str| {
-                    let args = [&flags[..], &["-w", "-c", source, "-o", object]].concat();
+                let bcc = |source: &str, object: &str, backend: &[&str]| {
+                    let args = [&flags[..], backend, &["-w", "-c", source, "-o", object]].concat();
                     succeeds(&directory.bcc(mode, &args));
                 };
+                let native = ["-Xbcc", "--backend=native"];
                 reference("lib.c", "r-lib.o");
                 reference("client.c", "r-client.o");
-                bcc("lib.c", "b-lib.o");
-                bcc("client.c", "b-client.o");
+                bcc("lib.c", "b-lib.o", &[]);
+                bcc("client.c", "b-client.o", &[]);
+                bcc("lib.c", "n-lib.o", &native);
+                bcc("client.c", "n-client.o", &native);
                 for (library, client) in [
                     ("b-lib.o", "r-client.o"),
                     ("r-lib.o", "b-client.o"),
                     ("b-lib.o", "b-client.o"),
+                    ("n-lib.o", "r-client.o"),
+                    ("r-lib.o", "n-client.o"),
+                    ("n-lib.o", "b-client.o"),
+                    ("b-lib.o", "n-client.o"),
                 ] {
                     succeeds(&directory.bcc(mode, &[library, client, "-o", "mixed"]));
                     let run = Command::new(directory.path("mixed")).output().unwrap();
