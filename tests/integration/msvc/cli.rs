@@ -249,6 +249,49 @@ fn command_lines_match_cl() {
     differences.assert_none("command line");
 }
 
+/// A source whose pragma operators share their lines with other tokens, in
+/// a macro and outside one.
+const PRAGMA_OPERATORS: &str =
+    "#define DECL(n) _Pragma(\"pack(push, 1)\") int n; _Pragma(\"pack(pop)\")\nDECL(b)\nint c; \
+     __pragma(warning(disable: 4100)) int d;\n#define W __pragma(warning(push)) \
+     __pragma(warning(disable: 4101))\nW int e; __pragma(warning(pop))\nint m; \
+     _Pragma(\"once\")\nint main(void) { return b + c + d + e; }\n";
+
+/// The text `bcc --msvc-mode /P` writes compiles again with `cl`, and
+/// `cl`'s with bcc: each keeps a pragma operator among its line's tokens as
+/// `__pragma(...)`.
+#[test]
+fn preprocessed_pragma_operators_compile_again_with_cl() {
+    let Some(msvc) = msvc() else {
+        eprintln!("skipping: no Visual Studio C compiler on this host");
+        return;
+    };
+    let root = scratch("pragma-operators");
+    for (preprocessor, compiler) in [(false, true), (true, false)] {
+        let directory = root.join(format!("{preprocessor}"));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("p.c"), PRAGMA_OPERATORS).unwrap();
+        for (cl, arguments) in [
+            (preprocessor, ["/nologo", "/P", "p.c"]),
+            (compiler, ["/nologo", "/c", "/Tcp.i"]),
+        ] {
+            let mut command = if cl { msvc.cl() } else { msvc.bcc() };
+            let output = run_native(command.current_dir(&directory).args(arguments)).unwrap();
+            assert!(
+                output.status.success(),
+                "{} {}: {}{}\n{}",
+                if cl { "cl" } else { "bcc" },
+                arguments.join(" "),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+                fs::read_to_string(directory.join("p.i")).unwrap_or_default(),
+            );
+        }
+        assert!(directory.join("p.obj").is_file());
+    }
+    drop(fs::remove_dir_all(root));
+}
+
 /// The diagnostics with a code in `text`, without the directory before each
 /// file name: `bad.c(2): error C2065: 'missing': undeclared identifier`.
 fn coded(text: &str) -> Vec<String> {

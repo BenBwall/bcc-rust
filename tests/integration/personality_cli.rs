@@ -14048,6 +14048,64 @@ warn.c:34: warning: cast between pointer and integer of different size
         );
     }
 
+    /// `cl /E`, `/EP` and `/P` keep a `_Pragma` or `__pragma` operator's
+    /// pragma among the tokens of its line as `__pragma(...)`, spaced as the
+    /// operator was, as the real `cl.exe` 19.44 writes it under Wine, so the
+    /// text compiles again: a `#pragma` in the middle of a line does not.
+    /// `_Pragma`'s literal is written as it destringizes, and `once` stays.
+    #[test]
+    fn cl_writes_pragma_operators_back_so_its_text_compiles_again() {
+        let directory = Directory::new();
+        directory.write(
+            "p.c",
+            "#define DECL(n) _Pragma(\"pack(push, 1)\") int n; \
+             _Pragma(\"pack(pop)\")\nDECL(b)\nint c; __pragma(warning(disable: 4100)) int \
+             d;\n_Pragma(\"pack(push,  2)\")\n__pragma(pack(pop))\nint e; \
+             _Pragma(\"warning(push)\")\n#define W __pragma(warning(push)) __pragma( \
+             warning(disable:4101) )\nW int f;\nint g; W\n  _Pragma(\"message(\\\"hi \
+             there\\\")\") int h;\n#pragma pack(1)\nint i; _Pragma(\"comment(lib, \
+             \\\"x.lib\\\")\") int j;\n#define WRAP(x) __pragma(warning(suppress: 4100)) \
+             x\nWRAP(int k;) int l;\nint m; _Pragma(\"once\")\n#pragma warning(pop)\nint \
+             main(void) { return b + c + d; }\n",
+        );
+        directory.write(
+            "q.c",
+            "int a;_Pragma(\"pack(1)\")int b;\n#define S(x) x _Pragma(\"pack(1)\")x\nS(int \
+             g;)S(int h;)\n#pragma once\n",
+        );
+        let text = "\n__pragma(pack(push, 1)) int b; __pragma(pack(pop))\nint c; \
+                    __pragma(warning(disable: 4100)) int d;\n__pragma(pack(push,  \
+                    2))\n__pragma(pack(pop))\nint e; \
+                    __pragma(warning(push))\n\n__pragma(warning(push)) \
+                    __pragma(warning(disable:4101) ) int f;\nint g; __pragma(warning(push)) \
+                    __pragma(warning(disable:4101) )\n  __pragma(message(\"hi there\")) int \
+                    h;\n#pragma pack(1)\nint i; __pragma(comment(lib, \"x.lib\")) int \
+                    j;\n\n__pragma(warning(suppress: 4100)) int k; int l;\nint m; \
+                    __pragma(once)\n#pragma warning(pop)\nint main(void) { return b + c + d; }\n";
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/E", "p.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), format!("#line 1 \"p.c\"\n{text}"));
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/EP", "p.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), format!("\n{text}"));
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/E", "q.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stdout(&output),
+            "#line 1 \"q.c\"\nint a;__pragma(pack(1))int b;\n\nint g; __pragma(pack(1))int g;int \
+             h; __pragma(pack(1))int h;\n#pragma once\n"
+        );
+        for source in ["p", "q"] {
+            let output = directory.bcc("--msvc-mode", &["/nologo", "/P", &format!("{source}.c")]);
+            succeeds(&output);
+            let preprocessed = format!("/Tc{source}.i");
+            let output = directory.bcc("--msvc-mode", &["/nologo", "/c", &preprocessed]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), format!("{source}.i\n"));
+            assert_eq!(stderr(&output), "");
+        }
+    }
+
     /// `cl` warns (D9025) when an option overrides another of its kind with
     /// another value, as the real `cl.exe` 19.44 does, and replaces a
     /// macro that `/D` defines again silently.

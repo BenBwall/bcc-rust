@@ -170,6 +170,17 @@ impl SpacingState {
         };
     }
 
+    /// Notes that text standing for a token went out in place of the last
+    /// token read, as `cl`'s text writes a pragma operator back: the next
+    /// token is spaced from it as from a token given out.
+    pub(in crate::translation_phases::preprocessing) fn stood_in(&mut self) {
+        self.pending = if std::mem::take(&mut self.end_after) {
+            TokenSpacing::END
+        } else {
+            TokenSpacing::NONE
+        };
+    }
+
     /// The padding gathered so far, to go with the argument just read.
     pub(in crate::translation_phases::preprocessing) const fn pending(self) -> TokenSpacing {
         self.pending

@@ -74,7 +74,10 @@ use super::{
 };
 use crate::{
     configuration::CompilerConfiguration,
-    translation_phases::preprocessing::LiteralUnit,
+    translation_phases::{
+        preprocessing::LiteralUnit,
+        preprocessor_tokenizer::OutputSpacing,
+    },
     util::{
         bump::{
             ArenaMap,
@@ -110,6 +113,19 @@ pub(crate) enum TextEventKind<'tu> {
     /// spelled, each run of white space as one space.
     /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
     Pragma(&'tu str),
+    /// The pragma of a `_Pragma` or `__pragma` operator, which `cl`'s text
+    /// keeps where the operator stood, among the tokens of its line:
+    /// `__pragma(` and the pragma's text, `_Pragma`'s literal destringized
+    /// as written, then `)`. `column` is where the operator is, and
+    /// `spacing` how it is separated from the token before it, as for a
+    /// token. Recorded under the `cl` identity only.
+    /// Microsoft Learn, "Pragma directives and the __pragma keyword".
+    /// C99: §6.10.9 paragraph 1, p. 161; PDF p. 173.
+    PragmaOperator {
+        text:    &'tu str,
+        column:  u32,
+        spacing: OutputSpacing,
+    },
     /// An `#include` opened `file`.
     /// C99: §6.10.2 paragraph 3, p. 149; PDF p. 161.
     FileEntered,

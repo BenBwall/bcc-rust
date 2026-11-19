@@ -41,9 +41,11 @@ use crate::{
 
 /// What a text of phase 4 writes between its tokens, as GCC and Clang write
 /// it. Each `#pragma` line, and each `_Pragma` operator's, stands on a line of
-/// its own, spelled as written, unless the preprocessor alone carries it out.
-/// Each file entered or returned to gets a line marker, even when no token
-/// lies between two of them.
+/// its own, spelled as written, unless the preprocessor alone carries it out;
+/// `cl` keeps an operator's pragma among the tokens of its line instead, as
+/// `__pragma(...)`, which reads back as the same pragma. Each file entered
+/// or returned to gets a line marker, even when no token lies between two of
+/// them.
 /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171; §6.10.9 paragraph 1,
 /// p. 161; PDF p. 173.
 #[derive(Default)]
@@ -68,6 +70,17 @@ impl TextEvents {
             }
             match event.kind {
                 | TextEventKind::Pragma(text) =>
+                    writer.pragma(context, event.file, event.line, text),
+                | TextEventKind::PragmaOperator {
+                    text,
+                    column,
+                    spacing,
+                } if writer.cl => {
+                    writer.cl_place(context, event.file, event.line, column, spacing, NAME);
+                    writer.text.push_str(text);
+                    writer.last = PasteClass::Punctuator(b')', 0);
+                },
+                | TextEventKind::PragmaOperator { text, .. } =>
                     writer.pragma(context, event.file, event.line, text),
                 | TextEventKind::FileEntered if writer.cl => writer.cl_enter(context, event.file),
                 | TextEventKind::FileEntered =>
@@ -115,6 +128,10 @@ pub(crate) struct TextOptions {
 
 /// More blank lines than this are replaced by a line marker, as GCC does.
 const MAX_BLANK_LINES: u32 = 8;
+
+/// The class and first character of `__pragma`, as `cl`'s text writes a
+/// pragma operator back.
+const NAME: (PasteClass, u8) = (PasteClass::Name, b'_');
 
 /// The preprocessed text as it is written, and where it has got to.
 #[expect(
@@ -358,15 +375,7 @@ impl<'a> TextWriter<'a> {
         let later = matches!(self.line, Some((current_file, current_line))
             if current_file == file && line > current_line);
         if self.cl {
-            if self.fresh || later || self.line.is_none_or(|(current, _)| current != file) {
-                self.cl_reach(context, file, line);
-                self.indent(column);
-                self.begin_line(column, spacing, class);
-            } else if spacing.space || (spacing.avoid_paste && avoid_paste(self.last, class, first))
-            {
-                self.text.push(' ');
-            }
-            self.fresh = false;
+            self.cl_place(context, file, line, column, spacing, (class, first));
         } else if self.at_line_start {
             self.advance(context, file, line);
             self.at_line_start = false;
@@ -413,7 +422,9 @@ impl<'a> TextWriter<'a> {
     /// Writes a pragma's line, `text`, for line `line` of `file`: on that
     /// line when the output has not reached it, otherwise after a new line
     /// and a line marker, as for a `_Pragma` operator between two tokens of
-    /// a line. The next token starts a line of its own.
+    /// a line. The next token starts a line of its own. In `cl`'s layout,
+    /// where only a `#pragma` directive comes here, the line is the
+    /// directive's own.
     pub(crate) fn pragma(&mut self, context: &Context<'_>, file: u32, line: u32, text: &str) {
         if self.cl {
             if self.stopped {
@@ -566,6 +577,31 @@ impl<'a> TextWriter<'a> {
         }
     }
 
+    /// Places a token of class `class`, spelled from `first`, in `cl`'s
+    /// layout, for `line` and `column` of `file`: at the start of that line,
+    /// indented to the column, when it is later or nothing is written on the
+    /// current line yet, otherwise after a space where `spacing` asks for one.
+    fn cl_place(
+        &mut self,
+        context: &Context<'_>,
+        file: u32,
+        line: u32,
+        column: u32,
+        spacing: OutputSpacing,
+        (class, first): (PasteClass, u8),
+    ) {
+        let later = matches!(self.line, Some((current_file, current_line))
+            if current_file == file && line > current_line);
+        if self.fresh || later || self.line.is_none_or(|(current, _)| current != file) {
+            self.cl_reach(context, file, line);
+            self.indent(column);
+            self.begin_line(column, spacing, class);
+        } else if spacing.space || (spacing.avoid_paste && avoid_paste(self.last, class, first)) {
+            self.text.push(' ');
+        }
+        self.fresh = false;
+    }
+
     /// Moves `cl`'s layout to the start of `line` of `file`, with an empty
     /// line for each source line passed: `cl /E` writes a line for each
     /// line of a source file, directives and blank lines included, and
@@ -627,9 +663,11 @@ impl<'a> TextWriter<'a> {
     }
 
     /// Writes `cl`'s marker for `line` of `file`, `#line LINE "FILE"`, on a
-    /// line of its own, or an empty line under `-P`. `cl` names an included
-    /// file by its absolute path, from the working directory when relative,
-    /// and the main file as the command line does.
+    /// line of its own, or an empty line under `-P`. An included file is
+    /// named by its absolute path, from the working directory when relative,
+    /// as `cl` names one found beside its includer (one found through a
+    /// relative `/I` directory `cl` names relatively), and the main file as
+    /// the command line does.
     fn cl_marker(&mut self, context: &Context<'_>, file: u32, line: u32) {
         if self.line.is_some() && !self.fresh {
             self.text.push('\n');

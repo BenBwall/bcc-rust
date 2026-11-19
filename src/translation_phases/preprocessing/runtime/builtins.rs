@@ -25,6 +25,7 @@ use super::{
         Expander,
         PreprocessorError,
         PreprocessorErrorType,
+        directives::PragmaOperator,
     },
     TokenizerFrameType,
 };
@@ -51,7 +52,7 @@ use crate::{
     },
 };
 
-impl Expander<'_, '_, '_, '_> {
+impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// Expands a registered builtin at its invocation location. A consumed
     /// pragma returns no token; the caller resumes its frame reader.
     /// C99: §6.10.8p1 and §6.10.9p1, pp. 160-161; PDF pp. 172-173.
@@ -223,7 +224,8 @@ impl Expander<'_, '_, '_, '_> {
                 let invocation = self.invocation_location(token);
                 let from = invocation.index;
                 let outer = self.state.pragma_operator.replace(invocation);
-                self.expand_pragma_operator(from);
+                let operator = self.pragma_operator(token);
+                self.expand_pragma_operator(from, operator);
                 self.state.pragma_operator = outer;
                 None
             },
@@ -263,9 +265,10 @@ impl Expander<'_, '_, '_, '_> {
         intern_string_literal(self.context, self.scratch, &spelling)
     }
 
-    /// Executes the C99 string-form pragma operator.
+    /// Executes the C99 string-form pragma operator, which `cl`'s text writes
+    /// back as `operator` says.
     /// C99: §6.10.9p1, p. 161; PDF p. 173.
-    fn expand_pragma_operator(&mut self, from: u32) {
+    fn expand_pragma_operator(&mut self, from: u32, operator: Option<PragmaOperator<'tu>>) {
         _ =
             self.expect_token_preserving_rejected::<true>(
                 |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
@@ -311,7 +314,8 @@ impl Expander<'_, '_, '_, '_> {
         // C99: §6.10.9p1, p. 161; PDF p. 173: its tokens are processed as a
         // directive's, whose operands a text of phase 4 reads as tokens too.
         let in_directive = std::mem::replace(&mut self.state.in_directive, true);
-        _ = self.parse_pragma_directive(from, at);
+        let operator = operator.map(|operator| operator.with_string(input));
+        _ = self.parse_pragma_directive(from, at, operator);
         self.state.in_directive = in_directive;
         if self.tokenizer.next_item(self.context).is_some() {
             let source_vectors = self.current_location();
