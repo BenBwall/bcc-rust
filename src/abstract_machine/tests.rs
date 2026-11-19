@@ -6,6 +6,7 @@ use super::{
     Operand,
     Session,
     State,
+    Upcoming,
     Value,
     compile,
 };
@@ -15,11 +16,33 @@ fn run(source: &str) -> Session {
     let mut session = program.session();
     for _ in 0..=super::model::MAX_STEPS + 1 {
         if session.state().terminal() {
+            assert_eq!(
+                session.state().upcoming,
+                None,
+                "an ended run has no next step"
+            );
             return session;
         }
-        let _state = session.step();
+        let upcoming = session.state().upcoming.clone();
+        let state = session.step();
+        foretold(upcoming.as_ref(), state);
     }
     panic!("session did not terminate at its resource bound");
+}
+
+/// Checks that the description of the next operation, `upcoming`, named
+/// the step that ran: the event it said, or a stop there.
+fn foretold(upcoming: Option<&Upcoming>, state: &State) {
+    let upcoming = upcoming.expect("a state that can step describes its next operation");
+    assert!(
+        state.event.kind == upcoming.kind || state.event.kind == EventKind::Fault,
+        "step {} was described as {:?} ({}) but recorded {:?} ({})",
+        state.step,
+        upcoming.kind,
+        upcoming.text,
+        state.event.kind,
+        state.event.title,
+    );
 }
 
 fn returned(source: &str, expected: i128) {
@@ -630,7 +653,7 @@ fn snapshots_use_schema_ranges_pointer_ids_and_escaped_source() {
                   a; return *p; }";
     let session = run(source);
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":8"), "versioned schema");
+    assert!(json.contains("\"schema_version\":9"), "versioned schema");
     assert!(
         json.contains(
             "\"kind\":\"pointer\",\"target\":1,\"offset\":0,\"first\":0,\"length\":1,\"structure\"\
@@ -1448,7 +1471,7 @@ fn storing_zero_into_a_pointer_explains_the_null_pointer() {
 fn schema_three_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":8"));
+    assert!(json.contains("\"schema_version\":9"));
     assert!(
         json.contains("\"kind\":\"return\",\"category\":\"call\""),
         "{json}"
@@ -4533,7 +4556,7 @@ int main(void) {
 fn floating_values_and_types_reach_the_json() {
     let session = run("int main(void) { double d = 0.1; float f = d; return 0; }");
     let json = session.trace_json();
-    assert!(json.starts_with("{\"schema_version\":8,"), "{json}");
+    assert!(json.starts_with("{\"schema_version\":9,"), "{json}");
     assert!(json.contains(
         "{\"kind\":\"floating\",\"type\":\"double\",\"value\":\"0.1\",\"exact\":\"0.\
          1000000000000000055511151231257827021181583404541015625\",\"bytes\":[154,153,153,153,153,\
@@ -4622,5 +4645,219 @@ fn the_floating_lesson_is_close_but_not_exact() {
             .starts_with("No double holds the exact sum `0.3000000000000000166533453693773481"),
         "{}",
         lead("Compute 0.1 + 0.2 = 0.30000000000000004")
+    );
+}
+
+/// The site's first lesson, "Objects, loops and calls".
+const OBJECTS: &str = include_str!("../../web/demos/objects.c");
+
+/// The site's lessons, which the page steps through note by note.
+const LESSONS: [&str; 12] = [
+    OBJECTS,
+    HELLO,
+    CONSTANTS,
+    include_str!("../../web/demos/recursion.c"),
+    include_str!("../../web/demos/promotion.c"),
+    UNSIGNED,
+    include_str!("../../web/demos/overflow.c"),
+    FLOATING,
+    include_str!("../../web/demos/pointers.c"),
+    include_str!("../../web/demos/structs.c"),
+    include_str!("../../web/demos/bounds.c"),
+    include_str!("../../web/demos/indeterminate.c"),
+];
+
+#[test]
+fn every_lesson_step_is_described_before_it_runs() {
+    let mut steps = 0;
+    for lesson in LESSONS {
+        let session = run(lesson);
+        steps += session.state().step;
+    }
+    assert_eq!(
+        steps, 1242,
+        "the lessons' steps, which the site's notes follow"
+    );
+}
+
+#[test]
+fn the_next_operation_is_described_in_plain_words() {
+    let program = compile(OBJECTS).expect("demo compiles");
+    let mut session = program.session();
+    let mut said = Vec::new();
+    while !session.state().terminal() {
+        if let Some(upcoming) = &session.state().upcoming {
+            said.push((upcoming.text.clone(), upcoming.clause.id));
+        }
+        let _state = session.step();
+    }
+    for (text, clause) in [
+        (
+            "begin the lifetime of `total`, `values` and `cursor`",
+            "6.2.4p5",
+        ),
+        ("reach the declaration of `total`", "6.2.1p7"),
+        ("find the object `total`", "6.5.1p2"),
+        ("evaluate the constant `0`", "6.4.4.1p5"),
+        ("initialize `total`", "6.7.8p11"),
+        ("select `values[1]` to initialize", "6.7.8p17"),
+        (
+            "turn the array `values` into a pointer to its first element",
+            "6.3.2.1p3",
+        ),
+        ("read `total`", "6.3.2.1p2"),
+        ("compare `i < 3`", "6.5.8p6"),
+        ("test the `for` condition `i < 3`", "6.8.5p4"),
+        ("call `bump`", "6.5.2.2p4"),
+        ("find the object `value` points to", "6.5.3.2p4"),
+        ("add `before` and `1`", "6.5.6p5"),
+        ("store into `values[0]` (in main)", "6.5.16.1p2"),
+        ("return from `bump`", "6.8.6.4p3"),
+        ("move a pointer: `cursor + 1`", "6.5.6p8"),
+        ("end the lifetime of `next`", "6.2.4p5"),
+        ("jump back to the loop condition", "6.8.5p4"),
+        ("return from `main`, which ends the program", "5.1.2.2.3p1"),
+    ] {
+        assert!(
+            said.iter().any(|(said, id)| said == text && *id == clause),
+            "missing {text:?} ({clause}) in {said:#?}"
+        );
+    }
+}
+
+/// Only the initial call of `main` ends the program, and only `main`
+/// returns 0 from its closing brace (C99 §5.1.2.2.3p1); another
+/// function's closing brace returns no value its caller may use
+/// (§6.9.1p12), where the machine stops.
+#[test]
+fn returns_and_closing_braces_say_what_they_do() {
+    let said = |source: &str| {
+        let program = compile(source).expect("test source compiles");
+        let mut session = program.session();
+        let mut said = Vec::new();
+        while !session.state().terminal() {
+            if let Some(upcoming) = &session.state().upcoming {
+                said.push((upcoming.text.clone(), upcoming.clause.id));
+            }
+            let _state = session.step();
+        }
+        said
+    };
+    let recursive =
+        said("int main(void) { static int n = 0; n++; if (n < 2) { int x = main(); } return 0; }");
+    let returns: Vec<_> = recursive
+        .iter()
+        .filter(|(text, _)| text.starts_with("return from `main`"))
+        .collect();
+    assert_eq!(
+        returns,
+        [
+            &(String::from("return from `main`"), "6.8.6.4p3"),
+            &(
+                String::from("return from `main`, which ends the program"),
+                "5.1.2.2.3p1"
+            ),
+        ],
+        "{recursive:#?}"
+    );
+    let falling = said("int main(void) { static int n = 0; n++; if (n < 2) { int x = main(); } }");
+    let ends: Vec<_> = falling
+        .iter()
+        .filter(|(text, _)| text.starts_with("reach the end of"))
+        .collect();
+    assert_eq!(
+        ends,
+        [
+            &(
+                String::from("reach the end of `main`, which returns 0 to its caller"),
+                "5.1.2.2.3p1"
+            ),
+            &(
+                String::from("reach the end of `main`, which returns 0 and ends the program"),
+                "5.1.2.2.3p1"
+            ),
+        ],
+        "{falling:#?}"
+    );
+    let other = said("int f(void) {} int main(void) { return f(); }");
+    assert!(
+        other.contains(&(
+            String::from("reach the end of `f` without a return statement"),
+            "6.9.1p12"
+        )),
+        "{other:#?}"
+    );
+    assert!(
+        !other.iter().any(|(text, _)| text.contains("returns 0")),
+        "{other:#?}"
+    );
+}
+
+#[test]
+fn conversions_subscripts_and_library_calls_are_described() {
+    let said = |source: &str| {
+        let program = compile(source).expect("lesson compiles");
+        let mut session = program.session();
+        let mut said = Vec::new();
+        while !session.state().terminal() {
+            said.extend(
+                session
+                    .state()
+                    .upcoming
+                    .as_ref()
+                    .map(|upcoming| upcoming.text.clone()),
+            );
+            let _state = session.step();
+        }
+        said
+    };
+    let hello = said(HELLO);
+    for text in [
+        "include the header `<stdio.h>`",
+        "create the string literal `\"Hello, world!\"`, before `main` runs",
+        "call `puts`, which writes to standard output",
+        "store the string's characters into `name`",
+        "select `text[count]`, checking it is inside its array",
+        "promote `text[count]` from `char` to `int`",
+        "add 1 to `count`",
+    ] {
+        assert!(
+            hello.iter().any(|said| said == text),
+            "missing {text:?} in {hello:#?}"
+        );
+    }
+    let unsigned = said(UNSIGNED);
+    for text in [
+        "convert `3` from `int` to `unsigned int`",
+        "subtract 1 from `i`",
+        "add `values[k]` to `sum`",
+        "shift the bits of `1u` left by `31`",
+    ] {
+        assert!(
+            unsigned.iter().any(|said| said == text),
+            "missing {text:?} in {unsigned:#?}"
+        );
+    }
+    let floating = said(FLOATING);
+    assert!(
+        floating
+            .iter()
+            .any(|said| said == "cast `price` from `double` to `int`")
+    );
+}
+
+#[test]
+fn a_stop_ends_the_description_and_the_trace_carries_it() {
+    let session = run(include_str!("../../web/demos/bounds.c"));
+    assert_eq!(session.state().status, "undefined_behavior");
+    assert_eq!(session.state().upcoming, None);
+    let program = compile(OBJECTS).expect("lesson compiles");
+    let json = program.session().state_json();
+    assert!(
+        json.contains(
+            "\"upcoming\":{\"kind\":\"enter_block\",\"text\":\"begin the lifetime of `total`, \
+             `values` and `cursor`\""
+        ),
+        "{json}"
     );
 }

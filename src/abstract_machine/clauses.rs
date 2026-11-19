@@ -448,6 +448,10 @@ clauses! {
     /// C99: §6.9.1 paragraph 9, p. 142; PDF p. 154.
     PARAMETERS = "6.9.1p9", "p. 142; PDF p. 154", "Function definitions",
         "Each parameter is a local object with automatic storage duration, private to this call.";
+    /// C99: §6.9.1 paragraph 12, p. 142; PDF p. 154.
+    FUNCTION_END = "6.9.1p12", "p. 142; PDF p. 154", "Function definitions",
+        "If the } that ends a function is reached and the caller uses the call's value, the \
+         behavior is undefined.";
     /// C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
     TRANSLATION_PHASES = "5.1.1.2p1", "pp. 9-10; PDF pp. 21-22", "Translation phases",
         "A source file is translated in phases; in phase 4 the preprocessor executes directives \

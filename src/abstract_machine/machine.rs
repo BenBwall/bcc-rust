@@ -916,6 +916,7 @@ impl Machine {
 
     pub fn refresh(&mut self, program: &Program) {
         self.state.frames.clear();
+        self.state.upcoming = None;
         // Directives run in translation, and static initialization comes
         // before program startup: no call has begun until main's first
         // operation (C99 §5.1.1.2p1, §5.1.2p1).
@@ -923,6 +924,7 @@ impl Machine {
             self.state.evaluation = None;
             if !self.state.terminal() {
                 self.state.source_range = self.before_main(program);
+                self.state.upcoming = Some(self.upcoming_before_main(program));
             }
             return;
         }
@@ -953,6 +955,7 @@ impl Machine {
             if let Some(effect) = self.pending_effect(&next.op) {
                 self.state.pending_effects.push(effect);
             }
+            self.state.upcoming = Some(self.upcoming(program, next));
         }
     }
 
@@ -997,6 +1000,7 @@ impl Machine {
                 frames:          Vec::new(),
                 objects:         Vec::new(),
                 pending_effects: Vec::new(),
+                upcoming:        None,
                 diagnostics:     Vec::new(),
                 return_value:    None,
                 output:          Vec::new(),
@@ -1024,6 +1028,7 @@ impl Machine {
         self.state.source_range = diagnostic.source_range;
         self.state.event = narration::fault(&diagnostic);
         self.state.pending_effects.clear();
+        self.state.upcoming = None;
         self.state.diagnostics.clear();
         self.state.diagnostics.push(diagnostic);
     }
@@ -1105,6 +1110,11 @@ impl Machine {
             + event.operands.capacity() * size_of::<Operand>()
             + event.objects.capacity() * size_of::<usize>()
             + self.state.pending_effects.capacity() * size_of::<String>()
+            + self
+                .state
+                .upcoming
+                .as_ref()
+                .map_or(0, |upcoming| upcoming.text.capacity())
             + self.state.output.capacity();
         for effect in &self.state.pending_effects {
             bytes += effect.capacity();

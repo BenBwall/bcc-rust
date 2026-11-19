@@ -23,6 +23,10 @@ pub struct Snapshot {
     pub stack:        Vec<Frame>,
     pub objects:      Vec<Object>,
     pub effects:      Vec<String>,
+    /// What the next operation will do, as the engine describes it before
+    /// running it; `None` once the run has ended.
+    #[serde(default)]
+    pub upcoming:     Option<Upcoming>,
     pub diagnostic:   Option<Diagnostic>,
     pub return_value: Option<Value>,
     /// Whether the program can write to standard output: it includes
@@ -39,6 +43,21 @@ impl Snapshot {
     pub fn can_step(&self) -> bool {
         matches!(self.status.as_str(), "ready" | "running")
     }
+}
+
+/// The next operation, described before it runs.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Upcoming {
+    /// The engine's rule name of the event it will record, such as
+    /// `lvalue_conversion`.
+    pub kind:     String,
+    /// That event's category, which selects the colour.
+    pub category: String,
+    /// What it does, lower case, with code in backticks: "read `total`".
+    pub text:     String,
+    /// The paragraph of C99 that defines it.
+    pub clause:   Clause,
 }
 
 /// The last completed operation, explained.

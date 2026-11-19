@@ -6,6 +6,7 @@
 //! operation applied (see `clauses.rs` for the citations).
 
 mod floating;
+mod upcoming;
 
 use std::fmt::Write;
 

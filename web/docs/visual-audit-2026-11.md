@@ -1684,3 +1684,282 @@ workbench the shadowing probe's notes 6 and 12 to 23 name the inner `x` as
   current step below the foot at each laptop size.
 - **The cells under the head** still name a shadowing object `x`; the
   tape, Table 1 and the note call it `x #2`.
+
+## Part 9: what comes next (2026-11)
+
+Part 8 left four things for later. This part takes three of them: "what
+comes next" was named only for a store, an update and a library call; at
+an undefined-behavior stop the explanation of the stop came after "Why it
+matters"; and below 1181 px the note still sat under the cells. The work is
+on `agent/site-whats-next`.
+
+### Method
+
+The engine was changed first and tested on its own: every test that runs a
+program to its end, and a new one over the 1,242 steps of the twelve
+lessons, checks that each step's description of the next one names the
+kind of event the next step records (or a stop there). The site was built
+with `web/build.sh` as in Parts 7 and 8: Trunk without `--release`, the dev
+profile at `opt-level=s`. The before build is Part 8's last, from
+`97430e88c`, whose site and engine sources are those of `main` at
+`ec445bf3b`. The after builds are this branch at `4eeac8c57` (the walks
+at 1440 and 1366 px, and the phone's with reduced motion), at `a0d2e9c9f`,
+which only adds the step counter's change of finding 4 (the walk at 1024
+px, the phone's with motion and the Over probe), and at `1043da16e`, which
+only recolours Over's tag (contrast and screen-reader text). Playwright
+scripts drove Chromium:
+
+- **the lesson walk:** Part 8's fold walk, extended. It steps through every
+  note of the twelve lessons (1,254 notes) as a reader who brings the
+  workbench to the top of the window once and then only presses Step. At
+  each note it also records the note's event kind, the "Next" line (its
+  words, its kind, its clause link and where it sits), the expression
+  panel's "next" entry, Over's tag or closing entry and the Over key's
+  tooltip, and where a stop's callout sits. A check then compares each
+  note's "Next" with the note that follows. The walk ran on the after build
+  at 1440x900, 1366x768 and 390x844 in both themes, with reduced motion
+  and with motion allowed (waiting 650 ms for each step's motion to settle),
+  and at 1024x768 light; and on the before build at 1440x900 light,
+  1366x768 dark, 390x844 light and 1024x768 light, for the text comparison;
+- **Over:** a probe pressed Over at every note of "Objects, loops and calls"
+  and checked that it stopped at the step the tag marked;
+- **contrast and screen-reader text:** the WCAG contrast of every text node
+  in the note and the control strip against its composited background, and
+  the accessible text of the "Next" line, the panel's entries and the Over
+  key, at notes 2 and 45 of the first lesson, at note 44 after stepping
+  back (where the tag marks a recorded step), and at the "Signed overflow"
+  stop, at 1440x900, 1366x768, 1024x768 and 390x844 in both themes.
+
+The screenshots are in [`screenshots/next/`](screenshots/next/), named
+`<item>-<width>-<theme>-before.png` and `…-after.png`.
+
+### Findings
+
+#### 1. Only three kinds of step said what came next
+
+The engine knew what it would write next, so a note could say "next: store
+into total", but nothing about a read, an operator, a conversion, a call or
+a block. A newcomer pressing Step met each of these unannounced.
+
+**Fixed.** The engine now describes each of its operations before running
+it (`src/abstract_machine/narration/upcoming.rs`). The description holds
+the kind of event the operation will record, what it does in plain words,
+and the paragraph of C99 that defines it. It names only what the machine
+knows beforehand: the source the operation evaluates, its operands'
+spellings and the objects their addresses designate, never the value it
+will produce. Before `main` it names the next directive or static object.
+Across the lessons the descriptions take 32 kinds of step:
+
+| Kind | Notes | Example |
+| --- | ---: | --- |
+| designate | 306 | find the object `total` (C99 §6.5.1p2) |
+| lvalue conversion | 186 | read `i` (§6.3.2.1p2) |
+| constant | 126 | evaluate the constant `0`; evaluate `LIMIT`, which stands for `4` |
+| initialize | 64 | initialize `total` (§6.7.8p11) |
+| block entry | 61 | begin the lifetime of `total`, `values` and `cursor` (§6.2.4p5) |
+| declaration | 56 | reach the declaration of `total` (§6.2.1p7) |
+| comparison | 45 | compare `i < 3` (§6.5.8p6) |
+| branch | 43 | test the `for` condition `i < 3` (§6.8.5p4) |
+| arithmetic | 41 | add `before` and `1`; shift the bits of `1u` left by `31` |
+| block exit | 35 | end the lifetime of `next` |
+| assignment | 33 | store into `values[0]` (in main) (§6.5.16.1p2) |
+| jump | 31 | jump back to the loop condition |
+| `++`/`--` | 26 | add 1 to `count` (§6.5.2.4p2) |
+| array decay | 21 | turn the array `values` into a pointer to its first element |
+| return | 20 | return from `bump`; return from `main`, which ends the program |
+| compound assignment | 18 | add `step` to `total` (§6.5.16.2p3) |
+| indirection | 16 | find the object `value` points to (§6.5.3.2p4) |
+| static storage | 15 | create the string literal `"Hello, world!"`, before `main` runs |
+| library call, discard | 12 each | call `puts`, which writes to standard output |
+| call | 11 | call `bump` (§6.5.2.2p4) |
+| conversion | 11 | convert `3` from `int` to `unsigned int` (§6.3.1.8p1) |
+| member | 11 | select the member `x` of `p` |
+| pointer arithmetic | 10 | move a pointer: `cursor + 1`; compute the address `&values[0]` |
+| promotion | 10 | promote `text[count]` from `char` to `int` (§6.3.1.1p2) |
+| subscript | 7 | select `text[count]`, checking it is inside its array (§6.5.2.1p2) |
+| directive | 6 | include the header `<stdio.h>`; define the macro `LIMIT` |
+| cast | 3 | cast `price` from `double` to `int` (§6.5.4p4) |
+| static local, address, `sizeof`, unary | 2, 2, 1, 1 | negate `1` |
+
+Each clause is one the engine already cites for that rule; the new ones'
+association was checked against N1256 (6.5.1p2, 6.5.2.2p4, 6.7.8p13,
+6.7.8p17, 6.8.5p4, 6.2.1p7). The JSON trace carries the description as
+schema version 9.
+
+The note shows it as a dimmed, dashed "Next:" line after the lead and the
+value flow, in the colour of the kind of step it will be, with the
+paragraph as a link to the standard. Where the note's expression panel
+already lists the next step (#411's "next: store into total", which now
+takes the engine's words), the line is left to the panel, so each note
+names the next step once.
+[`next-1440-light`](screenshots/next/next-1440-light-before.png)
+([after](screenshots/next/next-1440-light-after.png)).
+
+#### 2. Over's target was not shown
+
+Over runs to the last step of the expression the current step belongs to,
+or from that last step to the end of the next expression. The panel's key
+said so in words, but nothing showed which step that was.
+
+**Fixed.** A tag with the Over key's arrow marks the step Over stops at,
+when the run has recorded it (after stepping back). While it has not, a
+closing entry says "Over runs to its last step", or, at the expression's
+last step, "runs on to the next expression". At a run's last step, where
+Over cannot run, there is no mark. The Over key's tooltip names the
+expression it finishes.
+[`panel-1366-dark`](screenshots/next/panel-1366-dark-before.png)
+([after](screenshots/next/panel-1366-dark-after.png)),
+[`over-tag-1440-light`](screenshots/next/over-tag-1440-light-after.png).
+
+#### 3. A stop's explanation came last
+
+At an undefined-behavior stop the callout that says what went wrong came
+after the lead, the expression panel and "Why it matters". It was below
+the window's foot at all three stops in every configuration the walk
+measured on the before build, the phone's included.
+
+**Fixed.** The callout now comes first, under the note's title. It is in
+the window at all three stops in every configuration of the walk.
+[`stop-1440-light`](screenshots/next/stop-1440-light-before.png)
+([after](screenshots/next/stop-1440-light-after.png)).
+
+#### 4. Below 1181 px the control strip took two rows
+
+Between 821 and 1180 px the note sits under the tape and the cells, as Part
+8 left it. At 1024x768 the control strip also wrapped to two rows, 135 px
+tall, because the mode keys, the encoders, the transport keys and the
+status need about 1,120 px in one row.
+
+**Fixed, in part.** Between 821 and 1180 px Reset, Back and Run show their
+icons alone, as on a phone, and the step counter drops its word "Step";
+both stay for screen readers, and the keys' names in their tooltips. Step
+and Over keep their words. At 1024x768 the strip then keeps to one row at
+1,246 of the 1,254 notes, three-digit steps included. It still wraps at
+8 of the 12 last notes, where the status is longer: "Finished" at a
+three-digit step, and the three stops. The note sits 42 px higher. (A first version hid only the keys'
+names; the walk showed the counter then took the status to a second row
+from step 10, shifting the page under the strip.) At 1024x768 the notes
+whose title or lead ran past the window's foot fall from 546 to 81, but
+the "Next" line is still below the foot at 316 of its 410 notes and the
+expression panel's current step at every note. Below 1024 px the strip
+still takes two rows. Moving the note beside the tape at this width, as
+from 1181 px, would leave the tape too narrow to read; that is still left
+for later.
+[`strip-1024-light`](screenshots/next/strip-1024-light-before.png)
+([after](screenshots/next/strip-1024-light-after.png)).
+
+#### What the walk measured
+
+| Window, before → after | Notes | Title or lead out of view | "Next" shown, out of view | Panel's current step out of view | Stops with the callout in view |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1440x900 light | 1254 | 0 → 0 | 410, 0 | 1 → 1 of 1027 | 0 → 3 of 3 |
+| 1440x900 dark | 1254 | 0 | 410, 0 | 1 of 1027 | 3 of 3 |
+| 1366x768 light | 1254 | 0 | 410, 0 | 2 of 1027 | 3 of 3 |
+| 1366x768 dark | 1254 | 0 → 0 | 410, 0 | 1 → 2 of 1027 | 0 → 3 of 3 |
+| 1024x768 light | 1254 | 546 → 81 | 410, 316 | 1027 → 1027 of 1027 | 0 → 3 of 3 |
+| 390x844 light | 1254 | 0 → 0 | 410, 2 | 315 → 352 of 1027 | 0 → 3 of 3 |
+| 390x844 dark | 1254 | 0 | 410, 2 | 352 of 1027 | 3 of 3 |
+| 1440x900 light, motion | 1254 | 0 | 410, 0 | 1 of 1027 | 3 of 3 |
+| 1440x900 dark, motion | 1254 | 0 | 410, 0 | 1 of 1027 | 3 of 3 |
+| 1366x768 light, motion | 1254 | 0 | 410, 0 | 2 of 1027 | 3 of 3 |
+| 1366x768 dark, motion | 1254 | 0 | 410, 0 | 2 of 1027 | 3 of 3 |
+| 390x844 light, motion | 1254 | 0 | 410, 2 | 352 of 1027 | 3 of 3 |
+| 390x844 dark, motion | 1254 | 0 | 410, 2 | 352 of 1027 | 3 of 3 |
+
+A single number is the after build alone; the before build was walked at
+four of the configurations. At the other 832 notes that can step, the
+expression panel's own "next" entry names the next step, so the "Next"
+line is shown at 410. The one more note at 1366x768 whose panel's current
+step is below the foot is the "Signed overflow" stop: its callout now leads
+the note and pushes the panel down, as finding 3 intends. The other is
+Part 8's printf.
+
+On the phone the "Next" line sits between the lead and the panel, so the
+panel's current step is below the window's foot at 37 more notes. A
+variant that put the line after the panel (tried by injecting its CSS
+into the after build) brought that back to 317, but left the line itself
+below the foot at 194 of its 410 notes instead of 2. The line stays before
+the panel: it is the newer and shorter thing to read, and a phone reader
+scrolls to the panel anyway.
+[`phone-390-light`](screenshots/next/phone-390-light-before.png)
+([after](screenshots/next/phone-390-light-after.png)).
+
+#### Every "next" names the step that follows
+
+At every note of every configuration of the walk, each of the 1,242 notes
+that can step names the next step exactly once (the "Next" line or the
+panel's entry, whose words are the same), and the twelve last notes name
+none. Each names the kind of event the following note records: 1,242 of
+1,242 in every configuration, the three stops included, where the
+operation named is the one that stopped. The engine's own test checks the
+same over the lessons and every other program its tests run to the end;
+it caught one wrong kind while the change was written (a `float` passed
+through `...` becomes a `double` by a conversion between floating types,
+not an integer promotion).
+
+The description quotes the code it acts on, and where the next note's
+title names the same thing it agrees: "read `total`" before "Read `total` →
+0", "call `bump`" before "Call bump (frame #2)". Where the title gives
+values instead ("compare `i < 3`" before "Compare 0 < 3 → 1"), the code
+quoted is the source range the next step highlights.
+
+The Over probe pressed Over at every note of "Objects, loops and calls"
+and "Structs and static storage" that can step, 331 presses, stepping back
+after each one. At the 240 where the tag marked a recorded step, Over
+stopped at that step every time; at the other 91 it ran on past the
+current note, as the closing entry said. The site's tests check the exact
+stop at every note of every lesson that ends without a stop.
+
+#### Intended changes to the text
+
+None in the lessons' notes: every title, lead and value flow of the 1,254
+notes is the same before and after at 1440x900 light, 1366x768 dark,
+390x844 light and 1024x768 light. Each note gains the "Next" line or the
+panel's entry, the panel gains Over's tag or closing entry and a new key
+("Over (O) stops where its tag is"), and a stop's callout moves to the top
+of its note.
+
+#### Checks
+
+- **No sideways scroll** at any note of any lesson in any configuration,
+  and no page logged an error.
+- **Contrast:** nothing new is below AA. The lowest text in the note and
+  the control strip is still the note's number in the accent ink in the
+  light theme, 4.99:1, and the current step's number on vermilion, 5.25:1.
+  The "Next" line's words are 10.59:1 and its label and clause 5.89:1 in
+  the light theme, and above the lowest six (5.47:1) in the dark one.
+  Over's tag first measured 4.54:1 in the light theme, on the panel's
+  grey; on the cell colour it is 5.45:1, and 6.04:1 in the dark theme.
+- **Screen readers:** the "Next" line reads "Next step: find the object
+  total C99 §6.5.1p2 (opens the standard in a new tab)". A step Over
+  stops at reads "Step 45: Initialize before = 2, then a sequence point
+  (Over stops here)", and a closing entry "Over runs on to the next
+  expression" (a first version ran the tag into its words, "Overruns").
+  The Over key's tooltip reads "Step over: run to the last step of before
+  = *value, through any call it makes (O)". Reset, Back and Run keep their
+  names on small laptops, and the step counter its word.
+- **Reduced motion:** nothing new moves. Every count of the walk is the
+  same with motion allowed as with reduced motion.
+- **Tests:** the engine's tests (114, four of them new) check every
+  description against the step that follows in every program they run to
+  the end, the lessons' 1,242 steps among them, and the words of the
+  common kinds; the JSON test checks schema version 9 and the new field.
+  The site's tests (163) check the panel's "next" entry, that Over's mark
+  is where Over stops at every note of every lesson that ends without a
+  stop, and that a run's last step has no mark. The engine's clippy run,
+  the site's four clippy runs and the WebAssembly stepper's tests pass.
+
+### Left for later
+
+- **Below 1181 px** the note still sits under the tape and the cells;
+  below 1024 px the control strip still takes two rows.
+- **On the phone** the "Next" line pushes the expression panel's current
+  step below the window's foot at 37 more notes (above).
+- **One printf** with five conversions, at its last step, still has its
+  current step below the foot at each laptop size, and at the "Signed
+  overflow" stop the leading callout now does the same at 1366x768.
+- **The description** quotes source, not values: "compare `i < 3`" says
+  what will be compared, not that it is 0 < 3. Saying the values would
+  repeat the step it announces.
+- **The cells under the head** still name a shadowing object `x`; the
+  tape, Table 1 and the note call it `x #2`.
