@@ -184,9 +184,24 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 #define SIG_ATOMIC_MAX __SIG_ATOMIC_MAX__
 #define SIG_ATOMIC_MIN (-SIG_ATOMIC_MAX - 1)
 #define WCHAR_MAX __WCHAR_MAX__
+/* Clang 22 and earlier (the zig cc identity) predefine neither minimum. */
+#ifdef __WCHAR_MIN__
 #define WCHAR_MIN __WCHAR_MIN__
+#elif defined __WCHAR_UNSIGNED__
+#define WCHAR_MIN 0
+#else
+#define WCHAR_MIN (-WCHAR_MAX - 1)
+#endif
 #define WINT_MAX __WINT_MAX__
+#ifdef __WINT_MIN__
 #define WINT_MIN __WINT_MIN__
+#elif defined __WINT_UNSIGNED__ && __WINT_WIDTH__ >= __INT_WIDTH__
+#define WINT_MIN 0U
+#elif defined __WINT_UNSIGNED__
+#define WINT_MIN 0
+#else
+#define WINT_MIN (-WINT_MAX - 1)
+#endif
 #define SIZE_MAX __SIZE_MAX__
 #define INT8_C(c) __INT8_C(c)
 #define INT16_C(c) __INT16_C(c)
