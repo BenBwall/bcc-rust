@@ -98,7 +98,7 @@ pub fn Narration(
     start_at_top(event, card);
     let note = first_notes(snapshot, running);
     view! {
-        <article class="note narration" data-category=category aria-labelledby="narration-title" node_ref=card>
+        <article class="note narration" data-category=category data-kind=move || event.with(|event| event.as_ref().map(|event| event.kind.clone())) aria-labelledby="narration-title" node_ref=card>
             <h2 id="narration-title" class="note-title" tabindex="-1">
                 <span class="note-number">
                     {move || snapshot.with(|state| state.as_ref().map_or_else(|| "Note".to_owned(), |state| format!("Note {}", state.step)))}
