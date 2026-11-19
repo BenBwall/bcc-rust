@@ -6871,7 +6871,13 @@ mod tests {
         ] {
             let output = directory.bcc(mode, args);
             assert!(!output.status.success(), "{mode}");
-            assert_eq!(stderr(&output), expected, "{mode}");
+            // `cl` writes its diagnostics to stdout, after the source's name.
+            let printed = if mode == "--msvc-mode" {
+                stdout(&output).replacen("m.c\n", "", 1)
+            } else {
+                stderr(&output)
+            };
+            assert_eq!(printed, expected, "{mode}");
         }
     }
 
@@ -7531,7 +7537,12 @@ mod tests {
             // C1083 names it `./-W4.c`, as bcc's command line reads it).
             let output = directory.bcc(mode, &["/nologo", "/c", "--", "-W4.c"]);
             assert!(!output.status.success());
-            assert!(stderr(&output).contains("-W4.c'"), "{}", stderr(&output));
+            let text = if mode == "--msvc-mode" {
+                stdout(&output)
+            } else {
+                stderr(&output)
+            };
+            assert!(text.contains("-W4.c'"), "{text}");
             directory.write("-W4.c", "int w;\n");
             succeeds(&directory.bcc(mode, &["/nologo", "/c", "--", "-W4.c"]));
             std::fs::remove_file(directory.path("-W4.c")).unwrap();
@@ -7682,7 +7693,12 @@ mod tests {
             // `cl` exits with 2 after an error.
             let status = if mode == "--msvc-mode" { 2 } else { 1 };
             assert_eq!(output.status.code(), Some(status), "{mode}");
-            let text = stderr(&output);
+            // `cl` writes its diagnostics to stdout.
+            let text = if mode == "--msvc-mode" {
+                stdout(&output)
+            } else {
+                stderr(&output)
+            };
             assert!(text.contains(location), "{mode}: {text}");
             assert!(!text.contains("-->"), "{mode}: {text}");
             assert_eq!(
@@ -7918,9 +7934,14 @@ mod tests {
                 output.status.code(),
                 Some(status),
                 "{args:?}: {}",
-                stderr(&output)
+                stdout(&output)
             );
-            let printed: Vec<String> = stderr(&output).lines().map(str::to_owned).collect();
+            // `cl` writes its diagnostics to stdout, after the source's name.
+            let printed: Vec<String> = stdout(&output)
+                .lines()
+                .skip(1)
+                .map(str::to_owned)
+                .collect();
             assert_eq!(printed, lines, "{args:?}");
         }
         assert_eq!(
@@ -7941,7 +7962,7 @@ mod tests {
             let output = cl(&all);
             (
                 output.status.code(),
-                stderr(&output).matches("): warning:").count(),
+                stdout(&output).matches("): warning:").count(),
             )
         };
         assert_eq!(warnings(&[]), (Some(0), 2));
@@ -8125,8 +8146,9 @@ mod tests {
         // `cl` keeps its own codes and words.
         let cl = directory.bcc("--msvc-mode", &["/c", "/nologo", "/W4", "undeclared.c"]);
         assert_eq!(
-            stderr(&cl),
-            "undeclared.c(1): error C2065: 'undefined_thing': undeclared identifier\n"
+            stdout(&cl),
+            "undeclared.c\nundeclared.c(1): error C2065: 'undefined_thing': undeclared \
+             identifier\n"
         );
     }
 
@@ -9865,9 +9887,9 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         let output = directory.bcc("--msvc-mode", &["bad.c"]);
         assert_ne!(output.status.code(), Some(0));
         assert!(
-            stderr(&output).contains("bad.c(1): error:"),
+            stdout(&output).contains("bad.c(1): error:"),
             "{}",
-            stderr(&output)
+            stdout(&output)
         );
         directory.write("v.c", "long v = __STDC_VERSION__;\n");
         let output = directory.bcc("--msvc-mode", &["v.c"]);
@@ -9887,9 +9909,9 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         let bad = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "bad.c"]);
         assert_eq!(bad.status.code(), Some(2));
         assert!(
-            stderr(&bad).contains("bad.c(1): error:"),
+            stdout(&bad).contains("bad.c(1): error:"),
             "{}",
-            stderr(&bad)
+            stdout(&bad)
         );
     }
 
@@ -10195,14 +10217,12 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             };
             let cl = run("--msvc-mode", args, &[object]);
             assert_eq!(cl.status.code(), Some(2), "{args:?}");
-            assert_eq!(
-                stderr(&cl),
-                format!("c1: fatal error C1083: Cannot open source file: 'missing.c': {missing}\n")
-            );
+            // `cl` writes it to stdout, after the source's name.
             assert_eq!(
                 stdout(&cl),
                 format!(
-                    "missing.c\n{}\nGenerating Code...\n",
+                    "missing.c\nc1: fatal error C1083: Cannot open source file: 'missing.c': \
+                     {missing}\n{}\nGenerating Code...\n",
                     object.replace(".obj", ".c")
                 )
             );
@@ -10263,7 +10283,11 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         std::fs::remove_file(directory.path("good.obj")).unwrap();
         let cl = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "bad.c", "good.c"]);
         assert_eq!(cl.status.code(), Some(2));
-        assert_eq!(stdout(&cl), "bad.c\ngood.c\n");
+        let names: Vec<&str> = stdout(&cl)
+            .lines()
+            .filter(|line| !line.contains("): error"))
+            .collect();
+        assert_eq!(names, ["bad.c", "good.c"]);
         let clang_cl = directory.bcc("--clang-cl-mode", &["/nologo", "/c", "bad.c", "good.c"]);
         assert_eq!(clang_cl.status.code(), Some(1));
         assert!(!directory.path("good.obj").exists());
@@ -12741,13 +12765,32 @@ warn.c:34: warning: cast between pointer and integer of different size
                  {here}open.h\n. {here}b.h\n"
             )
         );
+        // `cl` writes its notes to stdout, after the source's name, with
+        // each header's absolute path.
         let output = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/showIncludes", "h.c"]);
         succeeds(&output);
+        let notes: Vec<(usize, String)> = stdout(&output)
+            .lines()
+            .skip(1)
+            .map(|line| {
+                let path = line.strip_prefix("Note: including file:").unwrap();
+                let depth = path.len() - path.trim_start().len();
+                let path = Path::new(path.trim_start());
+                assert!(path.is_absolute(), "{line}");
+                (depth, path.file_name().unwrap().to_string_lossy().into_owned())
+            })
+            .collect();
         assert_eq!(
-            stderr(&output),
-            "Note: including file: guarded.h\nNote: including file:  b.h\nNote: including file: \
-             defined.h\nNote: including file: open.h\nNote: including file: open.h\nNote: \
-             including file: b.h\n"
+            notes,
+            [
+                (1, "guarded.h"),
+                (2, "b.h"),
+                (1, "defined.h"),
+                (1, "open.h"),
+                (1, "open.h"),
+                (1, "b.h"),
+            ]
+            .map(|(depth, name)| (depth, name.to_owned()))
         );
     }
 

@@ -318,9 +318,10 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     ];
     // `cl` makes a tentative definition a communal symbol, so two units
     // that both declare `int x;` link; clang-cl does not, as Clang 11 and
-    // later do not.
+    // later do not. `cl` never colors its output.
     if !clang_cl {
         common.push("-fcommon".into());
+        common.push("-fno-color-diagnostics".into());
     }
     if !state.extensions {
         // `/Za`: ISO C without Microsoft's anonymous tagged members, and
@@ -436,6 +437,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             plan.steps.push(Step::Bcc(step));
         }
         return Ok(plan);
+    }
+    // `cl` writes the diagnostics of a compile, as its notes and the names
+    // of its sources, to stdout, and of `/E`, `/EP` and `/P` to stderr.
+    if !clang_cl {
+        common.push("--diagnostics-to-stdout".into());
     }
     // `/Zs`: each source is only checked.
     if state.syntax_only {

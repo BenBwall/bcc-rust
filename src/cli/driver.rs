@@ -80,6 +80,7 @@ use crate::util::bump::Bump;
 
 /// Runs the jobs the arguments ask for and returns the exit status.
 pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
+    super::diagnostic_stream::select(args.driver.diagnostics_to_stdout);
     // GCC's driver prints the commands it runs bare, Clang's quoted.
     crate::backend::llvm::print_commands(args.driver.verbose.then(|| {
         if args.compiler_identity == super::arguments::Identity::Gcc {

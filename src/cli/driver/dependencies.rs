@@ -29,6 +29,7 @@ use super::{
         Cli,
         MainError,
     },
+    super::diagnostic_stream::DiagnosticStream,
     Source,
     options::DependencyFiles,
     output_or_stem,
@@ -389,25 +390,45 @@ fn emit(request: &DependencyRequest, text: &str) -> Result<(), MainError> {
 /// separator (`llvm::sys::path::append`), so `.\sub/s.h` on Windows.
 const HERE: &str = if cfg!(windows) { ".\\" } else { "./" };
 
-/// Prints `Note: including file:` and the header to stderr for each
-/// `#include` that entered one, as `cl /showIncludes` does, with a space
-/// more before the path for each level of nesting; Ninja reads the path
-/// after the prefix and the spaces. clang-cl begins a path as `-H` does.
+/// Prints `Note: including file:` and the header to the diagnostic stream
+/// for each `#include` that entered one, as `cl /showIncludes` does, with a
+/// space more before the path for each level of nesting; Ninja reads the
+/// path after the prefix and the spaces. `cl` names a header by the absolute
+/// path of the directory it was found in and the name the directive wrote
+/// (`C:\src\inc/deep.h`), so a relative path starts from the working
+/// directory; clang-cl begins a path as `-H` does.
 pub(super) fn show_includes(context: &Context<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
     let clang = context.configuration.compiler_identity().rules() == RuleSet::Clang;
+    let cl = context.configuration.compiler_identity() == CompilerIdentity::Msvc;
+    let directory = if cl {
+        working_directory(&arena)
+    } else {
+        ""
+    };
     for entry in context.include_entries.iter().flatten() {
-        _ = writeln!(
+        let file = context.get_source_file(entry.file);
+        _ = write!(
             text,
-            "Note: including file:{:width$}{}{}",
+            "Note: including file:{:width$}{}",
             "",
             if clang && entry.here { HERE } else { "" },
-            context.get_source_file(entry.file).display(),
             width = entry.depth as usize,
         );
+        if file.is_relative() && !directory.is_empty() {
+            text.push_str(directory);
+            text.push(std::path::MAIN_SEPARATOR);
+        }
+        _ = writeln!(text, "{}", file.display());
     }
-    drop(io::stderr().lock().write_all(text.as_bytes()));
+    drop(DiagnosticStream.write_all(text.as_bytes()));
+}
+
+/// The working directory, which relative header names start from; empty if
+/// it cannot be read.
+fn working_directory(arena: &Bump) -> &str {
+    std::env::current_dir().map_or("", |path| arena.alloc_str(&path.to_string_lossy()))
 }
 
 /// Prints the header each `#include` entered to stderr for `-H`, after a

@@ -17,6 +17,7 @@ use std::{
     path::Path,
 };
 
+use super::diagnostic_stream::DiagnosticStream;
 use crate::{
     diagnostics::{
         ColorChoice as RenderColor,
@@ -111,7 +112,7 @@ pub(super) fn print_preprocessed<'tu>(
         tu,
         RenderColor::for_stderr(context.configuration.diagnostic_color()),
     );
-    let stderr = &mut io::stderr();
+    let stderr = &mut DiagnosticStream;
     let mut diagnosed = 0;
     let mut written = 0;
     for step in steps {

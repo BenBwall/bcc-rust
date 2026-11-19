@@ -33,6 +33,7 @@ use clap::{
     ValueEnum,
 };
 
+use super::diagnostic_stream::DiagnosticStream;
 use crate::{
     backend::{
         interpreter::{
@@ -120,7 +121,7 @@ pub(super) fn generate_code<'tu>(
         context.tu_arena(),
         RenderColor::for_stderr(context.configuration.diagnostic_color()),
     );
-    let stderr = &mut io::stderr();
+    let stderr = &mut DiagnosticStream;
     drop(reporter.report_pending(context, stderr));
     if !sema.lowerable(context) {
         drop(reporter.finish(context, stderr));
