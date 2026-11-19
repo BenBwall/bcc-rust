@@ -1244,6 +1244,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             tail,
             "ll" | "LL" | "ull" | "Ull" | "uLL" | "ULL" | "llu" | "llU" | "LLu" | "LLU"
         );
+        let microsoft = self
+            .context
+            .configuration
+            .accepts(Feature::MsIntTypes)
+            .then(|| microsoft_suffix(tail))
+            .flatten();
         if did_overflow
             && bit_precise
             && representation == IntegerRepresentation::Target
@@ -1289,6 +1295,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         let contents = self.context.string_cache.at(token.contents);
         let suffix_type = if let Some(unsigned) = bitint_unsigned {
             unsigned.then_some(IntegerSuffix::Unsigned)
+        } else if let Some(suffix) = microsoft {
+            index = contents.len() - 1;
+            suffix
         } else {
             match (
                 contents.char_at(index),
@@ -1992,6 +2001,30 @@ fn literal_encoding(spelling: &str) -> Option<LiteralEncoding> {
     } else {
         None
     }
+}
+
+/// The suffix of Microsoft's sized integer constants, `i8`, `i16`, `i32`
+/// and `i64` (or with `I`), after an optional `u` or `U`, as the suffix a
+/// standard constant of that size takes: `ll` for `i64` and `ull` for
+/// `ui64`, as `cl` and Clang type them. The narrower ones take no suffix
+/// (`u` for unsigned), so their constants have `int`'s type, where Clang
+/// gives `0i8` `char`'s and `0i16` `short`'s; promotion makes the
+/// difference visible only to `sizeof`. `None` for any other suffix.
+/// Microsoft extension: Clang 23, `NumericLiteralParser` in
+/// `LiteralSupport.cpp`. C99: §6.4.4.1 paragraphs 1-6, pp. 54-56; PDF pp.
+/// 66-68.
+fn microsoft_suffix(tail: &str) -> Option<Option<IntegerSuffix>> {
+    let (unsigned, sized) = match tail.strip_prefix(['u', 'U']) {
+        | Some(sized) => (true, sized),
+        | None => (false, tail),
+    };
+    Some(match (sized.strip_prefix(['i', 'I'])?, unsigned) {
+        | ("64", false) => Some(IntegerSuffix::LongLong),
+        | ("64", true) => Some(IntegerSuffix::UnsignedLongLong),
+        | ("8" | "16" | "32", false) => None,
+        | ("8" | "16" | "32", true) => Some(IntegerSuffix::Unsigned),
+        | _ => return None,
+    })
 }
 
 /// The format and length of a floating constant's `f16` or `F16` suffix,
