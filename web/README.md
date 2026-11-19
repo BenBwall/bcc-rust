@@ -219,8 +219,8 @@ cells the step touched share the window however many lanes the tape has;
 the note scrolls on its own when it is longer than the window, and each
 step starts it at its top, while a long expression's steps scroll in a
 window of their own that each step keeps on its entry. Narrower, the note sits under the cells; down to
-821 px Reset, Back and Run show their icons alone, so from about 1000 px
-the control strip keeps to one row. Narrower still, and
+821 px Reset, Back and Run show their icons alone and the step counter
+drops its word, so from 1024 px the control strip keeps to one row. Narrower still, and
 below 821 px, the device becomes a
 stack of modules with the source sized so the note follows it on the same
 screen, then the tape and the cells, and the transport keys docked at the

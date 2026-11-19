@@ -1590,11 +1590,13 @@
     .lesson-topics { grid-column: 2 / -1; }
   }
   /* Small laptops and tablets held sideways: Reset, Back and Run show
-     their icons alone, as on a phone (their names stay for screen readers
-     and in their tooltips), so the status keeps to the strip's first row
-     from about 1000 px and the note sits higher under the cells. */
+     their icons alone and the step counter drops its word, as on a phone
+     (both stay for screen readers, the keys' names in their tooltips too),
+     so from 1024 px the status keeps to the strip's first row and the note
+     sits higher under the cells. */
   @media (min-width: 821px) and (max-width: 1180px) {
-    .transport .button:not(.primary, .labelled) .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .transport .button:not(.primary, .labelled) .button-label,
+    .step-counter-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .transport .button:not(.primary, .labelled) { padding-inline: 10px; }
   }
   @container insight (max-width: 760px) {
