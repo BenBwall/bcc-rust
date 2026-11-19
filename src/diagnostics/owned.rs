@@ -115,6 +115,7 @@ impl OwnedDiagnostic {
         help.extend(self.help.iter().map(String::as_str));
         Diagnostic {
             fatal: false,
+            pragma_mapped: false,
             severity: self.severity,
             message: &self.message,
             option_suffix: self.option_suffix,

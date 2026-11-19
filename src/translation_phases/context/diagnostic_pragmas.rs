@@ -77,12 +77,41 @@ struct PragmaState {
     configuration:    CompilerConfiguration,
     /// One bit per group Clang's `fatal` made fatal.
     fatal:            crate::configuration::GroupMask,
+    /// One bit per group any pragma classified, whose errors Clang's
+    /// `-Wfatal-errors` then leaves errors: `makeUserMapping` sets
+    /// `NoErrorAsFatal` on a pragma's mapping (and `NoWarningAsError`, which
+    /// `configuration` already holds).
+    mapped:           crate::configuration::GroupMask,
     /// `warning "-Wpedantic"`: `-Werror` no longer promotes extension
     /// diagnostics.
     pedantic_warning: bool,
     /// The class Clang's `-Weverything` last set, which reaches diagnostics
     /// that belong to no other group.
     everything:       Option<PragmaClass>,
+}
+
+/// What the settings at a diagnostic's place made of it.
+#[derive(Clone, Copy)]
+pub(crate) struct PragmaClassification {
+    severity: ErrorSeverity,
+    /// Clang's `fatal` named its group.
+    fatal:    bool,
+    /// A pragma named its group (see [`PragmaState::mapped`]).
+    mapped:   bool,
+}
+
+impl PragmaState {
+    fn classification(
+        &self,
+        group: DiagnosticGroup,
+        severity: ErrorSeverity,
+    ) -> PragmaClassification {
+        PragmaClassification {
+            severity,
+            fatal: self.fatal.contains(group),
+            mapped: self.mapped.contains(group),
+        }
+    }
 }
 
 impl<'tu> DiagnosticPragmas<'tu> {
@@ -180,6 +209,7 @@ impl<'tu> Context<'tu> {
                     error,
                     severity: ErrorSeverity::Warning,
                     fatal: false,
+                    mapped: true,
                 }));
         } else {
             self.classified_error(source, error);
@@ -195,10 +225,10 @@ impl<'tu> Context<'tu> {
         &self,
         group: DiagnosticGroup,
         source: SourceVectors,
-    ) -> Option<(&'tu Bump, ErrorSeverity, bool)> {
+    ) -> Option<(&'tu Bump, PragmaClassification)> {
         let state = self.pragma_state_at(source)?;
         let severity = state.configuration.diagnostic_severity(group)?;
-        Some((self.tu, severity, state.fatal.contains(group)))
+        Some((self.tu, state.classification(group, severity)))
     }
 
     /// Queues `error` as [`Self::pragma_classification`] classified it.
@@ -206,15 +236,16 @@ impl<'tu> Context<'tu> {
     #[inline(never)]
     pub(crate) fn raw_classified_preprocessor_error(
         pending_errors: &mut ArenaQueue<'tu, TranslationError<'tu>>,
-        classified: Option<(&'tu Bump, ErrorSeverity, bool)>,
+        classified: Option<(&'tu Bump, PragmaClassification)>,
         error: PreprocessorError<'tu>,
     ) {
         let error = TranslationError::Preprocessing(error);
         pending_errors.push_back(match classified {
-            | Some((tu, severity, fatal)) => TranslationError::Classified(ClassifiedError {
-                severity,
-                fatal,
-                error: tu.alloc(error),
+            | Some((tu, classification)) => TranslationError::Classified(ClassifiedError {
+                severity: classification.severity,
+                fatal:    classification.fatal,
+                mapped:   classification.mapped,
+                error:    tu.alloc(error),
             }),
             | None => error,
         });
@@ -236,11 +267,11 @@ impl<'tu> Context<'tu> {
             self.pending_errors.push_back(error);
             return;
         };
-        let (severity, fatal) = if let Some(group) = group {
+        let classification = if let Some(group) = group {
             let Some(severity) = state.configuration.diagnostic_severity(group) else {
                 return;
             };
-            (severity, state.fatal.contains(group))
+            state.classification(group, severity)
         } else {
             self.pending_errors.push_back(error);
             return;
@@ -249,8 +280,9 @@ impl<'tu> Context<'tu> {
         self.pending_errors
             .push_back(TranslationError::Classified(ClassifiedError {
                 error,
-                severity,
-                fatal,
+                severity: classification.severity,
+                fatal: classification.fatal,
+                mapped: classification.mapped,
             }));
     }
 
@@ -266,6 +298,7 @@ impl<'tu> Context<'tu> {
         } else {
             state.fatal.difference(mask)
         };
+        state.mapped = state.mapped.union(mask);
         // Clang's `-Weverything` holds `-Wpedantic`.
         let everything = name == "everything"
             && self.configuration.compiler_identity().rules()
@@ -402,6 +435,7 @@ impl<'tu> Context<'tu> {
         PragmaState {
             configuration,
             fatal: crate::configuration::GroupMask::EMPTY,
+            mapped: crate::configuration::GroupMask::EMPTY,
             pedantic_warning: false,
             everything: None,
         }

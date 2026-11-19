@@ -244,7 +244,7 @@ int d[0];
     }
 
     /// `-Wfatal-errors` stops GCC at the first error a pragma makes; Clang
-    /// accepts the option and goes on.
+    /// leaves such an error an error and goes on.
     #[test]
     fn fatal_errors_stops_gcc_alone() {
         let source = "\
@@ -278,6 +278,155 @@ int x;
             compile("fatal", "--clang-mode", &["-Wfatal-errors"], source),
             ["2 error", "4 error"]
         );
+    }
+
+    /// Clang's `-Wfatal-errors` makes fatal every error but one a pragma
+    /// classified (`makeUserMapping` sets `NoErrorAsFatal` on a pragma's
+    /// mapping), and its `fatal` names the option without `-Werror`. GCC 14
+    /// ignores Clang's pragma and stops at its first error of every kind.
+    /// Each stderr and status is Clang 23.1.5's or GCC 14's, byte for byte.
+    #[test]
+    fn fatal_errors_spare_what_a_pragma_made_an_error() {
+        const ERROR_PRAGMA: &str = "\
+#pragma GCC diagnostic error \"-Wunused-variable\"
+int f(void) { int a; return 0; }
+int g(void) { int b; return 0; }
+";
+        const FATAL_PRAGMA: &str = "\
+#pragma clang diagnostic fatal \"-Wunused-variable\"
+int f(void) { int a; return 0; }
+int g(void) { int b; return 0; }
+";
+        const UNUSED: &str = "\
+int f(void) { int a; return 0; }
+int g(void) { int b; return 0; }
+";
+        const UNDECLARED: &str = "\
+int f(void) { return y; }
+int g(void) { return z; }
+";
+        const CLANG_UNUSED: &str = "\
+input.c:1:19: fatal error: unused variable 'a' [-Wunused-variable]
+    1 | int f(void) { int a; return 0; }
+      |                   ^
+1 error generated.
+";
+        let gcc_unused = |which: &str| {
+            format!(
+                "\
+input.c: In function 'f':
+input.c:1:19: error: unused variable 'a' [-Werror=unused-variable]
+    1 | int f(void) {{ int a; return 0; }}
+      |                   ^
+compilation terminated due to -Wfatal-errors.
+cc1: {which} warnings being treated as errors
+"
+            )
+        };
+        let cases: [(&str, &[&str], &str, (i32, String), (i32, String)); 5] = [
+            (
+                "pragma error",
+                &["-Wfatal-errors"],
+                ERROR_PRAGMA,
+                (
+                    1,
+                    "\
+input.c:2:19: error: unused variable 'a' [-Werror,-Wunused-variable]
+    2 | int f(void) { int a; return 0; }
+      |                   ^
+input.c:3:19: error: unused variable 'b' [-Werror,-Wunused-variable]
+    3 | int g(void) { int b; return 0; }
+      |                   ^
+2 errors generated.
+"
+                    .to_owned(),
+                ),
+                (
+                    1,
+                    "\
+input.c: In function 'f':
+input.c:2:19: error: unused variable 'a' [-Werror=unused-variable]
+    2 | int f(void) { int a; return 0; }
+      |                   ^
+compilation terminated due to -Wfatal-errors.
+cc1: some warnings being treated as errors
+"
+                    .to_owned(),
+                ),
+            ),
+            (
+                "pragma fatal",
+                &["-Wfatal-errors"],
+                FATAL_PRAGMA,
+                (
+                    1,
+                    "\
+input.c:2:19: fatal error: unused variable 'a' [-Wunused-variable]
+    2 | int f(void) { int a; return 0; }
+      |                   ^
+1 error generated.
+"
+                    .to_owned(),
+                ),
+                (0, String::new()),
+            ),
+            (
+                "-Werror=",
+                &["-Werror=unused-variable", "-Wfatal-errors"],
+                UNUSED,
+                (1, CLANG_UNUSED.to_owned()),
+                (1, gcc_unused("some")),
+            ),
+            (
+                "-Werror",
+                &["-Wunused-variable", "-Werror", "-Wfatal-errors"],
+                UNUSED,
+                (1, CLANG_UNUSED.to_owned()),
+                (1, gcc_unused("all")),
+            ),
+            (
+                "error",
+                &["-Wfatal-errors"],
+                UNDECLARED,
+                (
+                    1,
+                    "\
+input.c:1:22: fatal error: use of undeclared identifier 'y'
+    1 | int f(void) { return y; }
+      |                      ^
+1 error generated.
+"
+                    .to_owned(),
+                ),
+                (
+                    1,
+                    "\
+input.c: In function 'f':
+input.c:1:22: error: 'y' undeclared (first use in this function)
+    1 | int f(void) { return y; }
+      |                      ^
+compilation terminated due to -Wfatal-errors.
+"
+                    .to_owned(),
+                ),
+            ),
+        ];
+        let root = directory("fatal-pragma-mapped");
+        for (name, flags, source, clang, gcc) in cases {
+            fs::write(root.join("input.c"), source).unwrap();
+            for (mode, (status, stderr)) in [("--clang-mode", clang), ("--gcc-mode", gcc)] {
+                let mut arguments = vec![mode];
+                arguments.extend(flags);
+                arguments.extend(["-c", "-o", "output.o", "input.c"]);
+                let output = run(&root, &arguments);
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stderr),
+                    stderr,
+                    "{name} {mode}"
+                );
+                assert_eq!(output.status.code(), Some(status), "{name} {mode}");
+            }
+        }
     }
 
     /// `-E` keeps each pragma, `_Pragma` operators as lines, and compiling its

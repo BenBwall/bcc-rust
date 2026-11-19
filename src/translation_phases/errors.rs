@@ -63,6 +63,9 @@ pub(crate) struct ClassifiedError<'tu> {
     /// Clang's `#pragma clang diagnostic fatal`, after which nothing else is
     /// reported.
     pub(crate) fatal:    bool,
+    /// A pragma named its group, so Clang's `-Wfatal-errors` leaves it an
+    /// error.
+    pub(crate) mapped:   bool,
 }
 
 impl TranslationError<'_> {
@@ -273,6 +276,7 @@ impl ToDiagnostic for TranslationError<'_> {
             | Self::Classified(classified) => {
                 let mut diagnostic = classified.error.diagnostic_in(context, source, arena);
                 diagnostic.fatal = classified.fatal;
+                diagnostic.pragma_mapped = classified.mapped;
                 diagnostic
             },
             | Self::InitialProcessing(error) => error.diagnostic_in(context, source, arena),

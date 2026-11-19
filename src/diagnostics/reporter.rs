@@ -236,21 +236,29 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             == crate::configuration::DiagnosticFormat::Gcc;
         let errors_fatal = context.configuration.errors_fatal();
         for PendingDiagnostic { mut diagnostic, .. } in self.pending.drain(..) {
-            // Clang's fatal error names the warning option alone, without
-            // the `-Werror` that made it an error.
-            if errors_fatal && diagnostic.severity == ErrorSeverity::Error && !diagnostic.fatal {
+            // Clang's `-Wfatal-errors` leaves an error a pragma made one
+            // (`DiagnosticIDs::getDiagnosticSeverity`).
+            if errors_fatal
+                && diagnostic.severity == ErrorSeverity::Error
+                && !diagnostic.fatal
+                && !diagnostic.pragma_mapped
+            {
                 diagnostic.fatal = true;
-                if diagnostic.option_suffix
-                    && let Some(at) = diagnostic.message.rfind(" [-Werror,-W")
-                {
-                    let message = diagnostic.message;
-                    diagnostic.message = format_in!(
-                        self.diagnostics,
-                        "{} [{}",
-                        &message[..at],
-                        &message[at + " [-Werror,".len()..]
-                    );
-                }
+            }
+            // Clang's fatal error names the warning option alone, without
+            // the `-Werror` it writes for an error
+            // (`printDiagnosticOptions` in `TextDiagnosticPrinter.cpp`).
+            if diagnostic.fatal
+                && diagnostic.option_suffix
+                && let Some(at) = diagnostic.message.rfind(" [-Werror,-W")
+            {
+                let message = diagnostic.message;
+                diagnostic.message = format_in!(
+                    self.diagnostics,
+                    "{} [{}",
+                    &message[..at],
+                    &message[at + " [-Werror,".len()..]
+                );
             }
             if diagnostic.severity == ErrorSeverity::Warning
                 && context.configuration.suppress_warnings()
