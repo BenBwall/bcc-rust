@@ -80,13 +80,7 @@ pub fn Narration(
         })
     });
     let names = object_names(snapshot);
-    let labels = Memo::new(move |_| {
-        snapshot.with(|state| {
-            state
-                .as_ref()
-                .map_or_else(Vec::new, |state| reel.with(|reel| lane_labels(reel, state)))
-        })
-    });
+    let labels = tape_labels(snapshot, reel);
     // Whether the learner opened the details; it stays open (or closed)
     // from step to step.
     let details = RwSignal::new(false);
@@ -97,33 +91,8 @@ pub fn Narration(
         tip.set(None);
     });
     let card = NodeRef::<leptos::html::Article>::new();
-    // Beside the tape the card is a column of its own that scrolls when the
-    // note is longer than the window: each step's note starts at its top.
-    Effect::new(move || {
-        event.track();
-        if let Some(card) = card.get_untracked() {
-            card.set_scroll_top(0);
-        }
-    });
-    // Each note shows on the first step the learner sees it at (by step
-    // number, so Back to that step shows it again); steps Run passes through
-    // do not use it up. The run starts over at step 0.
-    let first_seen = StoredValue::new(HashMap::<String, usize>::new());
-    let note = Memo::new(move |_| {
-        snapshot.with(|state| {
-            let state = state.as_ref()?;
-            let note = &state.event.note;
-            if state.step == 0 {
-                first_seen.update_value(HashMap::clear);
-            }
-            if note.is_empty() || running.get() {
-                return None;
-            }
-            let first = first_seen
-                .try_update_value(|seen| *seen.entry(note.clone()).or_insert(state.step))?;
-            (first == state.step).then(|| note.clone())
-        })
-    });
+    start_at_top(event, card);
+    let note = first_notes(snapshot, running);
     view! {
         <article class="note narration" data-category=category aria-labelledby="narration-title" node_ref=card>
             <h2 id="narration-title" class="note-title" tabindex="-1">
@@ -278,6 +247,51 @@ fn StageLink(event: Memo<Option<StepEvent>>, on_preprocessor: Callback<()>) -> i
 
 /// The names of the objects the program has created, so the text can colour
 /// them as the source, the tree and the memory diagram do.
+/// The "Why it matters" note of each step that shows one. Each note shows
+/// on the first step the learner sees it at (by step number, so Back to
+/// that step shows it again); steps Run passes through do not use it up.
+/// The run starts over at step 0.
+fn first_notes(snapshot: Memo<Option<Snapshot>>, running: Signal<bool>) -> Memo<Option<String>> {
+    let first_seen = StoredValue::new(HashMap::<String, usize>::new());
+    Memo::new(move |_| {
+        snapshot.with(|state| {
+            let state = state.as_ref()?;
+            let note = &state.event.note;
+            if state.step == 0 {
+                first_seen.update_value(HashMap::clear);
+            }
+            if note.is_empty() || running.get() {
+                return None;
+            }
+            let first = first_seen
+                .try_update_value(|seen| *seen.entry(note.clone()).or_insert(state.step))?;
+            (first == state.step).then(|| note.clone())
+        })
+    })
+}
+
+/// Beside the tape the card is a column of its own that scrolls when the
+/// note is longer than the window: each step's note starts at its top.
+fn start_at_top(event: Memo<Option<StepEvent>>, card: NodeRef<leptos::html::Article>) {
+    Effect::new(move || {
+        event.track();
+        if let Some(card) = card.get_untracked() {
+            card.set_scroll_top(0);
+        }
+    });
+}
+
+/// The tape's labels for the step's objects, by [`lane_labels`].
+fn tape_labels(snapshot: Memo<Option<Snapshot>>, reel: Memo<Reel>) -> Memo<Vec<(String, String)>> {
+    Memo::new(move |_| {
+        snapshot.with(|state| {
+            state
+                .as_ref()
+                .map_or_else(Vec::new, |state| reel.with(|reel| lane_labels(reel, state)))
+        })
+    })
+}
+
 /// The names the step's objects share with others that the tape tells
 /// apart (a block's `x` shadowing the function's is `x #2` there), each
 /// with the tape's label for the step's object: none for a name the step
@@ -996,7 +1010,10 @@ mod tests {
             relabeled("Begin the lifetime of `y` and `x`", &labels),
             "Begin the lifetime of `y` and `x #2`"
         );
-        assert_eq!(relabeled("Evaluate `x + 1`; x stays", &labels), "Evaluate `x + 1`; x stays");
+        assert_eq!(
+            relabeled("Evaluate `x + 1`; x stays", &labels),
+            "Evaluate `x + 1`; x stays"
+        );
         assert_eq!(relabeled("Read `x`", &[]), "Read `x`");
     }
 
@@ -1029,8 +1046,8 @@ mod tests {
             | Ok(Answer::Snapshot(snapshot)) => *snapshot,
             | _ => panic!("a snapshot"),
         };
-        let source = "int main(void) {\n    int x = 1;\n    {\n        int y = x;\n        int x = \
-                      y + 1;\n        x = x + 1;\n    }\n    return x;\n}\n";
+        let source = "int main(void) {\n    int x = 1;\n    {\n        int y = x;\n        int x \
+                      = y + 1;\n        x = x + 1;\n    }\n    return x;\n}\n";
         let mut history = vec![snapshot(machine.run(Command::Load(source.to_owned())))];
         while history.last().is_some_and(Snapshot::can_step) {
             history.push(snapshot(machine.run(Command::Step)));
@@ -1038,10 +1055,18 @@ mod tests {
         let reel = Reel::record(&history);
         let titles: Vec<String> = history
             .iter()
-            .map(|snapshot| relabeled(&snapshot.event.title, &lane_labels(&reel, snapshot)).into_owned())
+            .map(|snapshot| {
+                relabeled(&snapshot.event.title, &lane_labels(&reel, snapshot)).into_owned()
+            })
             .collect();
-        for title in ["Begin the lifetime of `y` and `x #2`", "Declare `x #2` (int)"] {
-            assert!(titles.iter().any(|known| known == title), "{title} in {titles:#?}");
+        for title in [
+            "Begin the lifetime of `y` and `x #2`",
+            "Declare `x #2` (int)",
+        ] {
+            assert!(
+                titles.iter().any(|known| known == title),
+                "{title} in {titles:#?}"
+            );
         }
         assert!(
             titles
@@ -1051,7 +1076,13 @@ mod tests {
         );
         // The outer `x`, read before the inner one is declared and after
         // the block, keeps its name.
-        assert!(titles.iter().filter(|title| title.contains("`x`")).count() >= 2, "{titles:#?}");
-        assert!(titles.iter().all(|title| !title.contains("x #1")), "{titles:#?}");
+        assert!(
+            titles.iter().filter(|title| title.contains("`x`")).count() >= 2,
+            "{titles:#?}"
+        );
+        assert!(
+            titles.iter().all(|title| !title.contains("x #1")),
+            "{titles:#?}"
+        );
     }
 }
