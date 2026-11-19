@@ -2,6 +2,11 @@
 # source lines and the blank separator at the end of a rendered diagnostic.
 tests/fixtures/lexing/directives_and_macros.snap whitespace=-blank-at-eof
 tests/fixtures/lexing/test_programs.snap whitespace=-trailing-space
+
+# The compiler survey records each compiler's output byte for byte, including
+# the trailing spaces of empty macro definitions and diagnostics.
+docs/research/compiler-personalities-data/**/*.txt whitespace=-trailing-space,-blank-at-eof
+
 # GCC-format diagnostic goldens end with the blank line that separates
 # rendered diagnostics, as GCC's format has no closing summary line.
 

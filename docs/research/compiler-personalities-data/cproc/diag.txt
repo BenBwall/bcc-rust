@@ -1,0 +1,80 @@
+== undeclared.c
+undeclared.c:1:22: error: undeclared identifier: y
+cproc: compile: process 134190 exited with status 1
+cproc: codegen: process signaled: Terminated
+cproc: preprocess: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+status 1
+== semicolon.c
+semicolon.c:1:25: error: expected ',' or ';' after declarator, saw 'return'
+cproc: compile: process 134197 exited with status 1
+cproc: preprocess: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+status 1
+== member.c
+member.c:2:32: error: struct/union has no member named '(null)'
+cproc: compile: process 134204 exited with status 1
+cproc: preprocess: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+status 1
+== args.c
+args.c:2:25: error: not enough arguments for function call
+cproc: compile: process 134211 exited with status 1
+cproc: assemble: process signaled: Terminated
+cproc: preprocess: process signaled: Terminated
+status 1
+== redecl.c
+redecl.c:2:9: error: object 'a' redeclared with incompatible type
+cproc: compile: process 134218 exited with status 1
+cproc: preprocess: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+status 1
+== lvalue.c
+lvalue.c:1:17: error: left side of assignment expression is not an lvalue
+cproc: compile: process 134225 exited with status 1
+cproc: codegen: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+cproc: preprocess: process signaled: Terminated
+status 1
+== header.c
+header.c:1:10: fatal error: nope.h: No such file or directory
+    1 | #include "nope.h"
+      |          ^~~~~~~~
+compilation terminated.
+cproc: preprocess: process 134231 exited with status 1
+cproc: codegen: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+status 1
+== brk.c
+brk.c:1:21: error: 'break' statement must be in loop or switch
+cproc: compile: process 134239 exited with status 1
+cproc: preprocess: process signaled: Terminated
+cproc: codegen: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+status 1
+== gotos.c
+qbe:-:6: block @nowhere.3 is used undefined
+cproc: codegen: process 134247 exited with status 1
+cproc: assemble: process signaled: Terminated
+status 1
+== warn.c
+warn.c:1:29: error: assignment to pointer must be from pointer or null pointer constant
+cproc: compile: process 134253 exited with status 1
+cproc: codegen: process signaled: Terminated
+cproc: preprocess: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+status 1
+== missing.c
+cc1: fatal error: missing.c: No such file or directory
+compilation terminated.
+cproc: preprocess: process 134259 exited with status 1
+cproc: codegen: process signaled: Terminated
+cproc: assemble: process signaled: Terminated
+status 1
+== bogus option
+cproc: unknown option '-fbogus-option'
+usage: cproc [-c|-S|-E] [-D name[=value]] [-U name] [-s] [-g] [-o output] input...
+status 2
+== ok.c (link+run)
+hi
+status 0

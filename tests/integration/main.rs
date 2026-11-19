@@ -76,3 +76,4 @@ mod windows_dll_flow;
 mod windows_dll_interop;
 mod x86_interrupt;
 mod x86_intrinsics;
+mod zig_cc_cli;

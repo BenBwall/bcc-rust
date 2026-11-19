@@ -1,4 +1,4 @@
-# Driver modes: GCC, Clang, MSVC, clang-cl and TCC personalities
+# Driver modes: GCC, Clang, MSVC, clang-cl, TCC and zig cc personalities
 
 bcc can stand in for another C compiler on the command line. A **driver
 personality** reads the command line with that compiler's conventions,
@@ -24,6 +24,7 @@ onto (`src/cli/driver.rs`) is bcc's own and is documented in the README.
 | `--msvc-mode` (alias `--cl-mode`) | `cl` | MSVC 19.33 `cl.exe` |
 | `--clang-cl-mode` | `clang-cl` | clang-cl 23.1 |
 | `--tcc-mode` | `tcc` | TCC 0.9.27 |
+| `--zig-cc-mode` | `zig-cc`, `zigcc`, `zig` given `cc` first | zig 0.17.1's `zig cc` (Clang 22.1.8) |
 
 `--driver-mode=NAME` (Clang's spelling) is accepted too. The first mode flag
 anywhere on the command line wins and is removed before the rest is read.
@@ -227,23 +228,23 @@ without a personality as well:
 
 ## Compatibility features by personality
 
-| | GCC | Clang | `cl.exe` | clang-cl | TCC | bcc |
-| --- | --- | --- | --- | --- | --- | --- |
-| Default target | host (MinGW-w64 on Windows) | host | `x86_64-pc-windows-msvc` | `x86_64-pc-windows-msvc` | host | `x86_64-unknown-linux-gnu` |
-| Default mode | `gnu17` | `gnu17` | `c17` | `c17` | `gnu99` | `gnu17` |
-| Microsoft extensions | off | off | all (`-fms-extensions`) | all | off | off |
-| `__GNUC__` | 14.2.0 | 4.2.1 | undefined | undefined | undefined | 4.2.1 |
-| `__clang__`, `__llvm__` | undefined | 23.1.5 | undefined | 23.1.5 | undefined | 23.1.5 |
-| Other identity | `__VERSION__ "14.2.0"`, execution charset names, `__GCC_IEC_559` | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | |
-| `_Float32` ... `_Float128` | keywords, distinct types | identifiers | identifiers | identifiers | identifiers | identifiers (`-ffloatn-types`) |
-| `_Float16`, `__bf16` | types, GCC's `__FLT16_*__` and `__BFLT16_*__` | types, Clang's `__FLT16_*__` | identifiers | types | identifiers | types |
-| `__fp16` | identifier | storage type | identifier | storage type | identifier | storage type |
-| Tentative definitions | `-fno-common` (`-fcommon` makes them common) | same | `-fcommon` (`cl` makes them common) | `-fno-common` | `-fno-common` | `-fno-common` |
-| Unsigned plain `char` | `-funsigned-char` | `-funsigned-char` | `/J` | `/J`, `-funsigned-char` | `-funsigned-char` | `-funsigned-char` |
-| System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host; none for a cross target unless asked |
-| Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line): error:` | `file(line,col): error:` | `file:line: error:` | annotated snippet |
-| Default output | `a.out` (`a.exe` on Windows) | same | `first.exe`, objects kept | same | `a.out` | none (analysis only) |
-| `__bcc__` | defined | defined | defined | defined | defined | defined |
+| | GCC | Clang | `cl.exe` | clang-cl | TCC | zig cc | bcc |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Default target | host (MinGW-w64 on Windows) | host | `x86_64-pc-windows-msvc` | `x86_64-pc-windows-msvc` | host | host, its own processor | `x86_64-unknown-linux-gnu` |
+| Default mode | `gnu17` | `gnu17` | `c17` | `c17` | `gnu99` | `gnu17` | `gnu17` |
+| Microsoft extensions | off | off | all (`-fms-extensions`) | all | off | off | off |
+| `__GNUC__` | 14.2.0 | 4.2.1 | undefined | undefined | undefined | 4.2.1 | 4.2.1 |
+| `__clang__`, `__llvm__` | undefined | 23.1.5 | undefined | 23.1.5 | undefined | 22.1.8 | 23.1.5 |
+| Other identity | `__VERSION__ "14.2.0"`, execution charset names, `__GCC_IEC_559` | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | `NDEBUG` in the release modes, `__GLIBC_MINOR__` | |
+| `_Float32` ... `_Float128` | keywords, distinct types | identifiers | identifiers | identifiers | identifiers | identifiers | identifiers (`-ffloatn-types`) |
+| `_Float16`, `__bf16` | types, GCC's `__FLT16_*__` and `__BFLT16_*__` | types, Clang's `__FLT16_*__` | identifiers | types | identifiers | types, Clang's `__FLT16_*__` | types |
+| `__fp16` | identifier | storage type | identifier | storage type | identifier | storage type | storage type |
+| Tentative definitions | `-fno-common` (`-fcommon` makes them common) | same | `-fcommon` (`cl` makes them common) | `-fno-common` | `-fno-common` | `-fno-common` | `-fno-common` |
+| Unsigned plain `char` | `-funsigned-char` | `-funsigned-char` | `/J` | `/J`, `-funsigned-char` | `-funsigned-char` | `-funsigned-char` | `-funsigned-char` |
+| System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host, as Clang (zig: its own) | the host's when compiling for the host; none for a cross target unless asked |
+| Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line): error:` | `file(line,col): error:` | `file:line: error:` | Clang's | annotated snippet |
+| Default output | `a.out` (`a.exe` on Windows) | same | `first.exe`, objects kept | same | `a.out` | `a.out` (`a.exe` for Windows) | none (analysis only) |
+| `__bcc__` | defined | defined | defined | defined | defined | defined | defined |
 
 Plain `char` is signed by default in every personality, as GCC, Clang, MSVC
 and TCC default to on x86-64. `-funsigned-char` and `-fno-signed-char` make it
@@ -1415,6 +1416,204 @@ the x86-64 psABI requires, so `{double, long}` travels in two integer
 registers. bcc follows the psABI and agrees with GCC there, as both TCCs
 disagree with GCC; it does not copy TCC's classification.
 
+## zig cc
+
+`zig cc` is Clang 22.1.8's driver linked into the `zig` executable, behind a
+command line zig reads first (`src/main.zig`, the `cc` loop) and a bundled C
+library for every target it supports. The personality was compared with zig
+0.17.1 (the `x86_64-linux` release tarball) on x86-64 Linux with glibc 2.39 on
+2026-11-19, over 94 command lines (`--version` for each target,
+the target-query, CPU and option errors, `-dM -E` under each mode and target,
+missing inputs, the diagnostics probes of the TCC comparison, and programs
+linked and run); 59 are identical byte for byte, after each
+compiler's install directory and bcc's banner note are replaced, and the rest
+differ only as listed below. The opt-in test `zig_cc_parity_with_a_real_zig`
+in `tests/integration/zig_cc_cli.rs` repeats part of the comparison when
+`BCC_ZIG` names a `zig` binary.
+
+zig's driver is Clang's personality plus what zig reads itself, so the
+personality is a translator in front of the Clang personality
+(`personality/zig.rs`): it reads zig's own options, reports zig's errors, and
+hands every other option to the Clang personality with the options zig gives
+Clang before them. Everything the [Clang](#clang) section says holds, except
+what follows.
+
+**Selecting it.** `--zig-cc-mode` (`--driver-mode=zig-cc`), or an executable
+named `zig-cc` or `zigcc`, or one named `zig` whose first argument is `cc`, as
+build systems run it when given `CC="zig cc"`. A `zig` given another command
+`zig help` lists (`build`, `version`, `env`, ...) says `error: 'zig build' is
+not supported: bcc implements only 'zig cc'`, or
+zig's `error: unknown command: foo` or `error: expected command argument`,
+without zig's usage text. The driver's messages say `zig:`, as Clang's driver
+inside `zig` names itself.
+
+**What zig reads itself.**
+
+| zig cc | bcc |
+| --- | --- |
+| `-target QUERY`, `--target=QUERY` | the target ([Targets](#zig-cc-targets)); `--target QUERY` is `error: unknown clang option: "--target"`, and `-target` alone `error: expected parameter after "-target"` |
+| `-mcpu=CPU`, and `-march=` and `-mtune=` read the same way | `CPU` is one of zig's processors, `NAME+FEATURE-FEATURE` with zig's spelling of LLVM's names (`x86_64_v3`, `sse4_2`): `-march=` with LLVM's (`x86-64-v3`), and `-mFEATURE` or `-mno-FEATURE` for each feature Clang has an option for; `baseline` and `x86_64` add nothing. GCC's `-march=x86-64-v3` reads as processor `x86` with features, which zig refuses |
+| no `-O`, `-O0`, `-Og` | Debug: `-O0`, UBSan, `-fstack-protector-strong` |
+| `-O1` to `-O4`, `-Ofast` | ReleaseFast: `-O2 -DNDEBUG`; `-Ofast` brings no fast math. With UBSan's checks on (`-fsanitize=undefined` or `-fsanitize-trap=undefined`), ReleaseSafe instead, as zig makes it after reading the command line: `-O2 -D_FORTIFY_SOURCE=2`, the stack protector as in Debug, and no `NDEBUG` |
+| `-Os`, `-Oz` | ReleaseSmall: `-Os -DNDEBUG`, stripped as by `-s` (no DWARF, and a link without symbols) unless a `-g` option keeps the debug information; the checks leave it ReleaseSmall |
+| other `-O` options (`-O`, `-O5`) | Clang's, after zig's level |
+| `-f[no-]sanitize=` naming `undefined`, `thread` or a fuzzer | taken whole, the other names in the list dropped, as zig does: `undefined` turns zig's checks on or off in any mode (and makes ReleaseFast ReleaseSafe), `thread` is passed back alone, and a fuzzer is refused |
+| `-f[no-]sanitize-trap=undefined` | trapping checks, or reporting ones; `-fno-sanitize-trap=undefined` alone turns the checks off |
+| `-f[no-]PIC`, `-f[no-]pic`, `-f[no-]PIE`, `-f[no-]pie` | on Linux, `-fPIE` or `-fno-PIE` and then `-fPIC` or `-fno-PIC`, as zig passes them, so Clang's reading makes `-fPIE` PIC alone; PIC by default where zig links glibc dynamically, `-shared` or `-fPIE`; executables link with `-no-pie` unless `-fPIE` |
+| `-f[no-]omit-frame-pointer` | frame pointers kept unless `-fomit-frame-pointer` |
+| `-fstack-protector`, `-fstack-protector-strong`, `-fstack-protector-all`, `-fno-stack-protector` | `-fstack-protector-strong` or none |
+| `-g`, `-g1`, `-gline-tables-only`, `-gdwarf32`, `-gdwarf64`, `-s` | DWARF 4 (`-gdwarf-4`) unless `-s` strips, which also strips the symbols, or ReleaseSmall does; other `-g` options are Clang's after it |
+| `-x LANGUAGE` | zig's languages (`c`, `c-header`, `assembler`, `assembler-with-cpp` and the C++ and Objective-C ones); another is `error: language not recognized: "bogus"` |
+| `-flto=MODE` | `auto`, `full`, `thin` or `jobserver`; another is `error: invalid -flto mode "bogus"; must be "auto", "full", "thin", or "jobserver"` |
+| `-static`, `-dynamic`, `-shared`, `-nostdlib`, `-nodefaultlibs`, `-nolibc` | the link, and whether zig links the C library at all |
+| `-Wl,--version`, `-Wl,-v` | `zig ld 0.17.1 (bcc 0.1.0; not zig)` on stdout at once, which Meson reads as zig's linker; with no input, nothing more |
+
+The last `-O` option chooses the mode; zig gives Clang its own level and
+macros first and the command line's options after them, so `-O2 -UNDEBUG`
+leaves `NDEBUG` undefined.
+
+<a id="zig-cc-targets"></a>**Targets.** A query is
+`ARCH-OS[.MIN[...MAX]]-ABI[.VERSION]` (`std.Target.Query.parse`), where
+`native` stands for the machine's architecture or system. bcc parses it as
+zig does and refuses what zig refuses in zig's words:
+`error: unable to parse target query 'x86_64-unknown-linux-gnu':
+UnknownOperatingSystem`, and likewise `MissingOperatingSystem`,
+`UnknownApplicationBinaryInterface`, `InvalidOperatingSystemVersion`,
+`InvalidAbiVersion` and `UnexpectedExtraField`; an unknown architecture lists
+zig's architectures before `error: unknown architecture: 'bogus'`. Of the
+targets zig accepts, bcc has these:
+
+| Query | bcc target | zig's LLVM triple (`--version`) |
+| --- | --- | --- |
+| none, `native`, `x86_64-native` | `x86_64-unknown-linux-gnu` (on Linux) | `x86_64-unknown-linux6.8.0-gnu2.39.0`: the running kernel and glibc |
+| `x86_64-linux-gnu[.VERSION]` | `x86_64-unknown-linux-gnu` | `x86_64-unknown-linux5.10.0-gnu2.31.0`, or the version given |
+| `x86_64-linux`, `x86_64-linux-musl` | `x86_64-unknown-linux-musl` | `x86_64-unknown-linux5.10.0-musl` |
+| `x86_64-windows[-gnu]` | `x86_64-w64-windows-gnu` | `x86_64-unknown-windows-gnu` |
+| `x86_64-windows-msvc` | `x86_64-pc-windows-msvc` | `x86_64-unknown-windows-msvc` |
+| `wasm32-wasi[-musl]` | `wasm32-unknown-wasi` | `wasm32-unknown-wasip1-unknown` |
+| `wasm32-freestanding` | `wasm32-unknown-unknown`, freestanding | `wasm32-unknown-unknown-unknown` |
+
+Any other target zig has (`aarch64-linux-gnu`, `x86_64-macos`,
+`x86_64-linux-gnux32`) is `error: unable to compile for target
+'aarch64-linux-gnu': bcc compiles for ...`. A Linux version range keeps its
+minimum. Without a `-target`, or with `native` as the architecture, zig
+compiles for the machine's processor, `-march=native`; with any other, for
+the baseline processor. An unknown `-mcpu` processor or feature lists zig's
+processors or features for the architecture (`info: available CPUs for
+architecture 'x86_64':`) before `error: unknown CPU: 'x86'` or `error:
+unknown CPU feature: 'bogus'`.
+
+**What zig gives Clang**, in every compilation, before the command line's
+options (`addCCArgs` in `src/Compilation.zig`):
+
+- Clang 22.1.8's identity over the pinned Clang's: `__clang_major__` 22,
+  `__clang_patchlevel__` 8, `__clang_version__ "22.1.8 "` and `__VERSION__
+  "Clang 22.1.8"`, without the four macros Clang 23 added
+  (`__SIG_ATOMIC_MIN__`, `__SIG_ATOMIC_TYPE__`, `__WCHAR_MIN__`,
+  `__WINT_MIN__`); bcc's `<stdint.h>` spells `WCHAR_MIN` and `WINT_MIN`
+  without them. `__bcc__` stays.
+- `-DNDEBUG` in ReleaseFast and ReleaseSmall, `-D_FORTIFY_SOURCE=2` in
+  ReleaseSafe.
+- Where zig links the C library (not under `-nostdlib`, `-nodefaultlibs` or
+  `-nolibc`, nor for `wasm32-freestanding`): `-D__GLIBC_MINOR__=N` for glibc,
+  the query's minor version, the machine's when zig detects it, or 31; and
+  `-D__MSVCRT_VERSION__=0xE00 -D_WIN32_WINNT=0x0a00 -D__CRT__NO_INLINE` for
+  MinGW, `_WIN32_WINNT` from the query's Windows version (`win7` is
+  `0x0601`).
+- In Debug, on glibc's targets, UBSan's checks (`-fsanitize=undefined`) that
+  stop at the first report, as zig's own library does. zig always has that
+  library; where the bundled clang was built without compiler-rt's
+  `libclang_rt.ubsan_standalone.a` (as CI's pinned LLVM is), the checks trap
+  instead (`-fsanitize-trap=undefined`), so the program still stops at the
+  first one, by `SIGILL` and without a report; the stack protector,
+  in Debug and ReleaseSafe where zig links the C library, on Linux; frame
+  pointers; PIC as above; DWARF 4 outside ReleaseSmall; and `-ffreestanding`
+  for `wasm32-freestanding`.
+
+So `-dM -E` under each mode and target lists what zig cc's does, apart from
+the [Clang personality's own differences from Clang](#deviations) and those
+below.
+
+**Errors.** zig's own errors are `error: MESSAGE` with no driver name, and
+stop it at once, so only the first is reported: `error: unknown clang option:
+"-fbogus"` for an option Clang does not know (where Clang's driver says
+`unknown argument`); for a missing source, after the whole command line is
+read, `missing.c:1:1: error: checking cache failed: file_open FileNotFound
+/abs/missing.c` for each; for a missing object `error: failed to open
+object missing.o: FileNotFound`; for a response file it cannot read, at any
+depth, `error: unable to read response file "missing.rsp": FileNotFound`;
+`-fno-PIC` where zig needs PIC, `error:
+unable to create module "e": the selected target requires position
+independent code` (glibc, Windows) or `dynamic linking requires enabling
+Position Independent Code` (`-shared`), or with `-fPIE` `making a Position
+Independent Executable requires enabling Position Independent Code` (musl),
+the module named after the first source; `-shared -fPIE` when linking,
+`error: dynamic libraries cannot be position independent executables`; and `-static` with a glibc target that is not the machine's, `error:
+libc of the specified target requires dynamic linking`. Nothing runs after any
+of them. zig hands each source to Clang's compiler itself, so Clang's
+driver warnings about unused arguments and inputs are not printed. With no
+input at all it is Clang's driver that answers, `zig: error: no input files`.
+
+**Queries.** `--version` prints Clang's banner with zig's LLVM triple, naming
+bcc as every banner does (`clang version 22.1.8 (bcc 0.1.0, a zig
+cc-compatible C compiler; not zig)`). `-dumpversion` is `22.1.8`. zig hands
+`-dumpmachine` and `-print-target-triple` to Clang's driver with the query as
+written, so they print Clang's normalized reading of it
+(`x86_64-unknown-windows-msvc` for `x86_64-windows`, `wasm32-freestanding`
+unchanged) or, with no `-target`, the driver's own `x86_64-unknown-linux-musl`;
+a glibc version is Clang's `zig: error: version '.2.17' in target triple
+'x86_64-unknown-linux-gnu.2.17' is invalid` before the answer, exit status 1.
+`-v` and `-###` without inputs print the same banner for that triple.
+
+**What differs from zig cc:**
+
+- **The C library.** zig builds and links its own: musl, MinGW-w64, wasi-libc,
+  and glibc stubs of the version the query names, so a `.2.17` program links
+  against glibc 2.17's symbol versions. bcc uses the machine's glibc for the
+  glibc targets and the selected root (`--sysroot`) for the others, as the
+  Clang personality does: the glibc version is only `__GLIBC_MINOR__` (which
+  the machine's `<features.h>` redefines once included), and `-target
+  x86_64-linux-musl` fails at `<stdio.h>` without a musl root, where zig
+  links a static musl program.
+- **UBSan's reports.** zig's library panics at the first report, prints
+  zig's stack trace and aborts (`thread 1 panic: signed integer overflow:
+  2147483647 + 1 cannot be represented in type 'int'`, exit status 134);
+  bcc's reports come from the bundled clang's library, stopping at the first
+  (`ub.c:5:5: runtime error: signed integer overflow: ...`, status 1). The
+  messages are Clang's in both. bcc writes the checks only for glibc's
+  targets, so Debug on musl, Windows and WebAssembly has none, and no stack
+  protector off Linux, where zig has both (`__SSP_STRONG__` is undefined
+  there). A shared library links the bundled clang's static UBSan library
+  with its symbols hidden, as zig links its own, so `-shared
+  -Wl,--no-undefined` still links.
+- **No `-Wdate-time`.** zig's release modes pass `-Werror=date-time`, which
+  makes `__DATE__`, `__TIME__` and `__TIMESTAMP__` errors; bcc has no such
+  warning, so they expand. zig's `-fno-spell-checking` changes nothing, since
+  bcc suggests no corrections.
+- **The processor.** bcc's `-march=native` defines the features it knows of
+  the machine (here AVX2 and below, not the AVX-512 family and the 38 other
+  macros zig's `znver5` defines). zig's WebAssembly baseline is `lime1`
+  (`__wasm_extended_const__`, no bulk memory or reference types), where bcc
+  keeps Clang's `generic`; `-mcpu` names for WebAssembly are checked and
+  otherwise ignored. A feature without a Clang option (`+fast_lzcnt`) is
+  checked and dropped.
+- **The linker.** zig reads every `-Wl,` option itself and refuses those it
+  does not know (`error: unsupported linker arg: --bogus-opt`), and resolves
+  `-l` libraries even under `-c`; bcc passes them to LLD, which reports its
+  own errors when it links. zig's link line is its own, so CMake finds no
+  linker ID for it and implicit link libraries of zig's (`libubsan_rt.a`,
+  `libcompiler_rt.a`); bcc's are LLD and the bundled clang's.
+- **Clang's own differences.** Diagnostics, `-E`'s markers and the `-dM`
+  listing differ from zig cc exactly as the Clang personality's differ from
+  Clang ([Deviations](#deviations)): on the 10 diagnostics probes bcc's
+  output under `--zig-cc-mode` is the same as under `--clang-mode`. Clang 22
+  defines `__GXX_TYPEINFO_EQUALITY_INLINE` for MinGW where 23 does not, and
+  the MSVC target lacks the `_MSC_VER` family as under `--clang-mode`.
+- **zig's quirks.** `-c` with several sources and `-o` links them into one
+  object, and `-fsyntax-only` still compiles and fails to rename the object
+  zig never wrote; bcc refuses the first as Clang does and checks the syntax
+  for the second. `-v` and `-###` print bcc's steps, not zig's `-cc1` lines.
+
 ## Debug information
 
 `-g` writes debug information through the LLVM back end; `middle-end.md` has the
@@ -1492,6 +1691,21 @@ xz 5.6.3 with Autoconf and libtool build and pass their tests under
 - **clang-cl.** CMake finds `Clang 23.1.5 with MSVC-like command-line`
   simulating MSVC 19.33, C17 with extensions, as with the pinned Clang's
   clang-cl.
+- **zig cc.** Compared with zig 0.17.1 on 2026-11-19 (CMake 3.31.3,
+  Autoconf 2.71 with libtool 2.4.7, Meson 1.12.1), with `CC="bcc
+  --zig-cc-mode"`, `CC="zig cc"` and `CC=zig-cc` for an executable of each
+  name, which all conclude the same: CMake finds `Clang 22.1.8` with a GNU
+  front end, C17 with extensions, the same compile features (to `c_std_23`),
+  pointer size, PIC and dependency-file flags and check results; Autoconf
+  and libtool reach every value zig cc does; Meson finds `clang 22.1.8` and,
+  from `-Wl,--version`, zig's linker `ld.zigcc`, and builds and tests the
+  probe project. CMake's linker ID (`LLD`, none for zig), its implicit link
+  libraries and directories (the bundled clang's, where zig's are its own
+  `libubsan_rt.a` and `libcompiler_rt.a`) and linker dependency files
+  differ, since zig links in process. zlib 1.3.1 with CMake, in its default
+  build type (zig's Debug, with UBSan) and in Release, and xz 5.6.3 with
+  Autoconf and libtool build and pass their tests with `CC="zig cc"` naming
+  bcc.
 
 Before these were measured, Meson stopped on `-Wl,--version` (`no input
 files`) under GCC and Clang; CMake found no implicit link libraries,
@@ -1618,7 +1832,7 @@ bcc's driver assembles an assembly input with the bundled clang, and
 | Mode | Assembler | Without an `as` |
 | --- | --- | --- |
 | `--gcc-mode` (`gcc`, `cc`, `c89`, `c99`) | `auto`: the system's `as`, run by clang under `-fno-integrated-as` with the assembler options | the integrated assembler, after a note (`gcc: note: no system assembler ...`), once per command |
-| `--clang-mode`, bcc's own command line | `integrated`, or `system` under `-fno-integrated-as` (the last of `-f[no-]integrated-as` wins) | `system`: an error (`cannot assemble ...: no system assembler ... in the -B prefixes, COMPILER_PATH or PATH`) |
+| `--clang-mode`, `--zig-cc-mode`, bcc's own command line | `integrated`, or `system` under `-fno-integrated-as` (the last of `-f[no-]integrated-as` wins) | `system`: an error (`cannot assemble ...: no system assembler ... in the -B prefixes, COMPILER_PATH or PATH`) |
 | `--tcc-mode` | `integrated`; TCC ignores `-Wa,` options, warning only under `-Wunsupported`, and bcc does the same | — |
 | `--msvc-mode`, `--clang-cl-mode` | `integrated` | — |
 

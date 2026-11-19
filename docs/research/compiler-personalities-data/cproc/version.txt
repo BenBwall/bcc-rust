@@ -1,0 +1,4 @@
+$ env PATH=<scratch>/inst/qbe/bin:$PATH <scratch>/inst/cproc/bin/cproc --version
+cproc: unknown option '--version'
+usage: cproc [-c|-S|-E] [-D name[=value]] [-U name] [-s] [-g] [-o output] input...
+status 2

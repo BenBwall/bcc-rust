@@ -1,0 +1,6 @@
+$ <scratch>/inst/zig-x86_64-linux-0.17.1/zig cc --version
+clang version 22.1.8
+Target: x86_64-unknown-linux6.8.0-gnu2.39.0
+Thread model: posix
+InstalledDir: <scratch>/inst/zig-x86_64-linux-0.17.1
+status 0

@@ -1,0 +1,6 @@
+$ env PATH=<scratch>/inst/qbe/bin:$PATH <scratch>/inst/cproc/bin/cproc -v -c empty.c -o /dev/null
+cproc: spawning cpp -undef -D __STDC_NO_ATOMICS__ -D __STDC_NO_COMPLEX__ -D __extension__= -D __STDC_ENDIAN_LITTLE__=1234 -D __STDC_ENDIAN_BIG__=4321 -D __STDC_ENDIAN_NATIVE__=__STDC_ENDIAN_LITTLE__ -D __ORDER_LITTLE_ENDIAN__=__STDC_ENDIAN_LITTLE__ -D __ORDER_BIG_ENDIAN__=__STDC_ENDIAN_BIG__ -D __BYTE_ORDER__=__STDC_ENDIAN_NATIVE__ -D __FLT_EVAL_METHOD__=1 -D __BITINT_MAXWIDTH__=64 -D __x86_64__ -D __amd64__ -D __LP64__ -D __SIZEOF_LONG__=8 -D __SIZEOF_POINTER__=8 -D __SIZEOF_SIZE_T__=8 -D __SIZEOF_PTRDIFF_T__=8 -D __linux__ -D __unix__ -D __INT_MAX__=0x7fffffff -D __LONG_LONG_MAX__=0x7fffffffffffffffL empty.c
+cproc: spawning <scratch>/inst/cproc/bin/cproc-qbe -t x86_64-sysv -
+cproc: spawning qbe -t amd64_sysv -
+cproc: spawning as -o <scratch>/out/cproc/empty.o -
+status 0
