@@ -129,6 +129,11 @@ IEEE semantics, which the fast model permits.
   EULA for a reference `icx` (a CI job could install it from Intel's apt
   repository); without one, the identity would rest on documentation alone,
   and this note would rank zig cc first instead.
+- **Since added.** The user accepted the EULA on 2026-11-19, and
+  `--icx-mode` and `--icx-cl-mode` were built against a real icx 2026.2.0
+  ([driver modes, "icx"](../design/driver-modes.md#icx)). That comparison
+  settled the open points above: icx defines `__INTEL_CLANG_COMPILER` beside
+  `__INTEL_LLVM_COMPILER`, both `20260200`, and not `__INTEL_COMPILER`.
 
 ### 2. `--zig-cc-mode`
 
