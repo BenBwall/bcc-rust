@@ -393,10 +393,12 @@ const HERE: &str = if cfg!(windows) { ".\\" } else { "./" };
 /// Prints `Note: including file:` and the header to the diagnostic stream
 /// for each `#include` that entered one, as `cl /showIncludes` does, with a
 /// space more before the path for each level of nesting; Ninja reads the
-/// path after the prefix and the spaces. `cl` names a header by the absolute
-/// path of the directory it was found in and the name the directive wrote
-/// (`C:\src\inc/deep.h`), so a relative path starts from the working
-/// directory; clang-cl begins a path as `-H` does.
+/// path after the prefix and the spaces. `cl` names a header found beside
+/// its includer by the absolute path of that directory and the name the
+/// directive wrote (`C:\src\inc/deep.h`), so a relative path starts from
+/// the working directory; bcc does so for every header, though `cl` keeps
+/// the path of one found through a relative `/I` directory relative
+/// (`inc\deep.h`). clang-cl begins a path as `-H` does.
 pub(super) fn show_includes(context: &Context<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);

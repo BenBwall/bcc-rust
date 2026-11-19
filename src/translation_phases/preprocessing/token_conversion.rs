@@ -2013,9 +2013,14 @@ fn literal_encoding(spelling: &str) -> Option<LiteralEncoding> {
 /// if so whether it is unsigned and 64 bits wide. A constant takes the
 /// standard suffix of its size: `ll` for `i64` and `ull` for `ui64`, as
 /// `cl` and Clang type them, and none (`u` for unsigned) for the narrower
-/// ones, which have `int`'s type, where Clang gives `0i8` `char`'s and
-/// `0i16` `short`'s; promotion makes the difference visible only to
-/// `sizeof`.
+/// ones, which have `int`'s type while the value fits it, where Clang gives
+/// `0i8` `char`'s and `0i16` `short`'s; promotion makes that difference
+/// visible only to `sizeof`. A value that does not fit the signed type of
+/// the suffix's width takes the type the C rules give it unsuffixed, so
+/// `0xffffffffi32` is an `unsigned int` and `0xffffffffffffffffi64` an
+/// `unsigned long long`, both positive, where `cl` 19.44 and Clang wrap the
+/// value into the signed type, -1 (driver-modes.md, "Checked against
+/// `cl.exe` under Wine").
 /// Microsoft extension: Clang 23, `NumericLiteralParser` in
 /// `LiteralSupport.cpp`. C99: §6.4.4.1 paragraphs 1-6, pp. 54-56; PDF pp.
 /// 66-68.

@@ -908,7 +908,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/Zc:trigraphs`, `/Zc:trigraphs-` | `-ftrigraphs`, `-fno-trigraphs` (the default, as in `cl`) |
 | `/J` | `-funsigned-char`: plain `char` is unsigned and `_CHAR_UNSIGNED` defined |
 | `/external:I DIR`, `/external:env:VAR` | `-isystem` |
-| `/showIncludes` | `--show-includes`: `Note: including file: PATH`, with the header's absolute path, to stdout (to stderr under `/E`, `/EP` and `/P`) |
+| `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stdout (to stderr under `/E`, `/EP` and `/P`), the path absolute (see "Preprocessed text" for where `cl` keeps it relative) |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
 | `/Zi`, `/Z7`, `/ZI` | CodeView in the object, as clang-cl treats all three; a link keeps it through `lld-link -debug` |
 | `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
@@ -939,15 +939,36 @@ bcc compiles C17 by default, as clang-cl does, and defines
 
 **Preprocessed text.** `/E` writes a line for each source line, blank lines
 and directives included, as `cl` does: a `#line 1 "a.c"` marker first, a
-header's marker (`#line 1 "C:\\src\\h.h"`, its absolute path) on the
-`#include` line and the includer's on return, and a marker for the next line
-in place of each `#endif` and of an `#elif` that ends a skipped group (an
-`#else` is an empty line). `/EP` writes an empty line for each marker, and
-both stop at a fatal error (a missing header, `#error`). Within a line, bcc
-spaces tokens as GCC does, which `cl`'s traditional preprocessor also does in
-the cases surveyed; `cl`'s conforming one (`/Zc:preprocessor`, and every
-`/std:`) also puts a space after each macro's expansion (`int a = 1 ;`),
-which bcc does not, and keeps a `#pragma once` line that bcc leaves out.
+header's marker (`#line 1 "C:\\src\\h.h"`) on the `#include` line and the
+includer's on return, and a marker for the next line in place of each
+`#endif` and of an `#elif` that ends a skipped group (an `#else` is an empty
+line). `/EP` writes an empty line for each marker, and both stop at a fatal
+error (a missing header, `#error`). A `#pragma` directive keeps its line,
+`#pragma once` included, and a `_Pragma` or `__pragma` operator's pragma
+stays among the tokens of its line as `__pragma(...)`, spaced as the
+operator was, with `_Pragma`'s literal as it destringizes
+(`__pragma(message("hi"))`), so that the text compiles again. Within a line,
+bcc spaces tokens as GCC does, which `cl`'s traditional preprocessor (the
+default) also does in the cases surveyed. What still differs:
+
+- `cl`'s conforming preprocessor (`/Zc:preprocessor`, and every `/std:`)
+  also puts a space after each macro's expansion (`int a = 1 ;`), which bcc
+  does not.
+- `cl`'s traditional preprocessor joins a macro invocation whose arguments
+  span lines onto the line where it starts and writes a `#line` marker for
+  the line after it; bcc, like the conforming one, leaves each token of the
+  invocation's arguments on its own line. It also keeps a `\`-new-line
+  inside a string literal, which bcc joins.
+- In a pragma, bcc writes each run of white space as one space; `cl` keeps
+  the runs after its first token as written (`#pragma pack(   2 )`), and its
+  traditional preprocessor drops a comment there.
+- `cl` names a header found beside its includer by the includer's directory,
+  made absolute, and the name the directive wrote
+  (`C:\src\sub\../h.h`), and so does bcc, with the host's separators; but
+  `cl` names one found through a relative `/I` directory relatively, with
+  the directory as written (`#line 1 "inc\\deep.h"`, `Note: including file:
+  inc\deep.h`), where bcc makes that path absolute too. Ninja reads both
+  forms of a `/showIncludes` note.
 
 **Diagnostics.** `file(line): error: message`, the form `cl` writes
 without `/diagnostics:` (its `/diagnostics:classic`); `/diagnostics:column`
@@ -1124,8 +1145,10 @@ and files for 226.
 
 The comparison found, and bcc now does as `cl` does: a compile's
 diagnostics, C1083 and `/showIncludes` notes go to stdout, not stderr, and
-the notes name a header by its absolute path; `/E` lays out its text with a
-line for each source line and `#line` markers, and stops at a fatal error;
+the notes name a header found beside its includer by its absolute path;
+`/E` lays out its text with a line for each source line and `#line` markers,
+keeps a pragma operator among its line's tokens as `__pragma(...)`, and
+stops at a fatal error;
 `/WX` announces its first warning with C2220 and keeps the warnings'
 words; D9025 for an overriding option; `#error` as C1189, and C4033 and
 C4098; the file name, not the path, of each source compiled; a trailing
@@ -1155,7 +1178,12 @@ C4477, C4313, C4293, C4142, C4715, C4716) and its words and codes for the
 errors outside the Diagnostics table (C1075, C2039, C2084, C2100, C2106,
 C2124, C2197, C2198, C2063); the snippet of `/diagnostics:caret`; the
 system headers' paths under `/showIncludes`, which name the `INCLUDE`
-directories in each host's form; the warning bcc adds for `/GS`;
+directories in each host's form, and a header found through a relative `/I`
+directory, which `cl` names relatively; the `/E` layout differences listed
+under "Preprocessed text"; the type of a sized integer constant whose value
+does not fit the signed type of its suffix's width (`0xffffffffi32 > 0` is
+1 in bcc and 0 in `cl`, which wraps the value to -1, as Clang does); the
+warning bcc adds for `/GS`;
 `/fp:strict`, which bcc refuses; and the import library LLD writes for a
 DLL without exports.
 
