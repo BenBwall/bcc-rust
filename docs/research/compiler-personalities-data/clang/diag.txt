@@ -1,0 +1,77 @@
+== undeclared.c
+undeclared.c:1:22: error: use of undeclared identifier 'y'
+    1 | int f(void) { return y; }
+      |                      ^
+1 error generated.
+status 1
+== semicolon.c
+semicolon.c:1:24: error: expected ';' at end of declaration
+    1 | int f(void) { int x = 1 return x; }
+      |                        ^
+      |                        ;
+1 error generated.
+status 1
+== member.c
+member.c:2:32: error: no member named 'b' in 'struct s'
+    2 | int f(struct s *p) { return p->b; }
+      |                             ~  ^
+1 error generated.
+status 1
+== args.c
+args.c:2:25: error: too few arguments to function call, expected 2, have 1
+    2 | int f(void) { return g(1); }
+      |                      ~  ^
+args.c:1:5: note: 'g' declared here
+    1 | int g(int, int);
+      |     ^ ~~~~~~~~
+1 error generated.
+status 1
+== redecl.c
+redecl.c:2:8: error: redefinition of 'a' with a different type: 'double' vs 'int'
+    2 | double a;
+      |        ^
+redecl.c:1:5: note: previous definition is here
+    1 | int a;
+      |     ^
+1 error generated.
+status 1
+== lvalue.c
+lvalue.c:1:17: error: expression is not assignable
+    1 | int f(void) { 1 = 2; return 0; }
+      |               ~ ^
+1 error generated.
+status 1
+== header.c
+header.c:1:10: fatal error: 'nope.h' file not found
+    1 | #include "nope.h"
+      |          ^~~~~~~~
+1 error generated.
+status 1
+== brk.c
+brk.c:1:16: error: 'break' statement not in loop or switch statement
+    1 | void f(void) { break; }
+      |                ^
+1 error generated.
+status 1
+== gotos.c
+gotos.c:1:21: error: use of undeclared label 'nowhere'
+    1 | void f(void) { goto nowhere; }
+      |                     ^
+1 error generated.
+status 1
+== warn.c
+warn.c:1:26: error: incompatible integer to pointer conversion assigning to 'int *' from 'int' [-Wint-conversion]
+    1 | int *p; void f(void) { p = 1; }
+      |                          ^ ~
+1 error generated.
+status 1
+== missing.c
+clang: error: no such file or directory: 'missing.c'
+clang: error: no input files
+status 1
+== bogus option
+clang: error: unknown argument: '-fbogus-option'
+status 1
+== ok.c (link+run)
+hi
+status 0

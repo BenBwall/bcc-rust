@@ -1,0 +1,4 @@
+$ <scratch>/src/slimcc/slimcc -v -c empty.c -o /dev/null
+"as" "/tmp/slimcc-QGz0rA/0" "-o" "<scratch>/out/slimcc/empty.o" "--fatal-warnings"
+slimcc version 0.0
+status 0

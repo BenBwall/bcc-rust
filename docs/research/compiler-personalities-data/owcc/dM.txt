@@ -1,0 +1,144 @@
+Invalid option 'd'
+Open Watcom x86 32-bit Compilers Driver Program
+Version 2.0 beta Nov  1 2026 06:50:14 (64-bit)
+Copyright (c) 2004-2026 The Open Watcom Contributors. All Rights Reserved.
+Portions Copyright (c) 1988-2002 Sybase, Inc. All Rights Reserved.
+Source code is available under the Sybase Open Watcom Public License.
+See https://github.com/open-watcom/open-watcom-v2#readme for details.
+
+Usage:  owcc [options] file ...
+ 
+Options:
+ 
+-b <target> compile and link for <target>
+-c          compile only, no link
+-o <file>   set output file name
+-v          show sub program invocations
+-x {c,c++}  treat source files as C or C++ code
+        [Processor options]
+-march={i86,i186,i286,i386,axp,mips,ppc} generate code for this architecture
+-mregparm=<num>                          calling convention
+-mtune={i386,i486,i586,i686}             optimize for this family
+        [x86 Floating-point processor options]
+-fpmath={87,287,387} hardware floating-point code
+-fptune={586,686}    optimize f-p for CPU type
+-mhard-emu-float     inline 80x87 instructions with emulation
+-msoft-float         calls to floating-point library
+        [Compiler options]
+-fbrowser                    generate browsing information
+-femit-names                 emit routine names in the code
+-ffunction-sections          functions in separate segments
+-fgrow-stack                 generate calls to grow the stack
+-fhook-epilogue              call epilogue hook routine
+-fhook-prologue[=<num>]      call prologue hook routine
+-fmessage-full-path          full paths in messages
+-fno-rtti                    (C++) disable RTTI
+-fno-short-enum              force enums to be type int
+-fno-stack-check             remove stack overflow checks
+-fno-writable-strings        don't place strings in CODE segment
+-fnonconst-initializers      allow non-constant initializers
+-fnostdlib                   remove default library information
+-fo=<file>                   set object file name
+-fpack-struct={1,2,4,8,16}   default struct member alignment
+-fr=<file>                   output errors to a file name
+-fshort-enum                 use minimum base type for enum
+-fsigned-char                change char default to signed
+-fstack-probe                touch stack through SS first
+-fsyntax-only                check syntax only
+-fvoid-ptr-arithmetic        allow arithmetic operations on (void *)
+-fwrite-def                  output func declarations to .def
+-fwrite-def-without-typedefs same, but skip typedef names
+              set calling convention
+-mabi={cdecl,fastcall,fortran,pascal,stdcall,system,watcall} 
+  cdecl                      - set calling conv. to __cdecl
+  fastcall                   - set calling conv. to __fastcall
+  fortran                    - set calling conv. to __fortran
+  pascal                     - set calling conv. to __pascal
+  stdcall                    - set calling conv. to __stdcall
+  system                     - set calling conv. to _System
+  watcall                    - set calling conv. to __watcall
+-mcmodel={c,f,h,l,m,s,t}     memory model
+  c                          - memory model compact
+  f                          - memory model flat
+  h                          - memory model huge
+  l                          - memory model large
+  m                          - memory model medium
+  s                          - memory model small
+  t                          - memory model tiny
+-mwindows                    generate code for MS Windows
+-shared                      generate code for a DLL
+-std={c89,c99,ow}            disable/enable extensions
+-Wall                        set warning level to 4
+-Wc,<option>                 pass any option to WCC
+-Werror                      treat all warnings as errors
+-Wextra                      enable maximal warnings
+-Wlevel=<num>                set warning level number
+-Wn=<num>                    enable warning message <num>
+-Wno-n=<num>                 disable warning message <num>
+-Woverlay                    warn about problems in overlaying
+-Wpadded                     warn when padding a struct
+-Wstop-after-errors=<num>    stop compiler after <num> errors
+        [Debugging options]
+-g0        no debugging information
+-g1{+}     line number debugging info
+-g2        full symbolic debugging info
+-g2i       (C++) + inlines as COMDATs
+-g2s       (C++) + inlines as statics
+-g2t       (C++) without type names
+-g3        add info for unreferenced type names
+-g3i       (C++) + inlines as COMDATs
+-g3s       (C++) + inlines as statics
+-gcodeview codeview debug format
+-gdwarf    dwarf debug format
+-gwatcom   watcom debug format
+        [Optimization options]
+-feh{,=s,=t}                 exception handling: balanced, space, time
+-ffloat-store                improve floating-point consistency
+-fguess-branch-probability   branch prediction
+-finline-functions           expand functions inline
+-finline-intrinsics          inline intrinsic functions
+-finline-intrinsics-max      inline intrinsic functions
+-finline-limit=<num>         which functions to expand inline
+-finline-math                generate inline math functions
+-fkeep-duplicates            ensure unique addresses for functions
+-floop-optimize              perform loop optimizations
+-fno-omit-frame-pointer      generate traceable stack frames
+-fno-omit-leaf-frame-pointer generate more stack frames
+-fno-optimize-sibling-calls  disable call/ret optimization
+-fno-strict-aliasing         relax alias checking
+-frerun-optimizer            enable repeated optimizations
+-fschedule-insns             re-order instructions to avoid stalls
+-fschedule-prologue          control flow entry/exit seq.
+-funroll-loops               perform loop unrolling
+-funsafe-math-optimizations  numerically unstable floating-point
+-O0                          disable optimizations
+-Os                          optimize for space
+-Ot                          optimize for time
+-O{1,2,3}                    optimization presets
+        [Preprocessor options]
+-C               preserve comments
+-D<name>[=text]  define a macro
+-D+              extend syntax of -D option
+-E               preprocess source file
+-fcpp-wrap=<num> wrap output at column <num>
+-fmangle-cpp     encrypt C++ names
+-ftabstop=<num>  # of spaces in tab stop
+-I=<path>        include directory
+-include=<file>  force pre-include of file
+-MD              output autodepend make rule
+-MF=<file>       autodepend output file name
+-MMD             output autodepend make rule
+-MT<target>      autodepend target name
+-P               don't insert #line directives
+-pil             ignore #line directives
+-tp<name>        (C) set #pragma on <name>
+-U<name>         undefine macro name
+        [Linker options]
+-fd[=<file>]               save WLINK directives to file
+-fm[=<file>]               generate map file
+-mrtdll                    build with dll run-time library
+-mstack-size==<stack_size> set stack size
+-mthreads                  build Multi-thread application
+-s                         strip debug info from executable
+-Wl,<option>               pass any directive to WLINK
+status 1

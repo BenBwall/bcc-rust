@@ -1,0 +1,52 @@
+== undeclared.c
+undeclared.c(1): Error! E1011: Symbol 'y' has not been declared
+Error: Compiler returned a bad status compiling 'undeclared.c'
+status 1
+== semicolon.c
+semicolon.c(1): Error! E1009: Expecting ';' but found 'return'
+Error: Compiler returned a bad status compiling 'semicolon.c'
+status 1
+== member.c
+member.c(2): Error! E1031: Name 'b' not found in struct/union s
+Error: Compiler returned a bad status compiling 'member.c'
+status 1
+== args.c
+args.c(2): Error! E1151: Parameter count does not agree with previous definition
+args.c(2): Note! N2002: 'g' defined in: args.c(1)
+Error: Compiler returned a bad status compiling 'args.c'
+status 1
+== redecl.c
+redecl.c(2): Error! E1129: Type does not agree with previous definition of 'a'
+redecl.c(2): Note! N2002: 'a' defined in: redecl.c(1)
+Error: Compiler returned a bad status compiling 'redecl.c'
+status 1
+== lvalue.c
+lvalue.c(1): Error! E1014: Left operand must be an 'lvalue'
+Error: Compiler returned a bad status compiling 'lvalue.c'
+status 1
+== header.c
+header.c(1): Error! E1055: Unable to open 'nope.h'
+Error: Compiler returned a bad status compiling 'header.c'
+status 1
+== brk.c
+brk.c(1): Error! E1000: BREAK must appear in while, do, for or switch statement
+Error: Compiler returned a bad status compiling 'brk.c'
+status 1
+== gotos.c
+gotos.c(1): Error! E1018: Label 'nowhere' not defined in function
+Error: Compiler returned a bad status compiling 'gotos.c'
+status 1
+== warn.c
+warn.c(1): Warning! W101: Non-portable pointer conversion
+warn.c(1): Note! N2003: source conversion type is 'int'
+warn.c(1): Note! N2004: target conversion type is 'int *'
+status 0
+== missing.c
+Error! Unable to open 'missing.c'
+Error: Compiler returned a bad status compiling 'missing.c'
+status 1
+== bogus option
+status 0
+== ok.c (link+run)
+hi
+status 0

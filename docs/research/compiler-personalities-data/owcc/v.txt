@@ -1,0 +1,16 @@
+$ env WATCOM=<scratch>/inst/ow PATH=<scratch>/inst/ow/binl64:$PATH INCLUDE=<scratch>/inst/ow/lh <scratch>/inst/ow/binl64/owcc -v -c empty.c -o /dev/null
+Open Watcom x86 32-bit Compilers Driver Program
+Version 2.0 beta Nov  1 2026 06:50:14 (64-bit)
+Copyright (c) 2004-2026 The Open Watcom Contributors. All Rights Reserved.
+Portions Copyright (c) 1988-2002 Sybase, Inc. All Rights Reserved.
+Source code is available under the Sybase Open Watcom Public License.
+See https://github.com/open-watcom/open-watcom-v2#readme for details.
+	wcc386 -fo=<scratch>/out/owcc/empty.o -fr empty.c 
+Open Watcom C x86 32-bit Optimizing Compiler
+Version 2.0 beta Nov  1 2026 06:46:15 (64-bit)
+Copyright (c) 2002-2026 The Open Watcom Contributors. All Rights Reserved.
+Portions Copyright (c) 1984-2002 Sybase, Inc. All Rights Reserved.
+Source code is available under the Sybase Open Watcom Public License.
+See https://github.com/open-watcom/open-watcom-v2#readme for details.
+empty.c: 1 lines, included 51, 0 warnings, 0 errors
+status 0

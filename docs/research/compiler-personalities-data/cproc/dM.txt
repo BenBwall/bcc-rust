@@ -1,0 +1,3 @@
+cproc: unknown option '-dM'
+usage: cproc [-c|-S|-E] [-D name[=value]] [-U name] [-s] [-g] [-o output] input...
+status 2

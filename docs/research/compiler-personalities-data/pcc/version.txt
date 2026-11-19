@@ -1,0 +1,3 @@
+$ <scratch>/inst/pcc/bin/pcc --version
+Portable C Compiler 1.2.0.DEVEL 20180916 for x86_64-unknown-linux-gnu
+status 0

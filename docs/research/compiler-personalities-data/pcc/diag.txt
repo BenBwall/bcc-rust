@@ -1,0 +1,54 @@
+== undeclared.c
+undeclared.c, line 1: y undefined
+undeclared.c, line 1: cannot recover from earlier errors: goodbye!
+error: <scratch>/inst/pcc/libexec/ccom terminated with status 1
+status 1
+== semicolon.c
+semicolon.c, line 1: syntax error
+semicolon.c, line 1: cannot recover from earlier errors: goodbye!
+error: <scratch>/inst/pcc/libexec/ccom terminated with status 1
+status 1
+== member.c
+member.c, line 2: member 'b' not declared
+member.c, line 2: cannot recover from earlier errors: goodbye!
+error: <scratch>/inst/pcc/libexec/ccom terminated with status 1
+status 1
+== args.c
+args.c, line 2: too few arguments to function
+args.c, line 2: cannot recover from earlier errors: goodbye!
+error: <scratch>/inst/pcc/libexec/ccom terminated with status 1
+status 1
+== redecl.c
+redecl.c, line 2: redeclaration of a
+error: <scratch>/inst/pcc/libexec/ccom terminated with status 1
+status 1
+== lvalue.c
+lvalue.c, line 1: lvalue required
+lvalue.c, line 1: cannot recover from earlier errors: goodbye!
+error: <scratch>/inst/pcc/libexec/ccom terminated with status 1
+status 1
+== header.c
+header.c:1: error: cannot find 'nope.h'
+error: <scratch>/inst/pcc/libexec/cpp terminated with status 1
+status 1
+== brk.c
+brk.c, line 1: illegal break
+error: <scratch>/inst/pcc/libexec/ccom terminated with status 1
+status 1
+== gotos.c
+gotos.c, line 1: label 'nowhere' undefined
+error: <scratch>/inst/pcc/libexec/ccom terminated with status 1
+status 1
+== warn.c
+warn.c, line 1: warning: illegal combination of pointer and integer
+status 0
+== missing.c
+cannot open missing.c
+error: <scratch>/inst/pcc/libexec/cpp terminated with status 1
+status 1
+== bogus option
+status 0
+== ok.c (link+run)
+/usr/include//stdio.h:34: error: cannot find 'stddef.h'
+error: <scratch>/inst/pcc/libexec/cpp terminated with status 1
+status 1
