@@ -263,6 +263,18 @@ fn named_x86_instructions_match_the_interpreter() {
     );
 }
 
+/// The programs of the named instructions call both helpers whose vectors
+/// travel in YMM registers, so the default number of cases tests that
+/// convention in every back end.
+#[test]
+fn named_programs_call_the_ymm_helpers() {
+    let texts: Vec<String> = (0..6).map(super::named::generate_named).collect();
+    for helper in ["call @ymm(", "call @ymm64("] {
+        let calls: usize = texts.iter().map(|text| text.matches(helper).count()).sum();
+        assert!(calls >= 3, "only {calls} of `{helper}` in 6 programs");
+    }
+}
+
 /// `main` returning `value` (an `i32` constant or `poison`) after printing
 /// `letter`.
 fn program(letter: char, value: &str) -> String {
