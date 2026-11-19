@@ -25,6 +25,11 @@ fn executable_names_select_personalities() {
         named("x86_64-linux-musl-gcc"),
         Some((Personality::Gcc, Some(Target::LinuxMusl)))
     );
+    assert_eq!(named("zig-cc"), Some((Personality::ZigCc, None)));
+    assert_eq!(named("zigcc"), Some((Personality::ZigCc, None)));
+    assert_eq!(named("zig"), Some((Personality::ZigCc, None)));
+    assert_eq!(named("bcc-zig-cc"), Some((Personality::ZigCc, None)));
+    assert_eq!(named("zig-0.17"), Some((Personality::ZigCc, None)));
     assert_eq!(named("bcc-rust"), None);
     assert_eq!(named("bcc"), None);
 }
@@ -40,6 +45,8 @@ fn mode_flags_select_personalities_anywhere() {
         .map(Into::into)
         .into();
     assert_eq!(select(&mut arguments), Some(Personality::ClangCl));
+    let mut arguments: Vec<OsString> = ["bcc-rust", "--zig-cc-mode"].map(Into::into).into();
+    assert_eq!(select(&mut arguments), Some(Personality::ZigCc));
     let mut arguments: Vec<OsString> = ["bcc-rust", "x.c"].map(Into::into).into();
     assert_eq!(select(&mut arguments), None);
 }

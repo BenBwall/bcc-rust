@@ -40,6 +40,7 @@ use super::{
         treatment,
     },
     version,
+    zig,
 };
 use crate::{
     cli::{
@@ -71,6 +72,62 @@ use crate::{
 
 /// Translates a GCC or Clang command line.
 pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
+    let compiler = if invocation.personality == Personality::Gcc {
+        Compiler::Gcc
+    } else {
+        Compiler::Clang
+    };
+    let expanded = expand_response_files(invocation, &invocation.arguments, compiler)?;
+    plan_translated(invocation, &expanded, None)
+}
+
+/// `arguments` with each `@FILE` replaced by the arguments it holds, or the
+/// driver's error.
+pub(super) fn expand_response_files(
+    invocation: &Invocation,
+    arguments: &[OsString],
+    compiler: Compiler,
+) -> Result<Vec<OsString>, MainError> {
+    match response_files::expand(arguments, compiler) {
+        | Ok(arguments) => Ok(arguments),
+        | Err(ResponseFileError::TooMany) => {
+            invocation.error(format_args!("too many @-files encountered"));
+            Err(MainError::Reported(1))
+        },
+        | Err(ResponseFileError::GccDirectory) => {
+            invocation.error(format_args!("@-file refers to a directory"));
+            Err(MainError::Reported(1))
+        },
+        | Err(ResponseFileError::ClangDirectory(file)) => {
+            // LLVM's own words, misprint included.
+            super::print(
+                &format!(
+                    "cannot not open file '{}': Is a directory\n",
+                    file.display()
+                ),
+                true,
+            );
+            Err(MainError::Reported(1))
+        },
+        | Err(ResponseFileError::Recursive(file)) => {
+            // LLVM's own words, before the driver exists to name itself.
+            super::print(
+                &format!("recursive expansion of: '{}'\n", file.display()),
+                true,
+            );
+            Err(MainError::Reported(1))
+        },
+    }
+}
+
+/// Translates the expanded GCC or Clang command line `expanded`. Under
+/// zig cc, `zig` holds what zig gives Clang beside the options it passed
+/// on, which are `expanded`.
+pub(super) fn plan_translated(
+    invocation: &Invocation,
+    expanded: &[OsString],
+    zig: Option<&zig::Defaults>,
+) -> Result<Plan, MainError> {
     let personality = invocation.personality;
     let compiler = if personality == Personality::Gcc {
         Compiler::Gcc
@@ -80,9 +137,10 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let mut state = State {
         invocation,
         compiler,
+        zig,
         out: Vec::new(),
         errors: 0,
-        target: invocation.target,
+        target: zig.map_or(invocation.target, |zig| Some(zig.target)),
         sysroot: None,
         stages: Vec::new(),
         syntax_only: false,
@@ -113,36 +171,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         bad_standard: None,
         other_languages: Vec::new(),
     };
-    let expanded = match response_files::expand(&invocation.arguments, compiler) {
-        | Ok(arguments) => arguments,
-        | Err(ResponseFileError::TooMany) => {
-            invocation.error(format_args!("too many @-files encountered"));
-            return Err(MainError::Reported(1));
-        },
-        | Err(ResponseFileError::GccDirectory) => {
-            invocation.error(format_args!("@-file refers to a directory"));
-            return Err(MainError::Reported(1));
-        },
-        | Err(ResponseFileError::ClangDirectory(file)) => {
-            // LLVM's own words, misprint included.
-            super::print(
-                &format!(
-                    "cannot not open file '{}': Is a directory\n",
-                    file.display()
-                ),
-                true,
-            );
-            return Err(MainError::Reported(1));
-        },
-        | Err(ResponseFileError::Recursive(file)) => {
-            // LLVM's own words, before the driver exists to name itself.
-            super::print(
-                &format!("recursive expansion of: '{}'\n", file.display()),
-                true,
-            );
-            return Err(MainError::Reported(1));
-        },
-    };
     let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         state.position += 1;
@@ -170,6 +198,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         .rev()
         .min_by_key(|query| query.rank(compiler))
     {
+        // Clang's driver refuses the version zig's query gives glibc, and
+        // still answers.
+        if let Some(zig) = zig
+            && matches!(query, Query::DumpMachine | Query::Triple)
+            && let Some(message) = zig.machine_error()
+        {
+            state.errors += 1;
+            invocation.error(format_args!("{message}"));
+        }
         let text = state.answer(query);
         if compiler == Compiler::Clang && state.errors != 0 {
             super::print(&text, false);
@@ -292,6 +329,10 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     );
     common.push(format!("--target={}", target.triple()).into());
     common.push(format!("--driver-name={}", invocation.name).into());
+    // What zig gives Clang before the options it passes on.
+    if let Some(zig) = zig {
+        common.extend(zig.compile.iter().cloned());
+    }
     // GCC's driver assembles with the system's `as` (GCC manual, "Overall
     // Options"), so its `-Wa,` options and directives reach that.
     if personality == Personality::Gcc {
@@ -360,6 +401,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // `AC_SEARCH_LIBS([sqrt], [m])` tells apart.
     if links {
         common.push("--no-default-libm".into());
+        if let Some(zig) = zig {
+            common.extend(zig.link.iter().cloned());
+        }
     }
     let mut steps = Vec::new();
     let mut temporary = None;
@@ -395,6 +439,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         let mut bcc = common.clone();
         bcc.extend(state.arguments(job.inputs, links));
+        if links && let Some(zig) = zig {
+            bcc.extend(zig.link_after.iter().cloned());
+        }
         bcc.extend(job.stages.iter().map(OsString::from));
         if job.outputs == Outputs::Named {
             // `--output=` keeps a name such as `-.o` from reading as an
@@ -446,7 +493,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // prints the commands it runs and its header search, as GCC's and
     // Clang's subprocesses do; `-###` prints the steps alone.
     if state.verbose || state.dry_run {
-        let mut text = version::verbose(personality, target);
+        let mut text = match zig {
+            // Clang's own driver prints `-v` and `-###` without inputs, for
+            // what it makes of the `-target` operand.
+            | Some(zig) if !has_inputs => zig::Defaults::banner(&zig.machine),
+            | Some(zig) => zig::Defaults::banner(&zig.triple),
+            | None => version::verbose(personality, target),
+        };
         // Without inputs, neither compiler has a step to show.
         if state.dry_run && has_inputs {
             for bcc in &steps {
@@ -558,6 +611,8 @@ struct MachineOptions {
 struct State<'a> {
     invocation: &'a Invocation,
     compiler: Compiler,
+    /// What zig gives Clang, under zig cc.
+    zig: Option<&'a zig::Defaults>,
     /// `-save-temps`.
     save_temps: Option<SaveTemps>,
     /// bcc's options and inputs, in order.
@@ -1161,7 +1216,9 @@ impl State<'_> {
                 self.error(format_args!("'-MG' may only be used with '-M' or '-MM'"));
             }
         }
-        if clang {
+        if self.zig.is_some() {
+            self.check_zig_inputs();
+        } else if clang {
             for input in &mut self.inputs {
                 if input.path != "-" && std::fs::metadata(&input.path).is_err() {
                     input.dropped = true;
@@ -1206,6 +1263,52 @@ impl State<'_> {
             ));
         } else if self.outputs.len() > 1 {
             self.check_repeated_outputs();
+        }
+    }
+
+    /// Diagnoses missing inputs as zig does once it has read the command
+    /// line: each missing source when it checks its cache, in the source's
+    /// own location format, or else the first missing object when it opens
+    /// the linker's inputs. Nothing runs after either.
+    fn check_zig_inputs(&mut self) {
+        let mut missing_source = false;
+        for input in &mut self.inputs {
+            if input.path == "-" || std::fs::metadata(&input.path).is_ok() {
+                continue;
+            }
+            input.dropped = true;
+            if input.kind != InputKind::Link {
+                missing_source = true;
+                self.errors += 1;
+                let path = Path::new(&input.path);
+                let full = std::env::current_dir()
+                    .map_or_else(|_| path.to_path_buf(), |directory| directory.join(path));
+                super::print(
+                    &format!(
+                        "{}:1:1: error: checking cache failed: file_open FileNotFound {}\n",
+                        path.display(),
+                        full.display()
+                    ),
+                    true,
+                );
+            }
+        }
+        if missing_source {
+            return;
+        }
+        if let Some(input) = self
+            .inputs
+            .iter()
+            .find(|input| input.dropped && input.kind == InputKind::Link)
+        {
+            self.errors += 1;
+            super::print(
+                &format!(
+                    "error: failed to open object {}: FileNotFound\n",
+                    Path::new(&input.path).display()
+                ),
+                true,
+            );
         }
     }
 
@@ -1277,7 +1380,9 @@ impl State<'_> {
         if syntax_only_unused {
             self.syntax_only = false;
         }
-        if clang {
+        // zig hands each source to Clang's compiler itself, so Clang's
+        // driver reports no argument as unused.
+        if clang && self.zig.is_none() {
             self.warn_unused(syntax_only_unused);
         }
         if !self.syntax_only {
@@ -1641,7 +1746,7 @@ impl State<'_> {
             } else if gcc {
                 self.error(format_args!("debug output level '{level}' is too high"));
             } else {
-                self.error(format_args!("unknown argument: '{text}'"));
+                self.unknown_argument(text);
             }
             return;
         }
@@ -1655,7 +1760,7 @@ impl State<'_> {
             } else if gcc {
                 self.error(format_args!("dwarf version {version} is not supported"));
             } else {
-                self.error(format_args!("unknown argument: '{text}'"));
+                self.unknown_argument(text);
             }
             return;
         }
@@ -1774,7 +1879,7 @@ impl State<'_> {
                 "-fno-trapv" | "-fstrict-volatile-bitfields" | "-fno-strict-volatile-bitfields"
             )
         {
-            self.error(format_args!("unknown argument: '{text}'"));
+            self.unknown_argument(text);
             return;
         }
         // Clang's choice of assembler (Clang command line argument
@@ -1794,7 +1899,7 @@ impl State<'_> {
         if is_diagnostic_presentation(text) && !knows(self.compiler, text) {
             match self.compiler {
                 | Compiler::Gcc => self.unrecognized.push(text.into()),
-                | Compiler::Clang => self.error(format_args!("unknown argument: '{text}'")),
+                | Compiler::Clang => self.unknown_argument(text),
             }
             return;
         }
@@ -2018,7 +2123,7 @@ impl State<'_> {
         }
         match self.compiler {
             | Compiler::Gcc => self.unrecognized.push(text.into()),
-            | Compiler::Clang => self.error(format_args!("unknown argument: '{text}'")),
+            | Compiler::Clang => self.unknown_argument(text),
         }
     }
 
@@ -2210,6 +2315,14 @@ impl State<'_> {
     fn answer(&self, query: &Query) -> String {
         let personality = self.invocation.personality;
         let target = self.target.unwrap_or_else(|| host_target(personality));
+        if let Some(zig) = self.zig {
+            match query {
+                | Query::DumpMachine | Query::Triple => return format!("{}\n", zig.machine),
+                | Query::DumpVersion => return format!("{}\n", zig::CLANG_VERSION),
+                | Query::Version => return zig::Defaults::banner(&zig.triple),
+                | _ => {},
+            }
+        }
         match query {
             | Query::DumpMachine | Query::Triple =>
                 if personality == Personality::Gcc {
@@ -2330,12 +2443,29 @@ impl State<'_> {
 
     fn error(&mut self, message: std::fmt::Arguments<'_>) {
         self.errors += 1;
-        self.invocation.error(message);
+        // zig stops at its first error, which Clang's driver reports.
+        if self.zig.is_none() || self.errors == 1 {
+            self.invocation.error(message);
+        }
+    }
+
+    /// An option Clang does not know: `clang: error: unknown argument:
+    /// '-ffoo'`, or zig's `error: unknown clang option: "-ffoo"`, which
+    /// stops it.
+    fn unknown_argument(&mut self, text: &str) {
+        if self.zig.is_some() {
+            self.errors += 1;
+            if self.errors == 1 {
+                super::print(&format!("error: unknown clang option: \"{text}\"\n"), true);
+            }
+        } else {
+            self.error(format_args!("unknown argument: '{text}'"));
+        }
     }
 }
 
 /// What the bundled Clang prints for `query`, when it runs and succeeds.
-fn bundled_clang_answer(query: &str, target: Target) -> Option<String> {
+pub(super) fn bundled_clang_answer(query: &str, target: Target) -> Option<String> {
     let output = std::process::Command::new(version::program_name("clang"))
         .arg(format!("--target={}", target.triple()))
         .arg(query)
@@ -2381,10 +2511,10 @@ fn without_dependency_options(arguments: Vec<OsString>) -> Vec<OsString> {
 
 /// `--help`.
 fn help(personality: Personality, name: &str) -> String {
-    let compiler = if personality == Personality::Gcc {
-        "GCC"
-    } else {
-        "Clang"
+    let compiler = match personality {
+        | Personality::Gcc => "GCC",
+        | Personality::ZigCc => "zig cc",
+        | _ => "Clang",
     };
     format!(
         "Usage: {name} [options] file...\nbcc's {compiler}-compatible driver: it reads \

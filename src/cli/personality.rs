@@ -1,8 +1,9 @@
 //! Driver personalities make bcc's command line mimic another compiler's:
 //! `--gcc-mode`, `--clang-mode`, `--msvc-mode` (`cl.exe`),
-//! `--clang-cl-mode` and `--tcc-mode`, or an executable name such as `gcc`,
-//! `cc`, `clang`, `cl` or `tcc` (also with a prefix, `bcc-gcc` or
-//! `x86_64-w64-mingw32-gcc`, and a version suffix, `gcc-14`). A personality
+//! `--clang-cl-mode`, `--tcc-mode` and `--zig-cc-mode`, or an executable
+//! name such as `gcc`, `cc`, `clang`, `cl`, `tcc` or `zig-cc` (also with a
+//! prefix, `bcc-gcc` or `x86_64-w64-mingw32-gcc`, and a version suffix,
+//! `gcc-14`), or `zig cc`. A personality
 //! reads the rest of the command line with that compiler's conventions and
 //! translates it into bcc's own options, which the ordinary driver then
 //! runs, so every personality shares one implementation of each option.
@@ -19,13 +20,15 @@
 //! `-Wshadow` (a warning GCC knows and bcc lacks), and adds `-o a.out`,
 //! GCC's identity and diagnostic format, and the host's system headers.
 //!
-//! Read [`select`] and [`run`], then [`gnu::plan`], [`msvc::plan`] and
-//! [`tcc::plan`]. `docs/design/driver-modes.md` records the design and
-//! every deviation from the compilers mimicked.
+//! Read [`select`] and [`run`], then [`gnu::plan`], [`msvc::plan`],
+//! [`tcc::plan`] and [`zig::plan`]. `docs/design/driver-modes.md` records the
+//! design and every deviation from the compilers mimicked.
 //!
 //! Files by role:
 //! - Personalities: `personality/gnu.rs` (GCC and Clang), `personality/msvc.rs`
-//!   (`cl.exe` and clang-cl), `personality/tcc.rs`.
+//!   (`cl.exe` and clang-cl), `personality/tcc.rs`, and `personality/zig.rs`
+//!   (`zig cc`, which translates zig's own options and hands the rest to
+//!   Clang's).
 //! - Version banners and queries: `personality/version.rs`.
 //! - The option names each compiler knows: `personality/known.rs`, over the
 //!   lists in `personality/options/`; which of those bcc ignores, warns about
@@ -46,6 +49,7 @@
 mod gnu;
 mod msvc;
 mod tcc;
+mod zig;
 
 // Shared tables and text
 mod known;
@@ -78,6 +82,7 @@ pub(super) fn run(
         | Personality::Gcc | Personality::Clang => gnu::plan(&invocation)?,
         | Personality::Msvc | Personality::ClangCl => msvc::plan(&invocation)?,
         | Personality::Tcc => tcc::plan(&invocation)?,
+        | Personality::ZigCc => zig::plan(&invocation)?,
     };
     let mut status = 0;
     for step in plan.steps {
@@ -165,6 +170,9 @@ pub(super) enum Personality {
     ClangCl,
     /// TCC 0.9.27.
     Tcc,
+    /// zig 0.17.1's `zig cc`, Clang 22.1.8's driver behind zig's own
+    /// command line.
+    ZigCc,
 }
 
 impl Personality {
@@ -178,15 +186,17 @@ impl Personality {
             | "msvc" | "cl" => Self::Msvc,
             | "clang-cl" => Self::ClangCl,
             | "tcc" => Self::Tcc,
+            | "zig-cc" => Self::ZigCc,
             | _ => return None,
         })
     }
 
     /// The personality an executable named like `program` has, and the
     /// target its prefix names, if it names one: `gcc`, `cc`, `c89` and
-    /// `c99` are GCC, `clang` Clang, `cl` MSVC, `clang-cl` clang-cl and
-    /// `tcc` TCC, after an optional `PREFIX-` (`bcc-` or a target triple)
-    /// and before an optional version (`-14`, `-18.1`) and `.exe`.
+    /// `c99` are GCC, `clang` Clang, `cl` MSVC, `clang-cl` clang-cl, `tcc`
+    /// TCC, and `zig-cc`, `zigcc` and `zig` (whose first argument must then
+    /// be `cc`) zig cc, after an optional `PREFIX-` (`bcc-` or a target
+    /// triple) and before an optional version (`-14`, `-18.1`) and `.exe`.
     fn from_program(program: &Path) -> Option<(Self, Option<Target>)> {
         let name = program.file_stem()?.to_str()?;
         let name = name.to_ascii_lowercase();
@@ -202,6 +212,8 @@ impl Personality {
         }
         let (prefix, tool) = if let Some(prefix) = name.strip_suffix("clang-cl") {
             (prefix, "clang-cl")
+        } else if let Some(prefix) = name.strip_suffix("zig-cc") {
+            (prefix, "zig-cc")
         } else {
             name.rsplit_once('-')
                 .map_or(("", name), |(prefix, tool)| (prefix, tool))
@@ -212,6 +224,7 @@ impl Personality {
             | "cl" => Self::Msvc,
             | "clang-cl" => Self::ClangCl,
             | "tcc" => Self::Tcc,
+            | "zig-cc" | "zigcc" | "zig" => Self::ZigCc,
             | _ => return None,
         };
         let target = target_named(prefix.trim_end_matches('-'));
@@ -226,6 +239,9 @@ impl Personality {
             | Self::Msvc => "cl",
             | Self::ClangCl => "clang-cl",
             | Self::Tcc => "tcc",
+            // zig runs Clang's driver in its own process, which names it
+            // after the executable: `zig: error: no input files`.
+            | Self::ZigCc => "zig",
         }
     }
 }
@@ -266,6 +282,7 @@ impl Invocation {
             .filter(|(named, _)| *named == personality)
             .and_then(|(_, target)| target);
         let name = match from_program {
+            | _ if personality == Personality::ZigCc => personality.name().to_owned(),
             | Some((named, _)) if named == personality =>
                 Path::new(&program).file_stem().map_or_else(
                     || personality.name().to_owned(),

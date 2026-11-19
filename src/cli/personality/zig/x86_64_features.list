@@ -1,0 +1,202 @@
+16bit_mode: 16-bit mode (i8086)
+32bit_mode: 32-bit mode (80386)
+3dnow: Enable 3DNow! instructions
+3dnowa: Enable 3DNow! Athlon instructions
+64bit: Support 64-bit instructions
+adx: Support ADX instructions
+aes: Enable AES instructions
+allow_light_256_bit: Enable generation of 256-bit load/stores even if we prefer 128-bit
+amx_avx512: Support AMX-AVX512 instructions
+amx_bf16: Support AMX-BF16 instructions
+amx_complex: Support AMX-COMPLEX instructions
+amx_fp16: Support AMX amx-fp16 instructions
+amx_fp8: Support AMX-FP8 instructions
+amx_int8: Support AMX-INT8 instructions
+amx_movrs: Support AMX-MOVRS instructions
+amx_tf32: Support AMX-TF32 instructions
+amx_tile: Support AMX-TILE instructions
+avx: Enable AVX instructions
+avx10_1: Support AVX10.1 instruction
+avx10_2: Support AVX10.2 instruction
+avx2: Enable AVX2 instructions
+avx512bf16: Support bfloat16 floating point
+avx512bitalg: Enable AVX-512 Bit Algorithms
+avx512bw: Enable AVX-512 Byte and Word Instructions
+avx512cd: Enable AVX-512 Conflict Detection Instructions
+avx512dq: Enable AVX-512 Doubleword and Quadword Instructions
+avx512er: Enable AVX-512 Exponential and Reciprocal Instructions
+avx512f: Enable AVX-512 instructions
+avx512fp16: Support 16-bit floating point
+avx512ifma: Enable AVX-512 Integer Fused Multiple-Add
+avx512pf: Enable AVX-512 PreFetch Instructions
+avx512vbmi: Enable AVX-512 Vector Byte Manipulation Instructions
+avx512vbmi2: Enable AVX-512 further Vector Byte Manipulation Instructions
+avx512vl: Enable AVX-512 Vector Length eXtensions
+avx512vnni: Enable AVX-512 Vector Neural Network Instructions
+avx512vp2intersect: Enable AVX-512 vp2intersect
+avx512vpopcntdq: Enable AVX-512 Population Count Instructions
+avxifma: Enable AVX-IFMA
+avxneconvert: Support AVX-NE-CONVERT instructions
+avxvnni: Support AVX_VNNI encoding
+avxvnniint16: Enable AVX-VNNI-INT16
+avxvnniint8: Enable AVX-VNNI-INT8
+bmi: Support BMI instructions
+bmi2: Support BMI2 instructions
+branch_hint: Target has branch hint feature
+branchfusion: CMP/TEST can be fused with conditional branches
+bsf_bsr_0_clobbers_result: BSF/BSR may clobber the lower 32-bits of the result register when the source is zero
+ccmp: Support conditional cmp & test instructions
+cf: Support conditional faulting
+cldemote: Enable Cache Line Demote
+clflushopt: Flush A Cache Line Optimized
+clwb: Cache Line Write Back
+clzero: Enable Cache Line Zero
+cmov: Enable conditional move instructions
+cmpccxadd: Support CMPCCXADD instructions
+crc32: Enable SSE 4.2 CRC32 instruction (used when SSE4.2 is supported but function is GPR only)
+cx16: 64-bit with cmpxchg16b (this is true for most x86-64 chips, but not the first AMD chips)
+cx8: Support CMPXCHG8B instructions
+egpr: Support extended general purpose register
+enqcmd: Has ENQCMD instructions
+ermsb: REP MOVS/STOS are fast
+f16c: Support 16-bit floating point conversion instructions
+false_deps_getmant: VGETMANTSS/SD/SH and VGETMANDPS/PD(memory version) has a false dependency on dest register
+false_deps_lzcnt_tzcnt: LZCNT/TZCNT have a false dependency on dest register
+false_deps_mulc: VF[C]MULCPH/SH has a false dependency on dest register
+false_deps_mullq: VPMULLQ has a false dependency on dest register
+false_deps_perm: VPERMD/Q/PS/PD has a false dependency on dest register
+false_deps_popcnt: POPCNT has a false dependency on dest register
+false_deps_range: VRANGEPD/PS/SD/SS has a false dependency on dest register
+fast_11bytenop: Target can quickly decode up to 11 byte NOPs
+fast_15bytenop: Target can quickly decode up to 15 byte NOPs
+fast_7bytenop: Target can quickly decode up to 7 byte NOPs
+fast_bextr: Indicates that the BEXTR instruction is implemented as a single uop with good throughput
+fast_dpwssd: Prefer vpdpwssd instruction over vpmaddwd+vpaddd instruction sequence
+fast_gather: Indicates if gather is reasonably fast (this is true for Skylake client and all AVX-512 CPUs)
+fast_hops: Prefer horizontal vector math instructions (haddp, phsub, etc.) over normal vector instructions with shuffles
+fast_imm16: Prefer a i16 instruction with i16 immediate over extension to i32
+fast_lzcnt: LZCNT instructions are as fast as most simple integer ops
+fast_movbe: Prefer a movbe over a single-use load + bswap / single-use bswap + store
+fast_scalar_fsqrt: Scalar SQRT is fast (disable Newton-Raphson)
+fast_scalar_shift_masks: Prefer a left/right scalar logical shift pair over a shift+and pair
+fast_shld_rotate: SHLD can be used as a faster rotate
+fast_variable_crosslane_shuffle: Cross-lane shuffles with variable masks are fast
+fast_variable_perlane_shuffle: Per-lane shuffles with variable masks are fast
+fast_vector_fsqrt: Vector SQRT is fast (disable Newton-Raphson)
+fast_vector_shift_masks: Prefer a left/right vector logical shift pair over a shift+and pair
+faster_shift_than_shuffle: Shifts are faster (or as fast) as shuffle
+fma: Enable three-operand fused multiple-add
+fma4: Enable four-operand fused multiple-add
+fsgsbase: Support FS/GS Base instructions
+fsrm: REP MOVSB of short lengths is faster
+fxsr: Support fxsave/fxrestore instructions
+gfni: Enable Galois Field Arithmetic Instructions
+harden_sls_ijmp: Harden against straight line speculation across indirect JMP instructions.
+harden_sls_ret: Harden against straight line speculation across RET instructions.
+hreset: Has hreset instruction
+idivl_to_divb: Use 8-bit divide for positive values less than 256
+idivq_to_divl: Use 32-bit divide for positive values less than 2^32
+inline_asm_use_gpr32: Enable use of GPR32 in inline assembly for APX
+invpcid: Invalidate Process-Context Identifier
+kl: Support Key Locker kl Instructions
+lea_sp: Use LEA for adjusting the stack pointer (this is an optimization for Intel Atom processors)
+lea_uses_ag: LEA instruction needs inputs at AG stage
+lvi_cfi: Prevent indirect calls/branches from using a memory operand, and precede all indirect calls/branches from a register with an LFENCE instruction to serialize control flow. Also decompose RET instructions into a POP+LFENCE+JMP sequence.
+lvi_load_hardening: Insert LFENCE instructions to prevent data speculatively injected into loads from being used maliciously.
+lwp: Enable LWP instructions
+lzcnt: Support LZCNT instruction
+macrofusion: Various instructions can be fused with conditional branches
+mmx: Enable MMX instructions
+movbe: Support MOVBE instruction
+movdir64b: Support movdir64b instruction (direct store 64 bytes)
+movdiri: Support movdiri instruction (direct store integer)
+movrs: Enable MOVRS
+mwaitx: Enable MONITORX/MWAITX timer functionality
+ndd: Support non-destructive destination
+nf: Support status flags update suppression
+no_bypass_delay: Has no bypass delay when using the 'wrong' domain
+no_bypass_delay_blend: Has no bypass delay when using the 'wrong' blend type
+no_bypass_delay_mov: Has no bypass delay when using the 'wrong' mov type
+no_bypass_delay_shuffle: Has no bypass delay when using the 'wrong' shuffle type
+nopl: Enable NOPL instruction (generally pentium pro+)
+pad_short_functions: Pad short functions (to prevent a stall when returning too early)
+pclmul: Enable packed carry-less multiplication instructions
+pconfig: platform configuration instruction
+pku: Enable protection keys
+popcnt: Support POPCNT instruction
+ppx: Support Push-Pop Acceleration
+prefer_128_bit: Prefer 128-bit AVX instructions
+prefer_256_bit: Prefer 256-bit AVX instructions
+prefer_legacy_setcc: Prefer to emit legacy SetCC.
+prefer_mask_registers: Prefer AVX512 mask registers over PTEST/MOVMSK
+prefer_movmsk_over_vtest: Prefer movmsk over vtest instruction
+prefer_no_gather: Prefer no gather instructions
+prefer_no_scatter: Prefer no scatter instructions
+prefetchi: Prefetch instruction with T0 or T1 Hint
+prefetchwt1: Prefetch with Intent to Write and T1 Hint
+prfchw: Support PRFCHW instructions
+ptwrite: Support ptwrite instruction
+push2pop2: Support PUSH2/POP2 instructions
+raoint: Support RAO-INT instructions
+rdpid: Support RDPID instructions
+rdpru: Support RDPRU instructions
+rdrnd: Support RDRAND instruction
+rdseed: Support RDSEED instruction
+retpoline: Remove speculation of indirect branches from the generated code, either by avoiding them entirely or lowering them with a speculation blocking construct
+retpoline_external_thunk: When lowering an indirect call or branch using a `retpoline`, rely on the specified user provided thunk rather than emitting one ourselves. Only has effect when combined with some other retpoline feature
+retpoline_indirect_branches: Remove speculation of indirect branches from the generated code
+retpoline_indirect_calls: Remove speculation of indirect calls from the generated code
+rtm: Support RTM instructions
+sahf: Support LAHF and SAHF instructions in 64-bit mode
+sbb_dep_breaking: SBB with same register has no source dependency
+serialize: Has serialize instruction
+seses: Prevent speculative execution side channel timing attacks by inserting a speculation barrier before memory reads, memory writes, and conditional branches. Implies LVI Control Flow integrity.
+sgx: Enable Software Guard Extensions
+sha: Enable SHA instructions
+sha512: Support SHA512 instructions
+shstk: Support CET Shadow-Stack instructions
+slow_3ops_lea: LEA instruction with 3 ops or certain registers is slow
+slow_incdec: INC and DEC instructions are slower than ADD and SUB
+slow_lea: LEA instruction with certain arguments is slow
+slow_pmaddwd: PMADDWD is slower than PMULLD
+slow_pmulld: PMULLD instruction is slow (compared to PMULLW/PMULHW and PMULUDQ)
+slow_pmullq: PMULLQ instruction is slow
+slow_shld: SHLD instruction is slow
+slow_two_mem_ops: Two memory operand instructions are slow
+slow_unaligned_mem_16: Slow unaligned 16-byte memory access
+slow_unaligned_mem_32: Slow unaligned 32-byte memory access
+sm3: Support SM3 instructions
+sm4: Support SM4 instructions
+smap: Enable Supervisor Mode Access Prevention
+smep: Enable Supervisor Mode Execution Prevention
+soft_float: Use software floating point features
+sse: Enable SSE instructions
+sse2: Enable SSE2 instructions
+sse3: Enable SSE3 instructions
+sse4_1: Enable SSE 4.1 instructions
+sse4_2: Enable SSE 4.2 instructions
+sse4a: Support SSE 4a instructions
+sse_unaligned_mem: Allow unaligned memory operands with SSE instructions (this may require setting a configuration bit in the processor)
+ssse3: Enable SSSE3 instructions
+tagged_globals: Use an instruction sequence for taking the address of a global that allows a memory tag in the upper address bits.
+tbm: Enable TBM instructions
+tsxldtrk: Support TSXLDTRK instructions
+tuning_fast_imm_vector_shift: Vector shifts are fast (2/cycle) as opposed to slow (1/cycle)
+uintr: Has UINTR Instructions
+use_glm_div_sqrt_costs: Use Goldmont specific floating point div/sqrt costs
+use_slm_arith_costs: Use Silvermont specific arithmetic costs
+usermsr: Support USERMSR instructions
+vaes: Promote selected AES instructions to AVX512/AVX registers
+vpclmulqdq: Enable vpclmulqdq instructions
+vzeroupper: Should insert vzeroupper instructions
+waitpkg: Wait and pause enhancements
+wbnoinvd: Write Back No Invalidate
+widekl: Support Key Locker wide Instructions
+x32: 64-bit with ILP32 programming model (e.g. x32 ABI)
+x87: Enable X87 float instructions
+xop: Enable XOP instructions
+xsave: Support xsave instructions
+xsavec: Support xsavec instructions
+xsaveopt: Support xsaveopt instructions
+xsaves: Support xsaves instructions
+zu: Support zero-upper SETcc/IMUL

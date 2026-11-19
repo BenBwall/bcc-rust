@@ -36,7 +36,7 @@ pub(super) fn banner(personality: Personality, name: &str, target: Target) -> St
                  is not affiliated with the GNU Project or the Free Software Foundation.\n",
             );
         },
-        | Personality::Clang | Personality::ClangCl => {
+        | Personality::Clang | Personality::ClangCl | Personality::ZigCc => {
             _ = writeln!(
                 text,
                 "clang version {CLANG_VERSION} (bcc {BCC_VERSION}, a Clang-compatible C compiler; \
