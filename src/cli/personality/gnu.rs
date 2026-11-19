@@ -496,8 +496,8 @@ pub(super) fn plan_translated(
         let mut text = match zig {
             // Clang's own driver prints `-v` and `-###` without inputs, for
             // what it makes of the `-target` operand.
-            | Some(zig) if !has_inputs => zig.banner(&zig.machine),
-            | Some(zig) => zig.banner(&zig.triple),
+            | Some(zig) if !has_inputs => zig::Defaults::banner(&zig.machine),
+            | Some(zig) => zig::Defaults::banner(&zig.triple),
             | None => version::verbose(personality, target),
         };
         // Without inputs, neither compiler has a step to show.
@@ -2319,7 +2319,7 @@ impl State<'_> {
             match query {
                 | Query::DumpMachine | Query::Triple => return format!("{}\n", zig.machine),
                 | Query::DumpVersion => return format!("{}\n", zig::CLANG_VERSION),
-                | Query::Version => return zig.banner(&zig.triple),
+                | Query::Version => return zig::Defaults::banner(&zig.triple),
                 | _ => {},
             }
         }

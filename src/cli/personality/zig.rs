@@ -131,7 +131,7 @@ const ZIG_COMMANDS: [&str; 25] = [
 /// option it knows (`.optimize` in the `cc` loop).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum Mode {
-    /// `-O0`, `-Og` or none: `-O0` with UBSan and the stack protector.
+    /// `-O0`, `-Og` or none: `-O0` with `UBSan` and the stack protector.
     #[default]
     Debug,
     /// `-O1` to `-O4` and `-Ofast`: `-O2` and `NDEBUG`.
@@ -140,7 +140,7 @@ enum Mode {
     ReleaseSmall,
 }
 
-/// How zig compiles UBSan's checks (`sanitize_c`).
+/// How zig compiles `UBSan`'s checks (`sanitize_c`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum UndefinedChecks {
     Off,
@@ -304,12 +304,11 @@ impl Translation {
                 self.strip = Some(true);
                 self.out.push(argument.clone());
             },
-            | "-g" => self.strip = Some(false),
+            | "-g" | "-gdwarf32" | "-gdwarf64" => self.strip = Some(false),
             | "-g1" | "-gline-tables-only" => {
                 self.strip = Some(false);
                 self.out.push("-gline-tables-only".into());
             },
-            | "-gdwarf32" | "-gdwarf64" => self.strip = Some(false),
             | "-static" => self.static_link = true,
             | "-dynamic" => self.static_link = false,
             | "-shared" => {
@@ -720,7 +719,7 @@ impl Defaults {
 
     /// `--version`, and what `-v` prints first: Clang's banner with zig's
     /// target, naming bcc.
-    pub(super) fn banner(&self, triple: &str) -> String {
+    pub(super) fn banner(triple: &str) -> String {
         let mut text = String::new();
         _ = writeln!(
             text,
@@ -777,8 +776,8 @@ impl Version {
 }
 
 impl std::fmt::Display for Version {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
     }
 }
 

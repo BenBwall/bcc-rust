@@ -522,7 +522,7 @@ mod tests {
         u16::from_le_bytes([bytes[16], bytes[17]])
     }
 
-    /// zig's Debug mode stops at the first undefined behavior UBSan finds,
+    /// zig's Debug mode stops at the first undefined behavior `UBSan` finds,
     /// and its release modes do not check; executables are not
     /// position-independent, and carry DWARF unless stripped.
     #[cfg(target_os = "linux")]
