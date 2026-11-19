@@ -95,6 +95,10 @@ impl TextEvents {
 
 /// What `-E` writes.
 #[derive(Clone, Copy, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each is a separate command-line choice."
+)]
 pub(crate) struct TextOptions {
     /// `-P`: no line markers, and no blank lines kept between tokens.
     pub(crate) no_line_markers: bool,
@@ -113,6 +117,10 @@ pub(crate) struct TextOptions {
 const MAX_BLANK_LINES: u32 = 8;
 
 /// The preprocessed text as it is written, and where it has got to.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about the line being written."
+)]
 pub(crate) struct TextWriter<'a> {
     pub(crate) text: ArenaString<'a>,
     scratch:         Bump,
@@ -354,7 +362,8 @@ impl<'a> TextWriter<'a> {
                 self.cl_reach(context, file, line);
                 self.indent(column);
                 self.begin_line(column, spacing, class);
-            } else if spacing.space || (spacing.avoid_paste && avoid_paste(self.last, class, first)) {
+            } else if spacing.space || (spacing.avoid_paste && avoid_paste(self.last, class, first))
+            {
                 self.text.push(' ');
             }
             self.fresh = false;
@@ -564,15 +573,14 @@ impl<'a> TextWriter<'a> {
     /// gets a marker of its own.
     fn cl_reach(&mut self, context: &Context<'_>, file: u32, line: u32) {
         match self.line {
-            | Some((current_file, current)) if current_file == file => {
+            | Some((current_file, current)) if current_file == file =>
                 if line > current {
                     for _ in current..line {
                         self.text.push('\n');
                     }
                     self.line = Some((file, line));
                     self.fresh = true;
-                }
-            },
+                },
             | None => {
                 self.cl_marker(context, self.main_file, 1);
                 self.cl_reach(context, file, line);

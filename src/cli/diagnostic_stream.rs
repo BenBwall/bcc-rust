@@ -4,7 +4,7 @@
 //! keeps stdout for the text under `/E` and `/EP` and writes everything else
 //! to stderr then, also under `/P`; the `cl` personality asks for stdout
 //! only for compile and `/Zs` jobs (`--diagnostics-to-stdout`). Ninja reads
-//! the notes from stdout for its `deps = msvc` dependencies, and MSBuild and
+//! the notes from stdout for its `deps = msvc` dependencies, and `MSBuild` and
 //! IDEs read the diagnostics there. The command line's own messages (`cl :
 //! Command line error D8003 : ...`) go to stderr in both, as `cl` writes
 //! them.
@@ -28,20 +28,20 @@ use std::{
 pub(super) struct DiagnosticStream;
 
 impl io::Write for DiagnosticStream {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if TO_STDOUT.load(Ordering::Relaxed) {
-            io::stdout().lock().write(bytes)
+            io::stdout().lock().write(buf)
         } else {
-            io::stderr().lock().write(bytes)
+            io::stderr().lock().write(buf)
         }
     }
 
-    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         if TO_STDOUT.load(Ordering::Relaxed) {
             let mut stdout = io::stdout().lock();
-            stdout.write_all(bytes).and_then(|()| stdout.flush())
+            stdout.write_all(buf).and_then(|()| stdout.flush())
         } else {
-            io::stderr().lock().write_all(bytes)
+            io::stderr().lock().write_all(buf)
         }
     }
 

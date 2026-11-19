@@ -1439,10 +1439,7 @@ impl State {
     /// the other way round or for a redefinition, which replaces the earlier
     /// definition without a word, so bcc undefines the macro first.
     fn define_or_undefine(&mut self, invocation: &Invocation, name: &str, operand: &str) {
-        let macro_name = operand
-            .split(['=', '#'])
-            .next()
-            .unwrap_or(operand);
+        let macro_name = operand.split(['=', '#']).next().unwrap_or(operand);
         let class = format!("D {macro_name}");
         let defined_last = self
             .switches

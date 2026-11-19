@@ -27,20 +27,20 @@ use crate::{
     reason = "Each flag is an independent fact of how the diagnostic is written."
 )]
 pub(crate) struct Diagnostic<'d> {
-    pub(crate) severity:       ErrorSeverity,
+    pub(crate) severity:         ErrorSeverity,
     /// Clang's `#pragma clang diagnostic fatal`, written as a `fatal error`.
-    pub(crate) fatal:          bool,
+    pub(crate) fatal:            bool,
     /// A diagnostic pragma classified it, which keeps an error from Clang's
     /// `-Wfatal-errors` (`NoErrorAsFatal`, which
     /// `DiagnosticsEngine::makeUserMapping` sets on a pragma's mapping).
-    pub(crate) pragma_mapped:  bool,
-    pub(crate) message:        &'d str,
+    pub(crate) pragma_mapped:    bool,
+    pub(crate) message:          &'d str,
     /// The message ends with the ` [-WNAME]` of the warning option that
     /// controls it, which bcc appended (see [`Explanation::option_suffix`]).
-    pub(crate) option_suffix:  bool,
+    pub(crate) option_suffix:    bool,
     /// `cl`'s code for the diagnostic (`C2065`), which the MSVC formats
     /// write after the severity under the `cl` identity.
-    pub(crate) code:           Option<&'static str>,
+    pub(crate) code:             Option<&'static str>,
     /// `cl`'s `/WX` made this warning an error, so it is written as a
     /// warning, after `error C2220: the following warning is treated as an
     /// error` when it is the first: [`TreatedAsError`].
@@ -49,20 +49,20 @@ pub(crate) struct Diagnostic<'d> {
     /// "expected" errors and some warnings: Clang's snippet marks only where
     /// the primary range starts, with no `~` over the token there, and its
     /// macro notes' carets are points too.
-    pub(crate) point:          bool,
+    pub(crate) point:            bool,
     /// Clang names a place rather than a range for each related note,
     /// whose carets are then points.
-    pub(crate) related_points: bool,
-    pub(super) labels:         ArenaVec<'d, Label<'d>>,
-    pub(super) notes:          ArenaVec<'d, &'d str>,
-    pub(super) help:           ArenaVec<'d, &'d str>,
+    pub(crate) related_points:   bool,
+    pub(super) labels:           ArenaVec<'d, Label<'d>>,
+    pub(super) notes:            ArenaVec<'d, &'d str>,
+    pub(super) help:             ArenaVec<'d, &'d str>,
     /// The edits GCC and Clang suggest with it, which they print under the
     /// source they change.
-    pub(super) fix_its:        ArenaVec<'d, FixIt<'d>>,
+    pub(super) fix_its:          ArenaVec<'d, FixIt<'d>>,
     /// The range of the token or syntax that the diagnostic was reported
     /// about, before it was moved to a place in a file, whose order says
     /// which reading of a file read twice it is in.
-    pub(crate) reading:        Option<SourceVectors>,
+    pub(crate) reading:          Option<SourceVectors>,
 }
 
 /// Whether `cl`'s `/WX` made a warning an error. `cl` then writes `error

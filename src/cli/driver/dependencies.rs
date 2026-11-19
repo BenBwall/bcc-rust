@@ -28,8 +28,8 @@ use super::{
     super::{
         Cli,
         MainError,
+        diagnostic_stream::DiagnosticStream,
     },
-    super::diagnostic_stream::DiagnosticStream,
     Source,
     options::DependencyFiles,
     output_or_stem,
@@ -402,11 +402,7 @@ pub(super) fn show_includes(context: &Context<'_>) {
     let mut text = ArenaString::new_in(&arena);
     let clang = context.configuration.compiler_identity().rules() == RuleSet::Clang;
     let cl = context.configuration.compiler_identity() == CompilerIdentity::Msvc;
-    let directory = if cl {
-        working_directory(&arena)
-    } else {
-        ""
-    };
+    let directory = if cl { working_directory(&arena) } else { "" };
     for entry in context.include_entries.iter().flatten() {
         let file = context.get_source_file(entry.file);
         _ = write!(

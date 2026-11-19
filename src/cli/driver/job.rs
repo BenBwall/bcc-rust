@@ -21,11 +21,11 @@ use super::{
             Generated,
             generate_code,
         },
+        diagnostic_stream,
         output::{
             print_parser_output,
             print_preprocessor_output,
         },
-        diagnostic_stream,
         output_file,
         preprocessed::print_preprocessed,
     },
@@ -286,7 +286,8 @@ fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
     let reason = os_reason(error, arena);
     let path = path.display();
     match args.diagnostic_format {
-        | Format::Bcc => diagnostic_stream::report(format_args!("error: cannot read `{path}`: {error}")),
+        | Format::Bcc =>
+            diagnostic_stream::report(format_args!("error: cannot read `{path}`: {error}")),
         // GCC's preprocessor reports a directory as a missing file.
         | Format::Gcc => diagnostic_stream::report(format_args!(
             "cc1: fatal error: {path}: {}\ncompilation terminated.",
@@ -301,9 +302,10 @@ fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
             diagnostic_stream::report(format_args!(
                 "c1: fatal error C1083: Cannot open source file: '{path}': {reason}"
             )),
-        | Format::Clang | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret => diagnostic_stream::report(
-            format_args!("error: error reading '{path}': {reason}\n1 error generated."),
-        ),
+        | Format::Clang | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret =>
+            diagnostic_stream::report(format_args!(
+                "error: error reading '{path}': {reason}\n1 error generated."
+            )),
         | Format::Tcc => diagnostic_stream::report(format_args!(
             "{}: error: file '{path}' not found",
             args.driver.driver_name.as_deref().unwrap_or("tcc")

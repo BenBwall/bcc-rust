@@ -1690,11 +1690,8 @@ impl ToDiagnostic for PreprocessorError<'_> {
             | PreprocessorErrorType::ErrorDirective(message)
                 if context.configuration.msvc_wording() =>
                 Some(
-                    Explanation::new(
-                        arena,
-                        format_in!(arena, "#error: {}", message.trim_end()),
-                    )
-                    .msvc_code("C1189"),
+                    Explanation::new(arena, format_in!(arena, "#error: {}", message.trim_end()))
+                        .msvc_code("C1189"),
                 ),
             | _ => None,
         };

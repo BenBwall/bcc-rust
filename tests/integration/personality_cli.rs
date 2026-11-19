@@ -7940,11 +7940,7 @@ mod tests {
                 stdout(&output)
             );
             // `cl` writes its diagnostics to stdout, after the source's name.
-            let printed: Vec<String> = stdout(&output)
-                .lines()
-                .skip(1)
-                .map(str::to_owned)
-                .collect();
+            let printed: Vec<String> = stdout(&output).lines().skip(1).map(str::to_owned).collect();
             assert_eq!(printed, lines, "{args:?}");
         }
         assert_eq!(
@@ -12782,7 +12778,10 @@ warn.c:34: warning: cast between pointer and integer of different size
                 let depth = path.len() - path.trim_start().len();
                 let path = Path::new(path.trim_start());
                 assert!(path.is_absolute(), "{line}");
-                (depth, path.file_name().unwrap().to_string_lossy().into_owned())
+                (
+                    depth,
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                )
             })
             .collect();
         assert_eq!(
@@ -13995,10 +13994,7 @@ warn.c:34: warning: cast between pointer and integer of different size
         succeeds(&output);
         let without_markers: String = expected
             .lines()
-            .map(|line| {
-                let line = if line.starts_with("#line") { "" } else { line };
-                format!("{line}\n")
-            })
+            .flat_map(|line| [if line.starts_with("#line") { "" } else { line }, "\n"])
             .collect();
         assert_eq!(stdout(&output), without_markers);
         directory.write(
@@ -14073,7 +14069,10 @@ warn.c:34: warning: cast between pointer and integer of different size
             (&["/D", "X", "/U", "X"], &["'/DX' with '/UX'"]),
             (&["/UX", "/DX"], &[]),
             (&["/DX=1", "/DX=2"], &[]),
-            (&["/Fofirst.obj", "/Folast.obj"], &["'/Fofirst.obj' with '/Folast.obj'"]),
+            (
+                &["/Fofirst.obj", "/Folast.obj"],
+                &["'/Fofirst.obj' with '/Folast.obj'"],
+            ),
             (&["/GL", "/GL-"], &["'/GL' with '/GL-'"]),
         ] {
             let mut args = vec!["/nologo", "/c", "a.c"];
@@ -14082,7 +14081,7 @@ warn.c:34: warning: cast between pointer and integer of different size
             succeeds(&output);
             let expected: String = warnings
                 .iter()
-                .map(|words| format!("cl : Command line warning D9025 : overriding {words}\n"))
+                .flat_map(|words| ["cl : Command line warning D9025 : overriding ", words, "\n"])
                 .collect();
             assert_eq!(stderr(&output), expected, "{options:?}");
             assert_eq!(stdout(&output), "a.c\n", "{options:?}");
@@ -14098,10 +14097,7 @@ warn.c:34: warning: cast between pointer and integer of different size
         directory.write("a.c", "int a;\n");
         directory.write("b.c", "int b;\nint main(void) { return 0; }\n");
         std::fs::create_dir(directory.path("obj")).unwrap();
-        succeeds(&directory.bcc(
-            "--msvc-mode",
-            &["/nologo", "/c", "a.c", "b.c", "/Foobj\\"],
-        ));
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/c", "a.c", "b.c", "/Foobj\\"]));
         assert!(directory.path("obj/a.obj").is_file());
         assert!(directory.path("obj/b.obj").is_file());
     }
@@ -14112,8 +14108,10 @@ warn.c:34: warning: cast between pointer and integer of different size
     fn cl_prints_each_sources_file_name() {
         let directory = Directory::new();
         std::fs::create_dir(directory.path("sub")).unwrap();
-        directory.write("sub/s.c", "int s;
-");
+        directory.write(
+            "sub/s.c", "int s;
+",
+        );
         let output = directory.bcc("--msvc-mode", &["/nologo", "/c", "sub/s.c"]);
         succeeds(&output);
         assert_eq!(stdout(&output), "s.c\n");
@@ -14155,8 +14153,8 @@ warn.c:34: warning: cast between pointer and integer of different size
     /// never threads, whose header Visual C++ has.
     #[test]
     fn cl_defines_the_standard_macros_cl_defines() {
-        let probe = "__STDC__ __STDC_NO_ATOMICS__ __STDC_NO_COMPLEX__ __STDC_NO_THREADS__ \
-                     __STDC_NO_VLA__";
+        let probe =
+            "__STDC__ __STDC_NO_ATOMICS__ __STDC_NO_COMPLEX__ __STDC_NO_THREADS__ __STDC_NO_VLA__";
         assert_eq!(
             cl_expand("--msvc-mode", &[], probe),
             "__STDC__ __STDC_NO_ATOMICS__ __STDC_NO_COMPLEX__ __STDC_NO_THREADS__ __STDC_NO_VLA__"
@@ -14177,15 +14175,12 @@ warn.c:34: warning: cast between pointer and integer of different size
         let directory = Directory::new();
         directory.write(
             "suffixes.c",
-            "_Static_assert(sizeof(0ui64) == 8 && (0ui64 - 1) > 0, \"ui64\");\n\
-             _Static_assert(sizeof(9223372036854775807i64) == 8 && -1i64 < 0, \"i64\");\n\
-             _Static_assert(sizeof(5i32) == 4 && 7ui32 - 8 > 0, \"i32\");\n\
-             unsigned long long m = 0xffffffffffffffffui64 + 0I64;\n",
+            "_Static_assert(sizeof(0ui64) == 8 && (0ui64 - 1) > 0, \
+             \"ui64\");\n_Static_assert(sizeof(9223372036854775807i64) == 8 && -1i64 < 0, \
+             \"i64\");\n_Static_assert(sizeof(5i32) == 4 && 7ui32 - 8 > 0, \"i32\");\nunsigned \
+             long long m = 0xffffffffffffffffui64 + 0I64;\n",
         );
-        succeeds(&directory.bcc(
-            "--msvc-mode",
-            &["/nologo", "/std:c11", "/Zs", "suffixes.c"],
-        ));
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/std:c11", "/Zs", "suffixes.c"]));
         let gcc = directory.bcc("--gcc-mode", &["-fsyntax-only", "suffixes.c"]);
         assert!(!gcc.status.success());
     }
