@@ -71,6 +71,7 @@ mod torture_regressions;
 mod undefined_sanitizer;
 mod variable_records;
 mod vector_types;
+mod warning_options_cli;
 mod windows_dll_flow;
 mod windows_dll_interop;
 mod x86_interrupt;
