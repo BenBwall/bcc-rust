@@ -98,7 +98,7 @@ pub(super) fn print_preprocessed<'tu>(
             });
             if !options.macros {
                 pragmas.write_before(context, usize::MAX, &mut writer);
-                writer.finish();
+                writer.finish(context);
             }
             let macros = options
                 .macros

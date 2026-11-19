@@ -203,6 +203,7 @@ fn run_job<'tu>(
                 no_line_markers: args.driver.no_line_markers,
                 macros:          args.driver.dump_macros,
                 as_written:      true,
+                cl_layout:       args.compiler_identity == Identity::Msvc,
             };
             let failed = match output.filter(|path| *path != Path::new("-")) {
                 | Some(path) => std::fs::File::create(path)

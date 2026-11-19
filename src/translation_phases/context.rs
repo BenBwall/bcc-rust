@@ -115,6 +115,19 @@ pub(crate) enum TextEventKind<'tu> {
     FileEntered,
     /// The reader returned to `file` from one it had included.
     FileReturned,
+    /// The reader reached the `#include` on `line` of `file`, which `cl`'s
+    /// text gives the included file's line marker. Recorded under the `cl`
+    /// identity, whose text has a line for each source line, only.
+    IncludeLine,
+    /// The conditional directive on `line` of `file` ended a group: an
+    /// `#endif`, or an `#elif` that takes its group after a skipped one.
+    /// `cl`'s text replaces it with a line marker for the next line.
+    /// Recorded under the `cl` identity only.
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
+    ConditionalEnded,
+    /// A fatal error, a missing header (C1083) or `#error` (C1189), at which
+    /// `cl` stops its text. Recorded under the `cl` identity only.
+    Stopped,
 }
 
 #[expect(

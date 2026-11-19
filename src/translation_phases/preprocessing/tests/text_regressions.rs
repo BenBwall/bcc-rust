@@ -62,7 +62,11 @@ fn text_in(source: &str, configuration: CompilerConfiguration) -> Text {
         .iter()
         .filter_map(|event| match event.kind {
             | TextEventKind::Pragma(text) => Some((event.position, text.to_owned())),
-            | TextEventKind::FileEntered | TextEventKind::FileReturned => None,
+            | TextEventKind::FileEntered
+            | TextEventKind::FileReturned
+            | TextEventKind::IncludeLine
+            | TextEventKind::ConditionalEnded
+            | TextEventKind::Stopped => None,
         })
         .collect();
     let mut diagnostics = Vec::new();

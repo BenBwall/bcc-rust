@@ -62,15 +62,33 @@ impl TextEvents {
         while let Some(&event) = context.text_events.get(self.next)
             && event.position <= ordinal
         {
+            self.next += 1;
+            if writer.stopped {
+                continue;
+            }
             match event.kind {
                 | TextEventKind::Pragma(text) =>
                     writer.pragma(context, event.file, event.line, text),
+                | TextEventKind::FileEntered if writer.cl => writer.cl_enter(context, event.file),
                 | TextEventKind::FileEntered =>
                     writer.file_change(context, event.file, event.line, Flag::Entered),
+                | TextEventKind::FileReturned if writer.cl => {
+                    writer.cl_end_file(context);
+                    writer.cl_marker(context, event.file, event.line);
+                },
                 | TextEventKind::FileReturned =>
                     writer.file_change(context, event.file, event.line, Flag::Returned),
+                | TextEventKind::IncludeLine if writer.cl =>
+                    writer.cl_reach(context, event.file, event.line),
+                | TextEventKind::ConditionalEnded if writer.cl => {
+                    writer.cl_reach(context, event.file, event.line);
+                    writer.cl_marker(context, event.file, event.line + 1);
+                },
+                | TextEventKind::Stopped if writer.cl => writer.cl_stop(context),
+                | TextEventKind::IncludeLine
+                | TextEventKind::ConditionalEnded
+                | TextEventKind::Stopped => {},
             }
-            self.next += 1;
         }
     }
 }
@@ -86,6 +104,9 @@ pub(crate) struct TextOptions {
     /// Spell each token as its preprocessing token was spelled, as phase 4
     /// leaves it, rather than as the token phases 5 and 6 made of it.
     pub(crate) as_written:      bool,
+    /// `cl`'s layout: a line for each source line, and `#line` markers, or
+    /// empty lines in their place under `-P` (`cl /EP`).
+    pub(crate) cl_layout:       bool,
 }
 
 /// More blank lines than this are replaced by a line marker, as GCC does.
@@ -108,6 +129,12 @@ pub(crate) struct TextWriter<'a> {
     /// A file change's marker was just written, so the next token or marker
     /// starts its line with no new line first, whatever line it is on.
     at_line_start:   bool,
+    /// `cl`'s layout ([`Self::cl_reach`]), under the `cl` identity.
+    cl:              bool,
+    /// In `cl`'s layout, nothing is written on the current line yet.
+    fresh:           bool,
+    /// `cl` stopped its text at a fatal error.
+    stopped:         bool,
 }
 
 /// The flag on a line marker for a change of file.
@@ -248,6 +275,9 @@ impl<'a> TextWriter<'a> {
             main_file,
             after_pragma: false,
             at_line_start: false,
+            cl: options.cl_layout,
+            fresh: false,
+            stopped: false,
         }
     }
 
@@ -261,6 +291,9 @@ impl<'a> TextWriter<'a> {
         token: Token,
         at: Option<ReadAt>,
     ) -> Option<(u32, usize)> {
+        if self.stopped {
+            return None;
+        }
         let spelled = context.get_source_vectors(token.source_vectors).first();
         // A token without a place to read it from is one a macro made.
         let spacing = at.as_ref().map_or(
@@ -316,7 +349,16 @@ impl<'a> TextWriter<'a> {
         let first = classified.as_bytes().first().copied().unwrap_or(0);
         let later = matches!(self.line, Some((current_file, current_line))
             if current_file == file && line > current_line);
-        if self.at_line_start {
+        if self.cl {
+            if self.fresh || later || self.line.is_none_or(|(current, _)| current != file) {
+                self.cl_reach(context, file, line);
+                self.indent(column);
+                self.begin_line(column, spacing, class);
+            } else if spacing.space || (spacing.avoid_paste && avoid_paste(self.last, class, first)) {
+                self.text.push(' ');
+            }
+            self.fresh = false;
+        } else if self.at_line_start {
             self.advance(context, file, line);
             self.at_line_start = false;
             self.indent(column);
@@ -364,6 +406,19 @@ impl<'a> TextWriter<'a> {
     /// and a line marker, as for a `_Pragma` operator between two tokens of
     /// a line. The next token starts a line of its own.
     pub(crate) fn pragma(&mut self, context: &Context<'_>, file: u32, line: u32, text: &str) {
+        if self.cl {
+            if self.stopped {
+                return;
+            }
+            self.cl_reach(context, file, line);
+            if !self.fresh {
+                self.text.push(' ');
+            }
+            self.text.push_str(text);
+            self.fresh = false;
+            self.last = PasteClass::None;
+            return;
+        }
         match self.line {
             | Some((current_file, current_line))
                 if current_file == file && line <= current_line && !self.at_line_start =>
@@ -489,10 +544,106 @@ impl<'a> TextWriter<'a> {
     }
 
     /// Ends the last line.
-    pub(crate) fn finish(&mut self) {
-        if self.line.is_some() {
+    pub(crate) fn finish(&mut self, context: &Context<'_>) {
+        if self.cl {
+            if self.line.is_none() {
+                self.cl_marker(context, self.main_file, 1);
+            }
+            if !self.stopped {
+                self.cl_end_file(context);
+            }
+        } else if self.line.is_some() {
             self.end_line();
         }
+    }
+
+    /// Moves `cl`'s layout to the start of `line` of `file`, with an empty
+    /// line for each source line passed: `cl /E` writes a line for each
+    /// line of a source file, directives and blank lines included, and
+    /// starts the text with the main file's `#line` marker. Another file
+    /// gets a marker of its own.
+    fn cl_reach(&mut self, context: &Context<'_>, file: u32, line: u32) {
+        match self.line {
+            | Some((current_file, current)) if current_file == file => {
+                if line > current {
+                    for _ in current..line {
+                        self.text.push('\n');
+                    }
+                    self.line = Some((file, line));
+                    self.fresh = true;
+                }
+            },
+            | None => {
+                self.cl_marker(context, self.main_file, 1);
+                self.cl_reach(context, file, line);
+            },
+            | Some(_) => self.cl_marker(context, file, line),
+        }
+    }
+
+    /// Writes the marker of `file`, which the reader entered, in `cl`'s
+    /// layout: on the `#include` line [`Self::cl_reach`] reached, or after
+    /// the main file's marker for a file the command line forces.
+    fn cl_enter(&mut self, context: &Context<'_>, file: u32) {
+        if self.line.is_none() {
+            self.cl_marker(context, self.main_file, 1);
+        }
+        self.cl_marker(context, file, 1);
+    }
+
+    /// Stops `cl`'s text at a fatal error, as `cl` does, after the main
+    /// file's marker and the line in progress.
+    fn cl_stop(&mut self, context: &Context<'_>) {
+        if self.line.is_none() {
+            self.cl_marker(context, self.main_file, 1);
+        } else if !self.fresh {
+            self.text.push('\n');
+        }
+        self.stopped = true;
+    }
+
+    /// Writes the rest of the file being read in `cl`'s layout: an empty
+    /// line for each source line not reached, to its end.
+    fn cl_end_file(&mut self, context: &Context<'_>) {
+        let Some((file, _)) = self.line else {
+            return;
+        };
+        let text = context.source_text(file).unwrap_or_default();
+        let lines = text.bytes().filter(|&byte| byte == b'\n').count()
+            + usize::from(!text.is_empty() && !text.ends_with('\n'));
+        self.cl_reach(
+            context,
+            file,
+            u32::try_from(lines).unwrap_or(u32::MAX).saturating_add(1),
+        );
+    }
+
+    /// Writes `cl`'s marker for `line` of `file`, `#line LINE "FILE"`, on a
+    /// line of its own, or an empty line under `-P`. `cl` names an included
+    /// file by its absolute path, from the working directory when relative,
+    /// and the main file as the command line does.
+    fn cl_marker(&mut self, context: &Context<'_>, file: u32, line: u32) {
+        if self.line.is_some() && !self.fresh {
+            self.text.push('\n');
+        }
+        if !self.options.no_line_markers {
+            let path = context.get_source_file(file);
+            let mut name = ArenaString::new_in(&self.scratch);
+            if file != self.main_file
+                && path.is_relative()
+                && let Ok(directory) = std::env::current_dir()
+            {
+                _ = write!(name, "{}{}", directory.display(), std::path::MAIN_SEPARATOR);
+            }
+            _ = write!(name, "{}", path.display());
+            _ = write!(self.text, "#line {line} ");
+            _ = crate::diagnostics::write_c_quoted(&mut self.text, "", '"', &name);
+        }
+        self.text.push('\n');
+        self.scratch.reset();
+        self.line = Some((file, line));
+        self.fresh = true;
+        self.last = PasteClass::None;
     }
 }
 

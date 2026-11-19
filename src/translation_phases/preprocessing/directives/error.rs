@@ -6,6 +6,7 @@
 
 use crate::{
     translation_phases::{
+        TextEventKind,
         TranslationPhase,
         preprocessing::{
             Expander,
@@ -45,13 +46,17 @@ impl Expander<'_, '_, '_, '_> {
                     .trim_end_matches('\0'),
             );
         }
+        let warning = self.context.string_cache.at(directive.contents) == "warning";
         self.context.preprocessor_error(PreprocessorError {
-            error_type:     if self.context.string_cache.at(directive.contents) == "warning" {
+            error_type:     if warning {
                 PreprocessorErrorType::WarningDirective(self.context.diagnostic_text(&contents))
             } else {
                 PreprocessorErrorType::ErrorDirective(self.context.diagnostic_text(&contents))
             },
             source_vectors: directive.source_vectors,
         });
+        if !warning {
+            self.record_cl_text_line(TextEventKind::Stopped, None);
+        }
     }
 }

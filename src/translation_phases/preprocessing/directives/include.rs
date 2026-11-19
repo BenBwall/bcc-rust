@@ -241,6 +241,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 | _ => {},
             }
         }
+        self.record_cl_text_line(TextEventKind::IncludeLine, None);
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::SourceFile {
                 conditional_base: self.state.open_conditionals.len(),
@@ -576,6 +577,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     },
                     source_vectors: operand,
                 });
+                self.record_cl_text_line(TextEventKind::Stopped, None);
                 return None;
             }
             found
@@ -593,6 +595,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 },
                 source_vectors: operand,
             });
+            self.record_cl_text_line(TextEventKind::Stopped, None);
             return None;
         };
         if self

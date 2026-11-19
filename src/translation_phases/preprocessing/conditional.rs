@@ -29,6 +29,7 @@ use crate::{
         GetSourceFileIndex,
         SourceVector,
         SourceVectors,
+        TextEventKind,
         TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -108,6 +109,7 @@ impl Expander<'_, '_, '_, '_> {
         } else {
             let _ = self.state.open_conditionals.pop();
         }
+        self.record_group_end(directive);
         self.finish_conditional_directive("endif");
     }
 
@@ -207,6 +209,7 @@ impl Expander<'_, '_, '_, '_> {
                     let _ = self.state.open_conditionals.pop();
                     if innermost {
                         self.context.set_ignore_tokenizer_errors(false);
+                        self.record_group_end(name);
                         self.finish_conditional_directive("endif");
                         at_line_start = true;
                     }
@@ -228,6 +231,7 @@ impl Expander<'_, '_, '_, '_> {
                     }
                     self.trace_skip_end(file, after, until);
                     if taken {
+                        self.record_group_end(name);
                         self.resume_at_line_start();
                         return;
                     }
@@ -276,6 +280,7 @@ impl Expander<'_, '_, '_, '_> {
                     at_line_start = true;
                     self.trace_skip_end(file, after, until);
                     if taken {
+                        self.record_group_end(name);
                         self.resume_at_line_start();
                         return;
                     }
@@ -444,6 +449,18 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     ///
     /// C99: §6.10 paragraph 1, p. 145; PDF p. 157, and footnote 147, p. 149;
     /// PDF p. 161.
+    /// Records for `cl`'s layout of the text the conditional directive
+    /// `directive` names that ends a group: an `#endif`, or an `#elif` that
+    /// takes its group after a skipped one (`cl` writes an `#else` as an
+    /// empty line).
+    fn record_group_end(&mut self, directive: PreprocessorToken) {
+        let line = self
+            .context
+            .first_source_vector_or_default(directive.source_vectors)
+            .line;
+        self.record_cl_text_line(TextEventKind::ConditionalEnded, Some(line));
+    }
+
     fn finish_conditional_directive(&mut self, name: &'static str) {
         if let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             && token.kind != PreprocessorTokenType::Newline

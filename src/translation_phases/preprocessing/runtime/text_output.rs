@@ -36,6 +36,8 @@ use crate::{
         STDIN_NAME,
         SourcePosition,
         SourceVector,
+        TextEvent,
+        TextEventKind,
         TranslationPhase,
         preprocessor_tokenizer::{
             OutputSpacing,
@@ -231,6 +233,32 @@ fn builtin_value(context: &Context<'_>, name: &str) -> Option<&'static str> {
 }
 
 impl Expander<'_, '_, '_, '_> {
+    /// Records, for `cl`'s layout of the text, a directive that writes no
+    /// text, `kind`, on `line` of the file being read, or on the reader's
+    /// line: `cl /E` writes a line for each source line, and line markers in
+    /// place of `#include` and `#endif` lines. Other identities' texts do not
+    /// need it.
+    #[inline(never)]
+    pub(in crate::translation_phases::preprocessing) fn record_cl_text_line(
+        &mut self,
+        kind: TextEventKind<'static>,
+        line: Option<u32>,
+    ) {
+        if !self.state.as_text
+            || self.context.configuration.compiler_identity() != CompilerIdentity::Msvc
+        {
+            return;
+        }
+        if let Some((file, position)) = self.reading_position() {
+            self.context.text_events.push(TextEvent {
+                position: self.context.preprocessed_tokens,
+                file,
+                line: line.unwrap_or(position.line),
+                kind,
+            });
+        }
+    }
+
     /// The innermost source file being read, and the reader's position in
     /// it: the live cursor when no macro frame is above the file, otherwise
     /// the cursor the file's frame saved when the macro was pushed.
