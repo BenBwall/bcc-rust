@@ -1399,7 +1399,8 @@ impl State {
 
     /// Records `/D` or `/U` (`name`) with its `operand`: `cl` warns (D9025)
     /// when `/U` undefines a macro the last option for it defined, but not
-    /// the other way round or for a redefinition.
+    /// the other way round or for a redefinition, which replaces the earlier
+    /// definition without a word, so bcc undefines the macro first.
     fn define_or_undefine(&mut self, invocation: &Invocation, name: &str, operand: &str) {
         let macro_name = operand
             .split(['=', '#'])
@@ -1413,6 +1414,10 @@ impl State {
         if name == "U" && defined_last {
             self.set_switch(invocation, &class, "U", format!("/U{operand}"));
         } else {
+            if defined_last {
+                self.bcc.push("-U".into());
+                self.bcc.push(macro_name.into());
+            }
             self.switches.retain(|(other, _, _)| *other != class);
             self.switches
                 .push((class, name.into(), format!("/{name}{operand}")));
