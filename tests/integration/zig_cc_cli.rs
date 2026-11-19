@@ -184,6 +184,13 @@ mod tests {
                 target.as_deref(),
                 Some("Target: x86_64-unknown-windows-gnu")
             );
+        } else {
+            assert!(
+                target
+                    .as_deref()
+                    .is_some_and(|line| line.starts_with("Target: x86_64-unknown-linux")),
+                "{target:?}"
+            );
         }
         let output = directory.zig(&["-dumpversion"]);
         succeeds(&output);
@@ -680,6 +687,7 @@ int *f(void) { return &x; }
     }
 
     /// zig's Debug mode stops at the first undefined behavior `UBSan` finds,
+    /// reporting it where the bundled clang has the `UBSan` library,
     /// and its release modes do not check; executables are not
     /// position-independent, and carry DWARF unless stripped.
     #[cfg(target_os = "linux")]
@@ -691,18 +699,43 @@ int *f(void) { return &x; }
             "#include <limits.h>\n#include <stdio.h>\nint main(int argc, char **argv) {\n  int x \
              = INT_MAX;\n  x += argc;\n  printf(\"%d\\n\", x);\n  return 0;\n}\n",
         );
+        // A bundled clang built without compiler-rt has no `UBSan` library,
+        // and Clang's own `-fsanitize=undefined` cannot link there.
+        let clang = directory.run(
+            env!("CARGO_BIN_EXE_bcc-rust"),
+            &[
+                "--clang-mode",
+                "-fsanitize=undefined",
+                "ub.c",
+                "-o",
+                "clang",
+            ],
+        );
+        let runtime = clang.status.success();
+        assert!(
+            runtime || stderr(&clang).contains("ubsan"),
+            "{}",
+            stderr(&clang)
+        );
         succeeds(&directory.zig(&["-target", "x86_64-linux-gnu", "ub.c", "-o", "debug"]));
         let run = directory.run(directory.0.join("debug"), &[]);
         assert!(!run.status.success());
         assert_eq!(stdout(&run), "");
-        assert!(
-            stderr(&run).contains(
-                "ub.c:5:5: runtime error: signed integer overflow: 2147483647 + 1 cannot be \
-                 represented in type 'int'"
-            ),
-            "{}",
-            stderr(&run)
-        );
+        if runtime {
+            assert!(
+                stderr(&run).contains(
+                    "ub.c:5:5: runtime error: signed integer overflow: 2147483647 + 1 cannot be \
+                     represented in type 'int'"
+                ),
+                "{}",
+                stderr(&run)
+            );
+        } else {
+            // Without it the checks trap, and still stop the program.
+            use std::os::unix::process::ExitStatusExt as _;
+            assert!(run.status.signal().is_some(), "{:?}", run.status);
+            assert!(!stderr(&run).contains("runtime error"));
+        }
         assert_eq!(elf_type(&directory.0.join("debug")), 2);
         succeeds(&directory.zig(&["-O2", "ub.c", "-o", "release"]));
         let run = directory.run(directory.0.join("release"), &[]);

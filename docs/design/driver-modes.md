@@ -1427,7 +1427,11 @@ options (`addCCArgs` in `src/Compilation.zig`):
   MinGW, `_WIN32_WINNT` from the query's Windows version (`win7` is
   `0x0601`).
 - In Debug, on glibc's targets, UBSan's checks (`-fsanitize=undefined`) that
-  stop at the first report, as zig's own library does; the stack protector,
+  stop at the first report, as zig's own library does. zig always has that
+  library; where the bundled clang was built without compiler-rt's
+  `libclang_rt.ubsan_standalone.a` (as CI's pinned LLVM is), the checks trap
+  instead (`-fsanitize-trap=undefined`), so the program still stops at the
+  first one, by `SIGILL` and without a report; the stack protector,
   in Debug and ReleaseSafe where zig links the C library, on Linux; frame
   pointers; PIC as above; DWARF 4 outside ReleaseSmall; and `-ffreestanding`
   for `wasm32-freestanding`.

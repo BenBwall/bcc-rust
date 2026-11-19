@@ -20,7 +20,10 @@
 use std::{
     ffi::OsString,
     fmt::Write as _,
-    path::Path,
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 use super::{
@@ -641,11 +644,22 @@ impl Translation {
         // UBSan reports through the bundled library, which is glibc's; zig's
         // own library stops at the first report, which `-fno-sanitize-recover`
         // gives Clang's.
-        let undefined = self.undefined.unwrap_or(if debug {
+        let mut undefined = self.undefined.unwrap_or(if debug {
             UndefinedChecks::Full
         } else {
             UndefinedChecks::Off
         });
+        // zig always has its library; a bundled clang built without
+        // compiler-rt has none, and then the checks trap, which stops the
+        // program at the first one as zig's library does, without its
+        // report. Queries and options alone compile nothing.
+        let mut runtime = None;
+        if undefined == UndefinedChecks::Full && target == Target::LinuxGnu && self.inputs > 0 {
+            runtime = bundled_undefined_runtime(target);
+            if runtime.is_none() {
+                undefined = UndefinedChecks::Trap;
+            }
+        }
         match undefined {
             | UndefinedChecks::Off => {},
             | _ if target != Target::LinuxGnu => {
@@ -717,15 +731,10 @@ impl Translation {
         // clang's archive there, its symbols kept local.
         let mut link_after = Vec::new();
         if self.shared
-            && target == Target::LinuxGnu
-            && matches!(undefined, UndefinedChecks::Full)
-            && let Some(directory) = gnu::bundled_clang_answer("-print-runtime-dir", target)
+            && let Some(archive) = runtime
         {
-            let archive = Path::new(&directory).join("libclang_rt.ubsan_standalone.a");
-            if archive.is_file() {
-                link_after.push(archive.into_os_string());
-                link_after.push("-Wl,--exclude-libs,libclang_rt.ubsan_standalone.a".into());
-            }
+            link_after.push(archive.into_os_string());
+            link_after.push(format!("-Wl,--exclude-libs,{UNDEFINED_RUNTIME}").into());
         }
         if self.static_link {
             self.out.push("-static".into());
@@ -739,6 +748,18 @@ impl Translation {
             machine: query.clang_triple.clone(),
         })
     }
+}
+
+/// The bundled clang's `UBSan` library, which its driver links for
+/// `-fsanitize=undefined`.
+const UNDEFINED_RUNTIME: &str = "libclang_rt.ubsan_standalone.a";
+
+/// The bundled clang's [`UNDEFINED_RUNTIME`] for `target`, when it was built
+/// with compiler-rt.
+fn bundled_undefined_runtime(target: Target) -> Option<PathBuf> {
+    let directory = gnu::bundled_clang_answer("-print-runtime-dir", target)?;
+    let archive = Path::new(&directory).join(UNDEFINED_RUNTIME);
+    archive.is_file().then_some(archive)
 }
 
 /// What zig gives Clang beside the options it passes on.
@@ -1272,7 +1293,7 @@ fn host_glibc() -> Option<Version> {
                 "/usr/lib64/libc.so.6",
                 "/usr/lib/libc.so.6",
             ]
-            .map(std::path::PathBuf::from),
+            .map(PathBuf::from),
         );
     for candidate in candidates {
         let Ok(bytes) = std::fs::read(&candidate) else {
