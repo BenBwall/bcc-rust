@@ -37,6 +37,7 @@ use crate::{
         TextEventKind,
         interface::StrExt,
         preprocessor_tokenizer::{
+            OutputSpacing,
             PreprocessorToken,
             PreprocessorTokenType,
             ucn,
@@ -48,7 +49,78 @@ use crate::{
     },
 };
 
+/// A pragma operator, `_Pragma` or `__pragma`, whose pragma `cl`'s text
+/// writes back where the operator stood ([`TextEventKind::PragmaOperator`]):
+/// the place a token there would have, as a text of phase 4 places tokens.
+#[derive(Clone, Copy)]
+pub(in crate::translation_phases::preprocessing) struct PragmaOperator<'tu> {
+    file:    u32,
+    line:    u32,
+    column:  u32,
+    spacing: OutputSpacing,
+    /// `_Pragma`'s string literal destringized, which `cl` writes as it is;
+    /// `None` for `__pragma`, whose tokens are written.
+    string:  Option<&'tu str>,
+}
+
+impl<'tu> PragmaOperator<'tu> {
+    /// This `_Pragma` operator, whose literal destringized to `string`.
+    pub(in crate::translation_phases::preprocessing) fn with_string(
+        self,
+        string: &'tu str,
+    ) -> Self {
+        Self {
+            string: Some(string.strip_suffix('\n').unwrap_or(string)),
+            ..self
+        }
+    }
+}
+
 impl<'tu> Expander<'_, 'tu, '_, '_> {
+    /// The pragma operator `operator` (`_Pragma` or `__pragma`), just read,
+    /// as `cl`'s text writes it back; `None` unless this is a text of phase 4
+    /// under the `cl` identity. The operator takes the spacing a token read
+    /// in its place would, so the token after it is spaced as the source
+    /// spaces it from the operator. It stands where such a token would: at
+    /// the outermost invocation that produced it, or where it is spelled.
+    pub(in crate::translation_phases::preprocessing) fn pragma_operator(
+        &mut self,
+        operator: PreprocessorToken,
+    ) -> Option<PragmaOperator<'tu>> {
+        if !self.state.as_text
+            || self.context.configuration.compiler_identity() != CompilerIdentity::Msvc
+        {
+            return None;
+        }
+        let (file, position) = self.reading_position()?;
+        // The caller restores the state after the operator and notes there
+        // that it stood in for a token (`SpacingState::stood_in`).
+        let mut spaced = operator;
+        let mut state = self.spacing;
+        state.give(&mut spaced);
+        let spelled = self
+            .context
+            .get_source_vectors(operator.source_vectors)
+            .first()
+            .map(|vector| (vector.source_file_index, vector.line, vector.column));
+        let invocation = self
+            .outermost_invocation()
+            .map(|vector| (vector.source_file_index, vector.line, vector.column));
+        let (line, column) = match (invocation, spelled) {
+            | (Some((spelled_in, line, column)), _) | (None, Some((spelled_in, line, column)))
+                if spelled_in == file =>
+                (line, column),
+            | _ => (position.line, 0),
+        };
+        Some(PragmaOperator {
+            file,
+            line,
+            column,
+            spacing: spaced.spacing.output(),
+            string: None,
+        })
+    }
+
     /// Executes a `#pragma` directive, or the pragma of a `_Pragma` operator,
     /// returning whether its new-line was consumed. Most operands are not
     /// macro-replaced; pack operands are replaced for GCC/Clang compatibility.
@@ -70,18 +142,20 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     ///
     /// A text of phase 4 ([`Context::phase_four_text`]) writes the pragma
     /// back where it was, spelled as written, unless the preprocessor alone
-    /// carries it out ([`pragma_is_consumed`]), as GCC and Clang do.
+    /// carries it out ([`pragma_is_consumed`]), as GCC and Clang do; `cl`'s
+    /// text writes a pragma `operator`'s back as `__pragma(...)`.
     pub(in crate::translation_phases::preprocessing) fn parse_pragma_directive(
         &mut self,
         from: u32,
         at: Option<(u32, SourcePosition)>,
+        operator: Option<PragmaOperator<'tu>>,
     ) -> bool {
         if !self.context.pragma_content {
             let rules = self.context.configuration.compiler_identity().rules();
             self.context.pragma_content = pragma_is_content(rules, self.pragma_names());
         }
         let line = if self.state.as_text {
-            self.pragma_line()
+            self.pragma_line(operator)
         } else {
             None
         };
@@ -100,11 +174,23 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         if let Some(text) = line
             && let Some((file, at)) = at
         {
-            self.context.text_events.push(TextEvent {
-                position,
-                file,
-                line: at.line,
-                kind: TextEventKind::Pragma(text),
+            self.context.text_events.push(match operator {
+                | Some(operator) => TextEvent {
+                    position,
+                    file: operator.file,
+                    line: operator.line,
+                    kind: TextEventKind::PragmaOperator {
+                        text,
+                        column: operator.column,
+                        spacing: operator.spacing,
+                    },
+                },
+                | None => TextEvent {
+                    position,
+                    file,
+                    line: at.line,
+                    kind: TextEventKind::Pragma(text),
+                },
             });
         }
         consumed_newline
@@ -155,7 +241,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             break 'base;
                         },
                         | "once" => {
-                            if !self.current_is_header() {
+                            // `cl` accepts the pragma in any file without a
+                            // word, as compiling its own `/P` text needs.
+                            if !self.current_is_header()
+                                && self.context.configuration.compiler_identity()
+                                    != CompilerIdentity::Msvc
+                            {
                                 self.context.preprocessor_error(PreprocessorError {
                                     error_type:     PreprocessorErrorType::PragmaOnceInNonHeader,
                                     source_vectors: token.source_vectors,
@@ -508,10 +599,17 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// it: `#pragma` and its tokens as spelled, each run of white space as
     /// one space, in the translation-unit arena; `None` for a pragma that
     /// [`pragma_is_consumed`]. Its tokens are looked at, not read, so
-    /// nothing is reported twice.
-    fn pragma_line(&self) -> Option<&'tu str> {
+    /// nothing is reported twice. `cl` writes an `operator`'s pragma as
+    /// `__pragma(` and `_Pragma`'s destringized literal as written, or
+    /// `__pragma`'s tokens with the white space after the last, and `)`.
+    fn pragma_line(&self, operator: Option<PragmaOperator<'tu>>) -> Option<&'tu str> {
         let mut text = ArenaString::new_in(self.context.tu_arena());
-        text.push_str("#pragma");
+        let string = operator.and_then(|operator| operator.string);
+        text.push_str(if operator.is_some() {
+            "__pragma("
+        } else {
+            "#pragma"
+        });
         let mut names = [None; 2];
         let mut count = 0;
         let mut space = true;
@@ -525,7 +623,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         .string_cache
                         .at(contents)
                         .trim_end_matches('\0');
-                    if space || count == 0 {
+                    let separated = if operator.is_some() {
+                        space && count > 0
+                    } else {
+                        space || count == 0
+                    };
+                    if separated && string.is_none() {
                         text.push(' ');
                     }
                     space = false;
@@ -533,16 +636,25 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         *name = kind.is_identifier().then_some(spelling);
                     }
                     count += 1;
-                    text.push_str(spelling);
+                    if string.is_none() {
+                        text.push_str(spelling);
+                    }
                 },
             }
         }
-        let rules = self.context.configuration.compiler_identity().rules();
-        if pragma_is_consumed(rules, names) {
+        let identity = self.context.configuration.compiler_identity();
+        if pragma_is_consumed(identity, names) {
             return None;
         }
-        // GCC writes the space after `#pragma` even before nothing.
-        if count == 0 && rules == RuleSet::Gcc {
+        if operator.is_some() {
+            match string {
+                | Some(string) => text.push_str(string),
+                | None if space && count > 0 => text.push(' '),
+                | None => {},
+            }
+            text.push(')');
+        } else if count == 0 && identity.rules() == RuleSet::Gcc {
+            // GCC writes the space after `#pragma` even before nothing.
             text.push(' ');
         }
         Some(text.into_str())
@@ -1124,11 +1236,14 @@ fn pragma_is_content(rules: RuleSet, names: [Option<&str>; 2]) -> bool {
 /// `GCC warning` and `GCC error` for GCC, which reports them while
 /// preprocessing; and for Clang its own preprocessor's `clang` pragmas and
 /// MSVC's `region`, `endregion` and `mark`. Every other pragma is for later
-/// phases, or for none.
+/// phases, or for none. `cl` keeps `once`, as `#pragma once` or
+/// `__pragma(once)`, where the pragma was.
 /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
-fn pragma_is_consumed(rules: RuleSet, names: [Option<&str>; 2]) -> bool {
+fn pragma_is_consumed(identity: CompilerIdentity, names: [Option<&str>; 2]) -> bool {
+    let rules = identity.rules();
     match names {
-        | [Some("once" | "push_macro" | "pop_macro"), _]
+        | [Some("once"), _] => identity != CompilerIdentity::Msvc,
+        | [Some("push_macro" | "pop_macro"), _]
         | [Some("GCC"), Some("system_header" | "poison" | "dependency")] => true,
         | [Some("GCC"), Some("warning" | "error")] => rules == RuleSet::Gcc,
         | [

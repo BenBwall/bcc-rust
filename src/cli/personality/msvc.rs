@@ -330,9 +330,30 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     ];
     // `cl` makes a tentative definition a communal symbol, so two units
     // that both declare `int x;` link; clang-cl does not, as Clang 11 and
-    // later do not.
+    // later do not. `cl` never colors its output.
     if !clang_cl {
         common.push("-fcommon".into());
+        common.push("-fno-color-diagnostics".into());
+    }
+    // `cl` claims the C11 features it lacks only under `/std:`, where it
+    // defines `__STDC_VERSION__`: atomics, complex types and VLAs, which
+    // bcc has. `<threads.h>` comes with the Visual C++ headers, so
+    // `__STDC_NO_THREADS__` stays undefined.
+    if !clang_cl {
+        if state.standard_given {
+            common.extend(
+                [
+                    "-D__STDC_NO_ATOMICS__=1",
+                    "-D__STDC_NO_COMPLEX__=1",
+                    "-D__STDC_NO_VLA__=1",
+                ]
+                .map(OsString::from),
+            );
+        }
+        common.push("-U__STDC_NO_THREADS__".into());
+        if state.stdc {
+            common.push("-D__STDC__=1".into());
+        }
     }
     if !state.extensions {
         // `/Za`: ISO C without Microsoft's anonymous tagged members, and
@@ -441,13 +462,18 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             step.extend(source.arguments());
             if !clang_cl {
                 plan.steps.push(Step::Print {
-                    text:   format!("{}\n", Path::new(&source.path).display()),
+                    text:   format!("{}\n", source.echoed()),
                     stderr: true,
                 });
             }
             plan.steps.push(Step::Bcc(step));
         }
         return Ok(plan);
+    }
+    // `cl` writes the diagnostics of a compile, as its notes and the names
+    // of its sources, to stdout, and of `/E`, `/EP` and `/P` to stderr.
+    if !clang_cl {
+        common.push("--diagnostics-to-stdout".into());
     }
     // `/Zs`: each source is only checked.
     if state.syntax_only {
@@ -457,7 +483,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             step.extend(source.arguments());
             if !clang_cl {
                 plan.steps.push(Step::Print {
-                    text:   format!("{}\n", Path::new(&source.path).display()),
+                    text:   format!("{}\n", source.echoed()),
                     stderr: false,
                 });
             }
@@ -502,7 +528,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         step.extend(source.arguments());
         if !clang_cl {
             plan.steps.push(Step::Print {
-                text:   format!("{}\n", Path::new(&source.path).display()),
+                text:   format!("{}\n", source.echoed()),
                 stderr: false,
             });
         }
@@ -714,6 +740,13 @@ impl Source {
         self.c
     }
 
+    /// The name `cl` prints as it compiles the source: its file name,
+    /// after the last `/` or `\\` (`sub\\s.c` prints `s.c`).
+    fn echoed(&self) -> String {
+        let path = self.path.to_string_lossy();
+        path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned()
+    }
+
     /// The source on bcc's command line, as C; a name after `--` that
     /// starts with `-` gets `./` before it, but standard input stays `-`.
     fn arguments(&self) -> [OsString; 4] {
@@ -766,11 +799,16 @@ struct State {
     runtime:                 Option<Runtime>,
     /// Microsoft extensions: `/Ze` (the default) or `/Za`, the last wins.
     extensions:              bool,
+    /// `/Za` or `/Zc:__STDC__`, under which `cl` defines `__STDC__`.
+    stdc:                    bool,
     nologo:                  bool,
     /// clang-cl's `-v` or `-###`, which print its version without inputs.
     verbose:                 bool,
     ignore_include_variable: bool,
     standard:                &'static str,
+    /// `/std:` named the standard, as `/std:c11` does, rather than `cl`'s
+    /// default dialect.
+    standard_given:          bool,
     diagnostics:             &'static str,
     /// The warning level `/W0`-`/W4` set; `cl`'s own is 1.
     warning_level:           u8,
@@ -782,6 +820,10 @@ struct State {
     /// What `/wd`, `/we`, `/wo` and `/w1`-`/w4` said of each warning, the
     /// last option for a warning winning.
     warning_settings:        Vec<(u16, WarningSetting)>,
+    /// The last value and spelling of each switch whose classes
+    /// [`switch_class`] names, and of `/D` or `/U` for each macro (class
+    /// `D`), for `cl`'s warning D9025.
+    switches:                Vec<(String, String, String)>,
     errors:                  usize,
 }
 
@@ -809,15 +851,18 @@ impl Default for State {
             debug_dll:               false,
             runtime:                 None,
             extensions:              true,
+            stdc:                    false,
             nologo:                  false,
             verbose:                 false,
             ignore_include_variable: false,
             standard:                "c17",
+            standard_given:          false,
             diagnostics:             "msvc-caret",
             warning_level:           1,
             warning_level_options:   (0, 0),
             warnings_error:          false,
             warning_settings:        Vec::new(),
+            switches:                Vec::new(),
             errors:                  0,
         }
     }
@@ -875,6 +920,9 @@ impl State {
                 } else {
                     value.into()
                 };
+                if name == "D" || name == "U" {
+                    self.define_or_undefine(invocation, name, &value);
+                }
                 // `cl /DNAME#VALUE` defines NAME as VALUE.
                 let value = if name == "D" {
                     value.replacen('#', "=", 1)
@@ -887,6 +935,9 @@ impl State {
             }
         }
         let path = |value: &str| Some(PathBuf::from(value.strip_prefix(':').unwrap_or(value)));
+        if let Some((class, value)) = switch_class(option) {
+            self.set_switch(invocation, class, value, format!("/{option}"));
+        }
         match option {
             | "c" => self.compile_only = true,
             | "nologo" => self.nologo = true,
@@ -947,9 +998,14 @@ impl State {
                 self.warnings_error = false;
                 self.bcc.push("-Wno-error".into());
             },
-            | "std:c11" => self.standard = "c11",
-            | "std:c17" => self.standard = "c17",
-            | "std:clatest" => self.standard = "c23",
+            | "std:c11" | "std:c17" | "std:clatest" => {
+                self.standard = match option {
+                    | "std:c11" => "c11",
+                    | "std:c17" => "c17",
+                    | _ => "c23",
+                };
+                self.standard_given = true;
+            },
             | "MT" => self.runtime = Some(Runtime::Static),
             | "MTd" => self.runtime = Some(Runtime::StaticDebug),
             | "MD" => self.runtime = Some(Runtime::Dll),
@@ -960,8 +1016,12 @@ impl State {
                 self.dll = true;
                 self.debug_dll = option == "LDd";
             },
-            | "Za" => self.extensions = false,
+            | "Za" => {
+                self.extensions = false;
+                self.stdc = true;
+            },
             | "Ze" => self.extensions = true,
+            | "Zc:__STDC__" => self.stdc = true,
             | "Zp" => self.bcc.push("-fpack-struct=1".into()),
             | "Zp1" | "Zp2" | "Zp4" | "Zp8" | "Zp16" => self
                 .bcc
@@ -1036,7 +1096,6 @@ impl State {
             | "fp:except-"
             | "volatile:iso"
             | "Zc:preprocessor"
-            | "Zc:__STDC__"
             | "analyze-" => {},
             // Hardening and run-time checks a correct program does not
             // depend on.
@@ -1076,6 +1135,13 @@ impl State {
                     self.errors += 1;
                     return true;
                 };
+                let value_text = value.to_string_lossy();
+                self.set_switch(
+                    invocation,
+                    &option[..2],
+                    &value_text,
+                    format!("/{option}{value_text}"),
+                );
                 let value = Some(PathBuf::from(value));
                 match option {
                     | "Fe:" => self.executable = value,
@@ -1342,6 +1408,113 @@ impl State {
     }
 }
 
+impl State {
+    /// Records `spelling`, the switch of `class` with `value`, warning as
+    /// `cl` does (D9025) when it overrides an earlier one of the class with a
+    /// different value: `overriding '/W3' with '/W4'`. clang-cl does not
+    /// warn.
+    fn set_switch(&mut self, invocation: &Invocation, class: &str, value: &str, spelling: String) {
+        let previous = self
+            .switches
+            .iter()
+            .position(|(other, _, _)| other == class);
+        if let Some(index) = previous {
+            let (_, old_value, old_spelling) = self.switches.remove(index);
+            if old_value != value && invocation.personality == Personality::Msvc {
+                super::print(
+                    &format!(
+                        "{} : Command line warning D9025 : overriding '{old_spelling}' with \
+                         '{spelling}'\n",
+                        invocation.name
+                    ),
+                    true,
+                );
+            }
+        }
+        self.switches.push((class.into(), value.into(), spelling));
+    }
+
+    /// Records `/D` or `/U` (`name`) with its `operand`: `cl` warns (D9025)
+    /// when `/U` undefines a macro the last option for it defined, but not
+    /// the other way round or for a redefinition, which replaces the earlier
+    /// definition without a word, so bcc undefines the macro first.
+    fn define_or_undefine(&mut self, invocation: &Invocation, name: &str, operand: &str) {
+        let macro_name = operand.split(['=', '#']).next().unwrap_or(operand);
+        let class = format!("D {macro_name}");
+        let defined_last = self
+            .switches
+            .iter()
+            .any(|(other, value, _)| *other == class && value == "D");
+        if name == "U" && defined_last {
+            self.set_switch(invocation, &class, "U", format!("/U{operand}"));
+        } else {
+            if defined_last {
+                self.bcc.push("-U".into());
+                self.bcc.push(macro_name.into());
+            }
+            self.switches.retain(|(other, _, _)| *other != class);
+            self.switches
+                .push((class, name.into(), format!("/{name}{operand}")));
+        }
+    }
+}
+
+/// The class and value of a switch whose last occurrence wins in `cl`,
+/// which warns (D9025) when one overrides another of its class: the warning
+/// level (`/w` is `/W0`; `/Wall` is no level), the optimization level and
+/// the size or speed preference (`/Ox` is `/O2`, and neither class holds
+/// the other's options), the runtime, the standard, the debug information,
+/// `/WX`, the output names, the packing, and the switches with a `-` form.
+/// Microsoft Learn: "Command-Line Warning D9025".
+fn switch_class(option: &str) -> Option<(&'static str, &str)> {
+    Some(match option {
+        | "w" | "W0" => ("W", "0"),
+        | "W1" | "W2" | "W3" | "W4" => ("W", &option[1..]),
+        | "Od" => ("O", "d"),
+        | "O1" => ("O", "1"),
+        | "O2" | "Ox" => ("O", "2"),
+        | "Os" | "Ot" => ("Os", option),
+        | "MT" | "MTd" | "MD" | "MDd" => ("M", option),
+        | "Zi" | "Z7" | "ZI" => ("Z7", option),
+        | "Zp" => ("Zp", "1"),
+        | "Zp1" | "Zp2" | "Zp4" | "Zp8" | "Zp16" => ("Zp", &option[2..]),
+        | "TC" | "TP" => ("T", option),
+        | _ =>
+            if let Some(standard) = option.strip_prefix("std:") {
+                ("std", standard)
+            } else if let Some(model) = option.strip_prefix("fp:")
+                && matches!(model, "precise" | "fast" | "strict")
+            {
+                ("fp", model)
+            } else if let Some(level) = option.strip_prefix("Ob") {
+                ("Ob", level)
+            } else if let Some(name) = ["Fo", "Fe", "Fa", "Fi"].into_iter().find(|name| {
+                option.starts_with(name) && !option[2..].trim_start_matches(':').is_empty()
+            }) {
+                (name, option[2..].trim_start_matches(':'))
+            } else {
+                let base = option.strip_suffix('-').unwrap_or(option);
+                let class = [
+                    "WX",
+                    "GL",
+                    "sdl",
+                    "Oy",
+                    "GF",
+                    "GR",
+                    "Gw",
+                    "Gy",
+                    "Oi",
+                    "GS",
+                    "Zc:trigraphs",
+                    "permissive",
+                ]
+                .into_iter()
+                .find(|class| *class == base)?;
+                (class, option)
+            },
+    })
+}
+
 /// Accepts hardening or a run-time check bcc does not implement, with a
 /// warning.
 fn ignored(invocation: &Invocation, option: &str, why: &str) {
@@ -1446,7 +1619,18 @@ impl State {
 fn named(option: Option<&Path>, source: &OsStr, extension: &str) -> PathBuf {
     let stem = Path::new(Path::new(source).file_name().unwrap_or(source)).with_extension(extension);
     let name = match option {
-        | Some(option) if is_directory(option) => option.join(stem),
+        // A backslash separates directories only on Windows; elsewhere the
+        // one that ends `obj\` is dropped, so the objects go into `obj`, as
+        // `cl`'s do, rather than to `obj\/a.obj`.
+        | Some(option) if is_directory(option) => {
+            let text = option.as_os_str().to_string_lossy();
+            let directory = if cfg!(windows) {
+                &*text
+            } else {
+                text.trim_end_matches('\\')
+            };
+            Path::new(directory).join(stem)
+        },
         | Some(option) if option.extension().is_none() => option.with_extension(extension),
         | Some(option) => option.into(),
         | None => stem,

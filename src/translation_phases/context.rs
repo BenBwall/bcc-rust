@@ -74,7 +74,10 @@ use super::{
 };
 use crate::{
     configuration::CompilerConfiguration,
-    translation_phases::preprocessing::LiteralUnit,
+    translation_phases::{
+        preprocessing::LiteralUnit,
+        preprocessor_tokenizer::OutputSpacing,
+    },
     util::{
         bump::{
             ArenaMap,
@@ -110,11 +113,37 @@ pub(crate) enum TextEventKind<'tu> {
     /// spelled, each run of white space as one space.
     /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
     Pragma(&'tu str),
+    /// The pragma of a `_Pragma` or `__pragma` operator, which `cl`'s text
+    /// keeps where the operator stood, among the tokens of its line:
+    /// `__pragma(` and the pragma's text, `_Pragma`'s literal destringized
+    /// as written, then `)`. `column` is where the operator is, and
+    /// `spacing` how it is separated from the token before it, as for a
+    /// token. Recorded under the `cl` identity only.
+    /// Microsoft Learn, "Pragma directives and the __pragma keyword".
+    /// C99: §6.10.9 paragraph 1, p. 161; PDF p. 173.
+    PragmaOperator {
+        text:    &'tu str,
+        column:  u32,
+        spacing: OutputSpacing,
+    },
     /// An `#include` opened `file`.
     /// C99: §6.10.2 paragraph 3, p. 149; PDF p. 161.
     FileEntered,
     /// The reader returned to `file` from one it had included.
     FileReturned,
+    /// The reader reached the `#include` on `line` of `file`, which `cl`'s
+    /// text gives the included file's line marker. Recorded under the `cl`
+    /// identity, whose text has a line for each source line, only.
+    IncludeLine,
+    /// The conditional directive on `line` of `file` ended a group: an
+    /// `#endif`, or an `#elif` that takes its group after a skipped one.
+    /// `cl`'s text replaces it with a line marker for the next line.
+    /// Recorded under the `cl` identity only.
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
+    ConditionalEnded,
+    /// A fatal error, a missing header (C1083) or `#error` (C1189), at which
+    /// `cl` stops its text. Recorded under the `cl` identity only.
+    Stopped,
 }
 
 #[expect(

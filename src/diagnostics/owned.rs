@@ -6,6 +6,7 @@ use super::{
     model::{
         Label,
         LabelSource,
+        TreatedAsError,
     },
 };
 use crate::{
@@ -120,6 +121,7 @@ impl OwnedDiagnostic {
             message: &self.message,
             option_suffix: self.option_suffix,
             code: self.code,
+            treated_as_error: TreatedAsError::No,
             point: false,
             related_points: false,
             labels,

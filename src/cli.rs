@@ -19,9 +19,10 @@
 //! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
 //! - Jobs and linking: `driver.rs`.
 //! - Driver personalities (`--gcc-mode`, `--msvc-mode`, ...): `personality.rs`.
-//! - Output: `output.rs`, `preprocessed.rs`, `output_file.rs`; the token view
-//!   and the diagnostic reporter it shares with the explorer live in
-//!   `pipeline/views.rs` and `diagnostics/reporter.rs`.
+//! - Output: `output.rs`, `preprocessed.rs`, `output_file.rs`,
+//!   `diagnostic_stream.rs`; the token view and the diagnostic reporter it
+//!   shares with the explorer live in `pipeline/views.rs` and
+//!   `diagnostics/reporter.rs`.
 //! - Code generation: `code_generation.rs`.
 //! - Measurement entry points: `measured.rs`.
 //! - CLI fixtures: `tests.rs`.
@@ -42,6 +43,7 @@ mod personality;
 
 // Output and diagnostic reporting
 mod code_generation;
+mod diagnostic_stream;
 mod output;
 mod output_file;
 mod preprocessed;

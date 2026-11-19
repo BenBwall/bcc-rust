@@ -23,6 +23,7 @@ use crate::{
         GetPosition,
         SetPosition,
         SourceVectors,
+        TextEventKind,
         TranslationPhase,
         preprocessing::{
             Expander,
@@ -153,8 +154,16 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 },
                 | MacroDefinition::BuiltIn => {
                     let (spacing, depth) = (self.spacing, self.tokenizer_stack.len());
+                    let events = self.context.text_events.len();
                     let result = self.expand_builtin(token);
                     self.spacing = spacing;
+                    // `cl`'s text writes a pragma operator back as a token.
+                    if self.context.text_events[events..]
+                        .iter()
+                        .any(|event| matches!(event.kind, TextEventKind::PragmaOperator { .. }))
+                    {
+                        self.spacing.stood_in();
+                    }
                     // A consumed pragma is no replacement: GCC adds no padding.
                     if (result.is_some() || self.tokenizer_stack.len() > depth)
                         && let Some(spacing) = self.text_spacing()

@@ -50,6 +50,7 @@ mod definitions;
 mod error;
 mod pragma;
 
+pub(in crate::translation_phases::preprocessing) use pragma::PragmaOperator;
 pub(crate) use pragma::WarningSpecifier;
 
 use super::{
@@ -256,7 +257,7 @@ impl Expander<'_, '_, '_, '_> {
                     .first_source_vector(directive.source_vectors)
                     .index;
                 let at = self.reading_position();
-                if !self.parse_pragma_directive(from, at) {
+                if !self.parse_pragma_directive(from, at, None) {
                     self.skip_until_newline();
                 }
                 self.resume_at_line_start();

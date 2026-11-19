@@ -1244,6 +1244,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             tail,
             "ll" | "LL" | "ull" | "Ull" | "uLL" | "ULL" | "llu" | "llU" | "LLu" | "LLU"
         );
+        let microsoft = self
+            .context
+            .configuration
+            .accepts(Feature::MsIntTypes)
+            .then(|| microsoft_suffix(tail))
+            .flatten();
         if did_overflow
             && bit_precise
             && representation == IntegerRepresentation::Target
@@ -1289,6 +1295,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         let contents = self.context.string_cache.at(token.contents);
         let suffix_type = if let Some(unsigned) = bitint_unsigned {
             unsigned.then_some(IntegerSuffix::Unsigned)
+        } else if let Some((unsigned, wide)) = microsoft {
+            index = contents.len() - 1;
+            match (unsigned, wide) {
+                | (false, true) => Some(IntegerSuffix::LongLong),
+                | (true, true) => Some(IntegerSuffix::UnsignedLongLong),
+                | (false, false) => None,
+                | (true, false) => Some(IntegerSuffix::Unsigned),
+            }
         } else {
             match (
                 contents.char_at(index),
@@ -1991,6 +2005,34 @@ fn literal_encoding(spelling: &str) -> Option<LiteralEncoding> {
         Some(LiteralEncoding::Utf32)
     } else {
         None
+    }
+}
+
+/// Whether `tail` is one of Microsoft's sized integer suffixes, `i8`,
+/// `i16`, `i32` and `i64` (or with `I`), after an optional `u` or `U`, and
+/// if so whether it is unsigned and 64 bits wide. A constant takes the
+/// standard suffix of its size: `ll` for `i64` and `ull` for `ui64`, as
+/// `cl` and Clang type them, and none (`u` for unsigned) for the narrower
+/// ones, which have `int`'s type while the value fits it, where Clang gives
+/// `0i8` `char`'s and `0i16` `short`'s; promotion makes that difference
+/// visible only to `sizeof`. A value that does not fit the signed type of
+/// the suffix's width takes the type the C rules give it unsuffixed, so
+/// `0xffffffffi32` is an `unsigned int` and `0xffffffffffffffffi64` an
+/// `unsigned long long`, both positive, where `cl` 19.44 and Clang wrap the
+/// value into the signed type, -1 (driver-modes.md, "Checked against
+/// `cl.exe` under Wine").
+/// Microsoft extension: Clang 23, `NumericLiteralParser` in
+/// `LiteralSupport.cpp`. C99: §6.4.4.1 paragraphs 1-6, pp. 54-56; PDF pp.
+/// 66-68.
+fn microsoft_suffix(tail: &str) -> Option<(bool, bool)> {
+    let (unsigned, sized) = match tail.strip_prefix(['u', 'U']) {
+        | Some(sized) => (true, sized),
+        | None => (false, tail),
+    };
+    match sized.strip_prefix(['i', 'I'])? {
+        | "64" => Some((unsigned, true)),
+        | "8" | "16" | "32" => Some((unsigned, false)),
+        | _ => None,
     }
 }
 

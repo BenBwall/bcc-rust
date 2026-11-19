@@ -34,8 +34,11 @@ pub(crate) fn clang_knows_warning(option: &str) -> bool {
 /// identity's Clang rules make the groups errors. Microsoft Learn: "/w,
 /// /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd, /we, /wo, /Wv,
 /// /WX (Warning level)" and each warning's page, as for C4090 and C4113.
-pub(crate) const CL_CODED_WARNINGS: [(u16, u8, &str); 7] = [
+pub(crate) const CL_CODED_WARNINGS: [(u16, u8, &str); 9] = [
     (4013, 3, "implicit-function-declaration"),
+    // One group holds both, so `/wd` and `/we` of either set both.
+    (4033, 1, "return-mismatch"),
+    (4098, 1, "return-mismatch"),
     (4047, 1, "int-conversion"),
     (4133, 1, "incompatible-pointer-types"),
     // After C4133, whose group holds theirs. bcc keeps its own words for

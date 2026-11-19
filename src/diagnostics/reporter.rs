@@ -14,6 +14,7 @@ use super::{
     Explanation,
     Renderer,
     ToDiagnostic,
+    TreatedAsError,
     count_of,
     format_in,
 };
@@ -69,6 +70,9 @@ pub(crate) struct DiagnosticReporter<'r, 'tu> {
     pub(crate) warnings: usize,
     /// A fatal diagnostic was written, so nothing further is.
     fatal_reported:      bool,
+    /// A warning `cl`'s `/WX` made an error was written, after `cl`'s
+    /// error C2220.
+    treated_as_error:    bool,
     /// The warnings written as errors that GCC's format counts
     /// (`DK_WERROR`), which end its diagnostics with a line saying so.
     pub(crate) promoted: usize,
@@ -278,6 +282,14 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             if stopped {
                 continue;
             }
+            if diagnostic.treated_as_error != TreatedAsError::No {
+                diagnostic.treated_as_error = if self.treated_as_error {
+                    TreatedAsError::Later
+                } else {
+                    TreatedAsError::First
+                };
+                self.treated_as_error = true;
+            }
             if gcc && diagnostic.severity == ErrorSeverity::Error && diagnostic.option_suffix {
                 let message = diagnostic.message;
                 if message.ends_with(" [-Werror]") || message.contains(" [-Werror=") {
@@ -456,6 +468,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             errors: 0,
             warnings: 0,
             fatal_reported: false,
+            treated_as_error: false,
             promoted: 0,
         }
     }

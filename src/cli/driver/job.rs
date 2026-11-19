@@ -20,8 +20,8 @@ use super::{
             FAILURE_STATUS,
             Generated,
             generate_code,
-            report_stderr,
         },
+        diagnostic_stream,
         output::{
             print_parser_output,
             print_preprocessor_output,
@@ -204,6 +204,7 @@ fn run_job<'tu>(
                 no_line_markers: args.driver.no_line_markers,
                 macros:          args.driver.dump_macros,
                 as_written:      true,
+                cl_layout:       args.compiler_identity == Identity::Msvc,
             };
             let failed = match output.filter(|path| *path != Path::new("-")) {
                 | Some(path) => std::fs::File::create(path)
@@ -277,16 +278,18 @@ fn run_job<'tu>(
 /// Reports an input that cannot be read in the words of the compiler whose
 /// diagnostic format is selected: GCC's `cc1`, Clang's front end (also for
 /// clang-cl), `cl`'s `c1` with Microsoft's error C1083, or TCC; bcc's own
-/// format adds the OS's error code. Clang's and clang-cl's drivers report a
-/// missing file before any job runs, and so do their personalities, so this
-/// reaches them for a file that exists but cannot be read.
+/// format adds the OS's error code, on the diagnostic stream. Clang's and
+/// clang-cl's drivers report a missing file before any job runs, and so do
+/// their personalities, so this reaches them for a file that exists but
+/// cannot be read.
 fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
     let reason = os_reason(error, arena);
     let path = path.display();
     match args.diagnostic_format {
-        | Format::Bcc => report_stderr(format_args!("error: cannot read `{path}`: {error}")),
+        | Format::Bcc =>
+            diagnostic_stream::report(format_args!("error: cannot read `{path}`: {error}")),
         // GCC's preprocessor reports a directory as a missing file.
-        | Format::Gcc => report_stderr(format_args!(
+        | Format::Gcc => diagnostic_stream::report(format_args!(
             "cc1: fatal error: {path}: {}\ncompilation terminated.",
             if error.kind() == io::ErrorKind::IsADirectory {
                 "No such file or directory"
@@ -296,13 +299,14 @@ fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
         )),
         | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret
             if args.compiler_identity != Identity::ClangCl =>
-            report_stderr(format_args!(
+            diagnostic_stream::report(format_args!(
                 "c1: fatal error C1083: Cannot open source file: '{path}': {reason}"
             )),
-        | Format::Clang | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret => report_stderr(
-            format_args!("error: error reading '{path}': {reason}\n1 error generated."),
-        ),
-        | Format::Tcc => report_stderr(format_args!(
+        | Format::Clang | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret =>
+            diagnostic_stream::report(format_args!(
+                "error: error reading '{path}': {reason}\n1 error generated."
+            )),
+        | Format::Tcc => diagnostic_stream::report(format_args!(
             "{}: error: file '{path}' not found",
             args.driver.driver_name.as_deref().unwrap_or("tcc")
         )),

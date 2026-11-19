@@ -841,10 +841,18 @@ and `/Fi:` alone (`/Fo: out.obj`). `/DNAME#VALUE` defines NAME
 as VALUE. `cl` compiles each source to an object named after it (`a.c` to
 `a.obj`) and keeps it, then links an executable named after the first source
 (`a.exe`) unless `/c` is given. `/Fo` and `/Fe` name a file, or a directory
-when they end in a separator. `/link` passes the rest of the command line to
-the linker. `cl` prints a banner to stderr unless `/nologo` is given, and the
-name of each source it compiles. An unknown option draws `cl : Command line
-warning D9002 : ignoring unknown option '/foo'` and is ignored. A file
+when they end in a separator (a backslash on every host). `/link` passes the
+rest of the command line to the linker. `cl` prints a banner to stderr unless
+`/nologo` is given, and the file name of each source it compiles, without its
+directories, to stdout (to stderr under `/E`, `/EP` and `/P`). An unknown
+option draws `cl : Command line warning D9002 : ignoring unknown option
+'/foo'` and is ignored. An option that overrides an earlier one of its kind
+with another value draws `cl : Command line warning D9025 : overriding '/W3'
+with '/W4'`: the warning level (`/w` is `/W0`, and `/Wall` is no level), the
+optimization level (`/Ox` is `/O2`) and, apart from it, `/Os` and `/Ot`, the
+runtime, `/std:`, the debug information, `/WX`, `/Zp`, `/Fo`, `/Fe`, `/Fa`,
+`/Fi`, the switches with a `-` form (`/GL-`), and a `/U` of a macro whose last
+option was a `/D`; a later `/D` of the same macro replaces it silently. A file
 whose extension `cl` does not know (Microsoft documents `.c`, `.cxx`,
 `.cpp`, `.obj`, `.lib`, `.def` and `.exp`; `.res` goes to the linker too) is
 assumed to be an object, with `cl : Command line warning D9024 :
@@ -884,7 +892,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `cl` | bcc |
 | --- | --- |
 | `/c`, `/Fo`, `/Fe`, `/link ...` | `-c -o NAME.obj`, then a link of the objects with `-Wl,...`; `/Fo`, `/Fa` or `/Fi` naming a file for several sources is error D8036, as in `cl`; an output of any step that is an input of the command line (by device and inode) is refused before any step runs |
-| `/E`, `/EP`, `/P`, `/Fi` | `-E`, `-E -P`, `-E -o NAME.i` |
+| `/E`, `/EP`, `/P`, `/Fi` | `-E`, `-E -P`, `-E -o NAME.i`, in `cl`'s layout (Preprocessed text) |
 | `/FA`, `/Fa` | `-S -o NAME.asm` beside the object |
 | `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` |
 | `/O1`, `/Os` / `/O2`, `/Ox`, `/Ot` / `/Od` | `-Os` / `-O2` / `-O0` |
@@ -895,11 +903,12 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/MD`, `/MDd`, `/MT`, `/MTd`, `/LD`, `/LDd` | the last runtime option wins: `_DLL` for `/MD*`, `_DEBUG` for `/M*d` and `/LDd`, and the link takes `msvcrt`, `msvcrtd` or `libcmtd` instead of `libcmt`; `/LD` links a DLL with `/MT`'s runtime unless `/MD` names another |
 | `/Zs` | `--syntax-only` for each source, with no object and no link |
 | `/Zp`, `/ZpN` | `-fpack-struct=1`, `-fpack-struct=N`; another N is error D8021 |
-| `/Za`, `/Ze` | the last wins: `/Za` turns off Microsoft's anonymous tagged members and `_MSC_EXTENSIONS` |
+| `/Za`, `/Ze` | the last wins: `/Za` turns off Microsoft's anonymous tagged members and `_MSC_EXTENSIONS`, and defines `__STDC__` |
+| `/Zc:__STDC__` | defines `__STDC__` |
 | `/Zc:trigraphs`, `/Zc:trigraphs-` | `-ftrigraphs`, `-fno-trigraphs` (the default, as in `cl`) |
 | `/J` | `-funsigned-char`: plain `char` is unsigned and `_CHAR_UNSIGNED` defined |
 | `/external:I DIR`, `/external:env:VAR` | `-isystem` |
-| `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stderr |
+| `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stdout (to stderr under `/E`, `/EP` and `/P`), the path absolute (see "Preprocessed text" for where `cl` keeps it relative) |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
 | `/Zi`, `/Z7`, `/ZI` | CodeView in the object, as clang-cl treats all three; a link keeps it through `lld-link -debug` |
 | `/nologo`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
@@ -915,13 +924,51 @@ static runtime) and `_MSVC_TRADITIONAL 0`: bcc's preprocessor is
 conforming, like `cl /Zc:preprocessor`. Directories in `%INCLUDE%` are
 system header directories. A tentative definition is a communal symbol
 (`-fcommon`), as `cl` makes it, so two units that both declare `int x;`
-link.
+link. `__STDC__` is defined only under `/Za` or `/Zc:__STDC__`, as by `cl`
+and by Clang for its Windows MSVC targets: the Universal C Runtime's headers
+declare POSIX names such as `O_RDONLY` and `open` only without it. Under
+`/std:` the personality defines `__STDC_NO_ATOMICS__`, `__STDC_NO_COMPLEX__`
+and `__STDC_NO_VLA__`, as `cl` does, though bcc has all three, so that a
+program takes the paths it takes with `cl`, and in no mode
+`__STDC_NO_THREADS__`: Visual C++ has `<threads.h>`.
 
 **Language mode.** `cl` without `/std:` compiles a C dialect close to C17 and
 leaves `__STDC_VERSION__` undefined; `/std:c11` and `/std:c17` define it.
 bcc compiles C17 by default, as clang-cl does, and defines
-`__STDC_VERSION__` as `201710L`. `cl` defines `__STDC__` only under `/Za` or
-`/Zc:__STDC__`; bcc always defines it, as ISO C requires.
+`__STDC_VERSION__` as `201710L`.
+
+**Preprocessed text.** `/E` writes a line for each source line, blank lines
+and directives included, as `cl` does: a `#line 1 "a.c"` marker first, a
+header's marker (`#line 1 "C:\\src\\h.h"`) on the `#include` line and the
+includer's on return, and a marker for the next line in place of each
+`#endif` and of an `#elif` that ends a skipped group (an `#else` is an empty
+line). `/EP` writes an empty line for each marker, and both stop at a fatal
+error (a missing header, `#error`). A `#pragma` directive keeps its line,
+`#pragma once` included, and a `_Pragma` or `__pragma` operator's pragma
+stays among the tokens of its line as `__pragma(...)`, spaced as the
+operator was, with `_Pragma`'s literal as it destringizes
+(`__pragma(message("hi"))`), so that the text compiles again. Within a line,
+bcc spaces tokens as GCC does, which `cl`'s traditional preprocessor (the
+default) also does in the cases surveyed. What still differs:
+
+- `cl`'s conforming preprocessor (`/Zc:preprocessor`, and every `/std:`)
+  also puts a space after each macro's expansion (`int a = 1 ;`), which bcc
+  does not.
+- `cl`'s traditional preprocessor joins a macro invocation whose arguments
+  span lines onto the line where it starts and writes a `#line` marker for
+  the line after it; bcc, like the conforming one, leaves each token of the
+  invocation's arguments on its own line. It also keeps a `\`-new-line
+  inside a string literal, which bcc joins.
+- In a pragma, bcc writes each run of white space as one space; `cl` keeps
+  the runs after its first token as written (`#pragma pack(   2 )`), and its
+  traditional preprocessor drops a comment there.
+- `cl` names a header found beside its includer by the includer's directory,
+  made absolute, and the name the directive wrote
+  (`C:\src\sub\../h.h`), and so does bcc, with the host's separators; but
+  `cl` names one found through a relative `/I` directory relatively, with
+  the directory as written (`#line 1 "inc\\deep.h"`, `Note: including file:
+  inc\deep.h`), where bcc makes that path absolute too. Ninja reads both
+  forms of a `/showIncludes` note.
 
 **Diagnostics.** `file(line): error: message`, the form `cl` writes
 without `/diagnostics:` (its `/diagnostics:classic`); `/diagnostics:column`
@@ -931,11 +978,14 @@ words, and drop bcc's notes:
 
 | Code | `cl`'s words | Level | bcc's group |
 | --- | --- | --- | --- |
+| fatal error C1189 | `#error:  text`, the directive's text after `#error` | | |
 | error C2065 | `'y': undeclared identifier` | | |
 | error C2143 | `syntax error: missing ';' before 'return'` (a type keyword is `'type'`, a literal `'constant'` or `'string'`) | | |
 | error C2146 | `syntax error: missing ';' before identifier 'y'` | | |
 | warning C4013 | `'g' undefined; assuming extern returning int` | 3 | `implicit-function-declaration` |
+| warning C4033 | `'h' must return a value` | 1 | `return-mismatch` |
 | warning C4047 | `'=': 'int *' differs in levels of indirection from 'int'` (also between pointers: `'int *'` from `'char **'`) | 1 | `int-conversion` |
+| warning C4098 | `'g': 'void' function returning a value` | 1 | `return-mismatch` |
 | warning C4133 | `'=': incompatible types - from 'float *' to 'int *'` | 1 | `incompatible-pointer-types` |
 | warning C4311 | `'type cast': pointer truncation from 'int *' to 'int'` | 1 | `pointer-to-int-cast` |
 | warning C4312 | `'type cast': conversion from 'int' to 'int *' of greater size` | 1 | `int-to-pointer-cast` |
@@ -955,9 +1005,11 @@ which Clang's rules make errors, warnings unless `/WX` is given. C4113 and
 C4090 (lost qualifiers) keep bcc's words, but `/wd`, `/we` and the levels
 name them apart from C4133, as `cl` does. The rightmost of `/W0`-`/W4`,
 `/Wall` and `/w` wins. Under
-`/WX` bcc writes `error C4047`, where `cl` writes `error C2220: the
-following warning is treated as an error` and then the warning. bcc
-reports in source order, while `cl` reports an initializer's C4047 after
+`/WX`, as in `cl`, `error C2220: the following warning is treated as an
+error` comes before a unit's first warning, at its line, and every warning
+keeps its words (`warning C4047: ...`), where `/we4047` writes `error
+C4047`. One group holds C4033 and C4098, so `/wd` or `/we` of either sets
+both. bcc reports in source order, while `cl` reports an initializer's C4047 after
 the warnings of the statements that follow it in the same function, as the
 Windows comparison with `cl` shows.
 
@@ -969,16 +1021,22 @@ for a source that cannot be opened, which gives the C runtime's reason
 (`No such file or directory`) on Windows too, as `cl` does, rather than
 the system's. bcc's own driver messages take `cl`'s command-line form
 without a code (`cl : Command line error : cannot build ...`).
-`/showIncludes` indents each header by one space more per level of
-nesting, as `cl` does, and leaves out a re-inclusion whose include guard
-is already defined. `cl` writes compiler diagnostics, C1083 among them, to
-stdout; bcc writes them to stderr, as in its other modes, and writes only
-the source names to stdout, as `cl` does. (Microsoft Learn: "Compiler Error
+`/showIncludes` names each header by its absolute path, the directory it was
+found in joined with the name the directive wrote, indents it by one space
+more per level of nesting, as `cl` does, and leaves out a re-inclusion
+whose include guard is already defined. As `cl` does, the personality
+writes a compile's diagnostics, C1083 among them, and its `/showIncludes`
+notes to stdout, after the source's name, where MSBuild and Ninja's `deps
+= msvc` read them, and to stderr under `/E`, `/EP` and `/P`, which keep
+stdout (or the file) for the text; the command line's own messages go to
+stderr. (Microsoft Learn: "Fatal Error C1189", "Compiler Error
 C2065", "Compiler Error C2143", "Compiler Error C2146", "Compiler Warning
-(level 3) C4013", "Compiler Warning (level 1) C4047", "Compiler Warning
+(level 3) C4013", "Compiler Warning (level 1) C4033", "Compiler Warning
+(level 1) C4047", "Compiler Warning (level 1) C4098", "Compiler Warning
 (level 1 and level 3) C4133", "Compiler Warning (level 1) C4311",
-"Compiler Warning (level 1) C4312", "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2,
-/w3, /w4, /Wall, /wd, /we, /wo, /Wv, /WX (Warning level)".)
+"Compiler Warning (level 1) C4312", "Compiler Error C2220", "Command-Line
+Warning D9025", "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall,
+/wd, /we, /wo, /Wv, /WX (Warning level)".)
 
 **Banner.** `bcc 0.1.0, compatible with Microsoft (R) C/C++ Optimizing
 Compiler Version 19.33.0 for x64; not a Microsoft product`, to stderr. Tools
@@ -1056,6 +1114,78 @@ it, and the native back end's Win64 frame address is the establisher
 frame, as LLVM's is); and the driver differed in D8003, the classic
 diagnostic form, `Generating Code...`, C1083's reason, `_MSC_BUILD` and
 communal tentative definitions.
+
+### Checked against `cl.exe` under Wine
+
+On 19 November 2026 the personality, run as `bcc-rust --msvc-mode` and as an
+executable named `cl`, was compared byte for byte with the real `cl.exe`
+19.44.35230 (Build Tools 2022 17.14, `link` 14.44.35207, Windows SDK
+10.0.26100) on x86-64 Linux, where Wine 9.0 (Ubuntu 24.04's `wine64`) ran
+it. [msvc-wine](https://github.com/mstorsjo/msvc-wine)'s `vsdownload.py`
+fetched only the x64-hosted x64 toolset and the SDK (`--major 17
+--architecture x64 --host-arch x64 --only-host yes`, without ATL, MFC, ASan,
+DIA or MSBuild) and `install.sh` set it up; `cl.exe` ran under `wine64` with
+the `INCLUDE` and `LIB` of msvc-wine's `msvcenv.sh`, but without its
+wrappers, which rewrite the paths in `cl`'s output. bcc ran with the same
+directories in host form and the pinned LLVM's `lld-link`.
+`scripts/compare_cl_under_wine.py` repeats the comparison: each of 232
+command lines runs in a fresh copy of one directory of sources (those of
+`tests/integration/msvc/cli.rs` and more) with each compiler, and the exit
+status, the files written, stdout, stderr and each `.i` file's text are
+compared, after the directory's path in either form becomes one token and
+CRLF becomes LF. The command lines cover `cl /?` and the banner, `/c`,
+`/Fo`, `/Fe` and `/link`, `/W0`-`/W4`, `/Wall`, `/w`, `/WX`, `/wd`, `/we`
+and `/w1`, `/std:`, `/E`, `/EP` and `/P`, `/D`, `/U` and `/I`, `/O1`, `/O2`,
+`/Od` and `/Zi`, `/showIncludes`, command files and `CL` and `_CL_`, the
+predefined macros (`/EP` of a file naming them, under the options that
+change them), options that override others, and the common errors and
+warnings. As `cl` and as `--msvc-mode` alike, all five agreed for 70 of them
+before the fixes this comparison led to and for 173 after, and the status
+and files for 226.
+
+The comparison found, and bcc now does as `cl` does: a compile's
+diagnostics, C1083 and `/showIncludes` notes go to stdout, not stderr, and
+the notes name a header found beside its includer by its absolute path;
+`/E` lays out its text with a line for each source line and `#line` markers,
+keeps a pragma operator among its line's tokens as `__pragma(...)`, and
+stops at a fatal error;
+`/WX` announces its first warning with C2220 and keeps the warnings'
+words; D9025 for an overriding option; `#error` as C1189, and C4033 and
+C4098; the file name, not the path, of each source compiled; a trailing
+backslash in `/Fo` and `/Fe` off Windows; a repeated `/D` without a
+warning; the `__STDC_NO_*` macros under `/std:`. The real-code check found
+the rest:
+[zlib](https://zlib.net) 1.3.1, configured by CMake 3.31 with Ninja for an
+x64 Windows target (`CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded`, as
+`cl.exe` under Wine cannot reach its program database server for `/Zi`,
+error C1902), built its DLL, static library, `example.exe` and
+`minigzip.exe` with `cl` and `link.exe` (msvc-wine's wrappers), and with
+bcc failed: the Visual C++ `<limits.h>`, which bcc's own `<limits.h>`
+includes next, spells `ULLONG_MAX` with Microsoft's `ui64` suffix, and the
+Universal C Runtime's `<fcntl.h>` hid `O_RDONLY` because bcc defined
+`__STDC__`. With both fixed, zlib builds with bcc as `cl` linked by
+`lld-link` and by `link.exe`, and with `cl` linked by `lld-link`; in all
+four pairings `example.exe` passes under Wine and `minigzip.exe` compresses
+200,000 bytes of `deflate.c` to the same 19,748 bytes and back. bcc's
+objects name no runtime library (Deviations), so its CMake toolchain file
+names `msvcrt.lib` and `oldnames.lib` itself.
+
+What still differs, as Deviations records: the help text and the banner;
+the predefined macros' values (`_MSC_VER`, `_MSVC_TRADITIONAL`,
+`__STDC_VERSION__`, Clang's target macros) in each macro dump; `cl`'s
+warnings bcc does not report (C4101, C4100, C4189, C4244, C4018, C4706,
+C4477, C4313, C4293, C4142, C4715, C4716) and its words and codes for the
+errors outside the Diagnostics table (C1075, C2039, C2084, C2100, C2106,
+C2124, C2197, C2198, C2063); the snippet of `/diagnostics:caret`; the
+system headers' paths under `/showIncludes`, which name the `INCLUDE`
+directories in each host's form, and a header found through a relative `/I`
+directory, which `cl` names relatively; the `/E` layout differences listed
+under "Preprocessed text"; the type of a sized integer constant whose value
+does not fit the signed type of its suffix's width (`0xffffffffi32 > 0` is
+1 in bcc and 0 in `cl`, which wraps the value to -1, as Clang does); the
+warning bcc adds for `/GS`;
+`/fp:strict`, which bcc refuses; and the import library LLD writes for a
+DLL without exports.
 
 ## clang-cl
 
@@ -1980,32 +2110,27 @@ Besides those above:
   stays in the object, as with `/Z7`, as clang-cl does.
 - Against `cl` 19.44 the predefined macros differ in these, as the MSVC
   identity decides above: `_MSC_VER` and `_MSC_FULL_VER` (1944 and
-  194435228; bcc claims 19.33); `_MSVC_TRADITIONAL`, which `cl` defines as
+  194435230; bcc claims 19.33); `_MSVC_TRADITIONAL`, which `cl` defines as
   1 unless `/Zc:preprocessor` or a `/std:` option selects its conforming
-  preprocessor; `__STDC__`, which `cl` defines only under `/Za`;
-  `__STDC_VERSION__`, which `cl` leaves undefined without `/std:` and
-  defines as `202312L` for `/std:clatest`, where bcc's C23 is
-  `202311L`; `__STDC_NO_ATOMICS__`, `__STDC_NO_COMPLEX__` and
-  `__STDC_NO_VLA__`, which `cl` defines under `/std:c11` and later and bcc,
-  which has all three, does not; `__STDC_NO_THREADS__`, which bcc defines
-  and `cl` 19.44 does not; Clang's target macros, `__x86_64__` and
-  `__SSE2__` among them; and `_M_FP_FAST`, which `cl /fp:fast` defines and
-  bcc, keeping IEC 60559 semantics, does not.
-- `cl /E` writes `#line 1 "pp.c"` directives, one with the full path of
-  each header (backslashes doubled), and keeps a blank line for every
-  line that produced nothing, as `/EP` and `/P` do; bcc writes GNU markers
-  (`# 5 "pp.c"`) only where lines are skipped, and no blank lines.
-- A missing header is `cl`'s fatal error, which ends the unit
-  (`inc.c(1): fatal error C1083: Cannot open include file: 'deep.h': No
-  such file or directory`); bcc reports `cannot find header` with the
-  directories it searched, and goes on.
-- Compiler messages go to stderr, and only those in the table under
-  Diagnostics take `cl`'s code and words; the others are bcc's own, with
-  their C99 notes. bcc has no warning levels of its own, so `/W2` and `/W3`
-  change only the coded warnings, and `/W4` and `/Wall` turn on bcc's
-  `-Wall -Wextra`. bcc has no unreferenced-local warning (`cl /W4`'s
-  C4101), so `cl /W4 /WX` fails (error C2220) on a unit bcc compiles.
-  `/wo` (report a warning once) has no effect.
+  preprocessor; `__STDC_VERSION__`, which `cl` leaves undefined without
+  `/std:` and defines as `202312L` for `/std:clatest`, where bcc's C23 is
+  `202311L`; Clang's target macros, `__x86_64__`, `__SSE2__` and
+  `__SIZEOF_POINTER__` among them, and `__bcc__`; and `_M_FP_FAST`, which
+  `cl /fp:fast` defines and bcc, keeping IEC 60559 semantics, does not.
+- Only the diagnostics in the table under Diagnostics take `cl`'s code and
+  words; the others are bcc's own, with their C99 notes indented below
+  them, where `cl` writes its own (`error C2039: 'b': is not a member of
+  's'`, `error C2197`, `C2198`, `C2106`, `C2100`, `C2084`, `C2124`,
+  `C2063`, `fatal error C1075`) and `note:` lines of its own. bcc has no
+  warning levels of its own, so `/W2` and `/W3` change only the coded
+  warnings, and `/W4` and `/Wall` turn on bcc's `-Wall -Wextra`. bcc
+  reports none of `cl`'s unreferenced local or parameter warnings (C4101,
+  C4100, C4189), conversion warnings (C4244, C4018), C4706, format checks
+  (C4477, C4313), C4293, C4142, or its code generator's C4715 and C4716, so
+  `cl /W4 /WX` fails (error C2220) on units bcc compiles. bcc warns, where
+  `cl` does not, about a constant that changes value in a conversion
+  (`-Wconstant-conversion`), and does not diagnose a constant division by
+  zero (`cl`'s error C2124). `/wo` (report a warning once) has no effect.
 - bcc implements no `deprecated` attribute, `__declspec(deprecated)`
   included, so it never writes `cl`'s C4996, which the CRT headers raise
   through it for `strcpy` and its relatives at `/W3`.
@@ -2047,7 +2172,15 @@ Besides those above:
 - The MSVC runtime libraries are chosen at link time with
   `-nodefaultlib:libcmt` and `-defaultlib:`; bcc's objects carry no
   `/DEFAULTLIB` directives as `cl`'s do, so objects compiled with different
-  runtime options do not conflict at link time.
+  runtime options do not conflict at link time. A build system that links
+  bcc's objects with `link.exe` or `lld-link` itself, as CMake does for
+  `cl`, must name the runtime (`msvcrt.lib oldnames.lib` for `/MD`), or the
+  link finds no `mainCRTStartup`. `#pragma comment(lib, ...)` is not
+  implemented either.
+- bcc writes the help of `/?` in its own words, not `cl`'s option list,
+  and a banner of one line (`cl`'s also has a copyright line and an empty
+  one). It warns about the hardening options it ignores (`/GS`), and
+  refuses `/fp:strict`, which `cl` accepts.
 
 ## Gaps in the driver
 

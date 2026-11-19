@@ -371,6 +371,8 @@ fn phase_four(
     let text_arena = Bump::new();
     let text_options = TextOptions {
         as_written: true,
+        cl_layout: context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Msvc,
         ..TextOptions::default()
     };
     let mut writer = TextWriter::new(&text_arena, text_options, main_file);
@@ -409,7 +411,7 @@ fn phase_four(
         },
     );
     pragmas.write_before(&context, usize::MAX, &mut writer);
-    writer.finish();
+    writer.finish(&context);
     lines.written(&writer.text, &context, main_file, None, None);
     (
         writer.text.as_str().to_owned(),

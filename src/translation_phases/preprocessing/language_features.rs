@@ -156,6 +156,11 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                     return Some(token);
                 }
                 let from = self.invocation_location(token).index;
+                let operator = if name == "__pragma" {
+                    self.pragma_operator(token)
+                } else {
+                    None
+                };
                 let tokens = self.query_arguments::<false>(token)?.leak();
                 let name = self.context.string_cache.at(token.contents);
                 if name == "__pragma" {
@@ -175,7 +180,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                             SourceVector::default(),
                         ),
                     );
-                    _ = self.parse_pragma_directive(from, at);
+                    _ = self.parse_pragma_directive(from, at, operator);
                     self.tokenizer = old;
                     return None;
                 }

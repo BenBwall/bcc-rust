@@ -15,6 +15,7 @@ use crate::{
         Explanation,
         FixItPlace,
         ToDiagnostic,
+        TreatedAsError,
         format_in,
         quote_spelling,
     },
@@ -3299,7 +3300,8 @@ impl SemanticError {
     /// worded by `Analyzer::msvc_conversion_wording` and
     /// `Analyzer::msvc_cast_wording`, which leave a type `cl` spells its own
     /// way unworded. Microsoft Learn: "Compiler Error C2065", "Compiler
-    /// Warning (level 3) C4013", "Compiler Warning (level 1) C4047",
+    /// Warning (level 3) C4013", "Compiler Warning (level 1) C4033",
+    /// "Compiler Warning (level 1) C4098", "Compiler Warning (level 1) C4047",
     /// "Compiler Warning (level 1 and level 3) C4133", "Compiler Warning
     /// (level 1) C4311", "Compiler Warning (level 1) C4312".
     fn msvc_message<'d>(
@@ -3323,6 +3325,12 @@ impl SemanticError {
                 "C4013",
                 format_in!(arena, "'{name}' undefined; assuming extern returning int"),
             ),
+            | SemanticErrorKind::VoidReturnMismatch => (
+                "C4098",
+                format_in!(arena, "'{name}': 'void' function returning a value"),
+            ),
+            | SemanticErrorKind::ReturnMismatch =>
+                ("C4033", format_in!(arena, "'{name}' must return a value")),
             | SemanticErrorKind::PointerConstraint(G::IntConversion) =>
                 ("C4047", arena.alloc_str(name)),
             | SemanticErrorKind::PointerConstraint(G::IncompatiblePointerTypes) =>
@@ -3668,6 +3676,15 @@ impl ToDiagnostic for SemanticError {
             | None => explanation,
         };
         let mut diagnostic = explanation.at(self.severity(), source);
+        // The reporter marks the first of these in the unit.
+        if self.severity() == ErrorSeverity::Error
+            && self
+                .kind
+                .group()
+                .is_some_and(|group| context.configuration.cl_treats_as_error(group))
+        {
+            diagnostic.treated_as_error = TreatedAsError::First;
+        }
         if let Some(previous) = self.previous {
             let label = match self.kind {
                 | SemanticErrorKind::DuplicateLabel | SemanticErrorKind::DuplicateCase =>

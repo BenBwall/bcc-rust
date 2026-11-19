@@ -92,7 +92,8 @@ pub(in crate::cli) struct DriverOptions {
     pub(in crate::cli) dependency_target:      Vec<String>,
     /// Print `Note: including file: PATH` to stderr for each header an
     /// `#include` enters, with a space more for each level of nesting, as
-    /// `cl /showIncludes` does for Ninja's dependency scanning.
+    /// `cl /showIncludes` does for Ninja's dependency scanning (to stdout
+    /// with --diagnostics-to-stdout).
     #[arg(long)]
     pub(in crate::cli) show_includes:          bool,
     /// Add an empty rule for each header, so make does not fail when one is
@@ -117,6 +118,10 @@ pub(in crate::cli) struct DriverOptions {
     /// ...`), as the driver personalities do for the compiler they mimic.
     #[arg(long, hide = true, value_name = "NAME")]
     pub(in crate::cli) driver_name:            Option<String>,
+    /// Write the compiler's diagnostics and --show-includes notes to stdout
+    /// rather than stderr, as `cl` does while it compiles.
+    #[arg(long, hide = true)]
+    pub(in crate::cli) diagnostics_to_stdout:  bool,
     /// The `-o` output is the `a.out` a driver personality chose because
     /// the command named none, so the dependency files name the sources,
     /// not the output, as GCC and Clang name them then.

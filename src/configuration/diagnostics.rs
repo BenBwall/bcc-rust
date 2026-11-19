@@ -627,6 +627,22 @@ impl CompilerConfiguration {
         self.warnings_as_errors && !self.suppress_warnings
     }
 
+    /// Whether `cl`'s `/WX` (`-Werror`), rather than the group's own
+    /// severity or a `/we` (`-Werror=GROUP`), makes a diagnostic of `group`
+    /// an error under the `cl` identity, which then writes it as a warning
+    /// after its error C2220. The groups bcc reports with `cl`'s code are
+    /// warnings in `cl` whatever their severity in Clang's rules.
+    /// Microsoft Learn: "Compiler Error C2220".
+    pub(crate) fn cl_treats_as_error(self, group: DiagnosticGroup) -> bool {
+        self.msvc_wording()
+            && self.warnings_are_errors()
+            && self.warning_options[group as usize].error().is_none()
+            && (group.default_severity() == ErrorSeverity::Warning
+                || super::CL_CODED_WARNINGS
+                    .iter()
+                    .any(|&(_, _, name)| group.name() == Some(name)))
+    }
+
     /// Used for existing, ungrouped diagnostics from every translation phase.
     pub(crate) const fn warning_severity(self, severity: ErrorSeverity) -> ErrorSeverity {
         if matches!(severity, ErrorSeverity::Warning)

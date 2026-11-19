@@ -57,6 +57,7 @@ pub(crate) use model::{
     Explanation,
     FixItPlace,
     ToDiagnostic,
+    TreatedAsError,
 };
 #[cfg(test)]
 pub(crate) use owned::{

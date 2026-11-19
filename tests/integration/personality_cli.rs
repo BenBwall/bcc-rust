@@ -6871,7 +6871,13 @@ mod tests {
         ] {
             let output = directory.bcc(mode, args);
             assert!(!output.status.success(), "{mode}");
-            assert_eq!(stderr(&output), expected, "{mode}");
+            // `cl` writes its diagnostics to stdout, after the source's name.
+            let printed = if mode == "--msvc-mode" {
+                stdout(&output).replacen("m.c\n", "", 1)
+            } else {
+                stderr(&output)
+            };
+            assert_eq!(printed, expected, "{mode}");
         }
     }
 
@@ -7531,7 +7537,12 @@ mod tests {
             // C1083 names it `./-W4.c`, as bcc's command line reads it).
             let output = directory.bcc(mode, &["/nologo", "/c", "--", "-W4.c"]);
             assert!(!output.status.success());
-            assert!(stderr(&output).contains("-W4.c'"), "{}", stderr(&output));
+            let text = if mode == "--msvc-mode" {
+                stdout(&output)
+            } else {
+                stderr(&output)
+            };
+            assert!(text.contains("-W4.c'"), "{text}");
             directory.write("-W4.c", "int w;\n");
             succeeds(&directory.bcc(mode, &["/nologo", "/c", "--", "-W4.c"]));
             std::fs::remove_file(directory.path("-W4.c")).unwrap();
@@ -7540,11 +7551,12 @@ mod tests {
         let (missing, plain) = (absolute("missing.c"), absolute("plain.c"));
         let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", &missing, &plain]);
         assert_eq!(cl.status.code(), Some(2));
+        // `cl` writes it to stdout, after the source's file name.
         assert_eq!(
-            stderr(&cl),
+            stdout(&cl),
             format!(
-                "c1: fatal error C1083: Cannot open source file: '{missing}': No such file or \
-                 directory\n"
+                "missing.c\nc1: fatal error C1083: Cannot open source file: '{missing}': No such \
+                 file or directory\nplain.c\nGenerating Code...\n"
             )
         );
         let clang_cl = directory.bcc("--clang-cl-mode", &["/c", &missing]);
@@ -7603,7 +7615,7 @@ mod tests {
         );
         let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", &analyze, &plain]);
         assert_eq!(cl.status.code(), Some(2));
-        assert!(stderr(&cl).contains("fatal error C1083"), "{}", stderr(&cl));
+        assert!(stdout(&cl).contains("fatal error C1083"), "{}", stdout(&cl));
         // `cl`'s own options that clang-cl does not know stay options there.
         let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "/Zf", "/analyze", &plain]);
         succeeds(&cl);
@@ -7682,7 +7694,12 @@ mod tests {
             // `cl` exits with 2 after an error.
             let status = if mode == "--msvc-mode" { 2 } else { 1 };
             assert_eq!(output.status.code(), Some(status), "{mode}");
-            let text = stderr(&output);
+            // `cl` writes its diagnostics to stdout.
+            let text = if mode == "--msvc-mode" {
+                stdout(&output)
+            } else {
+                stderr(&output)
+            };
             assert!(text.contains(location), "{mode}: {text}");
             assert!(!text.contains("-->"), "{mode}: {text}");
             assert_eq!(
@@ -7885,12 +7902,14 @@ mod tests {
                      from 'char **'",
                 ],
             ),
+            // `/WX` announces the first warning it makes an error (C2220).
             (
                 &["/wd4047", "/WX", "pointers.c"],
                 2,
                 &[
-                    "pointers.c(5): error C4133: '=': incompatible types - from 'float *' to 'int \
-                     *'",
+                    "pointers.c(5): error C2220: the following warning is treated as an error",
+                    "pointers.c(5): warning C4133: '=': incompatible types - from 'float *' to \
+                     'int *'",
                 ],
             ),
             (&["/W0", "pointers.c"], 0, &[]),
@@ -7918,9 +7937,10 @@ mod tests {
                 output.status.code(),
                 Some(status),
                 "{args:?}: {}",
-                stderr(&output)
+                stdout(&output)
             );
-            let printed: Vec<String> = stderr(&output).lines().map(str::to_owned).collect();
+            // `cl` writes its diagnostics to stdout, after the source's name.
+            let printed: Vec<String> = stdout(&output).lines().skip(1).map(str::to_owned).collect();
             assert_eq!(printed, lines, "{args:?}");
         }
         assert_eq!(
@@ -7941,7 +7961,7 @@ mod tests {
             let output = cl(&all);
             (
                 output.status.code(),
-                stderr(&output).matches("): warning:").count(),
+                stdout(&output).matches("): warning:").count(),
             )
         };
         assert_eq!(warnings(&[]), (Some(0), 2));
@@ -8125,8 +8145,9 @@ mod tests {
         // `cl` keeps its own codes and words.
         let cl = directory.bcc("--msvc-mode", &["/c", "/nologo", "/W4", "undeclared.c"]);
         assert_eq!(
-            stderr(&cl),
-            "undeclared.c(1): error C2065: 'undefined_thing': undeclared identifier\n"
+            stdout(&cl),
+            "undeclared.c\nundeclared.c(1): error C2065: 'undefined_thing': undeclared \
+             identifier\n"
         );
     }
 
@@ -9865,9 +9886,9 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         let output = directory.bcc("--msvc-mode", &["bad.c"]);
         assert_ne!(output.status.code(), Some(0));
         assert!(
-            stderr(&output).contains("bad.c(1): error:"),
+            stdout(&output).contains("bad.c(1): error:"),
             "{}",
-            stderr(&output)
+            stdout(&output)
         );
         directory.write("v.c", "long v = __STDC_VERSION__;\n");
         let output = directory.bcc("--msvc-mode", &["v.c"]);
@@ -9887,9 +9908,9 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         let bad = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "bad.c"]);
         assert_eq!(bad.status.code(), Some(2));
         assert!(
-            stderr(&bad).contains("bad.c(1): error:"),
+            stdout(&bad).contains("bad.c(1): error:"),
             "{}",
-            stderr(&bad)
+            stdout(&bad)
         );
     }
 
@@ -10195,14 +10216,12 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             };
             let cl = run("--msvc-mode", args, &[object]);
             assert_eq!(cl.status.code(), Some(2), "{args:?}");
-            assert_eq!(
-                stderr(&cl),
-                format!("c1: fatal error C1083: Cannot open source file: 'missing.c': {missing}\n")
-            );
+            // `cl` writes it to stdout, after the source's name.
             assert_eq!(
                 stdout(&cl),
                 format!(
-                    "missing.c\n{}\nGenerating Code...\n",
+                    "missing.c\nc1: fatal error C1083: Cannot open source file: 'missing.c': \
+                     {missing}\n{}\nGenerating Code...\n",
                     object.replace(".obj", ".c")
                 )
             );
@@ -10263,7 +10282,12 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
         std::fs::remove_file(directory.path("good.obj")).unwrap();
         let cl = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "bad.c", "good.c"]);
         assert_eq!(cl.status.code(), Some(2));
-        assert_eq!(stdout(&cl), "bad.c\ngood.c\n");
+        let printed = stdout(&cl);
+        let names: Vec<&str> = printed
+            .lines()
+            .filter(|line| !line.contains("): error"))
+            .collect();
+        assert_eq!(names, ["bad.c", "good.c"]);
         let clang_cl = directory.bcc("--clang-cl-mode", &["/nologo", "/c", "bad.c", "good.c"]);
         assert_eq!(clang_cl.status.code(), Some(1));
         assert!(!directory.path("good.obj").exists());
@@ -12742,13 +12766,35 @@ warn.c:34: warning: cast between pointer and integer of different size
                  {here}open.h\n. {here}b.h\n"
             )
         );
+        // `cl` writes its notes to stdout, after the source's name, with
+        // each header's absolute path.
         let output = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/showIncludes", "h.c"]);
         succeeds(&output);
+        let notes: Vec<(usize, String)> = stdout(&output)
+            .lines()
+            .skip(1)
+            .map(|line| {
+                let path = line.strip_prefix("Note: including file:").unwrap();
+                let depth = path.len() - path.trim_start().len();
+                let path = Path::new(path.trim_start());
+                assert!(path.is_absolute(), "{line}");
+                (
+                    depth,
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
         assert_eq!(
-            stderr(&output),
-            "Note: including file: guarded.h\nNote: including file:  b.h\nNote: including file: \
-             defined.h\nNote: including file: open.h\nNote: including file: open.h\nNote: \
-             including file: b.h\n"
+            notes,
+            [
+                (1, "guarded.h"),
+                (2, "b.h"),
+                (1, "defined.h"),
+                (1, "open.h"),
+                (1, "open.h"),
+                (1, "b.h"),
+            ]
+            .map(|(depth, name)| (depth, name.to_owned()))
         );
     }
 
@@ -13918,5 +13964,282 @@ warn.c:34: warning: cast between pointer and integer of different size
         let clang = directory.bcc("--clang-mode", &["-c", "convert.c", "-o", "clang.o"]);
         succeeds(&clang);
         assert_eq!(stderr(&clang).matches("[-Wconstant-conversion]").count(), 5);
+    }
+
+    /// The text of `cl /E` as the real `cl.exe` 19.44 writes it, compared
+    /// under Wine: a line for each source line, `#line` markers on the
+    /// first line, after a skipped group's `#endif`, after an `#elif` that
+    /// ends a skipped group and for a header, and, under `/EP`, an empty line
+    /// for each marker. The text stops at a fatal error.
+    #[test]
+    fn cl_lays_out_preprocessed_text_as_cl_does() {
+        let directory = Directory::new();
+        directory.write(
+            "lines.c",
+            "#define A 1\n#define B 2\nint a = A;\n\n\n\nint b = B;\n#if 0\nx\ny\nz\n#endif\nint \
+             c;\n#ifdef A\nint e;\n#else\nint f;\n#endif\n\n\n\n\n\n\n\n\n\n\nint g;\nint h = A \
+             +\n  B;\n#define M(x) x +\\\n  1\nint i = M(2);\n#define LAST 1\n",
+        );
+        let expected = format!(
+            "#line 1 \"lines.c\"\n\n\nint a = 1;\n\n\n\nint b = 2;\n\n\n\n\n#line 13 \
+             \"lines.c\"\nint c;\n\nint e;\n\n\n#line 19 \"lines.c\"\n{}int g;\nint h = 1 +\n  \
+             2;\n\n\nint i = 2 + 1;\n\n",
+            "\n".repeat(10)
+        );
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/E", "lines.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), expected);
+        assert_eq!(stderr(&output), "lines.c\n");
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/EP", "lines.c"]);
+        succeeds(&output);
+        let without_markers: String = expected
+            .lines()
+            .flat_map(|line| [if line.starts_with("#line") { "" } else { line }, "\n"])
+            .collect();
+        assert_eq!(stdout(&output), without_markers);
+        directory.write(
+            "nested.c",
+            "#if 1\n# if 0\nint no;\n# elif 1\nint yes;\n# endif\n#endif\n#include \"h.h\"\nint n \
+             = N;\n",
+        );
+        directory.write("h.h", "#define N 7\n");
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/E", "nested.c"]);
+        succeeds(&output);
+        let text = stdout(&output);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines[..9],
+            [
+                "#line 1 \"nested.c\"",
+                "",
+                "",
+                "",
+                "#line 5 \"nested.c\"",
+                "int yes;",
+                "#line 7 \"nested.c\"",
+                "#line 8 \"nested.c\"",
+                lines[8],
+            ],
+            "{text}"
+        );
+        // A header is named by its absolute path.
+        let header = lines[8]
+            .strip_prefix("#line 1 \"")
+            .and_then(|rest| rest.strip_suffix("h.h\""))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(
+            Path::new(&header.replace("\\\\", "\\")).is_absolute(),
+            "{text}"
+        );
+        assert_eq!(
+            lines[9..],
+            ["", "#line 9 \"nested.c\"", "int n = 7;"],
+            "{text}"
+        );
+        // `cl` stops at a fatal error, here `#error` (C1189), and writes
+        // diagnostics to stderr under `/E`.
+        directory.write("error.c", "#error stop here\nint x;\n");
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/E", "error.c"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stdout(&output), "#line 1 \"error.c\"\n");
+        assert_eq!(
+            stderr(&output),
+            "error.c\nerror.c(1): fatal error C1189: #error:  stop here\n"
+        );
+    }
+
+    /// `cl /E`, `/EP` and `/P` keep a `_Pragma` or `__pragma` operator's
+    /// pragma among the tokens of its line as `__pragma(...)`, spaced as the
+    /// operator was, as the real `cl.exe` 19.44 writes it under Wine, so the
+    /// text compiles again: a `#pragma` in the middle of a line does not.
+    /// `_Pragma`'s literal is written as it destringizes, and `once` stays.
+    #[test]
+    fn cl_writes_pragma_operators_back_so_its_text_compiles_again() {
+        let directory = Directory::new();
+        directory.write(
+            "p.c",
+            "#define DECL(n) _Pragma(\"pack(push, 1)\") int n; \
+             _Pragma(\"pack(pop)\")\nDECL(b)\nint c; __pragma(warning(disable: 4100)) int \
+             d;\n_Pragma(\"pack(push,  2)\")\n__pragma(pack(pop))\nint e; \
+             _Pragma(\"warning(push)\")\n#define W __pragma(warning(push)) __pragma( \
+             warning(disable:4101) )\nW int f;\nint g; W\n  _Pragma(\"message(\\\"hi \
+             there\\\")\") int h;\n#pragma pack(1)\nint i; _Pragma(\"comment(lib, \
+             \\\"x.lib\\\")\") int j;\n#define WRAP(x) __pragma(warning(suppress: 4100)) \
+             x\nWRAP(int k;) int l;\nint m; _Pragma(\"once\")\n#pragma warning(pop)\nint \
+             main(void) { return b + c + d; }\n",
+        );
+        directory.write(
+            "q.c",
+            "int a;_Pragma(\"pack(1)\")int b;\n#define S(x) x _Pragma(\"pack(1)\")x\nS(int \
+             g;)S(int h;)\n#pragma once\n",
+        );
+        let text = "\n__pragma(pack(push, 1)) int b; __pragma(pack(pop))\nint c; \
+                    __pragma(warning(disable: 4100)) int d;\n__pragma(pack(push,  \
+                    2))\n__pragma(pack(pop))\nint e; \
+                    __pragma(warning(push))\n\n__pragma(warning(push)) \
+                    __pragma(warning(disable:4101) ) int f;\nint g; __pragma(warning(push)) \
+                    __pragma(warning(disable:4101) )\n  __pragma(message(\"hi there\")) int \
+                    h;\n#pragma pack(1)\nint i; __pragma(comment(lib, \"x.lib\")) int \
+                    j;\n\n__pragma(warning(suppress: 4100)) int k; int l;\nint m; \
+                    __pragma(once)\n#pragma warning(pop)\nint main(void) { return b + c + d; }\n";
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/E", "p.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), format!("#line 1 \"p.c\"\n{text}"));
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/EP", "p.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), format!("\n{text}"));
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/E", "q.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stdout(&output),
+            "#line 1 \"q.c\"\nint a;__pragma(pack(1))int b;\n\nint g; __pragma(pack(1))int g;int \
+             h; __pragma(pack(1))int h;\n#pragma once\n"
+        );
+        for source in ["p", "q"] {
+            let output = directory.bcc("--msvc-mode", &["/nologo", "/P", &format!("{source}.c")]);
+            succeeds(&output);
+            let preprocessed = format!("/Tc{source}.i");
+            let output = directory.bcc("--msvc-mode", &["/nologo", "/c", &preprocessed]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), format!("{source}.i\n"));
+            assert_eq!(stderr(&output), "");
+        }
+    }
+
+    /// `cl` warns (D9025) when an option overrides another of its kind with
+    /// another value, as the real `cl.exe` 19.44 does, and replaces a
+    /// macro that `/D` defines again silently.
+    #[test]
+    fn cl_warns_when_an_option_overrides_another() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        for (options, warnings) in [
+            (&["/W3", "/W4"][..], &["'/W3' with '/W4'"][..]),
+            (&["/w", "/W4"], &["'/w' with '/W4'"]),
+            (&["/W0", "/w"], &[]),
+            (&["/W4", "/Wall"], &[]),
+            (&["/O1", "/O2"], &["'/O1' with '/O2'"]),
+            (&["/O2", "/Ox"], &[]),
+            (&["/O1", "/Os"], &[]),
+            (&["/MD", "/MT"], &["'/MD' with '/MT'"]),
+            (&["/std:c11", "/std:c17"], &["'/std:c11' with '/std:c17'"]),
+            (&["/DX", "/UX"], &["'/DX' with '/UX'"]),
+            (&["/D", "X", "/U", "X"], &["'/DX' with '/UX'"]),
+            (&["/UX", "/DX"], &[]),
+            (&["/DX=1", "/DX=2"], &[]),
+            (
+                &["/Fofirst.obj", "/Folast.obj"],
+                &["'/Fofirst.obj' with '/Folast.obj'"],
+            ),
+            (&["/GL", "/GL-"], &["'/GL' with '/GL-'"]),
+        ] {
+            let mut args = vec!["/nologo", "/c", "a.c"];
+            args.extend(options);
+            let output = directory.bcc("--msvc-mode", &args);
+            succeeds(&output);
+            let expected: String = warnings
+                .iter()
+                .flat_map(|words| ["cl : Command line warning D9025 : overriding ", words, "\n"])
+                .collect();
+            assert_eq!(stderr(&output), expected, "{options:?}");
+            assert_eq!(stdout(&output), "a.c\n", "{options:?}");
+        }
+        assert_eq!(cl_expand("--msvc-mode", &["/DX=1", "/DX=2"], "X"), "2");
+    }
+
+    /// An output directory that ends in a backslash names that directory on
+    /// every host, as `cl`'s does.
+    #[test]
+    fn cl_reads_a_trailing_backslash_as_a_directory() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        directory.write("b.c", "int b;\nint main(void) { return 0; }\n");
+        std::fs::create_dir(directory.path("obj")).unwrap();
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/c", "a.c", "b.c", "/Foobj\\"]));
+        assert!(directory.path("obj/a.obj").is_file());
+        assert!(directory.path("obj/b.obj").is_file());
+    }
+
+    /// `cl` prints the file name of each source it compiles, without its
+    /// directories.
+    #[test]
+    fn cl_prints_each_sources_file_name() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sub")).unwrap();
+        directory.write(
+            "sub/s.c", "int s;
+",
+        );
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/c", "sub/s.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "s.c\n");
+    }
+
+    /// `cl` words `#error` as its fatal error C1189 and a return mismatch as
+    /// warning C4098 or C4033, both level 1, as the real `cl.exe` 19.44
+    /// writes them; `/wd` of either code turns off bcc's group for both.
+    #[test]
+    fn cl_words_error_directives_and_return_mismatches_as_cl_does() {
+        let directory = Directory::new();
+        directory.write("error.c", "#error stop here\nint x;\n");
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/c", "error.c"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(
+            stdout(&output),
+            "error.c\nerror.c(1): fatal error C1189: #error:  stop here\n"
+        );
+        directory.write(
+            "returns.c",
+            "int f(int a) { if (a) return 1; }\nvoid g(void) { return 1; }\nint h(void) { return; \
+             }\n",
+        );
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/c", "returns.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stdout(&output),
+            "returns.c\nreturns.c(2): warning C4098: 'g': 'void' function returning a \
+             value\nreturns.c(3): warning C4033: 'h' must return a value\n"
+        );
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/c", "/wd4098", "returns.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "returns.c\n");
+    }
+
+    /// `cl` defines `__STDC__` only under `/Za` or `/Zc:__STDC__`, and the
+    /// Universal C Runtime's headers declare POSIX names only without it;
+    /// under `/std:` it claims to lack atomics, complex types and VLAs, and
+    /// never threads, whose header Visual C++ has.
+    #[test]
+    fn cl_defines_the_standard_macros_cl_defines() {
+        let probe =
+            "__STDC__ __STDC_NO_ATOMICS__ __STDC_NO_COMPLEX__ __STDC_NO_THREADS__ __STDC_NO_VLA__";
+        assert_eq!(
+            cl_expand("--msvc-mode", &[], probe),
+            "__STDC__ __STDC_NO_ATOMICS__ __STDC_NO_COMPLEX__ __STDC_NO_THREADS__ __STDC_NO_VLA__"
+        );
+        assert_eq!(
+            cl_expand("--msvc-mode", &["/std:c11"], probe),
+            "__STDC__ 1 1 __STDC_NO_THREADS__ 1"
+        );
+        assert_eq!(cl_expand("--msvc-mode", &["/Za"], "__STDC__"), "1");
+        assert_eq!(cl_expand("--msvc-mode", &["/Zc:__STDC__"], "__STDC__"), "1");
+    }
+
+    /// Microsoft's sized integer suffixes, which the Visual C++ `<limits.h>`
+    /// spells its limits with (`0xffffffffffffffffui64`), give the constant
+    /// the type of that size, as in `cl`.
+    #[test]
+    fn cl_reads_microsoft_integer_suffixes() {
+        let directory = Directory::new();
+        directory.write(
+            "suffixes.c",
+            "_Static_assert(sizeof(0ui64) == 8 && (0ui64 - 1) > 0, \
+             \"ui64\");\n_Static_assert(sizeof(9223372036854775807i64) == 8 && -1i64 < 0, \
+             \"i64\");\n_Static_assert(sizeof(5i32) == 4 && 7ui32 - 8 > 0, \"i32\");\nunsigned \
+             long long m = 0xffffffffffffffffui64 + 0I64;\n",
+        );
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/std:c11", "/Zs", "suffixes.c"]));
+        let gcc = directory.bcc("--gcc-mode", &["-fsyntax-only", "suffixes.c"]);
+        assert!(!gcc.status.success());
     }
 }

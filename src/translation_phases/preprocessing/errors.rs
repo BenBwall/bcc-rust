@@ -1683,6 +1683,16 @@ impl ToDiagnostic for PreprocessorError<'_> {
         let compiler = match &self.error_type {
             | PreprocessorErrorType::HeaderNotFound { name, .. } =>
                 header_not_found(context, name, arena),
+            // `cl` stops at `#error` with its fatal error C1189, and writes
+            // the directive's text as it stands after `#error`. Microsoft
+            // Learn: "Fatal Error C1189". C99: §6.10.5 paragraph 1, p. 159;
+            // PDF p. 171.
+            | PreprocessorErrorType::ErrorDirective(message)
+                if context.configuration.msvc_wording() =>
+                Some(
+                    Explanation::new(arena, format_in!(arena, "#error: {}", message.trim_end()))
+                        .msvc_code("C1189"),
+                ),
             | _ => None,
         };
         // TCC writes it as a plain error, and stops at its first anyway.
