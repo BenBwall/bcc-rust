@@ -1988,7 +1988,7 @@ fn Toolbar(state: State) -> impl IntoView {
                     type="button"
                     class="button labelled"
                     title=move || state.group.with(|group| match group {
-                        | Some(group) if group.over != evaluation::OverStop::Next =>
+                        | Some(group) if matches!(group.over, Some(evaluation::OverStop::At(_) | evaluation::OverStop::End)) =>
                             format!("Step over: run to the last step of {}, through any call it makes (O)", group.text),
                         | _ => "Step over: run to the last step of the next expression (O)".to_owned(),
                     })

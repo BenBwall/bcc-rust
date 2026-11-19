@@ -33,8 +33,9 @@ pub struct Group {
     /// What the engine says the next step does, when the current step is the
     /// last the run has recorded and the group goes on.
     pub next:     Option<String>,
-    /// Where Over, pressed at the current step, stops.
-    pub over:     OverStop,
+    /// Where Over, pressed at the current step, stops; `None` when the run
+    /// ended at the current step, where Over cannot run.
+    pub over:     Option<OverStop>,
 }
 
 /// Where Over stops, as the group can show it.
@@ -308,9 +309,9 @@ pub fn group(history: &[Snapshot], cursor: usize, source: &str) -> Option<Group>
     // Over's own walk (`Over::stepped`) finishes the expression, or the
     // next one from its last step.
     let over = match (complete, last == cursor) {
-        | (false, _) => OverStop::End,
-        | (true, true) => OverStop::Next,
-        | (true, false) => OverStop::At(last),
+        | (false, _) => Some(OverStop::End),
+        | (true, true) => history[cursor].can_step().then_some(OverStop::Next),
+        | (true, false) => Some(OverStop::At(last)),
     };
     Some(Group {
         text: source_text(source, key.root),
@@ -413,8 +414,8 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
         group.with(|group| {
             group.as_ref().map(|group| {
                 let stop = match group.over {
-                    | OverStop::At(index) => Some(index),
-                    | OverStop::End | OverStop::Next => None,
+                    | Some(OverStop::At(index)) => Some(index),
+                    | _ => None,
                 };
                 let mut views = group
                     .parts
@@ -443,9 +444,9 @@ pub fn Evaluation(group: Memo<Option<Group>>, on_jump: Callback<usize>) -> impl 
                 }
                 // Where Over stops when the panel has no entry for it yet.
                 let beyond = match group.over {
-                    | OverStop::At(_) => None,
-                    | OverStop::End => Some("runs to its last step"),
-                    | OverStop::Next => Some("runs on to the next expression"),
+                    | Some(OverStop::End) => Some("runs to its last step"),
+                    | Some(OverStop::Next) => Some("runs on to the next expression"),
+                    | Some(OverStop::At(_)) | None => None,
                 };
                 if let Some(beyond) = beyond {
                     views.push(
