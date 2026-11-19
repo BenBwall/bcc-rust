@@ -399,9 +399,9 @@ mod tests {
         assert!(defines(&freestanding, "#define __STDC_HOSTED__ 0"));
     }
 
-    /// `UBSan`'s checks make `-O1` to `-Ofast` ReleaseSafe, as zig 0.17.1
-    /// does after its `cc` loop: no `NDEBUG`, `_FORTIFY_SOURCE=2` and the
-    /// stack protector. ReleaseSmall stays itself.
+    /// `UBSan`'s checks make `-O1` to `-Ofast` zig's safe release mode, as
+    /// zig 0.17.1 does after its `cc` loop: no `NDEBUG`, `_FORTIFY_SOURCE=2`
+    /// and the stack protector. `-Os` and `-Oz` stay as they are.
     #[test]
     fn checks_make_release_fast_safe() {
         let directory = Directory::new();
@@ -459,7 +459,7 @@ mod tests {
         assert!(defines(&macros, "#define _FORTIFY_SOURCE 2") && !names(&macros, "__SSP_STRONG__"));
     }
 
-    /// zig's ReleaseSmall strips the debug information and the symbols
+    /// zig's small release mode strips the debug information and the symbols
     /// unless a `-g` option keeps them; the other modes write DWARF 4.
     #[cfg(target_os = "linux")]
     #[test]

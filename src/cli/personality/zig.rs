@@ -138,9 +138,9 @@ enum Mode {
     /// `-O0`, `-Og` or none: `-O0` with `UBSan` and the stack protector.
     #[default]
     Debug,
-    /// ReleaseFast with `UBSan`'s checks on, which zig makes safe after the
-    /// `cc` loop (`main.zig`): `-O2`, `_FORTIFY_SOURCE=2` and the stack
-    /// protector, without `NDEBUG`.
+    /// `-O1` to `-O4` and `-Ofast` with `UBSan`'s checks on, which zig
+    /// makes safe after the `cc` loop (`main.zig`): `-O2`,
+    /// `_FORTIFY_SOURCE=2` and the stack protector, without `NDEBUG`.
     ReleaseSafe,
     /// `-O1` to `-O4` and `-Ofast`: `-O2` and `NDEBUG`.
     ReleaseFast,
