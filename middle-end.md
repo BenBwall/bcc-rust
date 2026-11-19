@@ -3602,4 +3602,16 @@ programs of the instructions on random and special vectors, which the LLVM
 back end's `tests/operands.rs` each instruction's registers and
 `tests/object.rs` its encodings, byte for byte against the pinned
 assembler. xz 5.6.3's CLMUL CRC32 and CRC64 and zlib-ng 2.2.2's SSE4.2 and
-PCLMULQDQ paths build with the native back end and pass their test suites.
+PCLMULQDQ paths build with the native back end and pass their test suites,
+and so do zlib-ng's AVX2 paths since the native back end passes vectors in
+YMM registers: its `-mavx2` probe passes, and its functable picks the AVX2
+`adler32`, `compare256`, `longest_match`, `slide_hash` and
+`chunkmemset_safe`, which agree with the C ones and the system zlib.
+`tests/fixtures/programs/avx_vector_abi.c`, built with `-mavx2`, puts 32-byte
+vectors in every place the psABI gives them, and
+`tests/integration/x86_intrinsics.rs` links each half, built by bcc through
+LLVM or the native back end, with the claimed compiler's build of the
+other, as it does the `target("avx")` fixtures; the named-instruction
+programs of `backend/difftest/named.rs` call helpers that pass vectors in
+YMM registers, and `native/tests/selection.rs` pins the instructions at
+each boundary.
