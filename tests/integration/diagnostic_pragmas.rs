@@ -269,7 +269,11 @@ int x;
             ],
         );
         assert_eq!(lines(&gcc), ["2 error"]);
-        assert!(String::from_utf8_lossy(&gcc.stderr).contains("compilation terminated."));
+        // GCC 14 names the option that stopped it.
+        assert!(
+            String::from_utf8_lossy(&gcc.stderr)
+                .contains("compilation terminated due to -Wfatal-errors.\n")
+        );
         assert_eq!(
             compile("fatal", "--clang-mode", &["-Wfatal-errors"], source),
             ["2 error", "4 error"]
