@@ -250,17 +250,21 @@ impl ClDefaults {
                 common.push("-O2".into());
             }
         }
+        // The floating-point model's macros, which `cl` defines as
+        // `/fp:` chooses (`/fp:strict` is refused).
+        common.push("-D_M_FP_CONTRACT=1".into());
         if self.fast {
             common.extend(
                 [
                     "-ffast-math",
                     "-fno-finite-math-only",
-                    "-U_M_FP_PRECISE",
                     "-D_M_FP_FAST=1",
                     "-D__NO_MATH_ERRNO__=1",
                 ]
                 .map(OsString::from),
             );
+        } else {
+            common.push("-D_M_FP_PRECISE=1".into());
         }
     }
 }
