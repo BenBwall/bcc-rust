@@ -12,6 +12,12 @@
 //! which the interpreter models and an AVX processor has. `vzeroall` is
 //! left out too: it would print nothing of its own, and the native
 //! end-to-end tests run it.
+//!
+//! The function with AVX also calls two helpers with AVX between its
+//! instructions, which take two 32-byte vectors in YMM registers around an
+//! `i32` and return a 32-byte vector in YMM0 or a 64-byte one in YMM0 and
+//! YMM1, so each back end's side of that convention meets the interpreter's
+//! (System V AMD64 psABI §3.2.3, `__m256`).
 
 use std::fmt::Write as _;
 
@@ -35,12 +41,101 @@ pub(super) fn generate_named(seed: u64) -> String {
         out.push('\n');
         Function::new(&mut rng, avx).write(&mut out, name);
     }
+    out.push_str(YMM_HELPERS);
     out.push_str(
         "\nfunction @main() -> i32 external {\nblock0:\n    v0 = call @sse()\n    v1 = call \
          @vex()\n    v2 = iconst.i32 0\n    return v2\n}\n",
     );
     out
 }
+
+/// The helpers whose vectors travel in YMM registers: `@ymm` returns
+/// `a - b * k` by 64-bit word, and `@ymm64` returns `a ^ b` and then `b - a`.
+const YMM_HELPERS: &str = "
+function @ymm(ptr result(size 32, align 32, vector, wide), ptr aggregate(size 32, align 32, \
+                           vector, wide), i32, ptr aggregate(size 32, align 32, vector, wide)) \
+                           internal noinline target \"+avx\" {
+block0(v0: ptr, v1: ptr, v2: i32, v3: ptr):
+    v4 = sext.i64 v2
+    v5 = iconst.i64 8
+    v6 = load.i64 v1, align 1
+    v7 = load.i64 v3, align 1
+    v8 = imul.i64 v7, v4
+    v9 = isub.i64 v6, v8
+    store.i64 v9, v0, align 1
+    v10 = ptr_add inbounds v1, v5
+    v11 = ptr_add inbounds v3, v5
+    v12 = ptr_add inbounds v0, v5
+    v13 = load.i64 v10, align 1
+    v14 = load.i64 v11, align 1
+    v15 = imul.i64 v14, v4
+    v16 = isub.i64 v13, v15
+    store.i64 v16, v12, align 1
+    v17 = ptr_add inbounds v10, v5
+    v18 = ptr_add inbounds v11, v5
+    v19 = ptr_add inbounds v12, v5
+    v20 = load.i64 v17, align 1
+    v21 = load.i64 v18, align 1
+    v22 = imul.i64 v21, v4
+    v23 = isub.i64 v20, v22
+    store.i64 v23, v19, align 1
+    v24 = ptr_add inbounds v17, v5
+    v25 = ptr_add inbounds v18, v5
+    v26 = ptr_add inbounds v19, v5
+    v27 = load.i64 v24, align 1
+    v28 = load.i64 v25, align 1
+    v29 = imul.i64 v28, v4
+    v30 = isub.i64 v27, v29
+    store.i64 v30, v26, align 1
+    return
+}
+
+function @ymm64(ptr result(size 64, align 64, vector, wide), ptr aggregate(size 32, align 32, \
+                           vector, wide), ptr aggregate(size 32, align 32, vector, wide)) \
+                           internal noinline target \"+avx\" {
+block0(v0: ptr, v1: ptr, v2: ptr):
+    v3 = iconst.i64 8
+    v4 = iconst.i64 32
+    v5 = ptr_add inbounds v0, v4
+    v6 = load.i64 v1, align 1
+    v7 = load.i64 v2, align 1
+    v8 = xor.i64 v6, v7
+    store.i64 v8, v0, align 1
+    v9 = isub.i64 v7, v6
+    store.i64 v9, v5, align 1
+    v10 = ptr_add inbounds v1, v3
+    v11 = ptr_add inbounds v2, v3
+    v12 = ptr_add inbounds v0, v3
+    v13 = ptr_add inbounds v5, v3
+    v14 = load.i64 v10, align 1
+    v15 = load.i64 v11, align 1
+    v16 = xor.i64 v14, v15
+    store.i64 v16, v12, align 1
+    v17 = isub.i64 v15, v14
+    store.i64 v17, v13, align 1
+    v18 = ptr_add inbounds v10, v3
+    v19 = ptr_add inbounds v11, v3
+    v20 = ptr_add inbounds v12, v3
+    v21 = ptr_add inbounds v13, v3
+    v22 = load.i64 v18, align 1
+    v23 = load.i64 v19, align 1
+    v24 = xor.i64 v22, v23
+    store.i64 v24, v20, align 1
+    v25 = isub.i64 v23, v22
+    store.i64 v25, v21, align 1
+    v26 = ptr_add inbounds v18, v3
+    v27 = ptr_add inbounds v19, v3
+    v28 = ptr_add inbounds v20, v3
+    v29 = ptr_add inbounds v21, v3
+    v30 = load.i64 v26, align 1
+    v31 = load.i64 v27, align 1
+    v32 = xor.i64 v30, v31
+    store.i64 v32, v28, align 1
+    v33 = isub.i64 v31, v30
+    store.i64 v33, v29, align 1
+    return
+}
+";
 
 /// Special lanes, as their bits: zeros, halves, infinities, NaNs with
 /// payloads, and values at the edges of the integer conversions.
@@ -113,9 +208,17 @@ impl<'r> Function<'r> {
             .copied()
             .filter(|&intrinsic| self.allowed(intrinsic))
             .collect();
+        let wide = self
+            .avx
+            .then(|| self.def(format_args!("stack_addr slot{SLOTS}")));
         for _ in 0..24 {
-            let intrinsic = candidates[self.rng.index(candidates.len())];
-            self.instruction(intrinsic, format);
+            match wide {
+                | Some(wide) if self.rng.index(6) == 0 => self.ymm_call(wide, format),
+                | _ => {
+                    let intrinsic = candidates[self.rng.index(candidates.len())];
+                    self.instruction(intrinsic, format);
+                },
+            }
         }
         let features = if self.avx {
             "+avx,+aes,+pclmul,+sse4.2,+xsave"
@@ -128,6 +231,10 @@ impl<'r> Function<'r> {
         );
         for slot in 0..SLOTS {
             let _ = writeln!(out, "    slot{slot} = stack_slot 32, align 8");
+        }
+        if self.avx {
+            // The result of `@ymm64`, whose area the call must align.
+            let _ = writeln!(out, "    slot{SLOTS} = stack_slot 64, align 64");
         }
         out.push_str("block0:\n");
         for slot in 0..SLOTS {
@@ -199,6 +306,33 @@ impl<'r> Function<'r> {
     /// A random slot.
     fn slot(&mut self) -> u32 {
         u32::try_from(self.rng.below(u64::from(SLOTS))).expect("a slot index is small")
+    }
+
+    /// Calls `@ymm` on two different random slots into a third, or `@ymm64`
+    /// on two into `wide`, the 64-byte slot, and prints the result.
+    fn ymm_call(&mut self, wide: u32, format: u32) {
+        let first = self.slot();
+        let second = (first + 1 + self.slot() % (SLOTS - 1)) % SLOTS;
+        let (destination, words) = if self.rng.index(2) == 0 {
+            let destination = (0..SLOTS)
+                .find(|&slot| slot != first && slot != second)
+                .expect("three slots");
+            let scale = self.rng.int(1000) - 500;
+            let scale = self.def(format_args!("iconst.i32 {scale}"));
+            let _ = writeln!(
+                self.body,
+                "    call @ymm(v{destination}, v{first}, v{scale}, v{second})"
+            );
+            (destination, 4)
+        } else {
+            let _ = writeln!(self.body, "    call @ymm64(v{wide}, v{first}, v{second})");
+            (wide, 8)
+        };
+        for word in 0..words {
+            let address = self.word(destination, word);
+            let loaded = self.def(format_args!("load.i64 v{address}, align 1"));
+            let _ = self.def(format_args!("call @printf(v{format}, v{loaded})"));
+        }
     }
 
     /// Runs `intrinsic` on random slots and prints its result.

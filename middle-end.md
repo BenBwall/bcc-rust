@@ -2790,8 +2790,14 @@ object can reach, and a call of one. `static` functions, whose callers are all b
 stay as they are, unless the attribute turns AVX off or AVX-512 on under the
 command line's AVX, where LLVM would give their vectors other registers.
 
-The native back end writes no AVX instructions, so it refuses a signature
-with a YMM register (`Construct::VectorRegister`). It returns the `f128`/`i128`
+The native back end (`isel/calls.rs`) passes a `vector_register` argument
+in the next YMM register, which it loads from the copy last before the call
+(`vmovups`, any alignment) and the callee stores to a fresh copy aligned to
+32 at its entry, and returns a `whole` result in YMM0, and a 64-byte one in
+YMM0 and YMM1, loaded from the return area last before `ret` and stored to
+the caller's right after the call. No virtual register holds the vector,
+and a `vzeroupper` follows each store, as it follows a 32-byte named
+instruction. It returns the `f128`/`i128`
 pair in XMM0 and XMM1, and
 passes a `byval` copy aligned above 16 bytes by realigning `%rsp` in the
 prologue (`andq $-align, %rsp`) with a frame pointer, as a moving stack
@@ -3396,8 +3402,9 @@ list.
 a feature only permits instructions, so both run a `target` function's code as any
 other: the native back end writes baseline code for it, which is correct on every
 processor that has the features, and the interpreter computes it. What the features
-would change otherwise stays refused: the native back end's refusal of a signature with
-a YMM register. The named x86 instructions are the exception: the native back end emits
+would change otherwise is the calling convention, which ABI lowering decides from the
+attribute and both back ends follow, the native one with YMM registers where the
+convention has them. The named x86 instructions are the other exception: the native back end emits
 each as the instruction itself, in its VEX form in a function with AVX ("x86 intrinsics"
 below).
 
@@ -3595,4 +3602,16 @@ programs of the instructions on random and special vectors, which the LLVM
 back end's `tests/operands.rs` each instruction's registers and
 `tests/object.rs` its encodings, byte for byte against the pinned
 assembler. xz 5.6.3's CLMUL CRC32 and CRC64 and zlib-ng 2.2.2's SSE4.2 and
-PCLMULQDQ paths build with the native back end and pass their test suites.
+PCLMULQDQ paths build with the native back end and pass their test suites,
+and so do zlib-ng's AVX2 paths since the native back end passes vectors in
+YMM registers: its `-mavx2` probe passes, and its functable picks the AVX2
+`adler32`, `compare256`, `longest_match`, `slide_hash` and
+`chunkmemset_safe`, which agree with the C ones and the system zlib.
+`tests/fixtures/programs/avx_vector_abi.c`, built with `-mavx2`, puts 32-byte
+vectors in every place the psABI gives them, and
+`tests/integration/x86_intrinsics.rs` links each half, built by bcc through
+LLVM or the native back end, with the claimed compiler's build of the
+other, as it does the `target("avx")` fixtures; the named-instruction
+programs of `backend/difftest/named.rs` call helpers that pass vectors in
+YMM registers, and `native/tests/selection.rs` pins the instructions at
+each boundary.

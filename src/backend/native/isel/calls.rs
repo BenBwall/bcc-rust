@@ -19,13 +19,26 @@
 //! ([`Selector::libcall`]) take and return them the same way, except that
 //! Win64 routines take an `i128` by reference and return one in `%xmm0`.
 //!
+//! With AVX a vector of 32 bytes, or a record wrapping one, travels whole in
+//! a YMM register (`vector_register`), and a result of 32 or 64 bytes comes
+//! back whole in `%ymm0`, then `%ymm1` (`registers` with `whole`). ABI
+//! lowering decided which, by the claimed compiler's rules and the features
+//! of the caller and callee; both sides are memory in the IR, so the
+//! register is loaded from the copy right before the call or `return` and
+//! stored to a fresh copy right after the entry or the call (`vmovups`, any
+//! alignment), and no virtual register holds the vector. A `vzeroupper`
+//! follows each store, as it follows a 32-byte named instruction
+//! (`isel/vector.rs`): nothing else keeps a value in the upper halves.
+//!
 //! References: psABI §3.2.3 "Parameter Passing" (registers, stack order,
 //! `%al` for variadic calls, `sret` returned in `%rax`, SSE results in
 //! `%xmm0`/`%xmm1`, X87 results in `%st0`) and §3.5.7 "Variable Argument
 //! Lists" (the register save area and `va_list`, Figure 3.33); Microsoft
 //! Learn, "x64 calling convention", sections "Parameter passing", "Varargs"
 //! (floating-point variadic arguments are duplicated in the integer register
-//! of their position) and "Return values".
+//! of their position) and "Return values"; psABI §3.2.3, "Classification"
+//! (`__m256` is SSE followed by SSEUP, one YMM register) and "Returning of
+//! Values" (in `%ymm0`).
 
 use super::{
     Selector,
@@ -56,6 +69,7 @@ use crate::{
             Reg,
             RegClass,
             SymbolRef,
+            VectorForm,
             Width,
             X87Format,
         },
@@ -128,6 +142,9 @@ pub(in crate::backend::native) enum Passed {
     /// A System V `__float128`: all of an SSE register, or a 16-byte stack
     /// slot.
     Vector(Reg, Reg),
+    /// A vector, or a record wrapping one, loaded whole into the next YMM
+    /// register from its copy (System V `vector_register`).
+    Ymm(Mem),
 }
 
 /// An argument of a runtime routine.
@@ -193,6 +210,14 @@ impl Selector<'_, '_, '_> {
             }
             self.result = ResultArea::Sret(pointer);
         }
+        // The YMM arguments still to store, after the last of which the
+        // upper halves are clean again.
+        let mut ymm_params = self
+            .signature
+            .aggregates
+            .iter()
+            .filter(|param| matches!(param.abi, ParamAbi::VectorRegister(_)))
+            .count();
         for (index, &param) in params.iter().enumerate() {
             if chain == Some(index) {
                 continue;
@@ -247,21 +272,26 @@ impl Selector<'_, '_, '_> {
             let dst = Reg::Virt(vreg);
             match self.signature.param_abi(index) {
                 | Some(ParamAbi::Registers(registers)) if index == 0 => {
-                    let slot = self.func.slots.len();
-                    self.func.slots.push(FrameSlotData {
-                        size:  u32::try_from(registers.area_bytes())
-                            .expect("a return area is small"),
-                        align: u32::try_from(registers.align.bytes().max(16))
-                            .expect("a return area is aligned to at most 16"),
-                    });
-                    let area = Mem::new(
-                        Base::Frame(FrameObject::Slot(
-                            u32::try_from(slot).expect("frame slots fit u32"),
-                        )),
-                        0,
-                    );
-                    self.emit(MInst::Lea { dst, addr: area });
+                    let area =
+                        self.fresh_object(dst, registers.area_bytes(), registers.align.bytes());
                     self.result = ResultArea::Registers { area, registers };
+                },
+                | Some(ParamAbi::VectorRegister(layout)) => {
+                    // ABI lowering gave it a register only while one was free.
+                    let register = assigner
+                        .vector()
+                        .expect("a YMM argument has a free register");
+                    let copy = self.fresh_object(dst, layout.size, layout.align.bytes());
+                    self.emit(MInst::VectorMove {
+                        form: VectorForm::Vex256,
+                        load: false,
+                        reg:  Reg::Phys(register),
+                        mem:  copy,
+                    });
+                    ymm_params -= 1;
+                    if ymm_params == 0 {
+                        self.emit(MInst::VZero { all: false });
+                    }
                 },
                 | Some(ParamAbi::ByVal(layout)) => {
                     let offset =
@@ -336,10 +366,28 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// Saves the argument registers where `va_arg` finds them: System V's
-    /// register save area (every SSE argument register too: `%al` only
-    /// bounds them), or Win64's home area, which makes all arguments one
-    /// array of 8-byte slots.
+    /// A frame object of `size` bytes aligned to `align` that nothing else
+    /// addresses, with its address in `dst`: the callee's return area, or the
+    /// copy of a vector that arrived in a YMM register. One aligned above the
+    /// stack's 16 bytes gets its address rounded up at run time, as an
+    /// over-aligned stack slot's is, and is then addressed through `dst`.
+    fn fresh_object(&mut self, dst: Reg, size: u64, align: u64) -> Mem {
+        let slot = u32::try_from(self.func.slots.len()).expect("frame slots fit u32");
+        let spare = align.saturating_sub(16);
+        self.func.slots.push(FrameSlotData {
+            size:  u32::try_from(size + spare).expect("a register's object is small"),
+            align: 16,
+        });
+        if spare == 0 {
+            let object = Mem::new(Base::Frame(FrameObject::Slot(slot)), 0);
+            self.emit(MInst::Lea { dst, addr: object });
+            return object;
+        }
+        self.func.slot_align = self.func.slot_align.max(align);
+        self.over_aligned_address(dst, slot, align);
+        Mem::new(Base::Reg(dst), 0)
+    }
+
     /// Takes a handler's parameters from the processor's frame, whose address
     /// the prologue leaves in `%rax`: the error code, if any, and above it
     /// the frame the first parameter points at. No register holds an
@@ -369,6 +417,10 @@ impl Selector<'_, '_, '_> {
         }
     }
 
+    /// Saves the argument registers where `va_arg` finds them: System V's
+    /// register save area (every SSE argument register too: `%al` only
+    /// bounds them), or Win64's home area, which makes all arguments one
+    /// array of 8-byte slots.
     fn save_argument_registers(&mut self) {
         let conv = self.conv;
         match conv.kind {
@@ -512,6 +564,7 @@ impl Selector<'_, '_, '_> {
                     size:  byval_size(layout.size)?,
                     align: align(layout.align.bytes()),
                 }),
+                | Some(ParamAbi::VectorRegister(_)) => passed.push(Passed::Ymm(self.address(arg))),
                 | _ => {
                     let extension = signature.param_extension(index).filter(|_| fixed);
                     let ty = self.ty(arg);
@@ -566,6 +619,18 @@ impl Selector<'_, '_, '_> {
         }
         if let Some((arg, registers)) = area {
             let mem = self.address(arg);
+            if registers.whole != 0 {
+                for (register, offset) in whole_registers(registers) {
+                    self.emit(MInst::VectorMove {
+                        form: VectorForm::Vex256,
+                        load: false,
+                        reg:  Reg::Phys(register),
+                        mem:  mem.offset(offset),
+                    });
+                }
+                self.emit(MInst::VZero { all: false });
+                return Ok(());
+            }
             if matches!(registers.first, Type::I128 | Type::F128) {
                 // Win64's `__int128` or System V's `__float128` result, all
                 // of `%xmm0`, and a 32-byte vector's second half in `%xmm1`.
@@ -652,6 +717,7 @@ impl Selector<'_, '_, '_> {
         let mut stack = ArenaVec::new_in(self.arena);
         let mut copies = ArenaVec::new_in(self.arena);
         let mut vectors = ArenaVec::new_in(self.arena);
+        let mut ymm = ArenaVec::new_in(self.arena);
         let mut call_align = 0_u32;
         for &arg in args {
             match arg {
@@ -694,6 +760,13 @@ impl Selector<'_, '_, '_> {
                         stack.push((offset + 8, Operand::Reg(high), RegClass::Gpr));
                     },
                 },
+                // ABI lowering gave it a register only while one was free.
+                | Passed::Ymm(mem) => ymm.push((
+                    assigner
+                        .vector()
+                        .expect("a YMM argument has a free register"),
+                    mem,
+                )),
             }
         }
         let home = self.conv.home_area;
@@ -789,6 +862,17 @@ impl Selector<'_, '_, '_> {
             }
             uses = uses.with(register);
         }
+        // The YMM arguments last, so that no SSE instruction runs while
+        // their upper halves are in use.
+        for (register, mem) in ymm {
+            self.emit(MInst::VectorMove {
+                form: VectorForm::Vex256,
+                load: true,
+                reg: Reg::Phys(register),
+                mem,
+            });
+            uses = uses.with(register);
+        }
         if let Some(chain) = chain {
             self.emit(MInst::Mov {
                 width: Width::B64,
@@ -826,6 +910,16 @@ impl Selector<'_, '_, '_> {
                 self.copy(Reg::Phys(PReg::Rax), pointer);
                 uses = uses.with(PReg::Rax);
             },
+            | ResultArea::Registers { area, registers } if registers.whole != 0 =>
+                for (register, offset) in whole_registers(registers) {
+                    self.emit(MInst::VectorMove {
+                        form: VectorForm::Vex256,
+                        load: true,
+                        reg:  Reg::Phys(register),
+                        mem:  area.offset(offset),
+                    });
+                    uses = uses.with(register);
+                },
             | ResultArea::Registers { area, registers }
                 if matches!(registers.first, Type::I128 | Type::F128) =>
             {
@@ -1059,6 +1153,17 @@ fn result_registers(registers: ResultRegisters) -> impl Iterator<Item = (i32, Ty
             register.expect("at most two parts"),
         )
     })
+}
+
+/// The YMM registers a whole vector result fills, each with its offset in
+/// the return area: `%ymm0` for 32 bytes, then `%ymm1` for 64, as LLVM
+/// splits a 64-byte vector without AVX-512 (psABI §3.2.3, "Returning of
+/// Values": the SSEUP eightbytes follow their SSE one in the same register).
+fn whole_registers(registers: ResultRegisters) -> impl Iterator<Item = (PReg, i32)> {
+    [PReg::Xmm0, PReg::Xmm1]
+        .into_iter()
+        .zip([0, 32])
+        .take(usize::from(registers.whole).div_ceil(32))
 }
 
 /// A `byval` size, which the support check bounds with the frame.

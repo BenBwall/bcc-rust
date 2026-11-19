@@ -262,11 +262,15 @@ impl Checker<'_, '_> {
                 | ParamAbi::ByVal(layout) if layout.align.bytes() > 4096 =>
                     return Err(Construct::SlotAlignment(layout.align.bytes())),
                 | ParamAbi::Sret(_) | ParamAbi::ByVal(_) | ParamAbi::Indirect(_) => {},
-                // This back end writes no AVX instructions.
+                // One YMM register.
+                | ParamAbi::VectorRegister(layout) if layout.size == 32 => {},
                 | ParamAbi::VectorRegister(layout) =>
                     return Err(Construct::VectorRegister(layout.size)),
-                | ParamAbi::Registers(registers) if registers.whole != 0 =>
+                // `%ymm0`, or `%ymm0` and `%ymm1`.
+                | ParamAbi::Registers(registers)
+                    if registers.whole != 0 && !matches!(registers.whole, 32 | 64) =>
                     return Err(Construct::VectorRegister(u64::from(registers.whole))),
+                | ParamAbi::Registers(registers) if registers.whole != 0 => {},
                 // Win64's `__int128` result and System V's `__float128` one
                 // in `%xmm0`, and System V's `long double` in `%st0`, or a
                 // complex one in `%st0` and `%st1`.
@@ -378,7 +382,8 @@ pub(crate) enum Construct {
     Opcode(Opcode),
     /// A Win64 `i128` passed by value.
     WideByValue,
-    /// A vector that AVX passes whole in YMM registers.
+    /// A vector of this many bytes in YMM registers other than one argument
+    /// of 32 bytes or a result of 32 or 64.
     VectorRegister(u64),
     /// `__builtin_return_address` or `__builtin_frame_address` in a handler
     /// or a naked function, neither of which has a return address and frame

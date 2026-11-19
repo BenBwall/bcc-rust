@@ -14,7 +14,9 @@
 //! `avx_target_abi_callee.c` with
 //! `avx_target_abi_caller.c` the vectors of functions whose `target`
 //! attribute turns AVX on, linked with either compiler's half, as
-//! `avx_target_variadic.c` does for a variadic one.
+//! `avx_target_variadic.c` does for a variadic one, and `avx_vector_abi.c`
+//! the vectors of a unit built with `-mavx2` in every place the psABI
+//! gives them.
 
 #[cfg(test)]
 #[expect(
@@ -292,10 +294,10 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
 
     /// External functions whose `target` attribute turns AVX on, in units
     /// built without AVX, link with the claimed compiler's build of the
-    /// other half, in both directions: GCC passes their 32-byte vectors in
-    /// YMM registers, and Clang their arguments in memory and their result
-    /// in YMM0, but a record holding one in memory. One is reached through
-    /// a pointer.
+    /// other half, in both directions, through LLVM and the native back
+    /// end: GCC passes their 32-byte vectors in YMM registers, and Clang
+    /// their arguments in memory and their result in YMM0, but a record
+    /// holding one in memory. One is reached through a pointer.
     #[test]
     fn avx_target_functions_link_with_gcc_and_clang() {
         if !cfg!(all(
@@ -314,7 +316,7 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
         for (identity, compiler) in references {
             let expected = build_and_run(compiler, &definitions, &[&calls]);
             for (ours, theirs) in [(&definitions, &calls), (&calls, &definitions)] {
-                for flags in [&["-O0"][..], &["-O2"]] {
+                for flags in COMPILED {
                     let context = format!("{identity} {flags:?} {ours}");
                     let object = temporary("part.o");
                     let built = bcc(&[
@@ -333,7 +335,8 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
 
     /// A variadic function whose `target` attribute turns AVX on, with a
     /// named 32-byte vector: Clang's convention passes it in memory, as LLVM
-    /// does, so each half bcc builds links with Clang's build of the other;
+    /// does, so each half bcc builds, through LLVM or the native back end,
+    /// links with Clang's build of the other;
     /// GCC's passes it in YMM0, where LLVM cannot, so bcc refuses both the
     /// definition and the call under GCC's identity.
     #[test]
@@ -356,7 +359,7 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
         assert!(built.status.success(), "{}", text(&built.stderr));
         let expected = build_and_run(clang, &source, &[callee.to_str().unwrap()]);
         std::fs::remove_file(&callee).unwrap();
-        for flags in [&["-O0"][..], &["-O2"]] {
+        for flags in COMPILED {
             for (ours, theirs) in [(&["-DCALLEE"][..], &[][..]), (&[], &["-DCALLEE"])] {
                 let context = format!("{flags:?} {ours:?}");
                 let object = temporary("variadic-part.o");
@@ -397,6 +400,125 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(_xgetbv(0)), long long), 
             }
         }
     }
+
+    /// A unit built with `-mavx2` passes its 32-byte vectors in YMM
+    /// registers and on the stack, returns them in YMM0 (and a 64-byte one
+    /// in YMM0 and YMM1 under Clang's convention), and reads unnamed ones
+    /// with `va_arg`, as the claimed compiler does: each half bcc builds
+    /// through LLVM or the native back end links with that compiler's build
+    /// of the other, in both directions, and with bcc's own build of the
+    /// other half through the other back end; the interpreter runs both
+    /// halves as one unit. A processor without AVX2 prints "skip" in every
+    /// build and runs no interpreter comparison.
+    #[test]
+    fn avx_vectors_link_with_gcc_and_clang() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let source = fixture("avx_vector_abi.c");
+        let mut references = vec![("--compiler-identity=clang", "target/llvm/bin/clang")];
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            references.push(("--compiler-identity=gcc", "gcc"));
+        }
+        let object = |compiler: &str, defines: &[&str]| {
+            let object = temporary("vector-part.o");
+            let built = Command::new(compiler)
+                .args(defines)
+                .args(["-mavx2", "-O0", "-w", "-c", &source, "-o"])
+                .arg(&object)
+                .output()
+                .unwrap();
+            assert!(
+                built.status.success(),
+                "{compiler}: {}",
+                text(&built.stderr)
+            );
+            object
+        };
+        let ours = |identity: &str, defines: &[&str], flags: &[&str], context: &str| {
+            let object = temporary("vector-ours.o");
+            let built = bcc(&[
+                &[identity, "-mavx2", "-w", "-c", &source, "-o"][..],
+                &[object.to_str().unwrap()],
+                defines,
+                flags,
+            ]
+            .concat());
+            assert!(built.status.success(), "{context}: {}", text(&built.stderr));
+            object
+        };
+        for (identity, compiler) in references {
+            let callee = object(compiler, &["-DCALLEE"]);
+            let expected = build_and_run(compiler, &source, &["-mavx2", callee.to_str().unwrap()]);
+            std::fs::remove_file(&callee).unwrap();
+            for flags in COMPILED {
+                for (half, other) in [(&["-DCALLEE"][..], &[][..]), (&[], &["-DCALLEE"])] {
+                    let context = format!("{identity} {flags:?} {half:?}");
+                    let mine = ours(identity, half, flags, &context);
+                    let theirs = object(compiler, other);
+                    let output = build_and_run(
+                        compiler,
+                        mine.to_str().unwrap(),
+                        &[theirs.to_str().unwrap()],
+                    );
+                    std::fs::remove_file(mine).unwrap();
+                    std::fs::remove_file(theirs).unwrap();
+                    assert_lines(&output, &expected, &context);
+                }
+            }
+            // Both halves bcc's, one through each back end.
+            for (callee, caller) in [
+                (&["--backend=native"][..], &["-O2"][..]),
+                (&["-O2"], &["--backend=native", "--opt=bcc"]),
+            ] {
+                let context = format!("{identity} callee {callee:?} caller {caller:?}");
+                let definitions = ours(identity, &["-DCALLEE"], callee, &context);
+                let calls = ours(identity, &[], caller, &context);
+                let output = build_and_run(
+                    compiler,
+                    definitions.to_str().unwrap(),
+                    &[calls.to_str().unwrap()],
+                );
+                std::fs::remove_file(definitions).unwrap();
+                std::fs::remove_file(calls).unwrap();
+                assert_lines(&output, &expected, &context);
+            }
+            if expected == "skip\n" {
+                continue;
+            }
+            for flags in [&["--opt=none"][..], &["--opt=bcc"]] {
+                let context = format!("{identity} --interpret {flags:?}");
+                let output = bcc(&[
+                    &[identity, "-mavx2", "-w", "-DWHOLE", "-DALWAYS_FAST"][..],
+                    &["--interpret", &source],
+                    flags,
+                ]
+                .concat());
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{context}: {}",
+                    text(&output.stderr)
+                );
+                assert_lines(&text(&output.stdout), &expected, &context);
+            }
+        }
+    }
+
+    /// The compiled bcc arms of the ABI tests: LLVM at -O0 and -O2, and the
+    /// native back end with and without bcc's optimizer and as a direct
+    /// object.
+    const COMPILED: [&[&str]; 5] = [
+        &["-O0"],
+        &["-O2"],
+        &["--backend=native"],
+        &["--backend=native", "--opt=bcc"],
+        &["--backend=native", "--native-object"],
+    ];
 
     /// The output of `source` built by `compiler` with `extra` arguments
     /// (macros, more sources and objects) at -O0.

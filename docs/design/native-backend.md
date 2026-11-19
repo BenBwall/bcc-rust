@@ -175,7 +175,8 @@ and lets the survey classify them. Stage 1 refused floats, `i128`, variadic
 definitions and dynamic stack allocation; **today** the check refuses only
 `i128` bit counts and byte swaps, `i128` positions Win64 never
 passes by value, structure results in register combinations neither
-convention defines, stack arguments aligned above 16,
+convention defines, stack arguments aligned above a page, vectors in YMM
+registers other than a 32-byte argument or a 32- or 64-byte result,
 frames larger than 1 GiB, stack arguments (chiefly `byval` structures) of
 more than 1 GiB in one signature, whose offsets and copy lengths would leave
 32-bit operands, and thread-local globals in named sections. Frame layout
@@ -668,8 +669,10 @@ aligned, except within the prolog"). Every call is made at that alignment.
   (stage 2, 2026-10-18), such a slot instead gets `align - 16` spare bytes
   and its address is computed, not folded: `lea` of the slot, `add
   $align-1`, `and $-align`, into a register every use goes through. The frame,
-  its unwind information and `%rbp` stay as they are; stack arguments aligned
-  above 16, which need the caller's stack realigned, are still refused.
+  its unwind information and `%rbp` stay as they are. A stack argument
+  aligned above 16 (a `byval` copy, such as a `__m256` past the eighth YMM
+  register or an unnamed one) instead realigns `%rsp` in the prologue, with
+  a frame pointer, and again at each such call (`MFunction::outgoing_align`).
 - **Frame pointers** (2026-11-08). A function whose stack moves keeps one,
   and so does every function but a naked one under
   `-fno-omit-frame-pointer` (GCC manual, "Optimize Options"), which reaches
@@ -766,7 +769,26 @@ Post-ABI aggregate kinds:
   caller stores `%rax`/`%rdx` into the area it passed after the call. Stage 1
   supports integer parts; stage 3 adds SSE parts (`%xmm0`/`%xmm1`), a whole
   `%xmm0` for `__float128` (System V) and `__int128` (Win64), and `%st0`
-  (and `%st1` for a complex `long double`) for X87 results.
+  (and `%st1` for a complex `long double`) for X87 results. With `whole`
+  (2026-11-19), a vector of 32 bytes comes back in `%ymm0` and one of 64 in
+  `%ymm0` and `%ymm1`: the callee's area, aligned as the layout says, is
+  loaded with `vmovups` last before `ret`, and the caller stores the
+  registers right after the call and then runs `vzeroupper`.
+- `vector_register(size 32, align)` (System V with AVX; psABI §3.2.3,
+  `__m256` is SSE then SSEUP): parameter `i` is the address of a copy that
+  travels in the next free vector register as a whole YMM register. The
+  caller loads it from the copy (`vmovups`, any alignment) after every other
+  argument register, so no SSE instruction runs while the upper half is in
+  use, and the call uses it like an XMM argument (`%al` counts it). The
+  callee stores it at entry to a fresh frame object aligned as the layout
+  says, which becomes the parameter, and runs `vzeroupper` after the last
+  one. ABI lowering gives one only while a register is free, so the
+  assigner always has one; an unnamed vector or one past the eighth is a
+  `byval` copy aligned to 32. No virtual register ever holds a YMM value,
+  so the allocator, spills and the callee-saved XMM registers of Win64 need
+  nothing for the upper halves: they are live only between those loads or
+  stores and the call, entry or `ret` they belong to, which name the
+  registers as fixed uses or definitions.
 
 Wide scalars that ABI lowering leaves as they are travel as LLVM's code
 generator passes them, which is what Clang's objects expect: under System V
