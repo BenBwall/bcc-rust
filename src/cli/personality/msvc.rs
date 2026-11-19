@@ -776,6 +776,10 @@ struct State {
     /// What `/wd`, `/we`, `/wo` and `/w1`-`/w4` said of each warning, the
     /// last option for a warning winning.
     warning_settings:        Vec<(u16, WarningSetting)>,
+    /// The last value and spelling of each switch whose classes
+    /// [`switch_class`] names, and of `/D` or `/U` for each macro (class
+    /// `D`), for `cl`'s warning D9025.
+    switches:                Vec<(String, String, String)>,
     errors:                  usize,
 }
 
@@ -812,6 +816,7 @@ impl Default for State {
             warning_level_options:   (0, 0),
             warnings_error:          false,
             warning_settings:        Vec::new(),
+            switches:                Vec::new(),
             errors:                  0,
         }
     }
@@ -869,6 +874,9 @@ impl State {
                 } else {
                     value.into()
                 };
+                if name == "D" || name == "U" {
+                    self.define_or_undefine(invocation, name, &value);
+                }
                 // `cl /DNAME#VALUE` defines NAME as VALUE.
                 let value = if name == "D" {
                     value.replacen('#', "=", 1)
@@ -881,6 +889,9 @@ impl State {
             }
         }
         let path = |value: &str| Some(PathBuf::from(value.strip_prefix(':').unwrap_or(value)));
+        if let Some((class, value)) = switch_class(option) {
+            self.set_switch(invocation, class, value, format!("/{option}"));
+        }
         match option {
             | "c" => self.compile_only = true,
             | "nologo" => self.nologo = true,
@@ -1061,6 +1072,13 @@ impl State {
                     self.errors += 1;
                     return true;
                 };
+                let value_text = value.to_string_lossy();
+                self.set_switch(
+                    invocation,
+                    &option[..2],
+                    &value_text,
+                    format!("/{option}{value_text}"),
+                );
                 let value = Some(PathBuf::from(value));
                 match option {
                     | "Fe:" => self.executable = value,
@@ -1327,6 +1345,111 @@ impl State {
     }
 }
 
+impl State {
+    /// Records `spelling`, the switch of `class` with `value`, warning as
+    /// `cl` does (D9025) when it overrides an earlier one of the class with a
+    /// different value: `overriding '/W3' with '/W4'`. clang-cl does not
+    /// warn.
+    fn set_switch(&mut self, invocation: &Invocation, class: &str, value: &str, spelling: String) {
+        let previous = self
+            .switches
+            .iter()
+            .position(|(other, _, _)| other == class);
+        if let Some(index) = previous {
+            let (_, old_value, old_spelling) = self.switches.remove(index);
+            if old_value != value && invocation.personality == Personality::Msvc {
+                super::print(
+                    &format!(
+                        "{} : Command line warning D9025 : overriding '{old_spelling}' with \
+                         '{spelling}'\n",
+                        invocation.name
+                    ),
+                    true,
+                );
+            }
+        }
+        self.switches.push((class.into(), value.into(), spelling));
+    }
+
+    /// Records `/D` or `/U` (`name`) with its `operand`: `cl` warns (D9025)
+    /// when `/U` undefines a macro the last option for it defined, but not
+    /// the other way round or for a redefinition.
+    fn define_or_undefine(&mut self, invocation: &Invocation, name: &str, operand: &str) {
+        let macro_name = operand
+            .split(['=', '#'])
+            .next()
+            .unwrap_or(operand);
+        let class = format!("D {macro_name}");
+        let defined_last = self
+            .switches
+            .iter()
+            .any(|(other, value, _)| *other == class && value == "D");
+        if name == "U" && defined_last {
+            self.set_switch(invocation, &class, "U", format!("/U{operand}"));
+        } else {
+            self.switches.retain(|(other, _, _)| *other != class);
+            self.switches
+                .push((class, name.into(), format!("/{name}{operand}")));
+        }
+    }
+}
+
+/// The class and value of a switch whose last occurrence wins in `cl`,
+/// which warns (D9025) when one overrides another of its class: the warning
+/// level (`/w` is `/W0`; `/Wall` is no level), the optimization level and
+/// the size or speed preference (`/Ox` is `/O2`, and neither class holds
+/// the other's options), the runtime, the standard, the debug information,
+/// `/WX`, the output names, the packing, and the switches with a `-` form.
+/// Microsoft Learn: "Command-Line Warning D9025".
+fn switch_class(option: &str) -> Option<(&'static str, &str)> {
+    Some(match option {
+        | "w" | "W0" => ("W", "0"),
+        | "W1" | "W2" | "W3" | "W4" => ("W", &option[1..]),
+        | "Od" => ("O", "d"),
+        | "O1" => ("O", "1"),
+        | "O2" | "Ox" => ("O", "2"),
+        | "Os" | "Ot" => ("Os", option),
+        | "MT" | "MTd" | "MD" | "MDd" => ("M", option),
+        | "Zi" | "Z7" | "ZI" => ("Z7", option),
+        | "Zp" => ("Zp", "1"),
+        | "Zp1" | "Zp2" | "Zp4" | "Zp8" | "Zp16" => ("Zp", &option[2..]),
+        | "TC" | "TP" => ("T", option),
+        | _ =>
+            if let Some(standard) = option.strip_prefix("std:") {
+                ("std", standard)
+            } else if let Some(model) = option.strip_prefix("fp:")
+                && matches!(model, "precise" | "fast" | "strict")
+            {
+                ("fp", model)
+            } else if let Some(level) = option.strip_prefix("Ob") {
+                ("Ob", level)
+            } else if let Some(name) = ["Fo", "Fe", "Fa", "Fi"].into_iter().find(|name| {
+                option.starts_with(name) && !option[2..].trim_start_matches(':').is_empty()
+            }) {
+                (name, option[2..].trim_start_matches(':'))
+            } else {
+                let base = option.strip_suffix('-').unwrap_or(option);
+                let class = [
+                    "WX",
+                    "GL",
+                    "sdl",
+                    "Oy",
+                    "GF",
+                    "GR",
+                    "Gw",
+                    "Gy",
+                    "Oi",
+                    "GS",
+                    "Zc:trigraphs",
+                    "permissive",
+                ]
+                .into_iter()
+                .find(|class| *class == base)?;
+                (class, option)
+            },
+    })
+}
+
 /// Accepts hardening or a run-time check bcc does not implement, with a
 /// warning.
 fn ignored(invocation: &Invocation, option: &str, why: &str) {
@@ -1431,7 +1554,18 @@ impl State {
 fn named(option: Option<&Path>, source: &OsStr, extension: &str) -> PathBuf {
     let stem = Path::new(Path::new(source).file_name().unwrap_or(source)).with_extension(extension);
     let name = match option {
-        | Some(option) if is_directory(option) => option.join(stem),
+        // A backslash separates directories only on Windows; elsewhere the
+        // one that ends `obj\` is dropped, so the objects go into `obj`, as
+        // `cl`'s do, rather than to `obj\/a.obj`.
+        | Some(option) if is_directory(option) => {
+            let text = option.as_os_str().to_string_lossy();
+            let directory = if cfg!(windows) {
+                &*text
+            } else {
+                text.trim_end_matches('\\')
+            };
+            Path::new(directory).join(stem)
+        },
         | Some(option) if option.extension().is_none() => option.with_extension(extension),
         | Some(option) => option.into(),
         | None => stem,
