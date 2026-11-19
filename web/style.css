@@ -1589,6 +1589,14 @@
     .lesson-card { grid-template-columns: 52px minmax(160px, 1fr) minmax(0, 2fr); }
     .lesson-topics { grid-column: 2 / -1; }
   }
+  /* Small laptops and tablets held sideways: Reset, Back and Run show
+     their icons alone, as on a phone (their names stay for screen readers
+     and in their tooltips), so the status keeps to the strip's first row
+     from about 1000 px and the note sits higher under the cells. */
+  @media (min-width: 821px) and (max-width: 1180px) {
+    .transport .button:not(.primary, .labelled) .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .transport .button:not(.primary, .labelled) { padding-inline: 10px; }
+  }
   @container insight (max-width: 760px) {
     .notes-row { grid-template-columns: minmax(0, 1fr); }
     .machine-side { border-top: 1px solid var(--seam); }
