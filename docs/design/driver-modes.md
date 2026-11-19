@@ -1858,13 +1858,13 @@ the pinned Clang's, and the wrapper's):
 
 **The classic options.** icx drops the classic `icc` options it no longer
 has, warning about them all at once before anything else, even a query's
-answer, in the order given:
+answer, in the order given (icx ends `option list:` with a space):
 
 ```text
 icx: command line warning #10430: Unsupported command line options encountered
 These options as listed are not supported.
 For more information, use '-qnextgen-diag'.
-option list: 
+option list:
 	-ip
 	-wd10441
 ```
