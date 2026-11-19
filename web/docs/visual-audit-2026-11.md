@@ -1443,3 +1443,244 @@ lead:
 - **A shadowing object's title** says "Begin the lifetime of `y` and `x`"
   for the inner `x`, which the tape and Table 1 call `x #2`; the engine does
   not know the page's lane numbers.
+
+## Part 8: the note beside the tape (2026-11)
+
+Parts 6 and 7 left the step's note below the fold on a laptop, and four
+smaller things: a shadowing object's title, Table 1's "Lives in" heading,
+"what comes next", and the tape's clock. This part gives the note a column
+of its own on wide screens, which is the main change, and fixes three of
+the four, on `agent/site-layout-fold`.
+
+### Method
+
+The site was built with `web/build.sh` as in Part 7: Trunk without
+`--release`, the dev profile at `opt-level=s`. The before build is #412's
+last, from `9704bb59e`, whose site and engine sources are those of `main`
+at `169b81fc8`. The after build is this branch at `97430e88c`. Playwright
+scripts drove Chromium:
+
+- **the fold walk:** every step of the twelve machine lessons (1,254
+  notes), as a reader who brings the workbench to the top of the window
+  once and then only presses Step. The script clicks the key where it is,
+  as a pointer does: Playwright's own `click()` scrolls the page first, which
+  moved it 424 px on the first try. At each note the walk records where the
+  current line, the note's title and lead, its expression panel (and that
+  panel's current step) and the cells the step touched sit, and whether
+  each is wholly in the window. In the window means below the sticky
+  header and control strip and above the window's foot (on a phone, above
+  the docked keys). A cell must also be uncovered at its centre and inside
+  its row's scrolled window. The walk also records each note's title, lead
+  and value flow, sideways scroll and page errors. It ran on both builds at
+  1440x900, 1366x768 and 1280x800 in both themes with reduced motion, and
+  at 1920x1080 light and 390x844 dark. With motion allowed it ran at
+  1440x900 dark, 1366x768 light and 1280x800 dark, over "Objects, loops and
+  calls" and "Structs and static storage" (333 notes), waiting 700 ms for
+  each step's motion to settle;
+- **probes:** Part 7's shadowing program at 1440x900 light; Table 1's
+  headings over the first 60 steps of the first lesson at 1440x900 light;
+  the hanger and the tape's playhead at step 45 of the first lesson at
+  1100x800, where the deck is compact;
+- **contrast:** the WCAG contrast of every text node in the note, Figure 1's
+  caption and Table 1's headings, against its composited background, at
+  step 45 of the first lesson and at the shadowing probe's block entry, at
+  1440x900, 1366x768 and 390x844 in both themes.
+
+The screenshots are in [`screenshots/fold/`](screenshots/fold/), named
+`<item>-<width>-<theme>-before.png` and `…-after.png`.
+
+### Findings
+
+#### 1. The note was below the fold
+
+The machine view stacked the tape, the cells and then the note, with
+Figure 2, the standard output and Table 1 beside the note. Part 2 sized the
+tape so the note's heading and four lines of its lead stayed above the fold
+at 1440x900, but Part 6 put the expression's steps under the lead, and they
+never fit. Before this change, at 1440x900 the panel ran past the window's
+foot at 907 of the 1,027 notes that show one. At 1366x768 the lead itself
+did at 104 notes, and the panel at every one. A reader pressing Step saw
+the line and the tape move but had to scroll to read what the step did, and
+to scroll back to see the tape.
+
+**Fixed.** From 1181 px wide, where the listing is already a sticky column,
+the note takes a column of its own at the machine's right, 360 px wide. It
+sticks under the control strip and is as tall as the window below it. The
+tape, the cells, Figure 2, the standard output and Table 1 stack in the
+column beside it. The line that ran (in the sticky listing), the note with
+its expression's steps, and the cells the step touched now share the
+window however many lanes the tape has. A note longer than the window
+scrolls on its own, and each step starts it at its top. The page itself
+never scrolls on a step, so nothing fights the reader's own scrolling: a
+reader who scrolls down to Table 1 or the standard output keeps the note
+beside them.
+
+In the new column the expression's steps run down #411's rail, which
+applies wherever the note is narrow: a container query on the note at
+572 px, the widest a phone's note gets, replaces the phone's media query.
+The lead is set at 22 px, as on a tablet. The machine column is narrower,
+so the reels give the tape their width and the deck is compact (each name
+rides on its lane, as on a phone). A vermilion rule under the cells leads
+from the playhead to the note. Below 1440 px the mode keys take their
+short names, so the control strip keeps to one row at 1366 px, where it
+used to wrap to two and take 31 px from the window. Below 1181 px nothing
+changes.
+
+The other options were weaker. Auto-scrolling the note into view on Step,
+as #409 scrolls a linked line, would have had to push the tape and most of
+the cells under the control strip at 768 px. A docked note would cover the
+cells it describes. Shrinking the tape to fit the note under it would leave
+it less than 70 px at 768 px, not two lanes.
+
+| Window, before → after | Notes | Something out of view | Title or lead | Expression panel | Its current step | No touched cell in view | Lowest lead bottom |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1440x900 light | 1254 | 907 → 3 | 2 → 0 | 907 → 3 of 1027 | 686 → 1 | 0 → 0 of 799 | 936 → 475 px |
+| 1440x900 dark | 1254 | 907 → 3 | 2 → 0 | 907 → 3 of 1027 | 686 → 1 | 0 → 0 of 799 | 936 → 475 px |
+| 1366x768 light | 1254 | 1049 → 12 | 104 → 0 | 1027 → 12 of 1027 | 979 → 1 | 0 → 0 of 799 | 877 → 475 px |
+| 1366x768 dark | 1254 | 1049 → 12 | 104 → 0 | 1027 → 12 of 1027 | 979 → 1 | 0 → 0 of 799 | 877 → 475 px |
+| 1280x800 light | 1254 | 1029 → 11 | 5 → 0 | 1027 → 10 of 1027 | 893 → 1 | 0 → 0 of 799 | 859 → 474 px |
+| 1280x800 dark | 1254 | 1029 → 11 | 5 → 0 | 1027 → 10 of 1027 | 893 → 1 | 0 → 0 of 799 | 859 → 474 px |
+| 1920x1080 light | 1254 | 445 → 1 | 0 → 0 | 445 → 1 of 1027 | 209 → 1 | 0 → 0 of 799 | 1007 → 475 px |
+| 390x844 dark | 1254 | 1098 → 1098 | 0 → 0 | 777 → 777 of 1027 | 315 → 315 | 799 → 799 of 799 | 682 → 682 px |
+| 1440x900 dark, motion | 333 | 270 → 0 | 0 → 0 | 270 → 0 of 291 | 200 → 0 | 0 → 0 of 253 | 857 → 368 px |
+| 1366x768 light, motion | 333 | 291 → 0 | 0 → 0 | 291 → 0 of 291 | 273 → 0 | 0 → 0 of 253 | 737 → 369 px |
+| 1280x800 dark, motion | 333 | 291 → 0 | 0 → 0 | 291 → 0 of 291 | 262 → 0 | 0 → 0 of 253 | 757 → 368 px |
+
+The light and dark runs at each size measured the same. With motion
+allowed, over its two lessons, nothing was out of view after the change. "Something out of view" counts the
+notes where the current line, the note's title or lead, its expression
+panel or every touched cell was not wholly in the window. The phone keeps
+its layout: the note comes first, the tape and the cells after it, as Part
+2 chose, and its numbers are the same before and after.
+
+[`fold-1440-light`](screenshots/fold/fold-1440-light-before.png)
+([after](screenshots/fold/fold-1440-light-after.png)),
+[`fold-1366-dark`](screenshots/fold/fold-1366-dark-before.png)
+([after](screenshots/fold/fold-1366-dark-after.png)),
+[`fold-1280-light`](screenshots/fold/fold-1280-light-before.png)
+([after](screenshots/fold/fold-1280-light-after.png)),
+[`fold-1920-light`](screenshots/fold/fold-1920-light-before.png)
+([after](screenshots/fold/fold-1920-light-after.png)),
+[`fold-1440-dark-motion`](screenshots/fold/fold-1440-dark-motion-before.png)
+([after](screenshots/fold/fold-1440-dark-motion-after.png)),
+[`fold-390-dark`](screenshots/fold/fold-390-dark-before.png)
+([after](screenshots/fold/fold-390-dark-after.png)).
+
+#### 2. A long expression's steps outran the window
+
+In the new column the steps of a long expression can still run past the
+window's foot. A printf with five conversions leads with which argument
+each took (five lines), and its expression has 12 steps. At 1366x768,
+before the next fix, the panel ran past the window's foot at 105 notes.
+
+**Fixed.** Beside the tape the steps scroll in a window of their own, as
+tall as the space a few lines of lead leave (the window's height less the
+control strip and 440 px, at least 150 px). Each step scrolls it just far
+enough to show its entry and the one after it, the next step or what comes
+next. The panel's current step is now out of view at one note in each
+laptop size: that printf, at its last step, whose five-line lead and value
+flow leave its steps too little of the column.
+[`printf-1366-light`](screenshots/fold/printf-1366-light-before.png)
+([after](screenshots/fold/printf-1366-light-after.png)).
+
+#### 3. A stop wraps the control strip
+
+When the run stops at undefined behavior, the status ("Stopped:
+indeterminate read") wraps the control strip to two rows at 1440 px, and
+the page shifts under it. In the three short lessons that stop, the machine
+column ended at the note's foot, so the note had no room to stay under the
+taller strip, and its title slipped 5 px beneath it.
+
+**Fixed.** Where the note has its own column, the machine view is at least
+a window tall. At those stops the note now sits under the strip.
+[`stop-1440-light`](screenshots/fold/stop-1440-light-before.png)
+([after](screenshots/fold/stop-1440-light-after.png)).
+
+#### 4. A shadowing object's title said `x`
+
+Part 7's shadowing probe named the inner `x` "`x`" in the note, while the
+tape and Table 1 called it `x #2`.
+
+**Fixed.** The note's title, lead and value flow now give each object the
+step used the number the tape gives its lane, where the step uses that name
+for one object only: "Begin the lifetime of `y` and `x #2`", "Declare `x #2`
+(int)", "Read `x #2` → 10", "End the lifetime of `y` and `x #2`". The outer
+`x` keeps its name, including the read of it before the inner one is
+declared. The label keeps the object's colour. The note takes only the
+tape's number, not the tape's shortening of a long string literal's name; a
+first version took the whole lane label, and the fold walk caught 24 notes
+of the printf lessons that read `"Hello, w…"` for `"Hello, world!"`. No lesson has a
+shadowing object, so no lesson's text changes.
+[`shadow-1440-light`](screenshots/fold/shadow-1440-light-before.png)
+([after](screenshots/fold/shadow-1440-light-after.png)).
+
+#### 5. Table 1's "Lives in" wrapped
+
+At note 1 of the first lesson, three rows say "not declared yet", which
+widened the object column until "Lives in" wrapped to two lines (39 px
+tall).
+
+**Fixed.** Table 1's headings keep to one line (23 px); a table too
+narrow for them scrolls, as its rows already do.
+[`sheet-1440-light`](screenshots/fold/sheet-1440-light-before.png)
+([after](screenshots/fold/sheet-1440-light-after.png)).
+
+#### 6. The tape's clock was explained only by the panel's key
+
+**Fixed.** Figure 1's caption now reads "Every object of the run, recorded
+on tape; the clock along its top pulses once a step, taller at a sequence
+point." The expression panel's key still says it too.
+
+#### 7. The hanger missed the playhead on a compact deck
+
+The vermilion hanger drops from the playhead through the cells. It was
+placed past the left reel and the lane names, but a compact deck lays the
+names on its lanes. At 1100x800 the hanger was at x = 1135, 152 px right of
+the playhead at 983 and outside the 1100 px window.
+
+**Fixed.** The hanger's offset is the reel's width plus the names' width,
+none on a compact deck. At 1100x800 both are at 983.
+[`hanger-1100-light`](screenshots/fold/hanger-1100-light-before.png)
+([after](screenshots/fold/hanger-1100-light-after.png)).
+
+#### Intended changes to the text
+
+None in the lessons. Every title, lead and value flow of the 1,254 notes is
+the same before and after in every configuration of the fold walk. In the
+workbench the shadowing probe's notes 6 and 12 to 23 name the inner `x` as
+`x #2`. Figure 1's caption is longer by one clause.
+
+#### Checks
+
+- **No sideways scroll** at any note of any lesson in any configuration,
+  and no page logged an error.
+- **Contrast:** nothing new is below AA. The lowest text in the note's
+  column is 4.99:1, the note's number in the accent ink in the light theme
+  (`#b33a0b` on `#ecebe6`, the colour Table 1 and Part 7 already use), then
+  5.25:1 for the current step's number on the vermilion entry. Figure 1's
+  caption, Table 1's headings and the `x #2` labels are above the lowest six
+  in every configuration: at least 5.36:1 in the light theme and 5.47:1 in
+  the dark one.
+- **Reduced motion:** nothing new moves. The note's column and the steps'
+  window jump to their place on each step, with or without motion.
+- **Tests:** the site's tests cover the label a shadowing object takes in
+  the title and that the outer object keeps its name, that a label replaces
+  only a whole code span and keeps the object's colour, and that a long
+  string literal keeps its spelling. The site's four clippy runs pass. The
+  engine is unchanged.
+
+### Left for later
+
+- **What comes next** is still named only for a store, an update and a
+  library call. Naming it for a read or an operator needs the engine to
+  describe each of its thirty or so operations before it runs one, which is
+  not small.
+- **Below 1181 px** (a small laptop at 1024x768, a tablet held sideways)
+  the note still sits under the cells, as before.
+- **The stop's callout** comes after "Why it matters" in the note, so at a
+  stop in the column layout it is often below the window's foot until the
+  reader scrolls the note.
+- **One printf** with five conversions, at its last step, still has its
+  current step below the foot at each laptop size.
+- **The cells under the head** still name a shadowing object `x`; the
+  tape, Table 1 and the note call it `x #2`.
