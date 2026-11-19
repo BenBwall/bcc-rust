@@ -365,16 +365,7 @@ impl Cli {
         // wherever they appear; GCC reads all of them in order.
         let clang = configuration.compiler_identity().rules() == RuleSet::Clang;
         let first = |option: &str| clang && matches!(option, "-pedantic" | "-pedantic-errors");
-        // A warning option Clang's front end does not take has no effect,
-        // under every identity but GCC's (`report_warning_options`).
-        let gcc = self.compiler_identity == Identity::Gcc;
-        let options = self
-            .language_option
-            .iter()
-            .map(std::ops::Deref::deref)
-            .filter(|option| {
-                gcc || !option.starts_with("-W") || warning_options::clang_takes(option)
-            });
+        let options = self.language_option.iter().map(std::ops::Deref::deref);
         let (format, presentation) = self.diagnostic_style();
         options
             .clone()
@@ -403,12 +394,14 @@ impl Cli {
     }
 
     /// Gives `context` what the compiler says about the warning options
-    /// with each unit it compiles. Clang's front end warns about each
+    /// with each unit it compiles: Clang's front end warns about each
     /// option it does not take, at the severity `-Wunknown-warning-option`
-    /// has; bcc's other identities read the options as bcc does, warning
-    /// in Clang's words about those it does not implement, GCC's groups
-    /// under any identity but GCC's. GCC's personality passes the `-Wno-`
-    /// options GCC ignores, which it notes.
+    /// has. The Clang and clang-cl personalities pass those options apart
+    /// (`--unknown-warning-option`), as Clang reads them; bcc's own command
+    /// line warns in Clang's words about an option bcc does not implement,
+    /// and under any identity but GCC's about one of GCC's groups, which it
+    /// applies all the same. The GCC personality passes the `-Wno-` options
+    /// GCC ignores, which GCC notes.
     pub(super) fn report_warning_options(&self, context: &mut Context<'_>) {
         let tu = context.tu_arena();
         context.command_line.unrecognized = tu.alloc_slice_fill_iter(
@@ -422,32 +415,30 @@ impl Cli {
         else {
             return;
         };
-        let identity = CompilerIdentity::from(self.compiler_identity);
+        let gcc = CompilerIdentity::from(self.compiler_identity) == CompilerIdentity::Gcc;
+        // An empty `-Wno-` names the unnamed group Clang's table begins
+        // with.
+        let unknown = self.language_option.iter().filter(|option| {
+            *option != "-Wno-"
+                && match LanguageFlag::parse(option) {
+                    | Some(LanguageFlag::UnknownWarning) => true,
+                    | Some(LanguageFlag::WarningGroup(group, _)) => group.gcc_only() && !gcc,
+                    | _ => false,
+                }
+        });
         let suffix = match severity {
             | ErrorSeverity::Error => "-Werror,-Wunknown-warning-option",
             | ErrorSeverity::Warning => "-Wunknown-warning-option",
         };
         let mut complaints = crate::util::bump::ArenaVec::new_in(tu);
-        for option in &self.language_option {
-            let complaint = if identity == CompilerIdentity::Gcc {
-                match LanguageFlag::parse(option) {
-                    | Some(LanguageFlag::UnknownWarning) => Some(crate::diagnostics::format_in!(
-                        tu,
-                        "unknown warning option '{option}'"
-                    )),
-                    | _ => None,
-                }
-            } else if option.starts_with("-W") {
-                warning_options::clang_complaint(option, tu)
-            } else {
-                None
-            };
-            if let Some(complaint) = complaint {
-                complaints.push((
-                    severity,
-                    crate::diagnostics::format_in!(tu, "{complaint} [{suffix}]"),
-                ));
-            }
+        for option in self.unknown_warning_option.iter().chain(unknown) {
+            let complaint = warning_options::clang_complaint(option, tu).unwrap_or_else(|| {
+                crate::diagnostics::format_in!(tu, "unknown warning option '{option}'")
+            });
+            complaints.push((
+                severity,
+                crate::diagnostics::format_in!(tu, "{complaint} [{suffix}]"),
+            ));
         }
         if severity == ErrorSeverity::Error {
             context.command_line.errors = complaints.len();

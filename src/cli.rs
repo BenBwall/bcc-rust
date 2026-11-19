@@ -191,6 +191,11 @@ struct Cli {
     /// notes after the diagnostics of each unit that has any.
     #[arg(long, hide = true)]
     unrecognized_warning_option: Vec<String>,
+    /// A warning option Clang's front end does not take, which the Clang
+    /// and clang-cl personalities pass for bcc to warn about as Clang does,
+    /// without effect.
+    #[arg(long, hide = true)]
+    unknown_warning_option: Vec<String>,
     /// Select the ELF thread-local storage model (also accepts GCC
     /// -ftls-model=MODEL): global-dynamic (the default), local-dynamic,
     /// initial-exec or local-exec. The compiler may still choose a more

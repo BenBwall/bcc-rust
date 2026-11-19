@@ -35,3 +35,4 @@ In file included from pragma-diagnostic-gcc.c:53:
 pragma-diagnostic-twice.h:1:15: warning: initialization of 'char *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
     1 | char *twice = 1;
       |               ^
+cc1: some warnings being treated as errors

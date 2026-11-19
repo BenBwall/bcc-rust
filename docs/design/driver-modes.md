@@ -122,8 +122,11 @@ has set, the pedantic ones included, and `-Wno-everything` turns every one
 off, so that a later `-Weverything` leaves them off but their own options
 turn them on again. `-Wfatal-errors` makes the first error a `fatal error`,
 without the `-Werror,` in the option it names, and nothing after it is
-reported or counted. bcc's own command line reads the warning options as
-Clang does under every identity but GCC's.
+reported or counted. The personality passes the options Clang does not
+take apart from the others, so they have no effect even where bcc has the
+group (`-Wnormalized`, bcc's own `-Wconstant-promotion`); bcc's own command
+line keeps its groups and warns, in Clang's words, about the options it does
+not implement.
 
 **clang-cl.** As Clang; its driver has no `-Wl,`, `-Wa,` or `-Wp,`, so each
 is an unknown warning option. `/Wall` is `-Weverything`.

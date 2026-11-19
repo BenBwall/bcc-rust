@@ -11372,8 +11372,9 @@ int g(void) { switch ((enum e)B) { case A: return 1; } return 0; }
             succeeds(&output);
             assert_eq!(stderr(&output), "", "{args:?}");
         }
-        // `-Wp,` splits its operand into options; `-ofile` is joined.
-        let output = directory.bcc("--tcc-mode", &["-Wp,-DX=3,-UY", "-c", "x.c", "-ojoined.o"]);
+        // `-Wp,` reads its operand as the next argument, commas and all;
+        // `-ofile` is joined.
+        let output = directory.bcc("--tcc-mode", &["-Wp,-DX=3", "-c", "x.c", "-ojoined.o"]);
         succeeds(&output);
         assert!(directory.path("joined.o").is_file());
         // The last action wins, with a warning for each after the first.

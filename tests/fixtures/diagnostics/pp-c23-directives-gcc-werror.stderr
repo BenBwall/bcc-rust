@@ -15,3 +15,4 @@ pp-c23-directives-gcc-werror.c:16:2: error: `#elifdef` after `#else`
    16 | #elifdef YES
       |  ^~~~~~~
 pp-c23-directives-gcc-werror.c:16:2: error: #elifdef before C23 is a GCC extension [-Werror]
+cc1: all warnings being treated as errors

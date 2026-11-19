@@ -69,7 +69,10 @@ use super::{
 };
 use crate::{
     backend::llvm::operand,
-    cli::arguments::implements_language_option,
+    cli::{
+        arguments::implements_language_option,
+        warning_options,
+    },
     target::{
         UNKNOWN_VECTOR_ABI,
         X86Features,
@@ -240,13 +243,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                         format_args!("'{text}' is not supported: {why}"),
                     ),
                 }
-            } else if ["-Wl,", "-Wa,", "-Wp,"]
-                .iter()
-                .any(|prefix| text.starts_with(prefix))
-            {
-                // clang-cl's driver has none of these, so its front end
-                // reads each as a warning option it does not know.
-                state.bcc.push(format!("--language-option={text}").into());
+            } else if text.starts_with("-W") && !warning_options::clang_takes(text) {
+                // Clang's front end warns about the warning options it does
+                // not take, `-Wl,`, `-Wa,` and `-Wp,` among them, which
+                // clang-cl's driver does not have.
+                state
+                    .bcc
+                    .push(format!("--unknown-warning-option={text}").into());
+            } else if text.starts_with("-W") && !implements_language_option(text) {
+                // Taken, and with no effect in bcc.
             } else {
                 state.bcc.push(argument.into());
             }

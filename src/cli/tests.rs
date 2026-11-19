@@ -323,20 +323,3 @@ fn clang_complains_about_warning_options_in_its_own_words() {
         );
     }
 }
-
-/// The groups bcc implements that Clang lacks are GCC's, which bcc's own
-/// command line, reading warning options as Clang does, reports as
-/// unknown.
-#[test]
-fn every_group_clang_lacks_is_gccs() {
-    for &group in crate::configuration::DiagnosticGroup::ALL {
-        let Some(name) = group.name() else {
-            continue;
-        };
-        assert_eq!(
-            warning_options::clang_takes(&format!("-W{name}")),
-            !group.gcc_only(),
-            "-W{name}"
-        );
-    }
-}

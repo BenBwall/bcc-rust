@@ -1464,7 +1464,7 @@ impl State<'_> {
     /// Clang's front end, do, and returns whether that is all there is to
     /// it; a warning the compiler knows goes on to be passed or ignored.
     /// Clang's front end warns about one it does not take, as bcc does with
-    /// the option passed on. GCC
+    /// the option passed apart. GCC
     /// refuses an empty `-Wno-`, a joined option's missing or bad value,
     /// and a name it does not know, Clang's included, except that it
     /// ignores an unknown `-Wno-` option, which bcc notes after the
@@ -1479,15 +1479,16 @@ impl State<'_> {
         {
             return false;
         }
-        // Clang's front end reads the warning options; bcc's reads them as
-        // it does and reports the same, so the options it does not take
-        // reach bcc.
+        // Clang's front end reads the warning options: bcc warns as it does
+        // about those it does not take, and applies those it takes and bcc
+        // implements.
         if self.compiler == Compiler::Clang {
-            if crate::cli::warning_options::clang_takes(text) {
-                return false;
+            if !crate::cli::warning_options::clang_takes(text) {
+                self.out
+                    .push(format!("--unknown-warning-option={text}").into());
+                return true;
             }
-            self.out.push(text.into());
-            return true;
+            return !implements_language_option(text);
         }
         if text == "-Wno-" {
             self.unrecognized.push(text.into());
