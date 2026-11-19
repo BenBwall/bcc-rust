@@ -475,7 +475,11 @@ fn extension_marker_leaves_default_on_c23_extensions_to_clang() {
             |p| {
                 assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
                 let extensions = super::extensions(p);
-                assert_eq!(extensions.len(), expected.len(), "{identity:?}: {extensions:?}");
+                assert_eq!(
+                    extensions.len(),
+                    expected.len(),
+                    "{identity:?}: {extensions:?}"
+                );
                 for (found, spelling) in extensions.iter().zip(expected) {
                     assert!(found.contains(spelling), "{identity:?}: {found}");
                 }

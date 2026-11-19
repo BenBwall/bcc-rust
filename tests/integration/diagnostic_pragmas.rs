@@ -861,9 +861,13 @@ int b[0];
             (i32, &'a [&'a str], &'a str),
             Option<(i32, &'a [&'a str], &'a str)>,
         );
-        const BODY: &str = "void f(int);\nvoid g(void);\n__extension__ void f(int) {}\n__extension__ \
-                            void g(void) { goto l; l: int x; (void)x; goto m; m: }\n__extension__ \
-                            _Static_assert(1);\n";
+        const BODY: &str = "\
+void f(int);
+void g(void);
+__extension__ void f(int) {}
+__extension__ void g(void) { goto l; l: int x; (void)x; goto m; m: }
+__extension__ _Static_assert(1);
+";
         const SILENT: (i32, &[&str], &str) = (0, &[], "");
         let cases: [Case<'_>; 4] = [
             // The reviewer's reproducer: a `-Wpedantic` pragma after one
@@ -945,7 +949,9 @@ int b[0];
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert_eq!(found, severities, "{name} {mode}: {stderr}");
                 assert!(
-                    stderr.lines().all(|line| !line.contains("parameter requires a name")),
+                    stderr
+                        .lines()
+                        .all(|line| !line.contains("parameter requires a name")),
                     "{name} {mode}: {stderr}"
                 );
                 assert_eq!(
