@@ -964,6 +964,99 @@ __extension__ _Static_assert(1);
         }
     }
 
+    /// Clang's `-Wpedantic` does not hold the four C23 extensions it warns of
+    /// by default (`InferPedantic` in `ClangDiagnosticsEmitter.cpp` takes in
+    /// only extensions that are off by default), so an `error` or `fatal`
+    /// pragma naming it leaves them warnings, inside `__extension__` or not,
+    /// and only `-Werror` or `-pedantic-errors` makes them errors. GCC files
+    /// them under `-Wpedantic`, which its own pragma makes errors outside
+    /// `__extension__`. Each line and severity in order, the closing line and
+    /// the status are Clang 23.1.5's, which bcc's own command line follows,
+    /// and the severities and status are GCC 14's (which ignores Clang's
+    /// pragma, where bcc's GCC personality already warns of an unnamed
+    /// parameter without `-pedantic`).
+    #[test]
+    fn pedantic_error_pragmas_leave_the_c23_extensions_clang_warns_of_warnings() {
+        const PLAIN: &str = "\
+void f(int);
+void g(void);
+void f(int) {}
+void g(void) { goto l; l: int x; (void)x; goto m; m: }
+_Static_assert(1);
+";
+        const EXTENSION: &str = "\
+void f(int);
+void g(void);
+__extension__ void f(int) {}
+__extension__ void g(void) { goto l; l: int x; (void)x; goto m; m: }
+__extension__ _Static_assert(1);
+";
+        const WARNINGS: &[&str] = &["4 warning", "5 warning", "5 warning", "6 warning"];
+        const ERRORS: &[&str] = &["4 error", "5 error", "5 error", "6 error"];
+        let root = directory("pedantic-error-c23");
+        for (body, extension) in [(PLAIN, false), (EXTENSION, true)] {
+            for pragma in [
+                "clang diagnostic error",
+                "clang diagnostic fatal",
+                "GCC diagnostic error",
+            ] {
+                fs::write(
+                    root.join("input.c"),
+                    format!("#pragma {pragma} \"-Wpedantic\"\n{body}"),
+                )
+                .unwrap();
+                for flags in [&[][..], &["-Werror"], &["-pedantic-errors"]] {
+                    let clang = if flags.is_empty() {
+                        (0, WARNINGS, "4 warnings generated.")
+                    } else {
+                        (1, ERRORS, "4 errors generated.")
+                    };
+                    let gcc = match (pragma.starts_with("GCC"), extension) {
+                        | (true, false) => Some((1, ERRORS)),
+                        | (true, true) => Some((0, &[][..])),
+                        | (false, _) => None,
+                    };
+                    for mode in [Some("--clang-mode"), None, Some("--gcc-mode")] {
+                        let (status, severities, last) = match mode {
+                            | Some("--gcc-mode") => {
+                                let Some((status, severities)) = gcc else {
+                                    continue;
+                                };
+                                (status, severities, None)
+                            },
+                            | _ => (clang.0, clang.1, Some(clang.2)),
+                        };
+                        let mut arguments: Vec<&str> = mode.into_iter().collect();
+                        arguments.push("-std=c17");
+                        arguments.extend(flags);
+                        arguments.extend(["-c", "-o", "output.o", "input.c"]);
+                        let output = run(&root, &arguments);
+                        let name = format!(
+                            "{pragma} {flags:?} {} {}",
+                            mode.unwrap_or("bcc"),
+                            if extension { "__extension__" } else { "plain" }
+                        );
+                        let found = if mode.is_none() {
+                            own_lines(&output)
+                        } else {
+                            lines(&output)
+                        };
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        assert_eq!(found, severities, "{name}: {stderr}");
+                        if let Some(last) = last {
+                            assert_eq!(
+                                stderr.lines().last().unwrap_or(""),
+                                last,
+                                "{name}: {stderr}"
+                            );
+                        }
+                        assert_eq!(output.status.code(), Some(status), "{name}");
+                    }
+                }
+            }
+        }
+    }
+
     /// `-E` keeps each pragma, `_Pragma` operators as lines, and compiling its
     /// text keeps their effect, around macros expanded in that text.
     #[test]

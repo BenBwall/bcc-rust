@@ -59,8 +59,9 @@ impl<'tu> Context<'tu> {
     /// `ClangDiagnosticsEmitter.cpp`): a pragma naming that option maps none
     /// of it, so `-Wfatal-errors` makes fatal the error `-pedantic-errors`
     /// made of it. Only a pragma naming `-Weverything` maps it
-    /// ([`ExtensionOption::Everything`]); otherwise the extension policy
-    /// decides it all the same.
+    /// ([`ExtensionOption::Everything`]); otherwise the command line's
+    /// extension policy decides it, which such a pragma can only turn on as
+    /// a warning ([`Self::extension_policy_at`]).
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     pub(crate) fn report_extension_outside_pedantic(
         &mut self,
@@ -130,7 +131,7 @@ impl<'tu> Context<'tu> {
             | Some(PragmaClass::Ignored) => return None,
             | Some(PragmaClass::Warning) => ErrorSeverity::Warning,
             | Some(PragmaClass::Error) => ErrorSeverity::Error,
-            | None => policy_severity(self.configuration_at(source).extension_policy(), baseline)?,
+            | None => policy_severity(self.extension_policy_at(option, source), baseline)?,
         };
         (!self.withholds(
             severity,

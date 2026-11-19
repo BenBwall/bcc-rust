@@ -29,6 +29,7 @@ use crate::{
         CL_CODED_WARNINGS,
         CompilerConfiguration,
         DiagnosticGroup,
+        ExtensionPolicy,
         PragmaClass,
     },
     translation_phases::{
@@ -213,6 +214,35 @@ impl<'tu> Context<'tu> {
             self.everything_class_at(source)
         } else {
             None
+        }
+    }
+
+    /// The extension policy that decides an extension diagnostic of `option`
+    /// at `source` where no `-Weverything` pragma set its class
+    /// ([`Self::everything_class_outside_pedantic`]). GCC files what Clang
+    /// warns of by default outside `-Wpedantic` under that option, so a pragma
+    /// naming it maps it there. Clang's maps none of it: `-pedantic-errors`
+    /// still makes it an error, and `error "-Wpedantic"` alone does not. So
+    /// under Clang's rules the command line's policy decides it, but where
+    /// that one leaves it unreported, which Clang's default does not, a
+    /// pragma that turns `-Wpedantic` on reports it as the warning Clang
+    /// gives by default.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) fn extension_policy_at(
+        &self,
+        option: ExtensionOption,
+        source: SourceVectors,
+    ) -> ExtensionPolicy {
+        let policy = self.configuration_at(source).extension_policy();
+        if option != ExtensionOption::Everything
+            || self.configuration.compiler_identity().rules()
+                != crate::configuration::RuleSet::Clang
+        {
+            return policy;
+        }
+        match self.configuration.extension_policy() {
+            | ExtensionPolicy::Allow if policy != ExtensionPolicy::Allow => ExtensionPolicy::Warn,
+            | command_line => command_line,
         }
     }
 
