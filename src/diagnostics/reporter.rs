@@ -11,9 +11,11 @@ use rustc_hash::FxBuildHasher;
 use super::{
     ColorChoice as RenderColor,
     Diagnostic,
+    Explanation,
     Renderer,
     ToDiagnostic,
     count_of,
+    format_in,
 };
 use crate::{
     translation_phases::{
@@ -67,6 +69,28 @@ pub(crate) struct DiagnosticReporter<'r, 'tu> {
     pub(crate) warnings: usize,
     /// A fatal diagnostic was written, so nothing further is.
     fatal_reported:      bool,
+    /// The warnings written as errors that GCC's format counts
+    /// (`DK_WERROR`), which end its diagnostics with a line saying so.
+    pub(crate) promoted: usize,
+}
+
+/// What a compiler says about its own command line with each translation
+/// unit it compiles, which bcc says with the unit's diagnostics: Clang's
+/// front end warns about the warning options it does not know before
+/// anything else and counts the warnings with the others, and GCC's
+/// compiler notes the `-Wno-` options it did not recognize after the
+/// others, only when there were others.
+#[derive(Debug, Default)]
+pub(crate) struct CommandLineDiagnostics<'tu> {
+    /// Clang's warnings, each message ending with its `[-W…]`, at the
+    /// severity the options give it; the first reporter of the unit takes
+    /// them.
+    pub(crate) leading:      std::cell::Cell<&'tu [(ErrorSeverity, &'tu str)]>,
+    /// GCC's unrecognized `-Wno-` options, in command-line order.
+    pub(crate) unrecognized: &'tu [&'tu str],
+    /// How many of [`Self::leading`] are errors, which leave the unit
+    /// without code.
+    pub(crate) errors:       usize,
 }
 
 impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
@@ -187,7 +211,55 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         let stops_at_error = context.configuration.diagnostic_format()
             == crate::configuration::DiagnosticFormat::Tcc
             || context.configuration.fatal_errors();
-        for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
+        let leading = context.command_line.leading.take();
+        if !leading.is_empty() {
+            let pending = std::mem::replace(&mut self.pending, ArenaVec::new_in(self.arena));
+            self.pending
+                .extend(leading.iter().map(|&(severity, message)| {
+                    PendingDiagnostic {
+                        diagnostic: Explanation::new(
+                            self.diagnostics,
+                            self.diagnostics.alloc_str(message),
+                        )
+                        .option_suffix()
+                        .at(severity, SourceVectors::default()),
+                        location: &[],
+                        ordering_location: None,
+                        sequence: 0,
+                        foldable: false,
+                        preserve_empty_translation_unit: false,
+                    }
+                }));
+            self.pending.extend(pending);
+        }
+        let gcc = context.configuration.diagnostic_format()
+            == crate::configuration::DiagnosticFormat::Gcc;
+        let errors_fatal = context.configuration.errors_fatal();
+        for PendingDiagnostic { mut diagnostic, .. } in self.pending.drain(..) {
+            // Clang's `-Wfatal-errors` leaves an error a pragma made one
+            // (`DiagnosticIDs::getDiagnosticSeverity`).
+            if errors_fatal
+                && diagnostic.severity == ErrorSeverity::Error
+                && !diagnostic.fatal
+                && !diagnostic.pragma_mapped
+            {
+                diagnostic.fatal = true;
+            }
+            // Clang's fatal error names the warning option alone, without
+            // the `-Werror` it writes for an error
+            // (`printDiagnosticOptions` in `TextDiagnosticPrinter.cpp`).
+            if diagnostic.fatal
+                && diagnostic.option_suffix
+                && let Some(at) = diagnostic.message.rfind(" [-Werror,-W")
+            {
+                let message = diagnostic.message;
+                diagnostic.message = format_in!(
+                    self.diagnostics,
+                    "{} [{}",
+                    &message[..at],
+                    &message[at + " [-Werror,".len()..]
+                );
+            }
             if diagnostic.severity == ErrorSeverity::Warning
                 && context.configuration.suppress_warnings()
             {
@@ -206,6 +278,12 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             if stopped {
                 continue;
             }
+            if gcc && diagnostic.severity == ErrorSeverity::Error && diagnostic.option_suffix {
+                let message = diagnostic.message;
+                if message.ends_with(" [-Werror]") || message.contains(" [-Werror=") {
+                    self.promoted += 1;
+                }
+            }
             let text = self.renderer.render_text(&diagnostic, context);
             if let Some(observer) = &mut self.observer {
                 observer(&diagnostic, text, context);
@@ -217,14 +295,25 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
 
     pub(crate) fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
         self.flush(context, out)?;
-        // GCC ends with this line after any fatal error, `-Wfatal-errors`
-        // or not.
         let gcc = context.configuration.diagnostic_format()
             == crate::configuration::DiagnosticFormat::Gcc;
-        if (context.configuration.fatal_errors() || (gcc && self.fatal_reported))
-            && self.errors != 0
-        {
-            writeln!(out, "compilation terminated.")?;
+        let terminated = (context.configuration.fatal_errors() || (gcc && self.fatal_reported))
+            && self.errors != 0;
+        if terminated {
+            // GCC names `-Wfatal-errors` when it, not a fatal error, ends
+            // the compilation (`diagnostic_context::action_after_output`).
+            writeln!(
+                out,
+                "{}",
+                if gcc && !self.fatal_reported {
+                    "compilation terminated due to -Wfatal-errors."
+                } else {
+                    "compilation terminated."
+                }
+            )?;
+        }
+        if gcc {
+            self.finish_gcc(context, out, terminated)?;
         }
         // GCC, MSVC and TCC print no summary, and Clang prints it only with
         // its snippets (`CompilerInstance::printDiagnosticStats` checks
@@ -249,6 +338,45 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             | _ if clang => writeln!(out, "{warnings} and {errors} generated."),
             | _ => writeln!(out, "{errors} and {warnings} generated."),
         }
+    }
+
+    /// GCC's last lines for a translation unit. Unless an error ended the
+    /// compilation, a note for each `-Wno-` option it did not recognize,
+    /// last first, when it reported anything (`print_ignored_options` in
+    /// `opts-global.cc`), at top level; then whether `-Werror` or a
+    /// `-Werror=` made the warnings it wrote as errors so
+    /// (`diagnostic_context::finish`).
+    fn finish_gcc(
+        &self,
+        context: &Context<'_>,
+        out: &mut dyn Write,
+        terminated: bool,
+    ) -> io::Result<()> {
+        let unrecognized = context.command_line.unrecognized;
+        if !terminated && self.errors + self.warnings != 0 && !unrecognized.is_empty() {
+            if self.renderer.leave_gcc_function() {
+                writeln!(out, "At top level:")?;
+            }
+            for option in unrecognized.iter().rev() {
+                writeln!(
+                    out,
+                    "cc1: note: unrecognized command-line option '{option}' may have been \
+                     intended to silence earlier diagnostics"
+                )?;
+            }
+        }
+        if self.promoted != 0 {
+            writeln!(
+                out,
+                "cc1: {} warnings being treated as errors",
+                if context.configuration.warnings_are_errors() {
+                    "all"
+                } else {
+                    "some"
+                }
+            )?;
+        }
+        Ok(())
     }
 
     /// The pending error that a foldable error at `location` folds into. A
@@ -328,6 +456,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             errors: 0,
             warnings: 0,
             fatal_reported: false,
+            promoted: 0,
         }
     }
 }

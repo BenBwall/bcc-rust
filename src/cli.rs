@@ -34,6 +34,7 @@
 mod arguments;
 mod errors;
 mod search;
+mod warning_options;
 
 // Jobs and driver personalities
 mod driver;
@@ -128,9 +129,6 @@ fn run_arguments(arguments: Vec<std::ffi::OsString>) -> Result<i32, MainError> {
 
 /// Runs bcc's driver on the parsed command line.
 fn run_driver(args: &Cli, matches: &clap::ArgMatches) -> Result<i32, MainError> {
-    if args.report_unknown_warning_options() {
-        return Ok(1);
-    }
     if let Some(option) = args.unsupported_relocation_flag() {
         #[expect(
             clippy::disallowed_methods,
@@ -189,6 +187,15 @@ struct Cli {
     /// models -fpic, -fPIC, -fpie, -fPIE and -fno-{pic,PIC,pie,PIE}.
     #[arg(long, hide = true)]
     language_option: Vec<String>,
+    /// A `-Wno-` option the GCC personality did not recognize, which GCC
+    /// notes after the diagnostics of each unit that has any.
+    #[arg(long, hide = true)]
+    unrecognized_warning_option: Vec<String>,
+    /// A warning option Clang's front end does not take, which the Clang
+    /// and clang-cl personalities pass for bcc to warn about as Clang does,
+    /// without effect.
+    #[arg(long, hide = true)]
+    unknown_warning_option: Vec<String>,
     /// Select the ELF thread-local storage model (also accepts GCC
     /// -ftls-model=MODEL): global-dynamic (the default), local-dynamic,
     /// initial-exec or local-exec. The compiler may still choose a more

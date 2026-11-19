@@ -49,6 +49,7 @@ impl<'tu> Context<'tu> {
             tu,
             configuration,
             preprocessing_options: &[],
+            command_line: crate::diagnostics::CommandLineDiagnostics::default(),
             preprocessed_input: false,
             phase_four_text: false,
             raw_source_bytes: false,

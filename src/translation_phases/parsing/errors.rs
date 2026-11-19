@@ -205,6 +205,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 error_type.severity()
             },
             severity_is_final: false,
+            pragma_mapped: false,
+            fatal: false,
             warning_group,
             production: self.active_production,
             expected: error_type.expected_syntax(),
@@ -240,8 +242,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     == Some(crate::configuration::PragmaClass::Warning);
             let severity_is_final = error.severity == ErrorSeverity::Warning
                 && (everything || (pedantic && self.context.pedantic_warning_at(source_vectors)));
+            // An error those settings made is a pragma's.
+            let pragma_error =
+                if error.severity == ErrorSeverity::Error && (pedantic || plain_complex) {
+                    self.context
+                        .pedantic_error_at(source_vectors, plain_complex && clang_rules)
+                } else {
+                    None
+                };
             self.context.parser_error(ParserError {
                 severity_is_final,
+                pragma_mapped: pragma_error.is_some(),
+                fatal: pragma_error == Some(true),
                 ..error
             });
         }
@@ -341,6 +353,11 @@ pub(crate) struct ParserError<'tu> {
     /// `warning "-Wpedantic"` set `severity` where this arose, so `-Werror`
     /// does not promote it when it is reported.
     pub(crate) severity_is_final: bool,
+    /// A diagnostic pragma set `severity`, so Clang's `-Wfatal-errors` leaves
+    /// an error an error ([`Context::pedantic_error_at`]).
+    pub(crate) pragma_mapped:     bool,
+    /// Clang's `#pragma clang diagnostic fatal` made it a fatal error.
+    pub(crate) fatal:             bool,
     pub(crate) warning_group:     Option<ParserWarningGroup>,
     #[cfg_attr(
         not(test),
@@ -2026,6 +2043,8 @@ impl ToDiagnostic for ParserError<'_> {
             );
         }
         let mut diagnostic = explanation.at(self.severity, source);
+        diagnostic.fatal = self.fatal;
+        diagnostic.pragma_mapped = self.pragma_mapped;
         // Clang marks where it expected the syntax, not what it found.
         diagnostic.point = gnu_words.is_some()
             && context.configuration.diagnostic_format()

@@ -15,3 +15,4 @@ sema-unused-order-later-error-werror-gcc.c: In function 'second':
 sema-unused-order-later-error-werror-gcc.c:5:33: error: typedef 'U' locally defined but not used [-Werror=unused-local-typedefs]
     5 | void second(void) { typedef int U; } int on_its_line = ;
       |                                 ^
+cc1: all warnings being treated as errors

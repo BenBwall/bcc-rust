@@ -2,8 +2,8 @@
 //! `tcc_parse_args` (`libtcc.c`) does: options are looked up in TCC's table
 //! in its order, by the longest leading match the table allows (`-run` and
 //! `-runFILE`, `-ofile`, `-xc`), `@FILE` reads more arguments from a file,
-//! and `-Wp,` splits its operand into options. `-c`, `-E`, `-r`, `-run` and
-//! `-shared` choose what is built, the last one winning with TCC's warning;
+//! and `-Wp,` reads its operand as the next argument. `-c`, `-E`, `-r`, `-run`
+//! and `-shared` choose what is built, the last one winning with TCC's warning;
 //! `-run FILE ARGS...` compiles FILE, runs it with ARGS and exits with its
 //! status. TCC compiles in C99 with GNU extensions, accepts Microsoft's
 //! anonymous structure members (`-fms-extensions` is on by default), keeps
@@ -474,7 +474,7 @@ impl Parser<'_> {
                         .error(format_args!("listfile '{}' not found", name.display()));
                     return Err(MainError::Reported(1));
                 };
-                let inserted = split_arguments(&String::from_utf8_lossy(&text), None);
+                let inserted = split_arguments(&String::from_utf8_lossy(&text));
                 drop(arguments.splice(index..=index, inserted));
                 continue;
             }
@@ -552,7 +552,7 @@ impl Parser<'_> {
             self.state.run_arguments = arguments.split_off(index);
             if !options.is_empty() {
                 let empty = self.state.empty;
-                drop(self.parse(split_arguments(&options, None), false)?);
+                drop(self.parse(split_arguments(&options), false)?);
                 self.state.empty = empty;
             }
             return Ok(None);
@@ -667,7 +667,10 @@ impl Parser<'_> {
             | "static" | "rdynamic" | "nostdlib" => self.link_option(format!("-{name}").into()),
             | "soname" => self.link_option(concat("-Wl,-soname,", &value)),
             | "Wl," => self.link_option(concat("-Wl,", &value)),
-            | "Wp," => return Ok(Parsed::Insert(split_arguments(value_text, Some(',')))),
+            // TCC reads the rest as one argument where `-Wp,` stood, commas
+            // and all: `-Wp,-DX=1,-DY` defines `X` as `1,-DY`, and `-Wp,` an
+            // input file with an empty name.
+            | "Wp," => return Ok(Parsed::Insert(vec![value])),
             | "pthread" => state.options.push("-pthread".into()),
             | "std" =>
                 if matches!(value_text, "=c11" | "=gnu11") {
@@ -680,6 +683,8 @@ impl Parser<'_> {
                 state.output = Some(value);
             },
             | "nostdinc" => state.options.push("--nostdinc".into()),
+            // Any `-W` option after it takes it back (`case TCC_OPTION_W`
+            // sets `warn_none` to 0).
             | "w" => state.options.push("-w".into()),
             | "O" => state
                 .options
@@ -765,7 +770,9 @@ impl Parser<'_> {
     /// `-Wdiscarded-qualifiers`, each also with `no-`, and `-Werror=` and
     /// `-Wno-error=` of the last two). bcc reads those it has in its own
     /// spelling; the others are ignored, as TCC ignores an unknown one.
+    /// Each, known or not, takes back an earlier `-w`.
     fn warning_option(&mut self, text: &str, value: &str) {
+        self.state.options.retain(|option| option != "-w");
         let (enabled, name) = value
             .strip_prefix("no-")
             .map_or((true, value), |name| (false, name));
@@ -941,7 +948,7 @@ enum Parsed {
     /// The option was read, and TCC would still only print (`-v`, `-B`,
     /// `-m64`).
     Continue,
-    /// `-Wp,`: these arguments are read next.
+    /// `-Wp,`: this argument is read next.
     Insert(Vec<OsString>),
     /// The option asks for something other than a compilation.
     Query(Query),
@@ -1256,12 +1263,11 @@ fn concat(prefix: &str, value: &OsStr) -> OsString {
     argument
 }
 
-/// Splits `text` into arguments as TCC's `dynarray_split` does: at
-/// `separator` (`-Wp,` splits at commas), or, without one, at blanks and
-/// control characters, where double quotes group and a backslash escapes a
-/// quote or a backslash (an `@FILE`, or `-run`'s joined options). Blanks
-/// before each argument are skipped either way.
-fn split_arguments(text: &str, separator: Option<char>) -> Vec<OsString> {
+/// Splits `text` into arguments as TCC's `dynarray_split` does: at blanks
+/// and control characters, where double quotes group and a backslash
+/// escapes a quote or a backslash (an `@FILE`, or `-run`'s joined options).
+/// Blanks before each argument are skipped.
+fn split_arguments(text: &str) -> Vec<OsString> {
     let mut arguments = Vec::new();
     let mut characters = text.chars().peekable();
     loop {
@@ -1272,11 +1278,7 @@ fn split_arguments(text: &str, separator: Option<char>) -> Vec<OsString> {
         let mut argument = String::new();
         let mut quoted = false;
         while let Some(c) = characters.next() {
-            if let Some(separator) = separator {
-                if c == separator {
-                    break;
-                }
-            } else if c == '\\' && matches!(characters.peek(), Some('"' | '\\')) {
+            if c == '\\' && matches!(characters.peek(), Some('"' | '\\')) {
                 argument.extend(characters.next());
                 continue;
             } else if c == '"' {

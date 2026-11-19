@@ -594,6 +594,29 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Clang's `-Weverything` (true) turns on every warning no option has
+    /// set, pedantic ones included, and `-Wno-everything` (false) sets
+    /// every one off, so that a later `-Weverything` leaves them off but
+    /// their own options turn them on again (`ProcessWarningOptions`, and
+    /// `EnableAllWarnings` in `DiagnosticIDs::getDiagnosticSeverity`). GCC
+    /// has neither; its groups stay as they are.
+    pub(crate) fn with_everything(mut self, enabled: bool) -> Self {
+        self.everything = enabled;
+        if enabled
+            && matches!(self.extension_policy, ExtensionPolicy::Allow)
+            && !self.pedantic_disabled
+        {
+            self = self.with_pedantic(true);
+        }
+        if !enabled {
+            for &group in DiagnosticGroup::ALL {
+                self.warning_options[group as usize].apply(WarningOption::Enable(false), true);
+            }
+            self = self.with_pedantic(false);
+        }
+        self
+    }
+
     pub(crate) const fn with_warnings_as_errors(mut self, enabled: bool) -> Self {
         self.warnings_as_errors = enabled;
         self
@@ -668,7 +691,11 @@ impl CompilerConfiguration {
                         && self.extension_policy != ExtensionPolicy::Allow),
         };
         let clang = self.identity.rules() == super::RuleSet::Clang;
-        if !option.enabled_with_all(group, clang).unwrap_or(enabled) {
+        let everything = self.everything && !group.unknown_to_clang();
+        if !option
+            .enabled_with_all(group, clang)
+            .unwrap_or(enabled || everything)
+        {
             return None;
         }
         // GCC re-enables a disabled group at its default severity.
@@ -1397,6 +1424,19 @@ impl DiagnosticGroup {
                 | Self::FormatContainsNul
                 | Self::SwitchOutsideRange
         )
+    }
+
+    /// Whether Clang has no group of this name, so that its `-Weverything`
+    /// leaves it off: GCC's own groups, and bcc's `constant-promotion`,
+    /// which neither compiler reports.
+    pub(crate) const fn unknown_to_clang(self) -> bool {
+        self.gcc_only()
+            || matches!(
+                self,
+                Self::ConstantPromotion
+                    | Self::DeclarationMissingParameterType
+                    | Self::GccShiftOverflow
+            )
     }
 
     pub(crate) fn parse(name: &str) -> Option<Self> {

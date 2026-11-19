@@ -29,10 +29,12 @@ use crate::{
         CL_CODED_WARNINGS,
         CompilerConfiguration,
         DiagnosticGroup,
+        ExtensionPolicy,
         PragmaClass,
     },
     translation_phases::{
         ErrorSeverity,
+        ExtensionOption,
         GetSeverity,
         TranslationError,
         errors::ClassifiedError,
@@ -74,15 +76,53 @@ struct Change<'tu> {
 /// The warning settings in force at some point of a translation unit.
 #[derive(Clone, Copy)]
 struct PragmaState {
-    configuration:    CompilerConfiguration,
+    configuration: CompilerConfiguration,
     /// One bit per group Clang's `fatal` made fatal.
-    fatal:            crate::configuration::GroupMask,
-    /// `warning "-Wpedantic"`: `-Werror` no longer promotes extension
-    /// diagnostics.
-    pedantic_warning: bool,
-    /// The class Clang's `-Weverything` last set, which reaches diagnostics
+    fatal:         crate::configuration::GroupMask,
+    /// One bit per group any pragma classified, whose errors Clang's
+    /// `-Wfatal-errors` then leaves errors: `makeUserMapping` sets
+    /// `NoErrorAsFatal` on a pragma's mapping (and `NoWarningAsError`, which
+    /// `configuration` already holds).
+    mapped:        crate::configuration::GroupMask,
+    /// What the latest pragma naming `-Wpedantic`, or Clang's
+    /// `-Weverything`, which holds it, made of the extension diagnostics:
+    /// `warning` keeps them from `-Werror`, and `error` from Clang's
+    /// `-Wfatal-errors`.
+    pedantic:      Option<PragmaSetting>,
+    /// What Clang's `-Weverything` last set, which reaches diagnostics
     /// that belong to no other group.
-    everything:       Option<PragmaClass>,
+    everything:    Option<PragmaSetting>,
+}
+
+/// A pragma's class for an option, with Clang's `fatal`.
+#[derive(Clone, Copy)]
+struct PragmaSetting {
+    class: PragmaClass,
+    fatal: bool,
+}
+
+/// What the settings at a diagnostic's place made of it.
+#[derive(Clone, Copy)]
+pub(crate) struct PragmaClassification {
+    severity: ErrorSeverity,
+    /// Clang's `fatal` named its group.
+    fatal:    bool,
+    /// A pragma named its group (see [`PragmaState::mapped`]).
+    mapped:   bool,
+}
+
+impl PragmaState {
+    fn classification(
+        &self,
+        group: DiagnosticGroup,
+        severity: ErrorSeverity,
+    ) -> PragmaClassification {
+        PragmaClassification {
+            severity,
+            fatal: self.fatal.contains(group),
+            mapped: self.mapped.contains(group),
+        }
+    }
 }
 
 impl<'tu> DiagnosticPragmas<'tu> {
@@ -150,7 +190,8 @@ impl<'tu> Context<'tu> {
     /// `-Wpedantic` diagnostic there from `-Werror` and `-pedantic-errors`.
     pub(crate) fn pedantic_warning_at(&self, source: SourceVectors) -> bool {
         self.pragma_state_at(source)
-            .is_some_and(|state| state.pedantic_warning)
+            .and_then(|state| state.pedantic)
+            .is_some_and(|setting| setting.class == PragmaClass::Warning)
     }
 
     /// The class Clang's `-Weverything` set where `source` is, if a pragma set
@@ -158,32 +199,126 @@ impl<'tu> Context<'tu> {
     pub(crate) fn everything_class_at(&self, source: SourceVectors) -> Option<PragmaClass> {
         self.pragma_state_at(source)
             .and_then(|state| state.everything)
+            .map(|setting| setting.class)
     }
 
-    /// Queues an extension diagnostic, which `warning "-Wpedantic"` keeps from
-    /// `-Werror`. A parser diagnostic records that itself, since the parser
-    /// edits it after queueing it and the reporter folds it by its variant.
+    /// [`Self::everything_class_at`] for an extension diagnostic of `option`,
+    /// if only Clang's `-Weverything` reaches it: a pragma naming `-Wpedantic`
+    /// does not, before or after that one.
+    pub(crate) fn everything_class_outside_pedantic(
+        &self,
+        option: ExtensionOption,
+        source: SourceVectors,
+    ) -> Option<PragmaClass> {
+        if option == ExtensionOption::Everything {
+            self.everything_class_at(source)
+        } else {
+            None
+        }
+    }
+
+    /// The extension policy that decides an extension diagnostic of `option`
+    /// at `source` where no `-Weverything` pragma set its class
+    /// ([`Self::everything_class_outside_pedantic`]). GCC files what Clang
+    /// warns of by default outside `-Wpedantic` under that option, so a pragma
+    /// naming it maps it there. Clang's maps none of it: `-pedantic-errors`
+    /// still makes it an error, and `error "-Wpedantic"` alone does not. So
+    /// under Clang's rules the command line's policy decides it, but where
+    /// that one leaves it unreported, which Clang's default does not, a
+    /// pragma that turns `-Wpedantic` on reports it as the warning Clang
+    /// gives by default.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) fn extension_policy_at(
+        &self,
+        option: ExtensionOption,
+        source: SourceVectors,
+    ) -> ExtensionPolicy {
+        let policy = self.configuration_at(source).extension_policy();
+        if option != ExtensionOption::Everything
+            || self.configuration.compiler_identity().rules()
+                != crate::configuration::RuleSet::Clang
+        {
+            return policy;
+        }
+        match self.configuration.extension_policy() {
+            | ExtensionPolicy::Allow if policy != ExtensionPolicy::Allow => ExtensionPolicy::Warn,
+            | command_line => command_line,
+        }
+    }
+
+    /// Whether the latest pragma naming `-Wpedantic`, or with `everything`
+    /// Clang's `-Weverything`, made an extension diagnostic at `source` an
+    /// error, and if so whether as Clang's `fatal`. Such an error is a
+    /// pragma's mapping, which Clang's `-Wfatal-errors` leaves an error (see
+    /// [`PragmaState::mapped`]).
+    pub(crate) fn pedantic_error_at(
+        &self,
+        source: SourceVectors,
+        everything: bool,
+    ) -> Option<bool> {
+        let state = self.pragma_state_at(source)?;
+        let setting = if everything {
+            state.everything
+        } else {
+            state.pedantic
+        }?;
+        (setting.class == PragmaClass::Error).then_some(setting.fatal)
+    }
+
+    /// Queues an extension diagnostic of the warning `option`, which
+    /// `warning "-Wpedantic"` keeps from `-Werror`. One whose severity is the
+    /// extension policy's and that no group of its own classifies is an error
+    /// of that pragma's `error` or `fatal` making, which Clang's
+    /// `-Wfatal-errors` leaves an error. What Clang warns of by default
+    /// outside `-Wpedantic` answers to its `-Weverything` alone, which also
+    /// gave it its severity. A parser diagnostic records either itself, since
+    /// the parser edits it after queueing it and the reporter folds it by its
+    /// variant.
     pub(crate) fn classified_extension(
         &mut self,
         source: SourceVectors,
         mut error: TranslationError<'tu>,
+        option: ExtensionOption,
     ) {
-        if error.severity() == ErrorSeverity::Warning && self.pedantic_warning_at(source) {
-            if let TranslationError::Parsing(parsing) = &mut error {
-                parsing.severity_is_final = true;
-                self.pending_errors.push_back(error);
+        let outside_pedantic = option == ExtensionOption::Everything
+            && self.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang;
+        let everything = self.everything_class_outside_pedantic(option, source);
+        let (severity, fatal) = match error.severity() {
+            | ErrorSeverity::Warning if everything == Some(PragmaClass::Warning) =>
+                (ErrorSeverity::Warning, false),
+            | ErrorSeverity::Warning if !outside_pedantic && self.pedantic_warning_at(source) =>
+                (ErrorSeverity::Warning, false),
+            | ErrorSeverity::Error
+                if error.group().is_none()
+                    && (option == ExtensionOption::Pedantic || everything.is_some()) =>
+            {
+                let Some(fatal) = self.pedantic_error_at(source, everything.is_some()) else {
+                    self.classified_error(source, error);
+                    return;
+                };
+                (ErrorSeverity::Error, fatal)
+            },
+            | _ => {
+                self.classified_error(source, error);
                 return;
-            }
-            let error = self.tu.alloc(error);
-            self.pending_errors
-                .push_back(TranslationError::Classified(ClassifiedError {
-                    error,
-                    severity: ErrorSeverity::Warning,
-                    fatal: false,
-                }));
-        } else {
-            self.classified_error(source, error);
+            },
+        };
+        if let TranslationError::Parsing(parsing) = &mut error {
+            parsing.severity_is_final = true;
+            parsing.pragma_mapped = true;
+            parsing.fatal = fatal;
+            self.pending_errors.push_back(error);
+            return;
         }
+        let error = self.tu.alloc(error);
+        self.pending_errors
+            .push_back(TranslationError::Classified(ClassifiedError {
+                error,
+                severity,
+                fatal,
+                mapped: true,
+            }));
     }
 
     /// What the settings at `source` make of a diagnostic of `group`, for a
@@ -195,10 +330,10 @@ impl<'tu> Context<'tu> {
         &self,
         group: DiagnosticGroup,
         source: SourceVectors,
-    ) -> Option<(&'tu Bump, ErrorSeverity, bool)> {
+    ) -> Option<(&'tu Bump, PragmaClassification)> {
         let state = self.pragma_state_at(source)?;
         let severity = state.configuration.diagnostic_severity(group)?;
-        Some((self.tu, severity, state.fatal.contains(group)))
+        Some((self.tu, state.classification(group, severity)))
     }
 
     /// Queues `error` as [`Self::pragma_classification`] classified it.
@@ -206,15 +341,16 @@ impl<'tu> Context<'tu> {
     #[inline(never)]
     pub(crate) fn raw_classified_preprocessor_error(
         pending_errors: &mut ArenaQueue<'tu, TranslationError<'tu>>,
-        classified: Option<(&'tu Bump, ErrorSeverity, bool)>,
+        classified: Option<(&'tu Bump, PragmaClassification)>,
         error: PreprocessorError<'tu>,
     ) {
         let error = TranslationError::Preprocessing(error);
         pending_errors.push_back(match classified {
-            | Some((tu, severity, fatal)) => TranslationError::Classified(ClassifiedError {
-                severity,
-                fatal,
-                error: tu.alloc(error),
+            | Some((tu, classification)) => TranslationError::Classified(ClassifiedError {
+                severity: classification.severity,
+                fatal:    classification.fatal,
+                mapped:   classification.mapped,
+                error:    tu.alloc(error),
             }),
             | None => error,
         });
@@ -236,11 +372,11 @@ impl<'tu> Context<'tu> {
             self.pending_errors.push_back(error);
             return;
         };
-        let (severity, fatal) = if let Some(group) = group {
+        let classification = if let Some(group) = group {
             let Some(severity) = state.configuration.diagnostic_severity(group) else {
                 return;
             };
-            (severity, state.fatal.contains(group))
+            state.classification(group, severity)
         } else {
             self.pending_errors.push_back(error);
             return;
@@ -249,8 +385,9 @@ impl<'tu> Context<'tu> {
         self.pending_errors
             .push_back(TranslationError::Classified(ClassifiedError {
                 error,
-                severity,
-                fatal,
+                severity: classification.severity,
+                fatal: classification.fatal,
+                mapped: classification.mapped,
             }));
     }
 
@@ -266,15 +403,17 @@ impl<'tu> Context<'tu> {
         } else {
             state.fatal.difference(mask)
         };
+        state.mapped = state.mapped.union(mask);
         // Clang's `-Weverything` holds `-Wpedantic`.
         let everything = name == "everything"
             && self.configuration.compiler_identity().rules()
                 == crate::configuration::RuleSet::Clang;
+        let setting = Some(PragmaSetting { class, fatal });
         if name == "pedantic" || everything {
-            state.pedantic_warning = class == PragmaClass::Warning;
+            state.pedantic = setting;
         }
         if everything {
-            state.everything = Some(class);
+            state.everything = setting;
         }
         self.record_pragma_state(&state);
     }
@@ -402,7 +541,8 @@ impl<'tu> Context<'tu> {
         PragmaState {
             configuration,
             fatal: crate::configuration::GroupMask::EMPTY,
-            pedantic_warning: false,
+            mapped: crate::configuration::GroupMask::EMPTY,
+            pedantic: None,
             everything: None,
         }
     }

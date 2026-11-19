@@ -212,6 +212,9 @@ pub(crate) struct CompilerConfiguration {
     /// either was given ([`CompilerConfiguration::permerror_default`]).
     permissive: Option<bool>,
     warnings_as_errors: bool,
+    /// Clang's `-Weverything` is in effect: a warning no option has set is
+    /// on.
+    everything: bool,
     /// `-Wfatal-errors`: GCC stops at the first error it reports.
     fatal_errors: bool,
     /// The compiler the identity macros claim.

@@ -35,7 +35,11 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
 - `__extension__` suppresses keyword, grammar and numeric-constant extension
   diagnostics within its owning declaration or expression. Lexical diagnostics
   (dollar identifiers, `//` comments, digraphs), directives and macro
-  definitions stay outside its scope.
+  definitions stay outside its scope. Under Clang's rules it leaves reported the
+  C23 extensions Clang warns of by default (a label at the end of a block or
+  before a declaration, `_Static_assert` without a message, an unnamed
+  parameter in a definition), since Clang's silences only the extension
+  diagnostics it does not report by default; GCC's silences them too.
 - A preprocessing extension diagnostic raised in a macro expansion may
   underline the replacement in the macro definition. Parser and semantic
   extension diagnostics and warning-group diagnostics point at the outermost
@@ -1004,7 +1008,11 @@ also have inspectable syntax nodes.
 
 `__extension__` suppresses extension diagnostics for keyword, grammar and
 numeric-constant tokens within its expression or declaration, including a
-function body or a parameter. Suppression ends at the owning production's boundary;
+function body or a parameter, except, under Clang's rules, a label at the end of
+a block or before a declaration, `_Static_assert` without a message and an
+unnamed parameter in a definition, which Clang warns of by default
+(`DiagnosticIDs::getDiagnosticSeverity` silences only an extension diagnostic
+that is off by default). Suppression ends at the owning production's boundary;
 later unsuppressed occurrences, including ones from macro expansions, keep their
 diagnostics. Nested functions isolate typedef, label and switch state; under
 the Clang identity a function definition in a block is the error "function
@@ -1375,7 +1383,16 @@ bcc files every extension under `-Wpedantic`, including those each compiler give
 a group of its own: GCC's `-Wlong-long` and `-Wdeclaration-after-statement`, and
 Clang's `-Wc23-extensions` but for its C23 directives, which the Clang
 personality reports under `c23-extensions` (above). A pragma naming
-`-Wpedantic` therefore reaches these in bcc alone. The lexer runs when a file is opened, before any pragma in it, so
+`-Wpedantic` therefore reaches these in bcc alone. The four Clang warns of by
+default (a label at the end of a block or before a declaration, `_Static_assert`
+without a message, an unnamed parameter in a definition) are outside Clang's
+`-Wpedantic`, so in the Clang personality such a pragma leaves their severity to
+the command line: `-pedantic-errors` or `-Werror` makes them errors, an `error`
+or `fatal` pragma does not. Where the command line leaves them unreported, which
+Clang's default does not, the pragma reports them as the warnings Clang gives.
+Clang's `-Weverything` holds those four, so in the Clang personality a pragma
+naming it maps them as it maps a group, and one naming `-Wpedantic`, before or
+after it, leaves them as it set them. The lexer runs when a file is opened, before any pragma in it, so
 what `-pedantic-errors` decides there (an unterminated quote's wording, say) does
 not follow a pragma.
 
@@ -1385,8 +1402,11 @@ does not report, and Clang under `-Wunknown-pragmas` or, for an unknown group,
 compiler knows and bcc has no group for is quiet and changes nothing; the lists
 are the driver's (`src/cli/personality/options/`). GCC's `pop` without `push`
 goes back to the command line silently and Clang's keeps the settings and warns.
-Clang's `fatal` reports `fatal error` and ends the compilation, and GCC's
-`-Wfatal-errors`, which Clang accepts and ignores, stops at the first error.
+Clang's `fatal` reports `fatal error` and ends the compilation. GCC's
+`-Wfatal-errors` stops at the first error; Clang's makes an error fatal unless a
+pragma made it one (`NoErrorAsFatal`): the `error` of a group, or of
+`-Wpedantic` or `-Weverything` for the extension diagnostics, stays an error
+even where `-pedantic-errors` made one too.
 
 These warnings gained a group for the pragmas to name, which the command line
 now controls too: `cpp` (`#warnings` in Clang) for `#warning`, Clang's

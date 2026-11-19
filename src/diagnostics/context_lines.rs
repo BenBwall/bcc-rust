@@ -64,6 +64,16 @@ pub(super) struct ContextLines {
 }
 
 impl Renderer {
+    /// Leaves the function GCC last named, for a diagnostic at no place,
+    /// returning whether it named one: GCC then writes `At top level:`
+    /// alone first.
+    pub(super) fn leave_gcc_function(&self) -> bool {
+        let mut state = self.context_lines.get();
+        let left = state.function.take().is_some();
+        self.context_lines.set(state);
+        left
+    }
+
     /// Writes the context lines for a diagnostic at `vector`, which was read
     /// in `segment`, with the include stack of stretch `stack`: GCC's for a
     /// diagnostic in a macro's definition is the definition's. A related

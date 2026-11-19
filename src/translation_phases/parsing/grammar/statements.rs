@@ -602,10 +602,10 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     token,
                 );
             }
-            self.extension(
+            self.extension_outside_pedantic(
                 Feature::C23Keywords,
                 "label at end of compound statement",
-                token.expect("closing brace exists"),
+                token.expect("closing brace exists").source_vectors,
             );
             let child = self.alloc_syntax(Statement {
                 kind:           StatementType::Null,
@@ -633,10 +633,10 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     token,
                 );
             }
-            self.extension(
+            self.extension_outside_pedantic(
                 Feature::C23Keywords,
                 "label before declaration",
-                token.expect("declaration exists"),
+                token.expect("declaration exists").source_vectors,
             );
             let declaration = self.parse_block_declaration(DeclarationContext::Block)?;
             self.alloc_syntax(Statement {

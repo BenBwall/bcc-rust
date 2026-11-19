@@ -153,6 +153,7 @@ pub(super) fn compile(
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(!args.no_repeated_specifier_warnings);
+    args.report_warning_options(&mut context);
     let generated = run_job(
         &mut context,
         args,

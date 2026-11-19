@@ -229,7 +229,8 @@ mod tests {
             (clang.status.code(), stderr(&clang).as_str()),
             (
                 Some(0),
-                "warning: unknown warning option '-Wno-bogus-warning' [-Wunknown-warning-option]\n"
+                "warning: unknown warning option '-Wno-bogus-warning' \
+                 [-Wunknown-warning-option]\n1 warning generated.\n"
             )
         );
         let known = directory.bcc("--clang-mode", &["-Wno-shadow", "-c", "src.c"]);

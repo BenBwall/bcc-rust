@@ -413,7 +413,9 @@ pub(super) fn warn_unused_assembler_options(args: &Cli) {
         } else {
             option.strip_prefix("-Wa,").unwrap_or(option).split(',')
         };
-        for piece in pieces.filter(|piece| *piece != "--noexecstack") {
+        // An empty piece is no option: GCC and Clang pass it on, and the
+        // assembler takes nothing from it.
+        for piece in pieces.filter(|piece| !piece.is_empty() && *piece != "--noexecstack") {
             super::report(
                 args,
                 Severity::Warning,

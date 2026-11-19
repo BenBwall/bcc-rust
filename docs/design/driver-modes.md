@@ -61,6 +61,96 @@ plain bcc warns. GCC refuses `for (int i...)` before C99 and `int a[] = {};`;
 Clang refuses `_Decimal64` and `#assert`. The table is in
 [language-standards.md](../../language-standards.md#-pedantic-under-a-personality-2026-11-07).
 
+## Warning options
+
+Each personality reads the warning options as its compiler does, with the
+same words and exit status, checked on 2026-11-19 against GCC 14 (and GCC
+13's driver), the pinned Clang 23.1.5, clang-cl and TCC 0.9.27, with and
+without another diagnostic in the unit
+(`tests/integration/warning_options_cli.rs`).
+
+**GCC.** The driver refuses an empty `-Wno-` (`unrecognized command-line
+option '-Wno-'`), a joined option without its value (`missing argument to
+'-Werror='`, also `-Wno-error=`, `-Wformat=` and every other `-W…=` GCC
+knows), a bad level for `-Wformat=` or `-Wunused-const-variable=`
+(`argument to '-Wformat=' is not between 0 and 2`, `... should be a
+non-negative integer`; `02` is 2), a `-Wnormalized=` form it does not have
+(with its note listing `id nfc nfkc none`), and the `no-` form of a joined
+option (`-Wno-format=2`). A missing argument is reported where it stands,
+the unrecognized options once the command line has been read. A `-W` name
+GCC does not know is unrecognized even when bcc implements it for Clang
+(`-W#warnings`, `-Wmain-return-type`), and `-Weverything` is one. An
+unknown `-Wno-` option is ignored, as is one that is Clang's only
+(`-Wno-#warnings` leaves `#warning` reported), and after the diagnostics of
+a unit that has any, GCC's compiler notes each, last first, after `At top
+level:` when the last diagnostic was in a function:
+
+```text
+cc1: note: unrecognized command-line option '-Wno-foo' may have been intended to silence earlier diagnostics
+```
+
+Its compiler refuses a `-Werror=` or `-Wno-error=` naming no warning
+(`cc1: error: '-Werror=foo': no option '-Wfoo'`; `-Werror=no-shadow` looks
+for `-Wno-shadow`), and an empty `-Wp,` operand, which it takes for a second
+input (`cc1: error: too many filenames given; type 'cc1 --help' for usage`),
+once for each C source, before compiling it, so nothing is compiled. A unit
+whose warnings `-Werror` made errors ends with `cc1: all warnings being
+treated as errors`, or `some` when only a `-Werror=` did (also after
+`-Werror -Wno-error`); `-Wfatal-errors` ends one with `compilation
+terminated due to -Wfatal-errors.` before that line. An empty `-Wa,` passes
+nothing to the assembler and draws no warning.
+
+**Clang.** The front end reads the warning options its driver passes, once
+for each source it compiles, as `ProcessWarningOptions` does: it warns about
+each it does not know (`warning: unknown warning option '-Wfoo'
+[-Wunknown-warning-option]`), before the unit's other diagnostics and
+counted with them (`1 warning generated.`), and suggests the group at the
+least edit distance from a misspelled one (`did you mean '-Wshadow'?`), as
+`DiagnosticIDs::getNearestOption` does over the groups that hold warnings,
+frozen from the pinned Clang's `DiagnosticGroups.inc` in
+`options/clang-warning-groups.list`: none when two are as near, or none is
+nearer than the name is long. It names a `-Wno-error=` group `-Werror=`;
+`-Werror-x`, `-Wno-error-x` and `-Wfatal-errors=` are `unknown -Werror
+warning specifier: '-Werror-x'` (`-Werror-implicit-function-declaration`
+stands); `-Wno-no-shadow`, `-Wformat=1`, `-Wformat=` and `-Wpass` (a group
+of remarks) are unknown. The warning follows the warning options:
+`-Wno-unknown-warning-option` and `-w` silence it, and `-Werror` or
+`-Werror=unknown-warning-option` make it an error
+(`[-Werror,-Wunknown-warning-option]`), which leaves the unit without an
+object and the status 1. `-Wsystem-headers`, `-Wfatal-errors=GROUP` and an
+empty `-Wno-` are taken. `-Weverything` turns on every warning no option
+has set, the pedantic ones included, and `-Wno-everything` turns every one
+off, so that a later `-Weverything` leaves them off but their own options
+turn them on again. `-Wfatal-errors` makes the first error a `fatal error`,
+without the `-Werror,` in the option it names, and nothing after it is
+reported or counted; an error a diagnostic pragma made stays an error. The personality passes the options Clang does not
+take apart from the others, so they have no effect even where bcc has the
+group (`-Wnormalized`, bcc's own `-Wconstant-promotion`); bcc's own command
+line keeps its groups and warns, in Clang's words, about the options it does
+not implement.
+
+**clang-cl.** As Clang; its driver has no `-Wl,`, `-Wa,` or `-Wp,`, so each
+is an unknown warning option. `/Wall` is `-Weverything`.
+
+**TCC.** Any `-W` option, known or not, takes back an earlier `-w`, so `-w
+-Wfoo` reports warnings again. `-Wp,` is read as one argument where it
+stood, commas and all: `-Wp,-DX=1,-DY=2` defines `X` as `1,-DY=2`, and
+`-Wp,` alone is an input file with an empty name (`tcc: error: file '' not
+found`).
+
+**Not matched.** GCC's spelling suggestions (`did you mean '-Wshadow'?`,
+also in `cc1`'s `no option` error): they search GCC's whole option table
+across its front ends, which bcc does not freeze, so bcc leaves them out.
+GCC's `-Wno-error-implicit-function-declaration` (an option without a
+negative form) is ignored rather than refused. GCC's `-Werror=pedantic`
+turns on its pedantic warnings, which it then reports as warnings without
+an option name, and Clang's makes them errors; bcc reports neither for a
+preprocessing directive. clang-cl's `unknown argument ignored in clang-cl:
+'-pedantic' [-Wunknown-argument]` is not given. `-Wfatal-errors` stops at
+the first error bcc reports, and bcc reports a preprocessing diagnostic
+before the errors of the lines above it where GCC, Clang and TCC report
+them in source order.
+
 ## How a personality runs
 
 A personality is a translator, not a second driver. It reads its compiler's
@@ -564,7 +654,8 @@ from a file, where both compilers take it; a file name need not be UTF-8.
 Stages: `-E`, `-S`, `-c`, and linking otherwise, into `a.out`. Several inputs
 are compiled separately and linked. GCC rejects an unknown option
 (`gcc: error: unrecognized command-line option '-ffoo'`) except an unknown
-`-Wno-*`, which it ignores, and reports the unrecognized options only
+`-Wno-*`, which it ignores and notes after other diagnostics ([Warning
+options](#warning-options)), and reports the unrecognized options only
 after reading the whole command line. Queries: `--version`, `-v`,
 `-dumpversion` (the major version since GCC 7), `-dumpfullversion`,
 `-dumpmachine`, `-print-file-name=`, `-print-libgcc-file-name`,
@@ -626,9 +717,9 @@ terminated.`
 The `-W`, `-f` and `-m` names GCC knows are those GCC 15.2 lists in
 `--help=warnings,common,optimizers,c,target,undocumented`, frozen in
 `src/cli/personality/options/gcc-*.list` by
-`scripts/update_driver_options.py`. Unknown warnings are ignored as GCC
-ignores them; the known `-f` and `-m` options bcc does not implement are
-treated as the section above describes. Many of them do change what a
+`scripts/update_driver_options.py`. Unknown warnings are treated as GCC
+treats them ([Warning options](#warning-options)); the known `-f` and `-m`
+options bcc does not implement are treated as the section above describes. Many of them do change what a
 program means (`-fwrapv`, `-fshort-enums`, `-fpack-struct`, `-mno-sse`),
 so they are not all ignored. `-m32`, `-mx32`, `-m16`, `-traditional` and
 `-imacros` are refused as well.
@@ -678,7 +769,8 @@ is not written, because bcc makes no bitcode file.
 `-Xclang`, `--driver-mode=`, and `-fdiagnostics-format=`. Clang errors on an
 unknown option (`clang: error: unknown argument: '-ffoo'`) but only warns
 about an unknown warning option (`warning: unknown warning option '-Wfoo'
-[-Wunknown-warning-option]`) and goes on. Its queries are answered once
+[-Wunknown-warning-option]`, [Warning options](#warning-options)) and goes
+on. Its queries are answered once
 the command line has been read, and only one: `-dumpmachine`,
 `-dumpversion`, `--help`, `--version`, `-print-resource-dir`,
 `-print-search-dirs`, `-print-runtime-dir`, the last `-print-file-name=`, the
@@ -796,7 +888,7 @@ Files", "@ (Specify a Compiler Response File)".)
 | `/FA`, `/Fa` | `-S -o NAME.asm` beside the object |
 | `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` |
 | `/O1`, `/Os` / `/O2`, `/Ox`, `/Ot` / `/Od` | `-Os` / `-O2` / `-O0` |
-| `/W0`, `/w` / `/W1`-`/W3` / `/W4`, `/Wall` / `/WX` | `-w` / default / `-Wall -Wextra` / `-Werror`; each also sets the level of the warnings bcc reports with `cl`'s code (see Diagnostics) |
+| `/W0`, `/w` / `/W1`-`/W3` / `/W4`, `/Wall` / `/WX` | `-w` / default / `-Wall -Wextra` / `-Werror` (clang-cl: `-w` / `-Wall` / `-Wall -Wextra`, `-Weverything` for `/Wall` / `-Werror`); each also sets the level of the warnings bcc reports with `cl`'s code (see Diagnostics) |
 | `/wdNNNN`, `/weNNNN`, `/w1NNNN`-`/w4NNNN` | for a warning bcc reports with `cl`'s code, `-Wno-GROUP`, `-Werror=GROUP` or its level; other numbers have no effect, and `/wo` none. `#pragma warning` reads the same numbers (language-standards.md, "Diagnostic pragmas") |
 | `/std:c11`, `/std:c17`, `/std:clatest` | `-std=c11`, `-std=c17`, `-std=c23` |
 | `/TC`, `/Tc FILE` | the inputs (or FILE) are C |
@@ -1074,7 +1166,8 @@ with double quotes grouping and a backslash escaping a quote (`tcc: error:
 listfile 'x' not found`). TCC reads listfiles without a limit, so one
 that names itself makes TCC hang; bcc stops after 4096 (`tcc: error:
 listfile 'self.txt' not read: more than 4096 listfiles (does one name
-itself?)`). `-Wp,A,B` reads `A` and `B` as options. An option's value is
+itself?)`). `-Wp,A,B` reads `A,B` as the next argument, as TCC's
+`tcc_parse_args` does. An option's value is
 the next argument even when that starts with `-`, so `tcc -I -c -c a.c`
 searches a directory named `-c`.
 `-c`, `-E`, `-r`, `-shared` and `-run` choose what is built: the last one
@@ -1119,7 +1212,8 @@ reject.
 
 | TCC | bcc |
 | --- | --- |
-| `-c`, `-E`, `-o`, `-I`, `-D`, `-U`, `-include`, `-isystem`, `-nostdinc`, `-w`, `-pthread` | the same |
+| `-c`, `-E`, `-o`, `-I`, `-D`, `-U`, `-include`, `-isystem`, `-nostdinc`, `-pthread` | the same |
+| `-w` | `-w`, unless a `-W` option follows it |
 | `-l`, `-L`, `-Wl,`, `-static`, `-rdynamic`, `-nostdlib`, `-shared` | the same, in order with the inputs; `-soname NAME` is `-Wl,-soname,NAME` |
 | `-r` | `-no-pie -nostdlib -Wl,-r`: one relocatable object from every input |
 | `-run` | a build in a temporary directory, then the program |

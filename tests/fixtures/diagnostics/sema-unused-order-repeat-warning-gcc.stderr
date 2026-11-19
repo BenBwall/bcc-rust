@@ -22,3 +22,4 @@ sema-unused-order-repeat-warning-gcc.c: In function 'third':
 sema-unused-order-repeat-warning-gcc.c:8:32: warning: typedef 'V' locally defined but not used [-Wunused-local-typedefs]
     8 | void third(void) { typedef int V; }
       |                                ^
+cc1: some warnings being treated as errors

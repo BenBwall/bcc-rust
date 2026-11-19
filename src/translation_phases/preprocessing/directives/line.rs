@@ -141,7 +141,8 @@ impl Expander<'_, '_, '_, '_> {
                 },
                 source_vectors: token.source_vectors,
             };
-            if clang {
+            // A number past 4294967295 is an error of its own.
+            if clang && value.is_some() {
                 self.context.pedantic_preprocessor_error(error);
             } else {
                 self.context.preprocessor_error(error);

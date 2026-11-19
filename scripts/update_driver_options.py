@@ -11,6 +11,11 @@ paths: clang-cl reads an argument that names none of them as an input file.
 `--autocomplete` does not list them, so they come from the pinned Clang's
 `clang/include/clang/Options/Options.td` (at the commit `clang --version`
 names), given with --options-td.
+
+Clang's front end reads the warning groups from its own table, which says
+which groups hold warnings and so which it knows and may suggest for a
+misspelled one. They come from the pinned Clang's generated
+`DiagnosticGroups.inc`, given with --diagnostic-groups.
 """
 import argparse
 from pathlib import Path
@@ -95,6 +100,56 @@ def clang_cl_options(options_td):
     )
 
 
+DIAG_ENTRY = re.compile(
+    r"DIAG_ENTRY\(\w+ /\* (.*?) \*/, \d+, (?:/\* (DiagArray\d+) \*/ )?\d+, "
+    r"(?:/\* (DiagSubGroup\d+) \*/ )?\d+, R\""
+)
+DIAG_ARRAY = re.compile(r"/\* (DiagArray\d+|DiagSubGroup\d+) \*/ ([^\n]*?)-1,")
+
+
+def clang_warning_groups(groups_inc):
+    """The warning groups of the pinned Clang's front end, in its table's
+    order, as lines for `known.rs`: a group Clang may suggest for a
+    misspelled one, or with `~` one it knows but never suggests, as it
+    suggests no group without warnings (`DiagnosticIDs::getNearestOption`).
+    A group of remarks alone is no warning option, and the unnamed group
+    the table begins with, which caps the suggestions' distance, is left
+    out."""
+    text = Path(groups_inc).read_text()
+    arrays = {
+        match.group(1): [item.strip() for item in match.group(2).split(",") if item.strip()]
+        for match in DIAG_ARRAY.finditer(text)
+    }
+    entries = [match.groups() for match in DIAG_ENTRY.finditer(text)]
+
+    def warnings(index):
+        # `getDiagnosticsInGroup` for warnings: whether none was found
+        # (an empty group counts as found), and how many there are.
+        _, members, subgroups = entries[index]
+        if not members and not subgroups:
+            return False, 0
+        missing, count = True, 0
+        for diagnostic in arrays.get(members, []):
+            if not diagnostic.startswith("diag::remark_"):
+                missing, count = False, count + 1
+        for subgroup in arrays.get(subgroups, []):
+            sub_missing, sub_count = warnings(int(subgroup))
+            missing, count = missing and sub_missing, count + sub_count
+        return missing, count
+
+    lines = []
+    for index, (name, _, _) in enumerate(entries):
+        missing, count = warnings(index)
+        if missing or not name:
+            continue
+        lines.append(name if count else f"~{name}")
+    return (
+        "# pinned Clang's warning groups (DiagnosticGroups.inc), `~` for those it never suggests; "
+        "regenerate with scripts/update_driver_options.py --diagnostic-groups\n"
+        + "".join(f"{line}\n" for line in lines)
+    )
+
+
 def render(names, prefix, source):
     selected = sorted(name for name in names if name.startswith(prefix) and len(name) > len(prefix))
     return f"# {source}; regenerate with scripts/update_driver_options.py\n" + "".join(f"{name}\n" for name in selected)
@@ -105,6 +160,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="compare instead of writing")
     parser.add_argument("--gcc", default="gcc", help="the GCC whose options to freeze")
     parser.add_argument("--options-td", help="the pinned Clang's clang/include/clang/Options/Options.td")
+    parser.add_argument("--diagnostic-groups", help="the pinned Clang's include/clang/Basic/DiagnosticGroups.inc")
     args = parser.parse_args()
     version = subprocess.run([args.gcc, "-dumpfullversion"], capture_output=True, text=True, check=True).stdout.strip()
     gcc = gcc_options(args.gcc)
@@ -115,6 +171,8 @@ def main():
         files[f"clang-{kind}.list"] = render(clang, prefix, "pinned Clang --autocomplete")
     if args.options_td:
         files["clang-cl.list"] = clang_cl_options(args.options_td)
+    if args.diagnostic_groups:
+        files["clang-warning-groups.list"] = clang_warning_groups(args.diagnostic_groups)
     stale = []
     OUT.mkdir(parents=True, exist_ok=True)
     for name, text in files.items():
