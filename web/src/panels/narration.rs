@@ -118,6 +118,15 @@ pub fn Narration(
                     "Sequence point"
                 </span>
             </p>
+            // A stop's explanation leads the note, before its lead and
+            // "Why it matters".
+            <div class="fault-callout" hidden=move || diagnostic.with(Option::is_none)>
+                <p class="fault-kind">{move || diagnostic.with(|d| d.as_ref().map_or_default(crate::snapshot::Diagnostic::kind_label))}</p>
+                <p class="fault-message">{move || diagnostic.with(|d| d.as_ref().map(|d| super::rich_text(&sentence_case(&d.message))))}</p>
+                <p class="fault-note" hidden=move || diagnostic.with(|d| d.as_ref().is_none_or(|d| d.note.is_empty()))>
+                    {move || diagnostic.with(|d| d.as_ref().map_or_default(|d| d.note.clone()))}
+                </p>
+            </div>
             <p class="narration-lead">
                 {move || event.with(|event| match event {
                     | Some(event) => labels.with(|labels| names.with(|names| explained(&relabeled(lead(event), labels), &mut Vec::new(), names, tip, card))),
@@ -143,13 +152,6 @@ pub fn Narration(
             <p class="return-callout" hidden=move || returned.with(Option::is_none)>
                 "Program finished: main returned "<strong>{move || returned.get().unwrap_or_default()}</strong>
             </p>
-            <div class="fault-callout" hidden=move || diagnostic.with(Option::is_none)>
-                <p class="fault-kind">{move || diagnostic.with(|d| d.as_ref().map_or_default(crate::snapshot::Diagnostic::kind_label))}</p>
-                <p class="fault-message">{move || diagnostic.with(|d| d.as_ref().map(|d| super::rich_text(&sentence_case(&d.message))))}</p>
-                <p class="fault-note" hidden=move || diagnostic.with(|d| d.as_ref().is_none_or(|d| d.note.is_empty()))>
-                    {move || diagnostic.with(|d| d.as_ref().map_or_default(|d| d.note.clone()))}
-                </p>
-            </div>
             <Clauses event />
             <Details event note names open=details tip card />
             <Recent recent on_jump />
