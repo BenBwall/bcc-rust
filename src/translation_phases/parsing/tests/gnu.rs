@@ -447,6 +447,44 @@ fn extension_marker_suppresses_only_its_operand_or_declaration() {
     );
 }
 
+/// Clang's `__extension__` silences only the extension diagnostics Clang does
+/// not report by default (`DiagnosticIDs::getDiagnosticSeverity`), so the C23
+/// extensions it warns of by default stay reported in its scope; GCC's
+/// silences them, as it files them under `-Wpedantic`. The `_Static_assert`
+/// keyword, a C11 extension in C99, stays silent under both.
+#[test]
+fn extension_marker_leaves_default_on_c23_extensions_to_clang() {
+    let source = "__extension__ void f(int) {}\n__extension__ void g(void) { l: int x; (void)x; \
+                  m: }\n__extension__ _Static_assert(1);\n";
+    for (identity, expected) in [
+        (
+            crate::configuration::CompilerIdentity::Clang,
+            &[
+                "unnamed parameter in function definition",
+                "label before declaration",
+                "label at end of compound statement",
+                "static assertion without message",
+            ][..],
+        ),
+        (crate::configuration::CompilerIdentity::Gcc, &[][..]),
+    ] {
+        with_parse_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
+                .with_compiler_identity(identity),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                let extensions = super::extensions(p);
+                assert_eq!(extensions.len(), expected.len(), "{identity:?}: {extensions:?}");
+                for (found, spelling) in extensions.iter().zip(expected) {
+                    assert!(found.contains(spelling), "{identity:?}: {found}");
+                }
+                assert_eq!(p.parser.pedantic_suppression, 0);
+            },
+        );
+    }
+}
+
 #[test]
 fn malformed_gnu_prefixes_terminate_and_restore_machine_state() {
     for source in [

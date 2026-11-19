@@ -64,14 +64,21 @@ impl Parser<'_, '_, '_> {
     }
 
     /// [`Self::extension_source`] for syntax Clang warns of by default
-    /// ([`Context::report_extension_outside_pedantic`]).
+    /// ([`Context::report_extension_outside_pedantic`]). Clang's
+    /// `__extension__` silences only the extension diagnostics it does not
+    /// report by default (`DiagnosticIDs::getDiagnosticSeverity`), so under
+    /// its rules this one reports inside `__extension__` too. GCC files the
+    /// same syntax under `-Wpedantic`, which its `__extension__` silences.
     pub(super) fn extension_outside_pedantic(
         &mut self,
         feature: crate::configuration::Feature,
         spelling: &'static str,
         source: SourceVectors,
     ) {
-        if self.pedantic_suppression == 0 {
+        if self.pedantic_suppression == 0
+            || self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang
+        {
             self.context
                 .report_extension_outside_pedantic(feature, spelling, source);
         }

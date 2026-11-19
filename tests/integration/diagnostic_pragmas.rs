@@ -58,6 +58,27 @@ mod tests {
             .collect()
     }
 
+    /// [`lines`] for bcc's own command line, which prints a diagnostic's
+    /// `severity: message`, then ` --> file:line:column` beneath it.
+    fn own_lines(output: &Output) -> Vec<String> {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut severity = None;
+        let mut found = Vec::new();
+        for line in stderr.lines() {
+            if let Some((head, _)) = line.split_once(": ")
+                && matches!(head, "warning" | "error" | "fatal error")
+            {
+                severity = Some(head);
+            } else if let Some(location) = line.strip_prefix(" --> ")
+                && let Some(severity) = severity.take()
+            {
+                let number = location.split(':').nth(1).unwrap();
+                found.push(format!("{number} {severity}"));
+            }
+        }
+        found
+    }
+
     fn compile(name: &str, mode: &str, flags: &[&str], source: &str) -> Vec<String> {
         compile_bytes(name, mode, flags, source.as_bytes())
     }
@@ -808,6 +829,125 @@ int b[0];
                     .collect();
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert_eq!(found, severities, "{name} {mode}: {stderr}");
+                assert_eq!(
+                    stderr.lines().last().unwrap_or(""),
+                    last,
+                    "{name} {mode}: {stderr}"
+                );
+                assert_eq!(output.status.code(), Some(status), "{name} {mode}");
+            }
+        }
+    }
+
+    /// Clang's `__extension__` silences only the extension diagnostics Clang
+    /// does not report by default (`DiagnosticIDs::getDiagnosticSeverity`),
+    /// so the C23 extensions it warns of by default stay reported inside one:
+    /// an unnamed parameter, a label before a declaration and at the end of a
+    /// block in an `__extension__` definition, and a message-less
+    /// `_Static_assert` after `__extension__`. GCC 14's `__extension__`
+    /// silences them, as it files them under `-Wpedantic`. Each line and
+    /// severity in order, the summary and the status are Clang 23.1.5's,
+    /// which bcc's own command line follows too, and GCC 14's (`None` where
+    /// GCC rejects the flags, or where bcc's GCC personality already warns of
+    /// an unnamed parameter without `-pedantic`).
+    #[test]
+    fn extension_keyword_leaves_the_c23_extensions_clang_warns_of() {
+        /// A case's name, flags and pragmas, then Clang's and GCC's exit
+        /// status, `line severity` list and closing line.
+        type Case<'a> = (
+            &'a str,
+            &'a [&'a str],
+            &'a [&'a str],
+            (i32, &'a [&'a str], &'a str),
+            Option<(i32, &'a [&'a str], &'a str)>,
+        );
+        const BODY: &str = "void f(int);\nvoid g(void);\n__extension__ void f(int) {}\n__extension__ \
+                            void g(void) { goto l; l: int x; (void)x; goto m; m: }\n__extension__ \
+                            _Static_assert(1);\n";
+        const SILENT: (i32, &[&str], &str) = (0, &[], "");
+        let cases: [Case<'_>; 4] = [
+            // The reviewer's reproducer: a `-Wpedantic` pragma after one
+            // naming `-Weverything` leaves the four as that one set them.
+            (
+                "error -Weverything, then ignored -Wpedantic",
+                &["-Werror"],
+                &["error \"-Weverything\"", "ignored \"-Wpedantic\""],
+                (
+                    1,
+                    &["5 error", "6 error", "6 error", "7 error"],
+                    "4 errors generated.",
+                ),
+                None,
+            ),
+            (
+                "-pedantic",
+                &["-pedantic"],
+                &[],
+                (
+                    0,
+                    &["3 warning", "4 warning", "4 warning", "5 warning"],
+                    "4 warnings generated.",
+                ),
+                Some(SILENT),
+            ),
+            (
+                "-pedantic-errors",
+                &["-pedantic-errors"],
+                &[],
+                (
+                    1,
+                    &["3 error", "4 error", "4 error", "5 error"],
+                    "4 errors generated.",
+                ),
+                Some(SILENT),
+            ),
+            (
+                "-Weverything",
+                &["-Weverything", "-Wno-unknown-warning-option"],
+                &[],
+                (
+                    0,
+                    &["3 warning", "4 warning", "4 warning", "5 warning"],
+                    "4 warnings generated.",
+                ),
+                None,
+            ),
+        ];
+        let root = directory("extension-c23");
+        for (name, flags, pragmas, clang, gcc) in cases {
+            let mut source = String::new();
+            for pragma in pragmas {
+                source.push_str("#pragma clang diagnostic ");
+                source.push_str(pragma);
+                source.push('\n');
+            }
+            source.push_str(BODY);
+            fs::write(root.join("input.c"), source).unwrap();
+            for (mode, expected) in [
+                (Some("--clang-mode"), Some(clang)),
+                (Some("--gcc-mode"), gcc),
+                (None, Some(clang)),
+            ] {
+                let Some((status, severities, last)) = expected else {
+                    continue;
+                };
+                let mut arguments: Vec<&str> = mode.into_iter().collect();
+                arguments.push("-std=c99");
+                arguments.extend(flags);
+                arguments.extend(["-c", "-o", "output.o", "input.c"]);
+                let output = run(&root, &arguments);
+                let mode = mode.unwrap_or("bcc");
+                let found = if mode == "bcc" {
+                    own_lines(&output)
+                } else {
+                    lines(&output)
+                };
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert_eq!(found, severities, "{name} {mode}: {stderr}");
+                assert!(
+                    stderr.lines().all(|line| !line.contains("parameter requires a name")),
+                    "{name} {mode}: {stderr}"
+                );
                 assert_eq!(
                     stderr.lines().last().unwrap_or(""),
                     last,

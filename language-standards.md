@@ -35,7 +35,11 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
 - `__extension__` suppresses keyword, grammar and numeric-constant extension
   diagnostics within its owning declaration or expression. Lexical diagnostics
   (dollar identifiers, `//` comments, digraphs), directives and macro
-  definitions stay outside its scope.
+  definitions stay outside its scope. Under Clang's rules it leaves reported the
+  C23 extensions Clang warns of by default (a label at the end of a block or
+  before a declaration, `_Static_assert` without a message, an unnamed
+  parameter in a definition), since Clang's silences only the extension
+  diagnostics it does not report by default; GCC's silences them too.
 - A preprocessing extension diagnostic raised in a macro expansion may
   underline the replacement in the macro definition. Parser and semantic
   extension diagnostics and warning-group diagnostics point at the outermost
@@ -1004,7 +1008,11 @@ also have inspectable syntax nodes.
 
 `__extension__` suppresses extension diagnostics for keyword, grammar and
 numeric-constant tokens within its expression or declaration, including a
-function body or a parameter. Suppression ends at the owning production's boundary;
+function body or a parameter, except, under Clang's rules, a label at the end of
+a block or before a declaration, `_Static_assert` without a message and an
+unnamed parameter in a definition, which Clang warns of by default
+(`DiagnosticIDs::getDiagnosticSeverity` silences only an extension diagnostic
+that is off by default). Suppression ends at the owning production's boundary;
 later unsuppressed occurrences, including ones from macro expansions, keep their
 diagnostics. Nested functions isolate typedef, label and switch state; under
 the Clang identity a function definition in a block is the error "function
