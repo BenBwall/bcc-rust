@@ -680,6 +680,144 @@ int b[0];
         }
     }
 
+    /// Clang's `-Weverything` holds the C23 extensions Clang warns of by
+    /// default, outside `-Wpedantic`: a label at the end of a block and an
+    /// unnamed parameter in a definition, which the parser and semantic
+    /// analysis report apart. A pragma naming it maps them as it maps a
+    /// group, so `-Wfatal-errors` leaves its `error` an error and its `fatal`
+    /// stops at the first, and a pragma naming `-Wpedantic`, before it or
+    /// after it, changes nothing of that. GCC 14 ignores Clang's pragmas.
+    /// Each severity in order, the summary and the status are Clang 23.1.5's
+    /// and GCC 14's (`None` where bcc's GCC personality already differs).
+    #[test]
+    fn everything_pragma_maps_the_c23_extensions_clang_warns_of() {
+        /// A case's name, flags, pragmas and body, then Clang's and GCC's
+        /// exit status, severities and closing line.
+        type Case<'a> = (
+            &'a str,
+            &'a [&'a str],
+            &'a [&'a str],
+            &'a str,
+            (i32, &'a [&'a str], &'a str),
+            Option<(i32, &'a [&'a str], &'a str)>,
+        );
+        const LABELS: &str = "void f(void);\nvoid g(void);\nvoid f(void) { goto l; l: }\nvoid \
+                              g(void) { goto m; m: }\n";
+        const UNNAMED: &str = "void f(int);\nvoid g(int);\nvoid f(int) {}\nvoid g(int) {}\n";
+        const ERROR: &str = "error \"-Weverything\"";
+        const FATAL: &str = "fatal \"-Weverything\"";
+        const ERRORS: (i32, &[&str], &str) = (1, &["error", "error"], "2 errors generated.");
+        const STOPPED: (i32, &[&str], &str) = (1, &["fatal error"], "1 error generated.");
+        const WARNINGS: (i32, &[&str], &str) =
+            (0, &["warning", "warning"], "2 warnings generated.");
+        const NONE: (i32, &[&str], &str) = (0, &[], "");
+        let cases: [Case<'_>; 11] = [
+            (
+                "error",
+                &["-Wfatal-errors"],
+                &[ERROR],
+                LABELS,
+                ERRORS,
+                Some(NONE),
+            ),
+            ("fatal", &[], &[FATAL], LABELS, STOPPED, Some(NONE)),
+            (
+                "error, then warning -Wpedantic",
+                &["-Wfatal-errors"],
+                &[ERROR, "warning \"-Wpedantic\""],
+                LABELS,
+                ERRORS,
+                Some(NONE),
+            ),
+            (
+                "warning -Wpedantic, then error",
+                &["-Wfatal-errors"],
+                &["warning \"-Wpedantic\"", ERROR],
+                LABELS,
+                ERRORS,
+                Some(NONE),
+            ),
+            (
+                "fatal, then ignored -Wpedantic",
+                &[],
+                &[FATAL, "ignored \"-Wpedantic\""],
+                LABELS,
+                STOPPED,
+                Some(NONE),
+            ),
+            (
+                "warning, then error -Wpedantic",
+                &["-pedantic-errors", "-Wfatal-errors"],
+                &["warning \"-Weverything\"", "error \"-Wpedantic\""],
+                LABELS,
+                WARNINGS,
+                Some((
+                    1,
+                    &["error"],
+                    "compilation terminated due to -Wfatal-errors.",
+                )),
+            ),
+            (
+                "warning -Wpedantic alone",
+                &["-pedantic", "-Werror"],
+                &["warning \"-Wpedantic\""],
+                LABELS,
+                ERRORS,
+                None,
+            ),
+            (
+                "unnamed: error, then ignored -Wpedantic",
+                &["-Wfatal-errors"],
+                &[ERROR, "ignored \"-Wpedantic\""],
+                UNNAMED,
+                ERRORS,
+                None,
+            ),
+            ("unnamed: fatal", &[], &[FATAL], UNNAMED, STOPPED, None),
+            (
+                "unnamed: ignored",
+                &[],
+                &["ignored \"-Weverything\""],
+                UNNAMED,
+                NONE,
+                None,
+            ),
+            ("unnamed: no pragma", &[], &[], UNNAMED, WARNINGS, None),
+        ];
+        let root = directory("everything-c23");
+        for (name, flags, pragmas, body, clang, gcc) in cases {
+            let mut source = String::new();
+            for pragma in pragmas {
+                source.push_str("#pragma clang diagnostic ");
+                source.push_str(pragma);
+                source.push('\n');
+            }
+            source.push_str(body);
+            fs::write(root.join("input.c"), source).unwrap();
+            for (mode, expected) in [("--clang-mode", Some(clang)), ("--gcc-mode", gcc)] {
+                let Some((status, severities, last)) = expected else {
+                    continue;
+                };
+                let mut arguments = vec![mode, "-std=c99"];
+                arguments.extend(flags);
+                arguments.extend(["-c", "-o", "output.o", "input.c"]);
+                let output = run(&root, &arguments);
+                let found: Vec<String> = lines(&output)
+                    .iter()
+                    .map(|line| line.split_once(' ').unwrap().1.to_owned())
+                    .collect();
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert_eq!(found, severities, "{name} {mode}: {stderr}");
+                assert_eq!(
+                    stderr.lines().last().unwrap_or(""),
+                    last,
+                    "{name} {mode}: {stderr}"
+                );
+                assert_eq!(output.status.code(), Some(status), "{name} {mode}");
+            }
+        }
+    }
+
     /// `-E` keeps each pragma, `_Pragma` operators as lines, and compiling its
     /// text keeps their effect, around macros expanded in that text.
     #[test]

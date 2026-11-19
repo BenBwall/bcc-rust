@@ -27,6 +27,7 @@ use crate::{
         ExtensionPolicy,
         Feature,
         FeatureOrigin,
+        PragmaClass,
     },
     diagnostics::{
         Diagnostic,
@@ -57,7 +58,9 @@ impl<'tu> Context<'tu> {
     /// block), which its `-Wpedantic` does not hold (`InferPedantic` in
     /// `ClangDiagnosticsEmitter.cpp`): a pragma naming that option maps none
     /// of it, so `-Wfatal-errors` makes fatal the error `-pedantic-errors`
-    /// made of it. The extension policy decides it all the same.
+    /// made of it. Only a pragma naming `-Weverything` maps it
+    /// ([`ExtensionOption::Everything`]); otherwise the extension policy
+    /// decides it all the same.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     pub(crate) fn report_extension_outside_pedantic(
         &mut self,
@@ -66,7 +69,12 @@ impl<'tu> Context<'tu> {
         source: SourceVectors,
     ) {
         if !self.configuration.silent_extension(feature) {
-            self.report_extension_in(spelling, feature.origin(), source, false);
+            self.report_extension_in(
+                spelling,
+                feature.origin(),
+                source,
+                ExtensionOption::Everything,
+            );
         }
     }
 
@@ -79,31 +87,34 @@ impl<'tu> Context<'tu> {
         origin: FeatureOrigin,
         source_vectors: SourceVectors,
     ) {
-        self.report_extension_in(spelling, origin, source_vectors, true);
+        self.report_extension_in(spelling, origin, source_vectors, ExtensionOption::Pedantic);
     }
 
-    /// [`Self::report_extension_since`], for a diagnostic of `-Wpedantic`
-    /// where `pedantic` says it is one.
+    /// [`Self::report_extension_since`], for a diagnostic of the warning
+    /// `option`.
     fn report_extension_in(
         &mut self,
         spelling: &str,
         origin: FeatureOrigin,
         source_vectors: SourceVectors,
-        pedantic: bool,
+        option: ExtensionOption,
     ) {
         let Some(severity) =
-            self.extension_severity(origin, DiagnosticPolicy::Extension, source_vectors)
+            self.extension_severity(origin, DiagnosticPolicy::Extension, source_vectors, option)
         else {
             return;
         };
-        self.emit_extension(spelling, origin, severity, source_vectors, pedantic);
+        self.emit_extension(spelling, origin, severity, source_vectors, option);
     }
 
+    /// What the settings at `source` make of an extension diagnostic of the
+    /// warning `option`, if they report it.
     fn extension_severity(
         &self,
         origin: FeatureOrigin,
         baseline: DiagnosticPolicy,
         source: SourceVectors,
+        option: ExtensionOption,
     ) -> Option<ErrorSeverity> {
         if matches!(
             origin,
@@ -112,7 +123,15 @@ impl<'tu> Context<'tu> {
         {
             return None;
         }
-        let severity = policy_severity(self.configuration_at(source).extension_policy(), baseline)?;
+        let severity = match self.everything_class_outside_pedantic(option, source) {
+            // Clang's `-w` silences what is not an error by default, whatever
+            // a pragma made of it (`DiagnosticIDs::getDiagnosticSeverity`).
+            | Some(_) if self.configuration.suppress_warnings() => return None,
+            | Some(PragmaClass::Ignored) => return None,
+            | Some(PragmaClass::Warning) => ErrorSeverity::Warning,
+            | Some(PragmaClass::Error) => ErrorSeverity::Error,
+            | None => policy_severity(self.configuration_at(source).extension_policy(), baseline)?,
+        };
         (!self.withholds(
             severity,
             !matches!(baseline, DiagnosticPolicy::Error),
@@ -121,9 +140,8 @@ impl<'tu> Context<'tu> {
         .then_some(severity)
     }
 
-    /// Queues the diagnostic once the policy has asked for one, as one of
-    /// `-Wpedantic` where `pedantic` says it is. Callers inline only the
-    /// policy checks above.
+    /// Queues the diagnostic of the warning `option` once the policy has asked
+    /// for one. Callers inline only the policy checks above.
     #[cold]
     #[inline(never)]
     fn emit_extension(
@@ -132,7 +150,7 @@ impl<'tu> Context<'tu> {
         origin: FeatureOrigin,
         severity: ErrorSeverity,
         source_vectors: SourceVectors,
-        pedantic: bool,
+        option: ExtensionOption,
     ) {
         let spelling = self.diagnostic_text(spelling);
         let at = source_vectors;
@@ -147,7 +165,7 @@ impl<'tu> Context<'tu> {
                 severity,
                 source_vectors,
             }),
-            pedantic,
+            option,
         );
     }
 
@@ -166,12 +184,17 @@ impl<'tu> Context<'tu> {
         } else {
             DiagnosticPolicy::Error
         };
-        if let Some(severity) = self.extension_severity(feature.origin(), baseline, source) {
-            // Clang's `-Wpedantic` holds what it reports only on request,
-            // not what it warns of by default (`InferPedantic` in
-            // `ClangDiagnosticsEmitter.cpp`).
-            let pedantic = matches!(baseline, DiagnosticPolicy::Extension);
-            self.classified_extension(source, diagnostic(severity), pedantic);
+        // Clang's `-Wpedantic` holds what it reports only on request, not
+        // what it warns of by default (`InferPedantic` in
+        // `ClangDiagnosticsEmitter.cpp`), and no option holds an error.
+        let option = match baseline {
+            | DiagnosticPolicy::Extension => ExtensionOption::Pedantic,
+            | DiagnosticPolicy::Warning => ExtensionOption::Everything,
+            | DiagnosticPolicy::WarningOnly | DiagnosticPolicy::Error => ExtensionOption::None,
+        };
+        if let Some(severity) = self.extension_severity(feature.origin(), baseline, source, option)
+        {
+            self.classified_extension(source, diagnostic(severity), option);
         }
     }
 
@@ -242,6 +265,20 @@ pub(crate) fn policy_severity(
         | ExtensionPolicy::Warn => Some(ErrorSeverity::Warning),
         | ExtensionPolicy::Deny => Some(ErrorSeverity::Error),
     }
+}
+
+/// The warning option that holds an extension diagnostic, which decides the
+/// diagnostic pragmas that reach it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExtensionOption {
+    /// `-Wpedantic`, and Clang's `-Weverything`, which holds it.
+    Pedantic,
+    /// Only Clang's `-Weverything`, for what Clang warns of by default outside
+    /// `-Wpedantic`, such as its `-Wc23-extensions`. GCC files it under
+    /// `-Wpedantic`.
+    Everything,
+    /// One this code does not track, whose own group, if any, classifies it.
+    None,
 }
 
 /// Baseline for a diagnostic controlled by the extension policy.

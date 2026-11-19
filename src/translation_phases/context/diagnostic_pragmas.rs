@@ -33,6 +33,7 @@ use crate::{
     },
     translation_phases::{
         ErrorSeverity,
+        ExtensionOption,
         GetSeverity,
         TranslationError,
         errors::ClassifiedError,
@@ -200,6 +201,21 @@ impl<'tu> Context<'tu> {
             .map(|setting| setting.class)
     }
 
+    /// [`Self::everything_class_at`] for an extension diagnostic of `option`,
+    /// if only Clang's `-Weverything` reaches it: a pragma naming `-Wpedantic`
+    /// does not, before or after that one.
+    pub(crate) fn everything_class_outside_pedantic(
+        &self,
+        option: ExtensionOption,
+        source: SourceVectors,
+    ) -> Option<PragmaClass> {
+        if option == ExtensionOption::Everything {
+            self.everything_class_at(source)
+        } else {
+            None
+        }
+    }
+
     /// Whether the latest pragma naming `-Wpedantic`, or with `everything`
     /// Clang's `-Weverything`, made an extension diagnostic at `source` an
     /// error, and if so whether as Clang's `fatal`. Such an error is a
@@ -219,23 +235,35 @@ impl<'tu> Context<'tu> {
         (setting.class == PragmaClass::Error).then_some(setting.fatal)
     }
 
-    /// Queues an extension diagnostic, which `warning "-Wpedantic"` keeps from
-    /// `-Werror`. One whose severity is the extension policy's (`pedantic`)
-    /// and that no group of its own classifies is an error of that pragma's
-    /// `error` or `fatal` making, which Clang's `-Wfatal-errors` leaves an
-    /// error. A parser diagnostic records either itself, since the parser
-    /// edits it after queueing it and the reporter folds it by its variant.
+    /// Queues an extension diagnostic of the warning `option`, which
+    /// `warning "-Wpedantic"` keeps from `-Werror`. One whose severity is the
+    /// extension policy's and that no group of its own classifies is an error
+    /// of that pragma's `error` or `fatal` making, which Clang's
+    /// `-Wfatal-errors` leaves an error. What Clang warns of by default
+    /// outside `-Wpedantic` answers to its `-Weverything` alone, which also
+    /// gave it its severity. A parser diagnostic records either itself, since
+    /// the parser edits it after queueing it and the reporter folds it by its
+    /// variant.
     pub(crate) fn classified_extension(
         &mut self,
         source: SourceVectors,
         mut error: TranslationError<'tu>,
-        pedantic: bool,
+        option: ExtensionOption,
     ) {
+        let outside_pedantic = option == ExtensionOption::Everything
+            && self.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang;
+        let everything = self.everything_class_outside_pedantic(option, source);
         let (severity, fatal) = match error.severity() {
-            | ErrorSeverity::Warning if self.pedantic_warning_at(source) =>
+            | ErrorSeverity::Warning if everything == Some(PragmaClass::Warning) =>
                 (ErrorSeverity::Warning, false),
-            | ErrorSeverity::Error if pedantic && error.group().is_none() => {
-                let Some(fatal) = self.pedantic_error_at(source, false) else {
+            | ErrorSeverity::Warning if !outside_pedantic && self.pedantic_warning_at(source) =>
+                (ErrorSeverity::Warning, false),
+            | ErrorSeverity::Error
+                if error.group().is_none()
+                    && (option == ExtensionOption::Pedantic || everything.is_some()) =>
+            {
+                let Some(fatal) = self.pedantic_error_at(source, everything.is_some()) else {
                     self.classified_error(source, error);
                     return;
                 };

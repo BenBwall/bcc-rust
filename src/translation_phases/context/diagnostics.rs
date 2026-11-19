@@ -115,7 +115,7 @@ impl<'tu> Context<'tu> {
             self.classified_extension(
                 error.source_vectors,
                 TranslationError::Preprocessing(error),
-                true,
+                crate::translation_phases::ExtensionOption::Pedantic,
             );
         }
     }
