@@ -1693,6 +1693,10 @@
     .notice { margin-inline: 18px; }
     .lesson-part { grid-template-columns: minmax(0, 1fr); }
     .lesson-part-title { padding-bottom: 2px; }
+    /* The phone's deck holds a lane or two before the first step, too
+       short for the blank tape's card: it follows the blank instead. */
+    .tape-empty { position: static; display: block; padding: 0 14px 16px; background: none; }
+    .tape-empty-card { max-width: none; }
     .lesson-card { grid-template-columns: 40px minmax(0, 1fr); gap: 2px 12px; padding: 11px 8px 11px 0; }
     /* The number, and a UB mark under it, span the title and the summary,
        so the mark never pushes the summary down a line. */
