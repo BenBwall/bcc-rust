@@ -815,6 +815,40 @@ fn static_union_casts_follow_each_compilers_constant_rules() {
     }
 }
 
+/// GCC gives a bit-field narrower than its declared type a type of its own,
+/// which no operand of a cast to a union type has; Clang matches the declared
+/// type.
+/// GNU extension: GCC manual, "Cast to a Union Type".
+#[test]
+fn gcc_union_casts_match_no_narrow_bit_field() {
+    use crate::configuration::CompilerIdentity;
+    for (identity, invalid) in [(CompilerIdentity::Gcc, 1), (CompilerIdentity::Clang, 0)] {
+        let configuration = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true)
+            .with_compiler_extensions(true)
+            .with_compiler_identity(identity);
+        with_configuration(
+            "union B { int b : 3; }; union B a = (union B)5; union W { int b : 32; int i; }; \
+             union W w = (union W)5;",
+            configuration,
+            |context, _| {
+                let errors = context.take_pending_errors();
+                let casts = errors
+                    .iter()
+                    .filter(|error| {
+                        matches!(
+                            error,
+                            TranslationError::Semantic(error)
+                                if error.kind == SemanticErrorKind::InvalidCast
+                        )
+                    })
+                    .count();
+                assert_eq!(casts, invalid, "{identity:?}: {errors:?}");
+            },
+        );
+    }
+}
+
 /// A declaration or function definition marked `__extension__` silences
 /// GCC's `-pedantic` reports of `__func__` before C99, of a conditional
 /// between pointers to arrays whose elements differ in qualifiers before
