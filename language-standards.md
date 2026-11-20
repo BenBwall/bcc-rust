@@ -30,8 +30,12 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   Clang exempts from pedantic diagnostics; the reserved GNU spellings follow
   the claimed compiler (below). Only `-pedantic`,
   `-Wpedantic` and `-pedantic-errors` select a policy. Pointer diagnostic group
-  controls and global `-Werror` are supported as described below;
-  `-Wno-pedantic` and other unrelated warning groups are not implemented.
+  controls and global `-Werror` are supported as described below. Where no
+  diagnostic pragma governs an extension diagnostic, the Clang and GCC
+  identities classify it from the warning options as their compilers do
+  (below); of the groups Clang files extensions under, bcc models only
+  `-Wpedantic`, `-Wc11-extensions` and `-Wc23-extensions` there, so an option
+  naming another, such as `-Wno-zero-length-array`, does not reach them.
 - `__extension__` suppresses keyword, grammar and numeric-constant extension
   diagnostics within its owning declaration or expression. Lexical diagnostics
   (dollar identifiers, `//` comments, digraphs), directives and macro
@@ -481,8 +485,37 @@ the default is Allow. Later policy flags win. Deny emits an error but keeps
 classified tokens available for structured parser recovery. Preprocessor
 extensions with their own diagnostics keep their established recovery.
 
+Where no diagnostic pragma governs it, an extension diagnostic's severity is
+the command line's as its compiler computes it
+(`CompilerConfiguration::clang_extension_severity` and `gcc_pedantic_severity`
+in `src/configuration/extension_mapping.rs`). Under Clang's rules, which bcc's
+own command line follows, each of `-Wpedantic`, `-Wc11-extensions` and
+`-Wc23-extensions` with its `-Wno-`, `-Werror=` and `-Wno-error=` forms, and
+`-Wno-everything`, sets the mapping of the diagnostics it holds in argv order:
+`-Wpedantic` holds the extensions Clang reports only on request, a revision's
+group its syntax, and Clang files `#warning`, an omitted variadic argument
+and a typedef redefinition under `-Wpedantic` alone. A command-line `-WX`
+keeps an earlier `-Werror=X`, and `-Wno-error=X` keeps `-Werror` from X for
+good. `-pedantic` and `-pedantic-errors`, wherever they appear, raise what no
+option turned off to a warning or an error, `-Wno-error=X` capping X at a
+warning; then `-w` silences it and `-Werror` makes a warning an error
+(`DiagnosticIDs::getDiagnosticSeverity`). The four C23 extensions Clang warns
+of by default (below) are warnings by default, which only `-Wc23-extensions`'s
+forms reach. Under GCC's rules `-w` silences a pedantic warning first,
+`-Werror=pedantic` enables the pedantic warnings, and the last of
+`-pedantic-errors`, `-Werror=pedantic` and `-Wno-error=pedantic` classifies
+what GCC files under `-Wpedantic`, which its format then names
+`[-Werror=pedantic]`. GCC files arithmetic on `void *` under `-Wpointer-arith`,
+which `-Wno-error=pedantic` leaves an error, and `long long` (`-Wlong-long`),
+binary constants, `__VA_OPT__`, hexadecimal floating constants and `#warning`
+where neither pedantic classification reaches them; the rest of what its
+preprocessor reports keeps the extension policy.
+
 `-w` (also `--suppress-warnings`) suppresses warning rendering and warning
-counts in every CLI view. Errors and extension-policy errors remain visible.
+counts in every CLI view. Errors remain visible, and so do the
+extension-policy errors of syntax a mode does not accept; under the Clang and
+GCC identities `-w` also silences the errors `-pedantic-errors` made of
+extensions, as both compilers do.
 
 Inline emission follows [GCC's Inline manual](https://gcc.gnu.org/onlinedocs/gcc/Inline.html)
 and [its dialect options](https://gcc.gnu.org/onlinedocs/gcc/C-Dialect-Options.html#index-fgnu89-inline).
@@ -1388,8 +1421,9 @@ default (a label at the end of a block or before a declaration, `_Static_assert`
 without a message, an unnamed parameter in a definition) are outside Clang's
 `-Wpedantic`, so in the Clang personality such a pragma leaves their severity to
 the command line: `-pedantic-errors` or `-Werror` makes them errors, an `error`
-or `fatal` pragma does not. Where the command line leaves them unreported, which
-Clang's default does not, the pragma reports them as the warnings Clang gives.
+or `fatal` pragma does not. Where the extension policy leaves them unreported,
+the pragma reports them as the warnings Clang gives; where no pragma governs
+them, the command line's classification reports them as Clang does (above).
 Clang's `-Weverything` holds those four, so in the Clang personality a pragma
 naming it maps them as it maps a group, and one naming `-Wpedantic`, before or
 after it, leaves them as it set them. The lexer runs when a file is opened, before any pragma in it, so
