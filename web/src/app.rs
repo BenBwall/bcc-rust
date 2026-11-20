@@ -2059,9 +2059,9 @@ fn Toolbar(state: State) -> impl IntoView {
             </div>
             <wasm::WasmTransport state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
             <wasm::StartAtMain state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
-            <div class="run-status" hidden=move || state.mode.get() != Mode::Wasm>
+            <div class="run-status wasm-status" hidden=move || state.mode.get() != Mode::Wasm>
                 <span class="status-pill" data-status=move || wasm::status(state.wasm).1>{move || wasm::status(state.wasm).0}</span>
-                <span class="step-counter">"Instruction "<strong>{move || state.wasm.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
+                <span class="step-counter"><span class="step-counter-label">"Instruction "</span><strong>{move || state.wasm.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
             </div>
         </div>
     }

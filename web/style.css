@@ -432,9 +432,13 @@
   /* The WebAssembly view's strip has two more keys and a longer status
      than the machine's, so its Reset, Back and Run show their icons alone
      at every width (their names stay for screen readers and in their
-     tooltips), and the strip keeps to one row on a laptop. */
+     tooltips), and the strip keeps to one row on a laptop, a count of
+     instructions in the thousands included. */
   .wasm-transport .button:not(.primary, .labelled) .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .wasm-transport .button:not(.primary, .labelled) { padding-inline: 10px; }
+  /* Its counter drops its word too: the note under the strip heads with
+     the instruction's number. */
+  .wasm-status .step-counter-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .toolbar .start-at-main { margin-top: 0; }
   .run-status { display: flex; align-items: center; gap: 14px; }
   /* A lamp: lit while the run can go on, dark when it has finished, red
