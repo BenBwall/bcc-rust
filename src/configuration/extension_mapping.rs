@@ -504,7 +504,8 @@ enum Level {
 /// no later option clears. `-WX` maps X's diagnostics to a warning, `-Wno-X`
 /// turns them off, `-Werror=X` maps them to an error, and `-Wno-error=X`
 /// takes an error mapping back to a warning (`DiagnosticsEngine::setSeverity`
-/// keeps the flag). Also GCC's classification of `-Wpedantic`.
+/// keeps the flag). Also GCC's classification of `-Wpedantic` and the
+/// state of each of GCC's own options.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct ExtensionMappings {
     classes:      [u8; ExtensionClass::ALL.len()],
@@ -569,8 +570,8 @@ impl ExtensionMappings {
 
     /// Records one of GCC's options, `group`, at its argv position: its
     /// `-W` and `-Wno-` forms enable it and turn it off, its `-Werror=` form
-    /// does both enable it and classify its diagnostics as errors, and its
-    /// `-Wno-error=` form classifies them as warnings alone
+    /// enables it and classifies its diagnostics as errors, and its
+    /// `-Wno-error=` form only classifies them as warnings
     /// (`control_warning_option` in GCC 14's `opts-common.cc`).
     const fn with_gcc_option(
         mut self,
@@ -610,9 +611,11 @@ impl ExtensionMappings {
                     // came first (`opts_set`).
                     let mut index = 0;
                     while index < ExtensionGroup::COUNT {
-                        let bits = &mut self.gcc_options[index];
-                        if *bits & 3 == 0 && ExtensionGroup::ALL[index].gcc_enabled_by_pedantic() {
-                            *bits = (Level::Error as u8 + 1) << 2;
+                        let group = ExtensionGroup::ALL[index];
+                        if group.gcc_enabled_by_pedantic()
+                            && self.gcc_option(group).enabled.is_none()
+                        {
+                            self.gcc_options[index] = (Level::Error as u8 + 1) << 2;
                         }
                         index += 1;
                     }
