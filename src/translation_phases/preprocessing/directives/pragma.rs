@@ -417,8 +417,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             break 'base;
                         },
                         | "STDC" => {
-                            let fenv_access;
-                            match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
+                            let fenv_access = match Self::next_ignore_whitespace(
+                                &mut self.tokenizer,
+                                self.context,
+                            ) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;
                                     self.context.preprocessor_error(PreprocessorError {
@@ -454,7 +456,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                         }
                                         break 'base;
                                     }
-                                    fenv_access = s == "FENV_ACCESS";
+                                    s == "FENV_ACCESS"
                                 },
                                 | None => {
                                     let source_vectors = self.current_location();
@@ -466,7 +468,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                     });
                                     break 'base;
                                 },
-                            }
+                            };
 
                             match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
