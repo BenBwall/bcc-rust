@@ -778,6 +778,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             left_value,
                             right_value,
                             domains,
+                            self.nan_source(),
                         ));
                     } else {
                         info.integer = Self::binary128_comparison(op, left_value, right_value);
@@ -836,7 +837,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )
                 };
                 let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
-                let value = Self::floating_binary(op, left_value, right_value, precision, domains);
+                let value = Self::floating_binary(
+                    op,
+                    left_value,
+                    right_value,
+                    precision,
+                    domains,
+                    self.nan_source(),
+                );
                 let value = if half {
                     value.map(|value| self.half_result(value, &mut info))
                 } else {

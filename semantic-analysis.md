@@ -2958,9 +2958,41 @@ cannot fold later operators with the unconverted integer; `(1 ? N + 1 :
 Lowering emits a folded binary128 value as `fconst.f128` (or converts it to
 the destination format for a static initializer), and static initializers
 read it through `float_parsing::bits::binary128_bits`. A folded invalid
-operation gives the run-time result, the negative default NaN; the pinned
-Clang folds `0.0q/0.0q` through LLVM's `APFloat` to a positive NaN, so the
-sign of such a statically folded NaN differs from Clang's.
+operation gives the NaN of its [`NanSource`](#folded-nans-2026-11-20): the
+positive one GCC and Clang fold, or under GCC's rules in a function while
+math may trap the negative default NaN libgcc gives at run time.
+
+## Folded NaNs (2026-11-20)
+
+An invalid operation (`0/0`, `∞ - ∞`, `0 × ∞`, `∞/∞`) gives a NaN whose
+sign IEC 60559 leaves unspecified, and the two computers that may produce it
+differ: x86-64 at run time gives its default NaN, sign bit set
+(`0xFFF8000000000000`), while GCC's `real.c` and LLVM's `APFloat` give the
+positive quiet NaN (`0x7FF8000000000000`). The host bridge computes as the
+hardware does, so `constants.rs` decides the sign afterwards, from
+`Analyzer::nan_source` (C99 §F.7.4 and §F.7.5):
+
+- `NanSource::Compiler`, outside a function and in a static or thread-local
+  object's initializer, or under GCC's rules with `-fno-trapping-math`: a
+  NaN that an invalid operation made from operands that are not NaNs is
+  positive. Both compilers fold these, at every optimization level.
+- `NanSource::ClangFunction`, an expression in a function under Clang's
+  rules: Clang folds real arithmetic the same way, but a complex quotient,
+  or a complex product whose parts are both NaNs, calls `__divdc3` or
+  `__muldc3` at run time, so those keep the hardware's NaN.
+- `NanSource::Runtime`, an expression in a function under GCC's rules while
+  math may trap (GCC's default): GCC leaves the operation unfolded
+  (`const_binop` refuses a NaN made from operands that are not NaNs), so the
+  value is the hardware's NaN.
+
+A NaN operand passes through with its sign in every case, as GCC's
+`const_binop` and LLVM's `APFloat` pass it, and a negation flips it.
+Binary128 folding follows the same rule. Two run-time differences remain
+outside folding: GCC rewrites `x * -1.0` to `-x` and folds
+`__builtin_signbit(0.0 / 0.0)` to 0 by its non-negativity reasoning even
+while leaving the division for run time, where bcc gives the hardware's
+negative NaN; and bcc does not raise the invalid exception for an
+operation GCC leaves for run time.
 
 ## Half-precision folding (2026-10-27)
 
