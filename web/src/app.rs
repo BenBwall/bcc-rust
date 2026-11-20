@@ -700,7 +700,9 @@ impl State {
         self.open_lesson_view(demo);
         show_workbench(true);
         self.action(move || async move {
-            let loaded = self.stage_program(demo.source.into(), demo.name.into()).await;
+            let loaded = self
+                .stage_program(demo.source.into(), demo.name.into())
+                .await;
             show_workbench(false);
             loaded
         });
@@ -2084,10 +2086,10 @@ fn show_workbench(focus: bool) {
         }
         if focus
             && let Some(tab) = document
-            .query_selector(".mode-tab[aria-selected=\"true\"]")
-            .ok()
-            .flatten()
-            .and_then(|tab| tab.dyn_into::<web_sys::HtmlElement>().ok())
+                .query_selector(".mode-tab[aria-selected=\"true\"]")
+                .ok()
+                .flatten()
+                .and_then(|tab| tab.dyn_into::<web_sys::HtmlElement>().ok())
         {
             let options = web_sys::FocusOptions::new();
             options.set_prevent_scroll(true);

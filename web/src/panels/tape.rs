@@ -1017,9 +1017,7 @@ pub fn Deck(
         });
     };
     // Only the first state is recorded, and the run can go on from it.
-    let blank = move || {
-        history.with(|history| history.len() == 1) && reel.with(|reel| reel.open)
-    };
+    let blank = move || history.with(|history| history.len() == 1) && reel.with(|reel| reel.open);
     let played = move || {
         let count = reel.with(|reel| reel.steps.len().max(2)) - 1;
         px(at()) / px(count)
