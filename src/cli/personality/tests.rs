@@ -42,6 +42,9 @@ fn executable_names_select_personalities() {
     assert_eq!(named("icx-cl"), Some((Personality::IcxCl, None)));
     assert_eq!(named("ICX-CL.EXE"), Some((Personality::IcxCl, None)));
     assert_eq!(named("bcc-icx-cl"), Some((Personality::IcxCl, None)));
+    // Only a whole word names icx: these are `cl` and GCC, as before icx.
+    assert_eq!(named("myicx-cl"), Some((Personality::Msvc, None)));
+    assert_eq!(named("gicx-cc"), Some((Personality::Gcc, None)));
     assert_eq!(named("icc"), None);
     assert_eq!(named("bcc-rust"), None);
     assert_eq!(named("bcc"), None);

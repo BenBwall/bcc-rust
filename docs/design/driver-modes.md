@@ -1776,8 +1776,9 @@ the [clang-cl](#clang-cl) personality with Intel's identity and defaults
 ([icx-cl](#icx-cl)).
 
 **Selecting it.** `--icx-mode` (`--driver-mode=icx`), or an executable named
-`icx` or `icx-cc`, also with a prefix or a version (`bcc-icx`,
-`icx-2026`). Intel's driver calls itself `icx` whatever it was run as
+`icx` or `icx-cc`, also with a prefix ending in `-` or a version
+(`bcc-icx`, `icx-2026`), as the other personalities' names are matched
+(`gicx-cc` is GCC's `cc` and `myicx-cl` is `cl`). Intel's driver calls itself `icx` whatever it was run as
 (`icx-cc` says `icx: error:`), and so does bcc. `icc`, the classic compiler
 icx replaced, does not select it: Intel withdrew `icc` in oneAPI 2024.0 and
 installs no `icc` that runs icx, and a build system that finds `icc` expects

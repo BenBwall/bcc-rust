@@ -236,9 +236,15 @@ impl Personality {
             (prefix, "clang-cl")
         } else if let Some(prefix) = name.strip_suffix("zig-cc") {
             (prefix, "zig-cc")
-        } else if let Some(prefix) = name.strip_suffix("icx-cl") {
+        } else if let Some(prefix) = name
+            .strip_suffix("icx-cl")
+            .filter(|prefix| prefix.is_empty() || prefix.ends_with('-'))
+        {
             (prefix, "icx-cl")
-        } else if let Some(prefix) = name.strip_suffix("icx-cc") {
+        } else if let Some(prefix) = name
+            .strip_suffix("icx-cc")
+            .filter(|prefix| prefix.is_empty() || prefix.ends_with('-'))
+        {
             (prefix, "icx-cc")
         } else {
             name.rsplit_once('-')
