@@ -76,26 +76,9 @@ pub(super) enum ConstantSite {
     StaticAssertion,
     /// C99: §6.7.2.1 paragraph 3, p. 101; PDF p. 113.
     BitFieldWidth(Option<StringCacheId>),
-    /// An array bound, which GCC's folding policy decides apart, and whether
-    /// GCC accepts there the variable length array it makes.
-    /// C99: §6.7.5.2 paragraphs 1, 2 and 4, pp. 116-117; PDF pp. 128-129.
-    ArrayBound(VariableBounds),
-    /// An alignment or an attribute's argument.
+    /// An array bound, which GCC's folding policy decides apart.
     #[default]
     Other,
-}
-
-/// Whether GCC accepts, silently, the variable length array that a bound
-/// which is no integer constant expression makes: in a parameter, or in an
-/// object or member with automatic storage at block scope. It refuses one at
-/// file scope, with static storage or in a compound literal.
-/// C99: §6.7.5.2 paragraph 2, p. 116; PDF p. 128.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum VariableBounds {
-    /// GCC refuses it, whatever `__extension__` marks.
-    Refused,
-    /// GCC accepts it, so a marked declaration silences the report.
-    Accepted,
 }
 
 /// An overflow Clang reports only if the evaluation of its full expression
@@ -753,21 +736,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ),
                 | ConstantSite::BitFieldWidth(None) =>
                     "bit-field width not an integer constant expression",
-                | ConstantSite::ArrayBound(_) | ConstantSite::Other =>
-                    "folded integer constant expression",
+                | ConstantSite::Other => "folded integer constant expression",
             };
-            // GCC makes an array whose bound is no integer constant
-            // expression variable length, and refuses it at file scope or
-            // with static storage, which no `__extension__` on the
-            // declaration silences; this report stands for that refusal.
-            if let ConstantSite::ArrayBound(bounds) = self.constant_site {
-                if self.extension_operands == 0
-                    && (self.extension_declarations == 0 || bounds == VariableBounds::Refused)
-                {
-                    self.pedantic_constant(text, e.source_vectors);
-                }
-            } else {
+            // A marked declaration silences the report as GCC 14 does, but
+            // for an array bound, which GCC makes variable length and judges
+            // by the array's storage and uses, and a value folded from an
+            // address, for which `-Wall` adds GCC's `-Waddress`; bcc models
+            // neither, so only an `__extension__` operand silences these.
+            // C99: §6.7.5.2 paragraph 4, p. 116; PDF p. 128.
+            if self.constant_site != ConstantSite::Other
+                && self.expression_info(e).constant == super::ConstantClass::Arithmetic
+            {
                 self.report_pedantic_constant(text, e.source_vectors);
+            } else if self.extension_operands == 0 {
+                self.pedantic_constant(text, e.source_vectors);
             }
             return;
         }

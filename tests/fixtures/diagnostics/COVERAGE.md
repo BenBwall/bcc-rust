@@ -323,6 +323,7 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | [GCC's ranges of discarded values](sema-unused-value-ranges-gcc.stderr) | Checked 17 November 2026 against GCC 14.2 (its `<stdbool.h>` standing in as `#define bool _Bool`): every line matches but for the order on line 41, where GCC reports the comma's left operand before the statement and bcc's reporter sorts the two by column. For an operand in a macro's argument GCC adds `in definition of macro`, which bcc never writes, so the fixture has none. |
 | [Clang's checked integer arithmetic](sema-stdckdint-clang.stderr) | Checked 16 November 2026 against Clang 23.1.5: the errors, their places and their words match. Clang underlines an argument's whole macro invocation (`^~~~~~~~~~~~~~~~~~~` under `ckd_add(&c, 127, 1)`) and the `(R)` it notes in its header (`^~~`), where bcc underlines the macro's name and points at the `(`. Clang's note names its own header (`stdckdint.h:37`); bcc's names `<built-in>/stdckdint.h:18`. For `ADD` around `ckd_add`, Clang also notes `ADD`'s expansion; bcc notes only the innermost macro. |
 | [GCC's checked integer arithmetic](sema-stdckdint-gcc.stderr) | Checked 16 November 2026 against GCC 14.2 with its own `<stdckdint.h>`: identical, byte for byte. GCC reports an error a system header's macro wrote where the user invoked the macro, as it does a warning. |
+| [GCC's folded bounds under `__extension__`](sema-extension-pedantic-gcc.stderr) | Checked 20 November 2026 against GCC 14. bcc reports a folded array bound such as `(int)(1.0 + 1)` with its `-pedantic` folded-constant warning whether or not `__extension__` marks the declaration, where GCC makes the array variable length and judges it by its storage and uses: silent for an automatic object, a parameter or a block-scope type name, and an error at file scope, with static storage, in a compound literal, under an initializer, after a jump into its scope, or through a typedef or structure a static object takes, none of which `__extension__` silences. Model that variable length array, then silence the report in a marked declaration where GCC accepts the array. |
 
 The prior panic and raw-NUL findings remain protected by the guard test and
 their existing fixtures. Keep those regressions even though the old review's
@@ -1194,12 +1195,14 @@ the marked one warn again on the same lines and columns.
 declaration and a marked function definition silence them, and a use after the
 marked declaration warns again on the same line and column. Its last rows
 check folded constants: a marked declaration silences GCC 14's reports of a
-folded enumerator, case label and bit-field width, and an automatic array's
-folded bound, which GCC makes variable length, but not a folded bound GCC then
-refuses at file scope and with static storage ("variably modified 'loud_bound' at file scope", "storage size
-of 'a' isn't constant"; the second is an error without `-pedantic`). bcc
-reports these bounds with its `-pedantic` folded-constant warning at the
-bound, where GCC points at the declaration.
+folded enumerator, case label and bit-field width, but leaves bcc's report of
+a folded array bound as it is unmarked. GCC makes such an array variable
+length: it refuses the static and file-scope ones ("variably modified
+'loud_bound' at file scope", "storage size of 'a' isn't constant"; the second
+is an error without `-pedantic`), where bcc reports its `-pedantic`
+folded-constant warning at the bound and GCC points at the declaration, and
+accepts the automatic one in `loud_automatic` silently, which bcc reports as
+it does unmarked (see Remaining output issues).
 
 ### Predefined function-name identifiers
 

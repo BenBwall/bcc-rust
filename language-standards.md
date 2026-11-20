@@ -56,13 +56,18 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   compilers, and GCC's `-pedantic` reports of predefined identifiers and of
   folded enumerators, case labels and bit-field widths, as in GCC; a marked
   member declaration or `_Static_assert` does not yet silence its own folded
-  constant. A marked declaration leaves GCC's report of a folded array bound,
-  which stands for GCC's refusal of the variable length array such a bound
-  makes at file scope, with static storage or in a compound literal, an error
-  `__extension__` does not silence; it silences the report only in a
-  parameter or an object or member with automatic storage, where GCC accepts
-  that array. Other semantic extension reports, such as arithmetic on
-  `void *`, ignore it yet, where both compilers silence them.
+  constant. A marked declaration leaves GCC's report of a folded array bound
+  as it is unmarked; only an `__extension__` operand around the bound or its
+  type name silences it. GCC makes such an array variable length and then
+  accepts or refuses it by its storage and uses (file scope, static storage,
+  a compound literal, an initializer, a jump into its scope, a typedef or
+  structure a static object takes), none of which `__extension__` silences;
+  matching GCC there needs that variable length array modelled, which is
+  follow-up work. A marked declaration also leaves the report of an
+  enumerator or case label folded from an address (`&x != 0`), where `-Wall`
+  adds GCC's `-Waddress`, which bcc does not model. Other semantic extension
+  reports, such as arithmetic on `void *`, ignore it yet, where both
+  compilers silence them.
 - A preprocessing extension diagnostic raised in a macro expansion may
   underline the replacement in the macro definition. Parser and semantic
   extension diagnostics and warning-group diagnostics point at the outermost
@@ -1112,14 +1117,13 @@ Clang warns of by default
 that is off by default). In semantic analysis it silences casts to a union
 type and to the operand's own type, and GCC's `-pedantic` reports of folded
 constants and predefined identifiers, except, in a marked declaration, that of
-a folded array bound, which GCC makes a variable length array and refuses at
-file scope, with static storage or in a compound literal; only a parameter's
-or an automatic object's bound, which GCC accepts, stays silent. It does not yet silence other semantic
-extension reports such as arithmetic on `void *`, which both compilers
-silence.
-Suppression ends at the owning production's boundary;
-later unsuppressed occurrences, including ones from macro expansions, keep their
-diagnostics. Nested functions isolate typedef, label and switch state; under
+a folded array bound, which stays as it is unmarked until bcc models the
+variable length array GCC makes of it, and of a value folded from an address
+(see the limits above). It does not yet
+silence other semantic extension reports such as arithmetic on `void *`,
+which both compilers silence. Suppression ends at the owning production's
+boundary; later unsuppressed occurrences, including ones from macro
+expansions, keep their diagnostics. Nested functions isolate typedef, label and switch state; under
 the Clang identity a function definition in a block is the error "function
 definition is not allowed here", as in Clang (TCC's and MSVC's identities give
 "cannot use local functions" and C2601 "local function definitions are

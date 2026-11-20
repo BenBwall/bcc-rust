@@ -436,22 +436,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.taint(d.recovered);
                 self.enter_extension_declaration(d.declaration_specifiers);
-                // C99 §6.7.5.2p2, p. 116; PDF p. 128: only an ordinary
-                // identifier with automatic storage at block scope may have
-                // a variable length array type.
-                self.enter_variable_bounds(
-                    if self.scope != 0
-                        && !d.init_declarators.is_empty()
-                        && matches!(
-                            d.declaration_specifiers.storage_class,
-                            None | Some(StorageClass::Auto | StorageClass::Register)
-                        )
-                    {
-                        exceptional_constants::VariableBounds::Accepted
-                    } else {
-                        exceptional_constants::VariableBounds::Refused
-                    },
-                );
                 self.validate_declaration_list_item(d);
                 self.report_empty_declaration(d);
                 self.constexpr_declaration(d);
@@ -696,7 +680,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.inhibited_evaluations -= 1;
                 },
             | Work::LeaveExtension => self.extension_declarations -= 1,
-            | Work::VariableBounds(bounds) => self.variable_bounds = bounds,
             | Work::ConstantContext => self.constant_contexts += 1,
             | Work::ConstantContextEnd(site) => {
                 self.constant_contexts -= 1;
@@ -2090,8 +2073,6 @@ enum Work<'tu, 's> {
     Unevaluated(bool),
     /// Leaves a declaration or function definition marked `__extension__`.
     LeaveExtension,
-    /// Restores [`Analyzer::variable_bounds`].
-    VariableBounds(exceptional_constants::VariableBounds),
     /// Enters a context requiring a constant.
     ConstantContext,
     /// Leaves it, for the evaluation of the constant at this site.
@@ -2329,12 +2310,6 @@ struct Analyzer<'a, 'tu, 's> {
     /// folded array bound (see [`Self::report_folded_constant`]).
     /// GNU extension: GCC manual, "Alternate Keywords".
     extension_declarations:  u32,
-    /// Whether, inside a marked declaration, GCC accepts the variable length
-    /// array a folded bound makes here, which `__extension__` does not make
-    /// it accept. A typedef's counts as refused, since a static object may
-    /// take it.
-    /// C99: §6.7.5.2 paragraph 2, p. 116; PDF p. 128.
-    variable_bounds:         exceptional_constants::VariableBounds,
     /// How many enclosing contexts require a constant expression: Clang's
     /// `ConstantEvaluated`, which silences its warnings about code.
     constant_contexts:       u32,

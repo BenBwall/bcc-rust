@@ -12,13 +12,12 @@ __extension__ const char *quiet_definition(void) { return __FUNCTION__; }
 const char *quiet_declaration(void) { __extension__ const char *p = __FUNCTION__; return p; }
 const char *loud_after(void) { __extension__ const char *p = __FUNCTION__; (void)p; return __FUNCTION__; }
 /* A marked declaration silences folded enumerators, case labels and bit-field
-   widths, and a folded array bound in an automatic object, which GCC makes
-   variable length; it refuses that array at file scope or with static
-   storage. */
+   widths, but not a folded array bound, which GCC makes variable length and
+   then judges by the array's storage and uses. */
 __extension__ enum { quiet_enumerator = (int)(1.0 + 1) };
 __extension__ struct quiet_width { int b : (int)(1.5 * 2); };
 __extension__ int quiet_case(int i) { switch (i) { case (int)(1.0 + 1): return 1; } return 0; }
 __extension__ static int loud_bound[(int)(1.0 + 1)];
 __extension__ struct loud_member { int a[(int)(1.0 + 1)]; };
 void loud_static(void) { __extension__ static int a[(int)(1.0 + 1)]; (void)a; }
-void quiet_automatic(void) { __extension__ int a[(int)(1.0 + 1)]; (void)a; }
+void loud_automatic(void) { __extension__ int a[(int)(1.0 + 1)]; (void)a; }

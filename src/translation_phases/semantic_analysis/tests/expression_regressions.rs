@@ -604,16 +604,16 @@ fn only_a_cast_to_a_union_type_is_a_gnu_union_cast() {
 
 /// A declaration or function definition marked `__extension__` silences
 /// GCC's `-pedantic` reports of folded enumerators, case labels and bit-field
-/// widths, as GCC 14 does, but not that of a folded array bound: GCC makes
-/// such an array variable length and refuses it at file scope, with static
-/// storage, in a compound literal or through a typedef, an error
-/// `__extension__` leaves alone. A parameter or an automatic object, which
-/// may be variable length, stays silent.
-/// C99: §6.6 paragraph 6, p. 95; PDF p. 107; §6.7.5.2 paragraphs 2 and 4,
-/// pp. 116-117; PDF pp. 128-129. GNU extension: GCC manual, "Alternate
-/// Keywords".
+/// widths, as GCC 14 does, but leaves the report of a folded array bound, and
+/// of a value folded from an address, as it is unmarked. GCC makes such an
+/// array variable length, and whether it then accepts it depends on the
+/// array's storage and uses, and `-Wall` adds its `-Waddress` to an address
+/// compared with a null pointer; this report models neither, so only an
+/// `__extension__` operand enclosing the value silences it.
+/// C99: §6.6 paragraph 6, p. 95; PDF p. 107; §6.7.5.2 paragraph 4, p. 116;
+/// PDF p. 128. GNU extension: GCC manual, "Alternate Keywords".
 #[test]
-fn extension_declarations_keep_gcc_folded_array_bound_reports() {
+fn extension_declarations_leave_gcc_folded_array_bound_reports() {
     use crate::configuration::CompilerIdentity;
     for (source, reported) in [
         ("__extension__ static int a[(int)(1.0 + 1)];", 1),
@@ -649,25 +649,31 @@ fn extension_declarations_keep_gcc_folded_array_bound_reports() {
             "void f(void) { __extension__ static int n = sizeof(int[(int)(1.0 + 1)]); (void)n; }",
             1,
         ),
-        // GCC accepts these variable length arrays silently.
+        // GCC accepts these variable length arrays silently, but the
+        // report stays as it is unmarked.
         (
             "void f(void) { __extension__ int a[(int)(1.0 + 1)]; (void)a; }",
-            0,
+            1,
         ),
         (
             "void f(void) { __extension__ int n = sizeof(int[(int)(1.0 + 1)]); (void)n; }",
-            0,
+            1,
         ),
         (
             "__extension__ void f(void) { struct T { int a[(int)(1.0 + 1)]; } t; (void)t; }",
-            0,
+            1,
         ),
         (
             "__extension__ void f(int a[static (int)(1.0 + 1)]) { (void)a; }",
+            1,
+        ),
+        // An `__extension__` operand around the bound never silenced it, but
+        // one around its type name does.
+        ("static int a[__extension__ ((int)(1.0 + 1))];", 1),
+        (
+            "static int n = __extension__ sizeof(int[(int)(1.0 + 1)]);",
             0,
         ),
-        // An `__extension__` operand around the bound never silenced it.
-        ("static int a[__extension__ ((int)(1.0 + 1))];", 1),
         ("static int a[(int)(1.0 + 1)];", 1),
         // The other folded constants are silenced in a marked declaration.
         ("__extension__ enum { A = (int)(1.0 + 1) };", 0),
@@ -678,6 +684,13 @@ fn extension_declarations_keep_gcc_folded_array_bound_reports() {
             0,
         ),
         ("enum { A = (int)(1.0 + 1) };", 1),
+        // A value folded from an address is reported as it is unmarked.
+        ("int x; __extension__ enum { A = &x != 0 };", 1),
+        (
+            "int x; __extension__ int g(int i) { switch (i) { case &x != 0: return 1; } return 0; \
+             }",
+            1,
+        ),
     ] {
         let configuration = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny)
             .with_gnu_extensions(true)
