@@ -77,14 +77,25 @@ pub(super) enum ConstantSite {
     /// C99: §6.7.2.1 paragraph 3, p. 101; PDF p. 113.
     BitFieldWidth(Option<StringCacheId>),
     /// An array bound, which GCC's folding policy decides apart, and whether
-    /// GCC accepts there, silently, the variable length array a bound that
-    /// is no integer constant expression makes: in a parameter, or under
-    /// `__extension__` in an object or member with automatic storage.
+    /// GCC accepts there the variable length array it makes.
     /// C99: §6.7.5.2 paragraphs 1, 2 and 4, pp. 116-117; PDF pp. 128-129.
-    ArrayBound(bool),
+    ArrayBound(VariableBounds),
     /// An alignment or an attribute's argument.
     #[default]
     Other,
+}
+
+/// Whether GCC accepts, silently, the variable length array that a bound
+/// which is no integer constant expression makes: in a parameter, or in an
+/// object or member with automatic storage at block scope. It refuses one at
+/// file scope, with static storage or in a compound literal.
+/// C99: §6.7.5.2 paragraph 2, p. 116; PDF p. 128.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum VariableBounds {
+    /// GCC refuses it, whatever `__extension__` marks.
+    Refused,
+    /// GCC accepts it, so a marked declaration silences the report.
+    Accepted,
 }
 
 /// An overflow Clang reports only if the evaluation of its full expression
@@ -749,8 +760,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // expression variable length, and refuses it at file scope or
             // with static storage, which no `__extension__` on the
             // declaration silences; this report stands for that refusal.
-            if let ConstantSite::ArrayBound(varying) = self.constant_site {
-                if self.extension_operands == 0 && (self.extension_declarations == 0 || !varying) {
+            if let ConstantSite::ArrayBound(bounds) = self.constant_site {
+                if self.extension_operands == 0
+                    && (self.extension_declarations == 0 || bounds == VariableBounds::Refused)
+                {
                     self.pedantic_constant(text, e.source_vectors);
                 }
             } else {

@@ -197,7 +197,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::DiscardType);
                 // Clang recovers folded bounds here, where C99 §6.5.2.5p1
                 // requires a non-VLA type (p. 75; PDF p. 87).
-                self.enter_varying_bounds(false);
+                self.enter_variable_bounds(super::exceptional_constants::VariableBounds::Refused);
                 self.work.push(Work::TypeName(type_name, true));
             },
             | E::Call {
@@ -780,14 +780,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Notes, inside a marked declaration, whether GCC accepts silently the
-    /// variable length array a folded bound makes in the work scheduled
-    /// next, until that work is done.
+    /// Notes, inside a marked declaration, whether GCC accepts the variable
+    /// length array a folded bound makes in the work scheduled next, until
+    /// that work is done.
     /// C99: §6.7.5.2 paragraph 2, p. 116; PDF p. 128.
-    pub(super) fn enter_varying_bounds(&mut self, varying: bool) {
+    pub(super) fn enter_variable_bounds(
+        &mut self,
+        bounds: super::exceptional_constants::VariableBounds,
+    ) {
         if self.extension_declarations != 0 {
-            self.work.push(Work::VaryingBounds(self.varying_bounds));
-            self.varying_bounds = varying;
+            self.work.push(Work::VariableBounds(self.variable_bounds));
+            self.variable_bounds = bounds;
         }
     }
 
