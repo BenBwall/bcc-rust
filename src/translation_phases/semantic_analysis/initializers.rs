@@ -64,6 +64,7 @@ use crate::{
                 TypeQualifiers,
             },
             syntax::{
+                BinaryOperator,
                 Expression,
                 ExpressionType,
                 UnaryOperator,
@@ -796,6 +797,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
         if let Some(literal) = literal.or(converted) {
             self.check_static_compound_literal(e, literal);
+        } else if static_storage && let Some((cast, member)) = self.union_cast(e) {
+            self.check_static_union_cast(e, cast, member);
         } else if static_storage {
             self.check_static_initializer(target, info, e, site.bits);
         }
@@ -833,17 +836,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         e: &'tu Expression<'tu>,
         bits: Option<BitRange>,
     ) {
-        // C23 §6.6p9: a named constant is a constant expression, a
-        // structure or union one included; one of pointer type is null.
-        if self.constant_place(e).is_some()
-            && (!self.scalar_type(target)
-                || (self.pointer_target(target).is_some()
-                    && info.integer.is_some_and(Integer::is_zero)))
-        {
+        if self.named_constant_initializer(target, info, e) {
             return;
         }
-        let bit_width = bits.map(|bits| bits.width);
-        let bit_field = bits.is_some();
         self.report_exceptional_initializer(e, info);
         if self.gcc_refuses_comma_initializer(e) {
             self.error(
@@ -854,6 +849,201 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             );
             return;
         }
+        self.check_static_value(target, info, e, bits);
+    }
+
+    /// Checks the cast to a union type `cast`, inside the static
+    /// initializer `e`, whose operand initializes the member of type
+    /// `member`. GCC and Clang accept it as if the member were initialized
+    /// in braces, so the operand must be a constant that member accepts,
+    /// through nested casts to unions. GCC folds the operand as an
+    /// expression, not as an initializer, so it refuses a comma, a compound
+    /// literal and the operations [`Self::gcc_leaves_unfolded`] names
+    /// ("initializer element is not constant"), and it has no `-pedantic` report of an undefined or
+    /// overflowed value there; Clang's evaluator reads all of them.
+    /// GNU extension: GCC manual, "Cast to a Union Type"; C99 §6.6
+    /// paragraph 10, p. 96; PDF p. 108 permits other forms of constant
+    /// expression. C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §6.7.8
+    /// paragraph 17, pp. 126-127; PDF pp. 138-139.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
+    fn check_static_union_cast(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        mut cast: &'tu Expression<'tu>,
+        mut member: TypeId,
+    ) {
+        let operand = loop {
+            let ExpressionType::Cast {
+                operand_expression, ..
+            } = cast.kind
+            else {
+                return;
+            };
+            match self.union_cast(operand_expression) {
+                | Some((inner, ty)) => (cast, member) = (inner, ty),
+                | None => break operand_expression,
+            }
+        };
+        let gcc = !self.context.configuration.folds_compound_literals();
+        let mut inner = operand;
+        while let ExpressionType::Parenthesized { expression } = inner.kind {
+            inner = expression;
+        }
+        let literal = matches!(inner.kind, ExpressionType::CompoundLiteral { .. });
+        if gcc
+            && (literal
+                || self.evaluates_comma(operand)
+                || self.gcc_leaves_unfolded(operand))
+        {
+            self.error(
+                SemanticErrorKind::NonConstantInitializer,
+                e.source_vectors,
+                None,
+                None,
+            );
+        } else if literal {
+            self.check_static_compound_literal(operand, inner);
+        } else {
+            let info = self.expression_info(operand);
+            if !self.named_constant_initializer(member, info, operand) {
+                self.check_static_value(member, info, operand, None);
+            }
+        }
+    }
+
+    /// The cast to a union type that `e` is, inside parentheses and
+    /// `__extension__`, and the type of the member its operand initializes.
+    /// GNU extension: GCC manual, "Cast to a Union Type".
+    fn union_cast(
+        &self,
+        mut e: &'tu Expression<'tu>,
+    ) -> Option<(&'tu Expression<'tu>, TypeId)> {
+        loop {
+            e = match e.kind {
+                | ExpressionType::Parenthesized { expression } => expression,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Extension,
+                    operand_expression,
+                } => operand_expression,
+                | ExpressionType::Cast { .. } => {
+                    // Semantic analysis gives a cast an operation type only
+                    // for a cast to a union, the member's.
+                    let member = self.expression_info(e).operation_type?;
+                    return Some((e, member));
+                },
+                | _ => return None,
+            };
+        }
+    }
+
+    /// Whether GCC leaves an operation in `e` unfolded, as it does outside
+    /// an initializer: arithmetic between a real and a complex operand,
+    /// whose real one keeps its type domain, which GCC's front end builds
+    /// from saved operands, and, while math may
+    /// trap (`-ftrapping-math`, its default), a floating division by zero,
+    /// or an operation that overflows to an infinity or gives a NaN from
+    /// operands that are neither, which raise IEC 60559 exceptions where a
+    /// constant expression is evaluated as during execution.
+    /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57; §F.7.4
+    /// paragraph 1, p. 449; PDF p. 461.
+    fn gcc_leaves_unfolded(&self, e: &'tu Expression<'tu>) -> bool {
+        use ExpressionType as E;
+        let traps = !self.context.configuration.no_trapping_math();
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push(e);
+        while let Some(e) = work.pop() {
+            match e.kind {
+                | E::Parenthesized { expression } => work.push(expression),
+                | E::Unary {
+                    operand_expression, ..
+                }
+                | E::Cast {
+                    operand_expression, ..
+                } => work.push(operand_expression),
+                | E::Binary {
+                    operator,
+                    left_expression,
+                    right_expression,
+                } => {
+                    let arithmetic = matches!(
+                        operator,
+                        BinaryOperator::Addition
+                            | BinaryOperator::Subtraction
+                            | BinaryOperator::Multiplication
+                            | BinaryOperator::Division
+                    );
+                    let (left, right) = (
+                        self.expression_info(left_expression),
+                        self.expression_info(right_expression),
+                    );
+                    if arithmetic && self.complex_type(left.ty) != self.complex_type(right.ty) {
+                        return true;
+                    }
+                    // An integer operand converts to a finite value.
+                    let class = |info: super::ExpressionInfo<'tu>| {
+                        info.floating().map_or(
+                            (info.integer.is_some_and(Integer::is_zero), false, false),
+                            |value| (value.real.is_zero(), value.real.is_infinite(), value.real.is_nan()),
+                        )
+                    };
+                    if arithmetic
+                        && traps
+                        && let Some(result) = self.expression_info(e).floating()
+                    {
+                        let ((_, left_infinite, left_nan), (right_zero, right_infinite, right_nan)) =
+                            (class(left), class(right));
+                        if (operator == BinaryOperator::Division && right_zero)
+                            || (result.real.is_nan() && !left_nan && !right_nan)
+                            || (result.real.is_infinite() && !left_infinite && !right_infinite)
+                        {
+                            return true;
+                        }
+                    }
+                    work.push(right_expression);
+                    work.push(left_expression);
+                },
+                | E::Conditional(c) => {
+                    match Self::constant_truth(self.expression_info(c.condition_expression)) {
+                        | Some(true) => work.push(c.then_expression),
+                        | Some(false) => work.push(c.else_expression),
+                        | None => {},
+                    }
+                },
+                | _ => {},
+            }
+        }
+        false
+    }
+
+    /// Whether `e` is a C23 named constant that initializes a `target`,
+    /// which is then constant: one of structure or union type, or one of
+    /// pointer type that is null.
+    /// C23 (N3220): §6.6 paragraph 9, p. 95; PDF p. 108.
+    fn named_constant_initializer(
+        &self,
+        target: TypeId,
+        info: super::ExpressionInfo<'tu>,
+        e: &'tu Expression<'tu>,
+    ) -> bool {
+        self.constant_place(e).is_some()
+            && (!self.scalar_type(target)
+                || (self.pointer_target(target).is_some()
+                    && info.integer.is_some_and(Integer::is_zero)))
+    }
+
+    /// Checks the value `e` gives a static `target`, after GCC's reports of
+    /// the initializer's form.
+    /// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §6.6 paragraphs 7-9,
+    /// pp. 95-96; PDF pp. 107-108.
+    fn check_static_value(
+        &mut self,
+        target: TypeId,
+        info: super::ExpressionInfo<'tu>,
+        e: &'tu Expression<'tu>,
+        bits: Option<BitRange>,
+    ) {
+        let bit_width = bits.map(|bits| bits.width);
+        let bit_field = bits.is_some();
         let folds = self.context.configuration.folds_exceptional_constants();
         let boolean = matches!(
             self.types.nodes[self.types.non_atomic(target).index],
@@ -1597,6 +1787,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         && let ExpressionType::CompoundLiteral { initializer, .. } = nested.kind
                     {
                         self.check_static_plan(initializer);
+                    } else if let Some((cast, member)) = self.union_cast(e) {
+                        self.check_static_union_cast(e, cast, member);
                     } else {
                         let info = self.expression_info(e);
                         self.check_static_initializer(destination.ty, info, e, None);

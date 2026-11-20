@@ -210,7 +210,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Whether `e` evaluates a comma operator, which no constant expression
     /// may (C99 §6.6p3), through what a constant `?:` selects.
-    fn evaluates_comma(&self, e: &'tu Expression<'tu>) -> bool {
+    pub(super) fn evaluates_comma(&self, e: &'tu Expression<'tu>) -> bool {
         use ExpressionType as E;
         let mut work = ArenaVec::new_in(self.scratch);
         work.push(e);

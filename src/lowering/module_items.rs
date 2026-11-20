@@ -2027,7 +2027,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     /// static object: the bytes and addresses of the literal's own
     /// initializer, as if it were written in braces. A C23 named constant
     /// gives the bytes its initializer stores in the subobject it
-    /// designates. Semantic analysis accepts no other expression here.
+    /// designates, and a cast to a union type the member its operand
+    /// initializes. Semantic analysis accepts no other expression here.
     /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6p10, p. 96;
     /// PDF p. 108. C23 (N3220): §6.6 paragraphs 7 and 9, p. 95; PDF p. 108.
     fn static_copy(
@@ -2042,6 +2043,9 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             || LoweringError::unsupported(Construct::StaticInitializer, expression.source_vectors);
         if let Some(place) = self.sema.named_constant(expression) {
             return self.static_named_copy(bytes, relocations, offset, ty, place, expression);
+        }
+        if let Some(cast) = self.union_cast(expression) {
+            return self.static_union_cast(bytes, relocations, offset, ty, cast);
         }
         let literal = loop {
             match expression.kind {
@@ -2073,6 +2077,86 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             );
         }
         Ok(())
+    }
+
+    /// Writes the union of type `ty` at `offset` that the cast to it, `cast`,
+    /// gives a static object: zero bytes but for the member the operand
+    /// initializes, through nested casts to unions, which all start at the
+    /// union's address, as if the member were initialized in braces.
+    /// GNU extension: GCC manual, "Cast to a Union Type"; C99 §6.7.8
+    /// paragraphs 10 and 17, pp. 126-127; PDF pp. 138-139; §6.7.2.1
+    /// paragraph 14, p. 103; PDF p. 115.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
+    fn static_union_cast(
+        &mut self,
+        bytes: &mut [u8],
+        relocations: &mut ArenaVec<'_, Relocation>,
+        offset: u64,
+        ty: TypeId,
+        mut cast: &'tu Expression<'tu>,
+    ) -> Result<(), LoweringError> {
+        let source = cast.source_vectors;
+        let size = types::layout(&self.sema.types, ty)
+            .map_err(|kind| at(kind, source))?
+            .size;
+        let start = index(offset, cast)?;
+        bytes[start..start + index(size, cast)?].fill(0);
+        discard(relocations, offset, offset + size, self.pointer_bytes());
+        loop {
+            let ExpressionType::Cast {
+                operand_expression, ..
+            } = cast.kind
+            else {
+                return Err(LoweringError::missing("a union cast has no operand", source));
+            };
+            let member = self
+                .sema
+                .expression_info(cast)
+                .and_then(|info| info.operation_type)
+                .ok_or_else(|| LoweringError::missing("a union cast has no member", source))?;
+            match self.union_cast(operand_expression) {
+                | Some(inner) => cast = inner,
+                | None =>
+                    // A bit-field member takes the operand whole, as Clang
+                    // stores it; GCC matches no narrower bit-field.
+                    return if repr(&self.sema.types, member).map_err(|kind| at(kind, source))?
+                        == Repr::Aggregate
+                        || self.whole_compound_literal(operand_expression).is_some()
+                    {
+                        self.static_copy(bytes, relocations, offset, member, operand_expression)
+                    } else {
+                        self.static_scalar(
+                            bytes,
+                            relocations,
+                            (offset, None),
+                            member,
+                            operand_expression,
+                        )
+                    },
+            }
+        }
+    }
+
+    /// The cast to a union type that `expression` is, inside parentheses
+    /// and `__extension__`: semantic analysis gives a cast an operation type
+    /// only for a cast to a union, the member's.
+    fn union_cast(&self, mut expression: &'tu Expression<'tu>) -> Option<&'tu Expression<'tu>> {
+        loop {
+            expression = match expression.kind {
+                | ExpressionType::Parenthesized { expression } => expression,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Extension,
+                    operand_expression,
+                } => operand_expression,
+                | ExpressionType::Cast { .. } =>
+                    return self
+                        .sema
+                        .expression_info(expression)?
+                        .operation_type
+                        .map(|_| expression),
+                | _ => return None,
+            };
+        }
     }
 
     /// Writes the bytes a C23 named constant's initializer stores in the
