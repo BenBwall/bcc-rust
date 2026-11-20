@@ -3409,6 +3409,10 @@ pub(super) struct State<'tu, 's> {
     /// Where `#pragma STDC FENV_ACCESS` is on
     /// ([`Analyzer::enter_fenv_access_root`]).
     pub(super) fenv_access: FenvAccess,
+    /// The initializers being analyzed whose NaNs
+    /// [`Analyzer::settle_strict_initializer`] settles, innermost last:
+    /// each binding, and where its conversions begin.
+    pub(super) strict_initializers: ArenaVec<'s, (usize, usize)>,
     /// Root expression of the initializer value currently being analyzed.
     pub(super) initializer_value: Option<usize>,
     pub(super) current: Option<FunctionContext<'tu>>,
@@ -3496,6 +3500,7 @@ impl<'s> State<'_, 's> {
             reference_function: None,
             initializer: None,
             fenv_access: FenvAccess::default(),
+            strict_initializers: ArenaVec::new_in(scratch),
             initializer_value: None,
             current: None,
             next_function: 0,

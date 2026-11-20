@@ -61,17 +61,13 @@ pub(super) enum NanSource {
     /// parts are both NaNs, calls `__divdc3` or `__muldc3`, which compute
     /// at run time.
     ClangFunction,
-    /// Clang's evaluator for an automatic array or structure under strict
-    /// exception behavior, where Clang's code computes the rest at run time
-    /// (`EmitAutoVarInit` copies a constant aggregate's image): it folds as
-    /// the compiler does, but refuses a complex quotient by a real divisor
-    /// that raises an exception, so that one is computed at run time.
-    ClangAggregate,
     /// The hardware at run time: GCC leaves an operation that raises the
     /// invalid exception in a function unfolded while math may trap
     /// (`-ftrapping-math`, its default), and Clang emits it as a
     /// constrained operation under `-ftrapping-math` or
-    /// `#pragma STDC FENV_ACCESS ON`.
+    /// `#pragma STDC FENV_ACCESS ON`, unless it copies the initializer of
+    /// an automatic array or structure from a constant image
+    /// ([`Analyzer::settle_strict_initializer`]).
     Runtime,
 }
 
@@ -88,13 +84,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let limited_complex = configuration.limited_complex_arithmetic();
         match configuration.compiler_identity().rules() {
-            | RuleSet::Clang
-                if configuration.requests_trapping_math() || self.functions.fenv_access.root =>
-                if self.initializing_automatic_aggregate() {
-                    NanSource::ClangAggregate
-                } else {
-                    NanSource::Runtime
-                },
+            | RuleSet::Clang if self.clang_strict_exceptions() => NanSource::Runtime,
             | RuleSet::Clang if limited_complex => NanSource::Compiler,
             | RuleSet::Clang => NanSource::ClangFunction,
             | RuleSet::Gcc if !configuration.no_trapping_math() => NanSource::Runtime,
@@ -103,18 +93,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether the initializer of an automatic array or structure is
-    /// analyzed now, which Clang's evaluator folds whole when it can.
-    fn initializing_automatic_aggregate(&self) -> bool {
-        self.functions.initializer.is_some_and(|binding| {
-            let data = self.bindings[binding];
-            !data.duration.is_static_or_thread()
-                && match self.types.nodes[data.ty.index] {
-                    | TypeKind::Array(..) => true,
-                    | TypeKind::Tag(tag) => self.types.tags[tag].kind != super::TagKind::Enum,
-                    | _ => false,
-                }
-        })
+    /// Whether Clang's code for the function analyzed now has strict
+    /// exception behavior: under `-ftrapping-math`, or where
+    /// `#pragma STDC FENV_ACCESS ON` is in effect. C99: §7.6.1 paragraph 2,
+    /// p. 189; PDF p. 201.
+    pub(super) fn clang_strict_exceptions(&self) -> bool {
+        self.context.configuration.requests_trapping_math() || self.functions.fenv_access.root
     }
 
     /// Enters the root whose output tokens run from `start` to `end`:
@@ -141,16 +125,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// [`Self::floating_binary`] with the NaN of the context analyzed now.
-    pub(super) fn fold_floating(
+    /// `left op right` for operands of types `left_type` and `right_type`,
+    /// whose values are already converted to the real or complex floating
+    /// type `operand_type`, with the NaN of `source`: the value
+    /// [`Self::floating_binary`] gives, not yet rounded to the result type.
+    pub(super) fn floating_operation(
         &self,
         op: BinaryOperator,
-        left: Floating,
-        right: Floating,
-        precision: i32,
-        domains: u8,
+        [left, right]: [Floating; 2],
+        [left_type, right_type]: [TypeId; 2],
+        operand_type: TypeId,
+        source: NanSource,
     ) -> Option<Floating> {
-        Self::floating_binary(op, left, right, precision, domains, self.nan_source())
+        let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
+            unreachable!("floating scalar operation")
+        };
+        let precision = self
+            .floating_precision(scalar)
+            .expect("foldable real precision");
+        let domains =
+            u8::from(self.complex_type(left_type)) | (u8::from(self.complex_type(right_type)) << 1);
+        Self::floating_binary(op, left, right, precision, domains, source)
     }
 
     /// IEC 60559 arithmetic: a zero divisor gives an infinity or NaN
@@ -172,10 +167,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | B::Division => 3,
             | _ => return None,
         };
-        // Clang's evaluator refuses a complex quotient by a real divisor
-        // that raises an exception, which then computes at run time.
-        let folded = source != NanSource::Runtime
-            && !(source == NanSource::ClangAggregate && domains == 1 && op == B::Division);
+        let folded = source != NanSource::Runtime;
         let arithmetic = |a: LongDouble, b: LongDouble, operation| {
             let result = a.arithmetic(b, operation, precision);
             if folded {
@@ -224,7 +216,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             // Whether a routine or the hardware computes the result.
             let routine = match source {
-                | NanSource::Compiler | NanSource::ClangAggregate => false,
+                | NanSource::Compiler => false,
                 | NanSource::GccFunction => matches!(op, B::Multiplication | B::Division),
                 | NanSource::ClangFunction =>
                     op == B::Division || (op == B::Multiplication && real.is_nan() && imag.is_nan()),

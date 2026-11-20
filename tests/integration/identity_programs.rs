@@ -85,8 +85,8 @@ mod tests {
     /// The same NaNs with strict exception behavior, which Clang's
     /// `-ftrapping-math` and `#pragma STDC FENV_ACCESS ON` ask for: Clang
     /// then computes an invalid operation in a function at run time, but
-    /// for a constant automatic array or structure, which its evaluator
-    /// folds. GCC traps by default and ignores the pragma.
+    /// for an automatic array or structure whose whole initializer its
+    /// evaluator folds. GCC traps by default and ignores the pragma.
     #[test]
     fn folded_nans_with_strict_exceptions_match_the_claimed_compiler() {
         matches_the_claimed_compiler_with(

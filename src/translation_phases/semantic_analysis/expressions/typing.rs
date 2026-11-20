@@ -278,42 +278,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // excess.
             let half = self.half_type(ty) && matches!(op, U::Minus | U::Plus);
             let value = if half {
-                operand.floating()
+                operand
+                    .floating()
+                    .map(|value| Self::unary_value(op, conjugate, value))
+                    .map(|value| self.half_result(value, &mut info))
             } else {
-                self.floating_value(operand)
-            };
-            let value = value.map(|value| {
-                if op == U::Minus {
-                    Self::floating_negate(value)
-                } else if conjugate {
-                    super::super::Floating {
-                        real: value.real,
-                        imag: value.imag.negate(),
-                    }
-                } else {
-                    value
-                }
-            });
-            // Negating a NaN only flips its sign (C99 Annex F.3); rounding it
-            // again would quiet a signaling one.
-            let nan = |value: &super::super::Floating| {
-                value
-                    .real
-                    .x87_parts()
-                    .is_some_and(|(_, exponent, significand)| {
-                        exponent == 0x7FFF && significand << 1 != 0
-                    })
-            };
-            let value = if half {
-                value.map(|value| self.half_result(value, &mut info))
-            } else {
-                value.and_then(|value| {
-                    if nan(&value) {
-                        Some(value)
-                    } else {
-                        self.round_floating(value, ty)
-                    }
-                })
+                self.unary_floating(op, conjugate, operand, ty)
             };
             info.set_floating(value);
         }
@@ -337,6 +307,49 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.mark_unfolded_binary128(&mut info);
         }
         info
+    }
+
+    /// The folded value of unary `+`, `-` or complex conjugation `~` of the
+    /// constant `operand`, rounded to `ty`, the promoted type; a type other
+    /// than `_Float16` and `__bf16`, whose operands keep their excess.
+    /// C99: §6.5.3.3 paragraphs 2-3, p. 79; PDF p. 91.
+    pub(in crate::translation_phases::semantic_analysis) fn unary_floating(
+        &self,
+        op: UnaryOperator,
+        conjugate: bool,
+        operand: ExpressionInfo<'tu>,
+        ty: TypeId,
+    ) -> Option<super::super::Floating> {
+        let value = Self::unary_value(op, conjugate, self.floating_value(operand)?);
+        // Negating a NaN only flips its sign (C99 Annex F.3); rounding it
+        // again would quiet a signaling one.
+        let nan = value
+            .real
+            .x87_parts()
+            .is_some_and(|(_, exponent, significand)| exponent == 0x7FFF && significand << 1 != 0);
+        if nan {
+            Some(value)
+        } else {
+            self.round_floating(value, ty)
+        }
+    }
+
+    /// `value` negated, conjugated or unchanged, as unary `op` gives it.
+    fn unary_value(
+        op: UnaryOperator,
+        conjugate: bool,
+        value: super::super::Floating,
+    ) -> super::super::Floating {
+        if op == UnaryOperator::Minus {
+            Self::floating_negate(value)
+        } else if conjugate {
+            super::super::Floating {
+                real: value.real,
+                imag: value.imag.negate(),
+            }
+        } else {
+            value
+        }
     }
 
     /// A left shift into the sign bit, which C99 §6.5.7p4 leaves undefined.
@@ -824,20 +837,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else if floating
                 && let Some((left_value, right_value)) = operand(left).zip(operand(right))
             {
-                let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
-                    unreachable!("floating scalar operation")
-                };
-                let precision = self
-                    .floating_precision(scalar)
-                    .expect("foldable real precision");
-                let complex_type = |ty: TypeId| {
-                    matches!(
-                        self.types.nodes[ty.index],
-                        TypeKind::Scalar(s) if s.complex()
-                    )
-                };
-                let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
-                let value = self.fold_floating(op, left_value, right_value, precision, domains);
+                let value = self.floating_operation(
+                    op,
+                    [left_value, right_value],
+                    [lt, rt],
+                    operand_type,
+                    self.nan_source(),
+                );
                 let value = if half {
                     value.map(|value| self.half_result(value, &mut info))
                 } else {

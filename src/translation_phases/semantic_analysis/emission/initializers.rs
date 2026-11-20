@@ -191,6 +191,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         Some(live.leak())
     }
 
+    /// Whether Clang emits the automatic aggregate `initializer` initializes
+    /// as a constant image ([`Self::constant_aggregate_initializer`]).
+    pub(in crate::translation_phases::semantic_analysis) fn constant_automatic_aggregate(
+        &mut self,
+        initializer: &'tu Initializer<'tu>,
+    ) -> bool {
+        self.constant_aggregate_initializer(Node::Initializer(initializer), false)
+    }
+
     /// A bounded capability scan over typed values and retained plans, not
     /// an integer evaluator. Potential mode accepts a pure unmodeled choice
     /// with a constant-capable arm, solely to limit optional storage. Only

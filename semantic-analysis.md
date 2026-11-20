@@ -2998,11 +2998,39 @@ hardware does, so `constants.rs` decides the sign afterwards, from
   and `-fno-fast-math` ignore exceptions) or `#pragma STDC FENV_ACCESS ON`,
   Clang emits the operation as a constrained intrinsic that LLVM does not
   fold. Either way the value is the hardware's NaN.
-- `NanSource::ClangAggregate`, the initializer of an automatic array or
-  structure under Clang's strict exception behavior: `EmitAutoVarInit`
-  copies a constant aggregate's image, which Clang's evaluator folds, so it
-  folds as `Compiler` does. The evaluator refuses a complex quotient by a
-  real divisor that raises an exception, which keeps the hardware's NaN.
+
+Under Clang's strict exception behavior an automatic array or structure is
+the exception. `EmitAutoVarInit` copies its initial value from a constant
+image when Clang's evaluator folds the whole initializer, with the positive
+NaN, and otherwise Clang's code computes every member at run time. Under
+strict exception behavior the evaluator (`checkFloatingPointResult`) refuses:
+
+- an operation or conversion whose result is not a NaN but raises an
+  exception: an inexact `1.0 / 3.0` or `(float)0.1`, an overflow, an
+  underflow, a division by zero, or an integer that does not convert
+  exactly. A sum or difference with a complex operand, and a product or
+  quotient of two complex values, raise none; a product with one real
+  operand and a complex quotient by a real divisor check each part;
+- an unordered comparison;
+- a builtin call other than the constants, the sign operations, `fmax`,
+  `fmin`, `__builtin_complex`, `__builtin_expect` and the classification
+  and quiet comparison macros (`STRICT_BUILTINS`);
+- an address converted to an integer, or the pointer an array compound
+  literal decays to.
+
+bcc folds such an initializer as `Runtime` does, recording where its
+conversions begin (`Analyzer::begin_strict_initializer`). When it is done,
+`Analyzer::settle_strict_initializer` (`strict_initializers.rs`) checks the
+whole initializer against those rules and against
+`Analyzer::constant_automatic_aggregate`, the constant aggregate test the
+emission policy already applies. If Clang's evaluator would fold it, each
+invalid operation folds again with `Compiler`'s NaN, followed by the
+parentheses, casts, unary `+`, `-` and `~`, arithmetic, comma operators and
+conditionals that derive their values from it. If any other expression
+derives its value from one (a builtin call, a statement expression,
+`_Generic`, a conversion to an integer), or a `_Float16`, `__bf16`,
+binary128, complex integer or vector value takes part, the whole
+initializer keeps the hardware's NaN, as before this rule.
 
 The preprocessor records each `#pragma STDC FENV_ACCESS` the identity
 checks, with its output-token ordinal (`Context::fenv_access_pragmas`), and
@@ -3022,13 +3050,17 @@ Binary128 folding follows the same rule. Remaining differences:
 - Under Clang's strict exception behavior, Clang's evaluator still folds a
   builtin call whose arguments are constant (`__builtin_signbit`,
   `__builtin_copysign`) and an integer constant expression from the
-  positive NaN, where bcc reads the hardware's. The evaluator's whole
-  aggregate is computed at run time when any operation in it raises an
-  exception other than invalid (an inexact `1.0 / 3.0`, a division by
-  zero, the complex quotient above), or when the initializer is not
-  constant; bcc still folds the aggregate's other members. A pragma inside
-  a compound statement applies to the whole function in bcc, where Clang
-  limits it to that statement.
+  positive NaN, where bcc reads the hardware's. An automatic array or
+  structure whose initializer the evaluator folds keeps the hardware's NaN
+  in bcc when its value derives from one through such a call, a statement
+  expression or `_Generic`, or when bcc does not take the initializer for a
+  constant (a `const` automatic named in it, a builtin call bcc does not
+  fold, a binary128 or `_Float16` member). A pragma inside a compound
+  statement applies to the whole function in bcc. So it does in Clang at
+  `-O0`, which marks the whole function `strictfp`, so that code before
+  and after the compound statement computes its invalid operations at run
+  time too; at `-O2` Clang folds the code outside it, where bcc keeps the
+  hardware's NaN.
 - Clang folds a complex quotient in a constant automatic aggregate in every
   mode, which `ClangFunction` leaves to `__divdc3`.
 - bcc does not raise the invalid exception for an operation it folds that

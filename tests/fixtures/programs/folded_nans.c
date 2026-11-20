@@ -9,7 +9,9 @@
  * a function but still calls `__muldc3` and `__divdc3`, and with Clang's
  * strict exceptions (-ftrapping-math, folded_nans_fenv_access.c), where
  * Clang computes the operation in a function at run time unless it
- * initializes a constant automatic array or structure. */
+ * initializes an automatic array or structure whose whole initializer its
+ * evaluator folds: none with a run-time member, the address of an automatic
+ * object, or another member that rounds, overflows or divides by zero. */
 #include <stdio.h>
 #include <string.h>
 
@@ -113,6 +115,13 @@ int main(void) {
     double a_literal = (double){0.0 / 0.0};
     double a_array[2] = {0.0 / 0.0, INF - INF};
     struct { int tag; double value; } a_struct = {1, 0 * INF};
+    static volatile double one = 1.0;
+    double run_time = one;
+    double a_run_time[2] = {0.0 / 0.0, run_time};
+    double a_inexact[2] = {1.0 / 3.0, 0.0 / 0.0};
+    float a_rounded[2] = {0.1, 0.0f / 0.0f};
+    struct { double *where; double value; } a_address = {&run_time, 0.0 / 0.0};
+    double a_exact[3] = {0.5 + 0.25, -(0.0 / 0.0), (double)(0.0f / 0.0f)};
     show_double("0/0", a_div);
     show_double("inf-inf", a_sub);
     show_double("0*inf", a_mul);
@@ -131,5 +140,11 @@ int main(void) {
     show_double("{0/0, ...}", a_array[0]);
     show_double("{..., inf-inf}", a_array[1]);
     show_double("{1, 0*inf}", a_struct.value);
+    show_double("{0/0, run_time}", a_run_time[0]);
+    show_double("{1/3, 0/0}", a_inexact[1]);
+    show_float("{0.1f, 0f/0f}", a_rounded[1]);
+    show_double("{&run_time, 0/0}", a_address.value);
+    show_double("{.75, -(0/0), ...}", a_exact[1]);
+    show_double("{..., (double)(0f/0f)}", a_exact[2]);
     return 0;
 }

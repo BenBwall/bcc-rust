@@ -257,8 +257,8 @@ fn gcc_without_trapping_math_calls_the_complex_routines() {
 /// Under Clang's strict exception behavior, from `-ftrapping-math` or
 /// `#pragma STDC FENV_ACCESS ON`, an invalid operation in a function is
 /// computed at run time, but Clang's evaluator still folds the initializer
-/// of a constant automatic array or structure, except a complex quotient
-/// by a real divisor that raises an exception.
+/// of a constant automatic array or structure, unless a complex quotient
+/// by a real divisor raises an exception.
 #[test]
 fn clang_strict_exceptions_compute_the_nan_at_run_time() {
     let cases = [
@@ -297,6 +297,80 @@ fn clang_strict_exceptions_compute_the_nan_at_run_time() {
             Some(&expected),
             "{pragma}"
         );
+    }
+}
+
+/// Under Clang's strict exception behavior an automatic array or
+/// structure takes the compiler's NaN only when Clang's evaluator folds its
+/// whole initializer, and the hardware's otherwise: a run-time member, the
+/// address of an automatic object, a builtin it does not fold, an unordered
+/// comparison, or an operation or conversion that rounds, overflows or
+/// divides by zero has Clang compute every member at run time.
+#[test]
+fn clang_strict_exceptions_fold_only_a_whole_constant_aggregate() {
+    let folds = [
+        "double a[2] = {0.5, 0.0 / 0.0};",
+        "double a[2] = {1.0 / 4.0 + 0.5, 0.0 / 0.0};",
+        "double a[2] = {[1] = 0.0 / 0.0};",
+        "double a[2] = {-(0.0 / 0.0), (float)(0.0 / 0.0) * 2.0};",
+        "float a[2] = {0.5, 0.0f / 0.0f};",
+        "float a[2] = {16777216, 0.0 / 0.0};",
+        "long double a[2] = {1.0L / 4.0L, 0.0L / 0.0L};",
+        "struct { double *p; double v; } s = {&g, 0.0 / 0.0};",
+        "struct { struct { int i; double d; } s; double w[2]; } n = {{1, 0.0 / 0.0}, {1, 2}};",
+        "_Complex double z[2] = {(1.0 + 1.0i) / 2.0, 0.0 / 0.0};",
+        "_Complex double z[2] = {(0.1 + 0.2i) * (3.0 + 1.0i), 0.0 / 0.0};",
+        "double a[2] = {__builtin_inf() / 0.0, 0.0 / 0.0};",
+        "double a[2] = {(double)(0.5 < 1.0) + __builtin_inf(), 0.0 / 0.0};",
+    ];
+    let computes = [
+        "double a[2] = {0.0 / 0.0, x};",
+        "struct { double *p; double v; } s = {&x, 0.0 / 0.0};",
+        "double a[2] = {0.0 / 0.0, (double)(long)&x};",
+        "double a[2] = {0.0 / 0.0, x = 1};",
+        "double a[2] = {0.0 / 0.0, (int)(0.0 / 0.0 == 0.0 / 0.0)};",
+        "double a[2] = {1.0 / 3.0, 0.0 / 0.0};",
+        "float a[2] = {0.1, 0.0f / 0.0f};",
+        "double a[2] = {(float)16777217, 0.0 / 0.0};",
+        "double a[2] = {(float)0.1, 0.0 / 0.0};",
+        "double a[2] = {1.0 / 0.0, 0.0 / 0.0};",
+        "double a[2] = {1e308 * 10.0, 0.0 / 0.0};",
+        "double a[2] = {0x1p-1022 / 3.0, 0.0 / 0.0};",
+        "long double a[2] = {1.0L / 3.0L, 0.0L / 0.0L};",
+        "_Complex double z[2] = {(1.0 + 1.0i) / 3.0, 0.0 / 0.0};",
+        "_Complex double z[2] = {3.0 * (0.1 + 0.1i), 0.0 / 0.0};",
+        "_Complex double z[2] = {(1.0i) / 0.0, 0.0 / 0.0};",
+        "struct { struct { int i; double d; } s; double w[2]; } n = {{1, 0.0 / 0.0}, {x, 1}};",
+        "double a[2][1] = {{0.0 / 0.0}, {x}};",
+        "struct { int i; double d; } s[2] = {{1, 0.0 / 0.0}, {2, 1.0 / 3.0}};",
+        "struct { int *p; double v; } s = {(int[]){1, 2}, 0.0 / 0.0};",
+        "double a[2] = {__builtin_sqrt(4.0), 0.0 / 0.0};",
+        "double a[2] = {(1.0 / 3.0, 0.5), 0.0 / 0.0};",
+    ];
+    let nans = |source: &str, rules| {
+        let mut bits = folded(source, rules, BinaryOperator::Division);
+        bits.retain(|&bits| bits >> 52 & 0x7FF == 0x7FF && bits & 0xF_FFFF_FFFF_FFFF != 0);
+        bits
+    };
+    for (sources, expected) in [(&folds[..], POSITIVE), (&computes[..], NEGATIVE)] {
+        for declaration in sources {
+            let source = format!(
+                "static double g;
+void f(double x) {{ {declaration} (void)x; }}"
+            );
+            let pragma = format!(
+                "#pragma STDC FENV_ACCESS ON
+{source}"
+            );
+            for (source, rules) in [(&source, Rules::ClangTrappingMath), (&pragma, Rules::Clang)] {
+                let bits = nans(source, rules);
+                assert!(!bits.is_empty(), "{source}");
+                assert!(
+                    bits.iter().all(|&bits| bits == expected),
+                    "{source}: {bits:x?}"
+                );
+            }
+        }
     }
 }
 
