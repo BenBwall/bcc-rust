@@ -4652,9 +4652,9 @@ mod tests {
     /// GCC reads its pedantic options in order. Clang reads `-pedantic` and
     /// `-pedantic-errors` before every `-W` option, so `-Wno-error=pedantic`
     /// and `-Wno-pedantic` outrank them wherever they appear. In both,
-    /// `-Wpedantic` keeps pedantic errors errors. `-Werror=pedantic` makes
-    /// only GCC's plain `_Complex` diagnostic an error so far: it leaves the
-    /// other extensions as they were, and `-w` still silences it.
+    /// `-Wpedantic` keeps pedantic errors errors. `-w` silences what
+    /// `-Werror=pedantic` made an error, which does not reach a diagnostic GCC
+    /// files under `-Wlong-long`.
     #[test]
     fn pedantic_options_combine_as_each_compiler_reads_them() {
         let directory = Directory::new();

@@ -16,7 +16,8 @@
 //! - Language choices: `language.rs`; which modelled compiler's rules each
 //!   compiler identity follows: `identity.rs`.
 //! - Feature vocabulary and origin: `features.rs`.
-//! - Warning groups and severity overrides: `diagnostics.rs`.
+//! - Warning groups and severity overrides: `diagnostics.rs`; how the command
+//!   line classifies an extension diagnostic: `extension_mapping.rs`.
 //! - Construction, option changes, and accessors: `options.rs`.
 //! - Feature-policy fixtures: `tests.rs`.
 //!
@@ -31,6 +32,7 @@ mod language;
 
 // Feature policy
 mod diagnostics;
+mod extension_mapping;
 mod features;
 mod warning_names;
 
@@ -45,6 +47,11 @@ pub(crate) use diagnostics::{
     GroupMask,
     PragmaClass,
     WarningOption,
+};
+pub(crate) use extension_mapping::{
+    ExtensionClass,
+    ExtensionOptionName,
+    GccFiling,
 };
 pub(crate) use features::{
     Feature,
@@ -132,6 +139,12 @@ pub(crate) struct CompilerConfiguration {
     /// `-Werror=pedantic` was `-Wno-pedantic`, which stops the diagnostics
     /// but leaves their error state for a later `-Wpedantic`, as in GCC.
     pedantic_disabled: bool,
+    /// Clang's `-pedantic`, apart from `-Wpedantic`
+    /// ([`Self::with_pedantic_flag`]).
+    pedantic_flag: bool,
+    /// How the warning options in argv order classify an extension
+    /// diagnostic ([`Self::clang_extension_severity`]).
+    extension_mappings: extension_mapping::ExtensionMappings,
     accepted: u128,
     native: u128,
     repeated_specifier_warnings: bool,

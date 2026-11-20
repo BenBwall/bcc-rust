@@ -245,6 +245,38 @@ pub(crate) enum Feature {
 }
 
 impl Feature {
+    /// Where GCC 14 files its pedantic warning about the feature, where not
+    /// under `-Wpedantic`: arithmetic on `void *` or a function pointer and
+    /// `sizeof` of either under `-Wpointer-arith`, which `-Wpedantic` enables
+    /// and classifies (`LangEnabledBy` in `c.opt`); `long long` under
+    /// `-Wlong-long`, which `-pedantic` enables without classifying; and
+    /// binary constants, `__VA_OPT__`, hexadecimal floating constants and
+    /// `#warning` under no option (`binary constants are a C23 feature or GCC
+    /// extension`), all four from its preprocessor.
+    pub(crate) const fn gcc_filing(self) -> Option<super::GccFiling> {
+        match self {
+            | Self::VoidPointerArithmetic => Some(super::GccFiling::Enabled),
+            | Self::LongLong
+            | Self::BinaryConstants
+            | Self::VaOpt
+            | Self::HexFloats
+            | Self::WarningDirective => Some(super::GccFiling::Unclassified),
+            | _ => None,
+        }
+    }
+
+    /// Whether Clang files its extension diagnostic about the feature under
+    /// `-Wpedantic` alone, outside its revision's group: `#warning`
+    /// (`ext_pp_warning_directive`, in no group), an omitted variadic
+    /// argument (`-Wvariadic-macro-arguments-omitted`) and a typedef
+    /// redefinition (`-Wtypedef-redefinition`).
+    pub(crate) const fn clang_outside_revision_group(self) -> bool {
+        matches!(
+            self,
+            Self::WarningDirective | Self::OmittedVariadicArguments | Self::TypedefRedefinition
+        )
+    }
+
     pub(crate) const fn origin(self) -> FeatureOrigin {
         match self {
             | Self::Digraphs => FeatureOrigin::Standard(CStandard::C95),

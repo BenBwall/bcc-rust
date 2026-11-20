@@ -590,3 +590,91 @@ fn clang_tautological_compare_holds_its_groups() {
         None
     );
 }
+
+/// Clang's mapping of an extension diagnostic, set by its options in argv
+/// order: a command-line `-WX` keeps an earlier `-Werror=X`, `-Wno-error=X`
+/// caps `-pedantic-errors` at a warning and keeps `-Werror` from it for good,
+/// `-Wno-X` outranks `-pedantic-errors` wherever it appears, an option for
+/// `-Wpedantic` leaves what Clang warns of by default alone, and `-w`
+/// silences every one (Clang 23.1.5, measured with `-std=c99`).
+#[test]
+fn clang_extension_mapping_follows_the_options_in_order() {
+    use ExtensionClass::{
+        C11,
+        C23ByDefault,
+        Pedantic,
+    };
+    use ExtensionOptionName as Name;
+    use WarningOption::{
+        Enable,
+        Error,
+    };
+
+    use crate::translation_phases::ErrorSeverity::{
+        Error as E,
+        Warning as W,
+    };
+    let base = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_compiler_identity(CompilerIdentity::Clang);
+    let errors = base.with_pedantic_errors();
+    for (configuration, class, expected) in [
+        (base, Pedantic, None),
+        (base, C23ByDefault, Some(W)),
+        (base.with_pedantic_flag(), Pedantic, Some(W)),
+        (errors, C23ByDefault, Some(E)),
+        (errors.with_suppress_warnings(true), Pedantic, None),
+        (
+            base.with_extension_option(Name::Pedantic, Error(true))
+                .with_extension_option(Name::Pedantic, Enable(true)),
+            Pedantic,
+            Some(E),
+        ),
+        (
+            errors.with_extension_option(Name::Pedantic, Error(false)),
+            Pedantic,
+            Some(W),
+        ),
+        (
+            errors.with_extension_option(Name::Pedantic, Error(false)),
+            C23ByDefault,
+            Some(E),
+        ),
+        (
+            errors.with_extension_option(Name::Pedantic, Enable(false)),
+            C23ByDefault,
+            Some(E),
+        ),
+        (
+            errors.with_extension_option(Name::C23Extensions, Enable(false)),
+            C23ByDefault,
+            None,
+        ),
+        (
+            base.with_extension_option(Name::C11Extensions, Enable(false))
+                .with_extension_option(Name::Pedantic, Enable(true)),
+            C11,
+            Some(W),
+        ),
+        (
+            base.with_extension_option(Name::Pedantic, Enable(true))
+                .with_extension_option(Name::C11Extensions, Enable(false)),
+            C11,
+            None,
+        ),
+        (
+            base.with_warnings_as_errors(true)
+                .with_extension_option(Name::C23Extensions, Error(false))
+                .with_extension_option(Name::C23Extensions, Error(true))
+                .with_extension_option(Name::C23Extensions, Enable(false))
+                .with_extension_option(Name::C23Extensions, Enable(true)),
+            C23ByDefault,
+            Some(W),
+        ),
+    ] {
+        assert_eq!(
+            configuration.clang_extension_severity(class),
+            expected,
+            "{class:?}"
+        );
+    }
+}

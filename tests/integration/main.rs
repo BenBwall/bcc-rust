@@ -52,6 +52,7 @@ mod nested_functions;
 mod optimization_cli;
 mod overloadable;
 mod overloadable_abi;
+mod pedantic_options_cli;
 mod personality_cli;
 mod pointer_diagnostics;
 mod preprocessing_cli;

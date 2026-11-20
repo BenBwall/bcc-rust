@@ -215,6 +215,9 @@ pub(crate) struct Context<'tu> {
     /// which keeps a translation unit that declares nothing from being
     /// empty.
     pub(crate) pragma_content: bool,
+    /// The parser has started: an extension diagnostic now reports syntax
+    /// or semantics of translation phase 7 rather than the preprocessor's.
+    pub(crate) parsing_started: bool,
     /// What `#pragma GCC diagnostic` and `#pragma clang diagnostic` changed.
     diagnostic_pragmas: diagnostic_pragmas::DiagnosticPragmas<'tu>,
     /// The pragmas a text of phase 4 ([`Self::phase_four_text`]) writes back

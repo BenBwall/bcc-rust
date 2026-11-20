@@ -475,22 +475,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 TypeSpecifiers::Void | TypeSpecifiers::TypedefName(_)
                             )
                     });
-                    // The parser already reports the C23 spelling under a
-                    // pedantic policy, or wherever Clang's `-Weverything`
-                    // set its class, inside `__extension__` too under Clang's
-                    // rules (GCC's `__extension__` silences it), under the
-                    // policy it asked (`Context::extension_policy_at`). Do
-                    // not emit the same requirement twice.
+                    // The parser already reports the C23 spelling wherever
+                    // the command line alone classifies it, under a pedantic
+                    // policy, or wherever Clang's `-Weverything` set its
+                    // class, inside `__extension__` too under Clang's rules
+                    // (GCC's `__extension__` silences it), and leaves the
+                    // rest here. Do not emit the same requirement twice.
                     let source = syntax.map_or(f.declarator.source_vectors, |p| p.source_vectors);
-                    let option = crate::translation_phases::ExtensionOption::Everything;
-                    if parser_exempt
-                        || (self.context.extension_policy_at(option, source)
-                            == crate::configuration::ExtensionPolicy::Allow
-                            && self
-                                .context
-                                .everything_class_outside_pedantic(option, source)
-                                .is_none())
-                    {
+                    if parser_exempt || self.context.unnamed_parameter_left_to_analysis(source) {
                         self.extension_error(
                             crate::configuration::Feature::UnnamedDefinitionParameters,
                             crate::translation_phases::DiagnosticPolicy::Warning,

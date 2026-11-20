@@ -957,8 +957,10 @@ impl CompilerConfiguration {
             | Feature::Counter | Feature::EmptyMacroArguments | Feature::GnuVaArgs => gcc,
             | Feature::DollarIdentifiers => gcc && c99,
             | Feature::ForDeclarations => gcc && !c99,
+            // Clang reports `__VA_OPT__` in no C mode, even under
+            // `-pedantic-errors` (Clang 23.1.5, `-std=c89` to `gnu17`).
+            | Feature::VaOpt => !gcc || self.gnu,
             | Feature::GnuTypeof
-            | Feature::VaOpt
             | Feature::Elifdef
             | Feature::OmittedVariadicArguments
             | Feature::HexFloats
@@ -1153,6 +1155,8 @@ impl CompilerConfiguration {
             werror_pedantic: None,
             command_line_pedantic_deny: None,
             pedantic_disabled: false,
+            pedantic_flag: false,
+            extension_mappings: super::extension_mapping::ExtensionMappings::NONE,
             fatal_errors: false,
             accepted: 0,
             native: 0,

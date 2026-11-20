@@ -129,6 +129,26 @@ group (`-Wnormalized`, bcc's own `-Wconstant-promotion`); bcc's own command
 line keeps its groups and warns, in Clang's words, about the options it does
 not implement.
 
+**Pedantic options.** Each personality classifies an extension diagnostic no
+diagnostic pragma governs as its compiler reads `-pedantic`, `-Wpedantic`,
+`-pedantic-errors`, `-w`, `-Werror` and their group forms
+(`language-standards.md`, "Implementation notes"), checked on 2026-11-20 in
+every order of pairs and triples against Clang 23.1.5 and GCC 14 for a
+zero-length array, `_Static_assert`, a binary constant, `__VA_OPT__`, the four
+C23 extensions Clang warns of by default, `#elifdef`, a `void` expression
+returned and arithmetic on `void *` (`tests/integration/pedantic_options_cli.rs`).
+Clang's `-w` silences what `-pedantic-errors` made an error, its
+`-Wno-c23-extensions` silences the C23 extensions it warns of by default, its
+`-Wno-error=pedantic` and `-Wno-pedantic` leave those errors under
+`-pedantic-errors`, and its `-Werror=c11-extensions`, `-Werror=c23-extensions`
+and `-Werror=pedantic` make their diagnostics errors; `-pedantic` itself is read
+apart from `-Wpedantic`, so `-Wno-pedantic -pedantic` reports nothing. GCC's
+`-w` silences its pedantic warnings before `-pedantic-errors` can make them
+errors, its `-Werror=pedantic` enables them as errors (`[-Werror=pedantic]`,
+`cc1: some warnings being treated as errors`), and its `-Wno-error=pedantic`
+keeps them warnings where they come after the other two, though not GCC's
+`-Wpointer-arith` or the preprocessor warnings it files under no option.
+
 **clang-cl.** As Clang; its driver has no `-Wl,`, `-Wa,` or `-Wp,`, so each
 is an unknown warning option. `/Wall` is `-Weverything`.
 
@@ -142,10 +162,12 @@ found`).
 also in `cc1`'s `no option` error): they search GCC's whole option table
 across its front ends, which bcc does not freeze, so bcc leaves them out.
 GCC's `-Wno-error-implicit-function-declaration` (an option without a
-negative form) is ignored rather than refused. GCC's `-Werror=pedantic`
-turns on its pedantic warnings, which it then reports as warnings without
-an option name, and Clang's makes them errors; bcc reports neither for a
-preprocessing directive. clang-cl's `unknown argument ignored in clang-cl:
+negative form) is ignored rather than refused. GCC files many of its
+preprocessor's pedantic warnings under options of their own or none, which bcc
+models only for the five above, so its `-Werror=pedantic` and
+`-Wno-error=pedantic` leave the others as the extension policy says; and bcc
+names `-Wpedantic` where GCC names `-Wpointer-arith` or `-Wlong-long`, and
+words a `-Werror` it promoted without an option `[-Werror]`. clang-cl's `unknown argument ignored in clang-cl:
 '-pedantic' [-Wunknown-argument]` is not given. `-Wfatal-errors` stops at
 the first error bcc reports, and bcc reports a preprocessing diagnostic
 before the errors of the lines above it where GCC, Clang and TCC report

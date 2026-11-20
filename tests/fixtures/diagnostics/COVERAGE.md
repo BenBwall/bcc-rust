@@ -952,9 +952,12 @@ warnings are not implemented and have no claimed coverage.
 
 The unnamed-parameter default warning and typedef fallback under Warn are pinned
 by [parameter-name](sema3-parameter-name.c) and
-[parameter-typedef-warn](sema3-parameter-typedef-warn.c). Their typed message and
-C99 note remain intact; C23 emits no extension diagnostic, and Deny promotes the
-warning to an error (covered by the semantic policy matrix tests).
+[parameter-typedef-warn](sema3-parameter-typedef-warn.c). Where the command line
+alone classifies the parameter, as in the first, the parser reports it as the C23
+extension Clang warns of by default, in order with the other C23 extensions; the
+typedef fallback keeps semantic analysis's typed message and C99 note. C23 emits
+no extension diagnostic, and Deny promotes the warning to an error (covered by
+the semantic policy matrix tests).
 
 Four more `sema3-*` fixtures extend statement coverage:
 

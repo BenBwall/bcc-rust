@@ -636,8 +636,26 @@ fn modern_reserved_spellings_remain_structured_under_every_policy() {
                     p.errors
                 );
                 assert_eq!(p.items.len(), 5, "{standard:?}/{policy:?}: {:?}", p.items);
-                if policy == ExtensionPolicy::Allow || standard == CStandard::C2y {
+                if standard == CStandard::C2y
+                    || (policy == ExtensionPolicy::Allow && standard >= CStandard::C23)
+                {
                     assert!(extensions(p).is_empty(), "{:?}", p.errors);
+                } else if policy == ExtensionPolicy::Allow {
+                    // Clang warns of these C23 extensions by default.
+                    assert_eq!(
+                        extensions(p),
+                        [
+                            "'unnamed parameter in function definition' is a C23 extension",
+                            "'label before declaration' is a C23 extension",
+                            "'static assertion without message' is a C23 extension",
+                        ],
+                        "{standard:?}"
+                    );
+                    assert!(
+                        p.errors
+                            .iter()
+                            .all(|e| e.severity() == ErrorSeverity::Warning)
+                    );
                 } else {
                     assert_ne!(extensions(p), Vec::<String>::new());
                     assert!(p.errors.iter().all(|e| e.severity()

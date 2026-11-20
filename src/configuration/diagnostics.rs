@@ -152,6 +152,13 @@ impl CompilerConfiguration {
     ) -> Self {
         let clang = self.identity.rules() == super::RuleSet::Clang;
         self.warning_options[group as usize].apply(option, clang);
+        match group {
+            | DiagnosticGroup::C11Extensions =>
+                self = self.with_extension_option(super::ExtensionOptionName::C11Extensions, option),
+            | DiagnosticGroup::C23Extensions =>
+                self = self.with_extension_option(super::ExtensionOptionName::C23Extensions, option),
+            | _ => {},
+        }
         let implies: &[DiagnosticGroup] = match group {
             | DiagnosticGroup::Unused => DiagnosticGroup::UNUSED,
             | DiagnosticGroup::UnusedVariable if !clang => &[DiagnosticGroup::UnusedConstVariable],
@@ -1006,6 +1013,11 @@ diagnostic_groups! {
     /// personality only ([`CompilerConfiguration::reports_c23_directives`]).
     /// Its old name `c2x-extensions` is read by [`DiagnosticGroup::parse`].
     C23Extensions => Some("c23-extensions"), Warning, true;
+    /// Clang: C11 syntax written before C11, reported only on request. Its
+    /// options set Clang's mapping of those extension diagnostics
+    /// ([`CompilerConfiguration::clang_extension_severity`]); no diagnostic
+    /// names the group itself.
+    C11Extensions => Some("c11-extensions"), Extension, true;
     /// Clang: `#pragma GCC warning`. GCC names no option for it.
     PragmaMessages => Some("#pragma-messages"), Warning, false;
     /// Clang: tokens after a directive is complete.
