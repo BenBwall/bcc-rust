@@ -746,25 +746,53 @@ fn extension_declarations_leave_gcc_folded_array_bound_reports() {
 fn static_union_casts_follow_each_compilers_constant_rules() {
     use crate::configuration::CompilerIdentity;
     let declarations = "union U { int i; float f; }; union D { double d; int i; }; union C { \
-                        _Complex double z; int i; }; struct P { int a, b; }; union V { struct \
-                        P p; int i; }; union O { union U u; double d; }; union Q { int *p; \
-                        long l; }; struct S { int a; union U u; }; typedef const union U T; \
-                        int x; float y;\n";
+                        _Complex double z; int i; }; struct P { int a, b; }; union V { struct P \
+                        p; int i; }; union O { union U u; double d; }; union Q { int *p; long l; \
+                        }; struct S { int a; union U u; }; typedef const union U T; int x; float \
+                        y;\n";
     // Each source, and whether GCC and Clang refuse it.
     for (source, gcc, clang) in [
         ("union U a = (union U)1;", false, false),
         ("union U a = __extension__ ((union U)2.5f);", false, false),
-        ("T a = (T)1; static const union U b = (const union U)2;", false, false),
-        ("union U a[3] = { (union U)1, [2] = (T)2.0f };", false, false),
-        ("struct S a = { 1, (union U)2 }, b = { .u = (union U)3.0f };", false, false),
-        ("struct S a[2] = { { 1, (union U)2 }, [1].u = (union U)3 };", false, false),
+        (
+            "T a = (T)1; static const union U b = (const union U)2;",
+            false,
+            false,
+        ),
+        (
+            "union U a[3] = { (union U)1, [2] = (T)2.0f };",
+            false,
+            false,
+        ),
+        (
+            "struct S a = { 1, (union U)2 }, b = { .u = (union U)3.0f };",
+            false,
+            false,
+        ),
+        (
+            "struct S a[2] = { { 1, (union U)2 }, [1].u = (union U)3 };",
+            false,
+            false,
+        ),
         ("union O a = (union O)(union U)1;", false, false),
-        ("union Q a = (union Q)&x, b = (union Q)(int *)0;", false, false),
+        (
+            "union Q a = (union Q)&x, b = (union Q)(int *)0;",
+            false,
+            false,
+        ),
         ("union D a = (union D)(2.0 / 3);", false, false),
-        ("union C a = (union C)((_Complex double)1.0 + 2.0i);", false, false),
+        (
+            "union C a = (union C)((_Complex double)1.0 + 2.0i);",
+            false,
+            false,
+        ),
         ("union U a = (union U)(1 << 40);", false, false),
         ("struct S *p = &(struct S){ 1, (union U)2 };", false, false),
-        ("void f(void) { static union U a = (union U)1; (void)a; }", false, false),
+        (
+            "void f(void) { static union U a = (union U)1; (void)a; }",
+            false,
+            false,
+        ),
         ("union U a = (union U)(int){ 3 };", true, false),
         ("union V a = (union V)(struct P){ 1, 2 };", true, false),
         ("union U a = (union U)(0, 1);", true, false),
@@ -863,7 +891,11 @@ fn extension_declarations_silence_gcc_pedantic_reports() {
     use crate::configuration::CompilerIdentity;
     for (standard, source, reported) in [
         (CStandard::C11, "__extension__ static int x = 1 << 40;", 0),
-        (CStandard::C11, "__extension__ int x = 1 << 40, y = 1 >> 40;", 0),
+        (
+            CStandard::C11,
+            "__extension__ int x = 1 << 40, y = 1 >> 40;",
+            0,
+        ),
         (
             CStandard::C11,
             "__extension__ static struct { int a; int b; } s = { 1, 1 << 40 };",
@@ -907,8 +939,8 @@ fn extension_declarations_silence_gcc_pedantic_reports() {
         ),
         (
             CStandard::C89,
-            "__extension__ const char *f(void) { return __func__; }\nconst char *g(void) { \
-             return __func__; }",
+            "__extension__ const char *f(void) { return __func__; }\nconst char *g(void) { return \
+             __func__; }",
             1,
         ),
         (
@@ -923,8 +955,8 @@ fn extension_declarations_silence_gcc_pedantic_reports() {
         ),
         (
             CStandard::C11,
-            "void h(int (*p)[2], const int (*q)[2], int c) { __extension__ const void *r = c ? \
-             p : q; (void)r; }",
+            "void h(int (*p)[2], const int (*q)[2], int c) { __extension__ const void *r = c ? p \
+             : q; (void)r; }",
             0,
         ),
         (

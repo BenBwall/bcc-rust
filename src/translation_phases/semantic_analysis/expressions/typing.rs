@@ -1534,7 +1534,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let member = self.types.tags[id].members.get().iter().find(|member| {
                 !(gcc
                     && member.width.is_some_and(|width| {
-                        self.integer_type(member.ty).is_some_and(|(bits, _)| width < bits)
+                        self.integer_type(member.ty)
+                            .is_some_and(|(bits, _)| width < bits)
                     }))
                     && self
                         .types

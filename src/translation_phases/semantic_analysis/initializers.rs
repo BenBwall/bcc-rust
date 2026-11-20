@@ -859,8 +859,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// through nested casts to unions. GCC folds the operand as an
     /// expression, not as an initializer, so it refuses a comma, a compound
     /// literal and the operations [`Self::gcc_leaves_unfolded`] names
-    /// ("initializer element is not constant"), and it has no `-pedantic` report of an undefined or
-    /// overflowed value there; Clang's evaluator reads all of them.
+    /// ("initializer element is not constant"), and it has no `-pedantic`
+    /// report of an undefined or overflowed value there; Clang's evaluator
+    /// reads all of them.
     /// GNU extension: GCC manual, "Cast to a Union Type"; C99 §6.6
     /// paragraph 10, p. 96; PDF p. 108 permits other forms of constant
     /// expression. C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §6.7.8
@@ -884,17 +885,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | None => break operand_expression,
             }
         };
-        let gcc = !self.context.configuration.folds_compound_literals();
+        let gcc = self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Gcc;
         let mut inner = operand;
         while let ExpressionType::Parenthesized { expression } = inner.kind {
             inner = expression;
         }
         let literal = matches!(inner.kind, ExpressionType::CompoundLiteral { .. });
-        if gcc
-            && (literal
-                || self.evaluates_comma(operand)
-                || self.gcc_leaves_unfolded(operand))
-        {
+        if gcc && (literal || self.evaluates_comma(operand) || self.gcc_leaves_unfolded(operand)) {
             self.error(
                 SemanticErrorKind::NonConstantInitializer,
                 e.source_vectors,
@@ -914,10 +912,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// The cast to a union type that `e` is, inside parentheses and
     /// `__extension__`, and the type of the member its operand initializes.
     /// GNU extension: GCC manual, "Cast to a Union Type".
-    fn union_cast(
-        &self,
-        mut e: &'tu Expression<'tu>,
-    ) -> Option<(&'tu Expression<'tu>, TypeId)> {
+    fn union_cast(&self, mut e: &'tu Expression<'tu>) -> Option<(&'tu Expression<'tu>, TypeId)> {
         loop {
             e = match e.kind {
                 | ExpressionType::Parenthesized { expression } => expression,
@@ -939,11 +934,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Whether GCC leaves an operation in `e` unfolded, as it does outside
     /// an initializer: arithmetic between a real and a complex operand,
     /// whose real one keeps its type domain, which GCC's front end builds
-    /// from saved operands, and, while math may
-    /// trap (`-ftrapping-math`, its default), a floating division by zero,
-    /// or an operation that overflows to an infinity or gives a NaN from
-    /// operands that are neither, which raise IEC 60559 exceptions where a
-    /// constant expression is evaluated as during execution.
+    /// from saved operands, and, while math may trap (`-ftrapping-math`,
+    /// its default), a floating division by zero, or an operation that
+    /// overflows to an infinity or gives a NaN from operands that are
+    /// neither, which raise IEC 60559 exceptions where a constant
+    /// expression is evaluated as during execution.
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57; §F.7.4
     /// paragraph 1, p. 449; PDF p. 461.
     fn gcc_leaves_unfolded(&self, e: &'tu Expression<'tu>) -> bool {
@@ -983,7 +978,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     let class = |info: super::ExpressionInfo<'tu>| {
                         info.floating().map_or(
                             (info.integer.is_some_and(Integer::is_zero), false, false),
-                            |value| (value.real.is_zero(), value.real.is_infinite(), value.real.is_nan()),
+                            |value| {
+                                (
+                                    value.real.is_zero(),
+                                    value.real.is_infinite(),
+                                    value.real.is_nan(),
+                                )
+                            },
                         )
                     };
                     if arithmetic

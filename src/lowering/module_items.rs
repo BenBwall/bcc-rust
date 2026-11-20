@@ -2107,7 +2107,10 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 operand_expression, ..
             } = cast.kind
             else {
-                return Err(LoweringError::missing("a union cast has no operand", source));
+                return Err(LoweringError::missing(
+                    "a union cast has no operand",
+                    source,
+                ));
             };
             let member = self
                 .sema
@@ -2117,8 +2120,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             match self.union_cast(operand_expression) {
                 | Some(inner) => cast = inner,
                 | None =>
-                    // A bit-field member takes the operand whole, as Clang
-                    // stores it; GCC matches no narrower bit-field.
+                // A bit-field member takes the operand whole, as Clang
+                // stores it; GCC matches no narrower bit-field.
                     return if repr(&self.sema.types, member).map_err(|kind| at(kind, source))?
                         == Repr::Aggregate
                         || self.whole_compound_literal(operand_expression).is_some()
