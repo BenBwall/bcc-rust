@@ -1213,7 +1213,16 @@ mod tests {
         ),
         // bcc's own command line applies `-Wgnu`'s forms to the one
         // diagnostic of that group it models, and warns that it does not
-        // implement the rest.
+        // implement the rest; the personalities pass the options their
+        // compiler takes without a word.
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-Wno-gnu", "-Wno-long-long"],
+            &[],
+            0,
+        ),
         (
             OWN,
             "c99",

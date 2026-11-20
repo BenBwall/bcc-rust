@@ -401,7 +401,8 @@ impl Cli {
     /// (`--unknown-warning-option`), as Clang reads them; bcc's own command
     /// line warns in Clang's words about an option bcc does not implement,
     /// and under any identity but GCC's about one of GCC's groups, which it
-    /// applies all the same. The GCC personality passes the `-Wno-` options
+    /// applies all the same, as it applies an option whose group it models
+    /// only in part. The GCC personality passes the `-Wno-` options
     /// GCC ignores, which GCC notes.
     pub(super) fn report_warning_options(&self, context: &mut Context<'_>) {
         let tu = context.tu_arena();
@@ -417,6 +418,10 @@ impl Cli {
             return;
         };
         let gcc = CompilerIdentity::from(self.compiler_identity) == CompilerIdentity::Gcc;
+        // The personalities pass the options their compiler takes, under
+        // their own identity or with `--compiler-extensions`.
+        let own = !self.compiler_extensions
+            && matches!(self.compiler_identity, Identity::Clang | Identity::Gcc);
         // An empty `-Wno-` names the unnamed group Clang's table begins
         // with.
         let unknown = self.language_option.iter().filter(|option| {
@@ -426,7 +431,7 @@ impl Cli {
                     | Some(LanguageFlag::WarningGroup(group, _)) => group.gcc_only() && !gcc,
                     // An option bcc models only in part, which it applies.
                     | Some(LanguageFlag::ExtensionOption(name, _, whole)) =>
-                        !name.models_whole_group(whole, !gcc),
+                        own && !name.models_whole_group(whole, !gcc),
                     | _ => false,
                 }
         });
