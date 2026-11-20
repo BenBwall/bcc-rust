@@ -1,4 +1,4 @@
-warning: 'variadic macro' is a C99 extension [-Wpedantic]
+warning: 'variadic macro' is a C99 extension [-Wvariadic-macros]
  --> lexpp-c89-extensions.c:2:9
   |
 2 | #define V(x,...) x

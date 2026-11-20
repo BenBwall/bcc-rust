@@ -1,11 +1,17 @@
 //! Regressions for declaration visibility, compatibility and recovery.
 
 use super::*;
-use crate::configuration::{
-    CStandard,
-    CompilerConfiguration,
-    CompilerIdentity,
-    ExtensionPolicy,
+use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        CompilerIdentity,
+        ExtensionPolicy,
+    },
+    translation_phases::{
+        ErrorSeverity,
+        GetSeverity,
+    },
 };
 
 #[test]
@@ -374,11 +380,18 @@ fn repeated_non_vm_typedefs_and_nested_vm_typedefs_remain_valid() {
             )
             .with_gnu_extensions(gnu),
             |context, _| {
-                assert_eq!(
-                    context.pending_error_count(),
-                    0,
-                    "{standard:?}, gnu={gnu}: {:?}",
-                    context.take_pending_errors()
+                // Before C11 each repetition is the C11 extension Clang warns
+                // of by default, and nothing else is reported.
+                let errors = context.take_pending_errors();
+                let expected = if standard < CStandard::C11 { 3 } else { 0 };
+                assert!(
+                    errors.len() == expected
+                        && errors.iter().all(|error| {
+                            matches!(error, TranslationError::Extension(extension)
+                                if extension.spelling() == "typedef redefinition")
+                                && error.severity() == ErrorSeverity::Warning
+                        }),
+                    "{standard:?}, gnu={gnu}: {errors:?}"
                 );
             },
         );

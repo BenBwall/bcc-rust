@@ -558,7 +558,7 @@ impl Expander<'_, '_, '_, '_> {
                 }),
                 // Clang's `-Wvariadic-macros`, which is no part of
                 // `-Wpedantic`.
-                | "__VA_OPT__" => self.context.preprocessor_error(PreprocessorError {
+                | "__VA_OPT__" => self.context.report_misplaced_va_opt(PreprocessorError {
                     error_type: PreprocessorErrorType::VaOptOutsideVariadicMacro(global),
                     source_vectors,
                 }),

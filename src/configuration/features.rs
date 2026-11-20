@@ -247,34 +247,42 @@ pub(crate) enum Feature {
 impl Feature {
     /// Where GCC 14 files its pedantic warning about the feature, where not
     /// under `-Wpedantic`: arithmetic on `void *` or a function pointer and
-    /// `sizeof` of either under `-Wpointer-arith`, which `-Wpedantic` enables
-    /// and classifies (`LangEnabledBy` in `c.opt`); `long long` under
-    /// `-Wlong-long`, which `-pedantic` enables without classifying; and
-    /// binary constants, `__VA_OPT__`, hexadecimal floating constants and
-    /// `#warning` under no option (`binary constants are a C23 feature or GCC
-    /// extension`), all four from its preprocessor.
+    /// `sizeof` of either under `-Wpointer-arith`, and variadic macros, named
+    /// or before C99, under `-Wvariadic-macros`, both of which `-Wpedantic`
+    /// enables and classifies (`LangEnabledBy` in `c.opt`); `long long` under
+    /// `-Wlong-long` and mixed declarations and code under
+    /// `-Wdeclaration-after-statement`, which `-pedantic` enables before C99
+    /// without classifying (`pedwarn_c90` in `c-errors.cc`); and binary
+    /// constants, `__VA_OPT__`, hexadecimal floating constants, `#warning`
+    /// and an omitted variadic argument under no option (`binary constants
+    /// are a C23 feature or GCC extension`), all five from its preprocessor.
     pub(crate) const fn gcc_filing(self) -> Option<super::GccFiling> {
         match self {
-            | Self::VoidPointerArithmetic => Some(super::GccFiling::Enabled),
+            | Self::VoidPointerArithmetic | Self::VariadicMacros | Self::NamedVariadicMacros =>
+                Some(super::GccFiling::Enabled),
             | Self::LongLong
+            | Self::MixedDeclarations
             | Self::BinaryConstants
             | Self::VaOpt
             | Self::HexFloats
-            | Self::WarningDirective => Some(super::GccFiling::Unclassified),
+            | Self::WarningDirective
+            | Self::OmittedVariadicArguments => Some(super::GccFiling::Unclassified),
             | _ => None,
         }
     }
 
-    /// Whether Clang files its extension diagnostic about the feature under
-    /// `-Wpedantic` alone, outside its revision's group: `#warning`
-    /// (`ext_pp_warning_directive`, in no group), an omitted variadic
-    /// argument (`-Wvariadic-macro-arguments-omitted`) and a typedef
-    /// redefinition (`-Wtypedef-redefinition`).
-    pub(crate) const fn clang_outside_revision_group(self) -> bool {
-        matches!(
-            self,
-            Self::WarningDirective | Self::OmittedVariadicArguments | Self::TypedefRedefinition
-        )
+    /// The option of its own that GCC 14 names after its pedantic warning
+    /// about the feature, which [`Self::gcc_filing`] files there
+    /// (`ISO C90 does not support 'long long' [-Wlong-long]`).
+    pub(crate) const fn gcc_group(self) -> Option<super::ExtensionGroup> {
+        match self {
+            | Self::VoidPointerArithmetic => Some(super::ExtensionGroup::PointerArith),
+            | Self::LongLong => Some(super::ExtensionGroup::LongLong),
+            | Self::MixedDeclarations => Some(super::ExtensionGroup::DeclarationAfterStatement),
+            | Self::VariadicMacros | Self::NamedVariadicMacros =>
+                Some(super::ExtensionGroup::VariadicMacros),
+            | _ => None,
+        }
     }
 
     pub(crate) const fn origin(self) -> FeatureOrigin {

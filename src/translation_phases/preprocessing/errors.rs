@@ -1748,12 +1748,15 @@ impl std::error::Error for PreprocessorError<'_> {}
 impl PreprocessorError<'_> {
     /// Rewords `diagnostic`, whose severity is final, in GCC's or Clang's
     /// words where its diagnostic format is theirs: the message of a
-    /// `#warning` directive with the option that controls it, and a C23
-    /// directive written before C23. Clang marks a place for each.
-    /// GCC 14, `libcpp/directives.cc`: `do_diagnostic` and `do_elif`;
-    /// Clang 23, `DiagnosticLexKinds.td`: `pp_hash_warning`,
-    /// `ext_pp_warning_directive`, `ext_c23_pp_directive` and
-    /// `ext_pp_embed_directive`.
+    /// `#warning` directive with the option that controls it, a C23
+    /// directive written before C23, an omitted variadic argument, and
+    /// Clang's `__VA_OPT__` outside a variadic macro. Clang marks a place for
+    /// each.
+    /// GCC 14, `libcpp/directives.cc`: `do_diagnostic` and `do_elif`, and
+    /// `libcpp/macro.cc`: `_cpp_arguments_ok`; Clang 23,
+    /// `DiagnosticLexKinds.td`: `pp_hash_warning`, `ext_pp_warning_directive`,
+    /// `ext_c23_pp_directive`, `ext_pp_embed_directive`,
+    /// `ext_c_missing_varargs_arg` and `ext_pp_bad_vaopt_use`.
     pub(crate) fn reword_for_compiler<'d>(
         &self,
         diagnostic: &mut Diagnostic<'d>,
@@ -1812,6 +1815,33 @@ impl PreprocessorError<'_> {
                     "{} [{}]",
                     clang_directive_words(*directive, arena),
                     option("c23-extensions")
+                ),
+                true,
+            ),
+            // GCC files it under no option, as its pedantic C23 directives.
+            | (F::Gcc, PreprocessorErrorType::MissingVariadicArgument(_)) => {
+                let message =
+                    "ISO C99 requires at least one argument for the \"...\" in a variadic macro";
+                if error && self.severity() == ErrorSeverity::Warning {
+                    (format_in!(arena, "{message} [-Werror]"), true)
+                } else {
+                    (message, false)
+                }
+            },
+            | (F::Clang, PreprocessorErrorType::MissingVariadicArgument(_)) => (
+                format_in!(
+                    arena,
+                    "passing no argument for the '...' parameter of a variadic macro is a C23 \
+                     extension [{}]",
+                    option("variadic-macro-arguments-omitted")
+                ),
+                true,
+            ),
+            | (F::Clang, PreprocessorErrorType::VaOptOutsideVariadicMacro(_)) => (
+                format_in!(
+                    arena,
+                    "__VA_OPT__ can only appear in the expansion of a variadic macro [{}]",
+                    option("variadic-macros")
                 ),
                 true,
             ),

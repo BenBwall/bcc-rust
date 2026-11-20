@@ -49,7 +49,9 @@ pub(crate) use diagnostics::{
     WarningOption,
 };
 pub(crate) use extension_mapping::{
+    Coverage,
     ExtensionClass,
+    ExtensionGroup,
     ExtensionOptionName,
     GccFiling,
 };
