@@ -734,6 +734,62 @@ fn extension_declarations_leave_gcc_folded_array_bound_reports() {
     }
 }
 
+/// A declaration or function definition marked `__extension__` silences
+/// GCC's `-pedantic` report of a static initializer folded from an undefined
+/// shift, as GCC 14 does; an `__extension__` operand does not, since GCC
+/// reports the initializer after it.
+/// C99: §6.6 paragraphs 4 and 7, p. 95; PDF p. 107. GNU extension: GCC
+/// manual, "Alternate Keywords".
+#[test]
+fn extension_declarations_silence_gcc_pedantic_reports() {
+    use crate::configuration::CompilerIdentity;
+    for (standard, source, reported) in [
+        (CStandard::C11, "__extension__ static int x = 1 << 40;", 0),
+        (CStandard::C11, "__extension__ int x = 1 << 40, y = 1 >> 40;", 0),
+        (
+            CStandard::C11,
+            "__extension__ static struct { int a; int b; } s = { 1, 1 << 40 };",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "void f(void) { __extension__ static int x = 1 << 40; (void)x; }",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "__extension__ void f(void) { static int x = 1 << 40; (void)x; }\nvoid g(void) { \
+             static int y = 1 << 40; (void)y; }",
+            1,
+        ),
+        (CStandard::C11, "static int x = __extension__ (1 << 40);", 1),
+        (CStandard::C11, "static int x = 1 << 40;", 1),
+    ] {
+        let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Deny)
+            .with_gnu_extensions(true)
+            .with_compiler_extensions(true)
+            .with_compiler_identity(CompilerIdentity::Gcc);
+        with_configuration(source, configuration, |context, _| {
+            let errors = context.take_pending_errors();
+            let pedantic = errors
+                .iter()
+                .filter(|error| {
+                    matches!(
+                        error,
+                        TranslationError::Classified(classified)
+                            if matches!(
+                                &*classified.error,
+                                TranslationError::Semantic(error)
+                                    if matches!(error.kind, SemanticErrorKind::PedanticConstant(_))
+                            )
+                    )
+                })
+                .count();
+            assert_eq!(pedantic, reported, "{source}: {errors:?}");
+        });
+    }
+}
+
 /// GCC accepts a cast of a structure or union to its own type, qualifiers
 /// aside, as its value, an rvalue ("ISO C forbids casting nonscalar to the
 /// same type" under -Wpedantic); any other aggregate cast stays invalid.
