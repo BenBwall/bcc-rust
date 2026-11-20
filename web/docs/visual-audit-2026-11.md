@@ -1963,3 +1963,277 @@ of its note.
   repeat the step it announces.
 - **The cells under the head** still name a shadowing object `x`; the
   tape, Table 1 and the note call it `x #2`.
+
+## Part 10: a newcomer's whole-site pass (2026-11)
+
+Parts 4 to 9 each looked at one view. This part looks at the whole site
+once more, as a programmer who has never studied compilers would on a
+first visit: the landing, Table 1, the abstract machine, the compiler
+stages and the WebAssembly view, in that order. It then fixes the four
+findings that most hurt a first visit and lists the rest. The work is on
+`agent/site-newcomer-pass`.
+
+### Method
+
+The before build is `main` at `9e93d97a5`; the after builds are this
+branch. Both were built with `web/build.sh` as in Parts 7 to 9: Trunk
+without `--release`, the dev profile at `opt-level=s`. Playwright scripts
+drove Chromium with reduced motion unless noted:
+
+- **the review:** a first visit at 1440x900, 1366x768, 1024x768 and
+  390x844 in both themes. It opens the page (at first paint and once the
+  engine has loaded, and the whole page at 1440 and 390 px), Table 1, the
+  hero's primary key "Step through it", the machine after 6 and 36 steps,
+  the compiler pipeline (six stages, and all eleven at 1440x900 dark), the
+  WebAssembly view, "How it works" and the glossary, recording sideways
+  scroll and console errors. Steps are pressed with a pointer at the Step
+  key's place: a Playwright locator click scrolls the sticky key into view
+  first, which moved the page up 424 px and looked like a bug the site does
+  not have;
+- **the probe:** the four changes below at the same eight configurations,
+  and with motion allowed at 1440x900 light, 1366x768 dark and 390x844
+  dark: where the workbench lands after a lesson is chosen with the
+  pointer and with the keyboard (sampled from 50 ms to 2 s), where the
+  focus goes and where Tab and `→` go next; the blank tape's card, its fit
+  and when it goes; the rows of the WebAssembly strip at instruction 125
+  and at the end of the printf lesson (6,177); and the WCAG contrast of
+  each new text node against its composited background;
+- **the subset:** 28 small programs opened into the machine with **Open
+  .c**, one per claim of "Limits of this model" (§3 of "How it works");
+- **the lesson walk:** Part 9's walk, every note of the twelve machine
+  lessons, before and after at 1440x900 light and after at 390x844 dark,
+  comparing each note's title, lead and value flow.
+
+The screenshots are in [`screenshots/newcomer/`](screenshots/newcomer/),
+named `<item>-<width>-<theme>-before.png` and `…-after.png`, or without
+the suffix where the view did not change.
+
+### What a newcomer sees
+
+**First impression.** The landing says what the site is and what to do
+first. The eyebrow names it ("an interactive introduction to compilers
+and the C abstract machine"), the headline asks the question the site
+answers, and three numbered keys give an order: pick a lesson, step
+through it, follow a program through the compiler. Figure 0 draws the
+whole path at a glance: one statement, run by the abstract machine along
+the top and carried down by the compiler through tokens, syntax tree,
+types, IR and assembly to machine code, each station a link to its view.
+The lede is dense (six lines of monospace that name the abstract machine,
+a tape, IR, assembly and machine code at once), and Figure 0's stations
+are words a newcomer may not know; both are left for later.
+[`landing-1440-dark`](screenshots/newcomer/landing-1440-dark.png),
+[`landing-390-light`](screenshots/newcomer/landing-390-light.png).
+
+**Visual quality.** The machine and the compiler stages read as one
+instrument: the same black screens in both themes, numbered keys, figure
+and table captions, vermilion for "now", and syntax colours that agree
+between the C listing and the outputs. Spacing and type are consistent
+from view to view. Three places looked unfinished: the tape before the
+first step (finding 2), the WebAssembly strip, whose status took a row of
+its own on every laptop (finding 3), and, below 1181 px, the same strip
+on two rows, as Part 9 left the machine's below 1024 px.
+[`machine-1440-dark`](screenshots/newcomer/machine-1440-dark.png),
+[`machine-code-1440-dark`](screenshots/newcomer/machine-code-1440-dark.png).
+
+**Teaching path.** The order is clear inside each view. The compiler's
+eleven stages are numbered keys under "Front end", "Middle end" and "Back
+end"; each stage says what it takes in, what it gives out and why a
+compiler has it, gives one example from the program ("In this program"),
+and ends with a key to the next stage, the last one back to the first.
+The machine's notes say what each step did, which rule of C it followed,
+why it matters and what comes next. Between the views the order is
+looser: the hero's third key and lesson 13 open the pipeline at its first
+stage, but the "Compiler pipeline" key opens it at stage 7, bcc IR (left
+for later).
+
+**Friction.** Choosing a lesson in Table 1 did nothing a reader could see
+(finding 1), and "Limits of this model" said that much of what the
+lessons show was outside the machine (finding 4). Smaller ones are left
+for later below.
+
+### Findings
+
+#### 1. Choosing a lesson did nothing in sight
+
+Table 1 sits between the landing and the workbench, so a lesson chosen
+there loaded into a workbench out of sight: at 1440x900, choosing lesson 5
+left the page where it was, with the workbench's top 1,362 px below the
+window's top. Only the row's colour changed. On a phone the workbench was
+further still.
+
+**Fixed.** Choosing a lesson brings the workbench to the top of the
+window, at the place the hero's keys and the skip link bring it to (52 px
+from the top on a laptop, under the header; 12 px on a phone, whose header
+scrolls away). It glides, as the page's links do, and jumps with reduced
+motion. The lesson loads after that first scroll, and its listing and tape
+then take their own heights; the browser's scroll anchoring moved the page
+by 43 px to keep what it had anchored on in place, so the page scrolls
+there once more when the lesson has loaded. The keyboard focus goes to the
+key of the view the lesson opened in, at the head of the control strip:
+`→` steps at once from there, and Tab goes on to the strip's controls. The
+focus ring shows when the lesson was chosen with the keyboard and not with
+the pointer. The probe found the workbench at 52 px (12 px on the phone)
+for a machine lesson chosen with the pointer, one chosen with the
+keyboard and lesson 13, which opens the pipeline, at every configuration;
+with motion allowed it is there by 1.2 s.
+[`lesson-1440-light`](screenshots/newcomer/lesson-1440-light-before.png)
+([after](screenshots/newcomer/lesson-1440-light-after.png)).
+
+#### 2. The tape before the first step looked broken
+
+Before the first step Figure 1 was a black field with "NOT YET RUN" in
+small grey capitals, and the playhead and its flag drawn across the first
+call's name, which read as a drawing that had failed to load. Nothing on
+the tape said what it would hold or how to start; the note beside it does,
+but the tape is the largest thing on the screen.
+
+**Fixed.** A card over the blank tape says "Nothing recorded yet", then
+"Press Step or → to run the first step", the Step key drawn as it is in
+the strip, and what will fill the tape: a column a step, the program's
+objects as lanes from the step their lifetime begins with their values
+along them, and a note for each step saying what it did and which rule of
+C it followed. It goes at the first recorded step and stays gone when
+Back returns to step 0, since the tape is no longer blank; it comes back
+for each program loaded. The tape under it still takes the pointer. On a
+phone the tape before the first step is 40 to 80 px tall, too short for
+the card, which ran over the cells and Figure 2 in a first version; up to
+820 px the card follows the blank tape in the deck instead.
+[`blank-tape-1366-light`](screenshots/newcomer/blank-tape-1366-light-before.png)
+([after](screenshots/newcomer/blank-tape-1366-light-after.png)),
+[`blank-tape-1024-dark`](screenshots/newcomer/blank-tape-1024-dark-before.png)
+([after](screenshots/newcomer/blank-tape-1024-dark-after.png)),
+[`blank-tape-390-light`](screenshots/newcomer/blank-tape-390-light-before.png)
+([after](screenshots/newcomer/blank-tape-390-light-after.png)).
+
+#### 3. The WebAssembly strip took two rows on every laptop
+
+The control strip is at most 1,402 px wide. The WebAssembly view puts two
+more keys in it than the machine (Out and Next line), the "Start at main"
+switch and a longer status; with the mode keys' full names, from 1440 px
+up, that came to 1,519 px, so the status ("Ready Instruction 125") took a
+second row of its own and the strip was 103 px tall instead of 64.
+
+**Fixed.** In the WebAssembly view Reset, Back and Run show their icons
+alone at every width, as the machine's do below 1181 px, and the counter
+drops its word "Instruction", as the machine's drops "Step" there; the
+note under the strip heads with the same number ("Instruction 125"). The
+keys' names and the word stay for screen readers, and the keys' names in
+their tooltips. The mode keys keep their full names, so they do not
+change under the pointer when the view changes. At 1440x900 and 1366x768
+the strip keeps to one row, at instruction 125 and at the end of the
+printf lesson, 6,177 (a first version, with only the icons, took a second
+row again from four digits).
+[`wasm-strip-1440-dark`](screenshots/newcomer/wasm-strip-1440-dark-before.png)
+([after](screenshots/newcomer/wasm-strip-1440-dark-after.png)).
+
+#### 4. "Limits of this model" said the opposite of the lessons
+
+§3 of "How it works" still described the machine before the lessons on
+strings, printf, `#define`, the integer types and floating point. It said
+that the preprocessor, other integer types, char pointers and strings,
+library calls and floating point were outside the subset, and that its
+lesson opened in the compiler pipeline instead; lessons 2, 3, 5, 6 and 8
+show each of these running in the machine.
+
+**Fixed.** The section now lists what the machine runs (the integer types
+from char to unsigned long long and the three floating types at their
+x86-64 sizes; pointers; arrays of numbers or chars, and string literals;
+structures, nested or through pointers; const, casts and sizeof;
+file-scope and static objects; functions that return a number or a
+structure; if and else, while and for; printf, puts and putchar after
+`#include <stdio.h>`; `#define` of a name as one number, character or
+string) and, among what it does not, the constructs a reader is likely to
+write: switch, do, break, continue and goto; `?:` and the comma operator;
+typedef, enum, union and `_Bool`; void and static functions; arrays of
+pointers or of structures; a call inside a larger expression; nested side
+effects such as `a = b++`; other library functions; and more of the
+preprocessor. It says what happens to such a program: it stops before its
+first step, and its note says why, or, for the preprocessor, sends the
+reader to the Preprocessor stage. A second paragraph says that the
+machine's left-to-right operand order is one C allows, citing C99 §6.5p3
+(checked against N1256, PDF p. 79).
+
+Each claim was checked by opening a program into the machine. Seven
+ran to their end: `char *` into a string, arrays of `double`, `float` and
+`long` in one program, `long double`, `if`/`else`, `unsigned long long` with `signed char`
+and `unsigned short`, `->` on a pointer to a structure, and a function
+returning a structure. Each of the others stopped at Note 0, "This program
+is outside the supported subset": `switch`, `do`, `break`, `continue`,
+`goto`, `?:`, the comma operator, `typedef`, `enum`, `union`, `_Bool`, a
+void function, a static function, an array of pointers, an array of
+structures, `int x = f(1) + 1`, `return n * f(n - 1)`, `a = b++` and
+`getchar`; a function-like macro and `#include <stdlib.h>` stopped at "The
+machine starts after the preprocessor".
+[`limits-1440-dark`](screenshots/newcomer/limits-1440-dark-before.png)
+([after](screenshots/newcomer/limits-1440-dark-after.png); the after
+shot predates a last change of its fourth sentence from the end, from
+"with a button to the Preprocessor stage" to "its note sends the reader to
+the compiler's Preprocessor stage", since the stop's note names the stage
+in its explanation but has no button).
+
+#### Intended changes to the text
+
+- §3 of "How it works", "Limits of this model", is rewritten (finding 4)
+  and gains the paragraph on operand order.
+- The blank tape's card is new (finding 2).
+- The WebAssembly strip's counter no longer shows its word "Instruction",
+  which screen readers still read (finding 3).
+
+Nothing else: every lesson's title in Table 1 is the same, and every
+title, lead and value flow of the 1,254 notes of the twelve machine
+lessons is the same before and after at 1440x900 light.
+
+#### Checks
+
+- **No sideways scroll** at any step of the review or the probe in any
+  configuration, nor at any note of the lesson walk, and no page logged an
+  error.
+- **Contrast:** the card's text is on the tape's black screen in both
+  themes: its label 6.31:1, its lead's Step key (the strip's key colours)
+  6.06:1, its body 6.88:1. The rewritten §3 is 10.59:1 in the light theme
+  and 9.40:1 in the dark. The lowest text the probe measured is still §3's
+  number in the accent ink in the light theme, 4.99:1, as in Part 9.
+- **Keyboard and screen readers:** choosing a lesson with Enter moves the
+  focus to the view's key with its focus ring; `→` from there steps the
+  machine. The card is text in Figure 1, after the tape. The
+  WebAssembly keys keep their names, and the counter its word, for screen
+  readers.
+- **Reduced motion:** the page jumps to the workbench instead of gliding;
+  nothing else new moves.
+- **Tests:** the site's tests (163 and 2) and its four clippy runs
+  (native, and wasm32 for hydrate, worker and compiler) pass.
+
+### Left for later
+
+- **The "Compiler pipeline" key opens at stage 7, bcc IR**, not at the
+  first stage, unless the pipeline is reached through the hero's third key
+  or lesson 13. A newcomer who tries the views in order meets the IR before
+  tokens and the syntax tree. Opening at stage 1 would follow the path, but
+  for most lessons stage 1's output is the source itself, and the IR is
+  what readers who already know the front end come for.
+  [`pipeline-opens-1440-light`](screenshots/newcomer/pipeline-opens-1440-light.png).
+- **A stage's output starts below the fold** at 1440x900 (about 700 px
+  down): the heading, the hand-off sentence, "In this program", the in,
+  out and why lines and the reading line come first. A phone already shows
+  the output right under the stage keys; a laptop could do the same, or
+  fold the explanation.
+  Same screenshot.
+- **The reading line appears twice** in the pipeline on a laptop: "Point at
+  a line to read what it links to." under the source and above the output.
+- **Below 1181 px the WebAssembly strip still takes two rows**, as the
+  machine's does below 1024 px.
+  [`wasm-strip-1024-light`](screenshots/newcomer/wasm-strip-1024-light.png).
+- **A preprocessor stop has no button** to the Preprocessor stage: its
+  note names the stage in "How C defines this step", but the button the
+  steps of `#include <stdio.h>` and `#define` carry is not shown at the
+  stop, though the README says the stop has one.
+- **The landing's words for the compiler's forms** (tokens, syntax tree,
+  IR) are links to the views in Figure 0 but not to their glossary entries,
+  which exist; and the lede is six dense lines. On a phone Figure 0
+  scrolls sideways (it says so).
+- **Figure 2 and Table 1 before the first step** are a sentence and an
+  empty table head; the blank tape's card now explains the screen, but the
+  table could say that it fills as objects begin.
+- **The view keys are a tab list without arrow-key movement**: the arrow
+  keys step the machine everywhere on the page, so a screen-reader user
+  who expects the tab pattern's arrows moves the machine instead.
