@@ -4,7 +4,12 @@
  * whose sign bit is set, at run time. In a function Clang folds the
  * operation too, while GCC, as math may trap, leaves it for run time; a
  * complex quotient is computed by `__divdc3` at run time under both. A NaN
- * operand passes through with its sign, and a negation flips it. */
+ * operand passes through with its sign, and a negation flips it. The tests
+ * also build it with -fno-trapping-math, where GCC folds real arithmetic in
+ * a function but still calls `__muldc3` and `__divdc3`, and with Clang's
+ * strict exceptions (-ftrapping-math, folded_nans_fenv_access.c), where
+ * Clang computes the operation in a function at run time unless it
+ * initializes a constant automatic array or structure. */
 #include <stdio.h>
 #include <string.h>
 
@@ -101,8 +106,13 @@ int main(void) {
     float a_float = 0.0f / 0.0f;
     long double a_long_double = 0.0L / 0.0L, a_long_double_sub = __builtin_infl() - __builtin_infl();
     _Complex double a_complex_quotient = (0.0 + 0.0i) / (0.0 + 0.0i);
+    _Complex double a_complex_product = (INF + 0.0i) * (0.0 + 1.0i);
+    _Complex double a_complex_sum = (INF + 1.0i) + (-INF + 1.0i);
     __float128 a_quad = 0.0Q / 0.0Q;
     static double a_static = 0.0 / 0.0;
+    double a_literal = (double){0.0 / 0.0};
+    double a_array[2] = {0.0 / 0.0, INF - INF};
+    struct { int tag; double value; } a_struct = {1, 0 * INF};
     show_double("0/0", a_div);
     show_double("inf-inf", a_sub);
     show_double("0*inf", a_mul);
@@ -113,7 +123,13 @@ int main(void) {
     show_long_double("0L/0L", a_long_double);
     show_long_double("infl-infl", a_long_double_sub);
     show_complex("(0+0i)/(0+0i)", a_complex_quotient);
+    show_complex("(inf+0i)*(0+1i)", a_complex_product);
+    show_complex("(inf+i)+(-inf+i)", a_complex_sum);
     show_quad("0Q/0Q", a_quad);
     show_double("static 0/0", a_static);
+    show_double("(double){0/0}", a_literal);
+    show_double("{0/0, ...}", a_array[0]);
+    show_double("{..., inf-inf}", a_array[1]);
+    show_double("{1, 0*inf}", a_struct.value);
     return 0;
 }

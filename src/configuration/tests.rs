@@ -984,3 +984,35 @@ fn gcc_options_of_their_own_take_every_form_in_argv_order() {
         assert_eq!(found, expected, "case {case}");
     }
 }
+
+/// Clang's strict exception behavior follows the last option that decides
+/// trapping math: an explicit `-ftrapping-math`, which `-ffast-math` and
+/// `-funsafe-math-optimizations` give up but `-fno-fast-math` does not
+/// restore, as Clang's driver reads them.
+#[test]
+fn trapping_math_is_requested_only_explicitly() {
+    let base = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow);
+    let traps = base.with_relaxed_floating_point(RelaxedFloatingPoint::NoTrappingMath, false);
+    let no_traps = base.with_relaxed_floating_point(RelaxedFloatingPoint::NoTrappingMath, true);
+    assert!(!base.requests_trapping_math());
+    assert!(traps.requests_trapping_math());
+    assert!(!no_traps.requests_trapping_math());
+    // `-ftrapping-math -ffast-math`, then `-fno-fast-math` after either.
+    let fast = traps.with_implied_floating_point(RelaxedFloatingPoint::NoTrappingMath, true);
+    assert!(!fast.requests_trapping_math());
+    assert!(
+        !fast
+            .with_implied_floating_point(RelaxedFloatingPoint::NoTrappingMath, false)
+            .requests_trapping_math()
+    );
+    assert!(
+        traps
+            .with_implied_floating_point(RelaxedFloatingPoint::NoTrappingMath, false)
+            .requests_trapping_math()
+    );
+    assert!(
+        !no_traps
+            .with_implied_floating_point(RelaxedFloatingPoint::NoTrappingMath, false)
+            .requests_trapping_math()
+    );
+}

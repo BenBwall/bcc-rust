@@ -1,8 +1,9 @@
 //! The NaN an invalid floating operation folds to ([`NanSource`]): the
-//! positive quiet NaN GCC's and Clang's arithmetic give, except where GCC
-//! leaves the operation for run time, in a function while math may trap,
-//! and where Clang calls a complex routine; there it is the x86-64 default
-//! NaN, sign bit set. C99: §F.7.4 paragraph 1, p. 449; PDF p. 461; §F.7.5
+//! positive quiet NaN GCC's and Clang's arithmetic give, except where the
+//! operation is computed at run time: by GCC in a function while math may
+//! trap, by Clang in a function under strict exception behavior, and where
+//! either calls a complex routine; there it is the x86-64 default NaN, sign
+//! bit set. C99: §F.7.4 paragraph 1, p. 449; PDF p. 461; §F.7.5
 //! paragraph 1, p. 450; PDF p. 462.
 //!
 //! [`NanSource`]: super::super::constants::NanSource
@@ -26,26 +27,42 @@ const NEGATIVE: u128 = 0xFFF8_0000_0000_0000;
 #[derive(Clone, Copy, Debug)]
 enum Rules {
     Clang,
+    /// Clang's `-ftrapping-math`: strict exception behavior.
+    ClangTrappingMath,
     Gcc,
     GccNoTrappingMath,
+    /// GCC's `-fno-trapping-math -fcx-limited-range`.
+    GccLimitedComplex,
+}
+
+impl Rules {
+    fn configuration(self) -> CompilerConfiguration {
+        let identity = match self {
+            | Self::Clang | Self::ClangTrappingMath => CompilerIdentity::Clang,
+            | Self::Gcc | Self::GccNoTrappingMath | Self::GccLimitedComplex =>
+                CompilerIdentity::Gcc,
+        };
+        let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true)
+            .with_compiler_identity(identity);
+        match self {
+            | Self::Clang | Self::Gcc => configuration,
+            | Self::ClangTrappingMath => configuration
+                .with_relaxed_floating_point(RelaxedFloatingPoint::NoTrappingMath, false),
+            | Self::GccNoTrappingMath => configuration
+                .with_relaxed_floating_point(RelaxedFloatingPoint::NoTrappingMath, true),
+            | Self::GccLimitedComplex => configuration
+                .with_relaxed_floating_point(RelaxedFloatingPoint::NoTrappingMath, true)
+                .with_relaxed_floating_point(RelaxedFloatingPoint::CxLimitedRange, true),
+        }
+    }
 }
 
 /// The `double` bits of the real part of every folded `operator`
 /// expression in `source`, in order of analysis.
 fn folded(source: &str, rules: Rules, operator: BinaryOperator) -> Vec<u128> {
-    let identity = match rules {
-        | Rules::Clang => CompilerIdentity::Clang,
-        | Rules::Gcc | Rules::GccNoTrappingMath => CompilerIdentity::Gcc,
-    };
-    let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
-        .with_gnu_extensions(true)
-        .with_compiler_identity(identity)
-        .with_relaxed_floating_point(
-            RelaxedFloatingPoint::NoTrappingMath,
-            matches!(rules, Rules::GccNoTrappingMath),
-        );
     let mut bits = Vec::new();
-    with_configuration(source, configuration, |context, unit| {
+    with_configuration(source, rules.configuration(), |context, unit| {
         assert_eq!(context.pending_error_count(), 0, "{rules:?}: {source}");
         bits.extend(
             unit.expressions
@@ -66,7 +83,12 @@ fn folded(source: &str, rules: Rules, operator: BinaryOperator) -> Vec<u128> {
 /// under every identity: at file scope and for a block-scope static.
 #[test]
 fn a_static_initializer_folds_the_positive_nan() {
-    for rules in [Rules::Clang, Rules::Gcc, Rules::GccNoTrappingMath] {
+    for rules in [
+        Rules::Clang,
+        Rules::ClangTrappingMath,
+        Rules::Gcc,
+        Rules::GccNoTrappingMath,
+    ] {
         for source in [
             "double d = 0.0 / 0.0;",
             "static double d = (1.0 / 0.0 - 1.0 / 0.0) / 1.0;",
@@ -196,6 +218,104 @@ fn a_complex_quotient_in_a_function_is_the_routines() {
         )
         .last(),
         Some(&POSITIVE)
+    );
+}
+
+/// Without trapping math GCC folds real arithmetic in a function, but the
+/// product or quotient of two complex values still calls `__muldc3` or
+/// `__divdc3` at run time, unless `-fcx-limited-range` has GCC compute it
+/// inline, where it folds. A complex sum folds componentwise.
+#[test]
+fn gcc_without_trapping_math_calls_the_complex_routines() {
+    let in_function =
+        |expression: &str| format!("void f(void) {{ _Complex double z = {expression}; (void)z; }}");
+    let quotient = in_function("(0.0 + 0.0i) / (0.0 + 0.0i)");
+    let product = in_function("(__builtin_inf() + 0.0i) * (0.0 + 1.0i)");
+    let sum = in_function("(__builtin_inf() + 1.0i) + (-__builtin_inf() + 1.0i)");
+    for (rules, expected) in [
+        (Rules::GccNoTrappingMath, NEGATIVE),
+        (Rules::GccLimitedComplex, POSITIVE),
+    ] {
+        assert_eq!(
+            folded(&quotient, rules, BinaryOperator::Division),
+            [expected],
+            "{rules:?}"
+        );
+        assert_eq!(
+            folded(&product, rules, BinaryOperator::Multiplication).last(),
+            Some(&expected),
+            "{rules:?}"
+        );
+        assert_eq!(
+            folded(&sum, rules, BinaryOperator::Addition).last(),
+            Some(&POSITIVE),
+            "{rules:?}"
+        );
+    }
+}
+
+/// Under Clang's strict exception behavior, from `-ftrapping-math` or
+/// `#pragma STDC FENV_ACCESS ON`, an invalid operation in a function is
+/// computed at run time, but Clang's evaluator still folds the initializer
+/// of a constant automatic array or structure, except a complex quotient
+/// by a real divisor that raises an exception.
+#[test]
+fn clang_strict_exceptions_compute_the_nan_at_run_time() {
+    let cases = [
+        ("void f(void) { double d = 0.0 / 0.0; (void)d; }", NEGATIVE),
+        (
+            "void f(void) { double d = (double){0.0 / 0.0}; (void)d; }",
+            NEGATIVE,
+        ),
+        ("double f(void) { return 0.0 / 0.0; }", NEGATIVE),
+        (
+            "void f(void) { double a[1] = {0.0 / 0.0}; (void)a; }",
+            POSITIVE,
+        ),
+        (
+            "void f(void) { struct { int i; double d; } s = {1, 0.0 / 0.0}; (void)s; }",
+            POSITIVE,
+        ),
+        (
+            "void f(void) { _Complex double z[1] = {(1.0i) / 0.0}; (void)z; }",
+            NEGATIVE,
+        ),
+        (
+            "void f(void) { static double d = 0.0 / 0.0; (void)d; }",
+            POSITIVE,
+        ),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(
+            folded(source, Rules::ClangTrappingMath, BinaryOperator::Division).last(),
+            Some(&expected),
+            "{source}"
+        );
+        let pragma = format!("#pragma STDC FENV_ACCESS ON\n{source}");
+        assert_eq!(
+            folded(&pragma, Rules::Clang, BinaryOperator::Division).last(),
+            Some(&expected),
+            "{pragma}"
+        );
+    }
+}
+
+/// `#pragma STDC FENV_ACCESS` applies from where it appears, at file scope
+/// or in a function's body, until another turns it off; GCC ignores it.
+#[test]
+fn fenv_access_applies_where_it_is_on() {
+    let source = "void before(void) { double d = 0.0 / 0.0; (void)d; }\n#pragma STDC FENV_ACCESS \
+                  ON\nvoid on(void) { double d = 0.0 / 0.0; (void)d; }\n#pragma STDC FENV_ACCESS \
+                  OFF\nvoid off(void) { double d = 0.0 / 0.0; (void)d; }\nvoid inner(void) \
+                  {\n#pragma STDC FENV_ACCESS ON\n double d = 0.0 / 0.0; (void)d;\n}\nvoid \
+                  after(void) { double d = 0.0 / 0.0; (void)d; }";
+    assert_eq!(
+        folded(source, Rules::Clang, BinaryOperator::Division),
+        [POSITIVE, NEGATIVE, POSITIVE, NEGATIVE, POSITIVE]
+    );
+    assert_eq!(
+        folded(source, Rules::GccNoTrappingMath, BinaryOperator::Division),
+        [POSITIVE; 5]
     );
 }
 

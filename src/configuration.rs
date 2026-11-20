@@ -211,6 +211,10 @@ pub(crate) struct CompilerConfiguration {
     /// Signaling NaNs are to be kept apart from quiet ones
     /// (`-fsignaling-nans`).
     signaling_nans: bool,
+    /// The last option that decides trapping math asked for traps
+    /// explicitly (`-ftrapping-math`); see
+    /// [`CompilerConfiguration::requests_trapping_math`].
+    trapping_math_requested: bool,
     /// `-mgeneral-regs-only`.
     general_regs_only: bool,
     /// `-muintr`.

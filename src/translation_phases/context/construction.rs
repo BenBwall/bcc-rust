@@ -65,6 +65,7 @@ impl<'tu> Context<'tu> {
             pragma_content: false,
             parsing_started: false,
             weak_pragmas: ArenaVec::new_in(tu),
+            fenv_access_pragmas: ArenaVec::new_in(tu),
             diagnostic_pragmas: super::diagnostic_pragmas::DiagnosticPragmas::new_in(tu),
             text_events: ArenaVec::new_in(tu),
             source_map: super::source_map::SourceMap::new_in(tu),

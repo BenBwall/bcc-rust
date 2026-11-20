@@ -642,6 +642,9 @@ impl CompilerConfiguration {
     ) -> Self {
         self = self.with_implied_floating_point(option, relaxed);
         self.given_floating_point |= option.bit();
+        if matches!(option, super::RelaxedFloatingPoint::NoTrappingMath) {
+            self.trapping_math_requested = !relaxed;
+        }
         self
     }
 
@@ -654,6 +657,9 @@ impl CompilerConfiguration {
     ) -> Self {
         if relaxed {
             self.relaxed_floating_point |= option.bit();
+            if matches!(option, super::RelaxedFloatingPoint::NoTrappingMath) {
+                self.trapping_math_requested = false;
+            }
         } else {
             self.relaxed_floating_point &= !option.bit();
         }
@@ -776,6 +782,33 @@ impl CompilerConfiguration {
     pub(crate) const fn no_trapping_math(self) -> bool {
         self.relaxes_floating_point(super::RelaxedFloatingPoint::NoTrappingMath)
             && !self.signaling_nans
+    }
+
+    /// Whether traps were asked for explicitly: the last option that
+    /// decides trapping math is `-ftrapping-math`, which no `-ffast-math`,
+    /// `-funsafe-math-optimizations` or `-fno-trapping-math` follows. Under
+    /// Clang's rules this is `-ffp-exception-behavior=strict`, as Clang's
+    /// driver maps it, while Clang's default and `-fno-fast-math` ignore
+    /// exceptions; GCC's rules read [`Self::no_trapping_math`] instead,
+    /// since GCC traps by default. GNU extension: Clang's "Controlling
+    /// Floating-point Behavior".
+    pub(crate) const fn requests_trapping_math(self) -> bool {
+        self.trapping_math_requested
+    }
+
+    /// Whether complex multiplication and division leave out Annex G's
+    /// treatment of infinities and NaNs: `-fcx-fortran-rules` or its
+    /// `-fno-` form decides alone when given, and `-fcx-limited-range`
+    /// (which `-ffast-math` implies) otherwise, as in GCC 15. C99: §G.5.1
+    /// paragraph 4, pp. 469-470; PDF pp. 481-482. GNU extension: GCC
+    /// manual, "Optimize Options".
+    pub(crate) const fn limited_complex_arithmetic(self) -> bool {
+        use super::RelaxedFloatingPoint as Relaxed;
+        if self.gives_floating_point(Relaxed::CxFortranRules) {
+            self.relaxes_floating_point(Relaxed::CxFortranRules)
+        } else {
+            self.relaxes_floating_point(Relaxed::CxLimitedRange)
+        }
     }
 
     /// Whether reassociation is permitted: `-fassociative-math`, which both
@@ -1196,6 +1229,7 @@ impl CompilerConfiguration {
             standard_excess_precision: false,
             fast_math_saved: 0,
             signaling_nans: false,
+            trapping_math_requested: false,
             general_regs_only: false,
             user_interrupts: false,
             suppress_warnings: false,

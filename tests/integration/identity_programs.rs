@@ -62,6 +62,42 @@ mod tests {
         matches_the_claimed_compiler("folded_nans.c");
     }
 
+    /// The same NaNs without trapping math: GCC then folds real arithmetic
+    /// in a function too, but still computes the product or quotient of
+    /// two complex values with `__muldc3` or `__divdc3` at run time, unless
+    /// `-fcx-limited-range` has it compute them inline.
+    #[test]
+    fn folded_nans_without_trapping_math_match_the_claimed_compiler() {
+        matches_the_claimed_compiler_with(
+            "folded_nans.c",
+            "-std=gnu17",
+            &["-fno-trapping-math"],
+            false,
+        );
+        matches_the_claimed_compiler_with(
+            "folded_nans.c",
+            "-std=gnu17",
+            &["-fno-trapping-math", "-fcx-limited-range"],
+            false,
+        );
+    }
+
+    /// The same NaNs with strict exception behavior, which Clang's
+    /// `-ftrapping-math` and `#pragma STDC FENV_ACCESS ON` ask for: Clang
+    /// then computes an invalid operation in a function at run time, but
+    /// for a constant automatic array or structure, which its evaluator
+    /// folds. GCC traps by default and ignores the pragma.
+    #[test]
+    fn folded_nans_with_strict_exceptions_match_the_claimed_compiler() {
+        matches_the_claimed_compiler_with(
+            "folded_nans.c",
+            "-std=gnu17",
+            &["-ftrapping-math"],
+            false,
+        );
+        matches_the_claimed_compiler("folded_nans_fenv_access.c");
+    }
+
     /// The C99 §7.12.14 comparison builtins glibc's `<math.h>` uses, with
     /// `__builtin_issignaling` and `__builtin_roundeven`.
     #[test]
@@ -390,6 +426,17 @@ mod tests {
     /// where it is on the path, printing the reference's lines except
     /// those starting `x86:`, which use types wasm32 lacks.
     fn matches_the_claimed_compiler_in(fixture: &str, standard: &str, wasm32: bool) {
+        matches_the_claimed_compiler_with(fixture, standard, &[], wasm32);
+    }
+
+    /// [`matches_the_claimed_compiler_in`] with `options` given to each
+    /// compiler and to bcc too.
+    fn matches_the_claimed_compiler_with(
+        fixture: &str,
+        standard: &str,
+        options: &[&str],
+        wasm32: bool,
+    ) {
         if !cfg!(all(
             target_arch = "x86_64",
             target_os = "linux",
@@ -410,12 +457,12 @@ mod tests {
             eprintln!("skipping the GCC identity: no host GCC");
         }
         for (identity, compiler) in references {
-            let expected = reference(compiler, &source, standard);
+            let expected = reference(compiler, &source, standard, options);
             for flags in [
                 &["--interpret", "--opt=none"][..],
                 &["--interpret", "--opt=bcc"],
             ] {
-                let output = bcc(&[&[identity, standard, &source][..], flags].concat());
+                let output = bcc(&[&[identity, standard, &source][..], options, flags].concat());
                 assert_eq!(
                     output.status.code(),
                     Some(0),
@@ -443,6 +490,7 @@ mod tests {
                         "-o",
                         executable.to_str().unwrap(),
                     ][..],
+                    options,
                     flags,
                 ]
                 .concat());
@@ -529,10 +577,12 @@ mod tests {
 
     /// The output of `source` built by `compiler` in the language mode
     /// `standard`.
-    fn reference(compiler: &str, source: &str, standard: &str) -> String {
+    fn reference(compiler: &str, source: &str, standard: &str, options: &[&str]) -> String {
         let executable = temporary("reference.exe");
         let built = Command::new(compiler)
-            .args([source, standard, "-O0", "-w", "-o"])
+            .args([source, standard, "-O0", "-w"])
+            .args(options)
+            .arg("-o")
             .arg(&executable)
             .arg("-lm")
             .output()

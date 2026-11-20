@@ -3384,6 +3384,18 @@ struct InlineObject {
     source:   SourceVectors,
 }
 
+/// The state of `#pragma STDC FENV_ACCESS` as the roots are analyzed.
+/// C99: §7.6.1 paragraph 2, p. 189; PDF p. 201.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct FenvAccess {
+    /// On in the root being analyzed.
+    pub(super) root:       bool,
+    /// On at file scope after the pragmas read so far.
+    pub(super) file_scope: bool,
+    /// The first pragma not yet read, in `Context::fenv_access_pragmas`.
+    pub(super) next:       usize,
+}
+
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Insertion, visitation, elision and the enclosing switch are independent emission \
@@ -3394,6 +3406,9 @@ pub(super) struct State<'tu, 's> {
     reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
     pub(super) reference_function: Option<usize>,
     pub(super) initializer: Option<usize>,
+    /// Where `#pragma STDC FENV_ACCESS` is on
+    /// ([`Analyzer::enter_fenv_access_root`]).
+    pub(super) fenv_access: FenvAccess,
     /// Root expression of the initializer value currently being analyzed.
     pub(super) initializer_value: Option<usize>,
     pub(super) current: Option<FunctionContext<'tu>>,
@@ -3480,6 +3495,7 @@ impl<'s> State<'_, 's> {
             reference_contexts: ArenaVec::new_in(scratch),
             reference_function: None,
             initializer: None,
+            fenv_access: FenvAccess::default(),
             initializer_value: None,
             current: None,
             next_function: 0,

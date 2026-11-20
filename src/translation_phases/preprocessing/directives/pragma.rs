@@ -127,7 +127,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     ///
     /// C99: §6.10.6 paragraphs 1-2, p. 159; PDF p. 171. `STDC` pragmas must
     /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
-    /// `on-off-switch`; they are checked but have no effect yet. `#pragma
+    /// `on-off-switch`; they are checked, and only `FENV_ACCESS` has an
+    /// effect, which semantic analysis reads under Clang's rules
+    /// ([`Context::fenv_access_pragmas`]). `#pragma
     /// once`, `#pragma pack`, `#pragma GCC system_header`, `#pragma GCC
     /// warning`/`error` and the diagnostic pragmas are bcc's
     /// implementation-defined pragmas. `#pragma
@@ -415,6 +417,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             break 'base;
                         },
                         | "STDC" => {
+                            let fenv_access;
                             match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;
@@ -451,6 +454,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                         }
                                         break 'base;
                                     }
+                                    fenv_access = s == "FENV_ACCESS";
                                 },
                                 | None => {
                                     let source_vectors = self.current_location();
@@ -485,6 +489,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                                 },
                                             );
                                         break 'base;
+                                    }
+                                    if fenv_access {
+                                        let on = s == "ON";
+                                        let position = self.context.preprocessed_tokens;
+                                        self.context.fenv_access_pragmas.push((position, on));
                                     }
                                 },
                                 | None => {

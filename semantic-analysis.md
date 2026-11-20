@@ -2959,8 +2959,8 @@ Lowering emits a folded binary128 value as `fconst.f128` (or converts it to
 the destination format for a static initializer), and static initializers
 read it through `float_parsing::bits::binary128_bits`. A folded invalid
 operation gives the NaN of its [`NanSource`](#folded-nans-2026-11-20): the
-positive one GCC and Clang fold, or under GCC's rules in a function while
-math may trap the negative default NaN libgcc gives at run time.
+positive one GCC and Clang fold, or, where the compiler leaves the operation
+for run time, the negative default NaN libgcc gives.
 
 ## Folded NaNs (2026-11-20)
 
@@ -2973,26 +2973,86 @@ hardware does, so `constants.rs` decides the sign afterwards, from
 `Analyzer::nan_source` (C99 §F.7.4 and §F.7.5):
 
 - `NanSource::Compiler`, outside a function and in a static or thread-local
-  object's initializer, or under GCC's rules with `-fno-trapping-math`: a
-  NaN that an invalid operation made from operands that are not NaNs is
-  positive. Both compilers fold these, at every optimization level.
+  object's initializer, and in a function where complex arithmetic is
+  limited (`-fcx-limited-range`, `-fcx-fortran-rules` or `-ffast-math`) and
+  no traps apply: a NaN that an invalid operation made from operands that
+  are not NaNs is positive. Both compilers fold these, at every
+  optimization level; with limited complex arithmetic they compute complex
+  products and quotients inline, where those fold too.
+- `NanSource::GccFunction`, an expression in a function under GCC's rules
+  with `-fno-trapping-math`: real arithmetic folds as the compiler's does,
+  but the product or quotient of two complex values calls `__muldc3` or
+  `__divdc3` at run time, so it keeps the hardware's NaN. GCC's
+  `const_binop` folds them through MPC only in an initializer
+  (`do_nonfinite = folding_initializer`).
 - `NanSource::ClangFunction`, an expression in a function under Clang's
   rules: Clang folds real arithmetic the same way, but a complex quotient,
   or a complex product whose parts are both NaNs, calls `__divdc3` or
   `__muldc3` at run time, so those keep the hardware's NaN.
 - `NanSource::Runtime`, an expression in a function under GCC's rules while
   math may trap (GCC's default): GCC leaves the operation unfolded
-  (`const_binop` refuses a NaN made from operands that are not NaNs), so the
-  value is the hardware's NaN.
+  (`const_binop` refuses a NaN made from operands that are not NaNs). Under
+  Clang's rules with strict exception behavior, from an explicit
+  `-ftrapping-math` (`CompilerConfiguration::requests_trapping_math`, which
+  Clang's driver maps to `-ffp-exception-behavior=strict`; Clang's default
+  and `-fno-fast-math` ignore exceptions) or `#pragma STDC FENV_ACCESS ON`,
+  Clang emits the operation as a constrained intrinsic that LLVM does not
+  fold. Either way the value is the hardware's NaN.
+- `NanSource::ClangAggregate`, the initializer of an automatic array or
+  structure under Clang's strict exception behavior: `EmitAutoVarInit`
+  copies a constant aggregate's image, which Clang's evaluator folds, so it
+  folds as `Compiler` does. The evaluator refuses a complex quotient by a
+  real divisor that raises an exception, which keeps the hardware's NaN.
+
+The preprocessor records each `#pragma STDC FENV_ACCESS` the identity
+checks, with its output-token ordinal (`Context::fenv_access_pragmas`), and
+the analyzer reads them as it enters each root
+(`Analyzer::enter_fenv_access_root`): pragmas between roots set the
+file-scope state, and a function is under the pragma if that state is on or
+a pragma inside it turns it on. GCC ignores the pragma, and its identity skips it unchecked.
 
 A NaN operand passes through with its sign in every case, as GCC's
 `const_binop` and LLVM's `APFloat` pass it, and a negation flips it.
-Binary128 folding follows the same rule. Two run-time differences remain
-outside folding: GCC rewrites `x * -1.0` to `-x` and folds
-`__builtin_signbit(0.0 / 0.0)` to 0 by its non-negativity reasoning even
-while leaving the division for run time, where bcc gives the hardware's
-negative NaN; and bcc does not raise the invalid exception for an
-operation GCC leaves for run time.
+Binary128 folding follows the same rule. Remaining differences:
+
+- GCC rewrites `x * -1.0` to `-x` and `-a + b` to `b - a`, and folds
+  `__builtin_signbit(0.0 / 0.0)` to 0 by its non-negativity reasoning even
+  while leaving the division for run time, where bcc gives the hardware's
+  negative NaN, and NaN + NaN takes the other operand's NaN.
+- Under Clang's strict exception behavior, Clang's evaluator still folds a
+  builtin call whose arguments are constant (`__builtin_signbit`,
+  `__builtin_copysign`) and an integer constant expression from the
+  positive NaN, where bcc reads the hardware's. The evaluator's whole
+  aggregate is computed at run time when any operation in it raises an
+  exception other than invalid (an inexact `1.0 / 3.0`, a division by
+  zero, the complex quotient above), or when the initializer is not
+  constant; bcc still folds the aggregate's other members. A pragma inside
+  a compound statement applies to the whole function in bcc, where Clang
+  limits it to that statement.
+- Clang folds a complex quotient in a constant automatic aggregate in every
+  mode, which `ClangFunction` leaves to `__divdc3`.
+- bcc does not raise the invalid exception for an operation it folds that
+  the compiler leaves for run time.
+
+Follow-ups found by PR #426's review, each the same before and after it:
+
+- A NaN + NaN fold picks the wrong operand's NaN for `float`, `long double`,
+  `_Float16` and `__float128` (`-(0/0) + (0/0)`): both compilers take the
+  first operand's, as `double` already does.
+- `compiler_nan` looks only at the operands of the whole complex operation,
+  while GCC and `APFloat` make each NaN made inside a complex operand
+  positive (`(∞ + ∞i) * 0`).
+- `(_Complex T)-NAN` gets the imaginary part `-0`; both compilers give
+  `+0`.
+- GCC canonicalizes the payload of a NaN operand in a complex product it
+  folds through MPC (`-nan(0x123) * 0`).
+- Clang's `_Float16` arithmetic in a function stays for run time
+  (`half_result`), where the interpreter and the native back end give the
+  hardware's NaN and LLVM folds the positive one.
+- Under GCC's `-ffast-math`, GCC's finite-math complex arithmetic gives
+  numbers, not NaNs (`1.0` for some quotients), and bcc gives NaNs.
+- TCC 0.9.27 rejects a static initializer that makes a NaN from an invalid
+  operation, which bcc's TCC identity folds.
 
 ## Half-precision folding (2026-10-27)
 

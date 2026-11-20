@@ -49,32 +49,95 @@ use crate::{
 pub(super) enum NanSource {
     /// The compiler's own arithmetic, as in a static initializer.
     Compiler,
+    /// GCC's code for a function without trapping math: its real arithmetic
+    /// folds as the compiler's does, but the product or quotient of two
+    /// complex values calls `__muldc3` or `__divdc3`, which compute at run
+    /// time. GCC folds those through MPC only in an initializer
+    /// (`const_binop`'s `do_nonfinite`), or computes them inline under
+    /// `-fcx-limited-range` and `-fcx-fortran-rules`, where they fold.
+    GccFunction,
     /// Clang's code for a function: its real arithmetic folds as the
     /// compiler's does, but a complex quotient, or a complex product whose
     /// parts are both NaNs, calls `__divdc3` or `__muldc3`, which compute
     /// at run time.
     ClangFunction,
+    /// Clang's evaluator for an automatic array or structure under strict
+    /// exception behavior, where Clang's code computes the rest at run time
+    /// (`EmitAutoVarInit` copies a constant aggregate's image): it folds as
+    /// the compiler does, but refuses a complex quotient by a real divisor
+    /// that raises an exception, so that one is computed at run time.
+    ClangAggregate,
     /// The hardware at run time: GCC leaves an operation that raises the
     /// invalid exception in a function unfolded while math may trap
-    /// (`-ftrapping-math`, its default).
+    /// (`-ftrapping-math`, its default), and Clang emits it as a
+    /// constrained operation under `-ftrapping-math` or
+    /// `#pragma STDC FENV_ACCESS ON`.
     Runtime,
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Who computes an invalid operation analyzed now ([`NanSource`]): the
     /// compiler outside a function and in a static or thread-local object's
-    /// initializer, otherwise the compiler's code for a function.
+    /// initializer, otherwise the compiler's code for a function, which
+    /// differs between the rule sets.
     pub(super) fn nan_source(&self) -> NanSource {
+        use crate::configuration::RuleSet;
         let configuration = self.context.configuration;
         if self.functions.current.is_none() || self.initializing_static() {
-            NanSource::Compiler
-        } else if configuration.compiler_identity().rules() == crate::configuration::RuleSet::Clang
+            return NanSource::Compiler;
+        }
+        let limited_complex = configuration.limited_complex_arithmetic();
+        match configuration.compiler_identity().rules() {
+            | RuleSet::Clang
+                if configuration.requests_trapping_math() || self.functions.fenv_access.root =>
+                if self.initializing_automatic_aggregate() {
+                    NanSource::ClangAggregate
+                } else {
+                    NanSource::Runtime
+                },
+            | RuleSet::Clang if limited_complex => NanSource::Compiler,
+            | RuleSet::Clang => NanSource::ClangFunction,
+            | RuleSet::Gcc if !configuration.no_trapping_math() => NanSource::Runtime,
+            | RuleSet::Gcc if limited_complex => NanSource::Compiler,
+            | RuleSet::Gcc => NanSource::GccFunction,
+        }
+    }
+
+    /// Whether the initializer of an automatic array or structure is
+    /// analyzed now, which Clang's evaluator folds whole when it can.
+    fn initializing_automatic_aggregate(&self) -> bool {
+        self.functions.initializer.is_some_and(|binding| {
+            let data = self.bindings[binding];
+            !data.duration.is_static_or_thread()
+                && match self.types.nodes[data.ty.index] {
+                    | TypeKind::Array(..) => true,
+                    | TypeKind::Tag(tag) => self.types.tags[tag].kind != super::TagKind::Enum,
+                    | _ => false,
+                }
+        })
+    }
+
+    /// Enters the root whose output tokens run from `start` to `end`:
+    /// `#pragma STDC FENV_ACCESS ON` is in effect in it if the file-scope
+    /// state before it is on, or a pragma inside it turns the state on.
+    /// Pragmas between roots set the file-scope state; one inside a root
+    /// lasts to the end of its compound statement, which bcc widens to the
+    /// whole root. C99: §7.6.1 paragraph 2, p. 189; PDF p. 201.
+    pub(super) fn enter_fenv_access_root(&mut self, start: usize, end: usize) {
+        let pragmas = &self.context.fenv_access_pragmas;
+        let state = &mut self.functions.fenv_access;
+        while let Some(&(position, on)) = pragmas.get(state.next)
+            && position <= start
         {
-            NanSource::ClangFunction
-        } else if configuration.no_trapping_math() {
-            NanSource::Compiler
-        } else {
-            NanSource::Runtime
+            state.file_scope = on;
+            state.next += 1;
+        }
+        state.root = state.file_scope;
+        while let Some(&(position, on)) = pragmas.get(state.next)
+            && position < end
+        {
+            state.root |= on;
+            state.next += 1;
         }
     }
 
@@ -109,7 +172,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | B::Division => 3,
             | _ => return None,
         };
-        let folded = source != NanSource::Runtime;
+        // Clang's evaluator refuses a complex quotient by a real divisor
+        // that raises an exception, which then computes at run time.
+        let folded = source != NanSource::Runtime
+            && !(source == NanSource::ClangAggregate && domains == 1 && op == B::Division);
         let arithmetic = |a: LongDouble, b: LongDouble, operation| {
             let result = a.arithmetic(b, operation, precision);
             if folded {
@@ -156,8 +222,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 operation,
                 precision,
             );
-            let routine = op == B::Division || (real.is_nan() && imag.is_nan());
-            if source == NanSource::Runtime || (source == NanSource::ClangFunction && routine) {
+            // Whether a routine or the hardware computes the result.
+            let routine = match source {
+                | NanSource::Compiler | NanSource::ClangAggregate => false,
+                | NanSource::GccFunction => matches!(op, B::Multiplication | B::Division),
+                | NanSource::ClangFunction =>
+                    op == B::Division || (op == B::Multiplication && real.is_nan() && imag.is_nan()),
+                | NanSource::Runtime => true,
+            };
+            if routine {
                 return Some(Floating { real, imag });
             }
             let operands = [left.real, left.imag, right.real, right.imag];

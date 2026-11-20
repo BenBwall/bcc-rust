@@ -277,10 +277,13 @@ pub(crate) fn analyze<'tu>(
     let scratch = Bump::new();
     let mut analyzer = Analyzer::new(context, &scratch);
     analyzer.record_weak_names(unit.external_declarations(), unit.root_ends());
+    let mut root_start = 0;
     for (index, &root) in unit.external_declarations().iter().enumerate() {
         analyzer.assert_balanced();
-        analyzer.functions.emission.root_end =
-            unit.root_ends().get(index).copied().unwrap_or(usize::MAX);
+        let root_end = unit.root_ends().get(index).copied().unwrap_or(usize::MAX);
+        analyzer.functions.emission.root_end = root_end;
+        analyzer.enter_fenv_access_root(root_start, root_end);
+        root_start = root_end;
         analyzer.work.push(Work::Root(root));
         while let Some(work) = analyzer.work.pop() {
             analyzer.step(work);

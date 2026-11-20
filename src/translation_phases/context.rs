@@ -211,6 +211,12 @@ pub(crate) struct Context<'tu> {
     /// out of the values Clang's evaluator folds, each with its output-token
     /// ordinal ([`Self::preprocessed_tokens`] before the next token).
     pub(crate) weak_pragmas: ArenaVec<'tu, (usize, StringCacheId)>,
+    /// Each `#pragma STDC FENV_ACCESS` the identity's preprocessor checks,
+    /// with its output-token ordinal and whether it turns the state on
+    /// (`ON`; `OFF` and `DEFAULT` turn it off, Clang's default). Under
+    /// Clang's rules a function the state is on in computes its invalid
+    /// operations at run time. C99: §7.6.1 paragraph 2, p. 189; PDF p. 201.
+    pub(crate) fenv_access_pragmas: ArenaVec<'tu, (usize, bool)>,
     /// A pragma the identity's compiler hands to its parser was read,
     /// which keeps a translation unit that declares nothing from being
     /// empty.
