@@ -89,6 +89,19 @@ mod tests {
         }
     }
 
+    /// icx's Linux driver, whatever the host: on Windows Intel's `icx` is
+    /// `icx-cl`, and bcc's default MinGW target differs (its code is always
+    /// position-independent), so the identity tests name the Linux target.
+    const LINUX: &str = "--target=x86_64-unknown-linux-gnu";
+
+    /// The macros `bcc --icx-mode --target=x86_64-unknown-linux-gnu ARGS -dM
+    /// -E e.c` defines.
+    fn linux_macros(directory: &Directory, args: &[&str]) -> String {
+        let mut all = vec![LINUX];
+        all.extend_from_slice(args);
+        directory.macros(&all)
+    }
+
     impl Drop for Directory {
         fn drop(&mut self) {
             drop(std::fs::remove_dir_all(&self.0));
@@ -160,7 +173,7 @@ mod tests {
     #[test]
     fn version_queries_name_intel_and_bcc() {
         let directory = Directory::new();
-        let output = directory.icx(&["--version"]);
+        let output = directory.icx(&[LINUX, "--version"]);
         succeeds(&output);
         let text = stdout(&output);
         let mut lines = text.lines();
@@ -180,13 +193,13 @@ mod tests {
         );
         // Meson takes a banner that mentions Clang for Clang's.
         assert!(!text.to_ascii_lowercase().contains("clang"), "{text}");
-        let output = directory.icx(&["-dumpversion"]);
+        let output = directory.icx(&[LINUX, "-dumpversion"]);
         succeeds(&output);
         assert_eq!(stdout(&output), "23.1.1\n");
-        let output = directory.icx(&["-dumpmachine"]);
+        let output = directory.icx(&[LINUX, "-dumpmachine"]);
         succeeds(&output);
         assert_eq!(stdout(&output), "x86_64-unknown-linux-gnu\n");
-        let output = directory.icx(&["-v"]);
+        let output = directory.icx(&[LINUX, "-v"]);
         succeeds(&output);
         assert!(stderr(&output).starts_with("Intel(R) oneAPI DPC++/C++ Compiler 2026.2.0"));
     }
@@ -196,7 +209,7 @@ mod tests {
     #[test]
     fn identity_and_defaults_are_intels() {
         let directory = Directory::new();
-        let macros = directory.macros(&[]);
+        let macros = linux_macros(&directory, &[]);
         for definition in [
             "#define __INTEL_LLVM_COMPILER 20260200",
             "#define __INTEL_CLANG_COMPILER 20260200",
@@ -233,36 +246,36 @@ mod tests {
         // `-O0`, or a debug option without an `-O` option, turns
         // optimization off.
         for args in [&["-O0"][..], &["-g"], &["-gdwarf-4"], &["-debug", "full"]] {
-            let macros = directory.macros(args);
+            let macros = linux_macros(&directory, args);
             assert!(defines(&macros, "#define __NO_INLINE__ 1"), "{args:?}");
             assert!(!names(&macros, "__OPTIMIZE__"), "{args:?}");
         }
-        let macros = directory.macros(&["-g", "-O2"]);
+        let macros = linux_macros(&directory, &["-g", "-O2"]);
         assert!(defines(&macros, "#define __OPTIMIZE__ 1"));
-        let macros = directory.macros(&["-Os"]);
+        let macros = linux_macros(&directory, &["-Os"]);
         assert!(defines(&macros, "#define __OPTIMIZE_SIZE__ 1"));
         for model in [
             "-fp-model=precise",
             "-fp-model=consistent",
             "-fno-fast-math",
         ] {
-            let macros = directory.macros(&[model]);
+            let macros = linux_macros(&directory, &[model]);
             assert!(!names(&macros, "__NO_MATH_ERRNO__"), "{model}");
         }
         for args in [&["-fp-model=fast=2"][..], &["-ffast-math"], &["-Ofast"]] {
-            let macros = directory.macros(args);
+            let macros = linux_macros(&directory, args);
             assert!(defines(&macros, "#define __FAST_MATH__ 1"), "{args:?}");
             assert!(
                 defines(&macros, "#define __FINITE_MATH_ONLY__ 0"),
                 "{args:?}"
             );
         }
-        let macros = directory.macros(&["-fPIC"]);
+        let macros = linux_macros(&directory, &["-fPIC"]);
         assert!(defines(&macros, "#define __PIC__ 2"));
         assert!(!names(&macros, "__PIE__"));
-        let macros = directory.macros(&["-fPIE"]);
+        let macros = linux_macros(&directory, &["-fPIE"]);
         assert!(defines(&macros, "#define __PIE__ 2"));
-        let macros = directory.macros(&["-xCORE-AVX2"]);
+        let macros = linux_macros(&directory, &["-xCORE-AVX2"]);
         for definition in [
             "#define __AVX2__ 1",
             "#define __FMA__ 1",
@@ -270,18 +283,18 @@ mod tests {
         ] {
             assert!(defines(&macros, definition), "{definition}");
         }
-        let macros = directory.macros(&["-xsse4.2"]);
+        let macros = linux_macros(&directory, &["-xsse4.2"]);
         assert!(defines(&macros, "#define __SSE4_2__ 1"));
         assert!(!names(&macros, "__AVX__"));
         // Further code paths leave the baseline as it is.
-        let macros = directory.macros(&["-axCORE-AVX2,SKYLAKE-AVX512"]);
+        let macros = linux_macros(&directory, &["-axCORE-AVX2,SKYLAKE-AVX512"]);
         assert!(!names(&macros, "__AVX__"));
-        let macros = directory.macros(&["-qopenmp-simd"]);
+        let macros = linux_macros(&directory, &["-qopenmp-simd"]);
         assert!(defines(&macros, "#define __INTEL_HOST_OPENMP 1"));
         assert!(!names(&macros, "_OPENMP"));
-        let macros = directory.macros(&["-strict-ansi"]);
+        let macros = linux_macros(&directory, &["-strict-ansi"]);
         assert!(defines(&macros, "#define __STRICT_ANSI__ 1"));
-        let macros = directory.macros(&["-fstack-security-check"]);
+        let macros = linux_macros(&directory, &["-fstack-security-check"]);
         assert!(defines(&macros, "#define __SSP_STRONG__ 2"));
     }
 
