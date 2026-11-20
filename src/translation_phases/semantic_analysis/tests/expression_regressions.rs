@@ -735,11 +735,12 @@ fn extension_declarations_leave_gcc_folded_array_bound_reports() {
 }
 
 /// A declaration or function definition marked `__extension__` silences
-/// GCC's `-pedantic` report of a static initializer folded from an undefined
-/// shift, as GCC 14 does; an `__extension__` operand does not, since GCC
-/// reports the initializer after it.
-/// C99: §6.6 paragraphs 4 and 7, p. 95; PDF p. 107. GNU extension: GCC
-/// manual, "Alternate Keywords".
+/// GCC's `-pedantic` report of `__func__` before C99 and of a static
+/// initializer folded from an undefined shift, as GCC 14 does; an
+/// `__extension__` operand does not silence the initializer's, since GCC
+/// reports it after the operand.
+/// C99: §6.4.2.2 paragraph 1, p. 52; PDF p. 64; §6.6 paragraphs 4 and 7,
+/// p. 95; PDF p. 107. GNU extension: GCC manual, "Alternate Keywords".
 #[test]
 fn extension_declarations_silence_gcc_pedantic_reports() {
     use crate::configuration::CompilerIdentity;
@@ -764,6 +765,40 @@ fn extension_declarations_silence_gcc_pedantic_reports() {
         ),
         (CStandard::C11, "static int x = __extension__ (1 << 40);", 1),
         (CStandard::C11, "static int x = 1 << 40;", 1),
+        (
+            CStandard::C89,
+            "__extension__ const char *f(void) { return __func__; }",
+            0,
+        ),
+        (
+            CStandard::C89,
+            "void f(void) { __extension__ const char *p = __func__, *q = __func__; (void)p; \
+             (void)q; }",
+            0,
+        ),
+        (
+            CStandard::C89,
+            "__extension__ void f(void) { void g(void) { const char *s = __func__; (void)s; } \
+             g(); }",
+            0,
+        ),
+        (
+            CStandard::C89,
+            "void f(void) { __extension__ const char *p = __func__; const char *q = __func__; \
+             (void)p; (void)q; }",
+            1,
+        ),
+        (
+            CStandard::C89,
+            "__extension__ const char *f(void) { return __func__; }\nconst char *g(void) { \
+             return __func__; }",
+            1,
+        ),
+        (
+            CStandard::C89,
+            "void f(void) { const char *s = __extension__ __func__; (void)s; }",
+            0,
+        ),
     ] {
         let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Deny)
             .with_gnu_extensions(true)
