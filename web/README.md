@@ -332,7 +332,8 @@ first read-only listing, whose folding arrows use it.
 - Choose a lesson, open a local C file, or edit the source in place and choose
   **Run edited code**. Choosing a lesson in Table 1 brings the workbench on
   screen (gliding, or jumping with reduced motion) and gives the keyboard
-  focus to the view it opened in, so the next `Tab` reaches its controls.
+  focus to the key of the view it opened in, at the head of the control
+  strip, where `→` steps at once and `Tab` goes on to the controls.
 - Before the first step the tape is blank, and a card over it says what
   will fill it (a column a step, a lane for each object from the step its
   lifetime begins) and that **Step** or `→` starts the run.

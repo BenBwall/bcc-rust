@@ -2068,8 +2068,9 @@ fn Toolbar(state: State) -> impl IntoView {
 }
 
 /// Bring the workbench to the top of the window for a lesson chosen in
-/// Table 1 and, with `focus`, give the keyboard focus to the view it opened
-/// in, so the next Tab reaches its controls. The page glides there as it does
+/// Table 1 and, with `focus`, give the keyboard focus to the key of the view
+/// it opened in, at the head of the control strip, so the reader goes on
+/// from there rather than from the table. The page glides there as it does
 /// to its links, or jumps when motion is reduced (the style sheet's
 /// `scroll-behavior`).
 fn show_workbench(focus: bool) {
