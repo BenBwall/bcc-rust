@@ -30,6 +30,7 @@ use super::{
     Step,
     TemporaryDirectory,
     host_target,
+    icx,
     known::{
         Compiler,
         knows,
@@ -79,7 +80,19 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         Compiler::Clang
     };
     let expanded = expand_response_files(invocation, &invocation.arguments, compiler)?;
-    plan_translated(invocation, &expanded, None)
+    plan_translated(invocation, &expanded, Front::None)
+}
+
+/// The driver in front of the Clang personality, which reads its own
+/// options first and gives Clang its defaults.
+#[derive(Clone, Copy)]
+pub(super) enum Front<'a> {
+    /// None: GCC's or Clang's own command line.
+    None,
+    /// zig cc, with what zig gives Clang.
+    Zig(&'a zig::Defaults),
+    /// Intel's icx, with what its driver gives Clang.
+    Icx(&'a icx::Defaults),
 }
 
 /// `arguments` with each `@FILE` replaced by the arguments it holds, or the
@@ -122,13 +135,18 @@ pub(super) fn expand_response_files(
 }
 
 /// Translates the expanded GCC or Clang command line `expanded`. Under
-/// zig cc, `zig` holds what zig gives Clang beside the options it passed
-/// on, which are `expanded`.
+/// zig cc and icx, `front` holds what the driver in front gives Clang
+/// beside the options it passed on, which are `expanded`.
 pub(super) fn plan_translated(
     invocation: &Invocation,
     expanded: &[OsString],
-    zig: Option<&zig::Defaults>,
+    front: Front<'_>,
 ) -> Result<Plan, MainError> {
+    let (zig, icx) = match front {
+        | Front::None => (None, None),
+        | Front::Zig(zig) => (Some(zig), None),
+        | Front::Icx(icx) => (None, Some(icx)),
+    };
     let personality = invocation.personality;
     let compiler = if personality == Personality::Gcc {
         Compiler::Gcc
@@ -139,8 +157,9 @@ pub(super) fn plan_translated(
         invocation,
         compiler,
         zig,
+        icx,
         out: Vec::new(),
-        errors: 0,
+        errors: icx.map_or(0, |icx| icx.reported),
         target: zig.map_or(invocation.target, |zig| Some(zig.target)),
         sysroot: None,
         stages: Vec::new(),
@@ -190,6 +209,24 @@ pub(super) fn plan_translated(
     // whole command line, after its other complaints.
     for option in std::mem::take(&mut state.unrecognized) {
         state.error(format_args!("unrecognized command-line option '{option}'"));
+    }
+    // Intel's driver remarks on a debug option that turns optimization off,
+    // even before answering a query, and then checks its own options'
+    // values.
+    if let Some(icx) = icx {
+        if let Some(option) = &icx.remark {
+            super::print(
+                &format!(
+                    "{}: remark: {}\n",
+                    invocation.name,
+                    icx::Defaults::remark_text(option, "-O0")
+                ),
+                true,
+            );
+        }
+        for message in &icx.errors {
+            state.error(format_args!("{message}"));
+        }
     }
     // Either compiler answers the query that ranks first in its own order,
     // the last of equals, wherever it stands, and leaves the inputs alone.
@@ -262,6 +299,17 @@ pub(super) fn plan_translated(
                  optimizations, or consult the documentation for the same behavior"
             ),
         );
+        // Intel's Clang reports the complex range its default model
+        // implied.
+        if icx.is_some() && state.fp_model.is_none() {
+            state.clang_warning(
+                "overriding-complex-range",
+                format_args!(
+                    "'-Ofast' sets complex range to \"basic\" overriding the setting of \
+                     \"promoted\" that was implied by '-ffp-model=fast'"
+                ),
+            );
+        }
     }
     // Clang's driver reports the floating-point models a later option
     // overrides, after `-Ofast`'s deprecation; a final `-Ofast` overrides
@@ -332,9 +380,13 @@ pub(super) fn plan_translated(
     );
     common.push(format!("--target={}", target.triple()).into());
     common.push(format!("--driver-name={}", invocation.name).into());
-    // What zig gives Clang before the options it passes on.
+    // What zig or Intel's driver gives Clang before the options it passes
+    // on.
     if let Some(zig) = zig {
         common.extend(zig.compile.iter().cloned());
+    }
+    if let Some(icx) = icx {
+        common.extend(icx.compile.iter().cloned());
     }
     // GCC's driver assembles with the system's `as` (GCC manual, "Overall
     // Options"), so its `-Wa,` options and directives reach that.
@@ -401,9 +453,21 @@ pub(super) fn plan_translated(
     }
     let links = state.stages.is_empty() && !state.syntax_only;
     // Neither driver links `libm` unless `-lm` asks for it, which Autoconf's
-    // `AC_SEARCH_LIBS([sqrt], [m])` tells apart.
+    // `AC_SEARCH_LIBS([sqrt], [m])` tells apart; Intel's always links it.
     if links {
-        common.push("--no-default-libm".into());
+        if let Some(icx) = icx {
+            // Intel's executables sit at a fixed address unless the
+            // command line links something else.
+            let other = state
+                .out
+                .iter()
+                .any(|option| matches!(option.to_str(), Some("-shared" | "-r" | "-pie")));
+            if !other {
+                common.extend(icx.link.iter().cloned());
+            }
+        } else {
+            common.push("--no-default-libm".into());
+        }
         if let Some(zig) = zig {
             common.extend(zig.link.iter().cloned());
         }
@@ -501,6 +565,7 @@ pub(super) fn plan_translated(
             // what it makes of the `-target` operand.
             | Some(zig) if !has_inputs => zig::Defaults::banner(&zig.machine),
             | Some(zig) => zig::Defaults::banner(&zig.triple),
+            | None if icx.is_some() => icx::banner(target),
             | None => version::verbose(personality, target),
         };
         // Without inputs, neither compiler has a step to show.
@@ -616,6 +681,8 @@ struct State<'a> {
     compiler: Compiler,
     /// What zig gives Clang, under zig cc.
     zig: Option<&'a zig::Defaults>,
+    /// What Intel's driver gives Clang, under icx.
+    icx: Option<&'a icx::Defaults>,
     /// `-save-temps`.
     save_temps: Option<SaveTemps>,
     /// bcc's options and inputs, in order.
@@ -2009,6 +2076,23 @@ impl State<'_> {
         } else if LINK_ONLY_OPTIONS.contains(&text) {
             self.link_only(text.into());
         }
+        // Intel's options for which of its libraries the link takes, which
+        // bcc's links never take; and its advice for OpenMP.
+        if self.icx.is_some() {
+            if matches!(text, "-static-intel" | "-shared-intel")
+                || text == "-no-intel-lib"
+                || text.starts_with("-no-intel-lib=")
+            {
+                self.link_only(text.into());
+                return;
+            }
+            if text == "-fopenmp" {
+                self.clang_warning(
+                    "recommended-option",
+                    format_args!("use of '-qopenmp' recommended over '-fopenmp'"),
+                );
+            }
+        }
         // Clang knows `-ftrapv` but not its negation, and has no
         // `-fstrict-volatile-bitfields`.
         if self.compiler == Compiler::Clang
@@ -2062,6 +2146,16 @@ impl State<'_> {
                 | "-ffp-model=aggressive" => Some("aggressive"),
                 | _ => None,
             };
+            // Clang knows `strict` too, which bcc refuses (`treatment`).
+            if let Some(value) = text.strip_prefix("-ffp-model=")
+                && model.is_none()
+                && value != "strict"
+            {
+                self.error(format_args!(
+                    "unsupported argument '{value}' to option '-ffp-model='"
+                ));
+                return;
+            }
             if let Some(model) = model {
                 self.fp_model_option(model);
                 return;
@@ -2427,6 +2521,13 @@ impl State<'_> {
                 | _ => {},
             }
         }
+        if self.icx.is_some() {
+            match query {
+                | Query::DumpVersion => return format!("{}\n", icx::CLANG_VERSION),
+                | Query::Version => return icx::banner(target),
+                | _ => {},
+            }
+        }
         match query {
             | Query::DumpMachine | Query::Triple =>
                 if personality == Personality::Gcc {
@@ -2649,6 +2750,7 @@ fn help(personality: Personality, name: &str) -> String {
     let compiler = match personality {
         | Personality::Gcc => "GCC",
         | Personality::ZigCc => "zig cc",
+        | Personality::Icx => "icx",
         | _ => "Clang",
     };
     format!(

@@ -379,6 +379,11 @@ impl Cli {
             })
             .with_code_options(self.code_options())
             .with_optimization(self.code_generation.optimization_macros())
+            // icx sets the flush in `main` only above `-O0`.
+            .with_denormals_flushed_in_main(
+                self.code_generation.flush_denormals_in_main
+                    && self.code_generation.optimization_macros().0,
+            )
             .with_debug_info(self.code_generation.debug_options(self.target))
             .with_stack_locals(
                 (self.code_generation.stack_locals || self.driver.driver_name.is_some())

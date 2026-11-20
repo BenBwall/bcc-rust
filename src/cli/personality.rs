@@ -1,9 +1,10 @@
 //! Driver personalities make bcc's command line mimic another compiler's:
 //! `--gcc-mode`, `--clang-mode`, `--msvc-mode` (`cl.exe`),
-//! `--clang-cl-mode`, `--tcc-mode` and `--zig-cc-mode`, or an executable
-//! name such as `gcc`, `cc`, `clang`, `cl`, `tcc` or `zig-cc` (also with a
-//! prefix, `bcc-gcc` or `x86_64-w64-mingw32-gcc`, and a version suffix,
-//! `gcc-14`), or `zig cc`. A personality
+//! `--clang-cl-mode`, `--tcc-mode`, `--zig-cc-mode`, `--icx-mode` and
+//! `--icx-cl-mode`, or an executable name such as `gcc`, `cc`, `clang`,
+//! `cl`, `tcc`, `zig-cc` or `icx` (also with a prefix, `bcc-gcc` or
+//! `x86_64-w64-mingw32-gcc`, and a version suffix, `gcc-14`), or `zig cc`.
+//! A personality
 //! reads the rest of the command line with that compiler's conventions and
 //! translates it into bcc's own options, which the ordinary driver then
 //! runs, so every personality shares one implementation of each option.
@@ -21,14 +22,17 @@
 //! GCC's identity and diagnostic format, and the host's system headers.
 //!
 //! Read [`select`] and [`run`], then [`gnu::plan`], [`msvc::plan`],
-//! [`tcc::plan`] and [`zig::plan`]. `docs/design/driver-modes.md` records the
-//! design and every deviation from the compilers mimicked.
+//! [`tcc::plan`], [`zig::plan`] and [`icx::plan`].
+//! `docs/design/driver-modes.md` records the design and every deviation from
+//! the compilers mimicked.
 //!
 //! Files by role:
 //! - Personalities: `personality/gnu.rs` (GCC and Clang), `personality/msvc.rs`
-//!   (`cl.exe` and clang-cl), `personality/tcc.rs`, and `personality/zig.rs`
-//!   (`zig cc`, which translates zig's own options and hands the rest to
-//!   Clang's).
+//!   (`cl.exe`, clang-cl and icx-cl), `personality/tcc.rs`,
+//!   `personality/zig.rs` (`zig cc`, which translates zig's own options and
+//!   hands the rest to Clang's), and `personality/icx.rs` (Intel's `icx`, which
+//!   does the same with Intel's options, and the identity and defaults `icx`
+//!   and `icx-cl` share).
 //! - Version banners and queries: `personality/version.rs`.
 //! - The option names each compiler knows: `personality/known.rs`, over the
 //!   lists in `personality/options/`; which of those bcc ignores, warns about
@@ -47,6 +51,7 @@
 
 // Personalities
 mod gnu;
+mod icx;
 mod msvc;
 mod tcc;
 mod zig;
@@ -80,9 +85,10 @@ pub(super) fn run(
     let invocation = Invocation::new(personality, arguments);
     let plan = match personality {
         | Personality::Gcc | Personality::Clang => gnu::plan(&invocation)?,
-        | Personality::Msvc | Personality::ClangCl => msvc::plan(&invocation)?,
+        | Personality::Msvc | Personality::ClangCl | Personality::IcxCl => msvc::plan(&invocation)?,
         | Personality::Tcc => tcc::plan(&invocation)?,
         | Personality::ZigCc => zig::plan(&invocation)?,
+        | Personality::Icx => icx::plan(&invocation)?,
     };
     let mut status = 0;
     for step in plan.steps {
@@ -173,6 +179,11 @@ pub(super) enum Personality {
     /// zig 0.17.1's `zig cc`, Clang 22.1.8's driver behind zig's own
     /// command line.
     ZigCc,
+    /// Intel oneAPI DPC++/C++ Compiler 2026.2.0's `icx`, Clang 23.1.1's
+    /// driver with Intel's defaults and options.
+    Icx,
+    /// The same compiler's `icx-cl`, its clang-cl.
+    IcxCl,
 }
 
 impl Personality {
@@ -187,16 +198,27 @@ impl Personality {
             | "clang-cl" => Self::ClangCl,
             | "tcc" => Self::Tcc,
             | "zig-cc" => Self::ZigCc,
+            | "icx" => Self::Icx,
+            | "icx-cl" => Self::IcxCl,
             | _ => return None,
         })
+    }
+
+    /// Whether the personality reads clang-cl's command line.
+    const fn is_clang_cl(self) -> bool {
+        matches!(self, Self::ClangCl | Self::IcxCl)
     }
 
     /// The personality an executable named like `program` has, and the
     /// target its prefix names, if it names one: `gcc`, `cc`, `c89` and
     /// `c99` are GCC, `clang` Clang, `cl` MSVC, `clang-cl` clang-cl, `tcc`
-    /// TCC, and `zig-cc`, `zigcc` and `zig` (whose first argument must then
-    /// be `cc`) zig cc, after an optional `PREFIX-` (`bcc-` or a target
-    /// triple) and before an optional version (`-14`, `-18.1`) and `.exe`.
+    /// TCC, `zig-cc`, `zigcc` and `zig` (whose first argument must then
+    /// be `cc`) zig cc, `icx-cc` icx and `icx-cl` icx-cl, and `icx` either,
+    /// as the host's own `icx` reads Clang's options on Linux and `cl`'s on
+    /// Windows, after an optional `PREFIX-` (`bcc-` or a target triple) and
+    /// before an optional version (`-14`, `-18.1`) and `.exe`. `icc`, the
+    /// classic compiler `icx` replaced, is not `icx`: Intel ships no `icc`
+    /// that runs it.
     fn from_program(program: &Path) -> Option<(Self, Option<Target>)> {
         let name = program.file_stem()?.to_str()?;
         let name = name.to_ascii_lowercase();
@@ -214,6 +236,16 @@ impl Personality {
             (prefix, "clang-cl")
         } else if let Some(prefix) = name.strip_suffix("zig-cc") {
             (prefix, "zig-cc")
+        } else if let Some(prefix) = name
+            .strip_suffix("icx-cl")
+            .filter(|prefix| prefix.is_empty() || prefix.ends_with('-'))
+        {
+            (prefix, "icx-cl")
+        } else if let Some(prefix) = name
+            .strip_suffix("icx-cc")
+            .filter(|prefix| prefix.is_empty() || prefix.ends_with('-'))
+        {
+            (prefix, "icx-cc")
         } else {
             name.rsplit_once('-')
                 .map_or(("", name), |(prefix, tool)| (prefix, tool))
@@ -225,6 +257,9 @@ impl Personality {
             | "clang-cl" => Self::ClangCl,
             | "tcc" => Self::Tcc,
             | "zig-cc" | "zigcc" | "zig" => Self::ZigCc,
+            | "icx" if cfg!(windows) => Self::IcxCl,
+            | "icx" | "icx-cc" => Self::Icx,
+            | "icx-cl" => Self::IcxCl,
             | _ => return None,
         };
         let target = target_named(prefix.trim_end_matches('-'));
@@ -242,6 +277,10 @@ impl Personality {
             // zig runs Clang's driver in its own process, which names it
             // after the executable: `zig: error: no input files`.
             | Self::ZigCc => "zig",
+            // Intel's `icx` runs its driver as `icx` whatever it was called:
+            // `icx-cc` and `icx-2026` say `icx: error:` too.
+            | Self::Icx => "icx",
+            | Self::IcxCl => "icx-cl",
         }
     }
 }
@@ -282,7 +321,11 @@ impl Invocation {
             .filter(|(named, _)| *named == personality)
             .and_then(|(_, target)| target);
         let name = match from_program {
-            | _ if personality == Personality::ZigCc => personality.name().to_owned(),
+            | _ if matches!(
+                personality,
+                Personality::ZigCc | Personality::Icx | Personality::IcxCl
+            ) =>
+                personality.name().to_owned(),
             | Some((named, _)) if named == personality =>
                 Path::new(&program).file_stem().map_or_else(
                     || personality.name().to_owned(),
@@ -432,11 +475,15 @@ fn command_line(step: &[OsString], style: crate::backend::llvm::CommandStyle) ->
 fn host_target(personality: Personality) -> Target {
     if cfg!(windows) {
         match personality {
-            | Personality::Msvc | Personality::ClangCl => Target::WindowsMsvc,
-            | Personality::Clang if cfg!(target_env = "msvc") => Target::WindowsMsvc,
+            | Personality::Msvc | Personality::ClangCl | Personality::IcxCl => Target::WindowsMsvc,
+            | Personality::Clang | Personality::Icx if cfg!(target_env = "msvc") =>
+                Target::WindowsMsvc,
             | _ => Target::WindowsGnu,
         }
-    } else if matches!(personality, Personality::Msvc | Personality::ClangCl) {
+    } else if matches!(
+        personality,
+        Personality::Msvc | Personality::ClangCl | Personality::IcxCl
+    ) {
         Target::WindowsMsvc
     } else if cfg!(target_env = "musl") {
         Target::LinuxMusl

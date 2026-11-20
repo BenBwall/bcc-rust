@@ -199,11 +199,12 @@ This is not yet a production-ready or conforming C99 compiler.
 ### Driver personalities
 
 bcc's command line can mimic another compiler's. `--gcc-mode`,
-`--clang-mode`, `--msvc-mode` (`cl.exe`), `--clang-cl-mode`, `--tcc-mode`
-and `--zig-cc-mode`, or running bcc under the name `gcc`, `cc`, `clang`, `cl`,
-`clang-cl`, `tcc` or `zig-cc` (a symbolic link; also `bcc-gcc`, `gcc-14`, or a
-target prefix such as `x86_64-w64-mingw32-gcc`), or as `zig cc`, select a
-personality. It reads that compiler's
+`--clang-mode`, `--msvc-mode` (`cl.exe`), `--clang-cl-mode`, `--tcc-mode`,
+`--zig-cc-mode`, `--icx-mode` and `--icx-cl-mode` (Intel oneAPI's `icx` and
+`icx-cl`), or running bcc under the name `gcc`, `cc`, `clang`, `cl`,
+`clang-cl`, `tcc`, `zig-cc`, `icx`, `icx-cc` or `icx-cl` (a symbolic link; also
+`bcc-gcc`, `gcc-14`, or a target prefix such as `x86_64-w64-mingw32-gcc`), or
+as `zig cc`, select a personality. It reads that compiler's
 options, including `cl`'s `/c /Fo /Fe /link` and `tcc -run`. Of the options
 the compiler knows and bcc does not implement, it ignores those that cannot
 change the program (warnings, diagnostics, tuning), warns
@@ -214,6 +215,8 @@ compiler: `__GNUC__` 14 and the `_Float32`-family keyword types for GCC,
 `_MSC_VER` 1933 with every Microsoft extension for `cl`, `__TINYC__` for
 TCC, Clang 22.1.8 with zig's target queries, `-mcpu` and per-`-O` defaults
 (UBSan and the stack protector in Debug, `NDEBUG` in release) for zig cc,
+`__INTEL_LLVM_COMPILER` with Intel's `-O2` and fast floating-point defaults,
+`-x` processor codes and `#10430` warning about classic `icc` options for icx,
 the compiler's spelling of an unsigned plain `char` (`-funsigned-char`,
 `cl /J`), and the compiler's diagnostic
 format, default target, system header directories, output names and version

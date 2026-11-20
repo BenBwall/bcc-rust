@@ -1113,6 +1113,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         };
         let signature = unit.module.function_signature(func);
         let draft = Draft::new(scratch, signature.params);
+        let copy_is_none = copy.is_none();
         // A structure or union result comes first, before the C parameters,
         // as does GNU's result of variable size, which has no ABI layout.
         let first = usize::from(
@@ -1173,6 +1174,9 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 attributes.no_sanitize_undefined
             });
         lowerer.begin_subprogram(record, func);
+        if copy_is_none {
+            lowerer.flush_denormals_in_main(func, source)?;
+        }
         if let Some(index) = signature.chain_param() {
             lowerer.chain_in = lowerer
                 .draft
@@ -1359,6 +1363,51 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         }
         lowerer.push_all(&bound_tasks);
         Ok(lowerer)
+    }
+
+    /// Begins an external `main` by setting MXCSR's flush-to-zero (bit 15)
+    /// and denormals-are-zero (bit 6) bits, when the options ask for it as
+    /// Intel's icx does: its back end writes these three instructions at
+    /// the top of `main` when it optimizes under a `fast` model, so the
+    /// process flushes subnormal results and operands from there on, while
+    /// constructors and other units' code before it do not. Subnormal
+    /// numbers are otherwise kept as IEC 60559 has them, so lowering adds
+    /// nothing to any other function.
+    /// C99: §5.2.4.2.2 paragraph 3, p. 23; PDF p. 35 (subnormal numbers);
+    /// §F.1 paragraph 1, p. 444; PDF p. 456 (IEC 60559 arithmetic).
+    fn flush_denormals_in_main(
+        &mut self,
+        func: FuncId,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        let function = self.unit.module.function(func);
+        if !self.unit.context.configuration.flushes_denormals_in_main()
+            || self.unit.target.is_wasm()
+            || function.name != "main"
+            || function.linkage != crate::ir::Linkage::External
+        {
+            return Ok(());
+        }
+        let control = self.fresh_object(
+            4,
+            crate::ir::Align::from_bytes(4).unwrap_or(crate::ir::Align::BYTE),
+            source,
+        )?;
+        let asm = self.scratch.alloc(crate::ir::InlineAsm {
+            template:     "stmxcsr $0\n\t$(orl $$32832, $0$|or dword ptr $0, 32832$)\n\tldmxcsr $0",
+            operands:     self.scratch.alloc_slice_copy(&[crate::ir::AsmOperand {
+                output:        true,
+                early_clobber: false,
+                constraint:    crate::ir::AsmConstraint::Memory,
+                ty:            Type::I32,
+                bytes:         4,
+            }]),
+            clobbers:     crate::ir::AsmClobbers::default(),
+            side_effects: true,
+        });
+        let args = self.scratch.alloc_slice_copy(&[control]);
+        _ = self.draft.push(super::ssa::Op::InlineAsm(asm, args), None);
+        Ok(())
     }
 
     /// Ends the body at its closing brace: `main` returns 0, any other
