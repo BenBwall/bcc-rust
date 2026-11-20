@@ -2379,8 +2379,8 @@ fn About() -> impl IntoView {
                          expression (store its result first); nested side effects such as a = b++; and the other \
                          library functions. A program that uses one of them stops before its first step, and its note \
                          says so. One that needs more of the preprocessor (another header, a function-like macro, \
-                         #if) stops there too, with a button to the Preprocessor stage, which shows what bcc makes of \
-                         it."
+                         #if) stops there too, and its note sends the reader to the compiler's Preprocessor stage, \
+                         which shows what bcc makes of it."
                     </p>
                     <p>
                         "The engine evaluates operands left to right, one of the orders C allows: "
