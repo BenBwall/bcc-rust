@@ -245,6 +245,24 @@ pub(crate) enum Feature {
 }
 
 impl Feature {
+    /// Whether GCC files its pedantic warning about the feature under an
+    /// option of its own that `-Wpedantic` enables, rather than under
+    /// `-Wpedantic`: GCC 14's `-Wpointer-arith` for arithmetic on `void *`
+    /// or a function pointer and for `sizeof` of either.
+    /// GNU extension: GCC manual, "Arithmetic on void- and Function-Pointers".
+    pub(crate) const fn gcc_files_under_own_option(self) -> bool {
+        matches!(self, Self::VoidPointerArithmetic)
+    }
+
+    /// Whether GCC's preprocessor files its pedantic warning about the
+    /// feature under no option, so that only `-pedantic-errors` and
+    /// `-Werror` make it an error: GCC 14's `binary constants are a C23
+    /// feature or GCC extension`, `__VA_OPT__ is not available until C23`
+    /// and `use of C99 hexadecimal floating constant`.
+    pub(crate) const fn gcc_preprocessor_names_no_option(self) -> bool {
+        matches!(self, Self::BinaryConstants | Self::VaOpt | Self::HexFloats)
+    }
+
     pub(crate) const fn origin(self) -> FeatureOrigin {
         match self {
             | Self::Digraphs => FeatureOrigin::Standard(CStandard::C95),

@@ -77,6 +77,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     }
 
     fn with_upstream(upstream: Upstream, context: &'c mut Context<'tu>, arena: &'p Bump) -> Self {
+        context.parsing_started = true;
         let mut token_diagnostics: TokenDiagnostics<'tu, 'p> =
             ArenaMap::with_hasher_in(FxBuildHasher, arena);
         for (index, error) in context.pending_errors.iter().enumerate() {

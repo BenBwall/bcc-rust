@@ -38,6 +38,7 @@ use crate::{
         DiagnosticFormat,
         DiagnosticGroup,
         DiagnosticPresentation,
+        ExtensionOptionName,
         ExtensionPolicy,
         LanguageMode,
         MsvcFeature,
@@ -938,7 +939,9 @@ enum LanguageFlag {
     FatalErrors(bool),
     /// Clang's `-Weverything` or `-Wno-everything`.
     Everything(bool),
-    /// `-pedantic` or `-Wpedantic` (true), or `-Wno-pedantic` (false).
+    /// `-pedantic`, which Clang reads apart from `-Wpedantic`.
+    PedanticFlag,
+    /// `-Wpedantic` (true) or `-Wno-pedantic` (false).
     Pedantic(bool),
     /// `-pedantic-errors`.
     PedanticErrors,
@@ -1061,7 +1064,8 @@ impl FloatingPointGroup {
 impl LanguageFlag {
     fn parse(text: &str) -> Option<Self> {
         match text {
-            | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(true)),
+            | "-pedantic" => return Some(Self::PedanticFlag),
+            | "-Wpedantic" => return Some(Self::Pedantic(true)),
             | "-pedantic-errors" => return Some(Self::PedanticErrors),
             | "-Werror=pedantic" => return Some(Self::PedanticAsError(true)),
             | "-Wno-error=pedantic" => return Some(Self::PedanticAsError(false)),
@@ -1306,11 +1310,28 @@ impl LanguageFlag {
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::FormatLevel(level) => configuration.with_format_level(level),
             | Self::FatalErrors(enabled) => configuration.with_fatal_errors(enabled),
-            | Self::Everything(enabled) => configuration.with_everything(enabled),
-            | Self::Pedantic(enabled) => configuration.with_pedantic(enabled),
-            | Self::PedanticErrors => configuration.with_pedantic_errors(),
-            | Self::PedanticAsError(true) => configuration.with_werror_pedantic(),
-            | Self::PedanticAsError(false) => configuration.with_pedantic_as_error(false),
+            | Self::Everything(true) => configuration.with_everything(true),
+            | Self::Everything(false) =>
+                configuration.with_everything(false).with_extension_option(
+                    ExtensionOptionName::Everything,
+                    WarningOption::Enable(false),
+                ),
+            | Self::PedanticFlag => configuration.with_pedantic(true).with_pedantic_flag(),
+            | Self::Pedantic(enabled) =>
+                configuration.with_pedantic(enabled).with_extension_option(
+                    ExtensionOptionName::Pedantic,
+                    WarningOption::Enable(enabled),
+                ),
+            | Self::PedanticErrors => configuration.with_pedantic_errors().with_extension_option(
+                ExtensionOptionName::PedanticErrors,
+                WarningOption::Error(true),
+            ),
+            | Self::PedanticAsError(error) => if error {
+                configuration.with_werror_pedantic()
+            } else {
+                configuration.with_pedantic_as_error(false)
+            }
+            .with_extension_option(ExtensionOptionName::Pedantic, WarningOption::Error(error)),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>
                 configuration.with_msvc_feature(feature, enabled),

@@ -63,6 +63,7 @@ impl<'tu> Context<'tu> {
             preprocessed_tokens: 0,
             pack_pragmas: ArenaVec::new_in(tu),
             pragma_content: false,
+            parsing_started: false,
             weak_pragmas: ArenaVec::new_in(tu),
             diagnostic_pragmas: super::diagnostic_pragmas::DiagnosticPragmas::new_in(tu),
             text_events: ArenaVec::new_in(tu),

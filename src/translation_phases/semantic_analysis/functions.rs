@@ -479,12 +479,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // pedantic policy, or wherever Clang's `-Weverything`
                     // set its class, inside `__extension__` too under Clang's
                     // rules (GCC's `__extension__` silences it), under the
-                    // policy it asked (`Context::extension_policy_at`). Do
-                    // not emit the same requirement twice.
+                    // policy it asked (`Context::extension_policy_at`), and
+                    // wherever the command line alone classifies it, as it
+                    // asked. Do not emit the same requirement twice.
                     let source = syntax.map_or(f.declarator.source_vectors, |p| p.source_vectors);
                     let option = crate::translation_phases::ExtensionOption::Everything;
                     if parser_exempt
-                        || (self.context.extension_policy_at(option, source)
+                        || (!self.context.command_line_classifies(
+                            option,
+                            source,
+                            crate::configuration::GccFiling::Pedantic,
+                        ) && self.context.extension_policy_at(option, source)
                             == crate::configuration::ExtensionPolicy::Allow
                             && self
                                 .context

@@ -188,7 +188,7 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
                 if let Some(keyword) = classification
                     && let Some(origin) = keyword.origin
                 {
-                    self.context.report_extension_since(
+                    self.context.report_keyword_extension(
                         keyword.spelling,
                         origin,
                         token.source_vectors,

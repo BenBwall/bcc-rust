@@ -1155,6 +1155,8 @@ impl CompilerConfiguration {
             werror_pedantic: None,
             command_line_pedantic_deny: None,
             pedantic_disabled: false,
+            pedantic_flag: false,
+            extension_mappings: super::extension_mapping::ExtensionMappings::NONE,
             fatal_errors: false,
             accepted: 0,
             native: 0,

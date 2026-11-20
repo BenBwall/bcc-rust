@@ -547,6 +547,13 @@ impl<'tu> Context<'tu> {
         }
     }
 
+    /// Whether a diagnostic pragma's settings hold at `source`, rather than
+    /// the command line's.
+    #[inline]
+    pub(crate) fn governed_by_pragma(&self, source: SourceVectors) -> bool {
+        self.pragma_state_at(source).is_some()
+    }
+
     /// The settings at `source`, or `None` where only the command line's
     /// hold: in a unit without diagnostic pragmas, or before the first one.
     #[inline]
