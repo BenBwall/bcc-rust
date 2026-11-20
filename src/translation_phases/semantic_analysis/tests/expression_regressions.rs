@@ -512,6 +512,63 @@ fn unparenthesized_alignof_operands_take_gnu_alignment() {
     );
 }
 
+/// GNU's cast to a union type applies only when the cast's type is a union
+/// type, through a typedef or qualified too, and the operand has a member's
+/// type. A cast to a pointer to a union, as Lua's `cast(union GCUnion *, o)`,
+/// is an ordinary pointer conversion that no policy reports, and an operand
+/// no member matches is refused without the extension report, as GCC 14 and
+/// Clang 23 do. GNU extension to C99 §6.5.4 paragraph 2, p. 81; PDF p. 93.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
+#[test]
+fn only_a_cast_to_a_union_type_is_a_gnu_union_cast() {
+    let declarations =
+        "union U { int i; double d; }; typedef union U T; typedef const union U C;\n";
+    for (body, unions) in [
+        ("void *p; union U *q = (union U *)p; (void)q;", 0),
+        ("union U *p; union U **q = (union U **)&p; (void)q;", 0),
+        ("void *p; (void)(T *)p; (void)(const union U *)p;", 0),
+        ("union U a = (union U)1; T b = (T)2.0; (void)a; (void)b;", 2),
+        (
+            "union U a = (const union U)1; union U b = (C)1; (void)a; (void)b;",
+            2,
+        ),
+    ] {
+        let source = format!("{declarations}void f(void) {{ {body} }}");
+        with_configuration(
+            &source,
+            CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+            |context, _| {
+                let errors = context.take_pending_errors();
+                assert_eq!(errors.len(), unions, "{body}: {errors:?}");
+                assert!(
+                    errors.iter().all(|error| matches!(
+                        error,
+                        TranslationError::Extension(extension)
+                            if extension.spelling() == "cast to union"
+                    )),
+                    "{body}: {errors:?}"
+                );
+            },
+        );
+    }
+    let source = format!("{declarations}void f(short s) {{ union U u = (union U)s; (void)u; }}");
+    with_configuration(
+        &source,
+        CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+        |context, _| {
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Semantic(error)]
+                        if error.kind == SemanticErrorKind::InvalidCast
+                ),
+                "{errors:?}"
+            );
+        },
+    );
+}
+
 /// GCC accepts a cast of a structure or union to its own type, qualifiers
 /// aside, as its value, an rvalue ("ISO C forbids casting nonscalar to the
 /// same type" under -Wpedantic); any other aggregate cast stays invalid.
@@ -533,12 +590,14 @@ fn aggregates_cast_to_their_own_type_are_rvalues() {
             |context, _| {
                 let errors = context.take_pending_errors();
                 assert_eq!(errors.len(), extensions, "{policy:?}: {errors:?}");
-                // The `(union U)` spelling keeps the parser's cast-to-union
-                // report; the others are same-type casts.
+                // All five are same-type casts, `(union U)u` included.
                 assert!(
-                    errors
-                        .iter()
-                        .all(|error| matches!(error, TranslationError::Extension(_))),
+                    errors.iter().all(|error| matches!(
+                        error,
+                        TranslationError::Extension(extension)
+                            if extension.spelling()
+                                == "cast of a structure or union to its own type"
+                    )),
                     "{errors:?}"
                 );
             },

@@ -1509,15 +1509,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )
                 .is_some()
         {
-            // The parser already reported a cast spelled `(union ...)`.
-            if !matches!(e.kind, ExpressionType::Cast { target_type: type_name, .. } if matches!(type_name.declaration_specifiers.type_specifiers, super::super::super::parsing::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.struct_or_union == super::super::super::parsing::declaration_syntax::StructOrUnion::Union))
-            {
-                self.context.report_extension(
-                    crate::configuration::Feature::SameTypeCasts,
-                    "cast of a structure or union to its own type",
-                    e.source_vectors,
-                );
-            }
+            self.context.report_extension(
+                crate::configuration::Feature::SameTypeCasts,
+                "cast of a structure or union to its own type",
+                e.source_vectors,
+            );
             let ty = self.types.non_atomic(target).unqualified();
             self.convert(operand.expression, ty, ConversionKind::Assignment);
             return Self::expression_result(e, ty);
@@ -1525,21 +1521,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let TypeKind::Tag(id) = self.types.nodes[target.index]
             && self.types.tags[id].kind == TagKind::Union
         {
-            // GNU cast-to-union extension: the operand has the type of a
-            // member, and initializes that member in a union rvalue.
+            // GNU cast-to-union extension: the target type is a union, not
+            // a pointer to one, and the operand has the type of a member,
+            // which it initializes in a union rvalue. C99 §6.5.4p2, p. 81;
+            // PDF p. 93 requires a scalar or void type, so GCC and Clang
+            // report the cast only once a member matches.
             // <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
-            if let ExpressionType::Cast {
-                target_type: type_name,
-                ..
-            } = e.kind
-                && !matches!(type_name.declaration_specifiers.type_specifiers, super::super::super::parsing::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.struct_or_union == super::super::super::parsing::declaration_syntax::StructOrUnion::Union)
-            {
-                self.context.report_extension(
-                    crate::configuration::Feature::UnionCasts,
-                    "cast to union",
-                    e.source_vectors,
-                );
-            }
             let member = self.types.tags[id].members.get().iter().find(|member| {
                 self.types
                     .composite(member.ty.unqualified(), from.unqualified())
@@ -1548,6 +1535,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let Some(member) = member else {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
             };
+            self.context.report_extension(
+                crate::configuration::Feature::UnionCasts,
+                "cast to union",
+                e.source_vectors,
+            );
             let member_ty = member.ty.unqualified();
             self.convert(operand.expression, member_ty, ConversionKind::Assignment);
             let mut info = Self::expression_result(e, target.unqualified());

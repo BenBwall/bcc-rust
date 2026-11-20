@@ -325,6 +325,26 @@ int main(void) {
         expected: 31,
     },
     Program {
+        // GNU casts to a union type write the member the operand's type
+        // matches, through a qualified typedef too; casts to a pointer to a
+        // union, or to a pointer to one, stay pointer conversions.
+        name:     "union_casts_and_union_pointer_casts",
+        source:   "union U { int i; double d; };
+typedef const union U C;
+struct Node { union U value; struct Node *next; };
+int main(void) {
+  union U a = (union U)7;
+  union U b = (C)2.5;
+  void *p = &a;
+  union U *q = (union U *)p;
+  union U **r = (union U **)&q;
+  struct Node n = { (union U)9, 0 };
+  return (a.i == 7) + (b.d == 2.5) * 2 + (q->i == 7) * 4 + ((*r)->i == 7) * 8
+       + (n.value.i == 9) * 16 + (((union U)3).i == 3) * 32;
+}",
+        expected: 63,
+    },
+    Program {
         // GNU and MSVC `#pragma push_macro` / `pop_macro`.
         name:     "push_and_pop_macro",
         source:   "#define VALUE 1

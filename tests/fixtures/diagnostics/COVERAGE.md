@@ -1167,6 +1167,23 @@ ISO alignment, mismatched union-cast member types and reversed GNU ranges.
 Its GNU11 sidecar keeps the diagnostics focused on operand constraints; a
 following declaration survives every error.
 
+### GNU casts to union type
+
+`sema-union-cast-clang.c` and `sema-union-cast-gcc.c` render GNU's cast to a
+union type under `-std=c99 -Wall -Wextra -pedantic` for each identity. Checked
+20 November 2026 against Clang 23.1.5 and GCC 14 with the same options: both
+warn on the same five lines and columns (the cast's `(`), of a union type
+spelled out, through a typedef, qualified, and through a qualified typedef, and
+of a structure operand matching a member; both report the same-type cast
+`(union U)u` as a cast of a nonscalar to its own type, and both refuse a
+`short` operand that matches no member without the extension warning. Casts
+to a pointer to a union, to a pointer to such a pointer, and through a typedef
+are silent in all three. The words differ: bcc's shared extension wording and
+`-Wpedantic` tag stand for GCC's "ISO C forbids casts to union type" and
+Clang's "cast to union type is a GNU extension [-Wgnu-union-cast]", and bcc's
+`invalid operand or target type for cast` for their "cast to union type from
+type ... not present in union".
+
 ### Predefined function-name identifiers
 
 `sema-predefined-outside-function.c` renders the default warning

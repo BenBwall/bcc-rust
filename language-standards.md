@@ -16,9 +16,8 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
 - Type checking, constant evaluation outside preprocessing, attribute meaning,
   target assembly validation, ABI and calling-convention effects and code
   generation belong to later phases. Syntax alone cannot settle every GNU
-  zero-length array or union cast: the policy diagnostic covers literal zero
-  bounds (parenthesized too) and explicitly written union types, while general
-  constant bounds and typedefs naming unions wait for analysis.
+  zero-length array: the policy diagnostic covers literal zero bounds
+  (parenthesized too), while general constant bounds wait for analysis.
 - Decimal type keywords parse, but the decimal floating suffixes `df`, `dd` and
   `dl` and decimal values are not implemented.
 - Integer constants are limited to 64-bit magnitudes, except `wb` and `uwb`
@@ -791,7 +790,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | VoidExpressionReturn | - | - | - | - | - | - | - | GNU only | semantic analysis |
 | RealImag | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
-| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
+| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
 | EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ExtraSemicolons | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -884,10 +883,17 @@ The following vocabulary entries retain the established diagnostic contracts:
   type, qualifiers aside (`(struct S)s`, through typedefs too), gives the
   operand's value as an rvalue, as GCC accepts it ("ISO C forbids casting
   nonscalar to the same type" under -Wpedantic; C99 §6.5.4p2 requires a scalar
-  or void type). Warn/Deny report it, except a cast spelled `(union ...)`,
-  which keeps the parser's `UnionCasts` report. A cast to another aggregate
-  type stays invalid, the result is not an lvalue, and it is no constant
-  initializer of a static object, as in GCC.
+  or void type). Warn/Deny report it, `(union U)u` included, as GCC and Clang
+  do. A cast to another aggregate type stays invalid, the result is not an
+  lvalue, and it is no constant initializer of a static object, as in GCC.
+- `UnionCasts` has GNU origin. Semantic analysis reports a cast whose type is
+  a union type, through a typedef or qualified too, once the operand's type
+  matches a member's, at the cast's `(` as GCC 14 and Clang 23 do. A cast to a
+  pointer to a union (`(union U *)p`) is an ordinary pointer conversion, and an
+  operand no member matches is refused without the extension report. GCC files
+  it under `-Wpedantic` ("ISO C forbids casts to union type") and Clang under
+  `-Wgnu-union-cast` ("cast to union type is a GNU extension"); bcc names
+  `-Wpedantic` under both identities, since it does not model Clang's group.
 - `ArrayCompoundLiteral` has GNU origin: an array initialized by a compound
   literal of its type, as "Arrays initialized by array compound literals"
   below describes. Only the Clang identity reports it under `-pedantic`;

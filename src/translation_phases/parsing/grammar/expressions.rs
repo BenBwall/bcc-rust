@@ -32,11 +32,7 @@ use crate::{
         SourceVectors,
         parsing::{
             Parser,
-            declaration_syntax::{
-                StructOrUnion,
-                TypeName,
-                TypeSpecifiers,
-            },
+            declaration_syntax::TypeName,
             errors::ParserErrorType,
             grammar::{
                 ProductionKind,
@@ -1306,14 +1302,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         type_name: &'tu TypeName<'tu>,
         type_source: SourceVectors,
     ) -> Option<()> {
-        if matches!(type_name.declaration_specifiers.type_specifiers, TypeSpecifiers::StructOrUnion(x) if x.struct_or_union == StructOrUnion::Union)
-        {
-            self.extension_source(
-                Feature::UnionCasts,
-                "cast to union",
-                type_name.source_vectors,
-            );
-        }
+        // Semantic analysis reports a cast to a union type, which only the
+        // resolved type name shows: `(union U *)` is a pointer cast, and a
+        // typedef may name a union.
         let operand = self
             .parse_expression(ExpressionMode::CastExpression, e.boundary, e.recovery)?
             .expression;
