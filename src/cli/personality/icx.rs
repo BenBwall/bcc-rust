@@ -435,19 +435,13 @@ impl Translation {
             self.fp_model(model);
             return;
         }
-        // Intel's Clang reads this spelling itself, and knows only its
-        // own models and Intel's main ones.
         if text == "-fp-model" {
             let model = rest
                 .next()
                 .map(|model| model.to_string_lossy().into_owned());
             let model = model.as_deref().unwrap_or_default();
             self.denormals.read(&format!("-fp-model={model}"));
-            if matches!(model, "source" | "double" | "extended" | "except") {
-                self.out.push(format!("-ffp-model={model}").into());
-            } else {
-                self.fp_model(model);
-            }
+            self.fp_model(model);
             return;
         }
         if let Some(code) = text.strip_prefix("-x")
@@ -499,15 +493,13 @@ impl Translation {
 
     /// `-fp-model=MODEL`: Intel's models onto Clang's `-ffp-model=` and the
     /// options it does not cover. Clang's driver refuses another model, as
-    /// `-ffp-model=` names it.
+    /// `-ffp-model=` names it: icx 2026.2.0 no longer has the classic
+    /// compiler's `source`, `double`, `extended` and `except`.
     fn fp_model(&mut self, model: &str) {
         let options: &[&str] = match model {
             | "fast" | "fast=1" => &["-ffp-model=fast"],
             | "fast=2" => &["-ffp-model=aggressive"],
             | "precise" => &["-ffp-model=precise"],
-            // Value-safe, contracting, with `errno` from the math library.
-            | "source" | "double" | "extended" | "except" =>
-                &["-fno-fast-math", "-ffp-contract=fast"],
             // Value-safe and never contracting.
             | "consistent" => &["-ffp-model=precise", "-ffp-contract=off"],
             | _ => {

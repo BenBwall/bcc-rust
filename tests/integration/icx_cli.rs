@@ -412,7 +412,18 @@ mod tests {
                 1,
                 "icx: error: unsupported argument 'source' to option '-ffp-model='\n".to_owned(),
             ),
-            (&["-fp-model=source", "-c", "e.c"], 0, String::new()),
+            // icx 2026.2.0 has none of the classic compiler's other models,
+            // in either spelling.
+            (
+                &["-fp-model=source", "-c", "e.c"],
+                1,
+                "icx: error: unsupported argument 'source' to option '-ffp-model='\n".to_owned(),
+            ),
+            (
+                &["-fp-model=except", "-c", "e.c"],
+                1,
+                "icx: error: unsupported argument 'except' to option '-ffp-model='\n".to_owned(),
+            ),
             (
                 &["-fp-model=precise", "-fp-model=fast", "-c", "e.c"],
                 0,
@@ -800,6 +811,7 @@ mod tests {
             &["-g", "main.c", "lib.c", "-o", "out"],
             &["-no-ftz", "main.c", "lib.c", "-o", "out"],
             &["-fp-model=precise", "main.c", "lib.c", "-o", "out"],
+            &["-fp-model=source", "-c", "e.c"],
         ];
         let normalize = |text: &[u8], program: &Path, directory: &Path| {
             let installed = std::fs::canonicalize(program)
