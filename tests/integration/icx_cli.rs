@@ -621,6 +621,16 @@ mod tests {
         ));
         let archive = std::fs::read(directory.0.join("e.lib")).unwrap();
         assert!(archive.starts_with(b"!<arch>\n"));
+        // `-o` names the object under `/c`, where the last of it and `/Fo`
+        // wins.
+        succeeds(&directory.bcc("--icx-cl-mode", &["/c", "e.c", "-o", "foo.obj"]));
+        assert!(directory.0.join("foo.obj").exists());
+        succeeds(&directory.bcc(
+            "--icx-cl-mode",
+            &["-o", "bar.obj", "/Fobaz.obj", "/c", "e.c"],
+        ));
+        assert!(directory.0.join("baz.obj").exists());
+        assert!(!directory.0.join("bar.obj").exists());
     }
 
     /// The executable names: `icx` and `icx-cc` are icx (`icx` is icx-cl on

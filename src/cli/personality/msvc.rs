@@ -206,7 +206,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 continue;
             }
             // CMake has `icx-cl` make a static library with
-            // `-fuse-ld=llvm-lib -o NAME.lib OBJECTS`.
+            // `-fuse-ld=llvm-lib -o NAME.lib OBJECTS`. `-o` names the
+            // object under `/c`, where it and `/Fo` override each other,
+            // and otherwise the executable or library.
             if option == "fuse-ld=llvm-lib" {
                 state.archive = true;
                 continue;
@@ -215,6 +217,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 && let Some(output) = arguments.next()
             {
                 state.executable = Some(output.into());
+                state.object_from_o = Some(output.into());
                 continue;
             }
             if let Some(words) = option.strip_prefix("Qoption,link,") {
@@ -354,6 +357,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 source.cpp = false;
             }
         }
+    }
+    if state.compile_only
+        && let Some(object) = state.object_from_o.take()
+    {
+        state.object = Some(object);
     }
     state.check_inputs(invocation);
     let c_count = state.sources.iter().filter(|source| source.is_c()).count();
@@ -873,6 +881,8 @@ struct State {
     executable:              Option<PathBuf>,
     /// `icx-cl -fuse-ld=llvm-lib`: archive the objects instead of linking.
     archive:                 bool,
+    /// `icx-cl -o` after any `/Fo`, which names the object under `/c`.
+    object_from_o:           Option<PathBuf>,
     preprocessed:            Option<PathBuf>,
     /// `/FA` or `/Fa`, with `/Fa`'s name.
     listing:                 bool,
@@ -931,6 +941,7 @@ impl Default for State {
             object:                  None,
             executable:              None,
             archive:                 false,
+            object_from_o:           None,
             preprocessed:            None,
             listing:                 false,
             listing_name:            None,
@@ -1232,7 +1243,7 @@ impl State {
                 let value = Some(PathBuf::from(value));
                 match option {
                     | "Fe:" => self.executable = value,
-                    | "Fo:" => self.object = value,
+                    | "Fo:" => (self.object, self.object_from_o) = (value, None),
                     | _ => self.preprocessed = value,
                 }
             },
@@ -1241,6 +1252,7 @@ impl State {
                     self.executable = path(value);
                 } else if let Some(value) = option.strip_prefix("Fo") {
                     self.object = path(value);
+                    self.object_from_o = None;
                 } else if let Some(value) = option.strip_prefix("Fi") {
                     self.preprocessed = path(value);
                 } else if let Some(value) = option.strip_prefix("Fa") {

@@ -1906,7 +1906,8 @@ command line as the clang-cl personality does, with:
   TARGET -QMF FILE`, linker options as `/Qoption,link,OPTION`, and static
   libraries made through the compiler, `-fuse-ld=llvm-lib -o NAME.lib
   OBJECTS`, which bcc archives with the bundled `llvm-ar` in COFF format,
-  as Intel's driver runs `llvm-lib`.
+  as Intel's driver runs `llvm-lib`. `-o` names the object under `/c`
+  (the last of it and `/Fo` wins), and otherwise the executable or library.
 
 Over the 34 `icx-cl` command lines, each `-dM` listing is the same set as
 Intel's apart from the processor macros below and `__SIZEOF_FLOAT128__`,
