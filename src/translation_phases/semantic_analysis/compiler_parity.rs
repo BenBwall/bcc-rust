@@ -126,14 +126,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// A variable length array before C99, which both report under
-    /// `-pedantic`.
+    /// `-pedantic`: Clang under `-Wpedantic`, and GCC under `-Wvla`.
     /// C99: §6.7.5.2 paragraph 4, p. 116; PDF p. 128.
     pub(super) fn report_variable_length_array(&mut self, expression: &'tu Expression<'tu>) {
         if self.context.configuration.compiler_extensions() && !self.tainted {
-            self.context.report_extension_since(
+            self.context.report_extension_under_gcc_option(
                 "variable length array",
                 FeatureOrigin::Standard(CStandard::C99),
                 expression.source_vectors,
+                crate::configuration::ExtensionGroup::Vla,
             );
         }
     }

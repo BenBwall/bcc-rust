@@ -1113,7 +1113,7 @@ impl SemanticErrorKind {
     }
 
     /// The primary label names what is wrong at the labeled source.
-    const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             | Self::PointerConstraint(
                 crate::configuration::DiagnosticGroup::PointerToIntCast
@@ -1427,7 +1427,7 @@ impl SemanticErrorKind {
         reason = "Keep semantic diagnostic headlines and their standard notes in one exhaustive \
                   table."
     )]
-    fn explanation(self) -> (&'static str, &'static str) {
+    pub(crate) fn explanation(self) -> (&'static str, &'static str) {
         match self {
             | Self::CallAttribute
             | Self::CallAttributeWarning

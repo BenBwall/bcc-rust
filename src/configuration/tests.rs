@@ -678,3 +678,165 @@ fn clang_extension_mapping_follows_the_options_in_order() {
         );
     }
 }
+
+/// The extensions each compiler files under a group of its own, which
+/// decides the options that reach them and the group their tags name. Clang
+/// warns of a typedef redefinition by default in `-Wtypedef-redefinition`
+/// alone, which neither `-Werror=pedantic` nor `-Wno-error=pedantic` reaches;
+/// it holds an omitted variadic argument in `-Wc23-extensions` too, and
+/// `#warning` in `-Wpedantic` alone (Clang 23.1.5, `-std=c99`). GCC 14 files
+/// `long long` and mixed declarations before C99 under options `-Wpedantic`
+/// does not classify, and variadic macros under one it does.
+#[test]
+fn extensions_take_the_groups_their_compilers_file_them_under() {
+    use ExtensionClass as C;
+    use ExtensionOptionName as Name;
+    use WarningOption::{
+        Enable,
+        Error,
+    };
+
+    use crate::translation_phases::ErrorSeverity::{
+        Error as E,
+        Warning as W,
+    };
+    let class = |feature: Feature, by_default| {
+        ExtensionClass::of(feature.origin(), Some(feature), by_default)
+    };
+    assert_eq!(
+        class(Feature::TypedefRedefinition, true),
+        C::TypedefRedefinition
+    );
+    assert_eq!(
+        class(Feature::OmittedVariadicArguments, false),
+        C::OmittedVariadicArguments
+    );
+    assert_eq!(class(Feature::WarningDirective, false), C::Pedantic);
+    assert_eq!(class(Feature::StaticAssert, false), C::C11);
+    for (class, group) in [
+        (C::Pedantic, "pedantic"),
+        (C::C11, "c11-extensions"),
+        (C::C23, "c23-extensions"),
+        (C::C23ByDefault, "c23-extensions"),
+        (
+            C::OmittedVariadicArguments,
+            "variadic-macro-arguments-omitted",
+        ),
+        (C::TypedefRedefinition, "typedef-redefinition"),
+        (C::ByDefault, "pedantic"),
+    ] {
+        assert_eq!(class.clang_group().name(), group, "{class:?}");
+    }
+    let base = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+        .with_compiler_identity(CompilerIdentity::Clang);
+    for (case, (configuration, expected)) in [
+        (base, Some(W)),
+        (
+            base.with_extension_option(Name::Pedantic, Error(true)),
+            Some(W),
+        ),
+        (
+            base.with_pedantic(true)
+                .with_pedantic_flag()
+                .with_warnings_as_errors(true)
+                .with_extension_option(Name::Pedantic, Error(false)),
+            Some(E),
+        ),
+        (
+            base.with_extension_option(Name::TypedefRedefinition, Enable(false))
+                .with_pedantic(true)
+                .with_pedantic_flag(),
+            None,
+        ),
+        (
+            base.with_extension_option(Name::TypedefRedefinition, Error(true)),
+            Some(E),
+        ),
+        (
+            base.with_warnings_as_errors(true)
+                .with_extension_option(Name::TypedefRedefinition, Error(false)),
+            Some(W),
+        ),
+        (
+            base.with_extension_option(Name::Everything, Enable(false)),
+            None,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            configuration.clang_extension_severity(C::TypedefRedefinition),
+            expected,
+            "case {case}"
+        );
+    }
+    let omitted = C::OmittedVariadicArguments;
+    assert_eq!(
+        base.with_extension_option(Name::C23Extensions, Error(true))
+            .clang_extension_severity(omitted),
+        Some(E)
+    );
+    assert_eq!(
+        base.with_extension_option(Name::Pedantic, Error(true))
+            .with_extension_option(Name::C23Extensions, Enable(false))
+            .clang_extension_severity(omitted),
+        None
+    );
+    let gnu = ExtensionOptionName::parse("gnu").unwrap();
+    assert_eq!(
+        base.with_extension_option(Name::C23Extensions, Error(true))
+            .with_extension_option(gnu, Enable(false))
+            .clang_extension_severity(omitted),
+        None
+    );
+    assert_eq!(
+        base.with_extension_option(gnu, Enable(false))
+            .with_extension_option(Name::C23Extensions, Error(true))
+            .clang_extension_severity(omitted),
+        Some(E)
+    );
+    assert_eq!(
+        base.with_pedantic(true)
+            .with_pedantic_flag()
+            .with_extension_option(gnu, Enable(false))
+            .clang_extension_severity(C::C23),
+        Some(W)
+    );
+    for (feature, filing, group) in [
+        (
+            Feature::VoidPointerArithmetic,
+            Some(GccFiling::Enabled),
+            Some(ExtensionGroup::PointerArith),
+        ),
+        (
+            Feature::LongLong,
+            Some(GccFiling::Unclassified),
+            Some(ExtensionGroup::LongLong),
+        ),
+        (
+            Feature::MixedDeclarations,
+            Some(GccFiling::Unclassified),
+            Some(ExtensionGroup::DeclarationAfterStatement),
+        ),
+        (
+            Feature::VariadicMacros,
+            Some(GccFiling::Enabled),
+            Some(ExtensionGroup::VariadicMacros),
+        ),
+        (
+            Feature::NamedVariadicMacros,
+            Some(GccFiling::Enabled),
+            Some(ExtensionGroup::VariadicMacros),
+        ),
+        (
+            Feature::OmittedVariadicArguments,
+            Some(GccFiling::Unclassified),
+            None,
+        ),
+        (Feature::TypedefRedefinition, None, None),
+    ] {
+        assert_eq!(feature.gcc_filing(), filing, "{feature:?}");
+        assert_eq!(feature.gcc_group(), group, "{feature:?}");
+    }
+}

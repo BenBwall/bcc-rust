@@ -50,6 +50,7 @@ pub(crate) use diagnostics::{
 };
 pub(crate) use extension_mapping::{
     ExtensionClass,
+    ExtensionGroup,
     ExtensionOptionName,
     GccFiling,
 };

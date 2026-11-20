@@ -1,10 +1,10 @@
-warning: 'variadic macro' is a C99 extension [-Wpedantic]
+warning: 'variadic macro' is a C99 extension [-Wvariadic-macros]
  --> lexpp-gnu89-extensions.c:1:9
   |
 1 | #define G(x,args...) x
   |         ^
 
-warning: 'named variadic macro' is a GNU extension [-Wpedantic]
+warning: 'named variadic macro' is a GNU extension [-Wvariadic-macros]
  --> lexpp-gnu89-extensions.c:1:13
   |
 1 | #define G(x,args...) x
@@ -16,7 +16,7 @@ warning: '$' is a GNU extension [-Wpedantic]
 2 | int $a = G(0b1,);
   |     ^
 
-warning: 'binary integer constant' is a C23 extension [-Wpedantic]
+warning: 'binary integer constant' is a C23 extension [-Wc23-extensions]
  --> lexpp-gnu89-extensions.c:2:12
   |
 2 | int $a = G(0b1,);

@@ -5,7 +5,10 @@
 //! extensions Clang warns of by default. Each expectation is the severities in
 //! order, the closing lines and the exit status that Clang 23.1.5 and GCC 14
 //! gave for the same `-std=c99 -fsyntax-only` command line, recorded on
-//! 2026-11-20 (`docs/design/driver-modes.md`, "Warning options").
+//! 2026-11-20 (`docs/design/driver-modes.md`, "Warning options"). A second
+//! table pins the extensions each compiler files under a group of its own, as
+//! Clang a typedef redefinition and GCC `long long` before C99, with the
+//! option each diagnostic's tag names.
 #![expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
@@ -997,6 +1000,451 @@ mod tests {
         ),
     ];
 
+    /// The sources of the extension diagnostics whose group decides how the
+    /// options reach them and which their tag names: a typedef redefinition
+    /// (Clang: `-Wtypedef-redefinition`, a warning by default), an omitted
+    /// variadic argument (Clang: `-Wvariadic-macro-arguments-omitted`, which
+    /// `-Wc23-extensions` holds), `_Noreturn` (`-Wc11-extensions`), a label at
+    /// the end of a block (`-Wc23-extensions`), `#warning` (`-Wpedantic`),
+    /// variadic macros (`-Wvariadic-macros`), C99's mixed declarations, a
+    /// variable length array and `long long` before C99 (GCC:
+    /// `-Wdeclaration-after-statement`, `-Wvla` and `-Wlong-long`), and
+    /// `sizeof(void)` and arithmetic on a function pointer (GCC:
+    /// `-Wpointer-arith`).
+    const TAGGED_SOURCES: &[(&str, &str)] = &[
+        ("typedef_redef", "typedef int T;\ntypedef int T;\n"),
+        ("va_omit", "#define F(a, ...) a\nint x = F(1);\n"),
+        ("c11_noreturn", "_Noreturn void f(void);\n"),
+        ("c23_label_end", "void f(void) {\nl:\n}\n"),
+        ("warning_dir", "#warning hi\nint x;\n"),
+        ("c90_variadic", "#define F(...) __VA_ARGS__\nint x;\n"),
+        ("named_va", "#define F(a...) a\nint x;\n"),
+        (
+            "c90_mixed",
+            "void f(void) { int a; a = 1; int b; (void)a; (void)b; }\n",
+        ),
+        ("c90_vla", "void f(int n) { int a[n]; (void)a; }\n"),
+        ("c90_longlong", "long long x;\n"),
+        (
+            "ptr_sizeof_void",
+            "int n = sizeof(void);\nvoid (*fp)(void);\nvoid g(void) { fp = fp + 1; }\n",
+        ),
+    ];
+
+    /// (personality, `-std`, source, options, each diagnostic's severity with
+    /// the option its tag names and each closing line, exit status). The
+    /// personalities' expectations are Clang 23.1.5's and GCC 14's output for
+    /// the same command line, recorded on 2026-11-20; bcc's own command line
+    /// (`None`) follows Clang's rules in its own format, which names no
+    /// `-Werror`, and keeps its own words for an omitted variadic argument.
+    type TaggedCase = (
+        Option<&'static str>,
+        &'static str,
+        &'static str,
+        &'static [&'static str],
+        &'static [&'static str],
+        i32,
+    );
+
+    const CLANG: Option<&str> = Some("--clang-mode");
+    const GCC: Option<&str> = Some("--gcc-mode");
+    const OWN: Option<&str> = None;
+
+    const TAGGED_CASES: &[TaggedCase] = &[
+        (
+            CLANG,
+            "c99",
+            "typedef_redef",
+            &[],
+            &["warning [-Wtypedef-redefinition]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "typedef_redef",
+            &["-Werror=pedantic"],
+            &["warning [-Wtypedef-redefinition]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "typedef_redef",
+            &["-pedantic", "-Werror", "-Wno-error=pedantic"],
+            &["error [-Werror,-Wtypedef-redefinition]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "typedef_redef",
+            &["-pedantic", "-Wno-typedef-redefinition"],
+            &[],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "typedef_redef",
+            &["-Werror=typedef-redefinition"],
+            &["error [-Werror,-Wtypedef-redefinition]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "typedef_redef",
+            &["-Werror", "-Wno-error=typedef-redefinition"],
+            &["warning [-Wtypedef-redefinition]"],
+            0,
+        ),
+        (CLANG, "c99", "typedef_redef", &["-w"], &[], 0),
+        (CLANG, "c11", "typedef_redef", &["-pedantic-errors"], &[], 0),
+        (
+            OWN,
+            "c99",
+            "typedef_redef",
+            &[],
+            &["warning [-Wtypedef-redefinition]"],
+            0,
+        ),
+        (
+            OWN,
+            "c99",
+            "typedef_redef",
+            &["-pedantic", "-Werror", "-Wno-error=pedantic"],
+            &["error [-Wtypedef-redefinition]"],
+            1,
+        ),
+        (
+            GCC,
+            "c99",
+            "typedef_redef",
+            &["-pedantic"],
+            &["warning [-Wpedantic]"],
+            0,
+        ),
+        (
+            GCC,
+            "c99",
+            "typedef_redef",
+            &["-pedantic", "-Werror"],
+            &[
+                "error [-Werror=pedantic]",
+                "cc1: all warnings being treated as errors",
+            ],
+            1,
+        ),
+        (GCC, "c99", "typedef_redef", &[], &[], 0),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-pedantic"],
+            &["warning [-Wvariadic-macro-arguments-omitted]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-Werror=c23-extensions"],
+            &["error [-Werror,-Wvariadic-macro-arguments-omitted]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-Wc23-extensions"],
+            &["warning [-Wvariadic-macro-arguments-omitted]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-Werror=pedantic", "-Wno-c23-extensions"],
+            &[],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-Werror", "-Wc11-extensions", "-Wc2x-extensions"],
+            &["error [-Werror,-Wvariadic-macro-arguments-omitted]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-Werror=c23-extensions", "-Wno-gnu"],
+            &[],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-Wno-gnu", "-Werror=c23-extensions"],
+            &["error [-Werror,-Wvariadic-macro-arguments-omitted]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-pedantic", "-Wno-variadic-macro-arguments-omitted"],
+            &[],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "va_omit",
+            &["-Wpre-c23-compat"],
+            &["warning [-Wvariadic-macro-arguments-omitted]"],
+            0,
+        ),
+        (
+            OWN,
+            "c99",
+            "va_omit",
+            &["-Werror", "-Wc11-extensions", "-Wc2x-extensions"],
+            &["error"],
+            1,
+        ),
+        (GCC, "c99", "va_omit", &["-pedantic"], &["warning"], 0),
+        (
+            GCC,
+            "c99",
+            "va_omit",
+            &["-pedantic", "-Werror"],
+            &[
+                "error [-Werror]",
+                "cc1: all warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c99",
+            "va_omit",
+            &["-Werror=pedantic"],
+            &["warning"],
+            0,
+        ),
+        (
+            GCC,
+            "c99",
+            "va_omit",
+            &["-pedantic-errors", "-Wno-error=pedantic"],
+            &["error"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "c11_noreturn",
+            &["-pedantic"],
+            &["warning [-Wc11-extensions]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "c11_noreturn",
+            &["-pedantic", "-Werror"],
+            &["error [-Werror,-Wc11-extensions]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "c23_label_end",
+            &[],
+            &["warning [-Wc23-extensions]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "c23_label_end",
+            &["-Werror"],
+            &["error [-Werror,-Wc23-extensions]"],
+            1,
+        ),
+        (
+            OWN,
+            "c99",
+            "c23_label_end",
+            &["-Werror"],
+            &["error [-Wc23-extensions]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "warning_dir",
+            &["-pedantic", "-Werror"],
+            &["error [-Werror,-Wpedantic]", "error [-Werror,-W#warnings]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c99",
+            "named_va",
+            &["-pedantic"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c90",
+            "c90_variadic",
+            &["-pedantic", "-Werror"],
+            &["error [-Werror,-Wvariadic-macros]"],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-Werror", "-Wpedantic"],
+            &[
+                "error [-Werror=variadic-macros]",
+                "cc1: all warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-Werror=pedantic"],
+            &[
+                "error [-Werror=variadic-macros]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-pedantic-errors", "-Wno-error=pedantic"],
+            &["error [-Wvariadic-macros]"],
+            1,
+        ),
+        (
+            GCC,
+            "c99",
+            "named_va",
+            &["-pedantic", "-Werror", "-Wno-error=pedantic"],
+            &[
+                "error [-Werror=variadic-macros]",
+                "cc1: all warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_mixed",
+            &["-Werror=pedantic"],
+            &["warning [-Wdeclaration-after-statement]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_mixed",
+            &["-pedantic", "-Werror", "-Wno-error=pedantic"],
+            &[
+                "error [-Werror=declaration-after-statement]",
+                "cc1: all warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_mixed",
+            &["-pedantic-errors"],
+            &["error [-Wdeclaration-after-statement]"],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_mixed",
+            &["-pedantic-errors", "-Wno-error=pedantic"],
+            &["error [-Wdeclaration-after-statement]"],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &["-pedantic"],
+            &["warning [-Wvla]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &["-Werror=pedantic"],
+            &["warning [-Wvla]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &["-pedantic", "-Werror", "-Wno-error=pedantic"],
+            &[
+                "error [-Werror=vla]",
+                "cc1: all warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c99",
+            "ptr_sizeof_void",
+            &["-pedantic"],
+            &["warning [-Wpointer-arith]", "warning [-Wpointer-arith]"],
+            0,
+        ),
+        (
+            GCC,
+            "c99",
+            "ptr_sizeof_void",
+            &["-Werror=pedantic", "-Wno-error=pedantic"],
+            &[
+                "error [-Werror=pointer-arith]",
+                "error [-Werror=pointer-arith]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_longlong",
+            &["-pedantic", "-Werror"],
+            &[
+                "error [-Werror=long-long]",
+                "cc1: all warnings being treated as errors",
+            ],
+            1,
+        ),
+    ];
+
     /// Each diagnostic's severity and each closing line, in order, from GCC's
     /// and Clang's `source:line:column: severity:` lines or bcc's own
     /// `severity: message` lines.
@@ -1078,6 +1526,76 @@ mod tests {
                         output.status.code()
                     ));
                 }
+            }
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// [`sequence`], with the option each diagnostic's tag names.
+    fn tagged_sequence(stderr: &str, source: &str, own: bool) -> Vec<String> {
+        stderr
+            .lines()
+            .filter_map(|line| {
+                let severity = if own {
+                    line.split_once(": ").map(|(severity, _)| severity)
+                } else if line.starts_with(source) {
+                    line.split(": ").nth(1)
+                } else {
+                    None
+                };
+                match severity {
+                    | Some(severity @ ("warning" | "error" | "fatal error")) =>
+                        Some(match line.rfind(" [-W").filter(|_| line.ends_with(']')) {
+                            | Some(at) => format!("{severity}{}", &line[at..]),
+                            | None => severity.to_owned(),
+                        }),
+                    | _ if !own
+                        && (line.ends_with("being treated as errors")
+                            || line.ends_with("generated.")) =>
+                        Some(line.to_owned()),
+                    | _ => None,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn extension_diagnostics_reach_and_name_the_groups_their_compilers_file_them_under() {
+        let directory: PathBuf =
+            std::env::temp_dir().join(format!("bcc-extension-groups-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, text) in TAGGED_SOURCES {
+            std::fs::write(directory.join(format!("{name}.c")), text).unwrap();
+        }
+        let mut failures = Vec::new();
+        for &(mode, standard, name, options, expected, status) in TAGGED_CASES {
+            let caret = match mode {
+                | Some("--gcc-mode") => Some("-fno-diagnostics-show-caret"),
+                | Some(_) => Some("-fno-caret-diagnostics"),
+                | None => None,
+            };
+            let source = format!("{name}.c");
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(mode)
+                .arg(format!("-std={standard}"))
+                .args(options)
+                .arg("-fsyntax-only")
+                .args(caret)
+                .arg(&source)
+                .current_dir(&directory)
+                .env("NO_COLOR", "1")
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let found = tagged_sequence(&stderr, &source, mode.is_none());
+            if found != expected || output.status.code() != Some(status) {
+                failures.push(format!(
+                    "{} -std={standard} {options:?} {name}: expected {expected:?} and {status}, \
+                     found {found:?} and {:?}:\n{stderr}",
+                    mode.unwrap_or("bcc"),
+                    output.status.code()
+                ));
             }
         }
         std::fs::remove_dir_all(&directory).unwrap();

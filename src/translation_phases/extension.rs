@@ -27,6 +27,7 @@ use crate::{
     configuration::{
         CompilerIdentity,
         ExtensionClass,
+        ExtensionGroup,
         ExtensionPolicy,
         Feature,
         FeatureOrigin,
@@ -94,6 +95,25 @@ impl<'tu> Context<'tu> {
         self.report_extension_in(spelling, origin, source_vectors, reach);
     }
 
+    /// [`Self::report_extension_since`] for syntax GCC files under an option
+    /// of its own that `-Wpedantic` does not classify, which its tag names in
+    /// place of `-Wpedantic`, as GCC 14 files a variable length array before
+    /// C99 under `-Wvla` (`pedwarn_c90` in `c-errors.cc`).
+    pub(crate) fn report_extension_under_gcc_option(
+        &mut self,
+        spelling: &str,
+        origin: FeatureOrigin,
+        source_vectors: SourceVectors,
+        group: ExtensionGroup,
+    ) {
+        let mut reach = self.reach(origin, None, ExtensionOption::Pedantic);
+        reach.gcc = GccFiling::Unclassified;
+        if self.configuration.compiler_identity().rules() == RuleSet::Gcc {
+            reach.group = group;
+        }
+        self.report_extension_in(spelling, origin, source_vectors, reach);
+    }
+
     /// [`Self::report_extension_since`] for a keyword, which GCC's C front
     /// end reports under `-Wpedantic`, though bcc reads keywords while it
     /// converts preprocessing tokens.
@@ -141,10 +161,23 @@ impl<'tu> Context<'tu> {
             | None if self.parsing_started => GccFiling::Pedantic,
             | None => GccFiling::Preprocessor,
         };
+        let clang = ExtensionClass::of(origin, feature, option == ExtensionOption::Everything);
+        let group = match self.configuration.compiler_identity().rules() {
+            | RuleSet::Clang => match feature.and_then(Feature::clang_group) {
+                | Some(group) => group,
+                | None => clang.clang_group(),
+            },
+            | RuleSet::Gcc => match feature.and_then(Feature::gcc_group) {
+                | Some(group) => group,
+                | None => ExtensionGroup::Pedantic,
+            },
+        };
         ExtensionReach {
             option,
-            clang: ExtensionClass::of(origin, feature, option == ExtensionOption::Everything),
+            clang,
             gcc,
+            group,
+            feature,
         }
     }
 
@@ -323,8 +356,9 @@ impl<'tu> Context<'tu> {
         let suppressed = self.tu_arena().alloc(Cell::new(false));
         let gcc_promotion = match reach.gcc {
             | _ if !self.gcc_promoted(severity, reach, at) => GccPromotion::None,
-            | GccFiling::Unclassified => GccPromotion::Werror,
-            | _ => GccPromotion::WerrorPedantic,
+            | GccFiling::Unclassified if reach.group == ExtensionGroup::Pedantic =>
+                GccPromotion::Werror,
+            | _ => GccPromotion::WerrorGroup,
         };
         self.queue_extension(
             at,
@@ -333,6 +367,8 @@ impl<'tu> Context<'tu> {
                 spelling,
                 origin,
                 severity,
+                group: reach.group,
+                feature: reach.feature,
                 gcc_promotion,
                 source_vectors,
             }),
@@ -386,9 +422,11 @@ impl<'tu> Context<'tu> {
     /// C99: §6.9.1 paragraph 5, p. 141; PDF p. 153.
     pub(crate) fn unnamed_parameter_left_to_analysis(&self, source: SourceVectors) -> bool {
         let reach = ExtensionReach {
-            option: ExtensionOption::Everything,
-            clang:  ExtensionClass::C23ByDefault,
-            gcc:    GccFiling::Pedantic,
+            option:  ExtensionOption::Everything,
+            clang:   ExtensionClass::C23ByDefault,
+            gcc:     GccFiling::Pedantic,
+            group:   ExtensionGroup::C23Extensions,
+            feature: Some(Feature::UnnamedDefinitionParameters),
         };
         !self.command_line_classifies(reach, source)
             && self.extension_policy_at(reach.option, source) == ExtensionPolicy::Allow
@@ -440,6 +478,8 @@ impl<'tu> Context<'tu> {
             spelling: "",
             origin: FeatureOrigin::Gnu,
             severity: ErrorSeverity::Warning,
+            group: ExtensionGroup::Pedantic,
+            feature: None,
             gcc_promotion: GccPromotion::None,
             source_vectors: SourceVectors::default(),
         });
@@ -483,12 +523,14 @@ pub(crate) enum ExtensionOption {
 
 /// How the warning options reach an extension diagnostic: by the option a
 /// pragma names it by, the class Clang's command-line options map, and where
-/// GCC files it.
+/// GCC files it; and the group its tag names under the identity's rules.
 #[derive(Clone, Copy)]
 struct ExtensionReach {
-    option: ExtensionOption,
-    clang:  ExtensionClass,
-    gcc:    GccFiling,
+    option:  ExtensionOption,
+    clang:   ExtensionClass,
+    gcc:     GccFiling,
+    group:   ExtensionGroup,
+    feature: Option<Feature>,
 }
 
 /// Baseline for a diagnostic controlled by the extension policy.
@@ -509,18 +551,23 @@ pub(crate) struct ExtensionDiagnostic<'tu> {
     spelling:                  &'tu str,
     origin:                    FeatureOrigin,
     severity:                  ErrorSeverity,
+    /// The group the tag names.
+    group:                     ExtensionGroup,
+    /// The feature, where the reporter named it.
+    feature:                   Option<Feature>,
     gcc_promotion:             GccPromotion,
     pub(super) source_vectors: SourceVectors,
 }
 
-/// What GCC's format names in place of `-Wpedantic` after an extension
+/// What GCC's format names in place of the group after an extension
 /// diagnostic that its `-Werror` or `-Werror=pedantic` made an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GccPromotion {
     None,
     /// `-Werror`, for a warning GCC files under no option.
     Werror,
-    WerrorPedantic,
+    /// `-Werror=` and the group.
+    WerrorGroup,
 }
 
 impl<'tu> ExtensionDiagnostic<'tu> {
@@ -574,16 +621,32 @@ impl ToDiagnostic for ExtensionDiagnostic<'_> {
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
-        let gcc = context.configuration.diagnostic_format()
-            == crate::configuration::DiagnosticFormat::Gcc;
-        let option = match self.gcc_promotion {
-            | GccPromotion::Werror if gcc => "-Werror",
-            | GccPromotion::WerrorPedantic if gcc => "-Werror=pedantic",
-            | _ => "-Wpedantic",
+        use crate::configuration::DiagnosticFormat as F;
+        // GCC names the option that made the warning an error; Clang names
+        // `-Werror` before the group on every extension diagnostic that is
+        // an error (`printDiagnosticOptions` in `TextDiagnosticPrinter.cpp`).
+        let format = context.configuration.diagnostic_format();
+        let group = self.group.name();
+        let option = match (format, self.gcc_promotion) {
+            | (F::Gcc, GccPromotion::Werror) => "-Werror",
+            | (F::Gcc, GccPromotion::WerrorGroup) => format_in!(arena, "-Werror={group}"),
+            | (F::Clang, _) if self.severity == ErrorSeverity::Error =>
+                format_in!(arena, "-Werror,-W{group}"),
+            | _ => format_in!(arena, "-W{group}"),
         };
-        Explanation::new(arena, format_in!(arena, "{self} [{option}]"))
-            .option_suffix()
-            .at(self.severity, source)
+        let explanation =
+            Explanation::new(arena, format_in!(arena, "{self} [{option}]")).option_suffix();
+        // bcc's own format keeps the label and note semantic analysis gives
+        // the same requirement where the parser leaves it to analysis.
+        // C99: §6.9.1 paragraph 5, p. 141; PDF p. 153.
+        let explanation = match (format, self.feature) {
+            | (F::Bcc, Some(Feature::UnnamedDefinitionParameters)) => {
+                let kind = super::semantic_analysis::SemanticErrorKind::UnnamedDefinitionParameter;
+                explanation.label(kind.label()).note(kind.explanation().1)
+            },
+            | _ => explanation,
+        };
+        explanation.at(self.severity, source)
     }
 }
 

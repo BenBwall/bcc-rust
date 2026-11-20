@@ -1303,8 +1303,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .nested_function_refusal()
                         .is_none();
                 if same_typedef {
+                    // Clang warns of it by default, in its own group; GCC
+                    // under `-Wpedantic`.
                     if !self.tainted {
-                        self.context.report_extension(
+                        self.context.report_extension_outside_pedantic(
                             crate::configuration::Feature::TypedefRedefinition,
                             "typedef redefinition",
                             name.source_vectors,

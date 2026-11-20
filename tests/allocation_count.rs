@@ -923,6 +923,62 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
     }
 
     #[test]
+    fn default_extension_warnings_allocate_only_from_arenas() {
+        // Clang warns of an unnamed parameter (`-Wc23-extensions`) and a
+        // typedef redefinition (`-Wtypedef-redefinition`) before C23 and C11
+        // by default. `-Wno-error=` keeps each a warning under `-Werror`, a
+        // severity the reporter would not give it, so it is queued
+        // reclassified.
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diagnostics");
+        for (fixture, arguments, expected) in [
+            (
+                "sema3-parameter-name.c",
+                &["-std=c99"][..],
+                "warning: 'unnamed parameter in function definition' is a C23 extension \
+                 [-Wc23-extensions]",
+            ),
+            (
+                "sema3-parameter-name.c",
+                &["-std=c99", "-Werror", "-Wno-error=c23-extensions"][..],
+                "warning: 'unnamed parameter in function definition' is a C23 extension \
+                 [-Wc23-extensions]",
+            ),
+            (
+                "sema-typedef-redefinition.c",
+                &["-std=c99", "-Werror", "-Wno-error=typedef-redefinition"][..],
+                "warning: 'typedef redefinition' is a C11 extension [-Wtypedef-redefinition]",
+            ),
+        ] {
+            let mut buffer = [0u8; 2048];
+            let mut output = std::io::Cursor::new(buffer.as_mut_slice());
+            let mut parse_calls = None;
+            let mut report_calls = None;
+            bcc_rust::compile_file_with_arguments_measured(
+                &fixtures.join(fixture),
+                arguments,
+                &mut output,
+                |step, run| {
+                    let totals = count(false, run);
+                    match step {
+                        | bcc_rust::CompileStep::Parse => parse_calls = Some(totals),
+                        | bcc_rust::CompileStep::Report => report_calls = Some(totals),
+                    }
+                },
+            )
+            .expect("the fixture compiles and renders");
+            assert_eq!(parse_calls, Some((0, 0)), "{fixture} {arguments:?}");
+            assert_eq!(report_calls, Some((0, 0)), "{fixture} {arguments:?}");
+            let length = usize::try_from(output.position()).unwrap();
+            let diagnostics = std::str::from_utf8(&output.get_ref()[..length]).unwrap();
+            assert!(
+                diagnostics.contains(expected),
+                "{fixture} {arguments:?}: {diagnostics}"
+            );
+        }
+    }
+
+    #[test]
     fn compiling_gnu_syntax_allocates_only_from_arenas() {
         let source = "__attribute__((used)) unsigned __int128 wide[0]; __typeof__(wide) copy; \
                       __auto_type value=1; struct Empty {}; __asm__(\"nop\"); int \

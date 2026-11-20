@@ -945,6 +945,9 @@ enum LanguageFlag {
     Pedantic(bool),
     /// `-pedantic-errors`.
     PedanticErrors,
+    /// A form of a warning option that only sets Clang's mapping of the
+    /// extension diagnostics it reaches, such as `-Wno-typedef-redefinition`.
+    ExtensionOption(ExtensionOptionName, WarningOption),
     /// `-Werror=pedantic` (true) or `-Wno-error=pedantic` (false).
     PedanticAsError(bool),
     /// `-fms-extensions` or `-fno-ms-extensions`.
@@ -1280,9 +1283,12 @@ impl LanguageFlag {
             } else {
                 DiagnosticGroup::parse(name)
             };
-            return Some(group.map_or(Self::UnknownWarning, |group| {
-                Self::WarningGroup(group, option)
-            }));
+            return Some(match group {
+                | Some(group) => Self::WarningGroup(group, option),
+                | None => ExtensionOptionName::parse(name).map_or(Self::UnknownWarning, |name| {
+                    Self::ExtensionOption(name, option)
+                }),
+            });
         }
         let (name, enabled) = text
             .strip_prefix("-fms-")
@@ -1332,6 +1338,8 @@ impl LanguageFlag {
                 configuration.with_pedantic_as_error(false)
             }
             .with_extension_option(ExtensionOptionName::Pedantic, WarningOption::Error(error)),
+            | Self::ExtensionOption(name, option) =>
+                configuration.with_extension_option(name, option),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>
                 configuration.with_msvc_feature(feature, enabled),

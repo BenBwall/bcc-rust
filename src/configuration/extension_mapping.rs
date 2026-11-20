@@ -25,11 +25,7 @@ impl CompilerConfiguration {
         let no_werror = self.extension_mappings.no_werror(class);
         let mut level = match mapping {
             | Some(level) => level,
-            | None if matches!(
-                class,
-                ExtensionClass::C23ByDefault | ExtensionClass::ByDefault
-            ) || self.everything =>
-                Level::Warning,
+            | None if class.by_default() || self.everything => Level::Warning,
             | None => Level::Ignored,
         };
         if mapping != Some(Level::Ignored) {
@@ -132,7 +128,9 @@ pub(crate) enum GccFiling {
     /// such as `-Wpointer-arith` ([`super::Feature::gcc_filing`]).
     Enabled,
     /// Under no option, or one that `-Wpedantic` does not classify, such as
-    /// `-Wlong-long` ([`super::Feature::gcc_filing`]).
+    /// `-Wlong-long`, `-Wdeclaration-after-statement` and `-Wvla`, which
+    /// `-pedantic` enables before C99 (`pedwarn_c90` in `c-errors.cc`)
+    /// ([`super::Feature::gcc_filing`]).
     Unclassified,
     /// By its preprocessor, which files its pedantic warnings under options
     /// of their own or none, which bcc does not model one by one: what bcc's
@@ -147,30 +145,62 @@ pub(crate) enum GccFiling {
 /// `ClangDiagnosticsEmitter.cpp`); a later revision's syntax is also in that
 /// revision's group (`-Wc11-extensions`, `-Wc23-extensions`). What Clang
 /// warns of by default, such as a label at the end of a block before C23, is
-/// in its revision's group alone.
+/// in its own group alone.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ExtensionClass {
     /// In `-Wpedantic` alone, as far as bcc models it: GNU and MSVC syntax,
-    /// and C99's before C99.
+    /// C99's before C99, and `#warning` before C23.
     Pedantic,
     /// In `-Wpedantic` and `-Wc11-extensions`.
     C11,
     /// In `-Wpedantic` and `-Wc23-extensions`.
     C23,
+    /// An omitted variadic argument before C23 (`ext_c_missing_varargs_arg`):
+    /// in `-Wpedantic` and `-Wvariadic-macro-arguments-omitted`, which
+    /// `-Wc23-extensions`, `-Wgnu-zero-variadic-macro-arguments` (and so
+    /// `-Wgnu`), `-Wpre-c23-compat` and `-Wc++20-extensions` hold.
+    OmittedVariadicArguments,
     /// A warning by default, in `-Wc23-extensions` alone.
     C23ByDefault,
+    /// A warning by default, in `-Wtypedef-redefinition` alone: a typedef
+    /// redefinition before C11 (`ext_redefinition_of_typedef`, an `ExtWarn`).
+    TypedefRedefinition,
     /// A warning by default, in no group bcc models.
     ByDefault,
 }
 
 impl ExtensionClass {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 7] = [
         Self::Pedantic,
         Self::C11,
         Self::C23,
+        Self::OmittedVariadicArguments,
         Self::C23ByDefault,
+        Self::TypedefRedefinition,
         Self::ByDefault,
     ];
+
+    /// Whether Clang warns of the class's diagnostics by default.
+    const fn by_default(self) -> bool {
+        matches!(
+            self,
+            Self::C23ByDefault | Self::TypedefRedefinition | Self::ByDefault
+        )
+    }
+
+    /// The group Clang's tag names after a diagnostic of the class
+    /// (`printDiagnosticOptions` in `TextDiagnosticPrinter.cpp`): its own
+    /// group where bcc models it, and otherwise `-Wpedantic`, which names
+    /// the extensions in no group.
+    pub(crate) const fn clang_group(self) -> ExtensionGroup {
+        match self {
+            | Self::C11 => ExtensionGroup::C11Extensions,
+            | Self::C23 | Self::C23ByDefault => ExtensionGroup::C23Extensions,
+            | Self::OmittedVariadicArguments => ExtensionGroup::VariadicMacroArgumentsOmitted,
+            | Self::TypedefRedefinition => ExtensionGroup::TypedefRedefinition,
+            | Self::Pedantic | Self::ByDefault => ExtensionGroup::Pedantic,
+        }
+    }
 
     /// The class of an extension diagnostic of syntax from `origin`, of
     /// `feature` where the caller names it, which Clang warns of by default
@@ -184,14 +214,15 @@ impl ExtensionClass {
             CStandard,
             FeatureOrigin,
         };
-        if let Some(feature) = feature
-            && feature.clang_outside_revision_group()
-        {
-            return if by_default {
-                Self::ByDefault
-            } else {
-                Self::Pedantic
-            };
+        match feature {
+            // `ext_redefinition_of_typedef`, which Clang warns of by default.
+            | Some(super::Feature::TypedefRedefinition) => return Self::TypedefRedefinition,
+            | Some(super::Feature::OmittedVariadicArguments) =>
+                return Self::OmittedVariadicArguments,
+            // `ext_pp_warning_directive`, in no group.
+            | Some(super::Feature::WarningDirective) if by_default => return Self::ByDefault,
+            | Some(super::Feature::WarningDirective) => return Self::Pedantic,
+            | _ => {},
         }
         match origin {
             | FeatureOrigin::Standard(CStandard::C23) if by_default => Self::C23ByDefault,
@@ -203,6 +234,48 @@ impl ExtensionClass {
     }
 }
 
+/// The warning option an extension diagnostic's tag names: the group its
+/// compiler files it under where bcc models that group
+/// ([`ExtensionClass::clang_group`], [`super::Feature::clang_group`],
+/// [`super::Feature::gcc_group`]), and otherwise `-Wpedantic`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ExtensionGroup {
+    Pedantic,
+    C11Extensions,
+    C23Extensions,
+    TypedefRedefinition,
+    /// GCC's `-Wpointer-arith`.
+    PointerArith,
+    /// GCC's `-Wlong-long`.
+    LongLong,
+    /// GCC's `-Wdeclaration-after-statement`.
+    DeclarationAfterStatement,
+    /// GCC's `-Wvla`.
+    Vla,
+    /// GCC's and Clang's `-Wvariadic-macros`.
+    VariadicMacros,
+    /// Clang's `-Wvariadic-macro-arguments-omitted`.
+    VariadicMacroArgumentsOmitted,
+}
+
+impl ExtensionGroup {
+    /// The group's name, without `-W`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            | Self::Pedantic => "pedantic",
+            | Self::C11Extensions => "c11-extensions",
+            | Self::C23Extensions => "c23-extensions",
+            | Self::TypedefRedefinition => "typedef-redefinition",
+            | Self::PointerArith => "pointer-arith",
+            | Self::LongLong => "long-long",
+            | Self::DeclarationAfterStatement => "declaration-after-statement",
+            | Self::Vla => "vla",
+            | Self::VariadicMacros => "variadic-macros",
+            | Self::VariadicMacroArgumentsOmitted => "variadic-macro-arguments-omitted",
+        }
+    }
+}
+
 /// The warning options that set Clang's mapping of extension diagnostics.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ExtensionOptionName {
@@ -210,6 +283,13 @@ pub(crate) enum ExtensionOptionName {
     Pedantic,
     C11Extensions,
     C23Extensions,
+    TypedefRedefinition,
+    /// The groups that hold `-Wvariadic-macro-arguments-omitted` and
+    /// nothing else bcc models: itself, `-Wgnu`,
+    /// `-Wgnu-zero-variadic-macro-arguments`, `-Wpre-c23-compat` (with its
+    /// `-pedantic` form and their `c2x` spellings) and `-Wc++20-extensions`
+    /// (`c++2a`). Clang 23, `DiagnosticGroups.td`.
+    VariadicMacroArgumentsOmitted,
     /// `-Wno-everything`, which turns every diagnostic off.
     Everything,
     /// `-pedantic-errors`, which GCC also reads as `-Werror=pedantic`.
@@ -217,16 +297,45 @@ pub(crate) enum ExtensionOptionName {
 }
 
 impl ExtensionOptionName {
+    /// The option a `-W` group name, without `-W`, sets only Clang's mapping
+    /// of extension diagnostics through, for the names bcc has no warning
+    /// group for.
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        match name {
+            | "typedef-redefinition" => Some(Self::TypedefRedefinition),
+            | "variadic-macro-arguments-omitted"
+            | "gnu-zero-variadic-macro-arguments"
+            | "gnu"
+            | "pre-c23-compat"
+            | "pre-c2x-compat"
+            | "pre-c23-compat-pedantic"
+            | "pre-c2x-compat-pedantic"
+            | "c++20-extensions"
+            | "c++2a-extensions" => Some(Self::VariadicMacroArgumentsOmitted),
+            | _ => None,
+        }
+    }
+
     /// Whether the option reaches the diagnostics of `class`.
     const fn reaches(self, class: ExtensionClass) -> bool {
         match self {
             | Self::Pedantic => matches!(
                 class,
-                ExtensionClass::Pedantic | ExtensionClass::C11 | ExtensionClass::C23
+                ExtensionClass::Pedantic
+                    | ExtensionClass::C11
+                    | ExtensionClass::C23
+                    | ExtensionClass::OmittedVariadicArguments
             ),
             | Self::C11Extensions => matches!(class, ExtensionClass::C11),
-            | Self::C23Extensions =>
-                matches!(class, ExtensionClass::C23 | ExtensionClass::C23ByDefault),
+            | Self::C23Extensions => matches!(
+                class,
+                ExtensionClass::C23
+                    | ExtensionClass::C23ByDefault
+                    | ExtensionClass::OmittedVariadicArguments
+            ),
+            | Self::TypedefRedefinition => matches!(class, ExtensionClass::TypedefRedefinition),
+            | Self::VariadicMacroArgumentsOmitted =>
+                matches!(class, ExtensionClass::OmittedVariadicArguments),
             | Self::Everything => true,
             | Self::PedanticErrors => false,
         }
