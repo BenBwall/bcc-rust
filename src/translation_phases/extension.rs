@@ -268,14 +268,27 @@ impl<'tu> Context<'tu> {
     }
 
     /// Queues an extension diagnostic at the `severity` the command line's
-    /// options settled, which the reporter must not promote again: `-Werror`
-    /// has had its say, and `-Wno-error=` may have kept it a warning.
-    /// `-Wfatal-errors` still makes such an error fatal. The diagnostic keeps
-    /// its own severity for its words, which may name the `-Werror` that
-    /// promoted it.
+    /// options settled, which the reporter must not change: `-Werror` has had
+    /// its say, and `-Wno-error=` may have kept it a warning. Only where the
+    /// reporter would give it another severity does it carry this one
+    /// ([`TranslationError::configured_severity`]). `-Wfatal-errors` still
+    /// makes such an error fatal. The diagnostic keeps its own severity for
+    /// its words, which may name the `-Werror` that promoted it.
+    fn push_final_extension(&mut self, error: TranslationError<'tu>, severity: ErrorSeverity) {
+        if error.configured_severity(self) == severity {
+            self.pending_errors.push_back(error);
+        } else {
+            self.push_reclassified_extension(error, severity);
+        }
+    }
+
     #[cold]
     #[inline(never)]
-    fn push_final_extension(&mut self, mut error: TranslationError<'tu>, severity: ErrorSeverity) {
+    fn push_reclassified_extension(
+        &mut self,
+        mut error: TranslationError<'tu>,
+        severity: ErrorSeverity,
+    ) {
         if let TranslationError::Parsing(parsing) = &mut error {
             parsing.severity = severity;
             parsing.severity_is_final = true;

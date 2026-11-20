@@ -33,13 +33,23 @@ impl CompilerConfiguration {
             | None => Level::Ignored,
         };
         if mapping != Some(Level::Ignored) {
+            // A configuration whose policy no option set, as the explorer and
+            // the library's callers build one, reads it as `-pedantic` or
+            // `-pedantic-errors`; on the command line it says no more than
+            // they and the options mapping the class do.
+            let policy = match (mapping, self.extension_policy) {
+                | (None, super::ExtensionPolicy::Deny) => Level::Error,
+                | (None, super::ExtensionPolicy::Warn) => Level::Warning,
+                | _ => Level::Ignored,
+            };
             let behavior = if self.pedantic_errors {
                 Level::Error
             } else if self.pedantic_flag {
                 Level::Warning
             } else {
                 Level::Ignored
-            };
+            }
+            .max(policy);
             level = level.max(if no_werror {
                 behavior.min(Level::Warning)
             } else {
@@ -75,7 +85,10 @@ impl CompilerConfiguration {
         if self.suppress_warnings || !(enabled || self.werror_pedantic().is_some()) {
             return None;
         }
-        let promoted = self.pedantic_errors || self.warnings_as_errors;
+        // A policy no option set reads as `-pedantic-errors`, as for Clang.
+        let promoted = self.pedantic_errors
+            || self.extension_policy == super::ExtensionPolicy::Deny
+            || self.warnings_as_errors;
         let error = match (filing, self.extension_mappings.gcc_pedantic) {
             | (GccFiling::Pedantic, Some(level)) => level == Level::Error,
             | (GccFiling::Enabled, _) => promoted || self.extension_mappings.gcc_pedantic_error,

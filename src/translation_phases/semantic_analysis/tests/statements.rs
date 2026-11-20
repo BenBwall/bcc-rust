@@ -125,8 +125,11 @@ fn function_definition_constraints() {
             "typedef int f(void) { return 0; }",
             SemanticErrorKind::FunctionDefinitionStorage,
         ),
+        // The parser reports `int f(int)` as the C23 extension Clang warns
+        // of by default; a typedef name it cannot tell from `void` is left
+        // to analysis.
         (
-            "int f(int) { return 0; }",
+            "typedef int I; int f(I) { return 0; }",
             SemanticErrorKind::UnnamedDefinitionParameter,
         ),
         (

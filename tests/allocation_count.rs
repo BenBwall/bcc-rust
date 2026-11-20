@@ -872,12 +872,14 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
     fn compiling_iso_syntax_allocates_only_from_arenas() {
         // Reserved spellings and unambiguous grammar are extensions under the
         // library's C99/Allow default, so this also traverses policy seams.
+        // The parameter is named and the label labels a statement: Clang warns
+        // of either C23 extension by default.
         let source = "[[vendor::tag((1),[2],{3})]] _Alignas(16) _Atomic(int) object; \
                       _Thread_local int thread; _Static_assert(1,\"message\"); unsigned \
-                      _BitInt(16) bits; enum E : unsigned { A [[deprecated]] }; int f(int) { int \
-                      a[3]; int n=_Generic(a,int*:1,default:0); n+=_Alignof(int)+_Countof a; \
+                      _BitInt(16) bits; enum E : unsigned { A [[deprecated]] }; int f(int p) { \
+                      int a[3]; int n=_Generic(a,int*:1,default:0); n+=_Alignof(int)+_Countof a; \
                       if(int x=1;x) n=x; switch(n){case 1:break;} outer: for(;;){break outer;} \
-                      label: int x=(static int){}; return n; }\n";
+                      label: n+=p; int x=(static int){}; return n+x; }\n";
         let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
         assert_eq!(summary.external_declarations, 6);
         assert_no_allocations("ISO syntax source", summary, &allocations);
