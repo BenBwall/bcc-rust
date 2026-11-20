@@ -1824,7 +1824,10 @@ fn Lessons(state: State) -> impl IntoView {
                                                     class:is-fault=demo.faults
                                                     aria-pressed=move || (selected() == Some(key)).to_string()
                                                     disabled=move || state.locked_tracked()
-                                                    on:click=move |_| state.select_demo(demo)
+                                                    on:click=move |_| {
+                                                        state.select_demo(demo);
+                                                        show_workbench();
+                                                    }
                                                 >
                                                     <span class="lesson-number">{format!("{:02}", index + 1)}</span>
                                                     <span class="lesson-title">{demo.title}</span>
@@ -2041,6 +2044,34 @@ fn Toolbar(state: State) -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// Bring the workbench on screen for a lesson chosen from Table 1, which
+/// otherwise loads out of sight below the table, and give the keyboard focus
+/// to the view it opened in, so the next Tab reaches its controls. The page
+/// glides there as it does to its links, or jumps when motion is reduced
+/// (the style sheet's `scroll-behavior`).
+fn show_workbench() {
+    let _ = Timeout::new(0, || {
+        let document = document();
+        if let Some(workbench) = document.get_element_by_id("workbench") {
+            let options = web_sys::ScrollIntoViewOptions::new();
+            options.set_block(web_sys::ScrollLogicalPosition::Start);
+            options.set_behavior(web_sys::ScrollBehavior::Auto);
+            workbench.scroll_into_view_with_scroll_into_view_options(&options);
+        }
+        if let Some(tab) = document
+            .query_selector(".mode-tab[aria-selected=\"true\"]")
+            .ok()
+            .flatten()
+            .and_then(|tab| tab.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let options = web_sys::FocusOptions::new();
+            options.set_prevent_scroll(true);
+            let _ = tab.focus_with_options(&options);
+        }
+    })
+    .forget();
 }
 
 /// Undo the browser's scroll anchoring while a change of view resizes the
