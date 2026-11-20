@@ -735,12 +735,14 @@ fn extension_declarations_leave_gcc_folded_array_bound_reports() {
 }
 
 /// A declaration or function definition marked `__extension__` silences
-/// GCC's `-pedantic` report of `__func__` before C99 and of a static
-/// initializer folded from an undefined shift, as GCC 14 does; an
-/// `__extension__` operand does not silence the initializer's, since GCC
-/// reports it after the operand.
+/// GCC's `-pedantic` reports of `__func__` before C99, of a conditional
+/// between pointers to arrays whose elements differ in qualifiers before
+/// C23, and of a static initializer folded from an undefined shift, as GCC
+/// 14 does; an `__extension__` operand does not silence the initializer's,
+/// since GCC reports it after the operand.
 /// C99: §6.4.2.2 paragraph 1, p. 52; PDF p. 64; §6.6 paragraphs 4 and 7,
-/// p. 95; PDF p. 107. GNU extension: GCC manual, "Alternate Keywords".
+/// p. 95; PDF p. 107. C23 (N3220): §6.5.16 paragraph 7, p. 92; PDF p. 105.
+/// GNU extension: GCC manual, "Alternate Keywords".
 #[test]
 fn extension_declarations_silence_gcc_pedantic_reports() {
     use crate::configuration::CompilerIdentity;
@@ -798,6 +800,28 @@ fn extension_declarations_silence_gcc_pedantic_reports() {
             CStandard::C89,
             "void f(void) { const char *s = __extension__ __func__; (void)s; }",
             0,
+        ),
+        (
+            CStandard::C11,
+            "__extension__ void g(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); }",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "void h(int (*p)[2], const int (*q)[2], int c) { __extension__ const void *r = c ? \
+             p : q; (void)r; }",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "int a[2]; const int b[2]; __extension__ const void *r = 1 ? &a : &b;",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "__extension__ void g(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); \
+             }\nvoid h(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); }",
+            1,
         ),
     ] {
         let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Deny)
