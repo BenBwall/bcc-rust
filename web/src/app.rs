@@ -684,9 +684,33 @@ impl State {
     /// Load a lesson, in the view it is about: a lesson about the compiler
     /// opens the pipeline at its stage, unless the WebAssembly view is open.
     fn select_demo(self, demo: &'static Demo) {
-        // The WebAssembly view steps every lesson, compiled by bcc itself,
-        // so it stays open. Otherwise a lesson about the compiler opens the
-        // pipeline at its stage, and the others the abstract machine.
+        self.open_lesson_view(demo);
+        self.action(move || self.stage_program(demo.source.into(), demo.name.into()));
+    }
+
+    /// Open a lesson chosen in Table 1, which loads into the workbench out
+    /// of sight below the table: bring the workbench on screen at once, and
+    /// again once the lesson has loaded, since its listing and tape then
+    /// take their own heights and the browser's scroll anchoring moves the
+    /// page to keep whatever it anchored on in place.
+    fn choose_lesson(self, demo: &'static Demo) {
+        if self.locked() {
+            return;
+        }
+        self.open_lesson_view(demo);
+        show_workbench(true);
+        self.action(move || async move {
+            let loaded = self.stage_program(demo.source.into(), demo.name.into()).await;
+            show_workbench(false);
+            loaded
+        });
+    }
+
+    /// The view a lesson opens in. The WebAssembly view steps every lesson,
+    /// compiled by bcc itself, so it stays open. Otherwise a lesson about the
+    /// compiler opens the pipeline at its stage, and the others the abstract
+    /// machine.
+    fn open_lesson_view(self, demo: &'static Demo) {
         if let Some(stage) = demo.stage {
             self.stage.set(stage);
         }
@@ -697,7 +721,6 @@ impl State {
                 Mode::Machine
             });
         }
-        self.action(move || self.stage_program(demo.source.into(), demo.name.into()));
     }
 
     /// Load the editor's text into the engine (and the compiler, when live).
@@ -1825,10 +1848,7 @@ fn Lessons(state: State) -> impl IntoView {
                                                     class:is-fault=demo.faults
                                                     aria-pressed=move || (selected() == Some(key)).to_string()
                                                     disabled=move || state.locked_tracked()
-                                                    on:click=move |_| {
-                                                        state.select_demo(demo);
-                                                        show_workbench();
-                                                    }
+                                                    on:click=move |_| state.choose_lesson(demo)
                                                 >
                                                     <span class="lesson-number">{format!("{:02}", index + 1)}</span>
                                                     <span class="lesson-title">{demo.title}</span>
@@ -2047,13 +2067,13 @@ fn Toolbar(state: State) -> impl IntoView {
     }
 }
 
-/// Bring the workbench on screen for a lesson chosen from Table 1, which
-/// otherwise loads out of sight below the table, and give the keyboard focus
-/// to the view it opened in, so the next Tab reaches its controls. The page
-/// glides there as it does to its links, or jumps when motion is reduced
-/// (the style sheet's `scroll-behavior`).
-fn show_workbench() {
-    let _ = Timeout::new(0, || {
+/// Bring the workbench to the top of the window for a lesson chosen in
+/// Table 1 and, with `focus`, give the keyboard focus to the view it opened
+/// in, so the next Tab reaches its controls. The page glides there as it does
+/// to its links, or jumps when motion is reduced (the style sheet's
+/// `scroll-behavior`).
+fn show_workbench(focus: bool) {
+    let _ = Timeout::new(0, move || {
         let document = document();
         if let Some(workbench) = document.get_element_by_id("workbench") {
             let options = web_sys::ScrollIntoViewOptions::new();
@@ -2061,7 +2081,8 @@ fn show_workbench() {
             options.set_behavior(web_sys::ScrollBehavior::Auto);
             workbench.scroll_into_view_with_scroll_into_view_options(&options);
         }
-        if let Some(tab) = document
+        if focus
+            && let Some(tab) = document
             .query_selector(".mode-tab[aria-selected=\"true\"]")
             .ok()
             .flatten()
