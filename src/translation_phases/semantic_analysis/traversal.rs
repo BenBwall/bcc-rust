@@ -197,6 +197,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::DiscardType);
                 // Clang recovers folded bounds here, where C99 §6.5.2.5p1
                 // requires a non-VLA type (p. 75; PDF p. 87).
+                self.enter_varying_bounds(false);
                 self.work.push(Work::TypeName(type_name, true));
             },
             | E::Call {
@@ -763,7 +764,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.inhibited_evaluations += 1;
         }
         if is_extension(e) {
-            self.extension_depth += 1;
+            self.extension_operands += 1;
         }
     }
 
@@ -774,9 +775,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU extension: GCC manual, "Alternate Keywords".
     pub(super) fn enter_extension_declaration(&mut self, specifiers: DeclarationSpecifiers<'tu>) {
         if extension_marked(specifiers) {
-            self.extension_depth += 1;
+            self.extension_declarations += 1;
             self.work.push(Work::LeaveExtension);
         }
+    }
+
+    /// Notes, inside a marked declaration, whether GCC accepts silently the
+    /// variable length array a folded bound makes in the work scheduled
+    /// next, until that work is done.
+    /// C99: §6.7.5.2 paragraph 2, p. 116; PDF p. 128.
+    pub(super) fn enter_varying_bounds(&mut self, varying: bool) {
+        if self.extension_declarations != 0 {
+            self.work.push(Work::VaryingBounds(self.varying_bounds));
+            self.varying_bounds = varying;
+        }
+    }
+
+    /// Whether an `__extension__` operand or marked declaration encloses the
+    /// current work, silencing `-pedantic` there.
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    pub(super) const fn under_extension(&self) -> bool {
+        self.extension_operands != 0 || self.extension_declarations != 0
     }
 
     /// Undoes [`Self::enter_expression`], and checks a finished full
@@ -786,7 +805,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.inhibited_evaluations -= 1;
         }
         if is_extension(e) {
-            self.extension_depth -= 1;
+            self.extension_operands -= 1;
         }
         self.expression_depth -= 1;
         if self.expression_depth == 0 {

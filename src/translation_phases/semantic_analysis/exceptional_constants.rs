@@ -76,7 +76,13 @@ pub(super) enum ConstantSite {
     StaticAssertion,
     /// C99: §6.7.2.1 paragraph 3, p. 101; PDF p. 113.
     BitFieldWidth(Option<StringCacheId>),
-    /// An array bound, which GCC's folding policy decides apart.
+    /// An array bound, which GCC's folding policy decides apart, and whether
+    /// GCC accepts there, silently, the variable length array a bound that
+    /// is no integer constant expression makes: in a parameter, or under
+    /// `__extension__` in an object or member with automatic storage.
+    /// C99: §6.7.5.2 paragraphs 1, 2 and 4, pp. 116-117; PDF pp. 128-129.
+    ArrayBound(bool),
+    /// An alignment or an attribute's argument.
     #[default]
     Other,
 }
@@ -736,9 +742,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ),
                 | ConstantSite::BitFieldWidth(None) =>
                     "bit-field width not an integer constant expression",
-                | ConstantSite::Other => "folded integer constant expression",
+                | ConstantSite::ArrayBound(_) | ConstantSite::Other =>
+                    "folded integer constant expression",
             };
-            self.report_pedantic_constant(text, e.source_vectors);
+            // GCC makes an array whose bound is no integer constant
+            // expression variable length, and refuses it at file scope or
+            // with static storage, which no `__extension__` on the
+            // declaration silences; this report stands for that refusal.
+            if let ConstantSite::ArrayBound(varying) = self.constant_site {
+                if self.extension_operands == 0 && (self.extension_declarations == 0 || !varying) {
+                    self.pedantic_constant(text, e.source_vectors);
+                }
+            } else {
+                self.report_pedantic_constant(text, e.source_vectors);
+            }
             return;
         }
         // Clang checks a case label's overflow, but not its form.
@@ -789,10 +806,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Reports `text` as `-pedantic` reports an extension.
+    /// An `__extension__` operand or marked declaration silences it.
     pub(super) fn report_pedantic_constant(&mut self, text: &str, source: SourceVectors) {
-        if self.extension_depth != 0 {
-            return;
+        if !self.under_extension() {
+            self.pedantic_constant(text, source);
         }
+    }
+
+    /// Reports `text` under `-pedantic`, whatever silences it elsewhere.
+    fn pedantic_constant(&mut self, text: &str, source: SourceVectors) {
         let text = self.context.string_cache.intern(text);
         self.extension_error(
             crate::configuration::Feature::ConstantFolding,

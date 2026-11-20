@@ -626,7 +626,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::RuntimeBound(true));
                     self.constant_expression(
                         expression,
-                        super::exceptional_constants::ConstantSite::Other,
+                        super::exceptional_constants::ConstantSite::ArrayBound(
+                            parameter || self.varying_bounds,
+                        ),
                     );
                 } else if is_pointer && !parameter {
                     // Already diagnosed; no dependent variably modified error.

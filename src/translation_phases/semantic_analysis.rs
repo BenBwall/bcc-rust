@@ -436,6 +436,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.taint(d.recovered);
                 self.enter_extension_declaration(d.declaration_specifiers);
+                // C99 §6.7.5.2p2, p. 116; PDF p. 128: only an ordinary
+                // identifier with automatic storage at block scope may have
+                // a variable length array type.
+                self.enter_varying_bounds(
+                    self.scope != 0
+                        && !d.init_declarators.is_empty()
+                        && matches!(
+                            d.declaration_specifiers.storage_class,
+                            None | Some(StorageClass::Auto | StorageClass::Register)
+                        ),
+                );
                 self.validate_declaration_list_item(d);
                 self.report_empty_declaration(d);
                 self.constexpr_declaration(d);
@@ -679,7 +690,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 } else {
                     self.inhibited_evaluations -= 1;
                 },
-            | Work::LeaveExtension => self.extension_depth -= 1,
+            | Work::LeaveExtension => self.extension_declarations -= 1,
+            | Work::VaryingBounds(varying) => self.varying_bounds = varying,
             | Work::ConstantContext => self.constant_contexts += 1,
             | Work::ConstantContextEnd(site) => {
                 self.constant_contexts -= 1;
@@ -2073,6 +2085,8 @@ enum Work<'tu, 's> {
     Unevaluated(bool),
     /// Leaves a declaration or function definition marked `__extension__`.
     LeaveExtension,
+    /// Restores [`Analyzer::varying_bounds`].
+    VaryingBounds(bool),
     /// Enters a context requiring a constant.
     ConstantContext,
     /// Leaves it, for the evaluation of the constant at this site.
@@ -2300,12 +2314,23 @@ struct Analyzer<'a, 'tu, 's> {
     /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92; §6.5.13-§6.5.15,
     /// pp. 89-91; PDF pp. 101-103.
     inhibited_evaluations:   u32,
-    /// How many enclosing `__extension__` operators, and declarations or
-    /// function definitions marked `__extension__`, silence `-pedantic`, as
+    /// How many enclosing `__extension__` operators silence `-pedantic`, as
     /// GCC's `disable_extension_diagnostics` and Clang's
-    /// `ExtensionRAIIObject` do for the operand or the whole declaration.
+    /// `ExtensionRAIIObject` do for the operand.
     /// GNU extension: GCC manual, "Alternate Keywords".
-    extension_depth:         u32,
+    extension_operands:      u32,
+    /// How many enclosing declarations or function definitions marked
+    /// `__extension__` silence `-pedantic` as an operand does, except for a
+    /// folded array bound (see [`Self::report_folded_constant`]).
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    extension_declarations:  u32,
+    /// Whether, inside a marked declaration, GCC accepts silently the
+    /// variable length array a folded bound makes here: in an object with
+    /// automatic storage at block scope. It refuses one at file scope, with
+    /// static storage or in a compound literal, and a typedef's when a static
+    /// object takes it, and `__extension__` does not silence that.
+    /// C99: §6.7.5.2 paragraph 2, p. 116; PDF p. 128.
+    varying_bounds:          bool,
     /// How many enclosing contexts require a constant expression: Clang's
     /// `ConstantEvaluated`, which silences its warnings about code.
     constant_contexts:       u32,

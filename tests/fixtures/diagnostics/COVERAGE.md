@@ -1192,7 +1192,14 @@ the marked one warn again on the same lines and columns.
 `__FUNCTION__` and `__PRETTY_FUNCTION__` under `__extension__`. Checked
 20 November 2026 against GCC 14: an `__extension__` operand, a marked
 declaration and a marked function definition silence them, and a use after the
-marked declaration warns again on the same line and column.
+marked declaration warns again on the same line and column. Its last rows
+check folded constants: a marked declaration silences GCC 14's reports of a
+folded enumerator, case label and bit-field width, and an automatic array's
+folded bound, which GCC makes variable length, but not a folded bound GCC then
+refuses at file scope and with static storage ("variably modified 'loud_bound' at file scope", "storage size
+of 'a' isn't constant"; the second is an error without `-pedantic`). bcc
+reports these bounds with its `-pedantic` folded-constant warning at the
+bound, where GCC points at the declaration.
 
 ### Predefined function-name identifiers
 

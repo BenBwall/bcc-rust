@@ -52,9 +52,16 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   silence a typedef redefinition. In semantic analysis an `__extension__`
   operand, or a declaration or function definition whose specifiers it marks,
   silences the cast to a union type and the cast to the operand's own
-  structure or union type (`UnionCasts`, `SameTypeCasts`) and GCC's
-  `-pedantic` reports of folded constants and predefined identifiers, as in
-  both compilers. Other semantic extension reports, such as arithmetic on
+  structure or union type (`UnionCasts`, `SameTypeCasts`), as in both
+  compilers, and GCC's `-pedantic` reports of predefined identifiers and of
+  folded enumerators, case labels and bit-field widths, as in GCC; a marked
+  member declaration or `_Static_assert` does not yet silence its own folded
+  constant. A marked declaration leaves GCC's report of a folded array bound,
+  which stands for GCC's refusal of the variable length array such a bound
+  makes at file scope, with static storage or in a compound literal, an error
+  `__extension__` does not silence; it silences the report only in a
+  parameter or an object or member with automatic storage, where GCC accepts
+  that array. Other semantic extension reports, such as arithmetic on
   `void *`, ignore it yet, where both compilers silence them.
 - A preprocessing extension diagnostic raised in a macro expansion may
   underline the replacement in the macro definition. Parser and semantic
@@ -1104,8 +1111,12 @@ Clang warns of by default
 (`DiagnosticIDs::getDiagnosticSeverity` silences only an extension diagnostic
 that is off by default). In semantic analysis it silences casts to a union
 type and to the operand's own type, and GCC's `-pedantic` reports of folded
-constants and predefined identifiers, but not yet other semantic extension
-reports such as arithmetic on `void *`, which both compilers silence.
+constants and predefined identifiers, except, in a marked declaration, that of
+a folded array bound, which GCC makes a variable length array and refuses at
+file scope, with static storage or in a compound literal; only a parameter's
+or an automatic object's bound, which GCC accepts, stays silent. It does not yet silence other semantic
+extension reports such as arithmetic on `void *`, which both compilers
+silence.
 Suppression ends at the owning production's boundary;
 later unsuppressed occurrences, including ones from macro expansions, keep their
 diagnostics. Nested functions isolate typedef, label and switch state; under

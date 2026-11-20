@@ -1666,7 +1666,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         text: &str,
         source: crate::translation_phases::SourceVectors,
     ) {
-        if self.extension_depth == 0 {
+        if !self.under_extension() {
             self.context.report_extension(feature, text, source);
         }
     }

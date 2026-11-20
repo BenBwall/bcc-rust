@@ -14,3 +14,14 @@ sema-extension-pedantic-gcc.c: In function 'loud_after':
 sema-extension-pedantic-gcc.c:13:92: warning: ISO C does not support '__FUNCTION__' predefined identifier [-Wpedantic]
    13 | const char *loud_after(void) { __extension__ const char *p = __FUNCTION__; (void)p; return __FUNCTION__; }
       |                                                                                            ^~~~~~~~~~~~
+sema-extension-pedantic-gcc.c: At top level:
+sema-extension-pedantic-gcc.c:21:37: warning: folded integer constant expression [-Wpedantic]
+   21 | __extension__ static int loud_bound[(int)(1.0 + 1)];
+      |                                     ^~~~~~~~~~~~~~
+sema-extension-pedantic-gcc.c:22:42: warning: folded integer constant expression [-Wpedantic]
+   22 | __extension__ struct loud_member { int a[(int)(1.0 + 1)]; };
+      |                                          ^~~~~~~~~~~~~~
+sema-extension-pedantic-gcc.c: In function 'loud_static':
+sema-extension-pedantic-gcc.c:23:53: warning: folded integer constant expression [-Wpedantic]
+   23 | void loud_static(void) { __extension__ static int a[(int)(1.0 + 1)]; (void)a; }
+      |                                                     ^~~~~~~~~~~~~~
