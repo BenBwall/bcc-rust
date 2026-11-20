@@ -323,6 +323,7 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | [GCC's ranges of discarded values](sema-unused-value-ranges-gcc.stderr) | Checked 17 November 2026 against GCC 14.2 (its `<stdbool.h>` standing in as `#define bool _Bool`): every line matches but for the order on line 41, where GCC reports the comma's left operand before the statement and bcc's reporter sorts the two by column. For an operand in a macro's argument GCC adds `in definition of macro`, which bcc never writes, so the fixture has none. |
 | [Clang's checked integer arithmetic](sema-stdckdint-clang.stderr) | Checked 16 November 2026 against Clang 23.1.5: the errors, their places and their words match. Clang underlines an argument's whole macro invocation (`^~~~~~~~~~~~~~~~~~~` under `ckd_add(&c, 127, 1)`) and the `(R)` it notes in its header (`^~~`), where bcc underlines the macro's name and points at the `(`. Clang's note names its own header (`stdckdint.h:37`); bcc's names `<built-in>/stdckdint.h:18`. For `ADD` around `ckd_add`, Clang also notes `ADD`'s expansion; bcc notes only the innermost macro. |
 | [GCC's checked integer arithmetic](sema-stdckdint-gcc.stderr) | Checked 16 November 2026 against GCC 14.2 with its own `<stdckdint.h>`: identical, byte for byte. GCC reports an error a system header's macro wrote where the user invoked the macro, as it does a warning. |
+| [GCC's folded bounds under `__extension__`](sema-extension-pedantic-gcc.stderr) | Checked 20 November 2026 against GCC 14. bcc reports a folded array bound such as `(int)(1.0 + 1)` with its `-pedantic` folded-constant warning whether or not `__extension__` marks the declaration, where GCC makes the array variable length and judges it by its storage and uses: silent for an automatic object, a parameter or a block-scope type name, and an error at file scope, with static storage, in a compound literal, under an initializer, after a jump into its scope, or through a typedef or structure a static object takes, none of which `__extension__` silences. Model that variable length array, then silence the report in a marked declaration where GCC accepts the array. |
 
 The prior panic and raw-NUL findings remain protected by the guard test and
 their existing fixtures. Keep those regressions even though the old review's
@@ -1166,6 +1167,42 @@ loop/switch targets, including continue through a switch.
 ISO alignment, mismatched union-cast member types and reversed GNU ranges.
 Its GNU11 sidecar keeps the diagnostics focused on operand constraints; a
 following declaration survives every error.
+
+### GNU casts to union type
+
+`sema-union-cast-clang.c` and `sema-union-cast-gcc.c` render GNU's cast to a
+union type under `-std=c99 -Wall -Wextra -pedantic` for each identity. Checked
+20 November 2026 against Clang 23.1.5 and GCC 14 with the same options: both
+warn on the same five lines and columns (the cast's `(`), of a union type
+spelled out, through a typedef, qualified, and through a qualified typedef, and
+of a structure operand matching a member; both report the same-type cast
+`(union U)u` as a cast of a nonscalar to its own type, and both refuse a
+`short` operand that matches no member without the extension warning. Casts
+to a pointer to a union, to a pointer to such a pointer, and through a typedef
+are silent in all three. The words differ: bcc's shared extension wording and
+`-Wpedantic` tag stand for GCC's "ISO C forbids casts to union type" and
+Clang's "cast to union type is a GNU extension [-Wgnu-union-cast]", and bcc's
+`invalid operand or target type for cast` for their "cast to union type from
+type ... not present in union". Under `__extension__`, on the cast, in a macro,
+around a statement expression, before a block-scope or file-scope declaration,
+before a function definition and on a same-type cast, all three are silent;
+the declaration after a marked one and the file-scope `sizeof` operand after
+the marked one warn again on the same lines and columns.
+
+`sema-extension-pedantic-gcc.c` checks GCC's `-pedantic` reports of
+`__FUNCTION__` and `__PRETTY_FUNCTION__` under `__extension__`. Checked
+20 November 2026 against GCC 14: an `__extension__` operand, a marked
+declaration and a marked function definition silence them, and a use after the
+marked declaration warns again on the same line and column. Its last rows
+check folded constants: a marked declaration silences GCC 14's reports of a
+folded enumerator, case label and bit-field width, but leaves bcc's report of
+a folded array bound as it is unmarked. GCC makes such an array variable
+length: it refuses the static and file-scope ones ("variably modified
+'loud_bound' at file scope", "storage size of 'a' isn't constant"; the second
+is an error without `-pedantic`), where bcc reports its `-pedantic`
+folded-constant warning at the bound and GCC points at the declaration, and
+accepts the automatic one in `loud_automatic` silently, which bcc reports as
+it does unmarked (see Remaining output issues).
 
 ### Predefined function-name identifiers
 

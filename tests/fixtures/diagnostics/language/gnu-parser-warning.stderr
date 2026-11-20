@@ -53,10 +53,10 @@ error: expected a single case value in this language mode, found `...`
    |                     ^^^ expected a single case value in this language mode
 
 warning: 'cast to union' is a GNU extension [-Wpedantic]
-  --> <input>:12:16
+  --> <input>:12:15
    |
 12 |     union U u=(union U)1;
-   |                ^^^^^^^
+   |               ^^^^^^^^^^
 
 warning: 'old-style field designator' is a GNU extension [-Wpedantic]
   --> <input>:13:36

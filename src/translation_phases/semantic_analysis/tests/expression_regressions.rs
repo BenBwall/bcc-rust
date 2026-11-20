@@ -512,6 +512,228 @@ fn unparenthesized_alignof_operands_take_gnu_alignment() {
     );
 }
 
+/// GNU's cast to a union type applies only when the cast's type is a union
+/// type, through a typedef or qualified too, and the operand has a member's
+/// type. A cast to a pointer to a union, as Lua's `cast(union GCUnion *, o)`,
+/// is an ordinary pointer conversion that no policy reports, and an operand
+/// no member matches is refused without the extension report, as GCC 14 and
+/// Clang 23 do. An `__extension__` operand or declaration silences the
+/// report in both. GNU extension to C99 §6.5.4 paragraph 2, p. 81; PDF p. 93.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
+#[test]
+fn only_a_cast_to_a_union_type_is_a_gnu_union_cast() {
+    let declarations =
+        "union U { int i; double d; }; typedef union U T; typedef const union U C;\n";
+    for (body, unions) in [
+        ("void *p; union U *q = (union U *)p; (void)q;", 0),
+        ("union U *p; union U **q = (union U **)&p; (void)q;", 0),
+        ("void *p; (void)(T *)p; (void)(const union U *)p;", 0),
+        ("union U a = (union U)1; T b = (T)2.0; (void)a; (void)b;", 2),
+        (
+            "union U a = (const union U)1; union U b = (C)1; (void)a; (void)b;",
+            2,
+        ),
+        // `__extension__` silences the cast, and a same-type cast, on its
+        // operand or on a whole declaration, as in GCC and Clang.
+        (
+            "union U a = __extension__ (union U)1; union U b = __extension__ (union U)a; (void)b;",
+            0,
+        ),
+        ("union U a = __extension__ ({ (union U)1; }); (void)a;", 0),
+        (
+            "__extension__ union U a = (union U)1; union U b = (union U)2; (void)a; (void)b;",
+            1,
+        ),
+    ] {
+        let source = format!("{declarations}void f(void) {{ {body} }}");
+        with_configuration(
+            &source,
+            CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+            |context, _| {
+                let errors = context.take_pending_errors();
+                assert_eq!(errors.len(), unions, "{body}: {errors:?}");
+                assert!(
+                    errors.iter().all(|error| matches!(
+                        error,
+                        TranslationError::Extension(extension)
+                            if extension.spelling() == "cast to union"
+                    )),
+                    "{body}: {errors:?}"
+                );
+            },
+        );
+    }
+    // A marked function definition silences its body; the next one is
+    // reported again.
+    let source = format!(
+        "{declarations}__extension__ int g(int i) {{ return ((union U)i).i; }}\nint h(int i) {{ \
+         return ((union U)i).i; }}"
+    );
+    with_configuration(
+        &source,
+        CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+        |context, _| {
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Extension(extension)]
+                        if extension.spelling() == "cast to union"
+                ),
+                "{errors:?}"
+            );
+        },
+    );
+    let source = format!("{declarations}void f(short s) {{ union U u = (union U)s; (void)u; }}");
+    with_configuration(
+        &source,
+        CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+        |context, _| {
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Semantic(error)]
+                        if error.kind == SemanticErrorKind::InvalidCast
+                ),
+                "{errors:?}"
+            );
+        },
+    );
+}
+
+/// A declaration or function definition marked `__extension__` silences
+/// GCC's `-pedantic` reports of folded enumerators, case labels and bit-field
+/// widths, as GCC 14 does, but leaves the report of a folded array bound, of
+/// a value folded from an address, and of a comma in a static initializer as
+/// it is unmarked. GCC makes such an
+/// array variable length, and whether it then accepts it depends on the
+/// array's storage and uses, and `-Wall` adds its `-Waddress` to an address
+/// compared with a null pointer; this report models neither, so only an
+/// `__extension__` operand enclosing the value silences it.
+/// C99: §6.6 paragraph 6, p. 95; PDF p. 107; §6.7.5.2 paragraph 4, p. 116;
+/// PDF p. 128. GNU extension: GCC manual, "Alternate Keywords".
+#[test]
+fn extension_declarations_leave_gcc_folded_array_bound_reports() {
+    use crate::configuration::CompilerIdentity;
+    for (source, reported) in [
+        ("__extension__ static int a[(int)(1.0 + 1)];", 1),
+        ("__extension__ int a[(int)(1.0 + 1)];", 1),
+        ("__extension__ struct T { int a[(int)(1.0 + 1)]; };", 1),
+        ("__extension__ typedef int T[(int)(1.0 + 1)];", 1),
+        (
+            "__extension__ static int a[sizeof(int[(int)(1.0 + 1)])];",
+            1,
+        ),
+        ("__extension__ static int (*p)[(int)(1.0 + 1)];", 1),
+        (
+            "__extension__ static int *p = (int[(int)(1.0 + 1)]){1, 2};",
+            1,
+        ),
+        (
+            "void f(void) { __extension__ static int a[(int)(1.0 + 1)]; (void)a; }",
+            1,
+        ),
+        (
+            "void f(void) { __extension__ typedef int T[(int)(1.0 + 1)]; static T t; (void)t; }",
+            1,
+        ),
+        (
+            "__extension__ void f(void) { static int a[(int)(1.0 + 1)]; (void)a; }",
+            1,
+        ),
+        (
+            "void f(void) { __extension__ int *p = (int[(int)(1.0 + 1)]){1, 2}; (void)p; }",
+            1,
+        ),
+        (
+            "void f(void) { __extension__ static int n = sizeof(int[(int)(1.0 + 1)]); (void)n; }",
+            1,
+        ),
+        // GCC accepts these variable length arrays silently, but the
+        // report stays as it is unmarked.
+        (
+            "void f(void) { __extension__ int a[(int)(1.0 + 1)]; (void)a; }",
+            1,
+        ),
+        (
+            "void f(void) { __extension__ int n = sizeof(int[(int)(1.0 + 1)]); (void)n; }",
+            1,
+        ),
+        (
+            "__extension__ void f(void) { struct T { int a[(int)(1.0 + 1)]; } t; (void)t; }",
+            1,
+        ),
+        (
+            "__extension__ void f(int a[static (int)(1.0 + 1)]) { (void)a; }",
+            1,
+        ),
+        // An `__extension__` operand around the bound never silenced it, but
+        // one around its type name does.
+        ("static int a[__extension__ ((int)(1.0 + 1))];", 1),
+        (
+            "static int n = __extension__ sizeof(int[(int)(1.0 + 1)]);",
+            0,
+        ),
+        ("static int a[(int)(1.0 + 1)];", 1),
+        // The other folded constants are silenced in a marked declaration.
+        ("__extension__ enum { A = (int)(1.0 + 1) };", 0),
+        ("__extension__ struct B { int b : (int)(1.5 * 2); };", 0),
+        (
+            "__extension__ int g(int i) { switch (i) { case (int)(1.0 + 1): return 1; } return 0; \
+             }",
+            0,
+        ),
+        ("enum { A = (int)(1.0 + 1) };", 1),
+        // A comma in a static initializer is reported as it is unmarked:
+        // GCC 14 refuses it there whatever the mark.
+        ("__extension__ static int y = (1, 2);", 1),
+        (
+            "void f(void) { __extension__ static int y = (1, 2); (void)y; }",
+            1,
+        ),
+        (
+            "__extension__ int g(void) { static int y = (1, 2); return y; }",
+            1,
+        ),
+        // A value folded from an address is reported as it is unmarked.
+        ("int x; __extension__ enum { A = &x != 0 };", 1),
+        (
+            "int x; __extension__ int g(int i) { switch (i) { case &x != 0: return 1; } return 0; \
+             }",
+            1,
+        ),
+    ] {
+        let configuration = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny)
+            .with_gnu_extensions(true)
+            .with_compiler_extensions(true)
+            .with_compiler_identity(CompilerIdentity::Gcc);
+        with_configuration(source, configuration, |context, _| {
+            let errors = context.take_pending_errors();
+            let folded = errors
+                .iter()
+                .filter(|error| {
+                    // `-pedantic-errors` makes GCC's pedantic report an error.
+                    matches!(
+                        error,
+                        TranslationError::Classified(classified)
+                            if matches!(
+                                &*classified.error,
+                                TranslationError::Semantic(error)
+                                    if matches!(error.kind, SemanticErrorKind::PedanticConstant(_))
+                            )
+                    )
+                })
+                .count();
+            assert_eq!(
+                (folded, errors.len()),
+                (reported, reported),
+                "{source}: {errors:?}"
+            );
+        });
+    }
+}
+
 /// GCC accepts a cast of a structure or union to its own type, qualifiers
 /// aside, as its value, an rvalue ("ISO C forbids casting nonscalar to the
 /// same type" under -Wpedantic); any other aggregate cast stays invalid.
@@ -533,12 +755,14 @@ fn aggregates_cast_to_their_own_type_are_rvalues() {
             |context, _| {
                 let errors = context.take_pending_errors();
                 assert_eq!(errors.len(), extensions, "{policy:?}: {errors:?}");
-                // The `(union U)` spelling keeps the parser's cast-to-union
-                // report; the others are same-type casts.
+                // All five are same-type casts, `(union U)u` included.
                 assert!(
-                    errors
-                        .iter()
-                        .all(|error| matches!(error, TranslationError::Extension(_))),
+                    errors.iter().all(|error| matches!(
+                        error,
+                        TranslationError::Extension(extension)
+                            if extension.spelling()
+                                == "cast of a structure or union to its own type"
+                    )),
                     "{errors:?}"
                 );
             },

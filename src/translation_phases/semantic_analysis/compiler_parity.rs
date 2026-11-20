@@ -84,7 +84,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 "ISO C does not support '__PRETTY_FUNCTION__' predefined identifier",
             | _ => return,
         };
-        self.report_pedantic_constant(text, name.source_vectors);
+        self.report_pedantic_extension(text, name.source_vectors);
     }
 
     /// What GCC's `-pedantic` says of `__func__` before C99, which a function

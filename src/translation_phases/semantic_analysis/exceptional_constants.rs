@@ -738,7 +738,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     "bit-field width not an integer constant expression",
                 | ConstantSite::Other => "folded integer constant expression",
             };
-            self.report_pedantic_constant(text, e.source_vectors);
+            // A marked declaration silences the report as GCC 14 does, but
+            // for an array bound, which GCC makes variable length and judges
+            // by the array's storage and uses, and a value folded from an
+            // address, for which `-Wall` adds GCC's `-Waddress`; bcc models
+            // neither, so only an `__extension__` operand silences these.
+            // C99: §6.7.5.2 paragraph 4, p. 116; PDF p. 128.
+            if self.constant_site != ConstantSite::Other
+                && self.expression_info(e).constant == super::ConstantClass::Arithmetic
+            {
+                self.report_pedantic_extension(text, e.source_vectors);
+            } else {
+                self.report_pedantic_constant(text, e.source_vectors);
+            }
             return;
         }
         // Clang checks a case label's overflow, but not its form.
@@ -788,11 +800,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Reports `text` as `-pedantic` reports an extension.
+    /// Reports `text` as `-pedantic` reports an extension. An `__extension__`
+    /// operand silences it; a declaration marked `__extension__` does not,
+    /// since GCC 14 still refuses, for one, a comma in a static initializer
+    /// there.
     pub(super) fn report_pedantic_constant(&mut self, text: &str, source: SourceVectors) {
-        if self.extension_operands != 0 {
-            return;
+        if self.extension_operands == 0 {
+            self.pedantic_constant(text, source);
         }
+    }
+
+    /// Reports `text` as `-pedantic` reports an extension, silenced by an
+    /// `__extension__` operand or by a marked declaration around it, as GCC 14
+    /// silences the reports that call this (checked one by one: a folded
+    /// enumerator, case label or bit-field width, and `__FUNCTION__`).
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    pub(super) fn report_pedantic_extension(&mut self, text: &str, source: SourceVectors) {
+        if !self.under_extension() {
+            self.pedantic_constant(text, source);
+        }
+    }
+
+    /// Reports `text` under `-pedantic`, whatever silences it elsewhere.
+    fn pedantic_constant(&mut self, text: &str, source: SourceVectors) {
         let text = self.context.string_cache.intern(text);
         self.extension_error(
             crate::configuration::Feature::ConstantFolding,

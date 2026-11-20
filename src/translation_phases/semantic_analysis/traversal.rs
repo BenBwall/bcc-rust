@@ -7,17 +7,23 @@ use super::{
     Analyzer,
     ScopeKind,
     Work,
-    functions::FunctionWork,
+    functions::{
+        FunctionWork,
+        extension_marked,
+    },
 };
-use crate::translation_phases::parsing::syntax::{
-    BinaryOperator,
-    Expression,
-    ExpressionSlot,
-    ExpressionType,
-    ForInitializer,
-    Statement,
-    StatementType,
-    UnaryOperator,
+use crate::translation_phases::parsing::{
+    declaration_syntax::DeclarationSpecifiers,
+    syntax::{
+        BinaryOperator,
+        Expression,
+        ExpressionSlot,
+        ExpressionType,
+        ForInitializer,
+        Statement,
+        StatementType,
+        UnaryOperator,
+    },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -759,6 +765,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if is_extension(e) {
             self.extension_operands += 1;
         }
+    }
+
+    /// Enters a declaration or function definition whose specifiers are
+    /// marked `__extension__` until its work is done: GCC and Clang silence
+    /// `-pedantic` in its initializers and body as in an `__extension__`
+    /// operand.
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    pub(super) fn enter_extension_declaration(&mut self, specifiers: DeclarationSpecifiers<'tu>) {
+        if extension_marked(specifiers) {
+            self.extension_declarations += 1;
+            self.work.push(Work::LeaveExtension);
+        }
+    }
+
+    /// Whether an `__extension__` operand or marked declaration encloses the
+    /// current work, silencing `-pedantic` there.
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    pub(super) const fn under_extension(&self) -> bool {
+        self.extension_operands != 0 || self.extension_declarations != 0
     }
 
     /// Undoes [`Self::enter_expression`], and checks a finished full

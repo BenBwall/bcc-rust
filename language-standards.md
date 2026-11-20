@@ -16,9 +16,8 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
 - Type checking, constant evaluation outside preprocessing, attribute meaning,
   target assembly validation, ABI and calling-convention effects and code
   generation belong to later phases. Syntax alone cannot settle every GNU
-  zero-length array or union cast: the policy diagnostic covers literal zero
-  bounds (parenthesized too) and explicitly written union types, while general
-  constant bounds and typedefs naming unions wait for analysis.
+  zero-length array: the policy diagnostic covers literal zero bounds
+  (parenthesized too), while general constant bounds wait for analysis.
 - Decimal type keywords parse, but the decimal floating suffixes `df`, `dd` and
   `dl` and decimal values are not implemented.
 - Integer constants are limited to 64-bit magnitudes, except `wb` and `uwb`
@@ -50,7 +49,25 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   parameter in a definition, and a typedef redefinition before C11), since
   Clang's silences only the extension diagnostics it does not report by
   default; GCC's silences them too, though under GCC's rules bcc does not yet
-  silence a typedef redefinition.
+  silence a typedef redefinition. In semantic analysis an `__extension__`
+  operand, or a declaration or function definition whose specifiers it marks,
+  silences the cast to a union type and the cast to the operand's own
+  structure or union type (`UnionCasts`, `SameTypeCasts`), as in both
+  compilers, and GCC's `-pedantic` reports of predefined identifiers and of
+  folded enumerators, case labels and bit-field widths, as in GCC; a marked
+  member declaration or `_Static_assert` does not yet silence its own folded
+  constant. A marked declaration leaves GCC's report of a folded array bound
+  as it is unmarked; only an `__extension__` operand around the bound or its
+  type name silences it. GCC makes such an array variable length and then
+  accepts or refuses it by its storage and uses (file scope, static storage,
+  a compound literal, an initializer, a jump into its scope, a typedef or
+  structure a static object takes), none of which `__extension__` silences;
+  matching GCC there needs that variable length array modelled, which is
+  follow-up work. A marked declaration also leaves the report of an
+  enumerator or case label folded from an address (`&x != 0`), where `-Wall`
+  adds GCC's `-Waddress`, which bcc does not model. Other semantic extension
+  reports, such as arithmetic on `void *`, ignore it yet, where both
+  compilers silence them.
 - A preprocessing extension diagnostic raised in a macro expansion may
   underline the replacement in the macro definition. Parser and semantic
   extension diagnostics and warning-group diagnostics point at the outermost
@@ -791,7 +808,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | VoidExpressionReturn | - | - | - | - | - | - | - | GNU only | semantic analysis |
 | RealImag | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
-| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
+| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
 | EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ExtraSemicolons | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -884,10 +901,19 @@ The following vocabulary entries retain the established diagnostic contracts:
   type, qualifiers aside (`(struct S)s`, through typedefs too), gives the
   operand's value as an rvalue, as GCC accepts it ("ISO C forbids casting
   nonscalar to the same type" under -Wpedantic; C99 §6.5.4p2 requires a scalar
-  or void type). Warn/Deny report it, except a cast spelled `(union ...)`,
-  which keeps the parser's `UnionCasts` report. A cast to another aggregate
-  type stays invalid, the result is not an lvalue, and it is no constant
-  initializer of a static object, as in GCC.
+  or void type). Warn/Deny report it, `(union U)u` included, as GCC and Clang
+  do. A cast to another aggregate type stays invalid, the result is not an
+  lvalue, and it is no constant initializer of a static object, as in GCC.
+- `UnionCasts` has GNU origin. Semantic analysis reports a cast whose type is
+  a union type, through a typedef or qualified too, once the operand's type
+  matches a member's, at the cast's `(` as GCC 14 and Clang 23 do. A cast to a
+  pointer to a union (`(union U *)p`) is an ordinary pointer conversion, and an
+  operand no member matches is refused without the extension report. GCC files
+  it under `-Wpedantic` ("ISO C forbids casts to union type") and Clang under
+  `-Wgnu-union-cast` ("cast to union type is a GNU extension"); bcc names
+  `-Wpedantic` under both identities, since it does not model Clang's group.
+  An `__extension__` operand, or a declaration or function definition marked
+  `__extension__`, silences it and the same-type cast, as in both compilers.
 - `ArrayCompoundLiteral` has GNU origin: an array initialized by a compound
   literal of its type, as "Arrays initialized by array compound literals"
   below describes. Only the Clang identity reports it under `-pedantic`;
@@ -1088,9 +1114,16 @@ a block or before a declaration, `_Static_assert` without a message, an
 unnamed parameter in a definition and a typedef redefinition before C11, which
 Clang warns of by default
 (`DiagnosticIDs::getDiagnosticSeverity` silences only an extension diagnostic
-that is off by default). Suppression ends at the owning production's boundary;
-later unsuppressed occurrences, including ones from macro expansions, keep their
-diagnostics. Nested functions isolate typedef, label and switch state; under
+that is off by default). In semantic analysis it silences casts to a union
+type and to the operand's own type, and GCC's `-pedantic` reports of folded
+constants and predefined identifiers, except, in a marked declaration, that of
+a folded array bound, which stays as it is unmarked until bcc models the
+variable length array GCC makes of it, and of a value folded from an address
+(see the limits above). It does not yet
+silence other semantic extension reports such as arithmetic on `void *`,
+which both compilers silence. Suppression ends at the owning production's
+boundary; later unsuppressed occurrences, including ones from macro
+expansions, keep their diagnostics. Nested functions isolate typedef, label and switch state; under
 the Clang identity a function definition in a block is the error "function
 definition is not allowed here", as in Clang (TCC's and MSVC's identities give
 "cannot use local functions" and C2601 "local function definitions are

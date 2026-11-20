@@ -3565,7 +3565,7 @@ pub(super) fn function_derivation<'tu>(
 }
 
 /// Whether a declaration's specifiers include `__extension__`.
-fn extension_marked(specifiers: DeclarationSpecifiers<'_>) -> bool {
+pub(super) fn extension_marked(specifiers: DeclarationSpecifiers<'_>) -> bool {
     let mut chain = specifiers.extensions;
     while let Some(item) = chain {
         if item.kind == SpecifierExtensionKind::ExtensionMarker {
