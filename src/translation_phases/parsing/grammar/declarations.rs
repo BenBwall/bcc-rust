@@ -658,6 +658,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                             .declarator
                             .and_then(Declarator::identifier)
                             .is_none()
+                        && !self
+                            .context
+                            .unnamed_parameter_left_to_analysis(parameter.source_vectors)
                     {
                         self.extension_outside_pedantic(
                             Feature::UnnamedDefinitionParameters,

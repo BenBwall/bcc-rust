@@ -78,7 +78,7 @@ impl CompilerConfiguration {
         let promoted = self.pedantic_errors || self.warnings_as_errors;
         let error = match (filing, self.extension_mappings.gcc_pedantic) {
             | (GccFiling::Pedantic, Some(level)) => level == Level::Error,
-            | (GccFiling::OwnOption, _) => promoted || self.extension_mappings.gcc_pedantic_error,
+            | (GccFiling::Enabled, _) => promoted || self.extension_mappings.gcc_pedantic_error,
             | _ => promoted,
         };
         Some(if error {
@@ -115,12 +115,12 @@ impl CompilerConfiguration {
 pub(crate) enum GccFiling {
     /// Under `-Wpedantic`, as its C front end files most of them.
     Pedantic,
-    /// Under an option of its own that `-Wpedantic` enables, such as
-    /// `-Wpointer-arith` ([`super::Feature::gcc_files_under_own_option`]).
-    OwnOption,
-    /// Under no option, as its preprocessor files some of them
-    /// ([`super::Feature::gcc_preprocessor_names_no_option`]).
-    NoOption,
+    /// Under an option of its own that `-Wpedantic` enables and classifies,
+    /// such as `-Wpointer-arith` ([`super::Feature::gcc_filing`]).
+    Enabled,
+    /// Under no option, or one that `-Wpedantic` does not classify, such as
+    /// `-Wlong-long` ([`super::Feature::gcc_filing`]).
+    Unclassified,
     /// By its preprocessor, which files its pedantic warnings under options
     /// of their own or none, which bcc does not model one by one: what bcc's
     /// preprocessor reports, before the parser starts, keeps the extension
@@ -159,13 +159,27 @@ impl ExtensionClass {
         Self::ByDefault,
     ];
 
-    /// The class of an extension diagnostic of syntax from `origin`, which
-    /// Clang warns of by default when `by_default` is set.
-    pub(crate) const fn of(origin: super::FeatureOrigin, by_default: bool) -> Self {
+    /// The class of an extension diagnostic of syntax from `origin`, of
+    /// `feature` where the caller names it, which Clang warns of by default
+    /// when `by_default` is set.
+    pub(crate) const fn of(
+        origin: super::FeatureOrigin,
+        feature: Option<super::Feature>,
+        by_default: bool,
+    ) -> Self {
         use super::{
             CStandard,
             FeatureOrigin,
         };
+        if let Some(feature) = feature
+            && feature.clang_outside_revision_group()
+        {
+            return if by_default {
+                Self::ByDefault
+            } else {
+                Self::Pedantic
+            };
+        }
         match origin {
             | FeatureOrigin::Standard(CStandard::C23) if by_default => Self::C23ByDefault,
             | _ if by_default => Self::ByDefault,

@@ -54,14 +54,8 @@ impl<'tu> Context<'tu> {
         source: SourceVectors,
     ) {
         if !self.configuration.silent_extension(feature) {
-            let filing = self.gcc_filing(Some(feature));
-            self.report_extension_in(
-                spelling,
-                feature.origin(),
-                source,
-                ExtensionOption::Pedantic,
-                filing,
-            );
+            let reach = self.reach(feature.origin(), Some(feature), ExtensionOption::Pedantic);
+            self.report_extension_in(spelling, feature.origin(), source, reach);
         }
     }
 
@@ -82,13 +76,8 @@ impl<'tu> Context<'tu> {
         source: SourceVectors,
     ) {
         if !self.configuration.silent_extension(feature) {
-            self.report_extension_in(
-                spelling,
-                feature.origin(),
-                source,
-                ExtensionOption::Everything,
-                self.gcc_filing(Some(feature)),
-            );
+            let reach = self.reach(feature.origin(), Some(feature), ExtensionOption::Everything);
+            self.report_extension_in(spelling, feature.origin(), source, reach);
         }
     }
 
@@ -101,13 +90,8 @@ impl<'tu> Context<'tu> {
         origin: FeatureOrigin,
         source_vectors: SourceVectors,
     ) {
-        self.report_extension_in(
-            spelling,
-            origin,
-            source_vectors,
-            ExtensionOption::Pedantic,
-            self.gcc_filing(None),
-        );
+        let reach = self.reach(origin, None, ExtensionOption::Pedantic);
+        self.report_extension_in(spelling, origin, source_vectors, reach);
     }
 
     /// [`Self::report_extension_since`] for a keyword, which GCC's C front
@@ -119,46 +103,59 @@ impl<'tu> Context<'tu> {
         origin: FeatureOrigin,
         source_vectors: SourceVectors,
     ) {
-        self.report_extension_in(
-            spelling,
-            origin,
-            source_vectors,
-            ExtensionOption::Pedantic,
-            GccFiling::Pedantic,
-        );
+        let reach = ExtensionReach {
+            gcc: GccFiling::Pedantic,
+            ..self.reach(origin, None, ExtensionOption::Pedantic)
+        };
+        self.report_extension_in(spelling, origin, source_vectors, reach);
     }
 
-    /// [`Self::report_extension_since`], for a diagnostic of the warning
-    /// `option`, which GCC files as `filing` says.
+    /// [`Self::report_extension_since`], for a diagnostic the options reach
+    /// as `reach` says.
     fn report_extension_in(
         &mut self,
         spelling: &str,
         origin: FeatureOrigin,
         source_vectors: SourceVectors,
-        option: ExtensionOption,
-        filing: GccFiling,
+        reach: ExtensionReach,
     ) {
-        let Some(severity) = self.extension_severity(
-            origin,
-            DiagnosticPolicy::Extension,
-            source_vectors,
-            option,
-            filing,
-        ) else {
+        let Some(severity) =
+            self.extension_severity(origin, DiagnosticPolicy::Extension, source_vectors, reach)
+        else {
             return;
         };
-        self.emit_extension(spelling, origin, severity, source_vectors, option, filing);
+        self.emit_extension(spelling, origin, severity, source_vectors, reach);
     }
 
-    /// What the settings at `source` make of an extension diagnostic of the
-    /// warning `option`, if they report it.
+    /// How the warning options reach an extension diagnostic of syntax from
+    /// `origin`, of `feature` where the caller names it, which a pragma
+    /// names by `option`.
+    fn reach(
+        &self,
+        origin: FeatureOrigin,
+        feature: Option<Feature>,
+        option: ExtensionOption,
+    ) -> ExtensionReach {
+        let gcc = match feature.and_then(Feature::gcc_filing) {
+            | Some(filing) => filing,
+            | None if self.parsing_started => GccFiling::Pedantic,
+            | None => GccFiling::Preprocessor,
+        };
+        ExtensionReach {
+            option,
+            clang: ExtensionClass::of(origin, feature, option == ExtensionOption::Everything),
+            gcc,
+        }
+    }
+
+    /// What the settings at `source` make of an extension diagnostic the
+    /// options reach as `reach` says, if they report it.
     fn extension_severity(
         &self,
         origin: FeatureOrigin,
         baseline: DiagnosticPolicy,
         source: SourceVectors,
-        option: ExtensionOption,
-        filing: GccFiling,
+        reach: ExtensionReach,
     ) -> Option<ErrorSeverity> {
         if matches!(
             origin,
@@ -176,10 +173,9 @@ impl<'tu> Context<'tu> {
         if self.configuration.suppress_warnings() && !matches!(baseline, DiagnosticPolicy::Error) {
             return None;
         }
-        let severity = if let Some(decided) =
-            self.command_line_extension_severity(origin, baseline, source, option, filing)
-        {
-            decided?
+        let option = reach.option;
+        let severity = if self.command_line_classifies(reach, source) {
+            self.command_line_extension_severity(baseline, reach)?
         } else {
             match self.everything_class_outside_pedantic(option, source) {
                 | Some(PragmaClass::Ignored) => return None,
@@ -197,11 +193,10 @@ impl<'tu> Context<'tu> {
     }
 
     /// What the command line's warning options alone make of an extension
-    /// diagnostic of the warning `option` at `source`, where no diagnostic
-    /// pragma governs it (`None` otherwise, and for an identity whose rules
-    /// bcc does not model this way): Clang's mapping of it
+    /// diagnostic the options reach as `reach` says, where they classify it
+    /// ([`Self::command_line_classifies`]): Clang's mapping of it
     /// ([`CompilerConfiguration::clang_extension_severity`]), or GCC's
-    /// classification of its `-Wpedantic`, which bcc files it under
+    /// classification of a pedantic warning
     /// ([`CompilerConfiguration::gcc_pedantic_severity`]). The severity is
     /// final: `-w` and `-Werror` have had their say.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
@@ -210,62 +205,79 @@ impl<'tu> Context<'tu> {
     /// [`CompilerConfiguration::gcc_pedantic_severity`]: crate::configuration::CompilerConfiguration::gcc_pedantic_severity
     fn command_line_extension_severity(
         &self,
-        origin: FeatureOrigin,
         baseline: DiagnosticPolicy,
-        source: SourceVectors,
-        option: ExtensionOption,
-        filing: GccFiling,
-    ) -> Option<Option<ErrorSeverity>> {
-        if !self.command_line_classifies(option, source, filing) {
-            return None;
-        }
+        reach: ExtensionReach,
+    ) -> Option<ErrorSeverity> {
         let configuration = self.configuration;
-        Some(
-            if configuration.compiler_identity().rules() == RuleSet::Clang {
-                configuration.clang_extension_severity(ExtensionClass::of(
-                    origin,
-                    option == ExtensionOption::Everything,
-                ))
-            } else {
-                // GCC files what Clang warns of by default under `-Wpedantic`
-                // too, which enables it.
-                let baseline = match option {
-                    | ExtensionOption::Everything => DiagnosticPolicy::Extension,
-                    | _ => baseline,
-                };
-                let policy = configuration.extension_policy();
-                configuration
-                    .gcc_pedantic_severity(policy_severity(policy, baseline).is_some(), filing)
-            },
-        )
+        if configuration.compiler_identity().rules() == RuleSet::Clang {
+            return configuration.clang_extension_severity(reach.clang);
+        }
+        // GCC files what Clang warns of by default under `-Wpedantic` too,
+        // which enables it.
+        let baseline = match reach.option {
+            | ExtensionOption::Everything => DiagnosticPolicy::Extension,
+            | _ => baseline,
+        };
+        let enabled = policy_severity(configuration.extension_policy(), baseline).is_some();
+        configuration.gcc_pedantic_severity(enabled, reach.gcc)
     }
 
-    /// Whether the command line alone classifies an extension diagnostic of
-    /// the warning `option` at `source`
-    /// ([`Self::command_line_extension_severity`]). What GCC's preprocessor
+    /// Whether the command line alone classifies an extension diagnostic the
+    /// options reach as `reach` says at `source`: where no diagnostic pragma
+    /// governs it, under Clang's rules or GCC's. What GCC's preprocessor
     /// reports ([`GccFiling::Preprocessor`]) stays the extension policy's.
-    pub(crate) fn command_line_classifies(
-        &self,
-        option: ExtensionOption,
-        source: SourceVectors,
-        filing: GccFiling,
-    ) -> bool {
-        option != ExtensionOption::None
+    fn command_line_classifies(&self, reach: ExtensionReach, source: SourceVectors) -> bool {
+        reach.option != ExtensionOption::None
             && (self.configuration.compiler_identity().rules() == RuleSet::Clang
                 || (self.configuration.compiler_identity() == CompilerIdentity::Gcc
-                    && filing != GccFiling::Preprocessor))
+                    && reach.gcc != GccFiling::Preprocessor))
             && !self.governed_by_pragma(source)
     }
 
-    /// Queues an extension diagnostic whose severity the command line's
+    /// Queues an extension diagnostic the options reach as `reach` says: one
+    /// whose severity the command line settled is final
+    /// ([`Self::command_line_classifies`]); a pragma classifies the others.
+    fn queue_extension(
+        &mut self,
+        source: SourceVectors,
+        error: TranslationError<'tu>,
+        severity: ErrorSeverity,
+        reach: ExtensionReach,
+    ) {
+        if self.command_line_classifies(reach, source) {
+            self.push_final_extension(error, severity);
+        } else {
+            self.classified_extension(source, error, reach.option);
+        }
+    }
+
+    /// Whether GCC's `-Werror`, or its `-Werror=pedantic`, made the extension
+    /// diagnostic at `source` the error `severity` says, which its format
+    /// names, unlike one `-pedantic-errors` made
+    /// (`print_option_information` in `diagnostic.cc`).
+    fn gcc_promoted(
+        &self,
+        severity: ErrorSeverity,
+        reach: ExtensionReach,
+        source: SourceVectors,
+    ) -> bool {
+        severity == ErrorSeverity::Error
+            && self.configuration.compiler_identity() == CompilerIdentity::Gcc
+            && !self.configuration.pedantic_errors()
+            && self.command_line_classifies(reach, source)
+    }
+
+    /// Queues an extension diagnostic at the `severity` the command line's
     /// options settled, which the reporter must not promote again: `-Werror`
     /// has had its say, and `-Wno-error=` may have kept it a warning.
-    /// `-Wfatal-errors` still makes such an error fatal.
+    /// `-Wfatal-errors` still makes such an error fatal. The diagnostic keeps
+    /// its own severity for its words, which may name the `-Werror` that
+    /// promoted it.
     #[cold]
     #[inline(never)]
-    fn push_final_extension(&mut self, mut error: TranslationError<'tu>) {
-        let severity = error.severity();
+    fn push_final_extension(&mut self, mut error: TranslationError<'tu>, severity: ErrorSeverity) {
         if let TranslationError::Parsing(parsing) = &mut error {
+            parsing.severity = severity;
             parsing.severity_is_final = true;
             self.pending_errors.push_back(error);
             return;
@@ -280,41 +292,8 @@ impl<'tu> Context<'tu> {
             }));
     }
 
-    /// How GCC files a diagnostic about `feature`, or about syntax whose
-    /// feature the caller does not name, reported now.
-    fn gcc_filing(&self, feature: Option<Feature>) -> GccFiling {
-        if !self.parsing_started {
-            if feature.is_some_and(Feature::gcc_preprocessor_names_no_option) {
-                GccFiling::NoOption
-            } else {
-                GccFiling::Preprocessor
-            }
-        } else if feature.is_some_and(Feature::gcc_files_under_own_option) {
-            GccFiling::OwnOption
-        } else {
-            GccFiling::Pedantic
-        }
-    }
-
-    /// Queues an extension diagnostic of the warning `option`: one whose
-    /// severity the command line settled is final
-    /// ([`Self::command_line_classifies`]); a pragma classifies the others.
-    fn queue_extension(
-        &mut self,
-        source: SourceVectors,
-        error: TranslationError<'tu>,
-        option: ExtensionOption,
-        filing: GccFiling,
-    ) {
-        if self.command_line_classifies(option, source, filing) {
-            self.push_final_extension(error);
-        } else {
-            self.classified_extension(source, error, option);
-        }
-    }
-
-    /// Queues the diagnostic of the warning `option` once the policy has asked
-    /// for one. Callers inline only the policy checks above.
+    /// Queues the diagnostic the options reach as `reach` says once the policy
+    /// has asked for one. Callers inline only the policy checks above.
     #[cold]
     #[inline(never)]
     fn emit_extension(
@@ -323,23 +302,15 @@ impl<'tu> Context<'tu> {
         origin: FeatureOrigin,
         severity: ErrorSeverity,
         source_vectors: SourceVectors,
-        option: ExtensionOption,
-        filing: GccFiling,
+        reach: ExtensionReach,
     ) {
         let spelling = self.diagnostic_text(spelling);
         let at = source_vectors;
         let source_vectors = self.file_location(source_vectors);
         let suppressed = self.tu_arena().alloc(Cell::new(false));
-        // GCC names `-Werror` where it, or `-Werror=pedantic`, made a warning
-        // an error, but not where `-pedantic-errors` made it one
-        // (`print_option_information` in `diagnostic.cc`).
-        let promoted = severity == ErrorSeverity::Error
-            && self.configuration.compiler_identity() == CompilerIdentity::Gcc
-            && !self.configuration.pedantic_errors()
-            && self.command_line_classifies(option, at, filing);
-        let gcc_promotion = match filing {
-            | _ if !promoted => GccPromotion::None,
-            | GccFiling::NoOption => GccPromotion::Werror,
+        let gcc_promotion = match reach.gcc {
+            | _ if !self.gcc_promoted(severity, reach, at) => GccPromotion::None,
+            | GccFiling::Unclassified => GccPromotion::Werror,
             | _ => GccPromotion::WerrorPedantic,
         };
         self.queue_extension(
@@ -352,8 +323,8 @@ impl<'tu> Context<'tu> {
                 gcc_promotion,
                 source_vectors,
             }),
-            option,
-            filing,
+            severity,
+            reach,
         );
     }
 
@@ -380,12 +351,37 @@ impl<'tu> Context<'tu> {
             | DiagnosticPolicy::Warning => ExtensionOption::Everything,
             | DiagnosticPolicy::WarningOnly | DiagnosticPolicy::Error => ExtensionOption::None,
         };
-        let filing = self.gcc_filing(Some(feature));
-        if let Some(severity) =
-            self.extension_severity(feature.origin(), baseline, source, option, filing)
-        {
-            self.queue_extension(source, diagnostic(severity), option, filing);
+        let reach = self.reach(feature.origin(), Some(feature), option);
+        if let Some(severity) = self.extension_severity(feature.origin(), baseline, source, reach) {
+            let own = if self.gcc_promoted(severity, reach, source) {
+                ErrorSeverity::Warning
+            } else {
+                severity
+            };
+            self.queue_extension(source, diagnostic(own), severity, reach);
         }
+    }
+
+    /// Whether semantic analysis reports a parameter without a name in a
+    /// function definition at `source`, in its own words, rather than the
+    /// parser as a C23 extension: where a diagnostic pragma governs it (or
+    /// the identity's rules are neither Clang's nor GCC's), the extension
+    /// policy leaves the extension unreported, and no pragma naming Clang's
+    /// `-Weverything` reaches it. Where the command line alone classifies it
+    /// ([`Self::command_line_classifies`]), the parser reports it as its
+    /// compiler does, in order with the other C23 extensions.
+    /// C99: §6.9.1 paragraph 5, p. 141; PDF p. 153.
+    pub(crate) fn unnamed_parameter_left_to_analysis(&self, source: SourceVectors) -> bool {
+        let reach = ExtensionReach {
+            option: ExtensionOption::Everything,
+            clang:  ExtensionClass::C23ByDefault,
+            gcc:    GccFiling::Pedantic,
+        };
+        !self.command_line_classifies(reach, source)
+            && self.extension_policy_at(reach.option, source) == ExtensionPolicy::Allow
+            && self
+                .everything_class_outside_pedantic(reach.option, source)
+                .is_none()
     }
 
     /// Typed preprocessor adapter; payloads keep their labels, notes and help.
@@ -470,6 +466,16 @@ pub(crate) enum ExtensionOption {
     Everything,
     /// One this code does not track, whose own group, if any, classifies it.
     None,
+}
+
+/// How the warning options reach an extension diagnostic: by the option a
+/// pragma names it by, the class Clang's command-line options map, and where
+/// GCC files it.
+#[derive(Clone, Copy)]
+struct ExtensionReach {
+    option: ExtensionOption,
+    clang:  ExtensionClass,
+    gcc:    GccFiling,
 }
 
 /// Baseline for a diagnostic controlled by the extension policy.
