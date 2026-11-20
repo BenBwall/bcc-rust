@@ -34,6 +34,7 @@ use crate::{
     configuration::{
         CompilerConfiguration,
         CompilerIdentity,
+        Coverage,
         DiagnosticColor,
         DiagnosticFormat,
         DiagnosticGroup,
@@ -401,8 +402,9 @@ impl Cli {
     /// (`--unknown-warning-option`), as Clang reads them; bcc's own command
     /// line warns in Clang's words about an option bcc does not implement,
     /// and under any identity but GCC's about one of GCC's groups, which it
-    /// applies all the same, as it applies an option whose group it models
-    /// only in part. The GCC personality passes the `-Wno-` options
+    /// applies all the same; and in its own words about an option whose
+    /// group it models only in part, which it applies to that part
+    /// ([`Coverage::Part`]). The GCC personality passes the `-Wno-` options
     /// GCC ignores, which GCC notes.
     pub(super) fn report_warning_options(&self, context: &mut Context<'_>) {
         let tu = context.tu_arena();
@@ -423,27 +425,44 @@ impl Cli {
         let own = !self.compiler_extensions
             && matches!(self.compiler_identity, Identity::Clang | Identity::Gcc);
         // An empty `-Wno-` names the unnamed group Clang's table begins
-        // with.
-        let unknown = self.language_option.iter().filter(|option| {
-            *option != "-Wno-"
-                && match LanguageFlag::parse(option) {
-                    | Some(LanguageFlag::UnknownWarning) => true,
-                    | Some(LanguageFlag::WarningGroup(group, _)) => group.gcc_only() && !gcc,
-                    // An option bcc models only in part, which it applies.
-                    | Some(LanguageFlag::ExtensionOption(name, _, whole)) =>
-                        own && !name.models_whole_group(whole, !gcc),
-                    | _ => false,
-                }
+        // with. Each complaint says whether bcc applies the option in part.
+        let unknown = self.language_option.iter().filter_map(|option| {
+            if option == "-Wno-" {
+                return None;
+            }
+            match LanguageFlag::parse(option)? {
+                | LanguageFlag::UnknownWarning => Some((option, false)),
+                | LanguageFlag::WarningGroup(group, _) if group.gcc_only() && !gcc =>
+                    Some((option, false)),
+                | LanguageFlag::ExtensionOption(name, _, whole) if own =>
+                    match name.coverage(whole, !gcc) {
+                        | Coverage::Whole => None,
+                        | Coverage::Part => Some((option, true)),
+                        | Coverage::Nothing => Some((option, false)),
+                    },
+                | _ => None,
+            }
         });
         let suffix = match severity {
             | ErrorSeverity::Error => "-Werror,-Wunknown-warning-option",
             | ErrorSeverity::Warning => "-Wunknown-warning-option",
         };
         let mut complaints = crate::util::bump::ArenaVec::new_in(tu);
-        for option in self.unknown_warning_option.iter().chain(unknown) {
-            let complaint = warning_options::clang_complaint(option, tu).unwrap_or_else(|| {
-                crate::diagnostics::format_in!(tu, "unknown warning option '{option}'")
-            });
+        let unrecognized = self
+            .unknown_warning_option
+            .iter()
+            .map(|option| (option, false));
+        for (option, part) in unrecognized.chain(unknown) {
+            let complaint = if part {
+                crate::diagnostics::format_in!(
+                    tu,
+                    "warning option '{option}' is only partly implemented"
+                )
+            } else {
+                warning_options::clang_complaint(option, tu).unwrap_or_else(|| {
+                    crate::diagnostics::format_in!(tu, "unknown warning option '{option}'")
+                })
+            };
             complaints.push((
                 severity,
                 crate::diagnostics::format_in!(tu, "{complaint} [{suffix}]"),
@@ -955,8 +974,8 @@ enum LanguageFlag {
     PedanticErrors,
     /// A form of a warning option that only sets the mapping of the
     /// extension diagnostics it reaches, such as `-Wno-typedef-redefinition`,
-    /// and whether bcc models its whole group
-    /// ([`ExtensionOptionName::models_whole_group`]).
+    /// and whether its name is that of the group bcc models
+    /// ([`ExtensionOptionName::coverage`]).
     ExtensionOption(ExtensionOptionName, WarningOption, bool),
     /// `-Werror=pedantic` (true) or `-Wno-error=pedantic` (false).
     PedanticAsError(bool),

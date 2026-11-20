@@ -1010,7 +1010,8 @@ mod tests {
     /// variable length array and `long long` before C99 (GCC:
     /// `-Wdeclaration-after-statement`, `-Wvla` and `-Wlong-long`), and
     /// `sizeof(void)` and arithmetic on a function pointer (GCC:
-    /// `-Wpointer-arith`).
+    /// `-Wpointer-arith`), and `__VA_OPT__` outside a variadic macro (Clang:
+    /// `-Wvariadic-macros`, a warning by default).
     const TAGGED_SOURCES: &[(&str, &str)] = &[
         ("typedef_redef", "typedef int T;\ntypedef int T;\n"),
         ("va_omit", "#define F(a, ...) a\nint x = F(1);\n"),
@@ -1029,6 +1030,7 @@ mod tests {
             "ptr_sizeof_void",
             "int n = sizeof(void);\nvoid (*fp)(void);\nvoid g(void) { fp = fp + 1; }\n",
         ),
+        ("vaopt_misplaced", "#define F(x) __VA_OPT__(x)\nint y;\n"),
     ];
 
     /// (personality, `-std`, source, options, each diagnostic's severity with
@@ -1038,7 +1040,8 @@ mod tests {
     /// (`None`) follows Clang's rules in its own format, which names no
     /// `-Werror`, and keeps its own words for an omitted variadic argument.
     /// GCC's `-Wno-` forms of its own options turn their warnings off in
-    /// either order.
+    /// either order; their `-Werror=` and `-Wno-error=` forms classify them
+    /// in argv order.
     type TaggedCase = (
         Option<&'static str>,
         &'static str,
@@ -1497,6 +1500,328 @@ mod tests {
             ],
             1,
         ),
+        // Every form of GCC's own options, in argv order: `-Werror=` enables
+        // and classifies, `-Wno-error=` only classifies, and a `-W`, `-Wno-`
+        // or `-Werror=` form ahead of `-Werror=pedantic` or
+        // `-pedantic-errors` keeps them from classifying an option
+        // `-Wpedantic` holds (`-Wpointer-arith`, `-Wvariadic-macros`).
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &[
+                "-pedantic",
+                "-Werror",
+                "-Wno-error=pedantic",
+                "-Wno-error=vla",
+            ],
+            &["warning [-Wvla]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &[
+                "-Wno-error=vla",
+                "-pedantic",
+                "-Werror",
+                "-Wno-error=pedantic",
+            ],
+            &["warning [-Wvla]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_mixed",
+            &[
+                "-pedantic",
+                "-Werror",
+                "-Wno-error=pedantic",
+                "-Wno-error=declaration-after-statement",
+            ],
+            &["warning [-Wdeclaration-after-statement]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_mixed",
+            &[
+                "-Wno-error=declaration-after-statement",
+                "-pedantic",
+                "-Werror",
+                "-Wno-error=pedantic",
+            ],
+            &["warning [-Wdeclaration-after-statement]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-Werror=pedantic", "-Wno-error=variadic-macros"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-Wno-error=variadic-macros", "-Werror=pedantic"],
+            &[
+                "error [-Werror=variadic-macros]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-Wvariadic-macros", "-Werror=pedantic"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-Werror=pedantic", "-Wvariadic-macros"],
+            &[
+                "error [-Werror=variadic-macros]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c99",
+            "named_va",
+            &["-Werror=pedantic", "-Wno-error=variadic-macros"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            GCC,
+            "c99",
+            "named_va",
+            &["-Wvariadic-macros", "-Werror=pedantic"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &["-Werror=pedantic", "-Werror=vla"],
+            &[
+                "error [-Werror=vla]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &["-Werror=vla", "-Werror=pedantic"],
+            &[
+                "error [-Werror=vla]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_mixed",
+            &["-Werror=pedantic", "-Werror=declaration-after-statement"],
+            &[
+                "error [-Werror=declaration-after-statement]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_mixed",
+            &["-Werror=declaration-after-statement", "-Werror=pedantic"],
+            &[
+                "error [-Werror=declaration-after-statement]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &["-Werror=vla"],
+            &[
+                "error [-Werror=vla]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_vla",
+            &["-Wno-vla", "-Werror=vla"],
+            &[
+                "error [-Werror=vla]",
+                "cc1: some warnings being treated as errors",
+            ],
+            1,
+        ),
+        (GCC, "c90", "c90_vla", &["-Werror=vla", "-Wno-vla"], &[], 0),
+        (
+            GCC,
+            "c90",
+            "c90_longlong",
+            &["-pedantic-errors", "-Wno-error=long-long"],
+            &["warning [-Wlong-long]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_longlong",
+            &["-Wlong-long"],
+            &["warning [-Wlong-long]"],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-Werror=variadic-macros"],
+            &[],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_variadic",
+            &["-Wno-error=variadic-macros", "-pedantic-errors"],
+            &["error [-Wvariadic-macros]"],
+            1,
+        ),
+        (
+            GCC,
+            "c99",
+            "ptr_sizeof_void",
+            &["-Wpointer-arith", "-Werror"],
+            &[
+                "error [-Werror=pointer-arith]",
+                "error [-Werror=pointer-arith]",
+                "cc1: all warnings being treated as errors",
+            ],
+            1,
+        ),
+        (
+            GCC,
+            "c99",
+            "ptr_sizeof_void",
+            &["-pedantic", "-Werror", "-Wno-error=pointer-arith"],
+            &["warning [-Wpointer-arith]", "warning [-Wpointer-arith]"],
+            0,
+        ),
+        (
+            GCC,
+            "c99",
+            "ptr_sizeof_void",
+            &["-Wpointer-arith", "-Werror=pedantic"],
+            &["warning [-Wpointer-arith]", "warning [-Wpointer-arith]"],
+            0,
+        ),
+        // Clang's `-Wvariadic-macros` holds the two variadic macro
+        // extensions and `__VA_OPT__` outside a variadic macro, which it
+        // warns of by default.
+        (
+            CLANG,
+            "c90",
+            "c90_variadic",
+            &["-pedantic", "-Werror", "-Wno-variadic-macros"],
+            &[],
+            0,
+        ),
+        (
+            CLANG,
+            "c90",
+            "c90_variadic",
+            &["-Wvariadic-macros"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c90",
+            "c90_variadic",
+            &["-pedantic-errors", "-Wno-error=variadic-macros"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c99",
+            "named_va",
+            &["-Werror=variadic-macros"],
+            &["error [-Werror,-Wvariadic-macros]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c23",
+            "vaopt_misplaced",
+            &[],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c23",
+            "vaopt_misplaced",
+            &["-Wno-variadic-macros"],
+            &[],
+            0,
+        ),
+        (
+            CLANG,
+            "c23",
+            "vaopt_misplaced",
+            &["-pedantic-errors"],
+            &["error [-Werror,-Wvariadic-macros]"],
+            1,
+        ),
+        (
+            CLANG,
+            "c23",
+            "vaopt_misplaced",
+            &["-Werror", "-Wno-error=variadic-macros"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        (
+            CLANG,
+            "c23",
+            "vaopt_misplaced",
+            &["-Werror=pedantic"],
+            &["warning [-Wvariadic-macros]"],
+            0,
+        ),
+        // bcc's own command line applies `-Wvariadic-macros` without a word.
+        (
+            OWN,
+            "c90",
+            "c90_variadic",
+            &["-pedantic", "-Werror", "-Wno-variadic-macros"],
+            &[],
+            0,
+        ),
     ];
 
     /// Each diagnostic's severity and each closing line, in order, from GCC's
@@ -1654,5 +1979,45 @@ mod tests {
         }
         std::fs::remove_dir_all(&directory).unwrap();
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// bcc's own command line says which options it applies only in part,
+    /// under the rules of its identity: Clang's `-Wgnu`, of which it models
+    /// an omitted variadic argument alone, and GCC's `-Wvla`, which also
+    /// warns of variable length arrays in C99 and later. An option it does
+    /// not apply under those rules is unknown, and one whose group it models
+    /// whole, as `-Wvariadic-macros`, passes without a word.
+    #[test]
+    fn own_command_line_names_the_options_it_applies_only_in_part() {
+        let directory: PathBuf =
+            std::env::temp_dir().join(format!("bcc-partial-options-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("empty.c"), "int x;\n").unwrap();
+        let options = ["-Wno-gnu", "-Wno-vla", "-Wno-variadic-macros"];
+        for (identity, partial, unknown) in [
+            (None, "-Wno-gnu", "-Wno-vla"),
+            (Some("--compiler-identity=gcc"), "-Wno-vla", "-Wno-gnu"),
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(identity)
+                .args(options)
+                .args(["-std=c99", "-fsyntax-only", "empty.c"])
+                .current_dir(&directory)
+                .env("NO_COLOR", "1")
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!(
+                    "warning: warning option '{partial}' is only partly implemented \
+                     [-Wunknown-warning-option]"
+                )) && stderr.contains(&format!(
+                    "warning: unknown warning option '{unknown}' [-Wunknown-warning-option]"
+                )) && !stderr.contains("-Wno-variadic-macros")
+                    && output.status.success(),
+                "{identity:?}: {stderr}"
+            );
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }

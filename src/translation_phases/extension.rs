@@ -163,10 +163,7 @@ impl<'tu> Context<'tu> {
         };
         let clang = ExtensionClass::of(origin, feature, option == ExtensionOption::Everything);
         let group = match self.configuration.compiler_identity().rules() {
-            | RuleSet::Clang => match feature.and_then(Feature::clang_group) {
-                | Some(group) => group,
-                | None => clang.clang_group(),
-            },
+            | RuleSet::Clang => clang.clang_group(),
             | RuleSet::Gcc => match feature.and_then(Feature::gcc_group) {
                 | Some(group) => group,
                 | None => ExtensionGroup::Pedantic,
@@ -450,6 +447,38 @@ impl<'tu> Context<'tu> {
                 source_vectors: source,
             })
         });
+    }
+
+    /// Reports `__VA_OPT__` outside a variadic macro, which Clang warns of
+    /// by default under `-Wvariadic-macros` alone (`ext_pp_bad_vaopt_use`,
+    /// an `ExtWarn`): under Clang's rules, where no diagnostic pragma
+    /// governs it, that option's forms classify it with the rest of its
+    /// group ([`ExtensionClass::VariadicMacrosByDefault`]); elsewhere the
+    /// extension policy decides, as for any preprocessing diagnostic.
+    /// C23: §6.10.5 paragraph 5, p. 178; PDF p. 191.
+    pub(crate) fn report_misplaced_va_opt(
+        &mut self,
+        error: super::preprocessing::PreprocessorError<'tu>,
+    ) {
+        let reach = ExtensionReach {
+            option:  ExtensionOption::Everything,
+            clang:   ExtensionClass::VariadicMacrosByDefault,
+            gcc:     GccFiling::Preprocessor,
+            group:   ExtensionGroup::VariadicMacros,
+            feature: None,
+        };
+        let source = error.source_vectors;
+        if self.configuration.compiler_identity().rules() != RuleSet::Clang
+            || !self.command_line_classifies(reach, source)
+        {
+            self.preprocessor_error(error);
+            return;
+        }
+        if let Some(severity) = self.configuration.clang_extension_severity(reach.clang)
+            && !self.withholds(severity, true, source)
+        {
+            self.push_final_extension(TranslationError::Preprocessing(error), severity);
+        }
     }
 
     /// Withdraws the pending preprocessing or extension diagnostic at

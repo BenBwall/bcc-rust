@@ -285,19 +285,6 @@ impl Feature {
         }
     }
 
-    /// The group of its own that Clang 23 names after its extension
-    /// diagnostic about the feature, where [`super::ExtensionClass`] does
-    /// not decide it: `-Wvariadic-macros` for variadic macros, named or
-    /// before C99 (`ext_variadic_macro` and `ext_named_variadic_macro` in
-    /// `DiagnosticLexKinds.td`), which `-Wpedantic` holds.
-    pub(crate) const fn clang_group(self) -> Option<super::ExtensionGroup> {
-        match self {
-            | Self::VariadicMacros | Self::NamedVariadicMacros =>
-                Some(super::ExtensionGroup::VariadicMacros),
-            | _ => None,
-        }
-    }
-
     pub(crate) const fn origin(self) -> FeatureOrigin {
         match self {
             | Self::Digraphs => FeatureOrigin::Standard(CStandard::C95),
