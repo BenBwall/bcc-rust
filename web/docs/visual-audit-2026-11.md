@@ -2137,15 +2137,17 @@ show each of these running in the machine.
 
 **Fixed.** The section now lists what the machine runs (the integer types
 from char to unsigned long long and the three floating types at their
-x86-64 sizes; pointers; arrays of numbers or chars, and string literals;
+x86-64 sizes; pointers to numbers, chars and structures; arrays of
+numbers or chars, and string literals;
 structures, nested or through pointers; const, casts and sizeof;
 file-scope and static objects; functions that return a number or a
 structure; if and else, while and for; printf, puts and putchar after
 `#include <stdio.h>`; `#define` of a name as one number, character or
 string) and, among what it does not, the constructs a reader is likely to
 write: switch, do, break, continue and goto; `?:` and the comma operator;
-typedef, enum, union and `_Bool`; void and static functions; arrays of
-pointers or of structures; a call inside a larger expression; nested side
+typedef, enum, union and `_Bool`; void and static functions; pointers to
+pointers or to functions; arrays of pointers, of structures or of arrays;
+hexadecimal and octal constants; a call inside a larger expression; nested side
 effects such as `a = b++`; other library functions; and more of the
 preprocessor. It says what happens to such a program: it stops before its
 first step, and its note says why, or, for the preprocessor, sends the
