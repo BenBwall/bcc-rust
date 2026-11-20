@@ -192,6 +192,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         || is_derived(right_expression),
                 | ExpressionType::Conditional(c) =>
                     is_derived(c.then_expression) || is_derived(c.else_expression),
+                // A structure or union compound literal is an object, whose
+                // members its own values initialize.
+                | ExpressionType::CompoundLiteral { .. }
+                    if self.aggregate(self.expression_info(e).ty) =>
+                    false,
                 | _ => {
                     let mut any = false;
                     super::emission::expression_children(self.scratch, e, |child| {
@@ -223,68 +228,77 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         initializers: &mut ArenaVec<'_, &'tu Initializer<'tu>>,
     ) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
-        let mut pending = ArenaVec::new_in(self.scratch);
-        pending.push(initializer);
-        while let Some(initializer) = pending.pop() {
-            let Some(plan) = self.initializers.plan(initializer) else {
-                return false;
+        // The values an initializer stores, as children of its owner.
+        let mut values =
+            |initializer: &'tu Initializer<'tu>,
+             work: &mut ArenaVec<'_, (&'tu Expression<'tu>, bool)>| {
+                let Some(plan) = self.initializers.plan(initializer) else {
+                    return false;
+                };
+                initializers.push(initializer);
+                for value in plan.values.iter().rev() {
+                    work.push((value.expression, false));
+                }
+                true
             };
-            initializers.push(initializer);
-            for value in plan.values.iter().rev() {
-                work.push((value.expression, false));
+        if !values(initializer, &mut work) {
+            return false;
+        }
+        while let Some((e, done)) = work.pop() {
+            if done {
+                nodes.push(e);
+                continue;
             }
-            while let Some((e, done)) = work.pop() {
-                if done {
-                    nodes.push(e);
-                    continue;
+            work.push((e, true));
+            let info = self.expression_info(e);
+            if let ExpressionType::CompoundLiteral { initializer, .. } = e.kind {
+                if !values(initializer, &mut work) {
+                    return false;
                 }
-                work.push((e, true));
-                let info = self.expression_info(e);
-                let mut push = |child| work.push((child, false));
-                match e.kind {
-                    // Unevaluated operands. C99: §6.5.3.4 paragraph 2, p. 80;
-                    // PDF p. 92.
-                    | ExpressionType::SizeofExpr(_)
-                    | ExpressionType::SizeofType(_)
-                    | ExpressionType::AlignofExpr(_)
-                    | ExpressionType::Countof(_) => {},
-                    | ExpressionType::Conditional(c) => {
-                        let condition = self.expression_info(c.condition_expression);
-                        match Self::constant_truth(condition) {
-                            | Some(true) => push(c.then_expression),
-                            | Some(false) => push(c.else_expression),
-                            | None => {
-                                push(c.else_expression);
-                                push(c.then_expression);
-                            },
-                        }
-                        push(c.condition_expression);
-                    },
-                    | ExpressionType::Generic(_) | ExpressionType::Builtin(_)
-                        if info.selected_expression.is_some() =>
-                        push(info.selected_expression.expect("checked")),
-                    | ExpressionType::StatementExpression(block) => {
-                        if !matches!(block.kind, StatementType::Compound { items } if items.len() == 1)
-                        {
-                            return false;
-                        }
-                        let Some((_, tail)) = self.statement_expression_tail(block) else {
-                            return false;
-                        };
-                        push(tail);
-                    },
-                    | ExpressionType::CompoundLiteral { initializer, .. } =>
-                        pending.push(initializer),
-                    | _ => {
-                        let mut children = ArenaVec::new_in(self.scratch);
-                        super::emission::expression_children(self.scratch, e, |child| {
-                            children.push(child);
-                        });
-                        for &child in children.iter().rev() {
-                            push(child);
-                        }
-                    },
-                }
+                continue;
+            }
+            let mut push = |child| work.push((child, false));
+            match e.kind {
+                // Unevaluated operands. C99: §6.5.3.4 paragraph 2, p. 80;
+                // PDF p. 92.
+                | ExpressionType::SizeofExpr(_)
+                | ExpressionType::SizeofType(_)
+                | ExpressionType::AlignofExpr(_)
+                | ExpressionType::Countof(_) => {},
+                | ExpressionType::Conditional(c) => {
+                    let condition = self.expression_info(c.condition_expression);
+                    match Self::constant_truth(condition) {
+                        | Some(true) => push(c.then_expression),
+                        | Some(false) => push(c.else_expression),
+                        | None => {
+                            push(c.else_expression);
+                            push(c.then_expression);
+                        },
+                    }
+                    push(c.condition_expression);
+                },
+                | ExpressionType::Generic(_) | ExpressionType::Builtin(_)
+                    if info.selected_expression.is_some() =>
+                    push(info.selected_expression.expect("checked")),
+                | ExpressionType::StatementExpression(block) => {
+                    if !matches!(block.kind, StatementType::Compound { items } if items.len() == 1)
+                    {
+                        return false;
+                    }
+                    let Some((_, tail)) = self.statement_expression_tail(block) else {
+                        return false;
+                    };
+                    push(tail);
+                },
+                | _ => {
+                    let mut children = ArenaVec::new_in(self.scratch);
+                    super::emission::expression_children(self.scratch, e, |child| {
+                        children.push(child);
+                    });
+                    for &child in children.iter().rev() {
+                        push(child);
+                    }
+                },
             }
         }
         true
