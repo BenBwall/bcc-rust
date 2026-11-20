@@ -837,14 +837,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )
                 };
                 let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
-                let value = Self::floating_binary(
-                    op,
-                    left_value,
-                    right_value,
-                    precision,
-                    domains,
-                    self.nan_source(),
-                );
+                let value = self.fold_floating(op, left_value, right_value, precision, domains);
                 let value = if half {
                     value.map(|value| self.half_result(value, &mut info))
                 } else {

@@ -78,6 +78,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// [`Self::floating_binary`] with the NaN of the context analyzed now.
+    pub(super) fn fold_floating(
+        &self,
+        op: BinaryOperator,
+        left: Floating,
+        right: Floating,
+        precision: i32,
+        domains: u8,
+    ) -> Option<Floating> {
+        Self::floating_binary(op, left, right, precision, domains, self.nan_source())
+    }
+
     /// IEC 60559 arithmetic: a zero divisor gives an infinity or NaN
     /// (Annex F.3), and an invalid operation the NaN of `source`.
     /// C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96.
