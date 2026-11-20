@@ -493,8 +493,12 @@ own command line follows, each of `-Wpedantic`, `-Wc11-extensions` and
 `-Wc23-extensions` with its `-Wno-`, `-Werror=` and `-Wno-error=` forms, and
 `-Wno-everything`, sets the mapping of the diagnostics it holds in argv order:
 `-Wpedantic` holds the extensions Clang reports only on request, a revision's
-group its syntax, and Clang files `#warning`, an omitted variadic argument
-and a typedef redefinition under `-Wpedantic` alone. A command-line `-WX`
+group its syntax, and Clang files `#warning` under `-Wpedantic` alone. An
+omitted variadic argument is in `-Wvariadic-macro-arguments-omitted`, which
+`-Wpedantic`, `-Wc23-extensions`, `-Wgnu`, `-Wgnu-zero-variadic-macro-arguments`,
+`-Wpre-c23-compat` and `-Wc++20-extensions` hold, and a typedef redefinition
+before C11 is a warning by default in `-Wtypedef-redefinition` alone; bcc reads
+those options' forms for these two diagnostics only. A command-line `-WX`
 keeps an earlier `-Werror=X`, and `-Wno-error=X` keeps `-Werror` from X for
 good. `-pedantic` and `-pedantic-errors`, wherever they appear, raise what no
 option turned off to a warning or an error, `-Wno-error=X` capping X at a
@@ -505,11 +509,21 @@ forms reach. Under GCC's rules `-w` silences a pedantic warning first,
 `-Werror=pedantic` enables the pedantic warnings, and the last of
 `-pedantic-errors`, `-Werror=pedantic` and `-Wno-error=pedantic` classifies
 what GCC files under `-Wpedantic`, which its format then names
-`[-Werror=pedantic]`. GCC files arithmetic on `void *` under `-Wpointer-arith`,
-which `-Wno-error=pedantic` leaves an error, and `long long` (`-Wlong-long`),
-binary constants, `__VA_OPT__`, hexadecimal floating constants and `#warning`
-where neither pedantic classification reaches them; the rest of what its
-preprocessor reports keeps the extension policy.
+`[-Werror=pedantic]`. GCC files arithmetic on `void *` or a function pointer
+and `sizeof` of either under `-Wpointer-arith`, and variadic macros, named or
+before C99, under `-Wvariadic-macros`, which `-Wno-error=pedantic` leaves
+errors; and `long long` (`-Wlong-long`), mixed declarations and code
+(`-Wdeclaration-after-statement`) and variable length arrays (`-Wvla`) before
+C99, binary constants, `__VA_OPT__`, hexadecimal floating constants, `#warning`
+and an omitted variadic argument where neither pedantic classification reaches
+them; the rest of what its preprocessor reports keeps the extension policy.
+An extension diagnostic's tag names the group its compiler files it under
+where bcc models that group (`-Wc11-extensions`, `-Wc23-extensions`,
+`-Wtypedef-redefinition` and `-Wvariadic-macros` under Clang's rules, the GCC
+options above under GCC's), and `-Wpedantic` otherwise; Clang's format writes
+`-Werror,` before it on an error, and GCC's names `-Werror=` and the option, or
+`-Werror` alone for one GCC files under no option. In the GCC and Clang
+formats an omitted variadic argument takes the compiler's words.
 
 `-w` (also `--suppress-warnings`) suppresses warning rendering and warning
 counts in every CLI view. Errors remain visible, and so do the
@@ -1412,14 +1426,16 @@ though Clang's waits for the function's end to know the code can run;
 rejects a pragma inside an expression or an initializer, so only Clang can tell
 those places from the statement's.
 
-bcc files every extension under `-Wpedantic`, including those each compiler gives
-a group of its own: GCC's `-Wlong-long` and `-Wdeclaration-after-statement`, and
-Clang's `-Wc23-extensions` but for its C23 directives, which the Clang
-personality reports under `c23-extensions` (above). A pragma naming
-`-Wpedantic` therefore reaches these in bcc alone. The four Clang warns of by
-default (a label at the end of a block or before a declaration, `_Static_assert`
-without a message, an unnamed parameter in a definition) are outside Clang's
-`-Wpedantic`, so in the Clang personality such a pragma leaves their severity to
+A diagnostic pragma reaches every extension through `-Wpedantic`, including those
+each compiler gives a group of its own, whose tags name that group (above):
+GCC's `-Wlong-long`, `-Wdeclaration-after-statement` and `-Wvla`, and Clang's
+`-Wc23-extensions` but for its C23 directives, which the Clang personality
+reports under `c23-extensions` (above). A pragma naming `-Wpedantic` therefore
+reaches these in bcc alone. The four Clang warns of by default (a label at the
+end of a block or before a declaration, `_Static_assert` without a message, an
+unnamed parameter in a definition), and a typedef redefinition before C11, are
+outside Clang's `-Wpedantic`, so in the Clang personality such a pragma leaves
+their severity to
 the command line: `-pedantic-errors` or `-Werror` makes them errors, an `error`
 or `fatal` pragma does not. Where the extension policy leaves them unreported,
 the pragma reports them as the warnings Clang gives; where no pragma governs

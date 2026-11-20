@@ -147,7 +147,14 @@ apart from `-Wpedantic`, so `-Wno-pedantic -pedantic` reports nothing. GCC's
 errors, its `-Werror=pedantic` enables them as errors (`[-Werror=pedantic]`,
 `cc1: some warnings being treated as errors`), and its `-Wno-error=pedantic`
 keeps them warnings where they come after the other two, though not GCC's
-`-Wpointer-arith` or the preprocessor warnings it files under no option.
+`-Wpointer-arith` and `-Wvariadic-macros` or the preprocessor warnings it files
+under no option. `long long`, mixed declarations and code and variable length
+arrays before C99 are under `-Wlong-long`, `-Wdeclaration-after-statement` and
+`-Wvla`, which `-pedantic` enables and neither classification reaches. Clang
+warns of a typedef redefinition before C11 by default under
+`-Wtypedef-redefinition`, which no form of `-Wpedantic` reaches, and holds an
+omitted variadic argument in `-Wc23-extensions` and `-Wgnu` too
+(`tests/integration/pedantic_options_cli.rs`, second table).
 
 **clang-cl.** As Clang; its driver has no `-Wl,`, `-Wa,` or `-Wp,`, so each
 is an unknown warning option. `/Wall` is `-Weverything`.
@@ -164,10 +171,12 @@ across its front ends, which bcc does not freeze, so bcc leaves them out.
 GCC's `-Wno-error-implicit-function-declaration` (an option without a
 negative form) is ignored rather than refused. GCC files many of its
 preprocessor's pedantic warnings under options of their own or none, which bcc
-models only for the five above, so its `-Werror=pedantic` and
+models only for those `language-standards.md` lists, so its `-Werror=pedantic` and
 `-Wno-error=pedantic` leave the others as the extension policy says; and bcc
-names `-Wpedantic` where GCC names `-Wpointer-arith` or `-Wlong-long`, and
-words a `-Werror` it promoted without an option `[-Werror]`. clang-cl's `unknown argument ignored in clang-cl:
+names `-Wpedantic` where GCC or Clang name a group bcc does not model, such as
+Clang's `-Wgnu-statement-expression`, and reads `-Wno-long-long`,
+`-Wno-declaration-after-statement`, `-Wno-vla` and `-Wno-variadic-macros` as
+no more than known options. clang-cl's `unknown argument ignored in clang-cl:
 '-pedantic' [-Wunknown-argument]` is not given. `-Wfatal-errors` stops at
 the first error bcc reports, and bcc reports a preprocessing diagnostic
 before the errors of the lines above it where GCC, Clang and TCC report
