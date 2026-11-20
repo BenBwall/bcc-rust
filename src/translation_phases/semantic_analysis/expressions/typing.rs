@@ -1509,7 +1509,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 )
                 .is_some()
         {
-            self.context.report_extension(
+            self.report_cast_extension(
                 crate::configuration::Feature::SameTypeCasts,
                 "cast of a structure or union to its own type",
                 e.source_vectors,
@@ -1535,7 +1535,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let Some(member) = member else {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
             };
-            self.context.report_extension(
+            self.report_cast_extension(
                 crate::configuration::Feature::UnionCasts,
                 "cast to union",
                 e.source_vectors,
@@ -1653,6 +1653,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.control.record_difference(e, labels);
         }
         info
+    }
+
+    /// Reports a GNU cast to a union or to the cast's own structure or union
+    /// type, which an `__extension__` operand or declaration silences in
+    /// both compilers.
+    /// GNU extension: GCC manual, "Cast to a Union Type" and "Alternate
+    /// Keywords"; C99 §6.5.4p2, p. 81; PDF p. 93.
+    fn report_cast_extension(
+        &mut self,
+        feature: crate::configuration::Feature,
+        text: &str,
+        source: crate::translation_phases::SourceVectors,
+    ) {
+        if self.extension_depth == 0 {
+            self.context.report_extension(feature, text, source);
+        }
     }
 
     /// Gives `info`, a value of type `target`, the folded value of

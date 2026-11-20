@@ -22,4 +22,19 @@ void values(int i, double d, union U u, struct S st, const int ci, short sh) {
     union U bad = (union U)sh;
     (void)a; (void)b; (void)c; (void)e; (void)w; (void)same; (void)bad;
 }
+/* `__extension__` silences both reports, on its operand or on a whole
+   declaration or function definition, as in GCC and Clang. */
+#define MAKE(e) (__extension__ (union U)(e))
+void quiet(int i, union U u, struct S st) {
+    union U a = __extension__ (union U)i;
+    __extension__ union U b = (union U)i;
+    union U c = MAKE(i);
+    union U same = __extension__ (union U)u;
+    union W w = __extension__ ({ (union W)st; });
+    union U loud = (union U)i;
+    (void)a; (void)b; (void)c; (void)same; (void)w; (void)loud;
+}
+__extension__ int quiet_definition(int i) { return ((union U)i).i; }
+__extension__ int quiet_size = sizeof((union U)1);
+int loud_size = sizeof((union U)1);
 int after;

@@ -435,6 +435,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     return;
                 }
                 self.taint(d.recovered);
+                self.enter_extension_declaration(d.declaration_specifiers);
                 self.validate_declaration_list_item(d);
                 self.report_empty_declaration(d);
                 self.constexpr_declaration(d);
@@ -590,6 +591,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::DeclarationEnd(declarator) => self.open_cleanup(declarator),
             | Work::Function(f) => {
                 self.taint(f.recovered);
+                self.enter_extension_declaration(f.declaration_specifiers);
                 if Self::constexpr_storage(f.declaration_specifiers.extensions) {
                     self.error(
                         SemanticErrorKind::InvalidConstexpr(errors::ConstexprFault::NotObject),
@@ -677,6 +679,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 } else {
                     self.inhibited_evaluations -= 1;
                 },
+            | Work::LeaveExtension => self.extension_depth -= 1,
             | Work::ConstantContext => self.constant_contexts += 1,
             | Work::ConstantContextEnd(site) => {
                 self.constant_contexts -= 1;
@@ -2068,6 +2071,8 @@ enum Work<'tu, 's> {
     SkippedOperand(&'tu Expression<'tu>, bool, bool),
     /// Enters (`true`) or leaves an unevaluated operand.
     Unevaluated(bool),
+    /// Leaves a declaration or function definition marked `__extension__`.
+    LeaveExtension,
     /// Enters a context requiring a constant.
     ConstantContext,
     /// Leaves it, for the evaluation of the constant at this site.
@@ -2295,10 +2300,12 @@ struct Analyzer<'a, 'tu, 's> {
     /// C99: §6.5.3.4 paragraph 2, p. 80; PDF p. 92; §6.5.13-§6.5.15,
     /// pp. 89-91; PDF pp. 101-103.
     inhibited_evaluations:   u32,
-    /// How many enclosing `__extension__` operators silence `-pedantic`, as
-    /// GCC's `disable_extension_diagnostics` does for the operand.
+    /// How many enclosing `__extension__` operators, and declarations or
+    /// function definitions marked `__extension__`, silence `-pedantic`, as
+    /// GCC's `disable_extension_diagnostics` and Clang's
+    /// `ExtensionRAIIObject` do for the operand or the whole declaration.
     /// GNU extension: GCC manual, "Alternate Keywords".
-    extension_operands:      u32,
+    extension_depth:         u32,
     /// How many enclosing contexts require a constant expression: Clang's
     /// `ConstantEvaluated`, which silences its warnings about code.
     constant_contexts:       u32,

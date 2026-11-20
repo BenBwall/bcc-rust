@@ -517,7 +517,8 @@ fn unparenthesized_alignof_operands_take_gnu_alignment() {
 /// type. A cast to a pointer to a union, as Lua's `cast(union GCUnion *, o)`,
 /// is an ordinary pointer conversion that no policy reports, and an operand
 /// no member matches is refused without the extension report, as GCC 14 and
-/// Clang 23 do. GNU extension to C99 §6.5.4 paragraph 2, p. 81; PDF p. 93.
+/// Clang 23 do. An `__extension__` operand or declaration silences the
+/// report in both. GNU extension to C99 §6.5.4 paragraph 2, p. 81; PDF p. 93.
 /// <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
 #[test]
 fn only_a_cast_to_a_union_type_is_a_gnu_union_cast() {
@@ -531,6 +532,17 @@ fn only_a_cast_to_a_union_type_is_a_gnu_union_cast() {
         (
             "union U a = (const union U)1; union U b = (C)1; (void)a; (void)b;",
             2,
+        ),
+        // `__extension__` silences the cast, and a same-type cast, on its
+        // operand or on a whole declaration, as in GCC and Clang.
+        (
+            "union U a = __extension__ (union U)1; union U b = __extension__ (union U)a; (void)b;",
+            0,
+        ),
+        ("union U a = __extension__ ({ (union U)1; }); (void)a;", 0),
+        (
+            "__extension__ union U a = (union U)1; union U b = (union U)2; (void)a; (void)b;",
+            1,
         ),
     ] {
         let source = format!("{declarations}void f(void) {{ {body} }}");
@@ -551,6 +563,27 @@ fn only_a_cast_to_a_union_type_is_a_gnu_union_cast() {
             },
         );
     }
+    // A marked function definition silences its body; the next one is
+    // reported again.
+    let source = format!(
+        "{declarations}__extension__ int g(int i) {{ return ((union U)i).i; }}\nint h(int i) {{ \
+         return ((union U)i).i; }}"
+    );
+    with_configuration(
+        &source,
+        CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+        |context, _| {
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Extension(extension)]
+                        if extension.spelling() == "cast to union"
+                ),
+                "{errors:?}"
+            );
+        },
+    );
     let source = format!("{declarations}void f(short s) {{ union U u = (union U)s; (void)u; }}");
     with_configuration(
         &source,

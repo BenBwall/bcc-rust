@@ -20,3 +20,11 @@ sema-union-cast-gcc.c:21:20: warning: 'cast of a structure or union to its own t
 sema-union-cast-gcc.c:22:19: error: invalid operand or target type for cast
    22 |     union U bad = (union U)sh;
       |                   ^~~~~~~~~
+sema-union-cast-gcc.c: In function 'quiet':
+sema-union-cast-gcc.c:34:20: warning: 'cast to union' is a GNU extension [-Wpedantic]
+   34 |     union U loud = (union U)i;
+      |                    ^~~~~~~~~~
+sema-union-cast-gcc.c: At top level:
+sema-union-cast-gcc.c:39:24: warning: 'cast to union' is a GNU extension [-Wpedantic]
+   39 | int loud_size = sizeof((union U)1);
+      |                        ^~~~~~~~~~

@@ -49,7 +49,13 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   parameter in a definition, and a typedef redefinition before C11), since
   Clang's silences only the extension diagnostics it does not report by
   default; GCC's silences them too, though under GCC's rules bcc does not yet
-  silence a typedef redefinition.
+  silence a typedef redefinition. In semantic analysis an `__extension__`
+  operand, or a declaration or function definition whose specifiers it marks,
+  silences the cast to a union type and the cast to the operand's own
+  structure or union type (`UnionCasts`, `SameTypeCasts`) and GCC's
+  `-pedantic` reports of folded constants and predefined identifiers, as in
+  both compilers. Other semantic extension reports, such as arithmetic on
+  `void *`, ignore it yet, where both compilers silence them.
 - A preprocessing extension diagnostic raised in a macro expansion may
   underline the replacement in the macro definition. Parser and semantic
   extension diagnostics and warning-group diagnostics point at the outermost
@@ -894,6 +900,8 @@ The following vocabulary entries retain the established diagnostic contracts:
   it under `-Wpedantic` ("ISO C forbids casts to union type") and Clang under
   `-Wgnu-union-cast` ("cast to union type is a GNU extension"); bcc names
   `-Wpedantic` under both identities, since it does not model Clang's group.
+  An `__extension__` operand, or a declaration or function definition marked
+  `__extension__`, silences it and the same-type cast, as in both compilers.
 - `ArrayCompoundLiteral` has GNU origin: an array initialized by a compound
   literal of its type, as "Arrays initialized by array compound literals"
   below describes. Only the Clang identity reports it under `-pedantic`;
@@ -1094,7 +1102,11 @@ a block or before a declaration, `_Static_assert` without a message, an
 unnamed parameter in a definition and a typedef redefinition before C11, which
 Clang warns of by default
 (`DiagnosticIDs::getDiagnosticSeverity` silences only an extension diagnostic
-that is off by default). Suppression ends at the owning production's boundary;
+that is off by default). In semantic analysis it silences casts to a union
+type and to the operand's own type, and GCC's `-pedantic` reports of folded
+constants and predefined identifiers, but not yet other semantic extension
+reports such as arithmetic on `void *`, which both compilers silence.
+Suppression ends at the owning production's boundary;
 later unsuppressed occurrences, including ones from macro expansions, keep their
 diagnostics. Nested functions isolate typedef, label and switch state; under
 the Clang identity a function definition in a block is the error "function

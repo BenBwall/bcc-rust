@@ -1182,7 +1182,17 @@ are silent in all three. The words differ: bcc's shared extension wording and
 `-Wpedantic` tag stand for GCC's "ISO C forbids casts to union type" and
 Clang's "cast to union type is a GNU extension [-Wgnu-union-cast]", and bcc's
 `invalid operand or target type for cast` for their "cast to union type from
-type ... not present in union".
+type ... not present in union". Under `__extension__`, on the cast, in a macro,
+around a statement expression, before a block-scope or file-scope declaration,
+before a function definition and on a same-type cast, all three are silent;
+the declaration after a marked one and the file-scope `sizeof` operand after
+the marked one warn again on the same lines and columns.
+
+`sema-extension-pedantic-gcc.c` checks GCC's `-pedantic` reports of
+`__FUNCTION__` and `__PRETTY_FUNCTION__` under `__extension__`. Checked
+20 November 2026 against GCC 14: an `__extension__` operand, a marked
+declaration and a marked function definition silence them, and a use after the
+marked declaration warns again on the same line and column.
 
 ### Predefined function-name identifiers
 

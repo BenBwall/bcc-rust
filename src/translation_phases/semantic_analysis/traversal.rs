@@ -7,17 +7,23 @@ use super::{
     Analyzer,
     ScopeKind,
     Work,
-    functions::FunctionWork,
+    functions::{
+        FunctionWork,
+        extension_marked,
+    },
 };
-use crate::translation_phases::parsing::syntax::{
-    BinaryOperator,
-    Expression,
-    ExpressionSlot,
-    ExpressionType,
-    ForInitializer,
-    Statement,
-    StatementType,
-    UnaryOperator,
+use crate::translation_phases::parsing::{
+    declaration_syntax::DeclarationSpecifiers,
+    syntax::{
+        BinaryOperator,
+        Expression,
+        ExpressionSlot,
+        ExpressionType,
+        ForInitializer,
+        Statement,
+        StatementType,
+        UnaryOperator,
+    },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -757,7 +763,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.inhibited_evaluations += 1;
         }
         if is_extension(e) {
-            self.extension_operands += 1;
+            self.extension_depth += 1;
+        }
+    }
+
+    /// Enters a declaration or function definition whose specifiers are
+    /// marked `__extension__` until its work is done: GCC and Clang silence
+    /// `-pedantic` in its initializers and body as in an `__extension__`
+    /// operand.
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    pub(super) fn enter_extension_declaration(&mut self, specifiers: DeclarationSpecifiers<'tu>) {
+        if extension_marked(specifiers) {
+            self.extension_depth += 1;
+            self.work.push(Work::LeaveExtension);
         }
     }
 
@@ -768,7 +786,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.inhibited_evaluations -= 1;
         }
         if is_extension(e) {
-            self.extension_operands -= 1;
+            self.extension_depth -= 1;
         }
         self.expression_depth -= 1;
         if self.expression_depth == 0 {

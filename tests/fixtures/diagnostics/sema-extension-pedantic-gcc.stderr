@@ -10,3 +10,7 @@ sema-extension-pedantic-gcc.c: In function 'outside':
 sema-extension-pedantic-gcc.c:8:70: warning: ISO C does not support '__FUNCTION__' predefined identifier [-Wpedantic]
     8 | const char *outside(int c) { return c ? __extension__ __FUNCTION__ : __FUNCTION__; }
       |                                                                      ^~~~~~~~~~~~
+sema-extension-pedantic-gcc.c: In function 'loud_after':
+sema-extension-pedantic-gcc.c:13:92: warning: ISO C does not support '__FUNCTION__' predefined identifier [-Wpedantic]
+   13 | const char *loud_after(void) { __extension__ const char *p = __FUNCTION__; (void)p; return __FUNCTION__; }
+      |                                                                                            ^~~~~~~~~~~~

@@ -19,4 +19,10 @@ sema-union-cast-clang.c:21:20: warning: 'cast of a structure or union to its own
 sema-union-cast-clang.c:22:19: error: invalid operand or target type for cast
    22 |     union U bad = (union U)sh;
       |                   ^~~~~~~~~
-6 warnings and 1 error generated.
+sema-union-cast-clang.c:34:20: warning: 'cast to union' is a GNU extension [-Wpedantic]
+   34 |     union U loud = (union U)i;
+      |                    ^~~~~~~~~~
+sema-union-cast-clang.c:39:24: warning: 'cast to union' is a GNU extension [-Wpedantic]
+   39 | int loud_size = sizeof((union U)1);
+      |                        ^~~~~~~~~~
+8 warnings and 1 error generated.
