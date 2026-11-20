@@ -1037,6 +1037,8 @@ mod tests {
     /// the same command line, recorded on 2026-11-20; bcc's own command line
     /// (`None`) follows Clang's rules in its own format, which names no
     /// `-Werror`, and keeps its own words for an omitted variadic argument.
+    /// GCC's `-Wno-` forms of its own options turn their warnings off in
+    /// either order.
     type TaggedCase = (
         Option<&'static str>,
         &'static str,
@@ -1209,6 +1211,17 @@ mod tests {
             &["warning [-Wvariadic-macro-arguments-omitted]"],
             0,
         ),
+        // bcc's own command line applies `-Wgnu`'s forms to the one
+        // diagnostic of that group it models, and warns that it does not
+        // implement the rest.
+        (
+            OWN,
+            "c99",
+            "va_omit",
+            &["-Wno-gnu"],
+            &["warning [-Wunknown-warning-option]"],
+            0,
+        ),
         (
             OWN,
             "c99",
@@ -1341,6 +1354,14 @@ mod tests {
         ),
         (
             GCC,
+            "c90",
+            "c90_variadic",
+            &["-Werror=pedantic", "-Wno-variadic-macros"],
+            &[],
+            0,
+        ),
+        (
+            GCC,
             "c99",
             "named_va",
             &["-pedantic", "-Werror", "-Wno-error=pedantic"],
@@ -1431,6 +1452,30 @@ mod tests {
                 "cc1: some warnings being treated as errors",
             ],
             1,
+        ),
+        (
+            GCC,
+            "c99",
+            "ptr_sizeof_void",
+            &["-pedantic", "-Wno-pointer-arith"],
+            &[],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_longlong",
+            &["-Wno-long-long", "-pedantic"],
+            &[],
+            0,
+        ),
+        (
+            GCC,
+            "c90",
+            "c90_longlong",
+            &["-Wno-long-long", "-Wlong-long", "-pedantic"],
+            &["warning [-Wlong-long]"],
+            0,
         ),
         (
             GCC,

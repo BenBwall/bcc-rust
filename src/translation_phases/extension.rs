@@ -252,7 +252,7 @@ impl<'tu> Context<'tu> {
             | _ => baseline,
         };
         let enabled = policy_severity(configuration.extension_policy(), baseline).is_some();
-        configuration.gcc_pedantic_severity(enabled, reach.gcc)
+        configuration.gcc_pedantic_severity(enabled, reach.gcc, reach.group)
     }
 
     /// Whether the command line alone classifies an extension diagnostic the

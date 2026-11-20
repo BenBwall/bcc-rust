@@ -498,7 +498,9 @@ omitted variadic argument is in `-Wvariadic-macro-arguments-omitted`, which
 `-Wpedantic`, `-Wc23-extensions`, `-Wgnu`, `-Wgnu-zero-variadic-macro-arguments`,
 `-Wpre-c23-compat` and `-Wc++20-extensions` hold, and a typedef redefinition
 before C11 is a warning by default in `-Wtypedef-redefinition` alone; bcc reads
-those options' forms for these two diagnostics only. A command-line `-WX`
+those options' forms for these two diagnostics only, and its own command line
+warns that it does not implement the rest of `-Wgnu` and the others. A
+command-line `-WX`
 keeps an earlier `-Werror=X`, and `-Wno-error=X` keeps `-Werror` from X for
 good. `-pedantic` and `-pedantic-errors`, wherever they appear, raise what no
 option turned off to a warning or an error, `-Wno-error=X` capping X at a
@@ -517,6 +519,8 @@ errors; and `long long` (`-Wlong-long`), mixed declarations and code
 C99, binary constants, `__VA_OPT__`, hexadecimal floating constants, `#warning`
 and an omitted variadic argument where neither pedantic classification reaches
 them; the rest of what its preprocessor reports keeps the extension policy.
+The `-Wno-` form of each of GCC's options above turns its warnings off,
+wherever it appears, until the option's `-W` form.
 An extension diagnostic's tag names the group its compiler files it under
 where bcc models that group (`-Wc11-extensions`, `-Wc23-extensions`,
 `-Wtypedef-redefinition` and `-Wvariadic-macros` under Clang's rules, the GCC

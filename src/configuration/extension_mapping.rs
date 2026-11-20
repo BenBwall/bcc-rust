@@ -70,15 +70,21 @@ impl CompilerConfiguration {
     /// error and the last as a warning, which outranks both.
     /// `-Werror=pedantic` also enables it. An option `-Wpedantic` enables
     /// takes the error of the first two too, which `-Wno-error=pedantic`
-    /// does not take back; one filed under no option takes neither.
-    /// GCC 14, `diagnostic.cc` (`diagnostic_report_diagnostic`) and
-    /// `opts.cc` (`OPT_pedantic_errors`).
+    /// does not take back; one filed under no option takes neither. The
+    /// option of its own a diagnostic is filed under, `group`, turns it off
+    /// with its `-Wno-` form, wherever that appears, until its `-W` form.
+    /// GCC 14, `diagnostic.cc` (`diagnostic_report_diagnostic`), `opts.cc`
+    /// (`OPT_pedantic_errors`) and `c-errors.cc` (`pedwarn_c90`).
     pub(crate) fn gcc_pedantic_severity(
         self,
         enabled: bool,
         filing: GccFiling,
+        group: ExtensionGroup,
     ) -> Option<ErrorSeverity> {
-        if self.suppress_warnings || !(enabled || self.werror_pedantic().is_some()) {
+        if self.suppress_warnings
+            || !(enabled || self.werror_pedantic().is_some())
+            || self.extension_mappings.gcc_disabled & (1 << group as u16) != 0
+        {
             return None;
         }
         // A policy no option set reads as `-pedantic-errors`, as for Clang.
@@ -290,6 +296,10 @@ pub(crate) enum ExtensionOptionName {
     /// `-pedantic` form and their `c2x` spellings) and `-Wc++20-extensions`
     /// (`c++2a`). Clang 23, `DiagnosticGroups.td`.
     VariadicMacroArgumentsOmitted,
+    /// GCC's option of that name, of the groups only GCC's rules file
+    /// diagnostics under ([`super::Feature::gcc_group`]), whose `-Wno-` form
+    /// turns them off.
+    Gcc(ExtensionGroup),
     /// `-Wno-everything`, which turns every diagnostic off.
     Everything,
     /// `-pedantic-errors`, which GCC also reads as `-Werror=pedantic`.
@@ -297,13 +307,16 @@ pub(crate) enum ExtensionOptionName {
 }
 
 impl ExtensionOptionName {
-    /// The option a `-W` group name, without `-W`, sets only Clang's mapping
-    /// of extension diagnostics through, for the names bcc has no warning
-    /// group for.
-    pub(crate) fn parse(name: &str) -> Option<Self> {
-        match name {
-            | "typedef-redefinition" => Some(Self::TypedefRedefinition),
-            | "variadic-macro-arguments-omitted"
+    /// The option a `-W` group name, without `-W`, sets only the mapping of
+    /// extension diagnostics through, for the names bcc has no warning group
+    /// for, and whether bcc models the whole group under the rules it
+    /// applies to ([`Self::models_whole_group`]).
+    pub(crate) fn parse(name: &str) -> Option<(Self, bool)> {
+        Some(match name {
+            | "typedef-redefinition" => (Self::TypedefRedefinition, true),
+            | "variadic-macro-arguments-omitted" => (Self::VariadicMacroArgumentsOmitted, true),
+            // Groups that hold diagnostics bcc reports under `-Wpedantic`
+            // alone, such as the comma `, ## __VA_ARGS__` pastes.
             | "gnu-zero-variadic-macro-arguments"
             | "gnu"
             | "pre-c23-compat"
@@ -311,9 +324,23 @@ impl ExtensionOptionName {
             | "pre-c23-compat-pedantic"
             | "pre-c2x-compat-pedantic"
             | "c++20-extensions"
-            | "c++2a-extensions" => Some(Self::VariadicMacroArgumentsOmitted),
-            | _ => None,
-        }
+            | "c++2a-extensions" => (Self::VariadicMacroArgumentsOmitted, false),
+            | "long-long" => (Self::Gcc(ExtensionGroup::LongLong), true),
+            | "declaration-after-statement" =>
+                (Self::Gcc(ExtensionGroup::DeclarationAfterStatement), true),
+            | "vla" => (Self::Gcc(ExtensionGroup::Vla), true),
+            | "variadic-macros" => (Self::Gcc(ExtensionGroup::VariadicMacros), true),
+            | "pointer-arith" => (Self::Gcc(ExtensionGroup::PointerArith), true),
+            | _ => return None,
+        })
+    }
+
+    /// Whether bcc models every diagnostic of the option's group under
+    /// Clang's rules (`clang`) or GCC's, given what [`Self::parse`] said of
+    /// its name: GCC's own options model nothing under Clang's rules, and
+    /// the others nothing under GCC's.
+    pub(crate) const fn models_whole_group(self, whole: bool, clang: bool) -> bool {
+        whole && clang == !matches!(self, Self::Gcc(_))
     }
 
     /// Whether the option reaches the diagnostics of `class`.
@@ -337,7 +364,7 @@ impl ExtensionOptionName {
             | Self::VariadicMacroArgumentsOmitted =>
                 matches!(class, ExtensionClass::OmittedVariadicArguments),
             | Self::Everything => true,
-            | Self::PedanticErrors => false,
+            | Self::PedanticErrors | Self::Gcc(_) => false,
         }
     }
 }
@@ -367,6 +394,9 @@ pub(super) struct ExtensionMappings {
     /// Whether `-pedantic-errors` or `-Werror=pedantic` appeared, which
     /// makes the options `-Wpedantic` enables errors for good.
     gcc_pedantic_error: bool,
+    /// The [`ExtensionGroup`]s of GCC's own options whose `-Wno-` form came
+    /// last, one bit each.
+    gcc_disabled:       u16,
 }
 
 impl ExtensionMappings {
@@ -374,6 +404,7 @@ impl ExtensionMappings {
         classes:            [0; ExtensionClass::ALL.len()],
         gcc_pedantic:       None,
         gcc_pedantic_error: false,
+        gcc_disabled:       0,
     };
     const NO_WERROR: u8 = 1 << 2;
 
@@ -396,6 +427,13 @@ impl ExtensionMappings {
         setting: super::WarningOption,
     ) -> Self {
         use super::WarningOption;
+        if let ExtensionOptionName::Gcc(group) = option {
+            match setting {
+                | WarningOption::Enable(true) => self.gcc_disabled &= !(1 << group as u16),
+                | WarningOption::Enable(false) => self.gcc_disabled |= 1 << group as u16,
+                | WarningOption::Error(_) => {},
+            }
+        }
         if matches!(
             option,
             ExtensionOptionName::Pedantic | ExtensionOptionName::PedanticErrors

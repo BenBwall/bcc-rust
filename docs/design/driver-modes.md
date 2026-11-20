@@ -174,9 +174,13 @@ preprocessor's pedantic warnings under options of their own or none, which bcc
 models only for those `language-standards.md` lists, so its `-Werror=pedantic` and
 `-Wno-error=pedantic` leave the others as the extension policy says; and bcc
 names `-Wpedantic` where GCC or Clang name a group bcc does not model, such as
-Clang's `-Wgnu-statement-expression`, and reads `-Wno-long-long`,
-`-Wno-declaration-after-statement`, `-Wno-vla` and `-Wno-variadic-macros` as
-no more than known options. clang-cl's `unknown argument ignored in clang-cl:
+Clang's `-Wgnu-statement-expression`. Of GCC's `-Wlong-long`,
+`-Wdeclaration-after-statement`, `-Wvla`, `-Wvariadic-macros` and
+`-Wpointer-arith` it reads only the `-Wno-` form, which turns them off in
+either order until their `-W` form, and of Clang's `-Wgnu`,
+`-Wgnu-zero-variadic-macro-arguments`, `-Wpre-c23-compat` and
+`-Wc++20-extensions` only what they make of an omitted variadic argument;
+bcc's own command line warns that it does not implement the rest. clang-cl's `unknown argument ignored in clang-cl:
 '-pedantic' [-Wunknown-argument]` is not given. `-Wfatal-errors` stops at
 the first error bcc reports, and bcc reports a preprocessing diagnostic
 before the errors of the lines above it where GCC, Clang and TCC report

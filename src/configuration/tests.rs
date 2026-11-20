@@ -783,7 +783,8 @@ fn extensions_take_the_groups_their_compilers_file_them_under() {
             .clang_extension_severity(omitted),
         None
     );
-    let gnu = ExtensionOptionName::parse("gnu").unwrap();
+    let (gnu, whole) = ExtensionOptionName::parse("gnu").unwrap();
+    assert!(!gnu.models_whole_group(whole, true));
     assert_eq!(
         base.with_extension_option(Name::C23Extensions, Error(true))
             .with_extension_option(gnu, Enable(false))
@@ -839,4 +840,36 @@ fn extensions_take_the_groups_their_compilers_file_them_under() {
         assert_eq!(feature.gcc_filing(), filing, "{feature:?}");
         assert_eq!(feature.gcc_group(), group, "{feature:?}");
     }
+    // GCC's `-Wno-variadic-macros` turns its warnings off wherever it
+    // appears, until `-Wvariadic-macros`; `-Wno-long-long` leaves them.
+    let gcc = CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Allow)
+        .with_compiler_identity(CompilerIdentity::Gcc)
+        .with_werror_pedantic()
+        .with_extension_option(Name::Pedantic, Error(true));
+    let (variadic, whole) = ExtensionOptionName::parse("variadic-macros").unwrap();
+    assert!(variadic.models_whole_group(whole, false) && !variadic.models_whole_group(whole, true));
+    let (long_long, _) = ExtensionOptionName::parse("long-long").unwrap();
+    let severity = |configuration: CompilerConfiguration| {
+        configuration.gcc_pedantic_severity(
+            true,
+            GccFiling::Enabled,
+            ExtensionGroup::VariadicMacros,
+        )
+    };
+    assert_eq!(severity(gcc), Some(E));
+    assert_eq!(
+        severity(gcc.with_extension_option(variadic, Enable(false))),
+        None
+    );
+    assert_eq!(
+        severity(
+            gcc.with_extension_option(variadic, Enable(false))
+                .with_extension_option(variadic, Enable(true))
+        ),
+        Some(E)
+    );
+    assert_eq!(
+        severity(gcc.with_extension_option(long_long, Enable(false))),
+        Some(E)
+    );
 }

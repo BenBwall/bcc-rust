@@ -209,8 +209,9 @@ fn unanalyzed_redeclarations_inherit_the_previous_kind() {
 #[test]
 fn repeated_typedefs_are_a_c11_extension_before_c11() {
     // GCC and Clang accept a typedef repeated with the same type in every
-    // mode and report it as a C11 feature only when pedantic, in GNU modes
-    // too. MSVC's vcruntime.h repeats the resource stddef.h's typedefs.
+    // mode, in GNU modes too, and report it before C11 as a C11 feature: GCC
+    // only when pedantic, and Clang by default (`-Wtypedef-redefinition`).
+    // MSVC's vcruntime.h repeats the resource stddef.h's typedefs.
     let source = "typedef int t; typedef int t; typedef long u; typedef int u;";
     for standard in [
         CStandard::C89,
@@ -219,22 +220,26 @@ fn repeated_typedefs_are_a_c11_extension_before_c11() {
         CStandard::C23,
     ] {
         for gnu in [false, true] {
+            let allow = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(gnu);
             assert_eq!(
-                kinds(
-                    source,
-                    CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
-                        .with_gnu_extensions(gnu)
-                ),
+                kinds(source, allow.with_compiler_identity(CompilerIdentity::Gcc)),
                 [SemanticErrorKind::TypedefRedeclaration],
                 "{standard:?} {gnu}"
             );
+            let reported = if standard < CStandard::C11 {
+                &["'typedef redefinition' is a C11 extension"][..]
+            } else {
+                &[]
+            };
             assert_eq!(
                 extensions("typedef int t; typedef int t;", pedantic(standard, gnu)),
-                if standard < CStandard::C11 {
-                    &["'typedef redefinition' is a C11 extension"][..]
-                } else {
-                    &[]
-                },
+                reported,
+                "{standard:?} {gnu}"
+            );
+            assert_eq!(
+                extensions("typedef int t; typedef int t;", allow),
+                reported,
                 "{standard:?} {gnu}"
             );
         }

@@ -424,6 +424,9 @@ impl Cli {
                 && match LanguageFlag::parse(option) {
                     | Some(LanguageFlag::UnknownWarning) => true,
                     | Some(LanguageFlag::WarningGroup(group, _)) => group.gcc_only() && !gcc,
+                    // An option bcc models only in part, which it applies.
+                    | Some(LanguageFlag::ExtensionOption(name, _, whole)) =>
+                        !name.models_whole_group(whole, !gcc),
                     | _ => false,
                 }
         });
@@ -945,9 +948,11 @@ enum LanguageFlag {
     Pedantic(bool),
     /// `-pedantic-errors`.
     PedanticErrors,
-    /// A form of a warning option that only sets Clang's mapping of the
-    /// extension diagnostics it reaches, such as `-Wno-typedef-redefinition`.
-    ExtensionOption(ExtensionOptionName, WarningOption),
+    /// A form of a warning option that only sets the mapping of the
+    /// extension diagnostics it reaches, such as `-Wno-typedef-redefinition`,
+    /// and whether bcc models its whole group
+    /// ([`ExtensionOptionName::models_whole_group`]).
+    ExtensionOption(ExtensionOptionName, WarningOption, bool),
     /// `-Werror=pedantic` (true) or `-Wno-error=pedantic` (false).
     PedanticAsError(bool),
     /// `-fms-extensions` or `-fno-ms-extensions`.
@@ -1285,9 +1290,10 @@ impl LanguageFlag {
             };
             return Some(match group {
                 | Some(group) => Self::WarningGroup(group, option),
-                | None => ExtensionOptionName::parse(name).map_or(Self::UnknownWarning, |name| {
-                    Self::ExtensionOption(name, option)
-                }),
+                | None => ExtensionOptionName::parse(name)
+                    .map_or(Self::UnknownWarning, |(name, whole)| {
+                        Self::ExtensionOption(name, option, whole)
+                    }),
             });
         }
         let (name, enabled) = text
@@ -1338,7 +1344,7 @@ impl LanguageFlag {
                 configuration.with_pedantic_as_error(false)
             }
             .with_extension_option(ExtensionOptionName::Pedantic, WarningOption::Error(error)),
-            | Self::ExtensionOption(name, option) =>
+            | Self::ExtensionOption(name, option, _) =>
                 configuration.with_extension_option(name, option),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>
