@@ -67,6 +67,7 @@ use crate::{
     },
     snapshot::{
         Diagnostic,
+        N1256_URL,
         Range,
         Snapshot,
         status_label,
@@ -2343,17 +2344,26 @@ fn About() -> impl IntoView {
                 <article>
                     <h3><span class="spec-number">"§3"</span>"Limits of this model"</h3>
                     <p>
-                        "The engine runs a bounded subset of C: int and char objects, int pointers, fixed int arrays, \
-                         structures (members of those types, nested structures and pointers to structures, brace and \
-                         .member initializers, copies by =, by argument and by return), file-scope and static objects, \
-                         functions returning int or a structure, if, while and for. Still outside it: the preprocessor \
-                         (its lesson opens in the compiler pipeline instead), arrays of anything but int, unions, other \
-                         integer types, void functions, char parameters, char pointers and strings, switch, break and goto, library calls \
-                         and floating point. Initializers take no brace elision or array designators, and a static object's \
-                         takes only a decimal int constant, or 0 for a pointer, so no address constants or arithmetic. \
-                         Pointers to structures take no arithmetic, and a call's result has no members to select. \
-                         Operands are evaluated left to right, and nested side effects are rejected \
-                         rather than sequenced."
+                        "The engine runs a bounded subset of C, the part the lessons use: the integer types from char \
+                         to unsigned long long and the three floating types, at their x86-64 sizes; pointers; arrays \
+                         of numbers or of chars, and string literals; structures, nested or reached through pointers; \
+                         const, casts and sizeof; file-scope and static objects; functions that return a number or a \
+                         structure; if and else, while and for; printf, puts and putchar after #include <stdio.h>; and \
+                         #define of a name as one number, character or string. Outside it are, among others: switch, \
+                         do, break, continue and goto; the ?: and comma operators; typedef, enum, union and _Bool; \
+                         void and static functions; arrays of pointers or of structures; a call inside a larger \
+                         expression (store its result first); nested side effects such as a = b++; and the other \
+                         library functions. A program that uses one of them stops before its first step, and its note \
+                         says so. One that needs more of the preprocessor (another header, a function-like macro, \
+                         #if) stops there too, with a button to the Preprocessor stage, which shows what bcc makes of \
+                         it."
+                    </p>
+                    <p>
+                        "The engine evaluates operands left to right, one of the orders C allows: "
+                        <a href=format!("{N1256_URL}#page=79") target="_blank" rel="noopener">
+                            "C99 §6.5p3"<span class="sr-only">" (opens the standard in a new tab)"</span>
+                        </a>
+                        " leaves the order unspecified, so a compiler may choose another."
                     </p>
                     <p>
                         "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
