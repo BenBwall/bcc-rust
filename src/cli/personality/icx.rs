@@ -595,9 +595,18 @@ fn intel_option(option: &str) -> Option<Intel> {
         // OpenMP, which bcc refuses as it does `-fopenmp`; calling
         // conventions, data layouts and precisions bcc does not follow; and
         // header search from the environment Intel's driver adds.
-        | "-qopenmp" | "-fiopenmp" | "-qopenmp-stubs" | "-fiopenmp-offload" | "-regcall"
-        | "-fstack-limit-register" | "-pc32" | "-pc64" | "-iexternal-env" | "-isystem-env"
-        | "-ivfsoverlay-lib" | "-fheader-search" => Intel::Refuse(CHANGES),
+        | "-qopenmp"
+        | "-fiopenmp"
+        | "-qopenmp-stubs"
+        | "-fiopenmp-offload"
+        | "-regcall"
+        | "-fstack-limit-register"
+        | "-pc32"
+        | "-pc64"
+        | "-iexternal-env"
+        | "-isystem-env"
+        | "-ivfsoverlay-lib"
+        | "-fheader-search" => Intel::Refuse(CHANGES),
         | "-fintel-long-double-size" if option != "-fintel-long-double-size=80" =>
             Intel::Refuse(CHANGES),
         | "-falign-stack" if option != "-falign-stack=maintain-16-byte" => Intel::Refuse(CHANGES),
