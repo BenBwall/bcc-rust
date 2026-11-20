@@ -53,6 +53,15 @@ mod tests {
         matches_the_claimed_compiler("imaginary_interchange_constants.c");
     }
 
+    /// The NaN an invalid floating operation folds to: positive in a static
+    /// initializer under both identities and in Clang's code for a
+    /// function, the x86-64 default NaN, sign bit set, where GCC leaves the
+    /// operation for run time.
+    #[test]
+    fn folded_nans_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("folded_nans.c");
+    }
+
     /// The C99 §7.12.14 comparison builtins glibc's `<math.h>` uses, with
     /// `__builtin_issignaling` and `__builtin_roundeven`.
     #[test]
