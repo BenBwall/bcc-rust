@@ -188,6 +188,10 @@ pub(super) fn identity(target: Target) -> Vec<OsString> {
 
 /// What Intel's driver gives clang-cl under `icx-cl`, as the command line
 /// before `/link` decides it.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each is an independent default the command line overrides."
+)]
 pub(super) struct ClDefaults {
     /// Whether an `/O` option chose the level.
     optimization: bool,
@@ -196,6 +200,10 @@ pub(super) struct ClDefaults {
     debug:        Option<String>,
     /// `/fp:fast`, the default, rather than `/fp:precise` or `/fp:strict`.
     fast:         bool,
+    /// Whether the last of `/fp:` and `/Qftz[-]` flushes subnormals, which
+    /// an optimized `main` then sets the processor to do, as under `icx`
+    /// ([`Denormals`]).
+    flush:        bool,
     /// `-Rno-debug-disables-optimization` was not given.
     remark:       bool,
 }
@@ -207,6 +215,7 @@ impl ClDefaults {
             optimization: false,
             debug:        None,
             fast:         true,
+            flush:        true,
             remark:       true,
         };
         for argument in arguments {
@@ -219,8 +228,11 @@ impl ClDefaults {
             match option {
                 | "link" => break,
                 | "Zi" | "Z7" | "ZI" => defaults.debug = Some(text.into()),
-                | "fp:fast" => defaults.fast = true,
-                | "fp:precise" | "fp:strict" | "fp:except" => defaults.fast = false,
+                | "fp:fast" => (defaults.fast, defaults.flush) = (true, true),
+                | "fp:precise" | "fp:strict" | "fp:except" =>
+                    (defaults.fast, defaults.flush) = (false, false),
+                | "Qftz" => defaults.flush = true,
+                | "Qftz-" => defaults.flush = false,
                 | "Rno-debug-disables-optimization" => defaults.remark = false,
                 | "Rdebug-disables-optimization" => defaults.remark = true,
                 | _ =>
@@ -249,6 +261,9 @@ impl ClDefaults {
             } else {
                 common.push("-O2".into());
             }
+        }
+        if self.flush {
+            common.push("--flush-denormals-in-main".into());
         }
         // The floating-point model's macros, which `cl` defines as
         // `/fp:` chooses (`/fp:strict` is refused).
@@ -314,6 +329,82 @@ struct Translation {
     debug:            Option<String>,
     /// `-R[no-]debug-disables-optimization`.
     remark:           Option<bool>,
+    /// The floating-point options' state, which decides the flush in
+    /// `main` and the link's `crtfastmath.o`.
+    denormals:        Denormals,
+}
+
+/// What icx's floating-point options decide about subnormal numbers, each
+/// as the last option that sets it. Intel's Clang makes an optimized
+/// `main` set MXCSR's FTZ and DAZ bits under its default `fast` model,
+/// `-ftz` or `-ffast-math`, and not under `-no-ftz` or a value-safe model.
+/// Its driver links `crtfastmath.o`, whose constructor sets them for the
+/// whole process, only where Clang's would for the options on the command
+/// line, not for the default model, and after any `-Ofast` at all.
+#[derive(Default)]
+struct Denormals {
+    /// `-no-ftz`, `-fno-fast-math`, `-fp-model=precise` or another option
+    /// that keeps subnormals came after any that flushes them.
+    kept:    bool,
+    /// The last of Clang's options that link `crtfastmath.o` and those that
+    /// do not asks for it.
+    runtime: bool,
+    /// Whether the link takes `crtfastmath.o` whatever those say: after any
+    /// `-Ofast`, but never after `-mno-daz-ftz`.
+    forced:  Option<bool>,
+}
+
+impl Denormals {
+    /// Reads `option`, one of Clang's options or Intel's `-fp-model=MODEL`
+    /// as spelled.
+    fn read(&mut self, option: &str) {
+        let (kept, runtime) = match option {
+            | "-ftz" => (Some(false), None),
+            | "-no-ftz" | "-fdenormal-fp-math=ieee" => (Some(true), None),
+            | "-ffast-math"
+            | "-funsafe-math-optimizations"
+            | "-ffp-model=fast"
+            | "-ffp-model=aggressive"
+            | "-fp-model=fast" => (Some(false), Some(true)),
+            | "-fp-model=fast=1" | "-fp-model=fast=2" => (Some(false), Some(false)),
+            | "-fno-fast-math"
+            | "-fno-unsafe-math-optimizations"
+            | "-ffp-model=precise"
+            | "-ffp-model=strict"
+            | "-fp-model=precise"
+            | "-fp-model=strict"
+            | "-fp-model=consistent" => (Some(true), Some(false)),
+            // `-fast` is `-Ofast` and more.
+            | "-Ofast" | "-fast" => {
+                if self.forced.is_none() {
+                    self.forced = Some(true);
+                }
+                (Some(false), None)
+            },
+            | "-mno-daz-ftz" => {
+                self.forced = Some(false);
+                (None, None)
+            },
+            | _ => (None, None),
+        };
+        if let Some(kept) = kept {
+            self.kept = kept;
+        }
+        if let Some(runtime) = runtime {
+            self.runtime = runtime;
+        }
+    }
+
+    /// bcc's options for what was read.
+    fn options(&self) -> impl Iterator<Item = OsString> {
+        let flush = (!self.kept).then_some("--flush-denormals-in-main");
+        let runtime = if self.forced.unwrap_or(self.runtime) {
+            "--link-fast-math-runtime"
+        } else {
+            "--no-fast-math-runtime"
+        };
+        flush.into_iter().chain([runtime]).map(OsString::from)
+    }
 }
 
 impl Translation {
@@ -331,6 +422,7 @@ impl Translation {
             self.classic.push(spelling);
             return;
         }
+        self.denormals.read(text);
         // Clang's options that take the next argument keep it.
         if SEPARATE_OPERANDS.contains(&text) {
             self.out.push(argument.clone());
@@ -350,6 +442,7 @@ impl Translation {
                 .next()
                 .map(|model| model.to_string_lossy().into_owned());
             let model = model.as_deref().unwrap_or_default();
+            self.denormals.read(&format!("-fp-model={model}"));
             if matches!(model, "source" | "double" | "extended" | "except") {
                 self.out.push(format!("-ffp-model={model}").into());
             } else {
@@ -497,6 +590,9 @@ impl Translation {
         // Code at a fixed address, linked so (Intel's Linux toolchain is not
         // position-independent by default).
         compile.push("-fno-pic".into());
+        // Subnormals as the floating-point options leave them, not as the
+        // default model would link them.
+        compile.extend(self.denormals.options());
         Defaults {
             compile,
             link: vec!["--no-pie".into()],

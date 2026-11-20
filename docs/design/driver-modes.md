@@ -1829,6 +1829,24 @@ own options:
 - **`libm`** is linked whether or not `-lm` asks for it, as icx links it with
   Intel's math libraries, so Autoconf's `AC_SEARCH_LIBS([sqrt], [m])` finds
   `none required`.
+- **Subnormals flushed from an optimized `main`.** icx decides the flush
+  when it compiles `main`, not when it links: above `-O0`, under a model
+  that flushes, its back end begins `main` with `stmxcsr`, `orl $0x8040`
+  and `ldmxcsr`, setting MXCSR's flush-to-zero and denormals-are-zero bits
+  for the rest of the process, and bcc writes the same three instructions
+  there. The last of these options decides whether the model flushes:
+  `-ftz`, `-ffast-math`, `-funsafe-math-optimizations`, `-Ofast` (wherever
+  it stands) and the `fast` models flush; `-no-ftz`, `-fno-fast-math`,
+  `-fno-unsafe-math-optimizations`, `-fdenormal-fp-math=ieee` and the
+  `precise` and `consistent` models keep subnormals. So `-O0`, `-g` alone,
+  `-no-ftz` and `-fp-model=precise` keep them, and so does a program whose
+  `main` was compiled so, however it is linked (Meson's `c_args`, CMake's
+  compile options and its Debug configuration never reach the link). Like
+  icx, bcc links `crtfastmath.o`, whose constructor sets the same bits, only
+  where Clang's driver would for the options of the link command itself
+  (the last of `-ffast-math`, `-funsafe-math-optimizations`,
+  `-ffp-model=fast` and `-fp-model=fast` and their opposites), after any
+  `-Ofast`, and never after `-mno-daz-ftz`; the default model links none.
 
 **Intel's options.** Of Intel's own (those `icx --autocomplete` lists beside
 the pinned Clang's, and the wrapper's):
@@ -1839,6 +1857,7 @@ the pinned Clang's, and the wrapper's):
 | `-axCODE,...`, `-mauto-arch=CODE` | checked (`unknown target CPU 'bogus' for option 'ax'`, after the driver's other errors) and dropped: they add code paths beside the baseline |
 | `-fp-model=MODEL` | `fast` and `fast=1` are `-ffp-model=fast`, `fast=2` `-ffp-model=aggressive`, `precise` `-ffp-model=precise`, `consistent` precise without contraction, `source`, `double`, `extended` and `except` precise with contraction; `strict` is refused, as bcc refuses `-ffp-model=strict`; another model is `unsupported argument 'bogus' to option '-ffp-model='` |
 | `-fp-model MODEL` | read by Intel's Clang, which knows its own models but not `source`, `double`, `extended` and `except`; it takes the next argument whatever it is |
+| `-ftz`, `-no-ftz` | whether an optimized `main` flushes subnormals (above) |
 | `-qopenmp`, `-fiopenmp`, `-qopenmp-stubs` | refused, as `-fopenmp` is; `-fopenmp` draws Intel's `use of '-qopenmp' recommended over '-fopenmp' [-Wrecommended-option]` first |
 | `-qopenmp-simd`, `-fiopenmp-simd` | `-fopenmp-simd` with `__INTEL_HOST_OPENMP` |
 | `-ipo`, `-no-ipo` | `-flto`, `-fno-lto` |
@@ -1848,7 +1867,7 @@ the pinned Clang's, and the wrapper's):
 | `-fast` | `-Ofast -march=native -flto -static` |
 | `-debug[=KIND]`, `-debug KIND` | `-g`, or `-g0` for `none`, turning optimization off as `-g` does; an unknown kind is `unsupported argument 'bogus' to option '-debug='` |
 | `-static-intel`, `-shared-intel`, `-no-intel-lib` | how to link Intel's libraries, which bcc never links: link options Clang reports as unused when not linking |
-| `-qopt-*`, `-qno-opt-*`, `-unroll[=N]`, `-inline-level=N`, `-fimf-*`, `-fp-speculation=`, `-ftz`, `-no-ftz`, `-vec`, `-fvec-*`, `-floop-*`, `-fno-alias`, `-traceback`, `-sox` and the like | tuning, reports and debug-information variants: dropped |
+| `-qopt-*`, `-qno-opt-*`, `-unroll[=N]`, `-inline-level=N`, `-fimf-*`, `-fp-speculation=`, `-vec`, `-fvec-*`, `-floop-*`, `-fno-alias`, `-traceback`, `-sox` and the like | tuning, reports and debug-information variants: dropped |
 | `-diag-disable=IDS`, `-diag-enable`, `-diag-warning`, `-diag-error` (the IDs joined or after a space) | dropped; `-diag-disable=10430` silences the classic-option warning |
 | the SYCL and offloading sub-options (`-fsycl-*`, `-fopenmp-target*`, `-Xsycl-target-*`) | dropped, since `-fsycl` and `-qopenmp` are refused |
 | `-fsycl`, `-fhls` | refused: bcc compiles C, not SYCL or device code |
@@ -1894,8 +1913,10 @@ command line as the clang-cl personality does, with:
   and `_M_FP_CONTRACT`, or `_M_FP_PRECISE` under `/fp:precise`, and
   `__NO_MATH_ERRNO__`, which bcc's clang-cl identity does not define. `/Zi`,
   `/Z7` or `/ZI` without an `/O` option turns optimization off with the
-  remark above naming it and `/Od`. `__SSP_STRONG__` stays undefined, as in
-  Intel's, which applies no `/GS` by default.
+  remark above naming it and `/Od`. An optimized `main` flushes subnormals
+  as under `icx`, unless the last of `/fp:` and `/Qftz[-]` is
+  `/fp:precise`, `/fp:strict` or `/Qftz-`. `__SSP_STRONG__` stays
+  undefined, as in Intel's, which applies no `/GS` by default.
 - Intel's `/Q` options, which clang-cl would read as paths: `/QxCODE` as
   `-x`, `/Qax`, `/Qipo`, `/Qopt-*`, `/Qdiag-*`, `/Qimf-*` and the like
   dropped, `/Qopenmp` refused, `/Qopenmp-simd` with `__INTEL_HOST_OPENMP`,
@@ -1928,12 +1949,10 @@ model, and Intel's diagnostics name the source by its absolute path
   library, `libm` and the bundled clang's runtime, so CMake's implicit link
   libraries and libtool's search path differ, and so may the last bits of
   results from math functions.
-- **Denormals.** icx sets flush-to-zero in `main` when it compiles it with
-  optimization under the fast model, unless `-no-ftz`; bcc links
-  `crtfastmath.o` whenever the fast model is in effect, as Clang does, so
-  denormals also flush at `-O0` (where icx keeps them) and `-ftz` and
-  `-no-ftz` change nothing. `crtfastmath.o` also brings DWARF that `file`
-  reports (`with debug_info`). `-fp-model=precise` keeps denormals in both.
+- **Subnormal options.** `-fdenormal-fp-math=` other than `ieee` and
+  `-mdaz-ftz` are refused, as under the Clang personality, where icx
+  accepts them. Where a link takes `crtfastmath.o`, the bundled clang's
+  brings DWARF that `file` reports (`with debug_info`).
 - **Processor macros.** `-x` codes and `-xHost` give bcc's x86-64 levels,
   so the processor's name macros (`__corei7__`, `__tune_corei7__`), the
   features above the level bcc has no option for (`__FSGSBASE__`,

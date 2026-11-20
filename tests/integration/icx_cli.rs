@@ -525,6 +525,83 @@ mod tests {
         succeeds(&directory.icx(&["-static-intel", "sqrt.c", "-o", "intel"]));
     }
 
+    /// A program that says whether `DBL_MIN / 4`, computed in another unit,
+    /// survives.
+    const SUBNORMAL_MAIN: &str = "#include <float.h>\n#include <stdio.h>\ndouble \
+                                  quarter(double);\nint main(void) {\n  volatile double y = \
+                                  quarter(DBL_MIN);\n  printf(\"%s\\n\", y != 0 ? \"kept\" : \
+                                  \"flushed\");\n  return 0;\n}\n";
+    const SUBNORMAL_LIBRARY: &str =
+        "double quarter(double x) { volatile double v = x; return v / 4; }\n";
+
+    /// icx flushes subnormals from an optimized `main` compiled under a
+    /// model that flushes, whatever the link command says, and links
+    /// `crtfastmath.o` only where the link command's own options ask for it.
+    /// Each expectation is what icx 2026.2.0's programs print.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn subnormals_flush_where_icx_flushes_them() {
+        let directory = Directory::new();
+        directory.write("main.c", SUBNORMAL_MAIN);
+        directory.write("lib.c", SUBNORMAL_LIBRARY);
+        let mut failures = Vec::new();
+        let mut check = |steps: &[&[&str]], expected: &str| {
+            for step in steps {
+                succeeds(&directory.icx(step));
+            }
+            let run = directory.run(directory.0.join("a.out"), &[]);
+            succeeds(&run);
+            if stdout(&run) != format!("{expected}\n") {
+                failures.push(format!("{steps:?}: {}", stdout(&run)));
+            }
+            drop(std::fs::remove_file(directory.0.join("a.out")));
+        };
+        for (options, expected) in [
+            (&[][..], "flushed"),
+            (&["-O0"], "kept"),
+            (&["-O2"], "flushed"),
+            (&["-g"], "kept"),
+            (&["-g", "-O2"], "flushed"),
+            (&["-no-ftz"], "kept"),
+            (&["-ftz", "-no-ftz"], "kept"),
+            (&["-fp-model=precise"], "kept"),
+            (&["-fp-model=precise", "-ftz"], "flushed"),
+            (&["-ftz", "-fp-model=precise"], "kept"),
+            (&["-O0", "-ftz"], "kept"),
+            (&["-fno-fast-math"], "kept"),
+            // `-ffast-math` links `crtfastmath.o`, as Clang's driver does.
+            (&["-O0", "-ffast-math"], "flushed"),
+            (&["-Ofast", "-O0"], "flushed"),
+            (&["-fdenormal-fp-math=ieee"], "kept"),
+        ] {
+            let mut step = options.to_vec();
+            step.extend_from_slice(&["main.c", "lib.c"]);
+            check(&[step.as_slice()], expected);
+        }
+        // Separate compilation and link, as build systems run them: the
+        // compile options decide the flush, and the link adds the runtime
+        // only for its own options.
+        for (compile, link, expected) in [
+            (&[][..], &[][..], "flushed"),
+            (&["-O0"], &[], "kept"),
+            (&["-g"], &[], "kept"),
+            (&["-O0", "-g"], &["-O0", "-g"], "kept"),
+            (&["-fp-model=precise"], &[], "kept"),
+            (&["-no-ftz"], &[], "kept"),
+            (&[], &["-fp-model=precise"], "flushed"),
+            (&["-O0"], &["-ftz"], "kept"),
+            (&["-O0"], &["-ffast-math"], "flushed"),
+            (&["-fp-model=precise"], &["-Ofast"], "flushed"),
+        ] {
+            let mut first = compile.to_vec();
+            first.extend_from_slice(&["-c", "main.c", "lib.c"]);
+            let mut second = link.to_vec();
+            second.extend_from_slice(&["main.o", "lib.o"]);
+            check(&[first.as_slice(), second.as_slice()], expected);
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// `icx-cl`: its logo first, whatever the command line, the identity
     /// with a 64-bit `long double`, `/O2` and `/fp:fast`, Intel's `/Q`
     /// options, and the static libraries `CMake` makes through it.
@@ -631,6 +708,26 @@ mod tests {
         ));
         assert!(directory.0.join("baz.obj").exists());
         assert!(!directory.0.join("bar.obj").exists());
+        // An optimized `main` sets MXCSR's flush bits under `/fp:fast` and
+        // `/Qftz`, as icx-cl's does.
+        for (options, flushes) in [
+            (&[][..], true),
+            (&["/Od"], false),
+            (&["/Zi"], false),
+            (&["/fp:precise"], false),
+            (&["/fp:precise", "/Qftz"], true),
+            (&["/Qftz-"], false),
+        ] {
+            let mut all = options.to_vec();
+            all.extend_from_slice(&["/c", "/FA", "/Fae.asm", "e.c"]);
+            succeeds(&directory.bcc("--icx-cl-mode", &all));
+            let listing = std::fs::read_to_string(directory.0.join("e.asm")).unwrap();
+            assert_eq!(
+                listing.contains("ldmxcsr"),
+                flushes,
+                "{options:?}\n{listing}"
+            );
+        }
     }
 
     /// The executable names: `icx` and `icx-cc` are icx (`icx` is icx-cl on
@@ -698,6 +795,11 @@ mod tests {
             &["-Wno-recommended-option", "-Wintel-compat", "-c", "e.c"],
             &["hello.c", "-o", "out"],
             &["sqrt.c", "-o", "out"],
+            &["main.c", "lib.c", "-o", "out"],
+            &["-O0", "main.c", "lib.c", "-o", "out"],
+            &["-g", "main.c", "lib.c", "-o", "out"],
+            &["-no-ftz", "main.c", "lib.c", "-o", "out"],
+            &["-fp-model=precise", "main.c", "lib.c", "-o", "out"],
         ];
         let normalize = |text: &[u8], program: &Path, directory: &Path| {
             let installed = std::fs::canonicalize(program)
@@ -735,6 +837,8 @@ mod tests {
                      (void)argv;\n  printf(\"%.3f\\n\", sqrt((double)argc + 1.0));\n  return \
                      0;\n}\n",
                 );
+                directory.write("main.c", SUBNORMAL_MAIN);
+                directory.write("lib.c", SUBNORMAL_LIBRARY);
                 let (program, mut all): (PathBuf, Vec<&str>) = if real {
                     (PathBuf::from(&icx), Vec::new())
                 } else {

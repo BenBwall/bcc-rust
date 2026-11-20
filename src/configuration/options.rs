@@ -260,6 +260,17 @@ impl CompilerConfiguration {
         self.stack_locals
     }
 
+    pub(crate) const fn with_denormals_flushed_in_main(mut self, flushes: bool) -> Self {
+        self.flushes_denormals_in_main = flushes;
+        self
+    }
+
+    /// Whether a hosted program's `main` makes the processor flush subnormal
+    /// results and operands to zero (MXCSR's FTZ and DAZ) when it starts.
+    pub(crate) const fn flushes_denormals_in_main(self) -> bool {
+        self.flushes_denormals_in_main
+    }
+
     /// What `-g` asks for, where the selected back end writes it.
     pub(crate) const fn debug_info(self) -> Option<super::DebugOptions> {
         self.debug_info
@@ -1162,6 +1173,7 @@ impl CompilerConfiguration {
             optimization: (false, false),
             debug_info: None,
             stack_locals: false,
+            flushes_denormals_in_main: false,
             gnu89_inline: None,
             char_signed: None,
             interchange_float_types: None,

@@ -144,6 +144,10 @@ pub(crate) struct CompilerConfiguration {
     /// Every named local object lives in memory, as GCC and Clang keep them
     /// at `-O0`, so a debugger reads and sets its current value.
     stack_locals: bool,
+    /// `main` makes the processor flush subnormal results and operands to
+    /// zero when it starts, as Intel's icx makes an optimized `main` do
+    /// under its `fast` models.
+    flushes_denormals_in_main: bool,
     gnu89_inline: Option<bool>,
     /// Whether plain `char` is signed, overriding the target's choice, as
     /// `-fsigned-char` and `-funsigned-char` do.
