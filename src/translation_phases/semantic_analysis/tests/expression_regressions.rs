@@ -604,8 +604,9 @@ fn only_a_cast_to_a_union_type_is_a_gnu_union_cast() {
 
 /// A declaration or function definition marked `__extension__` silences
 /// GCC's `-pedantic` reports of folded enumerators, case labels and bit-field
-/// widths, as GCC 14 does, but leaves the report of a folded array bound, and
-/// of a value folded from an address, as it is unmarked. GCC makes such an
+/// widths, as GCC 14 does, but leaves the report of a folded array bound, of
+/// a value folded from an address, and of a comma in a static initializer as
+/// it is unmarked. GCC makes such an
 /// array variable length, and whether it then accepts it depends on the
 /// array's storage and uses, and `-Wall` adds its `-Waddress` to an address
 /// compared with a null pointer; this report models neither, so only an
@@ -684,6 +685,17 @@ fn extension_declarations_leave_gcc_folded_array_bound_reports() {
             0,
         ),
         ("enum { A = (int)(1.0 + 1) };", 1),
+        // A comma in a static initializer is reported as it is unmarked:
+        // GCC 14 refuses it there whatever the mark.
+        ("__extension__ static int y = (1, 2);", 1),
+        (
+            "void f(void) { __extension__ static int y = (1, 2); (void)y; }",
+            1,
+        ),
+        (
+            "__extension__ int g(void) { static int y = (1, 2); return y; }",
+            1,
+        ),
         // A value folded from an address is reported as it is unmarked.
         ("int x; __extension__ enum { A = &x != 0 };", 1),
         (

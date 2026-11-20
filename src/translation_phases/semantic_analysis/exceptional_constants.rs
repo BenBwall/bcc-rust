@@ -747,9 +747,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if self.constant_site != ConstantSite::Other
                 && self.expression_info(e).constant == super::ConstantClass::Arithmetic
             {
+                self.report_pedantic_extension(text, e.source_vectors);
+            } else {
                 self.report_pedantic_constant(text, e.source_vectors);
-            } else if self.extension_operands == 0 {
-                self.pedantic_constant(text, e.source_vectors);
             }
             return;
         }
@@ -800,9 +800,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Reports `text` as `-pedantic` reports an extension.
-    /// An `__extension__` operand or marked declaration silences it.
+    /// Reports `text` as `-pedantic` reports an extension. An `__extension__`
+    /// operand silences it; a declaration marked `__extension__` does not,
+    /// since GCC 14 still refuses, for one, a comma in a static initializer
+    /// there.
     pub(super) fn report_pedantic_constant(&mut self, text: &str, source: SourceVectors) {
+        if self.extension_operands == 0 {
+            self.pedantic_constant(text, source);
+        }
+    }
+
+    /// Reports `text` as `-pedantic` reports an extension, silenced by an
+    /// `__extension__` operand or by a marked declaration around it, as GCC 14
+    /// silences the reports that call this (checked one by one: a folded
+    /// enumerator, case label or bit-field width, and `__FUNCTION__`).
+    /// GNU extension: GCC manual, "Alternate Keywords".
+    pub(super) fn report_pedantic_extension(&mut self, text: &str, source: SourceVectors) {
         if !self.under_extension() {
             self.pedantic_constant(text, source);
         }
