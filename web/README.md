@@ -220,7 +220,9 @@ the note scrolls on its own when it is longer than the window, and each
 step starts it at its top, while a long expression's steps scroll in a
 window of their own that each step keeps on its entry. Narrower, the note sits under the cells; down to
 821 px Reset, Back and Run show their icons alone and the step counter
-drops its word, so from 1024 px the control strip keeps to one row. Narrower still, and
+drops its word, so from 1024 px the control strip keeps to one row. The
+WebAssembly view's strip has more keys, so its Reset, Back and Run show their
+icons alone at every width, and it keeps to one row on a laptop too. Narrower still, and
 below 821 px, the device becomes a
 stack of modules with the source sized so the note follows it on the same
 screen, then the tape and the cells, and the transport keys docked at the
@@ -328,7 +330,12 @@ first read-only listing, whose folding arrows use it.
 ## Interface
 
 - Choose a lesson, open a local C file, or edit the source in place and choose
-  **Run edited code**.
+  **Run edited code**. Choosing a lesson in Table 1 brings the workbench on
+  screen (gliding, or jumping with reduced motion) and gives the keyboard
+  focus to the view it opened in, so the next `Tab` reaches its controls.
+- Before the first step the tape is blank, and a card over it says what
+  will fill it (a column a step, a lane for each object from the step its
+  lifetime begins) and that **Step** or `→` starts the run.
 - **Step** (`→` or `j`) performs one evaluation; **Back** (`←` or `k`) shows
   the previous state; **Over** (`o`) runs to the last step of the expression
   the step belongs to, through any call it makes, or from that last step to
