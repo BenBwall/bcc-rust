@@ -1207,8 +1207,8 @@ against GCC 14 on the same day, show a marked declaration silencing a
 conditional between pointers to arrays whose elements differ in qualifiers and
 a static initializer folded from an undefined shift, while the unmarked copies
 and the initializer whose shift sits in an `__extension__` operand warn on
-GCC's lines; GCC points the conditional at its `?`, column 72, where bcc points
-at the conditional, column 68. The last two rows initialize file-scope unions
+GCC's lines; GCC points the conditional at its `:`, column 72, where bcc points
+at its `?`, column 68. The last two rows initialize file-scope unions
 with casts to a union type, which GCC accepts; only the unmarked one warns,
 in bcc's wording for GCC's "ISO C forbids casts to union type".
 
