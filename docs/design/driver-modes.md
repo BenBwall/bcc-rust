@@ -1759,7 +1759,7 @@ Intel's apt repository, unpacked without root) on x86-64 Linux with glibc
 queries, the classic-option warning, Intel's options and their errors,
 `-dM -E` under each model, level and processor, preprocessing, programs
 linked and run, and the diagnostics probes of the TCC comparison). For
-`icx`, 77 are identical byte for byte after each compiler's install
+`icx`, 80 are identical byte for byte after each compiler's install
 directory, bcc's banner note and the configuration file icx's banner names
 are replaced, with each `-dM` listing compared as a set of definitions
 without the macros in which the Clang personality differs from the pinned
