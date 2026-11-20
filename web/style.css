@@ -429,6 +429,16 @@
   /* Phones show the short label (the responsive layer). */
   .mode-label-short { display: none; }
   .transport { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  /* The WebAssembly view's strip has two more keys and a longer status
+     than the machine's, so its Reset, Back and Run show their icons alone
+     at every width (their names stay for screen readers and in their
+     tooltips), and the strip keeps to one row on a laptop, a count of
+     instructions in the thousands included. */
+  .wasm-transport .button:not(.primary, .labelled) .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .wasm-transport .button:not(.primary, .labelled) { padding-inline: 10px; }
+  /* Its counter drops its word too: the note under the strip heads with
+     the instruction's number. */
+  .wasm-status .step-counter-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .toolbar .start-at-main { margin-top: 0; }
   .run-status { display: flex; align-items: center; gap: 14px; }
   /* A lamp: lit while the run can go on, dark when it has finished, red
@@ -663,6 +673,24 @@
   .tape-head { stroke: var(--accent); stroke-width: 2; }
   .tape-flag { fill: var(--accent); }
   .tape-flag-number { fill: var(--on-accent); font-size: 10.5px; font-weight: 700; }
+  /* Before the first step: what will fill the blank tape, and the key
+     that starts it, on a card over the blank. The tape under it still
+     takes the pointer. */
+  .tape-empty {
+    position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 16px;
+    background: color-mix(in srgb, var(--screen) 72%, transparent); pointer-events: none;
+  }
+  .tape-empty[hidden] { display: none; }
+  .tape-empty-card {
+    max-width: 440px; padding: 14px 18px 16px; border: 1px solid var(--screen-faint); border-left: 3px solid var(--accent);
+    background: var(--screen); color: var(--screen-dim); font-size: 12px; line-height: 1.6;
+  }
+  .tape-empty-card p { margin: 0; }
+  .tape-empty-label { font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+  .tape-empty-card .tape-empty-lead { margin-top: 6px; font: italic 400 21px/1.3 var(--font-serif); color: var(--screen-ink); }
+  .tape-empty-step { display: inline-block; padding: 0 .4em; background: var(--accent); color: var(--on-accent); font: 700 .62em/1.7 var(--font-mono); font-style: normal; letter-spacing: .06em; text-transform: uppercase; vertical-align: .2em; }
+  .tape-empty-lead kbd { --key: var(--screen-2); --key-edge: #4a4a45; --key-ink: var(--screen-ink); box-shadow: none; border-width: 1px; font: 400 .62em/1 var(--font-mono); vertical-align: .2em; }
+  .tape-empty-card .tape-empty-text { margin-top: 8px; }
 
 
   /* Under the head. */
@@ -1665,6 +1693,10 @@
     .notice { margin-inline: 18px; }
     .lesson-part { grid-template-columns: minmax(0, 1fr); }
     .lesson-part-title { padding-bottom: 2px; }
+    /* The phone's deck holds a lane or two before the first step, too
+       short for the blank tape's card: it follows the blank instead. */
+    .tape-empty { position: static; display: block; padding: 0 14px 16px; background: none; }
+    .tape-empty-card { max-width: none; }
     .lesson-card { grid-template-columns: 40px minmax(0, 1fr); gap: 2px 12px; padding: 11px 8px 11px 0; }
     /* The number, and a UB mark under it, span the title and the summary,
        so the mark never pushes the summary down a line. */

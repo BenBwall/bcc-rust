@@ -1016,6 +1016,8 @@ pub fn Deck(
             }
         });
     };
+    // Only the first state is recorded, and the run can go on from it.
+    let blank = move || history.with(|history| history.len() == 1) && reel.with(|reel| reel.open);
     let played = move || {
         let count = reel.with(|reel| reel.steps.len().max(2)) - 1;
         px(at()) / px(count)
@@ -1212,6 +1214,19 @@ pub fn Deck(
             >
                 {move || if more.get() { "▾ More rows below" } else { "▴ Back to the top rows" }}
             </button>
+            // Before the first step the tape is blank: say what will fill
+            // it and how to start, over the blank rather than beside it.
+            <div class="tape-empty" hidden=move || !blank()>
+                <div class="tape-empty-card">
+                    <p class="tape-empty-label">"Nothing recorded yet"</p>
+                    <p class="tape-empty-lead">"Press "<b class="tape-empty-step">"Step"</b>" or "<kbd>"→"</kbd>" to run the first step."</p>
+                    <p class="tape-empty-text">
+                        "Each step adds a column to this tape. The program’s objects appear as lanes from the step \
+                         their lifetime begins, with their values written along them, and each step’s note says \
+                         what it did and which rule of C it followed."
+                    </p>
+                </div>
+            </div>
             </div>
             <Spool side="right" fill=Signal::derive(move || 1.0 - played()) turn=Signal::derive(move || px(at()) * 37.0) />
         </figure>

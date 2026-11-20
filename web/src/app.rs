@@ -67,6 +67,7 @@ use crate::{
     },
     snapshot::{
         Diagnostic,
+        N1256_URL,
         Range,
         Snapshot,
         status_label,
@@ -683,9 +684,35 @@ impl State {
     /// Load a lesson, in the view it is about: a lesson about the compiler
     /// opens the pipeline at its stage, unless the WebAssembly view is open.
     fn select_demo(self, demo: &'static Demo) {
-        // The WebAssembly view steps every lesson, compiled by bcc itself,
-        // so it stays open. Otherwise a lesson about the compiler opens the
-        // pipeline at its stage, and the others the abstract machine.
+        self.open_lesson_view(demo);
+        self.action(move || self.stage_program(demo.source.into(), demo.name.into()));
+    }
+
+    /// Open a lesson chosen in Table 1, which loads into the workbench out
+    /// of sight below the table: bring the workbench on screen at once, and
+    /// again once the lesson has loaded, since its listing and tape then
+    /// take their own heights and the browser's scroll anchoring moves the
+    /// page to keep whatever it anchored on in place.
+    fn choose_lesson(self, demo: &'static Demo) {
+        if self.locked() {
+            return;
+        }
+        self.open_lesson_view(demo);
+        show_workbench(true);
+        self.action(move || async move {
+            let loaded = self
+                .stage_program(demo.source.into(), demo.name.into())
+                .await;
+            show_workbench(false);
+            loaded
+        });
+    }
+
+    /// The view a lesson opens in. The WebAssembly view steps every lesson,
+    /// compiled by bcc itself, so it stays open. Otherwise a lesson about the
+    /// compiler opens the pipeline at its stage, and the others the abstract
+    /// machine.
+    fn open_lesson_view(self, demo: &'static Demo) {
         if let Some(stage) = demo.stage {
             self.stage.set(stage);
         }
@@ -696,7 +723,6 @@ impl State {
                 Mode::Machine
             });
         }
-        self.action(move || self.stage_program(demo.source.into(), demo.name.into()));
     }
 
     /// Load the editor's text into the engine (and the compiler, when live).
@@ -1824,7 +1850,7 @@ fn Lessons(state: State) -> impl IntoView {
                                                     class:is-fault=demo.faults
                                                     aria-pressed=move || (selected() == Some(key)).to_string()
                                                     disabled=move || state.locked_tracked()
-                                                    on:click=move |_| state.select_demo(demo)
+                                                    on:click=move |_| state.choose_lesson(demo)
                                                 >
                                                     <span class="lesson-number">{format!("{:02}", index + 1)}</span>
                                                     <span class="lesson-title">{demo.title}</span>
@@ -2035,12 +2061,42 @@ fn Toolbar(state: State) -> impl IntoView {
             </div>
             <wasm::WasmTransport state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
             <wasm::StartAtMain state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
-            <div class="run-status" hidden=move || state.mode.get() != Mode::Wasm>
+            <div class="run-status wasm-status" hidden=move || state.mode.get() != Mode::Wasm>
                 <span class="status-pill" data-status=move || wasm::status(state.wasm).1>{move || wasm::status(state.wasm).0}</span>
-                <span class="step-counter">"Instruction "<strong>{move || state.wasm.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
+                <span class="step-counter"><span class="step-counter-label">"Instruction "</span><strong>{move || state.wasm.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
             </div>
         </div>
     }
+}
+
+/// Bring the workbench to the top of the window for a lesson chosen in
+/// Table 1 and, with `focus`, give the keyboard focus to the key of the view
+/// it opened in, at the head of the control strip, so the reader goes on
+/// from there rather than from the table. The page glides there as it does
+/// to its links, or jumps when motion is reduced (the style sheet's
+/// `scroll-behavior`).
+fn show_workbench(focus: bool) {
+    let _ = Timeout::new(0, move || {
+        let document = document();
+        if let Some(workbench) = document.get_element_by_id("workbench") {
+            let options = web_sys::ScrollIntoViewOptions::new();
+            options.set_block(web_sys::ScrollLogicalPosition::Start);
+            options.set_behavior(web_sys::ScrollBehavior::Auto);
+            workbench.scroll_into_view_with_scroll_into_view_options(&options);
+        }
+        if focus
+            && let Some(tab) = document
+                .query_selector(".mode-tab[aria-selected=\"true\"]")
+                .ok()
+                .flatten()
+                .and_then(|tab| tab.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let options = web_sys::FocusOptions::new();
+            options.set_prevent_scroll(true);
+            let _ = tab.focus_with_options(&options);
+        }
+    })
+    .forget();
 }
 
 /// Undo the browser's scroll anchoring while a change of view resizes the
@@ -2312,17 +2368,28 @@ fn About() -> impl IntoView {
                 <article>
                     <h3><span class="spec-number">"§3"</span>"Limits of this model"</h3>
                     <p>
-                        "The engine runs a bounded subset of C: int and char objects, int pointers, fixed int arrays, \
-                         structures (members of those types, nested structures and pointers to structures, brace and \
-                         .member initializers, copies by =, by argument and by return), file-scope and static objects, \
-                         functions returning int or a structure, if, while and for. Still outside it: the preprocessor \
-                         (its lesson opens in the compiler pipeline instead), arrays of anything but int, unions, other \
-                         integer types, void functions, char parameters, char pointers and strings, switch, break and goto, library calls \
-                         and floating point. Initializers take no brace elision or array designators, and a static object's \
-                         takes only a decimal int constant, or 0 for a pointer, so no address constants or arithmetic. \
-                         Pointers to structures take no arithmetic, and a call's result has no members to select. \
-                         Operands are evaluated left to right, and nested side effects are rejected \
-                         rather than sequenced."
+                        "The engine runs a bounded subset of C, the part the lessons use: the integer types from char \
+                         to unsigned long long and the three floating types, at their x86-64 sizes; pointers to \
+                         numbers, chars and structures; arrays of numbers or of chars, and string literals; \
+                         structures, nested or reached through pointers; \
+                         const, casts and sizeof; file-scope and static objects; functions that return a number or a \
+                         structure; if and else, while and for; printf, puts and putchar after #include <stdio.h>; and \
+                         #define of a name as one number, character or string. Outside it are, among others: switch, \
+                         do, break, continue and goto; the ?: and comma operators; typedef, enum, union and _Bool; \
+                         void and static functions; pointers to pointers or to functions; arrays of pointers, of \
+                         structures or of arrays; hexadecimal and octal constants; a call inside a larger \
+                         expression (store its result first); nested side effects such as a = b++; and the other \
+                         library functions. A program that uses one of them stops before its first step, and its note \
+                         says so. One that needs more of the preprocessor (another header, a function-like macro, \
+                         #if) stops there too, and its note sends the reader to the compiler's Preprocessor stage, \
+                         which shows what bcc makes of it."
+                    </p>
+                    <p>
+                        "The engine evaluates operands left to right, one of the orders C allows: "
+                        <a href=format!("{N1256_URL}#page=79") target="_blank" rel="noopener">
+                            "C99 §6.5p3"<span class="sr-only">" (opens the standard in a new tab)"</span>
+                        </a>
+                        " leaves the order unspecified, so a compiler may choose another."
                     </p>
                     <p>
                         "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
