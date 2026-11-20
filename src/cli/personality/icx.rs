@@ -472,8 +472,7 @@ impl Translation {
             | None if matches!(kind, "disable" | "enable" | "warning" | "error" | "remark") => (
                 kind,
                 rest.next()
-                    .map(|ids| ids.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
+                    .map_or_else(String::new, |ids| ids.to_string_lossy().into_owned()),
             ),
             // `-diag-dump` and the like.
             | None => return,
@@ -593,10 +592,16 @@ fn intel_option(option: &str) -> Option<Intel> {
     const CHANGES: &str = "bcc does not implement it, and ignoring it could change the program";
     let name = option.split_once('=').map_or(option, |(name, _)| name);
     Some(match name {
-        // OpenMP, which bcc refuses as it does `-fopenmp`, and its SIMD
-        // subset, which needs no run-time library.
-        | "-qopenmp" | "-fiopenmp" | "-qopenmp-stubs" | "-fiopenmp-offload" =>
+        // OpenMP, which bcc refuses as it does `-fopenmp`; calling
+        // conventions, data layouts and precisions bcc does not follow; and
+        // header search from the environment Intel's driver adds.
+        | "-qopenmp" | "-fiopenmp" | "-qopenmp-stubs" | "-fiopenmp-offload" | "-regcall"
+        | "-fstack-limit-register" | "-pc32" | "-pc64" | "-iexternal-env" | "-isystem-env"
+        | "-ivfsoverlay-lib" | "-fheader-search" => Intel::Refuse(CHANGES),
+        | "-fintel-long-double-size" if option != "-fintel-long-double-size=80" =>
             Intel::Refuse(CHANGES),
+        | "-falign-stack" if option != "-falign-stack=maintain-16-byte" => Intel::Refuse(CHANGES),
+        // OpenMP's SIMD subset, which needs no run-time library.
         | "-qopenmp-simd" | "-fiopenmp-simd" =>
             Intel::Pass(&["-fopenmp-simd", "-D__INTEL_HOST_OPENMP=1"]),
         | "-qno-openmp" | "-fno-iopenmp" => Intel::Pass(&["-fno-openmp"]),
@@ -611,16 +616,8 @@ fn intel_option(option: &str) -> Option<Intel> {
         | "-qmkl" | "-mkl" | "-qmkl-ilp64" | "-qmkl-sycl-impl" | "-qtbb" | "-tbb" | "-qipp"
         | "-ipp" | "-qipp-link" | "-ipp-link" | "-qdaal" | "-daal" | "-qactypes" | "-fortlib" =>
             Intel::Refuse("bcc has none of Intel's libraries"),
-        // Calling conventions, data layouts and precisions bcc does not
-        // follow.
-        | "-regcall" | "-fstack-limit-register" | "-pc32" | "-pc64" => Intel::Refuse(CHANGES),
-        | "-fintel-long-double-size" if option != "-fintel-long-double-size=80" =>
-            Intel::Refuse(CHANGES),
-        | "-falign-stack" if option != "-falign-stack=maintain-16-byte" => Intel::Refuse(CHANGES),
-        // Header search Intel's driver adds.
+        // Header search Intel's driver adds, with its operand.
         | "-iexternal" | "-pch-use" => Intel::IgnoreWithOperand,
-        | "-iexternal-env" | "-isystem-env" | "-ivfsoverlay-lib" | "-fheader-search" =>
-            Intel::Refuse(CHANGES),
         // Onto Clang's options.
         | "-ipo" => Intel::Pass(&["-flto"]),
         | "-no-ipo" => Intel::Pass(&["-fno-lto"]),

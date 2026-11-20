@@ -514,7 +514,7 @@ mod tests {
 
     /// `icx-cl`: its logo first, whatever the command line, the identity
     /// with a 64-bit `long double`, `/O2` and `/fp:fast`, Intel's `/Q`
-    /// options, and the static libraries CMake makes through it.
+    /// options, and the static libraries `CMake` makes through it.
     #[test]
     fn icx_cl_has_intels_logo_identity_and_defaults() {
         let directory = Directory::new();
