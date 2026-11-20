@@ -1148,9 +1148,10 @@ assertions folded from arithmetic; every other report, such as that of a
 folded array bound, of a value folded from an address or of a comma in a
 static initializer, only an `__extension__` operand silences (see the limits
 above). It does not yet silence other semantic extension reports such as
-arithmetic on `void *`, which both compilers silence. Suppression ends at the owning production's
-boundary; later unsuppressed occurrences, including ones from macro
-expansions, keep their diagnostics. Nested functions isolate typedef, label and switch state; under
+arithmetic on `void *`, which both compilers silence. Suppression ends at the
+owning production's boundary; later unsuppressed occurrences, including ones
+from macro expansions, keep their diagnostics. Nested functions isolate
+typedef, label and switch state; under
 the Clang identity a function definition in a block is the error "function
 definition is not allowed here", as in Clang (TCC's and MSVC's identities give
 "cannot use local functions" and C2601 "local function definitions are
