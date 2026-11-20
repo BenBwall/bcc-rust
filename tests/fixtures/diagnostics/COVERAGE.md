@@ -1202,7 +1202,15 @@ length: it refuses the static and file-scope ones ("variably modified
 is an error without `-pedantic`), where bcc reports its `-pedantic`
 folded-constant warning at the bound and GCC points at the declaration, and
 accepts the automatic one in `loud_automatic` silently, which bcc reports as
-it does unmarked (see Remaining output issues).
+it does unmarked (see Remaining output issues). The rows after it, checked
+against GCC 14 on the same day, show a marked declaration silencing a
+conditional between pointers to arrays whose elements differ in qualifiers and
+a static initializer folded from an undefined shift, while the unmarked copies
+and the initializer whose shift sits in an `__extension__` operand warn on
+GCC's lines; GCC points the conditional at its `:`, column 72, where bcc points
+at its `?`, column 68. The last two rows initialize file-scope unions
+with casts to a union type, which GCC accepts; only the unmarked one warns,
+in bcc's wording for GCC's "ISO C forbids casts to union type".
 
 ### Predefined function-name identifiers
 

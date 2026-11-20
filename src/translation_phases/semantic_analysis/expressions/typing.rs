@@ -1525,12 +1525,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // a pointer to one, and the operand has the type of a member,
             // which it initializes in a union rvalue. C99 §6.5.4p2, p. 81;
             // PDF p. 93 requires a scalar or void type, so GCC and Clang
-            // report the cast only once a member matches.
+            // report the cast only once a member matches. GCC gives a
+            // bit-field narrower than its declared type a type of its own,
+            // which no operand has; Clang matches the declared type.
             // <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
+            let gcc = self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc;
             let member = self.types.tags[id].members.get().iter().find(|member| {
-                self.types
-                    .composite(member.ty.unqualified(), from.unqualified())
-                    .is_some()
+                !(gcc
+                    && member.width.is_some_and(|width| {
+                        self.integer_type(member.ty)
+                            .is_some_and(|(bits, _)| width < bits)
+                    }))
+                    && self
+                        .types
+                        .composite(member.ty.unqualified(), from.unqualified())
+                        .is_some()
             });
             let Some(member) = member else {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidCast);

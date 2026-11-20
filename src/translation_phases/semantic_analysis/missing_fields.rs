@@ -40,6 +40,7 @@ use crate::{
                 Constant,
                 Expression,
                 ExpressionType as E,
+                UnaryOperator,
             },
         },
     },
@@ -258,18 +259,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether the expression initializes an aggregate whole, as a string
-    /// does a character array and a structure value its member: otherwise
-    /// the initializer elides braces.
+    /// does a character array, a structure value its member, and a cast to
+    /// a union type (GNU) its union: otherwise the initializer elides braces.
+    /// GNU extension: GCC manual, "Cast to a Union Type".
     fn initializes_whole(&self, e: &'tu Expression<'tu>) -> bool {
         let mut e = e;
-        while let E::Parenthesized { expression } = e.kind {
-            e = expression;
+        loop {
+            e = match e.kind {
+                | E::Parenthesized { expression } => expression,
+                | E::Unary {
+                    operator: UnaryOperator::Extension,
+                    operand_expression,
+                } => operand_expression,
+                | _ => break,
+            };
         }
         if matches!(e.kind, E::StringLiteral(_)) {
             return true;
         }
         let info = self.expression_info(e);
-        info.category != ValueCategory::Rvalue
+        // Semantic analysis gives a cast an operation type only for a cast
+        // to a union, the member's.
+        (info.category != ValueCategory::Rvalue
+            || (matches!(e.kind, E::Cast { .. }) && info.operation_type.is_some()))
             && matches!(self.types.nodes[info.ty.index], TypeKind::Tag(_))
     }
 

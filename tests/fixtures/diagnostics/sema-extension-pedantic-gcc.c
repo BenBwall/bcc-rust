@@ -21,3 +21,16 @@ __extension__ static int loud_bound[(int)(1.0 + 1)];
 __extension__ struct loud_member { int a[(int)(1.0 + 1)]; };
 void loud_static(void) { __extension__ static int a[(int)(1.0 + 1)]; (void)a; }
 void loud_automatic(void) { __extension__ int a[(int)(1.0 + 1)]; (void)a; }
+/* A marked declaration also silences pointers to arrays whose elements differ
+   in qualifiers and a static initializer folded from an undefined shift; an
+   operand around that initializer does not, as GCC reports it after. */
+__extension__ void quiet_arrays(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); }
+void loud_arrays(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); }
+__extension__ static int quiet_shift = 1 << 40;
+static int loud_shift = 1 << 40;
+static int loud_operand_shift = __extension__ (1 << 40);
+/* A cast to a union type initializes a static object; a marked declaration
+   silences the cast. */
+union cast_union { int i; float f; };
+__extension__ union cast_union quiet_cast = (union cast_union)1;
+union cast_union loud_cast = (union cast_union)2.5f;

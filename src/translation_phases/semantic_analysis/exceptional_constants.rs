@@ -774,8 +774,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// What GCC's `-pedantic` says of the static initializer `e` the mark on
     /// its result makes no constant expression: an overflow if arithmetic
-    /// wrapped it.
-    /// C99: §6.6 paragraphs 4 and 7, p. 95; PDF p. 107.
+    /// wrapped it. A declaration marked `__extension__` silences the
+    /// undefined value's report, as GCC 14 does (`1 << 40`); an operand
+    /// does not, since GCC reports the initializer after it.
+    /// C99: §6.6 paragraphs 4 and 7, p. 95; PDF p. 107. GNU extension: GCC
+    /// manual, "Alternate Keywords".
     pub(super) fn report_exceptional_initializer(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -793,7 +796,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
         } else if info.integer.is_some() {
-            self.report_pedantic_constant(
+            self.report_pedantic_extension(
                 "initializer element is not a constant expression",
                 e.source_vectors,
             );
@@ -802,8 +805,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Reports `text` as `-pedantic` reports an extension. An `__extension__`
     /// operand silences it; a declaration marked `__extension__` does not,
-    /// since GCC 14 still refuses, for one, a comma in a static initializer
-    /// there.
+    /// since GCC 14 still refuses a comma in a static initializer there, and
+    /// makes a folded array bound variable length.
     pub(super) fn report_pedantic_constant(&mut self, text: &str, source: SourceVectors) {
         if self.extension_operands == 0 {
             self.pedantic_constant(text, source);
@@ -813,7 +816,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Reports `text` as `-pedantic` reports an extension, silenced by an
     /// `__extension__` operand or by a marked declaration around it, as GCC 14
     /// silences the reports that call this (checked one by one: a folded
-    /// enumerator, case label or bit-field width, and `__FUNCTION__`).
+    /// enumerator, case label, bit-field width or static assertion,
+    /// `__FUNCTION__`, `__func__` before C99, pointers to differently
+    /// qualified arrays, and a static initializer folded from an undefined
+    /// shift).
     /// GNU extension: GCC manual, "Alternate Keywords".
     pub(super) fn report_pedantic_extension(&mut self, text: &str, source: SourceVectors) {
         if !self.under_extension() {

@@ -470,6 +470,19 @@ fn missing_fields_follow_each_compiler() {
             1,
             1,
         ),
+        // A cast to a union type (GNU) initializes its union whole.
+        (
+            "union U { int i; float f; }; struct M { int a; union U u; int c; }; struct M m = {1, \
+             (union U)2};",
+            1,
+            1,
+        ),
+        (
+            "union U { int i; float f; }; struct M { int a; union U u; int c; }; void f(void) { \
+             struct M m = {1, __extension__ (union U)2}; (void)m; }",
+            1,
+            1,
+        ),
     ] {
         let source = format!("{S}{source}");
         let kind = SemanticErrorKind::MissingFieldInitializer;

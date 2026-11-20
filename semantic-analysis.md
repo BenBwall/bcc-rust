@@ -2504,8 +2504,11 @@ and lower the guaranteed alignment of member accesses and initializer stores.
 the existing extension policy, including `Deny` in GNU dialects.
 
 GNU union casts require an exactly compatible member type and produce a union
-rvalue. GNU range designators require ordered nonnegative integer constant
-endpoints within bounds, infer incomplete array bounds from the upper endpoint,
+rvalue. A static initializer may be one when its operand is a constant the
+member accepts: lowering writes the member over a zeroed union, and GCC's rules
+refuse the operands GCC folds only as expressions (`language-standards.md`,
+`UnionCasts`). GNU range designators require ordered nonnegative integer
+constant endpoints within bounds, infer incomplete array bounds from the upper endpoint,
 and retain once-only expression evaluation. Existing `typeof`, type compatibility
 and `offsetof` queries consume these retained types without a separate feature
 implementation. Floating sign, infinity and sign-copy builtins retain signatures,

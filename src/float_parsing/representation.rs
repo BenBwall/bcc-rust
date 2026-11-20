@@ -194,6 +194,14 @@ impl LongDouble {
         self.classify() == FloatClass::Zero
     }
 
+    pub(crate) fn is_infinite(self) -> bool {
+        self.classify() == FloatClass::Infinite
+    }
+
+    pub(crate) fn is_nan(self) -> bool {
+        self.classify() == FloatClass::NotANumber
+    }
+
     /// C99 §7.12.11.1, p. 236; PDF p. 248: copysign changes only the
     /// representation's sign, including zero and NaN. Both host carriers
     /// are little-endian; padding remains untouched.

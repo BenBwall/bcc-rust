@@ -62,6 +62,7 @@ mod semantic_cli;
 mod static_compound_literals;
 mod static_function_designators;
 mod static_relocations;
+mod static_union_casts;
 mod stdbit;
 mod stdckdint;
 mod survey_wrong_code;

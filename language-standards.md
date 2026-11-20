@@ -49,25 +49,36 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   parameter in a definition, and a typedef redefinition before C11), since
   Clang's silences only the extension diagnostics it does not report by
   default; GCC's silences them too, though under GCC's rules bcc does not yet
-  silence a typedef redefinition. In semantic analysis an `__extension__`
-  operand, or a declaration or function definition whose specifiers it marks,
-  silences the cast to a union type and the cast to the operand's own
-  structure or union type (`UnionCasts`, `SameTypeCasts`), as in both
-  compilers, and GCC's `-pedantic` reports of predefined identifiers and of
-  folded enumerators, case labels and bit-field widths, as in GCC; a marked
-  member declaration or `_Static_assert` does not yet silence its own folded
-  constant. A marked declaration leaves GCC's report of a folded array bound
-  as it is unmarked; only an `__extension__` operand around the bound or its
-  type name silences it. GCC makes such an array variable length and then
-  accepts or refuses it by its storage and uses (file scope, static storage,
-  a compound literal, an initializer, a jump into its scope, a typedef or
-  structure a static object takes), none of which `__extension__` silences;
-  matching GCC there needs that variable length array modelled, which is
-  follow-up work. A marked declaration also leaves the report of an
-  enumerator or case label folded from an address (`&x != 0`), where `-Wall`
-  adds GCC's `-Waddress`, which bcc does not model. Other semantic extension
-  reports, such as arithmetic on `void *`, ignore it yet, where both
-  compilers silence them.
+  silence a typedef redefinition. In semantic analysis a declaration or
+  function definition whose specifiers `__extension__` marks silences these
+  reports in its initializers and body, as an `__extension__` operand does
+  around them:
+  - the cast to a union type and the cast to the operand's own structure or
+    union type (`UnionCasts`, `SameTypeCasts`), as in both compilers;
+  - GCC's `-pedantic` reports of `__FUNCTION__` and `__PRETTY_FUNCTION__`,
+    of `__func__` before C99, of a conditional between pointers to arrays
+    whose elements differ in qualifiers before C23, and of a static
+    initializer folded from an undefined shift (`1 << 40`), as in GCC 14,
+    though an operand around that initializer leaves it reported, as GCC
+    does;
+  - GCC's `-pedantic` reports of enumerators, case labels, bit-field widths
+    and static assertions folded from arithmetic, as in GCC 14, though a
+    marked member declaration or `_Static_assert` does not yet silence its
+    own.
+
+  Every other report stays as it is unmarked, and only an `__extension__`
+  operand around its expression silences it. These include GCC's reports of
+  a folded array bound, of an enumerator or case label folded from an
+  address (`&x != 0`), and of a comma in a static initializer. GCC makes such
+  an array variable length and then accepts or refuses it by its storage and
+  uses (file scope, static storage, a compound literal, an initializer, a
+  jump into its scope, a typedef or structure a static object takes), none of
+  which `__extension__` silences; matching GCC there needs that variable
+  length array modelled, which is follow-up work. For an address, `-Wall`
+  adds GCC's `-Waddress`, which bcc does not model, and GCC refuses the comma
+  in a marked declaration. Other semantic extension reports, such as
+  arithmetic on `void *`, ignore `__extension__` yet, where both compilers
+  silence them.
 - A preprocessing extension diagnostic raised in a macro expansion may
   underline the replacement in the macro definition. Parser and semantic
   extension diagnostics and warning-group diagnostics point at the outermost
@@ -914,6 +925,19 @@ The following vocabulary entries retain the established diagnostic contracts:
   `-Wpedantic` under both identities, since it does not model Clang's group.
   An `__extension__` operand, or a declaration or function definition marked
   `__extension__`, silences it and the same-type cast, as in both compilers.
+  As a static initializer, whole or inside braces, the cast stores its
+  operand in the member and zero in the rest of the union, as if the member
+  were initialized in braces, when the operand is a constant that member
+  accepts; nested casts to unions and `__extension__` around the cast are
+  read through. GCC folds the operand as an expression, not as an
+  initializer, so under GCC's rules a compound literal, a comma, a floating
+  operation that traps under `-ftrapping-math` and arithmetic between a real
+  and a complex operand there are "initializer element is not constant", and
+  an undefined or overflowed value has no `-pedantic` report; Clang's rules
+  accept all of them. GCC also matches no bit-field narrower than its
+  declared type; Clang matches it and stores the operand whole. A cast
+  selected by a constant `?:` and a C23 `constexpr` object a cast
+  initializes are still refused, though both compilers accept them.
 - `ArrayCompoundLiteral` has GNU origin: an array initialized by a compound
   literal of its type, as "Arrays initialized by array compound literals"
   below describes. Only the Clang identity reports it under `-pedantic`;
@@ -1114,16 +1138,20 @@ a block or before a declaration, `_Static_assert` without a message, an
 unnamed parameter in a definition and a typedef redefinition before C11, which
 Clang warns of by default
 (`DiagnosticIDs::getDiagnosticSeverity` silences only an extension diagnostic
-that is off by default). In semantic analysis it silences casts to a union
-type and to the operand's own type, and GCC's `-pedantic` reports of folded
-constants and predefined identifiers, except, in a marked declaration, that of
-a folded array bound, which stays as it is unmarked until bcc models the
-variable length array GCC makes of it, and of a value folded from an address
-(see the limits above). It does not yet
-silence other semantic extension reports such as arithmetic on `void *`,
-which both compilers silence. Suppression ends at the owning production's
-boundary; later unsuppressed occurrences, including ones from macro
-expansions, keep their diagnostics. Nested functions isolate typedef, label and switch state; under
+that is off by default). In semantic analysis a marked declaration or
+function definition silences only casts to a union type and to the operand's
+own type, GCC's `-pedantic` reports of `__FUNCTION__`, `__PRETTY_FUNCTION__`,
+`__func__` before C99, conditionals between pointers to differently qualified
+arrays before C23 and static initializers folded from an undefined shift, and
+its reports of enumerators, case labels, bit-field widths and static
+assertions folded from arithmetic; every other report, such as that of a
+folded array bound, of a value folded from an address or of a comma in a
+static initializer, only an `__extension__` operand silences (see the limits
+above). It does not yet silence other semantic extension reports such as
+arithmetic on `void *`, which both compilers silence. Suppression ends at the
+owning production's boundary; later unsuppressed occurrences, including ones
+from macro expansions, keep their diagnostics. Nested functions isolate
+typedef, label and switch state; under
 the Clang identity a function definition in a block is the error "function
 definition is not allowed here", as in Clang (TCC's and MSVC's identities give
 "cannot use local functions" and C2601 "local function definitions are

@@ -88,14 +88,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// What GCC's `-pedantic` says of `__func__` before C99, which a function
-    /// declares ahead of any use, so that this reads the identifier.
-    /// C99: §6.4.2.2 paragraph 1, p. 52; PDF p. 64.
+    /// declares ahead of any use, so that this reads the identifier. A
+    /// declaration or function definition marked `__extension__` silences
+    /// it, as GCC 14 does.
+    /// C99: §6.4.2.2 paragraph 1, p. 52; PDF p. 64. GNU extension: GCC
+    /// manual, "Alternate Keywords".
     pub(super) fn report_c90_func(&mut self, name: Identifier) {
         if self.gcc_personality()
             && self.context.configuration.standard() < CStandard::C99
             && self.context.string_cache.at(name.name) == "__func__"
         {
-            self.report_pedantic_constant(
+            self.report_pedantic_extension(
                 "ISO C90 does not support '__func__' predefined identifier",
                 name.source_vectors,
             );
@@ -207,7 +210,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Whether `e` evaluates a comma operator, which no constant expression
     /// may (C99 §6.6p3), through what a constant `?:` selects.
-    fn evaluates_comma(&self, e: &'tu Expression<'tu>) -> bool {
+    pub(super) fn evaluates_comma(&self, e: &'tu Expression<'tu>) -> bool {
         use ExpressionType as E;
         let mut work = ArenaVec::new_in(self.scratch);
         work.push(e);

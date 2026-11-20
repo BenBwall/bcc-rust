@@ -1066,10 +1066,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC's and TCC's target for arms that point to arrays whose elements
     /// differ only in qualifiers: the composite array with the union of
     /// both element qualifiers, as C23 has it, which GCC applies in every
-    /// mode and reports under `-pedantic` before C23. Clang reports a
-    /// mismatch instead.
+    /// mode and reports under `-pedantic` before C23, but not in a
+    /// declaration or function definition marked `__extension__` (GCC 14).
+    /// Clang reports a mismatch instead.
     /// C23 (N3220): §6.5.16 paragraph 7, p. 92; PDF p. 105; §6.7.4.1
-    /// paragraph 10, p. 121; PDF p. 134.
+    /// paragraph 10, p. 121; PDF p. 134. GNU extension: GCC manual,
+    /// "Alternate Keywords".
     fn gnu_qualified_arrays(
         &mut self,
         lp: TypeId,
@@ -1091,7 +1093,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
         let composite = self.types.composite(left, right)?;
         if self.context.configuration.standard() < crate::configuration::CStandard::C23 {
-            self.report_pedantic_constant(
+            self.report_pedantic_extension(
                 "invalid use of pointers to arrays with different qualifiers in ISO C before C23",
                 source,
             );

@@ -353,7 +353,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether `ty` is a complex floating type.
-    fn complex_type(&self, ty: TypeId) -> bool {
+    pub(super) fn complex_type(&self, ty: TypeId) -> bool {
         matches!(
             self.types.nodes[self.types.non_atomic(ty).index],
             TypeKind::Scalar(scalar) if scalar.complex()

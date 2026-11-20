@@ -734,6 +734,268 @@ fn extension_declarations_leave_gcc_folded_array_bound_reports() {
     }
 }
 
+/// A cast to a union type initializes a static object as if the member its
+/// operand fills were initialized in braces, when the operand is a constant
+/// that member accepts, under GCC's rules and Clang's. GCC folds the operand
+/// as an expression rather than an initializer, so it refuses a compound
+/// literal, a comma, a floating operation that traps and arithmetic between
+/// a real and a complex operand there, which Clang's evaluator reads.
+/// GNU extension: GCC manual, "Cast to a Union Type". C99: §6.7.8
+/// paragraph 4, p. 125; PDF p. 137; §F.7.4 paragraph 1, p. 449; PDF p. 461.
+#[test]
+fn static_union_casts_follow_each_compilers_constant_rules() {
+    use crate::configuration::CompilerIdentity;
+    let declarations = "union U { int i; float f; }; union D { double d; int i; }; union C { \
+                        _Complex double z; int i; }; struct P { int a, b; }; union V { struct P \
+                        p; int i; }; union O { union U u; double d; }; union Q { int *p; long l; \
+                        }; struct S { int a; union U u; }; typedef const union U T; int x; float \
+                        y;\n";
+    // Each source, and whether GCC and Clang refuse it.
+    for (source, gcc, clang) in [
+        ("union U a = (union U)1;", false, false),
+        ("union U a = __extension__ ((union U)2.5f);", false, false),
+        (
+            "T a = (T)1; static const union U b = (const union U)2;",
+            false,
+            false,
+        ),
+        (
+            "union U a[3] = { (union U)1, [2] = (T)2.0f };",
+            false,
+            false,
+        ),
+        (
+            "struct S a = { 1, (union U)2 }, b = { .u = (union U)3.0f };",
+            false,
+            false,
+        ),
+        (
+            "struct S a[2] = { { 1, (union U)2 }, [1].u = (union U)3 };",
+            false,
+            false,
+        ),
+        ("union O a = (union O)(union U)1;", false, false),
+        (
+            "union Q a = (union Q)&x, b = (union Q)(int *)0;",
+            false,
+            false,
+        ),
+        ("union D a = (union D)(2.0 / 3);", false, false),
+        (
+            "union C a = (union C)((_Complex double)1.0 + 2.0i);",
+            false,
+            false,
+        ),
+        ("union U a = (union U)(1 << 40);", false, false),
+        ("struct S *p = &(struct S){ 1, (union U)2 };", false, false),
+        (
+            "void f(void) { static union U a = (union U)1; (void)a; }",
+            false,
+            false,
+        ),
+        ("union U a = (union U)(int){ 3 };", true, false),
+        ("union V a = (union V)(struct P){ 1, 2 };", true, false),
+        ("union U a = (union U)(0, 1);", true, false),
+        ("union D a = (union D)(1.0 / 0.0);", true, false),
+        ("union D a = (union D)(1e308 * 10);", true, false),
+        ("union D a = (union D)(0.0 / 0.0);", true, false),
+        ("union C a = (union C)(1.0 + 2.0i);", true, false),
+        ("union C a = (union C)(2.0i * 2.0);", true, false),
+        ("union U a = (union U)x;", true, true),
+        ("union U a = (union U)y;", true, true),
+        ("union U a = (union U)(1 / 0);", true, true),
+    ] {
+        for (identity, refused) in [
+            (CompilerIdentity::Gcc, gcc),
+            (CompilerIdentity::Clang, clang),
+        ] {
+            let configuration = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_compiler_extensions(true)
+                .with_compiler_identity(identity);
+            with_configuration(
+                &format!("{declarations}{source}"),
+                configuration,
+                |context, _| {
+                    let errors = context.take_pending_errors();
+                    let refusals = errors
+                        .iter()
+                        .filter(|error| {
+                            matches!(
+                                error,
+                                TranslationError::Semantic(error)
+                                    if matches!(
+                                        error.kind,
+                                        SemanticErrorKind::NonConstantInitializer
+                                            | SemanticErrorKind::ConstantOverflow
+                                    )
+                            )
+                        })
+                        .count();
+                    assert_eq!(
+                        refusals,
+                        usize::from(refused),
+                        "{identity:?} {source}: {errors:?}"
+                    );
+                },
+            );
+        }
+    }
+}
+
+/// GCC gives a bit-field narrower than its declared type a type of its own,
+/// which no operand of a cast to a union type has; Clang matches the declared
+/// type.
+/// GNU extension: GCC manual, "Cast to a Union Type".
+#[test]
+fn gcc_union_casts_match_no_narrow_bit_field() {
+    use crate::configuration::CompilerIdentity;
+    for (identity, invalid) in [(CompilerIdentity::Gcc, 1), (CompilerIdentity::Clang, 0)] {
+        let configuration = CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true)
+            .with_compiler_extensions(true)
+            .with_compiler_identity(identity);
+        with_configuration(
+            "union B { int b : 3; }; union B a = (union B)5; union W { int b : 32; int i; }; \
+             union W w = (union W)5;",
+            configuration,
+            |context, _| {
+                let errors = context.take_pending_errors();
+                let casts = errors
+                    .iter()
+                    .filter(|error| {
+                        matches!(
+                            error,
+                            TranslationError::Semantic(error)
+                                if error.kind == SemanticErrorKind::InvalidCast
+                        )
+                    })
+                    .count();
+                assert_eq!(casts, invalid, "{identity:?}: {errors:?}");
+            },
+        );
+    }
+}
+
+/// A declaration or function definition marked `__extension__` silences
+/// GCC's `-pedantic` reports of `__func__` before C99, of a conditional
+/// between pointers to arrays whose elements differ in qualifiers before
+/// C23, and of a static initializer folded from an undefined shift, as GCC
+/// 14 does; an `__extension__` operand does not silence the initializer's,
+/// since GCC reports it after the operand.
+/// C99: §6.4.2.2 paragraph 1, p. 52; PDF p. 64; §6.6 paragraphs 4 and 7,
+/// p. 95; PDF p. 107. C23 (N3220): §6.5.16 paragraph 7, p. 92; PDF p. 105.
+/// GNU extension: GCC manual, "Alternate Keywords".
+#[test]
+fn extension_declarations_silence_gcc_pedantic_reports() {
+    use crate::configuration::CompilerIdentity;
+    for (standard, source, reported) in [
+        (CStandard::C11, "__extension__ static int x = 1 << 40;", 0),
+        (
+            CStandard::C11,
+            "__extension__ int x = 1 << 40, y = 1 >> 40;",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "__extension__ static struct { int a; int b; } s = { 1, 1 << 40 };",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "void f(void) { __extension__ static int x = 1 << 40; (void)x; }",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "__extension__ void f(void) { static int x = 1 << 40; (void)x; }\nvoid g(void) { \
+             static int y = 1 << 40; (void)y; }",
+            1,
+        ),
+        (CStandard::C11, "static int x = __extension__ (1 << 40);", 1),
+        (CStandard::C11, "static int x = 1 << 40;", 1),
+        (
+            CStandard::C89,
+            "__extension__ const char *f(void) { return __func__; }",
+            0,
+        ),
+        (
+            CStandard::C89,
+            "void f(void) { __extension__ const char *p = __func__, *q = __func__; (void)p; \
+             (void)q; }",
+            0,
+        ),
+        (
+            CStandard::C89,
+            "__extension__ void f(void) { void g(void) { const char *s = __func__; (void)s; } \
+             g(); }",
+            0,
+        ),
+        (
+            CStandard::C89,
+            "void f(void) { __extension__ const char *p = __func__; const char *q = __func__; \
+             (void)p; (void)q; }",
+            1,
+        ),
+        (
+            CStandard::C89,
+            "__extension__ const char *f(void) { return __func__; }\nconst char *g(void) { return \
+             __func__; }",
+            1,
+        ),
+        (
+            CStandard::C89,
+            "void f(void) { const char *s = __extension__ __func__; (void)s; }",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "__extension__ void g(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); }",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "void h(int (*p)[2], const int (*q)[2], int c) { __extension__ const void *r = c ? p \
+             : q; (void)r; }",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "int a[2]; const int b[2]; __extension__ const void *r = 1 ? &a : &b;",
+            0,
+        ),
+        (
+            CStandard::C11,
+            "__extension__ void g(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); \
+             }\nvoid h(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); }",
+            1,
+        ),
+    ] {
+        let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Deny)
+            .with_gnu_extensions(true)
+            .with_compiler_extensions(true)
+            .with_compiler_identity(CompilerIdentity::Gcc);
+        with_configuration(source, configuration, |context, _| {
+            let errors = context.take_pending_errors();
+            let pedantic = errors
+                .iter()
+                .filter(|error| {
+                    matches!(
+                        error,
+                        TranslationError::Classified(classified)
+                            if matches!(
+                                &*classified.error,
+                                TranslationError::Semantic(error)
+                                    if matches!(error.kind, SemanticErrorKind::PedanticConstant(_))
+                            )
+                    )
+                })
+                .count();
+            assert_eq!(pedantic, reported, "{source}: {errors:?}");
+        });
+    }
+}
+
 /// GCC accepts a cast of a structure or union to its own type, qualifiers
 /// aside, as its value, an rvalue ("ISO C forbids casting nonscalar to the
 /// same type" under -Wpedantic); any other aggregate cast stays invalid.
