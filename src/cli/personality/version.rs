@@ -7,7 +7,10 @@
 
 use std::fmt::Write as _;
 
-use super::Personality;
+use super::{
+    Personality,
+    icx,
+};
 use crate::target::Target;
 
 /// The version of GCC the GCC personality claims, as `__GNUC__`,
@@ -52,6 +55,8 @@ pub(super) fn banner(personality: Personality, name: &str, target: Target) -> St
                 _ = writeln!(text, "InstalledDir: {}", directory.display());
             }
         },
+        // `icx-cl` has printed its logo to stderr already.
+        | Personality::Icx | Personality::IcxCl => text.push_str(&icx::banner(target)),
         | Personality::Msvc => {
             _ = writeln!(
                 text,
@@ -96,6 +101,7 @@ pub(super) const fn dump_version(personality: Personality) -> &'static str {
     match personality {
         | Personality::Gcc => "14",
         | Personality::Tcc => TCC_VERSION,
+        | Personality::Icx | Personality::IcxCl => icx::CLANG_VERSION,
         | _ => CLANG_VERSION,
     }
 }

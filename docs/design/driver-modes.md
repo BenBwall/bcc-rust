@@ -1,4 +1,4 @@
-# Driver modes: GCC, Clang, MSVC, clang-cl, TCC and zig cc personalities
+# Driver modes: GCC, Clang, MSVC, clang-cl, TCC, zig cc and icx personalities
 
 bcc can stand in for another C compiler on the command line. A **driver
 personality** reads the command line with that compiler's conventions,
@@ -25,6 +25,8 @@ onto (`src/cli/driver.rs`) is bcc's own and is documented in the README.
 | `--clang-cl-mode` | `clang-cl` | clang-cl 23.1 |
 | `--tcc-mode` | `tcc` | TCC 0.9.27 |
 | `--zig-cc-mode` | `zig-cc`, `zigcc`, `zig` given `cc` first | zig 0.17.1's `zig cc` (Clang 22.1.8) |
+| `--icx-mode` | `icx` (off Windows), `icx-cc` | Intel oneAPI DPC++/C++ Compiler 2026.2.0's `icx` (Clang 23.1.1) |
+| `--icx-cl-mode` | `icx-cl`, and `icx` on Windows | the same compiler's `icx-cl` |
 
 `--driver-mode=NAME` (Clang's spelling) is accepted too. The first mode flag
 anywhere on the command line wins and is removed before the rest is read.
@@ -268,23 +270,23 @@ without a personality as well:
 
 ## Compatibility features by personality
 
-| | GCC | Clang | `cl.exe` | clang-cl | TCC | zig cc | bcc |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Default target | host (MinGW-w64 on Windows) | host | `x86_64-pc-windows-msvc` | `x86_64-pc-windows-msvc` | host | host, its own processor | `x86_64-unknown-linux-gnu` |
-| Default mode | `gnu17` | `gnu17` | `c17` | `c17` | `gnu99` | `gnu17` | `gnu17` |
-| Microsoft extensions | off | off | all (`-fms-extensions`) | all | off | off | off |
-| `__GNUC__` | 14.2.0 | 4.2.1 | undefined | undefined | undefined | 4.2.1 | 4.2.1 |
-| `__clang__`, `__llvm__` | undefined | 23.1.5 | undefined | 23.1.5 | undefined | 22.1.8 | 23.1.5 |
-| Other identity | `__VERSION__ "14.2.0"`, execution charset names, `__GCC_IEC_559` | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | `NDEBUG` in the release modes, `__GLIBC_MINOR__` | |
-| `_Float32` ... `_Float128` | keywords, distinct types | identifiers | identifiers | identifiers | identifiers | identifiers | identifiers (`-ffloatn-types`) |
-| `_Float16`, `__bf16` | types, GCC's `__FLT16_*__` and `__BFLT16_*__` | types, Clang's `__FLT16_*__` | identifiers | types | identifiers | types, Clang's `__FLT16_*__` | types |
-| `__fp16` | identifier | storage type | identifier | storage type | identifier | storage type | storage type |
-| Tentative definitions | `-fno-common` (`-fcommon` makes them common) | same | `-fcommon` (`cl` makes them common) | `-fno-common` | `-fno-common` | `-fno-common` | `-fno-common` |
-| Unsigned plain `char` | `-funsigned-char` | `-funsigned-char` | `/J` | `/J`, `-funsigned-char` | `-funsigned-char` | `-funsigned-char` | `-funsigned-char` |
-| System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host, as Clang (zig: its own) | the host's when compiling for the host; none for a cross target unless asked |
-| Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line): error:` | `file(line,col): error:` | `file:line: error:` | Clang's | annotated snippet |
-| Default output | `a.out` (`a.exe` on Windows) | same | `first.exe`, objects kept | same | `a.out` | `a.out` (`a.exe` for Windows) | none (analysis only) |
-| `__bcc__` | defined | defined | defined | defined | defined | defined | defined |
+| | GCC | Clang | `cl.exe` | clang-cl | TCC | zig cc | icx | bcc |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Default target | host (MinGW-w64 on Windows) | host | `x86_64-pc-windows-msvc` | `x86_64-pc-windows-msvc` | host | host, its own processor | host | `x86_64-unknown-linux-gnu` |
+| Default mode | `gnu17` | `gnu17` | `c17` | `c17` | `gnu99` | `gnu17` | `gnu17` | `gnu17` |
+| Microsoft extensions | off | off | all (`-fms-extensions`) | all | off | off | off | off |
+| `__GNUC__` | 14.2.0 | 4.2.1 | undefined | undefined | undefined | 4.2.1 | 4.2.1 | 4.2.1 |
+| `__clang__`, `__llvm__` | undefined | 23.1.5 | undefined | 23.1.5 | undefined | 22.1.8 | 23.1.1 | 23.1.5 |
+| Other identity | `__VERSION__ "14.2.0"`, execution charset names, `__GCC_IEC_559` | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | `NDEBUG` in the release modes, `__GLIBC_MINOR__` | `__INTEL_LLVM_COMPILER 20260200`, Intel's `__VERSION__`, `-O2` and the `fast` model | |
+| `_Float32` ... `_Float128` | keywords, distinct types | identifiers | identifiers | identifiers | identifiers | identifiers | identifiers | identifiers (`-ffloatn-types`) |
+| `_Float16`, `__bf16` | types, GCC's `__FLT16_*__` and `__BFLT16_*__` | types, Clang's `__FLT16_*__` | identifiers | types | identifiers | types, Clang's `__FLT16_*__` | types, Clang's `__FLT16_*__` | types |
+| `__fp16` | identifier | storage type | identifier | storage type | identifier | storage type | storage type | storage type |
+| Tentative definitions | `-fno-common` (`-fcommon` makes them common) | same | `-fcommon` (`cl` makes them common) | `-fno-common` | `-fno-common` | `-fno-common` | `-fno-common` | `-fno-common` |
+| Unsigned plain `char` | `-funsigned-char` | `-funsigned-char` | `/J` | `/J`, `-funsigned-char` | `-funsigned-char` | `-funsigned-char` | `-funsigned-char` | `-funsigned-char` |
+| System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host, as Clang (zig: its own) | as Clang | the host's when compiling for the host; none for a cross target unless asked |
+| Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line): error:` | `file(line,col): error:` | `file:line: error:` | Clang's | Clang's | annotated snippet |
+| Default output | `a.out` (`a.exe` on Windows) | same | `first.exe`, objects kept | same | `a.out` | `a.out` (`a.exe` for Windows) | `a.out` | none (analysis only) |
+| `__bcc__` | defined | defined | defined | defined | defined | defined | defined | defined |
 
 Plain `char` is signed by default in every personality, as GCC, Clang, MSVC
 and TCC default to on x86-64. `-funsigned-char` and `-fno-signed-char` make it
@@ -1784,6 +1786,232 @@ a glibc version is Clang's `zig: error: version '.2.17' in target triple
   zig never wrote; bcc refuses the first as Clang does and checks the syntax
   for the second. `-v` and `-###` print bcc's steps, not zig's `-cc1` lines.
 
+## icx
+
+Intel's oneAPI DPC++/C++ Compiler `icx` is Clang 23.1.1's driver behind a
+wrapper of Intel's own (`bin/icx`), which reads Intel's options first, and
+an Intel build of Clang that adds Intel's defaults and identity. On Linux
+`icx` (and `icx-cc`) reads Clang's command line; `icx-cl` reads clang-cl's,
+and on Windows `icx` does too. The personalities were compared with icx
+2026.2.0 (build 20261001, the `intel-oneapi-dpcpp-cpp-2026.2` packages of
+Intel's apt repository, unpacked without root) on x86-64 Linux with glibc
+2.39 on 2026-11-19, over 99 `icx` and 34 `icx-cl` command lines (the
+queries, the classic-option warning, Intel's options and their errors,
+`-dM -E` under each model, level and processor, preprocessing, programs
+linked and run, and the diagnostics probes of the TCC comparison). For
+`icx`, 80 are identical byte for byte after each compiler's install
+directory, bcc's banner note and the configuration file icx's banner names
+are replaced, with each `-dM` listing compared as a set of definitions
+without the macros in which the Clang personality differs from the pinned
+Clang already; the rest differ only as listed below. The opt-in test
+`icx_parity_with_a_real_icx` in `tests/integration/icx_cli.rs` repeats part
+of the comparison when `BCC_ICX` names an `icx` binary.
+
+Like zig cc's, the personality is a translator in front of the Clang
+personality (`personality/icx.rs`): it reads Intel's options, reports the
+wrapper's warning and errors, and hands every other option to the Clang
+personality with what Intel's driver gives Clang before them. Everything
+the [Clang](#clang) section says holds, except what follows. `icx-cl` is
+the [clang-cl](#clang-cl) personality with Intel's identity and defaults
+([icx-cl](#icx-cl)).
+
+**Selecting it.** `--icx-mode` (`--driver-mode=icx`), or an executable named
+`icx` or `icx-cc`, also with a prefix ending in `-` or a version
+(`bcc-icx`, `icx-2026`), as the other personalities' names are matched
+(`gicx-cc` is GCC's `cc` and `myicx-cl` is `cl`). Intel's driver calls itself `icx` whatever it was run as
+(`icx-cc` says `icx: error:`), and so does bcc. `icc`, the classic compiler
+icx replaced, does not select it: Intel withdrew `icc` in oneAPI 2024.0 and
+installs no `icc` that runs icx, and a build system that finds `icc` expects
+`__INTEL_COMPILER`, which icx does not define.
+
+**Identity.** Clang 23.1.1's macros, as the pinned Clang's with
+`__clang_patchlevel__` 1, and Intel's:
+
+| Macro | Value |
+| --- | --- |
+| `__INTEL_LLVM_COMPILER`, `__INTEL_CLANG_COMPILER` | `20260200` (`VVVVMMUU`) |
+| `__clang_version__` | `"23.1.1 (icx 2026.2.0.20261001)"` |
+| `__VERSION__` | `"Intel(R) oneAPI DPC++/C++ Compiler 2026.2.0 (2026.2.0.20261001)"` |
+| `__DPCPP__`, `__dpcpp_major__`, `__dpcpp_minor__`, `__dpcpp_patchlevel__` | `1`, `2026`, `2`, `0` |
+| `__AMX_SUPPORTED__`, `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16` | `1` |
+| `__I__` | `1j` |
+| `__LONG_DOUBLE_SIZE__` | `80` (`64` under `icx-cl`) |
+| `__FINITE_MATH_ONLY__` | `0`, even under `-ffast-math`, as Intel's Clang reports it |
+
+`__INTEL_COMPILER`, the classic compiler's, stays undefined, as in icx.
+CMake reads `__INTEL_LLVM_COMPILER` (`IntelLLVM`), and Meson the banner.
+`--version` prints `Intel(R) oneAPI DPC++/C++ Compiler 2026.2.0
+(2026.2.0.20261001)`, naming bcc after it, then Clang's target, thread model
+and installation lines; the banner has no `clang` in it, which Meson would
+read as Clang. `-dumpversion` is `23.1.1`.
+
+**Defaults that differ from Clang**, each overridden by the command line's
+own options:
+
+- **`-O2`** without an `-O` option, but **`-O0`** when a debug option (`-g`,
+  `-gdwarf-4`, `-g0`, `-debug`) is given without one, with Intel's remark
+  `icx: remark: note that use of '-g' without any optimization-level option
+  will turn off most compiler optimizations similar to use of '-O0'; use
+  '-Rno-debug-disables-optimization' to disable this remark
+  [-Rdebug-disables-optimization]`, naming the last debug option, after
+  the driver's errors about unknown options and before a query's answer;
+  `-w` leaves it, `-Rno-debug-disables-optimization` takes it away.
+- **The `fast` floating-point model**: Clang's `-ffp-model=fast`
+  (`-ffast-math` without finite math), so `__NO_MATH_ERRNO__` is defined
+  and `__FAST_MATH__` is not. A later `-ffp-model=` or `-fp-model=`
+  replaces it without Clang's warning about an overridden model, since the
+  command line gave none; `-Ofast` reports the complex range the default
+  implied (`'-Ofast' sets complex range to "basic" overriding the setting of
+  "promoted" that was implied by '-ffp-model=fast'`).
+- **Code at a fixed address**: no `__pic__` or `__pie__`, and executables
+  linked with `-no-pie` unless `-pie`, `-shared` or `-r` asks otherwise, as
+  icx links them (`-fPIE` alone leaves the executable at a fixed address).
+- **`libm`** is linked whether or not `-lm` asks for it, as icx links it with
+  Intel's math libraries, so Autoconf's `AC_SEARCH_LIBS([sqrt], [m])` finds
+  `none required`.
+- **Subnormals flushed from an optimized `main`.** icx decides the flush
+  when it compiles `main`, not when it links: above `-O0`, under a model
+  that flushes, its back end begins `main` with `stmxcsr`, `orl $0x8040`
+  and `ldmxcsr`, setting MXCSR's flush-to-zero and denormals-are-zero bits
+  for the rest of the process, and bcc writes the same three instructions
+  there. The last of these options decides whether the model flushes:
+  `-ftz`, `-ffast-math`, `-funsafe-math-optimizations`, `-Ofast` (wherever
+  it stands) and the `fast` models flush; `-no-ftz`, `-fno-fast-math`,
+  `-fno-unsafe-math-optimizations`, `-fdenormal-fp-math=ieee` and the
+  `precise` and `consistent` models keep subnormals. So `-O0`, `-g` alone,
+  `-no-ftz` and `-fp-model=precise` keep them, and so does a program whose
+  `main` was compiled so, however it is linked (Meson's `c_args`, CMake's
+  compile options and its Debug configuration never reach the link). Like
+  icx, bcc links `crtfastmath.o`, whose constructor sets the same bits, only
+  where Clang's driver would for the options of the link command itself
+  (the last of `-ffast-math`, `-funsafe-math-optimizations`,
+  `-ffp-model=fast` and `-fp-model=fast` and their opposites), after any
+  `-Ofast`, and never after `-mno-daz-ftz`; the default model links none.
+
+**Intel's options.** Of Intel's own (those `icx --autocomplete` lists beside
+the pinned Clang's, and the wrapper's):
+
+| icx | bcc |
+| --- | --- |
+| `-xCODE` (any case) | the processor's x86-64 level and the AVX, F16C and PCLMUL options bcc has: `-xHost` is `-march=native`, `-xSSE3` to `-xSSE4.1` the SSE options, `SSE4.2` and the Atom codes `-march=x86-64-v2`, `AVX`, `CORE-AVX-I` and the Sandy and Ivy Bridge names v2 with AVX, and `CORE-AVX2` and every newer processor name (`SKYLAKE-AVX512`, `SAPPHIRERAPIDS`, `AVX10.1`) `-march=x86-64-v3`; another `-x` is read as a language, as icx reads the codes it dropped (`KNL`, `MIC-AVX512`) and `SSE2` |
+| `-axCODE,...`, `-mauto-arch=CODE` | checked (`unknown target CPU 'bogus' for option 'ax'`, after the driver's other errors) and dropped: they add code paths beside the baseline |
+| `-fp-model=MODEL`, `-fp-model MODEL` | `fast` and `fast=1` are `-ffp-model=fast`, `fast=2` `-ffp-model=aggressive`, `precise` `-ffp-model=precise`, `consistent` precise without contraction; `strict` is refused, as bcc refuses `-ffp-model=strict`; another model, also the classic compiler's `source`, `double`, `extended` and `except`, is `unsupported argument 'source' to option '-ffp-model='`, as in icx 2026.2.0; the spelling with a space takes the next argument whatever it is |
+| `-ftz`, `-no-ftz` | whether an optimized `main` flushes subnormals (above) |
+| `-qopenmp`, `-fiopenmp`, `-qopenmp-stubs` | refused, as `-fopenmp` is; `-fopenmp` draws Intel's `use of '-qopenmp' recommended over '-fopenmp' [-Wrecommended-option]` first |
+| `-qopenmp-simd`, `-fiopenmp-simd` | `-fopenmp-simd` with `__INTEL_HOST_OPENMP` |
+| `-ipo`, `-no-ipo` | `-flto`, `-fno-lto` |
+| `-ansi-alias`, `-no-ansi-alias`, `-fma`, `-no-fma`, `-strict-ansi` | `-fstrict-aliasing`, `-fno-strict-aliasing`, `-ffp-contract=fast`, `-ffp-contract=off`, `-ansi` |
+| `-fstack-security-check`, `-use-msasm` | `-fstack-protector-strong` (warned about as Clang's), `-fasm-blocks` (refused as Clang's) |
+| `-EP`, `-dryrun`, `-#` | `-E -P`, `-###` |
+| `-fast` | `-Ofast -march=native -flto -static` |
+| `-debug[=KIND]`, `-debug KIND` | `-g`, or `-g0` for `none`, turning optimization off as `-g` does; an unknown kind is `unsupported argument 'bogus' to option '-debug='` |
+| `-static-intel`, `-shared-intel`, `-no-intel-lib` | how to link Intel's libraries, which bcc never links: link options Clang reports as unused when not linking |
+| `-qopt-*`, `-qno-opt-*`, `-unroll[=N]`, `-inline-level=N`, `-fimf-*`, `-fp-speculation=`, `-vec`, `-fvec-*`, `-floop-*`, `-fno-alias`, `-traceback`, `-sox` and the like | tuning, reports and debug-information variants: dropped |
+| `-diag-disable=IDS`, `-diag-enable`, `-diag-warning`, `-diag-error` (the IDs joined or after a space) | dropped; `-diag-disable=10430` silences the classic-option warning |
+| the SYCL and offloading sub-options (`-fsycl-*`, `-fopenmp-target*`, `-Xsycl-target-*`) | dropped, since `-fsycl` and `-qopenmp` are refused |
+| `-fsycl`, `-fhls` | refused: bcc compiles C, not SYCL or device code |
+| `-fintelfpga` | icx's own error (`option '-fintelfpga' is not supported and has been removed from the compiler. ...`) |
+| `-qmkl[=]`, `-qtbb`, `-qipp`, `-qdaal` | refused: bcc has none of Intel's libraries |
+| `-regcall`, `-pc32`, `-pc64`, `-fintel-long-double-size=` other than 80, `-falign-stack=` other than `maintain-16-byte`, `-isystem-env=` | refused: they change the calling convention, the precision or the header search |
+| Intel's warning groups (`-Wrecommended-option`, `-Wintel-compat`, `-Wno-debug-disables-optimization`) | dropped, also under `-Werror=` |
+
+**The classic options.** icx drops the classic `icc` options it no longer
+has, warning about them all at once before anything else, even a query's
+answer, in the order given (icx ends `option list:` with a space):
+
+```text
+icx: command line warning #10430: Unsupported command line options encountered
+These options as listed are not supported.
+For more information, use '-qnextgen-diag'.
+option list:
+	-ip
+	-wd10441
+```
+
+The table (`personality/icx/classic.list`) is icx 2026.2.0's
+`-qnextgen-diag` list of options "to be supported" and "being removed",
+less the nine entries it was found not to warn about. A `=<val>` entry
+takes a value starting with a digit, joined with or without `=` (`-w2`,
+`-par-num-threads=4`), a `=<string>` entry any nonempty value (`-wd10441`,
+`-A=foo`), and `-tcheck`, `-pch-dir` and `-create-pch` the next argument.
+The table wins over Clang's names: `-Winline`, `-Wchar-subscripts`,
+`-traditional`, `-print-sysroot` and `-ffloat-store` draw the warning.
+
+<a id="icx-cl"></a>**icx-cl.** `--icx-cl-mode` (`--driver-mode=icx-cl`), an
+executable named `icx-cl`, or one named `icx` on Windows, reads clang-cl's
+command line as the clang-cl personality does, with:
+
+- Intel's logo on stderr before anything else, `/nologo` or not:
+  `Intel(R) oneAPI DPC++/C++ Compiler for applications running on Intel(R)
+  64, Version 2026.2.0 Build 20261001`, then a line naming bcc where Intel
+  prints its copyright, and a blank line. Meson recognizes `icx-cl` by its
+  first line. `--version` prints the logo and then the banner above with
+  the `x86_64-pc-windows-msvc` target.
+- The identity above with `__LONG_DOUBLE_SIZE__` 64, and `_ISO_VOLATILE`
+  and `_UCRT_NOISY_NAN`, and `/O2` and `/fp:fast` by default: `_M_FP_FAST`
+  and `_M_FP_CONTRACT`, or `_M_FP_PRECISE` under `/fp:precise`, and
+  `__NO_MATH_ERRNO__`, which bcc's clang-cl identity does not define. `/Zi`,
+  `/Z7` or `/ZI` without an `/O` option turns optimization off with the
+  remark above naming it and `/Od`. An optimized `main` flushes subnormals
+  as under `icx`, unless the last of `/fp:` and `/Qftz[-]` is
+  `/fp:precise`, `/fp:strict` or `/Qftz-`. `__SSP_STRONG__` stays
+  undefined, as in Intel's, which applies no `/GS` by default.
+- Intel's `/Q` options, which clang-cl would read as paths: `/QxCODE` as
+  `-x`, `/Qax`, `/Qipo`, `/Qopt-*`, `/Qdiag-*`, `/Qimf-*` and the like
+  dropped, `/Qopenmp` refused, `/Qopenmp-simd` with `__INTEL_HOST_OPENMP`,
+  and `/Qmkl` and its kin refused. Any other `/Q` name is a path, as in
+  `icx-cl` on Linux (`no such file or directory: '/Qbogus'`).
+- The options CMake's IntelLLVM rules give `icx-cl`:
+  `-Rno-debug-disables-optimization`, dependency files with `-QMD -QMT
+  TARGET -QMF FILE`, linker options as `/Qoption,link,OPTION`, and static
+  libraries made through the compiler, `-fuse-ld=llvm-lib -o NAME.lib
+  OBJECTS`, which bcc archives with the bundled `llvm-ar` in COFF format,
+  as Intel's driver runs `llvm-lib`. `-o` names the object under `/c`
+  (the last of it and `/Fo` wins), and otherwise the executable or library.
+
+Over the 34 `icx-cl` command lines, each `-dM` listing is the same set as
+Intel's apart from the processor macros below and `__SIZEOF_FLOAT128__`,
+which icx-cl defines and bcc does not, having no `__float128` on the MSVC
+target; the rest differ as the clang-cl personality differs from clang-cl
+(unknown options refused rather than ignored with a warning, `/arch:AVX2`
+refused, `/E`'s `#line` markers) or as bcc refuses OpenMP and the strict
+model, and Intel's diagnostics name the source by its absolute path
+(`/home/me/a.c(1,22): error: ...`) where bcc keeps the name given.
+
+**What differs from icx:**
+
+- **Intel's code.** icx optimizes with Intel's loop optimizer and
+  vectorizer, calls its SVML vector math library and links its `libimf`,
+  `libsvml`, `libirng` and `libirc` (`-Bstatic` in executables, shared
+  in shared libraries, which then need Intel's runtime on the library
+  path); bcc generates code through its own back ends and links only the C
+  library, `libm` and the bundled clang's runtime, so CMake's implicit link
+  libraries and libtool's search path differ, and so may the last bits of
+  results from math functions.
+- **Subnormal options.** `-fdenormal-fp-math=` other than `ieee` and
+  `-mdaz-ftz` are refused, as under the Clang personality, where icx
+  accepts them. Where a link takes `crtfastmath.o`, the bundled clang's
+  brings DWARF that `file` reports (`with debug_info`).
+- **Processor macros.** `-x` codes and `-xHost` give bcc's x86-64 levels,
+  so the processor's name macros (`__corei7__`, `__tune_corei7__`), the
+  features above the level bcc has no option for (`__FSGSBASE__`,
+  `__RDRND__`, `__XSAVEOPT__`, `__INVPCID__`, `__LAHF_SAHF__`) and the
+  AVX-512 family are missing, and `__k8` stays, as under the Clang
+  personality's `-march=x86-64-v3`.
+- **Refused options.** OpenMP (`-qopenmp`, `-fopenmp`), SYCL, Intel's
+  libraries and the strict model are errors in bcc where icx compiles.
+- **No `-qnextgen-diag` listing**; the option is accepted and prints
+  nothing.
+- **Clang's own differences.** Diagnostics, `-E`'s markers, `-v`'s GCC
+  installation lines and the `-dM` listing differ from icx exactly as the
+  Clang personality's differ from Clang ([Deviations](#deviations)): on
+  the 10 diagnostics probes bcc's output under `--icx-mode` is the same as
+  under `--clang-mode`, and under `--icx-cl-mode` the same as under
+  `--clang-cl-mode` after Intel's logo. Intel's Clang 23.1.1 reports some
+  floating-point overrides differently from the pinned Clang 23.1.5
+  (`-Ofast` after an explicit model); bcc reports the pinned Clang's, plus
+  the default model's complex range above.
+
 ## Debug information
 
 `-g` writes debug information through the LLVM back end; `middle-end.md` has the
@@ -1876,6 +2104,28 @@ xz 5.6.3 with Autoconf and libtool build and pass their tests under
   build type (zig's Debug, with UBSan) and in Release, and xz 5.6.3 with
   Autoconf and libtool build and pass their tests with `CC="zig cc"` naming
   bcc.
+- **icx.** Compared with icx 2026.2.0 on 2026-11-19 (CMake 3.31.3,
+  Autoconf 2.71 with libtool 2.4.7, Meson 1.12.1), with `CC` naming an
+  executable `icx` that is bcc: CMake finds `IntelLLVM 2026.2.0` with a GNU
+  front end simulating GNU 4.2.1, C17 with extensions, the same compile
+  features (to `c_std_23`), pointer size, PIC and dependency-file flags and
+  check results; Autoconf and libtool reach every value icx does, `sqrt`
+  without `-lm` included (`none required`, as icx links `libm` itself);
+  Meson finds `intel-llvm 2026.2.0` and builds and tests the probe project.
+  CMake's linker ID (`LLD`, `GNU` for icx), its implicit link libraries and
+  directories (icx adds `svml`, `irng`, `imf`, `irc` and `irc_s` and
+  Intel's library directories) and libtool's `LD`,
+  `sys_lib_search_path_spec` and `archive_cmds_need_lc` differ, as for the
+  Clang personality. Off Windows, CMake with a Windows toolchain file finds
+  bcc's `icx-cl` to be `IntelLLVM 2026.2.0 with MSVC-like command-line`
+  simulating MSVC 19.33, as it finds Intel's, and configures and builds
+  with CMake's icx-cl rules (`-QMD -QMT -QMF` dependencies, static
+  libraries through `-fuse-ld=llvm-lib`); its `<stdatomic.h>` and
+  `-fstack-protector-strong` checks pass where Intel's `icx-cl` fails them
+  without Microsoft's headers and as clang-cl warns. zlib 1.3.1 with CMake
+  (its default build type and Release) and xz 5.6.3 with Autoconf and
+  libtool build and pass their tests with bcc as `icx`, as with Intel's;
+  xz's `config.h` is the same byte for byte.
 
 Before these were measured, Meson stopped on `-Wl,--version` (`no input
 files`) under GCC and Clang; CMake found no implicit link libraries,

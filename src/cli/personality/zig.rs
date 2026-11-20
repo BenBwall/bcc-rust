@@ -59,7 +59,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         return Ok(Plan::default());
     }
     let defaults = translation.defaults()?;
-    gnu::plan_translated(invocation, &translation.out, Some(&defaults))
+    gnu::plan_translated(invocation, &translation.out, gnu::Front::Zig(&defaults))
 }
 
 /// The arguments after `zig cc`: an executable named `zig` takes zig's

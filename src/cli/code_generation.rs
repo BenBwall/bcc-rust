@@ -399,6 +399,18 @@ pub(super) struct CodeGeneration {
     /// the personalities pass it.
     #[arg(long, hide = true)]
     pub(super) link_fast_math_runtime: bool,
+    /// Link no `crtfastmath.o` unless --link-fast-math-runtime asks for it,
+    /// whatever the floating-point options say: Intel's driver gives Clang
+    /// its default `fast` model without the runtime, which the icx
+    /// personality passes this for.
+    #[arg(long, hide = true)]
+    pub(super) no_fast_math_runtime: bool,
+    /// Make `main` set the processor to flush subnormal results and operands
+    /// to zero when it starts, if the program is optimized, as Intel's icx
+    /// does under its `fast` floating-point models; the icx and icx-cl
+    /// personalities pass it.
+    #[arg(long, hide = true)]
+    pub(super) flush_denormals_in_main: bool,
     /// Link the C library's math functions into a Linux executable only
     /// when -lm asks for them, as the GCC, Clang and TCC drivers do, rather
     /// than always; the personalities pass it.
@@ -719,7 +731,8 @@ impl CodeGeneration {
             target,
             kind: self.output_kind(),
             code,
-            fast_math_runtime: fast_math_runtime || self.link_fast_math_runtime,
+            fast_math_runtime: (fast_math_runtime && !self.no_fast_math_runtime)
+                || self.link_fast_math_runtime,
         }
     }
 }
