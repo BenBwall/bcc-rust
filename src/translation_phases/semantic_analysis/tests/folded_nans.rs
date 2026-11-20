@@ -241,7 +241,8 @@ fn binary128_folds_the_nan_its_compiler_computes() {
                             }
                         )
                     })
-                    .and_then(|info| info.binary128())
+                    .expect("a division")
+                    .binary128()
                     .expect("a folded binary128 value");
                 assert!(value.real.is_nan(), "{source}");
                 assert_eq!(value.real.is_negative(), negative, "{rules:?}: {source}");
