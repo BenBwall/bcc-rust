@@ -2643,6 +2643,10 @@ does, on this build and the before build.
   ran at 1440x900, 1366x768, 1024x768, 900x800, 834x1112 and 390x844 in
   both themes: no sideways scroll at any step, no console error or warning,
   the WebAssembly strip in one row from 1024 px, and every result above.
+- **The lesson walk** at 1440x900 light: every title, lead and value flow
+  of the 1,254 notes of the twelve machine lessons is the same as in the
+  walks of `main` and of the branch before the round, with no sideways
+  scroll at any note and no page error.
 - **Contrast** is unchanged: no new colours. The definition under the lede
   at 834 px is 10.59:1 (light) and 9.40:1 (dark), its word 15.82:1 and
   13.34:1; the cells' new line 5.89:1 and 6.22:1.
