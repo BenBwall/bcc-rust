@@ -41,7 +41,10 @@ use crate::{
         self,
         Engine,
     },
-    glossary::Glossary,
+    glossary::{
+        COMPILER_TERMS,
+        Glossary,
+    },
     palette,
     panels::{
         Cells,
@@ -1697,11 +1700,16 @@ fn Hero(state: State) -> impl IntoView {
             <div class="hero-text">
                 <p class="eyebrow">"bcc · an interactive introduction to compilers and the C abstract machine"</p>
                 <h1>"What really happens when C runs?"</h1>
+                // The forms the compiler gives the program are words a
+                // newcomer may not know: each links to its glossary entry
+                // and shows its definition on hover or focus.
                 <p class="lede">
-                    "The C standard doesn’t describe your CPU. It describes an "<em>"abstract machine"</em>
-                    ": objects with lifetimes, values that are read and stored, and rules for exactly when each \
-                     effect happens. Step through real programs one evaluation at a time, recorded like a tape, then \
-                     watch bcc, a C compiler written in Rust, translate the same code into IR, assembly and machine code."
+                    "The C standard describes an "<em>"abstract machine"</em>", not your CPU: objects with \
+                     lifetimes, values read and stored, rules for when each effect happens. Step through programs \
+                     on a tape, one evaluation at a time, then watch bcc, a C compiler in Rust, turn them into "
+                    <FormTerm id="token" written="tokens" />", a "<FormTerm id="syntax-tree" written="syntax tree" />", "
+                    <FormTerm id="ir" written="IR" />", "<FormTerm id="assembly" written="assembly" />" and "
+                    <FormTerm id="machine-code" written="machine code" />"."
                 </p>
                 // Each step is a link to where it happens; the second, which
                 // starts the first lesson, is where a first visit begins.
@@ -1726,6 +1734,47 @@ fn Hero(state: State) -> impl IntoView {
             </div>
             <ReadingMap state />
         </section>
+    }
+}
+
+/// A word of the landing for one of the forms the compiler gives a program:
+/// a link to its glossary entry, with the entry's definition beside it while
+/// a mouse is over it or the keyboard focus is on it (Escape hides it). A
+/// touch screen has no hover, so a tap follows the link to the entry; a
+/// screen reader reads the definition as the link's description.
+#[component]
+fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
+    let term = COMPILER_TERMS.iter().find(|term| term.id == id);
+    let open = RwSignal::new(false);
+    let tip = format!("form-tip-{id}");
+    view! {
+        <span
+            class="form-term"
+            on:pointerenter=move |event| {
+                if event.pointer_type() == "mouse" {
+                    open.set(true);
+                }
+            }
+            on:pointerleave=move |event| {
+                if event.pointer_type() == "mouse" {
+                    open.set(false);
+                }
+            }
+            on:focusin=move |_| open.set(true)
+            on:focusout=move |_| open.set(false)
+            on:keydown=move |event| {
+                if event.key() == "Escape" && open.get_untracked() {
+                    event.stop_propagation();
+                    open.set(false);
+                }
+            }
+        >
+            <a href=format!("#term-{id}") aria-describedby=tip.clone()>{written}</a>
+            <span class="form-tip" role="tooltip" id=tip hidden=move || !open.get()>
+                <b class="form-tip-word">{term.map(|term| term.name)}</b>
+                {term.map(|term| term.definition)}
+            </span>
+        </span>
     }
 }
 
