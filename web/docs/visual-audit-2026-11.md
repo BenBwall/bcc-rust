@@ -2587,14 +2587,19 @@ argument that mattered, as in Floating point's
 `%v10 = call i32 (ptr, ...) @printf(ptr noundef @.str.1, double noundef %v8)`.
 
 **Fixed.** The read-only listings now wrap, as the source already did. A
-wrapped line's later rows hang two indent levels in from the line's own
-(Monaco's `deepIndent`), past where the next instruction starts, and only
+wrapped line's later rows hang two tab stops in from the line's own
+indent (Monaco's `deepIndent`), and only
 its first row has a line number, so it reads as one line; the token
 colours are those of the line. The line links are decorations of the whole
 line, so pointing at any row of a wrapped line reads that line and marks
 its source, and a source line's mark covers every row of the output lines
 it links to. Where the page scrolls to show a linked or followed line, it
-now measures the whole wrapped line rather than one row. Narrowing the
+now measures the whole wrapped line rather than one row. (Corrected in
+[Part 12](#part-12-the-output-listings-and-the-steps-explanations-2026-11):
+Monaco guessed each listing's tab size from its text, so the hang was 8
+columns in some listings, past where the next instruction starts, but 4
+in others, where it starts; and the editor's own scroll to a linked line
+still stopped at the last line's first row. Part 12 fixes both.) Narrowing the
 notes was the other way: below 20rem they wrap the hand-off into more
 lines than the output gains, and at 1024 px and on a phone the output is
 narrower still, where the wrap helps as much. A wrapped line takes more
@@ -2654,3 +2659,423 @@ does, on this build and the before build.
   clippy runs (native, and wasm32 for hydrate, worker and compiler) pass.
   The worker run prints the engine's existing unfulfilled lint expectation
   in `src/abstract_machine/parser.rs`, as before; the engine is unchanged.
+
+## Part 12: the output listings and the steps' explanations (2026-11)
+
+Part 11's review left three things about the wrapped output listings, and
+Part 11 itself left four for later. This part fixes the listings, takes
+three of the four, and then walks three lessons once more as a programmer
+who has never studied compilers or the C standard, to improve the steps
+whose notes said least about what happened to memory and values. The work
+is on `agent/site-part12`.
+
+### Method
+
+The before build is the review's build of #427 at `e5fffb38f`, whose
+`web/` and engine are those of `main` at `b41e293e0` (Part 11 merged; the
+merge's other PR, #428, changed only the compiler). The after builds are
+this branch: `a1` at `300ff8c5d` (the first version of every change) for
+the first measurements and the first lesson walk, and the final build at
+`8007aaa10` for everything below unless noted (the branch's later commits
+only format code and write this part). Both were built with `web/build.sh`
+as in Parts 7 to 11: Trunk without `--release`, the dev profile at
+`opt-level=s`. Playwright scripts drove
+Chromium with reduced motion, one browser at a time:
+
+- **the listings:** Floating point's LLVM IR, pointing at source lines 8,
+  10 and 13 in turn (the review's reproduction) at 1366x768, 1024x768 and
+  900x800, checking that every row of every marked line lies inside the
+  editor; and the hang and the breaks of every wrapped line of Floating
+  point's bcc IR and LLVM IR and Structs' bcc IR, alone and with `-O0` and
+  `-O2` side by side, at 1366x768 (two columns) and 834x1112 (stacked);
+- **the probe:** at 1440x900, 1366x768, 1024x768, 900x800, 834x1112 and
+  390x844 in both themes (both builds at 1024x768 light, 900x800 dark,
+  834x1112 light and 390x844 light): the lede's word IR with the mouse, the
+  keyboard (focus, Tab, Escape) and, on the phone, taps (on the word, again,
+  elsewhere, and on the definition's link); Figure 0's stations; the stage
+  card at Logical lines and at bcc IR, where its Next and Skip keys and its
+  output sit and in what order its parts come; the WebAssembly strip; and
+  sideways scroll and console errors throughout;
+- **the definitions:** Part 11's sweep, every window width from 320 to
+  1440 px in 1 px steps, focusing each of the lede's five words, now also
+  checking that the definition sits under its word;
+- **contrast:** the WCAG contrast of the new and moved text at 1440x900,
+  1024x768 and 390x844 in both themes;
+- **the notes:** the engine's notes for every lesson, dumped from a test
+  before and after (title, lead, explanation, why it matters, citations,
+  what comes next), and Part 9's lesson walk, every note of the twelve
+  machine lessons at 1440x900 light and 390x844 dark on both builds, now
+  also recording the "Why it matters" note each step shows.
+
+The screenshots are in [`screenshots/part12/`](screenshots/part12/), named
+`<item>-<width>-<theme>-before.png` and `…-after.png`, saved with 256
+colours to keep them small.
+
+### The output listings
+
+#### 1. A wrapped row hung 4 columns in some listings and 8 in others
+
+A wrapped row hangs two tab stops past its line's indent (Monaco's
+`deepIndent`), but Monaco guessed each listing's tab size from the text its
+model was made with, so the same line hung differently from listing to
+listing: at 1366x768, Floating point's LLVM IR hung 8 columns at `-O0` and
+4 at `-O2`, and Structs' bcc IR hung 4 columns alone, where its function's
+instructions start, and 8 at `-O2`.
+
+**Fixed.** The editors keep the tab size of 4 the site sets instead of
+guessing (`detectIndentation: false`). Monaco keeps that setting in one
+configuration for every editor, so the source takes it too; its lessons
+indent by 4 already. Every wrapped row now starts at the second tab stop
+past its line's indent: column 8 for a line at the margin, and for LLVM
+IR's instructions, indented by 2, also column 8, six columns past them.
+The measurement found the same hang in every listing of the three, alone
+and side by side, at both sizes, where the before build had 4 in some and
+8 in others.
+[`compare-structs-1366-light`](screenshots/part12/compare-structs-1366-light-before.png)
+([after](screenshots/part12/compare-structs-1366-light-after.png)).
+
+#### 2. Revealing a linked line stopped at its first row
+
+Pointing at a source line scrolls the listing to the lines it links to.
+The editor revealed whole lines, which Monaco takes as the last line's
+first row, so a last line that wraps was left with its later rows below
+the editor's foot: after pointing at Floating point's source lines 8, 10
+and then 13, the second row of LLVM IR line 19 (`noundef %v15)`) was half
+hidden at 1366x768, 1024x768 and 900x800.
+
+**Fixed.** The editor reveals a range from the first line's start to the
+last line's end, which Monaco measures to the last row; a run too tall for
+the editor shows its first line whole. The editor's scroll to a followed
+line (the current instruction of the WebAssembly view) measures its whole
+line in the same way. The reproduction now finds every row of lines 17 to
+19 inside the editor at all three sizes.
+[`reveal-1366-light`](screenshots/part12/reveal-1366-light-before.png)
+([after](screenshots/part12/reveal-1366-light-after.png)).
+
+#### 3. A number split at its point
+
+Monaco may break a row after a full stop, so a narrow editor split
+numbers and names that hold one: in the side-by-side columns at 1366x768
+and stacked at 834x1112, Floating point's LLVM IR broke the string
+constants `c"0.1 + 0.2 == 0.3 is %d\0A\00"`, `c"0.1 + 0.2 is %.17g\0A\00"`
+and `c"ten 0.1s make %.17g\0A\00"` after `0.`, the review saw
+`3.000000e-01` split the same way, and the source at 1366x768 split its own
+line 12, `double sum = 0.1 + 0.` over `2;`.
+
+**Fixed.** Every editor breaks after the characters Monaco's default list
+has for Latin text except the full stop (`wordWrapBreakAfterCharacters`),
+so numbers, `p.x`, `@.str.5` and `%v.x` stay whole; the source takes the
+same rule, since its numbers split the same way. A piece too long for a row
+still breaks, so no line runs past the editor: the measurement found no
+number split and no row past the editor's edge in any of the listings or
+the source.
+[`compare-llvm-ir-1366-light`](screenshots/part12/compare-llvm-ir-1366-light-before.png)
+([after](screenshots/part12/compare-llvm-ir-1366-light-after.png)).
+
+#### 4. Part 11's account of the wrap
+
+Part 11's "Review, round 1" said a wrapped row hangs "past where the next
+instruction starts" and that the page "measures the whole wrapped line"
+when it scrolls to a linked line. The first was true only of the listings
+whose tab size Monaco had guessed as 4, and the second of the page's
+scroll but not of the editor's own. That paragraph now says so and points
+here.
+
+### Part 11's "left for later"
+
+#### 5. A narrow stage card put Next below the output
+
+From 821 to 1180 px, where the pipeline stands beside the listing, the
+stage card is narrow and stacks: the output came first and the hand-off,
+with Next and Skip, after it, below the window's foot. Next sat 1,089 px
+down at 1024x768, 1,137 px at 900x800 and 1,385 px at 834x1112.
+
+**Fixed.** There the hand-off and its keys come before the output, as one
+compact line (the hand-off at 18 px instead of 22): Next now sits 545 px
+down at 1024x768, 544 px at 900x800 and 551 px at 834x1112, and 501, 500
+and 551 px at bcc IR, which has no Skip. The rest of the notes (the
+command, "In this program", the in, out and why lines) still follow the
+output. The cost is the output's start: 99 px lower, at 651 px at
+1024x768 (607 at bcc IR), which leaves 117 px of it in that window; the
+keys that lead on are the part a reader needs before scrolling. The
+keyboard order already had the keys before the output, so now it follows
+what the eye sees. The phone keeps its order (the output first, under the
+channel keys), and so does the wide card from 1181 px, whose notes column
+already has the hand-off beside the output. A sticky Next and Skip was the
+other way; it would cover the output's last lines while the reader reads
+them.
+[`stage-card-1024-light`](screenshots/part12/stage-card-1024-light-before.png)
+([after](screenshots/part12/stage-card-1024-light-after.png)),
+[`stage-card-834-light`](screenshots/part12/stage-card-834-light-before.png)
+([after](screenshots/part12/stage-card-834-light-after.png)).
+
+#### 6. The lede's definitions: under their words, and on a tap
+
+Up to 1180 px a definition spanned the lede under it, since a box under
+its word could run off the window (Part 11, review round 1), and a tap on
+a phone followed the link to the glossary, away from the landing.
+
+**Fixed.** The page now places each definition under its word at every
+width: up to 340 px wide, as wide as the lede allows, and moved left as far
+as keeps it inside the lede. A tap on a word shows its definition instead
+of following the link, with a link to the entry inside it, "Read it in the
+glossary"; a second tap on the word, or a tap on that link, goes to the
+entry, and a tap anywhere else hides the definition. The mouse and the
+keyboard work as before: hover or focus shows the definition, Escape hides
+it, and Enter follows the word's link. The link inside the definition is
+for the pointer only (`tabindex="-1"`, `aria-hidden`), so Tab goes from one
+word to the next and a screen reader still reads the definition, without
+the link's words, as the word's description; the word's own link goes to
+the same entry. Before the page has loaded, a definition spans the lede
+as before. The sweep found every definition under its word and inside the
+window at every width from 320 to 1440 px in both themes (5,605 a theme),
+the closest edge still 18 px from the window's, at 320 px. The probe's taps
+on the phone showed the definition with the page's address unchanged,
+followed the link on the second tap, and hid it on a tap elsewhere.
+[`landing-term-900-dark`](screenshots/part12/landing-term-900-dark-before.png)
+([after](screenshots/part12/landing-term-900-dark-after.png)),
+[`landing-tap-390-light`](screenshots/part12/landing-tap-390-light-before.png)
+([after](screenshots/part12/landing-tap-390-light-after.png)).
+
+#### 7. Figure 0's stations
+
+Figure 0's station names open their views, and said nothing of what each
+form is.
+
+**Fixed, for the mouse and screen readers.** Each station's link has a
+title: the glossary's definition of its form, the same words the lede
+shows, or for Types, which has no entry, what the stage does ("Semantic
+analysis gives every name its declaration and every expression a type").
+A screen reader reads it as the link's description. A touch screen and the
+keyboard do not show a title; the lede above the figure shows the same
+five definitions to both, so the stations do not repeat its machinery.
+
+#### 8. The WebAssembly strip below 1024 px
+
+Not fixed. At 900 and 834 px the strip still takes two rows (99 px): the
+view keys (214 px), the transport (463), "Start at main" (142) and the
+status (120) take 939 px before their gaps, more than the strip has. Part 11 already took the
+numbers from the view keys and the words from Reset, Back and Run; what is
+left would be the words of Over, Out and Next line, whose icons alone do
+not say which is which, or the switch's label. A second row of the strip
+costs 35 px and hides nothing.
+
+### The steps' explanations
+
+#### Method
+
+The engine's notes for the first lesson (Objects, loops and calls, 198
+steps), the pointers lesson (Pointers and arrays, 141) and the printf
+lesson (Hello, world: printf and strings, 87) were read in order, with
+Floating point's (231) for the kinds of step those three lack. At each
+kind of step the question was whether a programmer who has not studied
+compilers or the C standard would know, from the lead and the
+explanation, what happened to memory and values and why C says so. Most
+steps already do: a read names the object and the value, a store the value
+before and after, a call the copies its parameters get, pointer arithmetic
+the elements it moves, and each topic's "Why it matters" note says why the
+rule exists. Four kinds of step did least, and three of them are the ones
+the pointers lesson is about.
+
+#### 9. Indirection: `*p` said "an lvalue designating"
+
+`*value` in the first lesson (9 steps) and `*first` in the pointers lesson
+(4) read: "`*value` follows the pointer to the object it points to,
+values[0] (in main)", and then "`value` holds a pointer to values[0] (in
+main), so `*value` (indirection) is an lvalue designating values[0] (in
+main)". That is right but leans on the standard's words, and the step had
+no "Why it matters" note: nothing said why following a pointer matters,
+which is the point of `bump(cursor)`.
+
+**Changed.** The lead says what `*value` now is: "`*value` follows the
+pointer in `value` to the object it points to: `*value` now stands for
+values[0] (in main) itself." The explanation says it in other words:
+"`value` holds a pointer to values[0] (in main). The unary `*` operator
+(indirection) turns a pointer back into the object it points to, so
+`*value` is an lvalue: another name for values[0] (in main), the same place
+in memory, not a copy of it. Nothing is read or written yet: the operator
+around it decides which." A new note says why it matters: "A pointer holds
+an address, and `*` is how a program uses it: reading `*p` reads the object
+p points to, and storing into `*p` changes that object, not a copy. That is
+how a function given a pointer changes its caller's objects. `*` needs a
+pointer to an object that still exists: through a null or dangling pointer
+it is undefined behavior, and this machine stops there." C99 §6.5.3.2p4
+says the result "is an lvalue designating the object" and that `*` on an
+invalid pointer is undefined, and its footnote 87 names a null pointer and
+the address of an object after its lifetime (N1256, p. 79, PDF p. 91); the
+machine stops on both (`Undefined::NullIndirection`,
+`Undefined::AfterLifetime`).
+[`note-indirection-1440-light`](screenshots/part12/note-indirection-1440-light-before.png)
+([after](screenshots/part12/note-indirection-1440-light-after.png)),
+[`note-indirection-1366-dark`](screenshots/part12/note-indirection-1366-dark-before.png)
+([after](screenshots/part12/note-indirection-1366-dark-after.png)).
+
+#### 10. A subscript said "a[i] means *(a + i)" in the abstract
+
+In the printf lesson `length` counts letters with `text[count]`, where
+`text` is a pointer, not an array. Its steps read "Subscripting counts
+elements from the pointer: it moves 0 elements and designates name[0] (in
+main)" and "Subscripting: a[i] means *(a + i). Starting from a pointer to
+name[0] (in main), …", with letters that are not the program's, and no
+note on why indexing a pointer works or what happens past the end.
+
+**Changed.** The step quotes the program's own subscript and names both
+values: the lead is "`text[count]` means `*(text + count)`: it moves 0
+elements and designates name[0] (in main)", and the explanation
+"Subscripting is pointer arithmetic followed by `*`: C defines
+`text[count]` as `*(text + count)`. Here `text` gives a pointer to name[0]
+(in main) and the index is 0, so the machine moves 0 elements and
+designates name[0] (in main). Nothing is read yet: the operator around it
+decides whether that element is read or stored into." A new note:
+"Subscripting is pointer arithmetic: `a[i]` is `*(a + i)` whether `a` is an
+array, which decays to a pointer first, or a pointer, so a function given
+only a pointer can index its caller's array. Nothing checks the index: one
+outside the array is undefined behavior, and this machine stops on it,
+where a compiled program may read or overwrite whatever lies there." C99
+§6.5.2.1p2 defines `E1[E2]` as `(*((E1)+(E2)))` (p. 70, PDF p. 82), and
+§6.5.6p8 leaves a result outside the array, or a `*` one past its end,
+undefined (p. 83, PDF p. 95), as the step already cited. The quoted text is
+the program's, from the expression's two operands (as the stop at a null
+pointer's subscript already quotes it); without it the step keeps the
+general `a[i]`.
+[`note-subscript-390-dark`](screenshots/part12/note-subscript-390-dark-before.png)
+([after](screenshots/part12/note-subscript-390-dark-after.png)).
+
+#### 11. A return said "the objects of its frame cease to exist"
+
+A return from a function other than main read "The return hands 3 back to
+the caller of bump, and the objects of its frame cease to exist", with no
+note. The explanation already named the call's new value and the objects
+that end, but neither said why it is safe for `bump` to return a value
+that lives in its own frame, which is the question a newcomer asks of a
+frame that is about to vanish.
+
+**Changed.** The lead names the call and the objects: "The return hands 3
+back as the value of `bump(cursor)`, and the frame of bump ends: its
+parameters and locals cease to exist." A new note: "A function's
+parameters and locals last only while its call runs. return copies the
+value out before the frame ends, so the caller gets it safely; returning
+the address of a local instead would hand back a dangling pointer, since
+the object it points to no longer exists." The step now also cites C99
+§6.2.4p2, "The value of a pointer becomes indeterminate when the object it
+points to reaches the end of its lifetime" (p. 32, PDF p. 44), beside
+§6.8.6.4p3 and §6.2.4p5. A return from main is unchanged; its note is the
+exit status.
+[`note-return-1440-light`](screenshots/part12/note-return-1440-light-before.png)
+([after](screenshots/part12/note-return-1440-light-after.png)).
+
+#### 12. A declaration's initializer said the declaration created the object
+
+The step before an initializer (`` `total` receives its initial value``)
+read "The value after `=` becomes the first value of `total`, the object
+this declaration just created", two steps after "Begin the lifetime of
+`total`" said the object was created at the block's brace (Part 7), and
+its explanation opened "In a declaration, `total` is not an expression
+that is evaluated", which leaves a newcomer to guess what it is instead.
+
+**Changed.** The lead ends "…, the object this declaration names." The
+explanation says what the name is and what comes next: "Here `total` is
+not an expression to evaluate but the name being declared, so nothing is
+read from it: its object already exists, and this step only marks it as
+the one the initializer fills. The initializer after `=` is evaluated
+next, converted to the object's type as an assignment would convert it,
+and stored as its first value." For a char array initialized by a string
+literal the last sentence is "The string literal after `=` comes next, and
+its characters become the first values of the array's elements", citing
+C99 §6.7.8p14 instead of §6.7.8p11, and for a structure initialized from
+another "The structure after `=` is evaluated next, and its value, every
+member included, becomes the object's first value", citing §6.7.8p13
+(both p. 126, PDF p. 138); before, both cited the scalar paragraph.
+
+#### 13. Two glossary entries
+
+The new notes name indirection and a dangling pointer, and the glossary
+(Table 2) had neither, so they gain entries, which the notes' first use of
+each word links to, as for every term: **Indirection**, "The unary *
+operator: *p is the object p points to, not a copy of it, so reading *p
+reads that object and storing into *p changes it" (§6.5.3.2p4), and
+**Dangling pointer**, "A pointer to an object whose lifetime has ended,
+such as a local of a function that has returned. Its value is
+indeterminate, and using it is undefined" (§6.2.4p2). The second also
+marks the word "dangling" in the note on lifetimes, which a step that ends
+a block shows.
+
+#### Intended changes to the text
+
+No lesson's title in Table 1 and no step's title change. The changes are
+these four kinds of step, in every lesson where they occur (the twelve
+machine lessons, and the pipeline lesson's machine run):
+
+| Step | Lead | Explanation | Why it matters | Citations |
+| --- | --- | --- | --- | --- |
+| `*p` (dereference) | new | new | new note | same |
+| `a[i]` (subscript) | new | new | new note | same |
+| return from a function other than main | new | same | new note | adds §6.2.4p2 |
+| `x` receives its initial value | new last words | new | none, as before | §6.7.8p14 or p13 for an array or a structure |
+
+Counted over the engine's dump, the notes that change, of each lesson's:
+Objects, loops and calls 21 of 198 (9 initializers, 9 dereferences, 3
+returns); Hello, world 8 of 87 (3, 4 subscripts, 1); Names for values 4 of
+98; Recursion and frames 8 of 79 (4, 4 returns); Integer promotions 3 of
+35; Unsigned numbers 11 of 184 (8, 3 subscripts); Signed overflow 2 of 38;
+Floating point 8 of 231; Pointers and arrays 8 of 141 (3, 4 dereferences,
+1 return); Structs and static storage 8 of 135 (4, 2 dereferences, 2
+returns); Reading past the end 1 of 21; Uninitialized reads 1 of 7: 83 of
+the 1,254. Nothing else in any note changes: no other title, lead,
+explanation, note, citation or "next" line, and the Designate lead of a
+read, a store, `&` and `++` is as before.
+
+Every one of these 83 notes, and only they, differs in the lesson walk:
+at 1440x900 light and at 390x844 dark, 83 of the 1,254 notes differ from
+the before build, the same 83 the dump lists. In the walk's fields that is
+the lead of all 83 (50 initializers, 15 dereferences, 11 returns, 7
+subscripts) and the "Why it matters" note where a lesson first meets the
+three new ones (3 dereferences, 5 returns, 2 subscripts); no title and no
+value flow changes. The walk of the first build, `a1`, and of the final
+build are the same note for note.
+
+#### Checks
+
+- **No sideways scroll** at any step of the probe in any of the twelve
+  configurations, in the listings' measurements, at any width of the sweep,
+  or at any note of the lesson walks, and no page logged an error or a
+  warning.
+- **Contrast:** the definition's link is the accent ink on the device,
+  bold at 11.5 px: 4.99:1 in the light theme, as Part 10 measured that ink
+  on that ground, and 6.87:1 in the dark. The rest is unchanged: the
+  definition 10.59:1 and 9.40:1, its word 15.82:1 and 13.34:1, the hand-off
+  at 18 px 15.82:1 and 13.34:1, Next 6.06:1 and Skip 15.82:1 and 13.34:1.
+- **Keyboard and screen readers:** focus on a lede word shows its
+  definition, Tab goes to the next word and hides it, Escape hides it, and
+  Enter follows the link; the definition's own link takes no Tab stop and
+  is hidden from screen readers, and the word's description is the
+  definition alone. In the narrow stage card the Next and Skip keys now come
+  before the output both on screen and in the Tab order. Figure 0's
+  stations are described by their titles. The new notes' words for
+  indirection and a dangling pointer are glossary terms, read and focused
+  like the others.
+- **Reduced motion:** nothing new moves. The reveal of a linked line glides
+  as before and jumps with reduced motion.
+- **Tests:** the site's tests (164, and the prerender's 2) and its four
+  clippy runs (native, and wasm32 for hydrate, worker and compiler) pass;
+  the worker run prints the engine's existing unfulfilled lint expectation
+  in `src/abstract_machine/parser.rs`, as before. The engine's tests (115)
+  and its clippy pass as `pages.yml` runs them; the tests now check the
+  new leads, the three new notes, the return's citation, and the
+  initializer's paragraph for a char array and a structure.
+
+### Left for later
+
+- **The WebAssembly strip below 1024 px** still takes two rows (finding 8).
+- **The narrow stage card's output** starts 99 px lower than before at
+  1024x768, so 117 px of it is in that window at the first stage. Folding
+  the hand-off into the stage's heading line would win some of it back.
+- **Figure 0's stations** show their definitions to the mouse and to
+  screen readers only; a tap or the keyboard opens the view, as before.
+- **Other steps a newcomer may stumble on:** the integer promotion of a
+  char reads "Promote char 65 to int" where the read before it said 65
+  ('A'), and the comparison after it reads "Compare 65 != 0" for
+  `text[count] != '\0'`; naming the characters there would join the loop in
+  the printf lesson to its source. Entering a block still explains, in its
+  first sentence, that this machine leaves out variable-length arrays,
+  which a newcomer does not need there.
