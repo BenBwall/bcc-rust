@@ -12,7 +12,8 @@ use crate::translation_phases::ErrorSeverity;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum PragmaExtensionReach {
     Nothing,
-    /// Those filed under one of GCC's own options.
+    /// Those filed under the group's own option: one of GCC's, or Clang's
+    /// `-Wvariadic-macros`.
     Group(super::ExtensionGroup),
     All,
 }
