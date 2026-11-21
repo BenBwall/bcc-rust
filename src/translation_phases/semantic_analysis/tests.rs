@@ -35,6 +35,7 @@ mod emission_work;
 mod extra_warnings;
 mod float128;
 mod float_integer_conversions;
+mod folded_nans;
 mod fortify;
 mod half_precision;
 mod imaginary_constants;

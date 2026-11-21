@@ -21,6 +21,7 @@ use super::super::{
     TypeId,
     TypeKind,
     UnaryOperator,
+    constants::NanSource,
 };
 use crate::{
     builtins::BuiltinOperation,
@@ -510,9 +511,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return None;
                 };
                 let precision = self.floating_precision(scalar)?;
-                Self::floating_binary(operator, left, right, precision, domains)
-                    .and_then(|value| self.round_floating(value, ty))
-                    .map(PredicateConstant::Floating)
+                Self::floating_binary(
+                    operator,
+                    left,
+                    right,
+                    precision,
+                    domains,
+                    NanSource::Runtime,
+                )
+                .and_then(|value| self.round_floating(value, ty))
+                .map(PredicateConstant::Floating)
             })
     }
 }
