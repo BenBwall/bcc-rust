@@ -63,7 +63,10 @@ pub fn Schematic(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                     }.into_any()
                 },
                 // Before the first step: what will be drawn here, in a card
-                // like the blank tape's.
+                // like the blank tape's, unless the run stopped there.
+                | _ if snapshot.with(|state| state.as_ref().is_some_and(|state| state.step == 0 && !state.can_step())) => view! {
+                    <p class="schematic-empty">"The machine stopped before its first step, so it evaluated no expression."</p>
+                }.into_any(),
                 | _ if snapshot.with(|state| state.as_ref().is_none_or(|state| state.step == 0)) => view! {
                     <div class="figure-empty">
                         <p class="figure-empty-label">"Nothing wired yet"</p>

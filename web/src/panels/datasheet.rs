@@ -41,6 +41,9 @@ pub fn Datasheet(
         })
     });
     let empty = move || snapshot.with(|snapshot| snapshot.as_ref().is_none_or(|snapshot| snapshot.objects.is_empty()));
+    // A run that can go on has objects to come; one that stopped or ended
+    // without any says so instead.
+    let ended = move || snapshot.with(|snapshot| snapshot.as_ref().is_some_and(|snapshot| !snapshot.can_step()));
     view! {
         <figure class="datasheet" aria-labelledby="datasheet-caption">
             <figcaption class="module-caption" id="datasheet-caption">
@@ -49,7 +52,8 @@ pub fn Datasheet(
             </figcaption>
             // Before any object's lifetime has begun the table has no rows:
             // a card says what will fill it, as the blank tape's does.
-            <div class="figure-empty" hidden=move || !empty()>
+            <p class="schematic-empty" hidden=move || !empty() || !ended()>"No object began its lifetime in this run."</p>
+            <div class="figure-empty" hidden=move || !empty() || ended()>
                 <p class="figure-empty-label">"No objects yet"</p>
                 <p class="figure-empty-text">
                     "Each object gets a row here when its lifetime begins: its type and size, where it lives, the \
