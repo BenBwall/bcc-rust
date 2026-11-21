@@ -233,7 +233,19 @@ pub fn PipelineView(
         <section class="pipeline" aria-labelledby="pipeline-title">
             <h2 id="pipeline-title" class="sr-only">"Compiler pipeline"</h2>
             <StageStrip stage compilation=shown />
-            <article class="card stage-card" id="stage-output" data-phase=move || stage.get().phase()>
+            // The selected key's panel. Where the card is wide, its output
+            // takes the main column, under the stage's name, and what the
+            // stage is and does the narrow one beside it, so the output
+            // starts high on a laptop; elsewhere they stack, the output
+            // first (style.css).
+            <article
+                class="card stage-card"
+                class:is-compare=side_by_side
+                id="stage-output"
+                role="tabpanel"
+                aria-labelledby=move || format!("stage-tab-{}", stage.get().key())
+                data-phase=move || stage.get().phase()
+            >
                 <header class="stage-header">
                     <div>
                         <p class="stage-kicker">
@@ -249,6 +261,7 @@ pub fn PipelineView(
                         <OptimizationToggle optimize />
                     </div>
                 </header>
+                <div class="stage-notes">
                 {move || {
                     let stage = stage.get();
                     match (stage.command(&filename.get(), optimize.get()), stage.internal()) {
@@ -312,10 +325,6 @@ pub fn PipelineView(
                 </div>
                 <StageBrief stage />
                 </div>
-                <StopBanner
-                    compilation=shown
-                    level=Signal::derive(move || side_by_side.get().then(|| level_name(optimize.get())))
-                />
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
                         {move || if !shown_links.with(Links::is_exact) {
@@ -369,6 +378,12 @@ pub fn PipelineView(
                         "Compare -O0 with -O2"
                     </button>
                 </div>
+                </div>
+                <div class="stage-work">
+                <StopBanner
+                    compilation=shown
+                    level=Signal::derive(move || side_by_side.get().then(|| level_name(optimize.get())))
+                />
                 <p
                     class="link-reading"
                     aria-hidden="true"
@@ -429,6 +444,7 @@ pub fn PipelineView(
                         </button>
                         <code class="stage-command">{move || Stage::Llvm.command(&filename.get(), optimize.get()).map(|command| format!("$ {command}"))}</code>
                     </div>
+                </div>
                 </div>
                 // What the stage did comes first, where a 1440x900 screen
                 // shows it; how it works and what the optimizer changed

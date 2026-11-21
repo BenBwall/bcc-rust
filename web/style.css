@@ -1234,6 +1234,9 @@
   /* The hand-off and the program's example, with what goes in, what comes
      out and why beside them where the card is wide enough. */
   .stage-lead { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 28px; }
+  /* The stage's notes and its work (the output, and what stops it) are one
+     column of the card's, unless the card is wide enough to split. */
+  .stage-notes, .stage-work { display: contents; }
   .stage-lead-main { min-width: 0; }
   @container insight (min-width: 900px) {
     .stage-lead { grid-template-columns: minmax(0, 1fr) minmax(260px, 23rem); }
@@ -1321,6 +1324,39 @@
   .stage-level { margin-bottom: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink); }
   @container insight (max-width: 700px) {
     .stage-output.is-compare { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* A narrow card (a phone's, or a small laptop's beside the listing)
+     stacks the stage: its output first, under the stage's name (on a phone
+     the channel keys name it, so the name follows), then what stage is and
+     does. Why bcc stopped, if it did, comes before the output. */
+  @container insight (max-width: 839px) {
+    .stage-card { display: flex; flex-direction: column; }
+    .stage-card > .stage-header { order: -5; }
+    .stage-work > .stop-banner { order: -4; margin: 0 0 12px; }
+    .stage-work > .link-reading { order: -3; }
+    .stage-work > .stage-output, .stage-work > .stage-missing { order: -2; margin: 0 0 12px; }
+    .stage-notes > .stage-toolbar { order: -1; }
+    .stage-work > .link-reading { margin: 0 0 12px; }
+    .stage-notes > .stage-toolbar .stage-note { margin: 0 0 10px; }
+    .stage-notes > .stage-command { align-self: flex-start; max-width: 100%; }
+  }
+  /* A wide card (a laptop's, from 1280 px) splits under the stage's name:
+     the output on the left, beside the source it links to, and the notes
+     on what the stage is and does in a column on the right, so the output
+     starts under the name rather than below the fold. -O0 and -O2 side by
+     side take the whole width, with the notes above them. */
+  @container insight (min-width: 840px) {
+    .stage-card:not(.is-compare) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 20rem); column-gap: 24px; align-items: start; }
+    .stage-card:not(.is-compare) > * { grid-column: 1 / -1; }
+    .stage-card:not(.is-compare) > .stage-header { grid-row: 1; }
+    .stage-card:not(.is-compare) > .stage-work { display: block; grid-area: 2 / 1; min-width: 0; }
+    .stage-card:not(.is-compare) > .stage-notes { display: flex; flex-direction: column; grid-area: 2 / 2; min-width: 0; padding-left: 20px; border-left: 1px solid var(--seam); }
+    /* The hand-off leads the notes; how to print the stage follows it. */
+    .stage-card:not(.is-compare) .stage-notes > .stage-command { order: 1; align-self: flex-start; max-width: 100%; }
+    .stage-card:not(.is-compare) .stage-notes > .stage-toolbar { order: 2; }
+    .stage-card:not(.is-compare) .stage-lead { grid-template-columns: minmax(0, 1fr); }
+    .stage-card:not(.is-compare) .stage-handoff { font-size: 20px; }
+    .stage-card:not(.is-compare) .stage-work > * { margin: 0 0 10px; }
   }
   .stage-beside-waiting { padding: 16px; background: var(--screen); color: var(--screen-dim); font-size: 12px; }
   .stage-missing { margin-top: 16px; padding: 16px; background: var(--screen); color: var(--screen-dim); }
@@ -1616,6 +1652,13 @@
     .note .evaluation-steps { max-height: max(150px, calc(100svh - var(--sticky-bottom) - 440px)); overflow-y: auto; padding-block: 3px; padding-right: 3px; scrollbar-width: thin; }
     .spool { display: none; }
   }
+  /* Where the listing stands beside the pipeline, the stage card's own
+     reading line, over the output, says what the line pointed at links to;
+     the listing's copy under the source serves only a phone, where the
+     output is a screen or more away. */
+  @media (min-width: 821px) {
+    .link-reading.is-source { display: none; }
+  }
   /* Laptops: the listing narrows; the side column of the notes drops under
      the note where the machine column is narrow. */
   @media (max-width: 1180px) {
@@ -1808,16 +1851,10 @@
     .stage-item { flex: none; scroll-snap-align: start; }
     .stage-button { width: auto; white-space: nowrap; }
     /* The stage's output first, right under the channel keys that name the
-       stage (as on a wide screen, where only the one-line hand-off comes
-       before it); why bcc stopped, if it did, comes before it, and what the
-       stage is and does after it. */
-    .stage-card { display: flex; flex-direction: column; padding-top: 12px; }
-    .stage-card > .stop-banner { order: -3; margin: 0 0 12px; }
-    .stage-card > .stage-output, .stage-card > .stage-missing { order: -2; margin: 0 0 12px; }
-    .stage-card > .link-reading, .stage-card > .stage-toolbar { order: -1; }
-    .stage-card > .link-reading { margin: 0 0 12px; }
-    .stage-card > .stage-toolbar .stage-note { margin: 0 0 10px; }
-    .stage-card > .stage-command { align-self: flex-start; max-width: 100%; }
+       stage (a laptop's narrow card puts the name before it). */
+    .stage-card { padding-top: 12px; }
+    .stage-card > .stage-header { order: 0; }
+    .stage-work > .link-reading { order: -1; }
     .source-legend { gap: 2px 12px; padding: 8px 12px; font-size: 10px; }
     .link-reading { min-height: calc(3 * 1.55em + 12px); }
     .link-reading.is-source { min-height: calc(3 * 1.55em + 12px); padding: 6px 12px; }
