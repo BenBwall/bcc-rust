@@ -3829,6 +3829,31 @@ impl SemanticError {
     }
 }
 
+impl SemanticError {
+    /// Names GCC's `-Werror=pedantic` in a `-pedantic` report that `-Werror`
+    /// or `-Werror=pedantic` made an error: one whose own severity, which the
+    /// extension policy left a warning, became an error. `-pedantic-errors`
+    /// makes its own errors, which keep `-Wpedantic`
+    /// (`print_option_information` in GCC's `diagnostic.cc`).
+    pub(crate) fn name_gcc_promotion<'d>(
+        &self,
+        diagnostic: &mut Diagnostic<'d>,
+        context: &Context<'_>,
+        arena: &'d Bump,
+    ) {
+        if let SemanticErrorKind::PedanticConstant(_) = self.kind
+            && self.extension_severity == Some(ErrorSeverity::Warning)
+            && diagnostic.severity == ErrorSeverity::Error
+            && context.configuration.diagnostic_format()
+                == crate::configuration::DiagnosticFormat::Gcc
+            && let Some(text) = diagnostic.message.strip_suffix(" [-Wpedantic]")
+        {
+            diagnostic.message = format_in!(arena, "{text} [-Werror=pedantic]");
+            diagnostic.option_suffix = true;
+        }
+    }
+}
+
 impl fmt::Display for SemanticError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.kind.explanation().0)

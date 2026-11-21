@@ -287,8 +287,11 @@ impl ToDiagnostic for TranslationError<'_> {
             | Self::Extension(error) => error.diagnostic_in(context, source, arena),
         };
         diagnostic.severity = self.configured_severity(context);
-        if let Self::Preprocessing(error) = self.unclassified() {
-            error.reword_for_compiler(&mut diagnostic, context, arena);
+        match self.unclassified() {
+            | Self::Preprocessing(error) =>
+                error.reword_for_compiler(&mut diagnostic, context, arena),
+            | Self::Semantic(error) => error.name_gcc_promotion(&mut diagnostic, context, arena),
+            | _ => {},
         }
         diagnostic
     }

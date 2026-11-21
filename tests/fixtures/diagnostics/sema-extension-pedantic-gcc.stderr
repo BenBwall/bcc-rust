@@ -30,9 +30,9 @@ sema-extension-pedantic-gcc.c:23:49: warning: folded integer constant expression
    23 | void loud_automatic(void) { __extension__ int a[(int)(1.0 + 1)]; (void)a; }
       |                                                 ^~~~~~~~~~~~~~
 sema-extension-pedantic-gcc.c: In function 'loud_arrays':
-sema-extension-pedantic-gcc.c:28:68: warning: invalid use of pointers to arrays with different qualifiers in ISO C before C23 [-Wpedantic]
+sema-extension-pedantic-gcc.c:28:72: warning: invalid use of pointers to arrays with different qualifiers in ISO C before C23 [-Wpedantic]
    28 | void loud_arrays(int (*p)[2], const int (*q)[2], int c) { (void)(c ? p : q); }
-      |                                                                    ^~~~~
+      |                                                                        ^
 sema-extension-pedantic-gcc.c: At top level:
 sema-extension-pedantic-gcc.c:29:42: warning: left shift count >= width of type [-Wshift-count-overflow]
    29 | __extension__ static int quiet_shift = 1 << 40;

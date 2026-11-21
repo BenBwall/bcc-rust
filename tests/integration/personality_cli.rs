@@ -2644,6 +2644,92 @@ mod tests {
         assert!(stderr(&output).contains(CLANG), "{}", stderr(&output));
     }
 
+    /// GCC 14 accepts conversions between function and object pointers,
+    /// reporting each under `-pedantic` in its own words; a conditional
+    /// between `void *` and a function pointer is no error there. Clang 23
+    /// reports no cast, and warns of the conditional by default. Each line
+    /// was checked against both compilers.
+    #[test]
+    fn gcc_reports_function_and_object_pointer_conversions() {
+        const CODE: &str = "typedef void (*fp)(void);\nvoid take(void *);\nvoid g(void *vp, fp f, \
+                            int c) {\n  take(f);\n  fp a = (fp)vp;\n  void *b = c ? vp : f;\n  \
+                            (void)a; (void)b;\n}\n";
+        let directory = Directory::new();
+        directory.write("c.c", CODE);
+        let output = directory.bcc("--gcc-mode", &["-std=gnu11", "-fsyntax-only", "c.c"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-std=c99", "-pedantic", "-fsyntax-only", "c.c"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        for line in [
+            "c.c:4:8: warning: ISO C forbids passing argument 1 of 'take' between function \
+             pointer and 'void *' [-Wpedantic]",
+            "c.c:5:10: warning: ISO C forbids conversion of object pointer to function pointer \
+             type [-Wpedantic]",
+            "c.c:6:20: warning: ISO C forbids conditional expr between 'void *' and function \
+             pointer [-Wpedantic]",
+        ] {
+            assert!(text.contains(line), "{line}: {text}");
+        }
+        // `-Werror` names the option that made the warning an error;
+        // `-pedantic-errors` does not.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-std=c99",
+                "-pedantic",
+                "-Werror=pedantic",
+                "-fsyntax-only",
+                "c.c",
+            ],
+        );
+        let text = stderr(&output);
+        assert!(!output.status.success());
+        assert_eq!(text.matches("[-Werror=pedantic]").count(), 3, "{text}");
+        assert!(
+            text.ends_with("cc1: some warnings being treated as errors\n"),
+            "{text}"
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-std=c99", "-pedantic-errors", "-fsyntax-only", "c.c"],
+        );
+        let text = stderr(&output);
+        assert!(!output.status.success());
+        assert_eq!(text.matches("error: ISO C forbids").count(), 3, "{text}");
+        assert!(!text.contains("-Werror"), "{text}");
+        // A system header's macro spells the cast and the conditional, so
+        // GCC withholds both, even under `-pedantic-errors`.
+        directory.write(
+            "sys.h",
+            "#pragma GCC system_header\ntypedef void (*fp)(void);\n#define TO_FP(p) \
+             ((fp)(p))\n#define PICK(c, a, b) ((c) ? (a) : (b))\n",
+        );
+        directory.write(
+            "m.c",
+            "#include \"sys.h\"\nvoid *g(void *vp, fp f, int c) { fp a = TO_FP(vp); (void)a; \
+             return PICK(c, vp, f); }\n",
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-std=c99", "-pedantic-errors", "-fsyntax-only", "m.c"],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-std=c99", "-pedantic", "-fsyntax-only", "c.c"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(!text.contains("ISO C forbids"), "{text}");
+        assert!(text.contains("[-Wpointer-type-mismatch]"), "{text}");
+    }
+
     /// Wider types and bit-precise ones of any width fold the same way, as
     /// assertions accepted by GCC 14.2 and by Clang 23.1 show.
     #[test]

@@ -3025,6 +3025,34 @@ modelled; MSVC keeps the Clang errors for the two pointer groups, where `cl`
 warns (C4047, C4133). The GCC torture survey lost no test
 (see the pull request).
 
+C99 converts function pointers only to other function pointers
+(§6.3.2.3p1, p8), and lists casts between them and object pointers as a
+common extension (§J.5.7). Both compilers accept them. Under GCC's identity,
+`-pedantic` reports them in GCC 14's words (`build_c_cast`,
+`convert_for_assignment`, `build_binary_op` and `build_conditional_expr` in
+`c-typeck.cc`):
+
+- a cast either way, "ISO C forbids conversion of object pointer to function
+  pointer type" and "... of function pointer to object pointer type", at its
+  `(`; a null pointer constant may become a function pointer silently.
+- an assignment, initialization, `return` or argument between `void *` and
+  a function pointer, "ISO C forbids initialization between function pointer
+  and 'void *'" and its `assignment`, `return` and `passing argument 1 of
+  'f'` forms, an initialization at its initializer.
+- equality between them, "ISO C forbids comparison of 'void *' with function
+  pointer".
+- a conditional between them, "ISO C forbids conditional expr between 'void
+  *' and function pointer", at its `:`. GCC takes the `void *` as the result,
+  where bcc refused it as a pointer mismatch before.
+
+`-Werror` names `[-Werror=pedantic]`, an `__extension__` operand or a marked
+declaration silences each, and a system header spelling the place, as a
+system macro's body does, withholds it even under `-pedantic-errors`.
+Clang reports no cast, words the rest as its own, and warns of the
+conditional by default (`-Wpointer-type-mismatch`); its identity is
+unchanged. GCC's note naming the parameter after an argument's report is not
+written.
+
 Under TCC, a `__builtin_` name TCC does not know (TCC `mob`'s `tcctok.h`
 and `tccdefs.h`: `expect`, `constant_p`, `frame_address`,
 `return_address`, `unreachable`, `types_compatible_p`, `choose_expr`, the

@@ -1207,10 +1207,31 @@ against GCC 14 on the same day, show a marked declaration silencing a
 conditional between pointers to arrays whose elements differ in qualifiers and
 a static initializer folded from an undefined shift, while the unmarked copies
 and the initializer whose shift sits in an `__extension__` operand warn on
-GCC's lines; GCC points the conditional at its `:`, column 72, where bcc points
-at its `?`, column 68. The last two rows initialize file-scope unions
+GCC's lines and columns, the conditional at its `:`. The last two rows initialize file-scope unions
 with casts to a union type, which GCC accepts; only the unmarked one warns,
 in bcc's wording for GCC's "ISO C forbids casts to union type".
+
+### GCC's function and object pointer conversions
+
+`sema-function-pointers-gcc.c` (`-std=gnu99 -pedantic`) pins GCC's
+`-pedantic` reports of conversions between function and object pointers:
+"ISO C forbids conversion of object pointer to function pointer type" and
+the reverse at a cast's `(`, at file scope and in a function, silent for a
+null pointer constant; "ISO C forbids initialization between function
+pointer and 'void *'" at the initializer, and its `return` and `assignment`
+forms; "ISO C forbids comparison of 'void *' with function pointer", silent
+against a null pointer; and "ISO C forbids conditional expr between 'void *'
+and function pointer" at the `:`, whose result is the `void *`. An
+`__extension__` operand or a marked declaration silences each. Checked
+21 November 2026 against GCC 14 (`LC_ALL=C`), which it matches byte for byte.
+Argument passing ("ISO C forbids passing argument 1 of 'f' between function
+pointer and 'void *'") is pinned by
+`gcc_reports_function_and_object_pointer_conversions` in
+`tests/integration/personality_cli.rs`, as GCC follows it with a note about
+the parameter that bcc does not write. GCC underlines only part of some
+initializers, a point for a conditional or a parenthesized one and the name
+of a called function, where bcc underlines the whole expression, as it does
+for every initializer it reports in GCC's format.
 
 ### GCC's negative left shifts
 
