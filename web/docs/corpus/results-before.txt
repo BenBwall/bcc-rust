@@ -1,0 +1,32 @@
+b01_and_mask.c	refused	3:21	unsupported	expected ;; unsupported or malformed subset syntax
+b02_or_set.c	refused	3:21	unsupported	unsupported character; the machine reads ASCII C, and #, other than to start a directive line, is outside this subset
+b03_xor_toggle.c	refused	3:24	unsupported	unsupported character; the machine reads ASCII C, and #, other than to start a directive line, is outside this subset
+b04_not_complement.c	refused	3:20	unsupported	unsupported character; the machine reads ASCII C, and #, other than to start a directive line, is outside this subset
+b05_compound_bits.c	refused	3:11	unsupported	unsupported character; the machine reads ASCII C, and #, other than to start a directive line, is outside this subset
+b06_is_odd.c	refused	3:11	unsupported	expected ); unsupported or malformed subset syntax
+c01_max.c	refused	4:21	unsupported	unsupported character; the machine reads ASCII C, and #, other than to start a directive line, is outside this subset
+c02_abs_return.c	refused	2:18	unsupported	unsupported character; the machine reads ASCII C, and #, other than to start a directive line, is outside this subset
+c03_printf_choice.c	refused	5:45	unsupported	unsupported character; the machine reads ASCII C, and #, other than to start a directive line, is outside this subset
+f01_call_sum.c	refused	6:38	unsupported	calls must be whole expressions; operand sequencing is outside this subset
+f02_call_condition.c	refused	7:20	unsupported	expected ); unsupported or malformed subset syntax
+f03_call_argument.c	refused	8:29	unsupported	nested function calls are outside this subset
+f04_call_nested.c	refused	6:26	unsupported	nested function calls are outside this subset
+g01_function_pointer.c	refused	6:9	unsupported	expected an identifier; keyword or unsupported type found
+g02_function_table.c	refused	10:9	unsupported	expected an identifier; keyword or unsupported type found
+h01_hex.c	refused	2:16	unsupported	octal and hexadecimal integer constants are outside this subset; write the value in decimal
+h02_octal.c	refused	2:23	unsupported	octal and hexadecimal integer constants are outside this subset; write the value in decimal
+h03_hex_unsigned.c	refused	2:24	unsupported	octal and hexadecimal integer constants are outside this subset; write the value in decimal
+i01_index_reversed.c	refused	4:16	unsupported	subscript requires a pointer to an arithmetic type and a side-effect-free integer index
+k01_for_two.c	refused	5:15	unsupported	expected ;; unsupported or malformed subset syntax
+k02_comma_value.c	refused	3:19	unsupported	expected ); unsupported or malformed subset syntax
+l01_and_range.c	refused	3:15	unsupported	expected ); unsupported or malformed subset syntax
+l02_or_either.c	refused	4:18	unsupported	unsupported character; the machine reads ASCII C, and #, other than to start a directive line, is outside this subset
+l03_and_value.c	refused	4:22	unsupported	expected ;; unsupported or malformed subset syntax
+l04_null_guard.c	refused	4:16	unsupported	expected ); unsupported or malformed subset syntax
+l05_while_and.c	refused	4:18	unsupported	expected ); unsupported or malformed subset syntax
+l06_not_and.c	refused	4:16	unsupported	expected ); unsupported or malformed subset syntax
+p01_pointer_to_pointer.c	refused	4:10	unsupported	expected an identifier; keyword or unsupported type found
+p02_out_parameter.c	refused	1:15	unsupported	expected an identifier; keyword or unsupported type found
+p03_array_of_pointers.c	refused	5:10	unsupported	arrays of pointers are outside this subset
+p04_array_of_strings.c	refused	4:11	unsupported	arrays of pointers are outside this subset
+p05_strings_unsized.c	refused	4:21	unsupported	an array of unknown size needs a string literal initializer in this subset; give its size
