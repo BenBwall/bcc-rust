@@ -2958,9 +2958,84 @@ cannot fold later operators with the unconverted integer; `(1 ? N + 1 :
 Lowering emits a folded binary128 value as `fconst.f128` (or converts it to
 the destination format for a static initializer), and static initializers
 read it through `float_parsing::bits::binary128_bits`. A folded invalid
-operation gives the run-time result, the negative default NaN; the pinned
-Clang folds `0.0q/0.0q` through LLVM's `APFloat` to a positive NaN, so the
-sign of such a statically folded NaN differs from Clang's.
+operation gives the NaN of its [`NanSource`](#folded-nans-2026-11-20): the
+positive one GCC and Clang fold in a static initializer, or, in a function,
+the negative default NaN libgcc gives at run time.
+
+## Folded NaNs (2026-11-20)
+
+An invalid operation (`0/0`, `∞ - ∞`, `0 × ∞`, `∞/∞`) gives a NaN whose
+sign IEC 60559 leaves unspecified, and the two computers that may produce it
+differ: x86-64 at run time gives its default NaN, sign bit set
+(`0xFFF8000000000000`), while GCC's `real.c` and LLVM's `APFloat` give the
+positive quiet NaN (`0x7FF8000000000000`). The host bridge computes as the
+hardware does, so `constants.rs` decides the sign afterwards, from
+`Analyzer::nan_source`:
+
+- `NanSource::Compiler` outside a function and in the initializer of an
+  object with static or thread storage duration, at file or block scope. Such
+  an initializer is a constant expression computed at translation time
+  (C99 §6.7.8p4, §F.7.5p1), and GCC 14 and Clang 23 fold it under every
+  floating-point option (`-ftrapping-math`, `-fno-trapping-math`,
+  `-ffast-math`, `-fcx-limited-range`) and pragma (`STDC FENV_ACCESS`,
+  `clang fp exceptions`, `float_control`, `GCC optimize`), complex products
+  and quotients included. A NaN that an invalid operation makes from
+  operands that are not NaNs is then positive.
+- `NanSource::Runtime` everywhere else: in a function body, automatic
+  initializers included, every invalid operation keeps the hardware's NaN,
+  exactly as before folded NaNs. Its IR is the same as before.
+
+The tcc and msvc identities take `Runtime` everywhere, static initializers
+included. TCC 0.9.27 folds only finite results (its `gen_opif`), so its code
+computes every invalid operation at run time, and it rejects one in a static
+initializer ("division by zero in constant"). There is no `cl` to compare
+the msvc identity with.
+
+A NaN operand passes through with its sign, as GCC's `const_binop` and
+LLVM's `APFloat` pass it, and a negation flips it. Binary128 folding follows
+the same rule. A deferred call predicate (`enable_if`, `diagnose_if`) keeps
+the hardware's NaN.
+
+### Known limit: NaNs in a function
+
+C99 §F.7.4p1 evaluates any other floating constant expression as if during
+execution, and the compilers differ there. GCC leaves an invalid operation
+for run time while math may trap, its default, and folds it under
+`-fno-trapping-math`, except a product or quotient of two complex values,
+which calls `__muldc3` or `__divdc3`. Clang folds it unless exceptions are
+strict (`-ftrapping-math`, `STDC FENV_ACCESS ON` and the other pragmas),
+except for an automatic aggregate whose whole initializer its evaluator
+folds. Either may also propagate a folded constant through inlining. So
+GCC's and Clang's code holds the positive NaN in some function bodies where
+bcc's holds the negative one, and `printf` shows `nan` where bcc's program
+shows `-nan`.
+
+PR #426 first tried to follow each compiler there, and then to fold only
+values it judged final (returned, passed, stored). Six review rounds found
+that any folded NaN that later meets a NaN computed at run time takes the
+wrong operand's sign: x86 returns the first operand's NaN, and GCC, Clang
+and bcc order operands differently (GCC keeps a constant second at `-O2`,
+both commute some expressions at `-O0`, and LLVM folds `x + NaN` to the
+constant). The value reached such operations through returns, later-defined
+callees, function pointers, globals, `__builtin_assume_aligned`, `memcpy`
+and returned structures, so no local analysis was sound. Main's NaN matches
+every combination of two run-time NaNs, so bcc keeps it in every function.
+
+Remaining differences in static initializers, each the same before and
+after folded NaNs:
+
+- A NaN + NaN fold picks the wrong operand's NaN for `float`, `long double`,
+  `_Float16` and `__float128` (`-(0/0) + (0/0)`): both compilers take the
+  first operand's, as `double` already does.
+- `compiler_nan` looks only at the operands of the whole complex operation,
+  while GCC and `APFloat` make each NaN made inside a complex operand
+  positive (`(∞ + ∞i) * 0`).
+- `(_Complex T)-NAN` gets the imaginary part `-0`; both compilers give
+  `+0`.
+- GCC canonicalizes the payload of a NaN operand in a complex product it
+  folds through MPC (`-nan(0x123) * 0`).
+- TCC 0.9.27 rejects a static initializer that makes a NaN from an invalid
+  operation, which bcc's TCC identity accepts, with the hardware's NaN.
 
 ## Half-precision folding (2026-10-27)
 

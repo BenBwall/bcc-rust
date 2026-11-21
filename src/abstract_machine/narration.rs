@@ -365,11 +365,11 @@ impl Topic {
                  is an infinity and 0.0 / 0.0 a NaN, which printf writes as inf and nan, with a \
                  minus sign when the NaN's sign bit is set. C leaves that sign open. x86-64's \
                  division instruction sets it, so a division done at run time prints -nan, as \
-                 here; a NaN the compiler works out from constants may have either sign (Clang's \
-                 prints nan, GCC's and bcc's -nan). Integer division by zero is still undefined: \
-                 without optimization x86-64's divide instruction traps and the program dies with \
-                 SIGFPE, but an optimizer may compute something else instead (GCC -O2 turns 1 / b \
-                 into a comparison that never traps).",
+                 here; a NaN the compiler works out from constants, as GCC, Clang and bcc do in a \
+                 static initializer, is positive and prints nan. Integer division by zero is still \
+                 undefined: without optimization x86-64's divide instruction traps and the program \
+                 dies with SIGFPE, but an optimizer may compute something else instead (GCC -O2 \
+                 turns 1 / b into a comparison that never traps).",
             | Self::VariadicPromotion =>
                 "A function with `...` cannot say what types its extra arguments have, so C widens \
                  them to a few standard types first. printf can then read every small integer as \

@@ -2,7 +2,8 @@
 //! Standard floating constants compute in the host `long double` carrier,
 //! rounded to their type's precision; binary128 constants compute with the
 //! software IEEE binary128 arithmetic of `crate::binary128`, so a folded
-//! value is the one libgcc's routines give at run time.
+//! value is the one libgcc's routines give at run time. An invalid
+//! operation's NaN takes the sign of whoever computes it ([`NanSource`]).
 //! C99: §6.6p4-8, pp. 95-96; PDF pp. 107-108; arithmetic conversions
 //! §6.3.1.8, pp. 44-45; PDF pp. 56-57. Integer arithmetic remains in
 //! integer.rs.
@@ -34,15 +35,85 @@ use crate::{
     x87::X87,
 };
 
+/// Who computes the NaN an invalid operation gives (`0/0`, `∞ - ∞`,
+/// `0 × ∞`, `∞/∞`), which decides its sign. IEC 60559 leaves a NaN's sign
+/// unspecified (IEEE 754-2008 §6.3), and the two computers differ: the
+/// x86-64 hardware gives its default NaN, whose sign bit is set, while GCC's
+/// `real.c` and LLVM's `APFloat` give the positive quiet NaN. Only the
+/// initializer of an object with static storage duration is computed at
+/// translation time; any other floating constant expression is evaluated as
+/// if during execution, and there bcc keeps the hardware's NaN.
+/// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §F.7.4 paragraph 1,
+/// p. 449; PDF p. 461; §F.7.5 paragraph 1, p. 450; PDF p. 462.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NanSource {
+    /// The compiler's own arithmetic, as in a static initializer.
+    Compiler,
+    /// The hardware at run time.
+    Runtime,
+}
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Who computes an invalid operation analyzed now ([`NanSource`]): the
+    /// compiler outside a function and in the initializer of a static or
+    /// thread-local object, which GCC and Clang fold at translation time
+    /// under every floating-point option and pragma, and the hardware in a
+    /// function body. GCC and Clang fold some operations there too, but
+    /// which ones depends on trapping math, pragmas, inlining and the
+    /// operand order of their code, so bcc computes every one as the
+    /// hardware does, and leaves its operand order to decide which NaN
+    /// survives where two meet. The tcc and msvc identities keep the
+    /// hardware's NaN everywhere: TCC folds no operation whose result is not
+    /// finite (its `gen_opif`) and rejects one in a static initializer, and
+    /// there is no `cl` to check against.
+    /// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §F.7.4 paragraph 1,
+    /// p. 449; PDF p. 461.
+    pub(super) fn nan_source(&self) -> NanSource {
+        use crate::configuration::CompilerIdentity;
+        let folds = !matches!(
+            self.context.configuration.compiler_identity(),
+            CompilerIdentity::Tcc | CompilerIdentity::Msvc
+        );
+        if folds && (self.functions.current.is_none() || self.initializing_static()) {
+            NanSource::Compiler
+        } else {
+            NanSource::Runtime
+        }
+    }
+
+    /// `left op right` for operands of types `left_type` and `right_type`,
+    /// whose values are already converted to the real or complex floating
+    /// type `operand_type`, with the NaN of [`Self::nan_source`]: the value
+    /// [`Self::floating_binary`] gives, not yet rounded to the result type.
+    pub(super) fn floating_operation(
+        &self,
+        op: BinaryOperator,
+        [left, right]: [Floating; 2],
+        [left_type, right_type]: [TypeId; 2],
+        operand_type: TypeId,
+    ) -> Option<Floating> {
+        let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
+            unreachable!("floating scalar operation")
+        };
+        let precision = self
+            .floating_precision(scalar)
+            .expect("foldable real precision");
+        let complex =
+            |ty: TypeId| matches!(self.types.nodes[ty.index], TypeKind::Scalar(s) if s.complex());
+        let domains = u8::from(complex(left_type)) | (u8::from(complex(right_type)) << 1);
+        Self::floating_binary(op, left, right, precision, domains, self.nan_source())
+    }
+
     /// IEC 60559 arithmetic: a zero divisor gives an infinity or NaN
-    /// (Annex F.3). C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96.
+    /// (Annex F.3), and an invalid operation the NaN of `source`.
+    /// C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96.
     pub(super) fn floating_binary(
         op: BinaryOperator,
         left: Floating,
         right: Floating,
         precision: i32,
         domains: u8,
+        source: NanSource,
     ) -> Option<Floating> {
         use BinaryOperator as B;
         let operation = match op {
@@ -52,7 +123,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | B::Division => 3,
             | _ => return None,
         };
-        let arithmetic = |a: LongDouble, b, operation| a.arithmetic(b, operation, precision);
+        let folded = source != NanSource::Runtime;
+        let arithmetic = |a: LongDouble, b: LongDouble, operation| {
+            let result = a.arithmetic(b, operation, precision);
+            if folded {
+                compiler_nan(result, &[a, b])
+            } else {
+                result
+            }
+        };
         if domains == 1 || domains == 2 {
             let imaginary = if domains == 1 { left.imag } else { right.imag };
             let real_operand = if domains == 1 { right.real } else { left.real };
@@ -91,11 +170,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 operation,
                 precision,
             );
-            Some(Floating { real, imag })
+            if !folded {
+                return Some(Floating { real, imag });
+            }
+            let operands = [left.real, left.imag, right.real, right.imag];
+            Some(Floating {
+                real: compiler_nan(real, &operands),
+                imag: compiler_nan(imag, &operands),
+            })
         } else {
-            Some(Floating::real(
-                left.real.arithmetic(right.real, operation, precision),
-            ))
+            Some(Floating::real(arithmetic(left.real, right.real, operation)))
         }
     }
 
@@ -610,14 +694,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         left: Binary128Value,
         right: Binary128Value,
         domains: u8,
+        source: NanSource,
     ) -> Option<Binary128Value> {
         use BinaryOperator as B;
-        let operation = match op {
+        let exact = match op {
             | B::Addition => Binary128::add,
             | B::Subtraction => Binary128::sub,
             | B::Multiplication => Binary128::mul,
             | B::Division => Binary128::div,
             | _ => return None,
+        };
+        // The NaN of `source` for an invalid operation ([`NanSource`]).
+        let operation = |a: Binary128, b: Binary128| {
+            let result = exact(a, b);
+            if source != NanSource::Runtime && result.is_nan() && !a.is_nan() && !b.is_nan() {
+                result.with_sign(false)
+            } else {
+                result
+            }
         };
         let real = operation(left.real, right.real);
         Some(match (domains, op) {
@@ -825,5 +919,18 @@ impl Floating {
             real: value,
             imag: LongDouble::ZERO,
         }
+    }
+}
+
+/// `result` as the compiler's arithmetic gives it: a NaN that an invalid
+/// operation made from `operands`, none of them a NaN, is the positive quiet
+/// NaN GCC's `real.c` and LLVM's `APFloat` give, where the hardware sets
+/// its sign bit ([`NanSource`]). A NaN operand passes through with its sign,
+/// as in both.
+fn compiler_nan(result: LongDouble, operands: &[LongDouble]) -> LongDouble {
+    if result.is_nan() && !operands.iter().any(|operand| operand.is_nan()) {
+        result.with_sign(false)
+    } else {
+        result
     }
 }

@@ -150,6 +150,58 @@ fn integer_arithmetic_on_constants_is_computed() {
     assert_pass(Pass::Fold, &input, &expected);
 }
 
+/// An invalid floating operation on constants (`0/0`, `∞ - ∞`, `0 × ∞`)
+/// stays for run time, in every format: its NaN is the one the target
+/// computes, x86-64's default NaN with the sign bit set, which a fold with
+/// the compilers' positive NaN would change, and executing it raises the
+/// invalid exception. Semantic analysis already folded what C's constant
+/// expressions fold. C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459;
+/// §F.7.4 paragraph 1, p. 449; PDF p. 461.
+#[test]
+fn invalid_floating_operations_on_constants_stay_for_run_time() {
+    let input = "function @f() -> f64 external {
+block0:
+    v0 = fconst.f64 0x0000000000000000
+    v1 = fconst.f64 0x7FF0000000000000
+    v2 = fdiv.f64 v0, v0
+    v3 = fsub.f64 v1, v1
+    v4 = fmul.f64 v0, v1
+    v5 = fadd.f64 v2, v3
+    v6 = fadd.f64 v5, v4
+    return v6
+}
+
+function @g() -> f32 external {
+block0:
+    v0 = fconst.f32 0x00000000
+    v1 = fdiv.f32 v0, v0
+    return v1
+}
+
+function @h() -> f80 external {
+block0:
+    v0 = fconst.f80 0x00000000000000000000
+    v1 = fdiv.f80 v0, v0
+    return v1
+}
+";
+    assert_pass_leaves(Pass::Fold, input);
+    let options = OptimizerOptions {
+        verify_each: true,
+        ..OptimizerOptions::default()
+    };
+    let (actual, _) = optimize_text(input, &options);
+    for operation in [
+        "fdiv.f64 v0, v0",
+        "fsub.f64 v1, v1",
+        "fmul.f64 v0, v1",
+        "fdiv.f32 v0, v0",
+        "fdiv.f80 v0, v0",
+    ] {
+        assert!(actual.contains(operation), "{operation}:\n{actual}");
+    }
+}
+
 #[test]
 fn wrapping_arithmetic_wraps_and_flags_poison() {
     let input = nullary(
