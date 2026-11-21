@@ -75,7 +75,9 @@ pub(super) enum Topic {
     ArrayDecay,
     Promotion,
     Address,
+    Indirection,
     PointerArithmetic,
+    Subscript,
     Comparison,
     IntRange,
     Division,
@@ -85,6 +87,7 @@ pub(super) enum Topic {
     Increment,
     Condition,
     ByValue,
+    FrameEnd,
     StaticStorage,
     StaticLocal,
     Member,
@@ -164,10 +167,22 @@ impl Topic {
             | Self::Address =>
                 "`&` does not read the object, so it is fine to take the address of a variable \
                  that has no value yet. The pointer is only a way to reach the object later.",
+            | Self::Indirection =>
+                "A pointer holds an address, and `*` is how a program uses it: reading `*p` reads \
+                 the object p points to, and storing into `*p` changes that object, not a copy. \
+                 That is how a function given a pointer changes its caller's objects. `*` needs a \
+                 pointer to an object that still exists: through a null or dangling pointer it is \
+                 undefined behavior, and this machine stops there.",
             | Self::PointerArithmetic =>
                 "An int is 4 bytes on x86-64, so the address grows by 4 per step, but C counts in \
                  elements. Pointer arithmetic is defined only within one array and one past its \
                  end; going further is undefined, even if the pointer is never used.",
+            | Self::Subscript =>
+                "Subscripting is pointer arithmetic: `a[i]` is `*(a + i)` whether `a` is an array, \
+                 which decays to a pointer first, or a pointer, so a function given only a pointer \
+                 can index its caller's array. Nothing checks the index: one outside the array is \
+                 undefined behavior, and this machine stops on it, where a compiled program may \
+                 read or overwrite whatever lies there.",
             | Self::Comparison =>
                 "Comparisons yield the int 0 or 1, so their result can be stored, added or tested \
                  like any other int. An if or a loop then treats 0 as false and anything else as \
@@ -207,6 +222,11 @@ impl Topic {
                 "C passes every argument by value: the callee gets copies, so assigning to a \
                  parameter never changes the caller's variable. Passing a pointer copies an \
                  address, which still lets the callee reach the caller's objects.",
+            | Self::FrameEnd =>
+                "A function's parameters and locals last only while its call runs. return copies \
+                 the value out before the frame ends, so the caller gets it safely; returning the \
+                 address of a local instead would hand back a dangling pointer, since the object \
+                 it points to no longer exists.",
             | Self::StaticStorage =>
                 "C has two lifetimes for ordinary variables. Automatic objects (locals) are \
                  created each time their block runs and start indeterminate. Static objects \
@@ -1980,13 +2000,25 @@ impl Machine {
                 format!("`{name}` receives its initial value"),
                 format!(
                     "The value after `=` becomes the first value of `{name}`, the object this \
-                     declaration just created."
+                     declaration names."
                 ),
-                format!(
-                    "In a declaration, `{name}` is not an expression that is evaluated: the \
-                     initializer gives the new object its first value, converted to its type as \
-                     if by assignment. The machine next evaluates the initializer."
-                ),
+                if self.object_type(id).is_some_and(Type::is_array) {
+                    format!(
+                        "Here `{name}` is not an expression to evaluate but the name being \
+                         declared, so nothing is read from it: its object already exists, and \
+                         this step only marks it as the one the initializer fills. The \
+                         initializer after `=` comes next, and its values become the first values \
+                         of the array's elements."
+                    )
+                } else {
+                    format!(
+                        "Here `{name}` is not an expression to evaluate but the name being \
+                         declared, so nothing is read from it: its object already exists, and \
+                         this step only marks it as the one the initializer fills. The \
+                         initializer after `=` is evaluated next, converted to the object's type \
+                         as an assignment would convert it, and stored as its first value."
+                    )
+                },
                 &[clauses::SCALAR_INITIALIZER],
             ),
             | Designation::Address => (
@@ -2472,22 +2504,29 @@ impl Machine {
     ) -> Event {
         let location = self.location_of(target, offset, structure);
         let operand = snippet(source, range).trim_start_matches('*');
-        let summary =
-            format!("`*{operand}` follows the pointer to the object it points to, {location}.");
+        let summary = format!(
+            "`*{operand}` follows the pointer in `{operand}` to the object it points to: \
+             `*{operand}` now stands for {location} itself."
+        );
         let text = format!(
-            "`{operand}` holds {}, so `*{operand}` (indirection) is an lvalue designating \
-             {location}. Nothing is read or written yet: the operator around it decides which.",
+            "`{operand}` holds {}. The unary `*` operator (indirection) turns a pointer back into \
+             the object it points to, so `*{operand}` is an lvalue: another name for {location}, \
+             the same place in memory, not a copy of it. Nothing is read or written yet: the \
+             operator around it decides which.",
             self.value_text(&pointer),
         );
-        let mut event = explained(
-            Event::new(
-                EventKind::Dereference,
-                range,
-                format!("`*{operand}` designates {location}"),
+        let mut event = noted(
+            explained(
+                Event::new(
+                    EventKind::Dereference,
+                    range,
+                    format!("`*{operand}` designates {location}"),
+                ),
+                &summary,
+                &text,
+                &[clauses::INDIRECTION],
             ),
-            &summary,
-            &text,
-            &[clauses::INDIRECTION],
+            Topic::Indirection,
         );
         event.operands.push(Operand::Value(pointer));
         event.objects.push(target);
@@ -2501,32 +2540,57 @@ impl Machine {
         )
     }
 
+    /// The subscript `base[index]`, written `written` (the base's and the
+    /// index's source, when known), designates element `offset` of object
+    /// `target`.
+    ///
+    /// C99: §6.5.2.1 paragraph 2, p. 70; PDF p. 82.
     pub(super) fn subscript(
         &self,
         range: SourceRange,
-        base: Value,
-        index: Value,
+        (base, index): (Value, Value),
+        written: Option<[String; 2]>,
         target: usize,
         offset: i32,
     ) -> Event {
         let location = self.location(target, offset);
-        let steps = match index {
-            | Value::Integer(index) => movement(index, "element"),
-            | _ => String::from("by the index"),
+        let (steps, number) = match index {
+            | Value::Integer(index) => (movement(index, "element"), format!("{index}")),
+            | _ => (String::from("by the index"), self.short_value(&index)),
+        };
+        let pointer = self.value_text(&base);
+        let (summary, defined) = match &written {
+            | Some([array, at]) => (
+                format!(
+                    "`{array}[{at}]` means `*({array} + {at})`: it moves {steps} and designates \
+                     {location}."
+                ),
+                format!(
+                    "C defines `{array}[{at}]` as `*({array} + {at})`. Here `{array}` gives \
+                     {pointer}"
+                ),
+            ),
+            | None => (
+                format!(
+                    "Subscripting counts elements from the pointer: it moves {steps} and \
+                     designates {location}."
+                ),
+                format!("C defines a[i] as *(a + i). Here the pointer is {pointer}"),
+            ),
         };
         let text = format!(
-            "Subscripting: a[i] means *(a + i). Starting from {}, the machine moves {steps} and \
-             designates {location}.",
-            self.value_text(&base),
+            "Subscripting is pointer arithmetic followed by `*`: {defined} and the index is \
+             {number}, so the machine moves {steps} and designates {location}. Nothing is read \
+             yet: the operator around it decides whether that element is read or stored into."
         );
-        let mut event = explained(
-            Event::new(EventKind::Subscript, range, format!("Select {location}")),
-            &format!(
-                "Subscripting counts elements from the pointer: it moves {steps} and designates \
-                 {location}."
+        let mut event = noted(
+            explained(
+                Event::new(EventKind::Subscript, range, format!("Select {location}")),
+                &summary,
+                &text,
+                &[clauses::SUBSCRIPT, clauses::POINTER_ARITHMETIC],
             ),
-            &text,
-            &[clauses::SUBSCRIPT, clauses::POINTER_ARITHMETIC],
+            Topic::Subscript,
         );
         event
             .operands
@@ -4333,7 +4397,12 @@ impl Machine {
             );
         }
         let mut cited = if call.is_some() {
-            vec![clauses::RETURN, clauses::AUTOMATIC_LIFETIME]
+            // The note's dangling pointer: C99 §6.2.4p2.
+            vec![
+                clauses::RETURN,
+                clauses::AUTOMATIC_LIFETIME,
+                clauses::LIFETIME,
+            ]
         } else {
             vec![clauses::MAIN_RETURN, clauses::AUTOMATIC_LIFETIME]
         };
@@ -4344,11 +4413,13 @@ impl Machine {
             String::from(
                 "Reaching main's closing brace returns 0, so the program ends with exit status 0.",
             )
-        } else if call.is_some() {
-            format!(
-                "The return hands {shown} back to the caller of {function}, and the objects of \
-                 its frame cease to exist."
-            )
+        } else if let Some(call) = call {
+            let frame = if ended.is_empty() {
+                format!("the frame of {function} ends")
+            } else {
+                format!("the frame of {function} ends: its parameters and locals cease to exist")
+            };
+            format!("The return hands {shown} back as the value of `{call}`, and {frame}.")
         } else {
             format!(
                 "Returning {shown} from main ends the program with exit status {shown}{}.",
@@ -4365,9 +4436,14 @@ impl Machine {
             &text,
             &cited,
         );
-        if call.is_none() {
-            event = noted(event, Topic::ExitStatus);
-        }
+        event = noted(
+            event,
+            if call.is_some() {
+                Topic::FrameEnd
+            } else {
+                Topic::ExitStatus
+            },
+        );
         event.sequence_point = !fallthrough;
         event.operands.push(Operand::Value(value.clone()));
         event.objects = ended;

@@ -860,6 +860,13 @@ fn calls_returns_and_block_exits_explain_frames_and_lifetimes() {
         .expect("twice returns");
     let event = &states[returned].event;
     assert_eq!(event.title, "Return 6 from twice");
+    assert_eq!(
+        event.summary,
+        "The return hands 6 back as the value of `twice(3)`, and the frame of twice ends: its \
+         parameters and locals cease to exist."
+    );
+    // C99 §6.2.4p2: a pointer to an ended object becomes indeterminate.
+    assert!(event.note.contains("dangling pointer"), "{}", event.note);
     assert!(
         event.explanation.contains("`twice(3)` now has the value 6"),
         "{}",
@@ -922,6 +929,23 @@ fn pointer_events_describe_decay_one_past_and_indirection() {
     assert!(!arithmetic[1].explanation.contains("one-past-the-end"));
     let indirection = find(EventKind::Dereference);
     assert_eq!(indirection[0].title, "`*p` designates a[1]");
+    // C99 §6.5.3.2p4: `*p` is an lvalue designating the object, not its
+    // value; footnote 87 names a null or dangling pointer as invalid.
+    assert_eq!(
+        indirection[0].summary,
+        "`*p` follows the pointer in `p` to the object it points to: `*p` now stands for a[1] \
+         itself."
+    );
+    assert!(
+        indirection[0].explanation.contains("not a copy of it"),
+        "{}",
+        indirection[0].explanation
+    );
+    assert!(
+        indirection[0].note.contains("null or dangling pointer"),
+        "{}",
+        indirection[0].note
+    );
     let fault = run("int main(void) { int a[2] = {1, 2}; return a[2]; }");
     let event = &fault.state().event;
     assert_eq!(event.kind, EventKind::Fault);
@@ -991,6 +1015,18 @@ fn names_are_narrated_by_what_their_operator_does() {
     // A declarator is not an expression: no primary-expression citation.
     assert_eq!(initializer.clauses[0].id, "6.7.8p11");
     assert_eq!(initializer.note, "");
+    // The object began with its block (C99 §6.2.4p5); the declaration
+    // creates nothing, it names the object its initializer fills.
+    assert!(
+        initializer
+            .summary
+            .ends_with("the object this declaration names.")
+            && initializer
+                .explanation
+                .contains("its object already exists"),
+        "{}",
+        initializer.explanation
+    );
     let assigned = states
         .iter()
         .find(|state| state.event.title == "`x` is where the result goes")
@@ -1247,6 +1283,23 @@ fn subscripts_span_their_bracket_and_narration_agrees_in_number() {
     );
     let subscript = event(EventKind::Subscript)[0];
     assert_eq!(text(subscript), "a[1]");
+    // C99 §6.5.2.1p2: E1[E2] is (*((E1)+(E2))), quoted from the program.
+    assert_eq!(
+        subscript.summary,
+        "`a[1]` means `*(a + 1)`: it moves 1 element forward and designates a[1]."
+    );
+    assert!(
+        subscript
+            .explanation
+            .contains("Here `a` gives a pointer to a[0] and the index is 1"),
+        "{}",
+        subscript.explanation
+    );
+    assert!(
+        subscript.note.contains("Nothing checks the index"),
+        "{}",
+        subscript.note
+    );
     assert!(
         subscript.explanation.contains("moves 1 element forward"),
         "{}",
