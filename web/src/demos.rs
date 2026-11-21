@@ -51,7 +51,8 @@ impl Part {
     /// What the part's lessons have in common, in a few words.
     pub fn summary(self) -> &'static str {
         match self {
-            | Self::Objects => "Objects, output, names for values, and calls.",
+            | Self::Objects =>
+                "Objects, output, names for values, calls, and the order things happen in.",
             | Self::Types =>
                 "What each type can hold, and what happens to a value that does not fit.",
             | Self::Memory => "Pointers, structures, and the reads C does not define.",
@@ -62,7 +63,7 @@ impl Part {
 
 /// The lessons, in reading order: each part's lessons together, the parts in
 /// the order of [`Part::ALL`].
-pub static DEMOS: [Demo; 14] = [
+pub static DEMOS: [Demo; 16] = [
     Demo {
         key:     "tour",
         title:   "Objects, loops and calls",
@@ -116,6 +117,20 @@ pub static DEMOS: [Demo; 14] = [
         source:  include_str!("../demos/recursion.c"),
     },
     Demo {
+        key:     "logic",
+        title:   "Short-circuit evaluation: &&, || and ?:",
+        summary: "&& stops at its first false operand and ?: runs only the side it picks, so a \
+                  bounds test keeps a read inside the array and a null test keeps * off a null \
+                  pointer.",
+        topics:  &["&& and ||", "?:", "sequence points"],
+        part:    Part::Objects,
+        faults:  false,
+        stage:   None,
+        path:    &[],
+        name:    "logic.c",
+        source:  include_str!("../demos/logic.c"),
+    },
+    Demo {
         key:     "promotion",
         title:   "Integer promotions",
         summary: "char values are promoted to int before arithmetic, and storing 200 into a char \
@@ -140,6 +155,19 @@ pub static DEMOS: [Demo; 14] = [
         path:    &[],
         name:    "unsigned.c",
         source:  include_str!("../demos/unsigned.c"),
+    },
+    Demo {
+        key:     "bits",
+        title:   "Bits and masks",
+        summary: "An unsigned int holds a row of flags: | sets a bit, & with ~ clears one, ^ \
+                  flips one and & tests one, and hexadecimal constants spell each mask's bits.",
+        topics:  &["& | ^ ~", "hexadecimal", "flags"],
+        part:    Part::Types,
+        faults:  false,
+        stage:   None,
+        path:    &[],
+        name:    "bits.c",
+        source:  include_str!("../demos/bits.c"),
     },
     Demo {
         key:     "overflow",
