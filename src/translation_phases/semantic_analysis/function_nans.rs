@@ -32,8 +32,10 @@ use rustc_hash::FxBuildHasher;
 use super::{
     Analyzer,
     BindingKind,
-    Floating,
-    constants::NanSource,
+    constants::{
+        Binary128Value,
+        NanSource,
+    },
     facts::InitOperation,
 };
 use crate::{
@@ -116,12 +118,11 @@ impl<'s> FunctionNans<'_, 's> {
 }
 
 impl<'tu, 's> Analyzer<'_, 'tu, 's> {
-    /// Records that `e`, a floating operation just folded to `value`, takes
-    /// the NaN of [`Self::deferred_nan_source`] where its value is final.
-    pub(super) fn defer_function_nan(&mut self, e: &'tu Expression<'tu>, value: Option<Floating>) {
-        if value.is_some_and(|value| value.real.is_nan() || value.imag.is_nan())
-            && let Some(source) = self.deferred_nan_source()
-        {
+    /// Records that `e`, a floating operation just folded, takes the NaN of
+    /// [`Self::deferred_nan_source`] where its value is final, when its
+    /// value holds a NaN (`nan`).
+    pub(super) fn defer_function_nan(&mut self, e: &'tu Expression<'tu>, nan: bool) {
+        if nan && let Some(source) = self.deferred_nan_source() {
             _ = self
                 .functions
                 .nans
@@ -495,20 +496,36 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 continue;
             }
             let info = self.expression_info(e);
-            if info.floating().is_some() {
-                let literal = matches!(e.kind, ExpressionType::CompoundLiteral { .. })
-                    && info.folded_literal();
-                if !literal && !self.refoldable(e) {
+            if info.binary128().is_some() {
+                if !self.binary128_refoldable(e) {
                     return;
                 }
                 order.push(e);
-            } else if info.integer.is_some() || info.binary128().is_some() {
+            } else if info.floating().is_some() {
+                let literal = matches!(e.kind, ExpressionType::CompoundLiteral { .. })
+                    && info.folded_literal();
+                // A conversion from binary128 is not folded again.
+                let from_binary128 = matches!(e.kind, ExpressionType::Cast { operand_expression, .. }
+                    if self.expression_info(operand_expression).binary128().is_some());
+                if (!literal && !self.refoldable(e)) || from_binary128 {
+                    return;
+                }
+                order.push(e);
+            } else if info.integer.is_some() {
                 return;
             }
             _ = derived.insert(address, ());
         }
         for &e in &order {
-            if let ExpressionType::CompoundLiteral { initializer, .. } = e.kind {
+            let source = folds
+                .get(&std::ptr::from_ref(e).addr())
+                .copied()
+                .unwrap_or(NanSource::Runtime);
+            if self.expression_info(e).binary128().is_some() {
+                let value = self.binary128_refold(e, source);
+                let index = self.expression_indices[&std::ptr::from_ref(e).addr()];
+                self.expressions[index].set_binary128(value);
+            } else if let ExpressionType::CompoundLiteral { initializer, .. } = e.kind {
                 let info = self.expression_info(e);
                 let value = self.literal_store(initializer).and_then(|value| {
                     self.converted_floating(self.expression_info(value), info.ty)
@@ -516,10 +533,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let index = self.expression_indices[&std::ptr::from_ref(e).addr()];
                 self.expressions[index].set_floating(value);
             } else {
-                let source = folds
-                    .get(&std::ptr::from_ref(e).addr())
-                    .copied()
-                    .unwrap_or(NanSource::Runtime);
                 self.refold(e, source);
             }
         }
@@ -634,6 +647,82 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             }
         }
         true
+    }
+
+    /// Whether [`Self::binary128_refold`] folds `e`, a binary128 constant,
+    /// again.
+    fn binary128_refoldable(&self, e: &'tu Expression<'tu>) -> bool {
+        match e.kind {
+            | ExpressionType::Parenthesized { .. } | ExpressionType::Cast { .. } => true,
+            | ExpressionType::Unary { operator, .. } =>
+                matches!(operator, UnaryOperator::Plus | UnaryOperator::Minus),
+            | ExpressionType::Binary { operator, .. } => matches!(
+                operator,
+                BinaryOperator::Addition
+                    | BinaryOperator::Subtraction
+                    | BinaryOperator::Multiplication
+                    | BinaryOperator::Division
+            ),
+            | _ => false,
+        }
+    }
+
+    /// Folds `e`, a binary128 constant, again from its operands' values, as
+    /// its analysis folded it but with the NaN of `source` for an invalid
+    /// operation.
+    fn binary128_refold(
+        &self,
+        e: &'tu Expression<'tu>,
+        source: NanSource,
+    ) -> Option<Binary128Value> {
+        let info = self.expression_info(e);
+        let complex = self.complex_type(self.types.non_atomic(info.ty));
+        let real_or_complex = |value: Binary128Value| {
+            if complex {
+                value
+            } else {
+                Binary128Value::real(value.real)
+            }
+        };
+        match e.kind {
+            | ExpressionType::Parenthesized { expression } =>
+                self.expression_info(expression).binary128(),
+            | ExpressionType::Cast {
+                operand_expression, ..
+            } => self
+                .binary128_value(self.expression_info(operand_expression))
+                .map(real_or_complex),
+            | ExpressionType::Unary {
+                operator,
+                operand_expression,
+            } => self
+                .binary128_value(self.expression_info(operand_expression))
+                .map(|value| {
+                    if operator == UnaryOperator::Minus {
+                        value.negate()
+                    } else {
+                        value
+                    }
+                }),
+            | ExpressionType::Binary {
+                operator,
+                left_expression,
+                right_expression,
+            } => {
+                let left = self.expression_info(left_expression);
+                let right = self.expression_info(right_expression);
+                let domains = u8::from(self.complex_type(self.types.non_atomic(left.ty)))
+                    | (u8::from(self.complex_type(self.types.non_atomic(right.ty))) << 1);
+                Self::binary128_binary(
+                    operator,
+                    self.binary128_value(left)?,
+                    self.binary128_value(right)?,
+                    domains,
+                    source,
+                )
+            },
+            | _ => unreachable!("checked by binary128_refoldable"),
+        }
     }
 
     /// The one value a scalar compound literal's `initializer` stores.

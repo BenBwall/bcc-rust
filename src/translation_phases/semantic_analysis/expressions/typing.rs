@@ -786,13 +786,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.binary128_value(left).zip(self.binary128_value(right))
                 {
                     if self.binary128_type(info.ty) {
-                        info.set_binary128(Self::binary128_binary(
+                        let value = Self::binary128_binary(
                             op,
                             left_value,
                             right_value,
                             domains,
                             self.nan_source(),
-                        ));
+                        );
+                        self.defer_function_nan(
+                            e,
+                            value.is_some_and(|value| value.real.is_nan() || value.imag.is_nan()),
+                        );
+                        info.set_binary128(value);
                     } else {
                         info.integer = Self::binary128_comparison(op, left_value, right_value);
                     }
@@ -849,7 +854,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     value.and_then(|value| self.round_floating(value, info.ty))
                 };
-                self.defer_function_nan(e, value);
+                self.defer_function_nan(
+                    e,
+                    value.is_some_and(|value| value.real.is_nan() || value.imag.is_nan()),
+                );
                 info.set_floating(value);
                 info.integer = Self::floating_comparison(op, left_value, right_value);
             }

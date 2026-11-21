@@ -3044,7 +3044,7 @@ access, subscripts, comma operators and conditional arms pass a value on.
 Reads in a GNU nested function count for the enclosing function's objects.
 Everything else (an operand of an arithmetic operation or compound
 assignment computed at run time, a builtin's argument, an expression this
-does not follow, a `_Float16`, `__bf16` or binary128 value, an integer
+does not follow, a `_Float16` or `__bf16` value, an integer
 derived from the NaN such as `__builtin_signbit(0.0 / 0.0)`) keeps the
 hardware's NaN. A context that requires a constant (`case` labels, static
 assertions, enumeration constants, bit-field widths, alignments) folds with
@@ -3129,9 +3129,7 @@ meaning. The pragmas' diagnostics and their other effects are unchanged.
 
 A NaN operand passes through with its sign in every case, as GCC's
 `const_binop` and LLVM's `APFloat` pass it, and a negation flips it.
-Binary128 folding follows the same rule, except that a function's binary128
-NaN keeps the hardware's sign, which `refold` does not compute. Remaining
-differences:
+Binary128 folding follows the same rule. Remaining differences:
 
 - GCC rewrites `x * -1.0` to `-x` and `-a + b` to `b - a`, and folds
   `__builtin_signbit(0.0 / 0.0)` to 0 by its non-negativity reasoning even

@@ -535,9 +535,9 @@ fn gcc_optimize_options_keep_the_nan_at_run_time() {
     }
 }
 
-/// Binary128 folds positive in a static initializer, and has libgcc's
-/// negative default NaN in a function, where bcc does not fold it again
-/// ([`Analyzer::settle_function_nans`]).
+/// Binary128 folds the same way: positive in a static initializer, and
+/// libgcc's negative default NaN where GCC leaves the operation for run
+/// time.
 #[test]
 fn binary128_folds_the_nan_its_compiler_computes() {
     for (source, rules, negative) in [
@@ -545,6 +545,11 @@ fn binary128_folds_the_nan_its_compiler_computes() {
         ("__float128 q = 0.0Q / 0.0Q;", Rules::Clang, false),
         (
             "void f(void) { __float128 q = 0.0Q / 0.0Q; (void)q; }",
+            Rules::Clang,
+            false,
+        ),
+        (
+            "__float128 f(__float128 x) { __float128 q = 0.0Q / 0.0Q; return q + x; }",
             Rules::Clang,
             true,
         ),
