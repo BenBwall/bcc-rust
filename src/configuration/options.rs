@@ -1204,6 +1204,7 @@ impl CompilerConfiguration {
             compiler_extensions: false,
             permissive: None,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
+            cl_warnings: super::ClWarnings::DEFAULT,
             warnings_as_errors: false,
             identity: super::CompilerIdentity::Clang,
             diagnostic_format: super::DiagnosticFormat::Bcc,

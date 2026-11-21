@@ -479,6 +479,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty: TypeId,
     ) {
         use BinaryOperator as B;
+        if self.unused.cl {
+            if self.inhibited_evaluations == 0 && !self.tainted {
+                self.report_exceptional_operands_as_cl(e, op, left, right, ty);
+            }
+            return;
+        }
         if !self.context.configuration.folds_exceptional_constants()
             || self.inhibited_evaluations != 0
             || self.tainted
@@ -553,6 +559,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.with_highlights(count, |analyzer| {
             analyzer.exceptional_warning(group, text, operator_source(e));
         });
+    }
+
+    /// `cl`'s C4293, at level 1, for a constant shift count that is negative
+    /// or not below the width of the promoted left operand, whatever that
+    /// operand is, and its error C2124 for an integer constant divided by a
+    /// constant zero (a variable divided by zero draws nothing).
+    /// Microsoft Learn: "Compiler Warning (level 1) C4293", "Compiler Error
+    /// C2124".
+    /// C99: §6.5.7 paragraph 3, p. 84; PDF p. 96; §6.5.5 paragraph 5, p. 82;
+    /// PDF p. 94.
+    fn report_exceptional_operands_as_cl(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        op: BinaryOperator,
+        left: ExpressionInfo<'tu>,
+        right: ExpressionInfo<'tu>,
+        ty: TypeId,
+    ) {
+        use BinaryOperator as B;
+        let Some(count) = right.integer.filter(|_| right.ice) else {
+            return;
+        };
+        match op {
+            | B::Division | B::Modulo
+                if count.is_zero() && left.ice && self.integer_type(left.ty).is_some() =>
+            {
+                self.error(
+                    SemanticErrorKind::ClDivideByZero,
+                    operator_source(e),
+                    None,
+                    None,
+                );
+            },
+            | B::LeftShift | B::RightShift => {
+                let Some((bits, _)) = self.integer_type(ty) else {
+                    return;
+                };
+                let group = if self.negative_integer(count) {
+                    DiagnosticGroup::ShiftCountNegative
+                } else if self.count_reaches_width(count, bits) {
+                    DiagnosticGroup::ShiftCountOverflow
+                } else {
+                    return;
+                };
+                let text = if op == B::LeftShift {
+                    "'<<': shift count negative or too big, undefined behavior"
+                } else {
+                    "'>>': shift count negative or too big, undefined behavior"
+                };
+                let text = self.context.string_cache.intern(text);
+                self.exceptional_warning(group, text, operator_source(e));
+            },
+            | _ => {},
+        }
     }
 
     /// GCC's `-Wshift-negative-value` for `left << count`, `e`: the left

@@ -753,6 +753,50 @@ impl CompilerConfiguration {
         self.warnings_as_errors && !self.suppress_warnings
     }
 
+    pub(crate) const fn cl_warnings(self) -> super::ClWarnings {
+        self.cl_warnings
+    }
+
+    /// `cl`'s warning level and numbered warnings as its command line sets
+    /// them, whose groups the `cl` personality's own options already set.
+    pub(crate) const fn with_cl_warnings(mut self, warnings: super::ClWarnings) -> Self {
+        self.cl_warnings = warnings;
+        self
+    }
+
+    /// `#pragma warning` under the `cl` identity: `warnings` replace the
+    /// level and states, and the groups of `code` (every group, for `None`,
+    /// as `push, n` changes the level) follow them. A warning shown at the
+    /// level stays one `/WX` makes an error, as an explicit error is kept
+    /// from it. Microsoft Learn: "warning pragma".
+    pub(crate) fn with_cl_pragma(mut self, warnings: super::ClWarnings, code: Option<u16>) -> Self {
+        use super::ClWarningState as State;
+        self.cl_warnings = warnings;
+        for (warning, (group, state)) in super::CL_CODED_WARNINGS.iter().zip(warnings.classes()) {
+            if code.is_some_and(|code| code != warning.code) {
+                continue;
+            }
+            let Some(group) = DiagnosticGroup::parse(group) else {
+                continue;
+            };
+            let settings = &mut self.warning_options[group as usize];
+            match state {
+                | State::Disabled => settings.set(WarningSettings::ENABLED, Some(false)),
+                | State::Error => {
+                    settings.set(WarningSettings::ENABLED, Some(true));
+                    settings.set(WarningSettings::ERROR, Some(true));
+                    settings.0 &= !WarningSettings::REENABLED;
+                },
+                | State::Level(_) => {
+                    settings.set(WarningSettings::ENABLED, Some(true));
+                    let error = (!self.warnings_as_errors).then_some(false);
+                    settings.set(WarningSettings::ERROR, error);
+                },
+            }
+        }
+        self
+    }
+
     /// Whether `cl`'s `/WX` (`-Werror`), rather than the group's own
     /// severity or a `/we` (`-Werror=GROUP`), makes a diagnostic of `group`
     /// an error under the `cl` identity, which then writes it as a warning
@@ -766,7 +810,7 @@ impl CompilerConfiguration {
             && (group.default_severity() == ErrorSeverity::Warning
                 || super::CL_CODED_WARNINGS
                     .iter()
-                    .any(|&(_, _, name)| group.name() == Some(name)))
+                    .any(|warning| group.name() == Some(warning.group)))
     }
 
     /// Used for existing, ungrouped diagnostics from every translation phase.
@@ -1261,6 +1305,10 @@ diagnostic_groups! {
     /// A signed operand the usual arithmetic conversions make unsigned, under
     /// `-Wextra`.
     SignCompare => Some("sign-compare"), Ignored, false;
+    /// bcc's: `cl`'s C4389, an equality comparison that converts a signed
+    /// operand, which its level 4 shows apart from the relational C4018
+    /// [`Self::SignCompare`] reports. Only the `cl` identity reports it.
+    SignCompareEquality => Some("sign-compare-equality"), Ignored, false;
     /// A braced list that leaves later members zero, under `-Wextra`.
     MissingFieldInitializers => Some("missing-field-initializers"), Ignored, false;
     /// GCC's words for a function returning its own automatic object's
@@ -1818,6 +1866,11 @@ pub(crate) struct GroupMask([u64; GroupMask::WORDS]);
 impl GroupMask {
     pub(crate) const EMPTY: Self = Self([0; Self::WORDS]);
     const WORDS: usize = DiagnosticGroup::COUNT.div_ceil(64);
+
+    /// The set of `group` alone.
+    pub(crate) const fn of(group: DiagnosticGroup) -> Self {
+        Self::EMPTY.with(group as usize)
+    }
 
     /// The set with the group at index `group` added.
     const fn with(mut self, group: usize) -> Self {

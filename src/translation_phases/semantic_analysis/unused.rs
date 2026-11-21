@@ -93,23 +93,26 @@ use crate::{
 )]
 struct Usage {
     /// GCC's `TREE_USED` and Clang's `isReferenced`.
-    referenced: bool,
+    referenced:  bool,
     /// GCC's `DECL_READ_P`.
-    read:       bool,
+    read:        bool,
     /// Clang's `RefsMinusAssignments`, whose subtraction happens by not
     /// counting the reference that an assignment discards.
-    references: u32,
+    references:  u32,
     /// A function's references outside its own body, which GCC counts.
-    outside:    bool,
+    outside:     bool,
     /// `unused`, `maybe_unused`, `used`, `cleanup`, or for a function
     /// `constructor`, `destructor` or being a symbol attribute's target.
-    exempt:     bool,
+    exempt:      bool,
     /// A function declared `inline`.
-    inline:     bool,
+    inline:      bool,
     /// A function declared GCC's `weakref`, which is defined elsewhere.
-    weakref:    bool,
+    weakref:     bool,
     /// What the name's type says, as [`Analyzer::type_mark`] reads it.
-    marked:     bool,
+    marked:      bool,
+    /// A local object declared with an initializer, which `cl` counts as no
+    /// reference.
+    initialized: bool,
 }
 
 /// How a discarded assignment writes the identifier expression it names.
@@ -139,6 +142,10 @@ struct WriteSite {
 pub(super) struct UnusedState<'s> {
     /// Whether a warning that needs identifier uses recorded is on.
     pub(super) tracking: bool,
+    /// Whether the warnings follow `cl`'s rules: under its identity, only
+    /// those it numbers and bcc gives its code (C4100, C4101, C4189, C4018,
+    /// C4389, C4706) are on.
+    pub(super) cl: bool,
     /// Whether a warning about discarded values is on, as Clang's is by
     /// default.
     pub(super) values: bool,
@@ -197,6 +204,10 @@ pub(super) struct UnusedState<'s> {
     /// The binding that defines each internal function, where GCC's symbol
     /// table gains the function.
     function_symbols: ArenaMap<'s, StringCacheId, usize>,
+    /// The variables `cl` reports at the end of the function, from the
+    /// blocks left so far: each block's own before those of the blocks it
+    /// holds, in the order the blocks begin.
+    cl_pending: ArenaVec<'s, (usize, Identifier)>,
 }
 
 /// Where a function's state begins in what [`UnusedState`] keeps for GCC.
@@ -222,15 +233,20 @@ impl<'s> UnusedState<'s> {
         pragmas: bool,
         prior_error: Option<ReadingPosition>,
     ) -> Self {
+        let enabled = |groups: &[G]| {
+            pragmas
+                || groups
+                    .iter()
+                    .any(|&group| configuration.diagnostic_severity(group).is_some())
+        };
+        let cl = configuration.compiler_identity() == CompilerIdentity::Msvc;
         let on = |groups: &[G]| {
             !matches!(
                 configuration.compiler_identity(),
                 CompilerIdentity::Tcc | CompilerIdentity::Msvc
-            ) && (pragmas
-                || groups
-                    .iter()
-                    .any(|&group| configuration.diagnostic_severity(group).is_some()))
+            ) && enabled(groups)
         };
+        let cl_on = |groups: &[G]| cl && enabled(groups);
         let tracking = on(&[
             G::UnusedVariable,
             G::UnusedConstVariable,
@@ -242,10 +258,15 @@ impl<'s> UnusedState<'s> {
             G::UnusedFunction,
             G::UnusedLocalTypedefs,
             G::UnusedLocalTypedef,
+        ]) || cl_on(&[
+            G::UnusedVariable,
+            G::UnusedParameter,
+            G::UnusedButSetVariable,
         ]);
         let values = on(&[G::UnusedValue, G::UnusedComparison]);
         Self {
             tracking,
+            cl,
             values,
             type_limits: on(&[
                 G::TypeLimits,
@@ -267,7 +288,7 @@ impl<'s> UnusedState<'s> {
                 G::LogicalNotParentheses,
                 G::DanglingElse,
                 G::SwitchBool,
-            ]),
+            ]) || cl_on(&[G::Parentheses]),
             switches: on(&[
                 G::Switch,
                 G::SwitchEnum,
@@ -279,7 +300,7 @@ impl<'s> UnusedState<'s> {
             return_flow: on(&[G::ReturnType, G::InvalidNoreturn, G::GccNoreturn])
                 || (configuration.compiler_identity() == CompilerIdentity::Tcc
                     && configuration.diagnostic_severity(G::ReturnType).is_some()),
-            sign_compare: on(&[G::SignCompare]),
+            sign_compare: on(&[G::SignCompare]) || cl_on(&[G::SignCompare, G::SignCompareEquality]),
             bool_operation: on(&[G::BoolOperation]),
             missing_fields: on(&[G::MissingFieldInitializers]),
             last_tag: None,
@@ -298,6 +319,7 @@ impl<'s> UnusedState<'s> {
             local_typedefs: ArenaVec::new_in(scratch),
             late_return_flow: ArenaVec::new_in(scratch),
             function_symbols: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            cl_pending: ArenaVec::new_in(scratch),
         }
     }
 
@@ -343,15 +365,21 @@ pub(crate) enum UnusedRule {
     GccLocalTypedef,
     /// Clang's.
     ClangLocalTypedef,
+    /// `cl`'s C4100: a parameter nothing names.
+    ClParameter,
+    /// `cl`'s C4101: a local variable nothing names.
+    ClVariable,
+    /// `cl`'s C4189: a local variable only its initializer names.
+    ClInitialized,
 }
 
 impl UnusedRule {
     pub(super) const fn group(self) -> G {
         match self {
-            | Self::Variable | Self::GccFileObject => G::UnusedVariable,
+            | Self::Variable | Self::GccFileObject | Self::ClVariable => G::UnusedVariable,
             | Self::GccFileConstant | Self::ClangFileConstant => G::UnusedConstVariable,
-            | Self::Parameter => G::UnusedParameter,
-            | Self::ButSetVariable => G::UnusedButSetVariable,
+            | Self::Parameter | Self::ClParameter => G::UnusedParameter,
+            | Self::ButSetVariable | Self::ClInitialized => G::UnusedButSetVariable,
             | Self::ButSetParameter => G::UnusedButSetParameter,
             | Self::ButSetGlobal => G::UnusedButSetGlobal,
             | Self::GccLabel | Self::ClangLabel => G::UnusedLabel,
@@ -398,6 +426,10 @@ impl UnusedRule {
             ),
             | Self::GccLocalTypedef => ("typedef", "locally defined but not used"),
             | Self::ClangLocalTypedef => ("unused typedef", ""),
+            // `cl`'s own words are `Analyzer::msvc_message`'s.
+            | Self::ClParameter => ("", "unreferenced parameter"),
+            | Self::ClVariable => ("", "unreferenced local variable"),
+            | Self::ClInitialized => ("", "local variable is initialized but not referenced"),
         }
     }
 
@@ -836,6 +868,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.scope == 0 || self.scopes[self.scope].kind == ScopeKind::Prototype {
             return;
         }
+        if self.unused.cl {
+            self.leave_scope_as_cl();
+            return;
+        }
         if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
             let order = self.scope_order(self.scope);
             self.with_report_order(order, Self::pop_scope_as_gcc);
@@ -852,6 +888,112 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 self.report_unused_variable(entry.binding, entry.name);
             }
+        }
+    }
+
+    /// `cl`'s report of a function's unreferenced parameters and local
+    /// variables, which waits for the end of the function, and stops after
+    /// the unit's first error: its parameters
+    /// and outermost block's variables, then each inner block's, in the
+    /// order the blocks begin. `cl` orders the names of one block by its
+    /// symbol table, which bcc does not model; bcc keeps their order.
+    /// Microsoft Learn: "Compiler Warning (level 4) C4100", "Compiler
+    /// Warning (level 3) C4101", "Compiler Warning (level 4) C4189".
+    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
+    fn leave_scope_as_cl(&mut self) {
+        let scope = self.scope;
+        let mut own = ArenaVec::new_in(self.scratch);
+        let mut next = self.scope_entries[scope].head.get();
+        while let Some(link) = next {
+            next = link.next;
+            let entry = self.entries[link.value];
+            if entry.namespace == Namespace::Ordinary
+                && matches!(
+                    self.bindings[entry.binding].kind,
+                    BindingKind::Object | BindingKind::Parameter
+                )
+            {
+                own.push((entry.binding, entry.name));
+            }
+        }
+        own.reverse();
+        // The blocks this one holds were left before it, so their variables
+        // are the last pending.
+        let pending = &self.unused.cl_pending;
+        let mut first = pending.len();
+        while first > 0 && self.scope_holds(scope, self.bindings[pending[first - 1].0].scope) {
+            first -= 1;
+        }
+        if self.scopes[scope].kind != ScopeKind::Function {
+            let count = own.len();
+            self.unused.cl_pending.extend(own);
+            self.unused.cl_pending[first..].rotate_right(count);
+            return;
+        }
+        let pending =
+            std::mem::replace(&mut self.unused.cl_pending, ArenaVec::new_in(self.scratch));
+        // `cl` reports none of these once the unit has had an error, a
+        // warning `/WX` promotes aside.
+        if self.hard_errors != 0 || self.prior_error_read() {
+            return;
+        }
+        let order = match self.functions.current {
+            | Some(function) => ReportOrder::After(self.context.file_location(
+                Context::last_source_vector(function.syntax.body.source_vectors),
+            )),
+            | None => ReportOrder::AtSite,
+        };
+        self.with_report_order(order, |analyzer| {
+            for &(binding, name) in own.iter().chain(&pending) {
+                analyzer.report_unused_as_cl(binding, name);
+            }
+        });
+    }
+
+    /// Whether `inner` is `scope` or a block within it.
+    fn scope_holds(&self, scope: usize, mut inner: usize) -> bool {
+        loop {
+            if inner == scope {
+                return true;
+            }
+            match self.scopes[inner].parent {
+                | Some(parent) => inner = parent,
+                | None => return false,
+            }
+        }
+    }
+
+    /// Reports a parameter or local variable nothing names, if `cl` does:
+    /// not one with static storage or linkage, and as C4189 one only its
+    /// initializer names, under the settings at its declaration.
+    fn report_unused_as_cl(&mut self, binding: usize, name: Identifier) {
+        let data = self.bindings[binding];
+        let usage = *self.unused.variable(binding);
+        if usage.referenced
+            || usage.exempt
+            || data.linkage != Linkage::None
+            || data.duration != super::Duration::Automatic
+            || self.types.unanalyzed(data.ty)
+            || matches!(
+                self.context.string_cache.at(name.name),
+                "__func__" | "__FUNCTION__" | "__PRETTY_FUNCTION__"
+            )
+        {
+            return;
+        }
+        let rule = match data.kind {
+            | BindingKind::Parameter => UnusedRule::ClParameter,
+            | _ if usage.initialized => UnusedRule::ClInitialized,
+            | _ => UnusedRule::ClVariable,
+        };
+        self.unused_rule(rule, name.source_vectors, Some(name.name));
+    }
+
+    /// Records that the local object `binding` is declared with an
+    /// initializer.
+    pub(super) fn note_initialized(&mut self, binding: usize) {
+        if self.unused.cl {
+            self.unused.variable(binding).initialized = true;
         }
     }
 
@@ -1251,6 +1393,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// has been reported (`ActOnEndOfTranslationUnitFragment`).
     pub(super) fn reports_unused_at_unit_end(&self) -> bool {
         self.unused.tracking
+            && !self.unused.cl
             && if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
                 !self.context.configuration.syntax_only()
             } else {
@@ -1421,7 +1564,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         declared: Option<Identifier>,
         scope: usize,
     ) {
-        if !self.unused.tracking {
+        if !self.unused.tracking || self.unused.cl {
             return;
         }
         if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {

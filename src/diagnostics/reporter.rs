@@ -282,8 +282,10 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             if stopped {
                 continue;
             }
+            // `cl` announces only a unit's first such warning, and none after
+            // an error it reported (this one is counted already).
             if diagnostic.treated_as_error != TreatedAsError::No {
-                diagnostic.treated_as_error = if self.treated_as_error {
+                diagnostic.treated_as_error = if self.treated_as_error || self.errors > 1 {
                     TreatedAsError::Later
                 } else {
                     TreatedAsError::First

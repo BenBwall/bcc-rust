@@ -587,7 +587,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 /// A binary operator as written.
-const fn binary_spelling(operator: B) -> &'static str {
+pub(super) const fn binary_spelling(operator: B) -> &'static str {
     match operator {
         | B::Multiplication => "*",
         | B::Division => "/",

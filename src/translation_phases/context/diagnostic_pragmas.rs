@@ -27,6 +27,8 @@ use super::Context;
 use crate::{
     configuration::{
         CL_CODED_WARNINGS,
+        ClWarningState,
+        ClWarnings,
         CompilerConfiguration,
         DiagnosticGroup,
         ExtensionGroup,
@@ -460,36 +462,55 @@ impl<'tu> Context<'tu> {
     }
 
     /// One number of `#pragma warning(<specifier>: <number>)` under the `cl`
-    /// identity, for the warnings bcc gives `cl`'s code. Microsoft Learn:
-    /// "warning pragma".
+    /// identity, for the warnings bcc gives `cl`'s code: `disable` and
+    /// `error` set it so, and `default` or a level shows it from that level
+    /// again, undoing a `/wd` or `/we`. Microsoft Learn: "warning pragma".
     #[cold]
     #[inline(never)]
     pub(crate) fn pragma_warning_number(&mut self, number: u32, specifier: WarningSpecifier) {
-        let group = CL_CODED_WARNINGS
-            .iter()
-            .find(|&&(code, ..)| u32::from(code) == number)
-            .and_then(|&(_, _, name)| DiagnosticGroup::parse(name));
-        let Some(group) = group else {
+        let Some((code, default)) = u16::try_from(number)
+            .ok()
+            .and_then(|code| Some((code, ClWarnings::default_level(code)?)))
+        else {
             return;
         };
-        let class = match specifier {
-            | WarningSpecifier::Disable => PragmaClass::Ignored,
-            | WarningSpecifier::Error => PragmaClass::Error,
-            | WarningSpecifier::Enable => PragmaClass::Warning,
-            | WarningSpecifier::Default => {
-                if self.configuration.diagnostic_severity(group).is_some() {
-                    PragmaClass::Warning
-                } else {
-                    PragmaClass::Ignored
-                }
-            },
+        let setting = match specifier {
+            | WarningSpecifier::Disable => ClWarningState::Disabled,
+            | WarningSpecifier::Error => ClWarningState::Error,
+            | WarningSpecifier::Default | WarningSpecifier::Once => ClWarningState::Level(default),
+            | WarningSpecifier::Level(level) => ClWarningState::Level(level),
             | WarningSpecifier::Suppress => return,
         };
         let mut state = self.current_pragma_state();
-        state.configuration = state.configuration.with_pragma_group(group, class);
-        if group.holds_extensions() {
-            state.extensions = state.extensions.with(PragmaExtensionReach::All);
+        let warnings = state.configuration.cl_warnings().with_state(code, setting);
+        state.configuration = state.configuration.with_cl_pragma(warnings, Some(code));
+        // An error the pragma made is `cl`'s `error CNNNN`, not a warning
+        // `/WX` makes an error after C2220.
+        for warning in CL_CODED_WARNINGS
+            .iter()
+            .filter(|warning| warning.code == code)
+        {
+            let Some(group) = DiagnosticGroup::parse(warning.group) else {
+                continue;
+            };
+            let mask = crate::configuration::GroupMask::of(group);
+            state.mapped = if setting == ClWarningState::Error {
+                state.mapped.union(mask)
+            } else {
+                state.mapped.difference(mask)
+            };
         }
+        self.record_pragma_state(&state);
+    }
+
+    /// `#pragma warning(push, n)` under the `cl` identity, after its push:
+    /// level `n` until the matching `pop`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn pragma_warning_level(&mut self, level: u8) {
+        let mut state = self.current_pragma_state();
+        let warnings = state.configuration.cl_warnings().with_level(level);
+        state.configuration = state.configuration.with_cl_pragma(warnings, None);
         self.record_pragma_state(&state);
     }
 

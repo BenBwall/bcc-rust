@@ -238,6 +238,11 @@ pub(crate) enum SemanticErrorKind {
     /// The words are the diagnostic's name.
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
     SignCompare,
+    /// `cl`'s C4389: the same of an equality comparison, which `cl` numbers
+    /// apart from a relational one.
+    SignCompareEquality,
+    /// `cl`'s error C2124: an integer constant divided by a constant zero.
+    ClDivideByZero,
     /// The words are the diagnostic's name.
     /// C99: §6.2.4p2, p. 32; PDF p. 44; §6.3.1.3p3, p. 43; PDF p. 55.
     ValueWarning(crate::configuration::DiagnosticGroup),
@@ -1332,7 +1337,9 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => rule.label(),
             | Self::BoolOperation(_) => "a truth value's bits",
             | Self::Main(_) => "nonportable declaration of main",
-            | Self::SignCompare => "signed operand converts to unsigned",
+            | Self::SignCompare | Self::SignCompareEquality =>
+                "signed operand converts to unsigned",
+            | Self::ClDivideByZero => "the divisor is zero",
             | Self::ValueWarning(_) => "this value is not what it seems",
             | Self::Uninitialized(_) => "this may read an indeterminate value",
             | Self::TypeLimits(_) => "the types decide this comparison",
@@ -1579,6 +1586,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::SignCompare
+                    | crate::configuration::DiagnosticGroup::SignCompareEquality
                     | crate::configuration::DiagnosticGroup::ReturnLocalAddr
                     | crate::configuration::DiagnosticGroup::ReturnStackAddress
                     | crate::configuration::DiagnosticGroup::TypeLimits
@@ -2137,7 +2145,11 @@ impl SemanticErrorKind {
                 "C99 §6.9.1p12: the value of a call is undefined if it is used after control \
                  reaches the closing brace",
             ),
-            | Self::SignCompare => (
+            | Self::ClDivideByZero => (
+                "integer constant divided by zero",
+                "C99 §6.5.5p5: the result of dividing by zero is undefined",
+            ),
+            | Self::SignCompare | Self::SignCompareEquality => (
                 "comparison of integers of different signs",
                 "C99 §6.3.1.8p1: the usual arithmetic conversions make the signed operand \
                  unsigned, so a negative value compares as a large one",
@@ -3093,6 +3105,7 @@ impl SemanticErrorKind {
             | Self::Unused(rule) => Some(rule.group()),
             | Self::BoolOperation(_) => Some(G::BoolOperation),
             | Self::SignCompare => Some(G::SignCompare),
+            | Self::SignCompareEquality => Some(G::SignCompareEquality),
             | Self::KnrPromotedParameter => Some(G::KnrPromotedParameter),
             | Self::DeprecatedNonPrototype => Some(G::DeprecatedNonPrototype),
             | Self::CallArgumentCount => Some(G::CallArgumentCount),
@@ -3308,7 +3321,11 @@ impl SemanticError {
     /// Warning (level 3) C4013", "Compiler Warning (level 1) C4033",
     /// "Compiler Warning (level 1) C4098", "Compiler Warning (level 1) C4047",
     /// "Compiler Warning (level 1 and level 3) C4133", "Compiler Warning
-    /// (level 1) C4311", "Compiler Warning (level 1) C4312".
+    /// (level 1) C4311", "Compiler Warning (level 1) C4312", "Compiler
+    /// Warning (level 4) C4100", "Compiler Warning (level 3) C4101",
+    /// "Compiler Warning (level 4) C4189", "Compiler Warning (level 3)
+    /// C4018", "Compiler Warning (level 4) C4389", "Compiler Warning (level
+    /// 4) C4706", "Compiler Warning (level 1) C4293", "Compiler Error C2124".
     fn msvc_message<'d>(
         &self,
         context: &Context<'_>,
@@ -3318,8 +3335,36 @@ impl SemanticError {
         if !context.configuration.msvc_wording() {
             return None;
         }
+        match self.kind {
+            | SemanticErrorKind::ExceptionalConstant(
+                G::ShiftCountOverflow | G::ShiftCountNegative,
+                text,
+            ) => return Some(("C4293", arena.alloc_str(context.string_cache.at(text)))),
+            | SemanticErrorKind::ClDivideByZero => return Some(("C2124", "divide or mod by zero")),
+            | _ => {},
+        }
         let name = context.string_cache.at(self.name?);
         Some(match self.kind {
+            | SemanticErrorKind::Unused(UnusedRule::ClParameter) => (
+                "C4100",
+                format_in!(arena, "'{name}': unreferenced parameter"),
+            ),
+            | SemanticErrorKind::Unused(UnusedRule::ClVariable) => (
+                "C4101",
+                format_in!(arena, "'{name}': unreferenced local variable"),
+            ),
+            | SemanticErrorKind::Unused(UnusedRule::ClInitialized) => (
+                "C4189",
+                format_in!(
+                    arena,
+                    "'{name}': local variable is initialized but not referenced"
+                ),
+            ),
+            // Worded by `Analyzer::check_sign_compare_as_cl` and
+            // `Analyzer::check_condition_parentheses`.
+            | SemanticErrorKind::SignCompare => ("C4018", arena.alloc_str(name)),
+            | SemanticErrorKind::SignCompareEquality => ("C4389", arena.alloc_str(name)),
+            | SemanticErrorKind::Parentheses(G::Parentheses) => ("C4706", arena.alloc_str(name)),
             | SemanticErrorKind::UndeclaredIdentifier
             | SemanticErrorKind::UndeclaredOutsideFunction => (
                 "C2065",
@@ -3566,6 +3611,7 @@ impl ToDiagnostic for SemanticError {
         } else if matches!(
             self.kind,
             SemanticErrorKind::SignCompare
+                | SemanticErrorKind::SignCompareEquality
                 | SemanticErrorKind::MissingFieldInitializer
                 | SemanticErrorKind::ValueWarning(_)
                 | SemanticErrorKind::Uninitialized(_)
@@ -3692,6 +3738,13 @@ impl ToDiagnostic for SemanticError {
             | None => explanation,
         };
         let mut diagnostic = explanation.at(self.severity(), source);
+        if let Some(("C4706", _)) = msvc {
+            diagnostic = diagnostic.msvc_note(
+                None,
+                "if an assignment is intended you can enclose it in parentheses, '(e1 = e2)', to \
+                 silence this warning",
+            );
+        }
         // The reporter marks the first of these in the unit.
         if self.severity() == ErrorSeverity::Error
             && self

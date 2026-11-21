@@ -129,6 +129,7 @@ impl OwnedDiagnostic {
             help,
             fix_its: ArenaVec::new_in(arena),
             reading: None,
+            msvc_notes: ArenaVec::new_in(arena),
         }
     }
 }

@@ -209,6 +209,14 @@ struct Cli {
     /// keep there.
     #[arg(long, hide = true)]
     compiler_extensions: bool,
+    /// `cl`'s warning level, which its `#pragma warning(push, n)` and
+    /// `default` read; the `cl` personality passes it.
+    #[arg(long, hide = true, value_name = "LEVEL")]
+    cl_warning_level: Option<u8>,
+    /// `cl`'s `/wd`, `/we` or `/wL` of one numbered warning: `CODE:d`,
+    /// `CODE:e` or `CODE:L`.
+    #[arg(long, hide = true, value_name = "CODE:SETTING")]
+    cl_warning: Vec<String>,
     /// GCC startup preprocessing options, normalized with their operation.
     #[arg(long, hide = true, allow_hyphen_values = true, value_parser = preprocessing_option)]
     preprocessing_option: Vec<String>,

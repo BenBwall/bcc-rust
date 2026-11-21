@@ -79,6 +79,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         left: ExpressionInfo<'tu>,
         right: ExpressionInfo<'tu>,
     ) {
+        if self.unused.cl {
+            self.check_sign_compare_as_cl(e, operator, left, right);
+            return;
+        }
         let Some(left_signed) = self.converts_sign(left, right) else {
             return;
         };
@@ -137,6 +141,51 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             });
         }
+    }
+
+    /// `cl`'s C4018 (a relational comparison, at level 3) and C4389 (an
+    /// equality comparison, at level 4): the operands' promoted types are of
+    /// one width and differ in sign, and neither operand is a constant,
+    /// whatever its value (`-1 < u` draws neither). `cl` keeps an unsigned
+    /// bit-field unsigned where C promotes it to `int`, and warns about it
+    /// where bcc does not. Microsoft Learn: "Compiler Warning (level 3)
+    /// C4018", "Compiler Warning (level 4) C4389".
+    /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57.
+    fn check_sign_compare_as_cl(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        operator: B,
+        left: ExpressionInfo<'tu>,
+        right: ExpressionInfo<'tu>,
+    ) {
+        if left.ice || right.ice {
+            return;
+        }
+        let (left_type, right_type) = (self.promoted(left), self.promoted(right));
+        let (Some((left_bits, left_signed)), Some((right_bits, right_signed))) =
+            (self.integer_type(left_type), self.integer_type(right_type))
+        else {
+            return;
+        };
+        if left_signed == right_signed || left_bits != right_bits {
+            return;
+        }
+        let (group, kind) = if matches!(operator, B::Equal | B::NotEqual) {
+            (
+                DiagnosticGroup::SignCompareEquality,
+                SemanticErrorKind::SignCompareEquality,
+            )
+        } else {
+            (DiagnosticGroup::SignCompare, SemanticErrorKind::SignCompare)
+        };
+        let text = format_in!(
+            self.scratch,
+            "'{}': signed/unsigned mismatch",
+            super::always_nonnull::binary_spelling(operator)
+        );
+        let name = self.context.string_cache.intern(text);
+        let site = e.operator_source_vectors.unwrap_or(e.source_vectors);
+        self.spelled_group_diagnostic(group, kind, site, Some(name), site);
     }
 
     /// GCC's `warn_for_sign_compare`, and `shorten_compare`, which settles a

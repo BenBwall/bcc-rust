@@ -1091,6 +1091,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .insert(self.bindings.len() - 1, request);
         }
         self.record_declaration(self.bindings.len() - 1, spec, declarator, initialized);
+        if initialized && !file {
+            self.note_initialized(self.bindings.len() - 1);
+        }
         if spec.storage_class == Some(StorageClass::Register) {
             _ = self.register_bindings.insert(self.bindings.len() - 1, true);
             if kind == BindingKind::Object && !file {

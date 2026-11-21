@@ -298,11 +298,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         .filter(|level| level.kind == PreprocessorTokenType::Number)
                         .map(|level| self.pragma_spelling(level));
                     token = if number.is_some() { rest.next() } else { level };
-                    if !matches!(number, Some("0" | "1" | "2" | "3" | "4")) {
+                    let Some(level @ 0..=4) = number.and_then(|number| number.parse().ok()) else {
                         return Err((
                             "#pragma warning(push, level) requires a level between 0 and 4",
                             token,
                         ));
+                    };
+                    if cl {
+                        self.context.pragma_warning_level(level);
                     }
                 }
             },
@@ -398,7 +401,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
 
 /// Whether `name` is bcc's own warning option, which neither compiler lists.
 fn is_bcc_warning(name: &str) -> bool {
-    name == "constant-promotion"
+    matches!(name, "constant-promotion" | "sign-compare-equality")
 }
 
 /// What a specifier of `#pragma warning` does to a warning it lists.
@@ -408,11 +411,13 @@ pub(crate) enum WarningSpecifier {
     Disable,
     /// `error`.
     Error,
-    /// `default`: back to the command line's setting.
+    /// `default`: shown from the warning's own level again.
     Default,
-    /// A level, or `once`: reports it, as a warning. bcc does not model
-    /// warning levels or `once`'s single report.
-    Enable,
+    /// A level: shown from it.
+    Level(u8),
+    /// `once`: shown from the warning's own level; bcc does not model the
+    /// single report.
+    Once,
     /// `suppress`, which `cl` applies to the next line only. bcc does not
     /// model that, so it changes nothing.
     Suppress,
@@ -423,7 +428,11 @@ fn name_or_level(name: Option<&str>) -> Option<WarningSpecifier> {
         | "disable" => Some(WarningSpecifier::Disable),
         | "error" => Some(WarningSpecifier::Error),
         | "default" => Some(WarningSpecifier::Default),
-        | "once" | "1" | "2" | "3" | "4" => Some(WarningSpecifier::Enable),
+        | "once" => Some(WarningSpecifier::Once),
+        | "1" => Some(WarningSpecifier::Level(1)),
+        | "2" => Some(WarningSpecifier::Level(2)),
+        | "3" => Some(WarningSpecifier::Level(3)),
+        | "4" => Some(WarningSpecifier::Level(4)),
         | "suppress" => Some(WarningSpecifier::Suppress),
         | _ => None,
     }

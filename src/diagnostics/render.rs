@@ -191,6 +191,23 @@ impl Renderer {
             self.paint(severity, severity_style),
             self.paint(message, Style::new().bold()),
         );
+        if let DiagnosticFormat::Msvc { column, .. } = format {
+            for note in &diagnostic.msvc_notes {
+                let vector = note
+                    .source
+                    .and_then(|source| context.get_source_vectors(source).first())
+                    .or(location);
+                if let Some(vector) = vector {
+                    let file = Self::file_name(context, vector, None);
+                    let _ = if column {
+                        write!(out, "{file}({},{}): ", vector.line, vector.column)
+                    } else {
+                        write!(out, "{file}({}): ", vector.line)
+                    };
+                }
+                let _ = writeln!(out, "note: {}", note.text);
+            }
+        }
         // TCC writes the message line alone.
         if format == DiagnosticFormat::Tcc {
             return out.into_str();

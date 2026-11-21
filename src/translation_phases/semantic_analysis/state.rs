@@ -37,10 +37,13 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         let target = context.configuration.layout();
         let pack_alignments = super::packing::states(context, scratch);
         let pragmas = context.has_diagnostic_pragmas();
-        let prior_error = (configuration.compiler_identity()
-            == crate::configuration::CompilerIdentity::Gcc)
-            .then(|| context.first_default_error())
-            .flatten();
+        let prior_error = matches!(
+            configuration.compiler_identity(),
+            crate::configuration::CompilerIdentity::Gcc
+                | crate::configuration::CompilerIdentity::Msvc
+        )
+        .then(|| context.first_default_error())
+        .flatten();
         let mut analyzer = Self {
             references: ArenaVec::new_in(tu),
             #[cfg(test)]
