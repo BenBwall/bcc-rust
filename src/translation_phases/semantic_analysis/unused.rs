@@ -953,6 +953,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )),
             | None => ReportOrder::AtSite,
         };
+        // `cl` places a parameter of an identifier list there, rather than at
+        // its declaration.
+        let identifiers =
+            self.functions.current.and_then(
+                |function| match super::functions::function_derivation(
+                    function.syntax.declarator,
+                    self.scratch,
+                ) {
+                    | Some(DirectDeclarator::KAndRStyleFunction { parameters }) =>
+                        Some(parameters.as_slice()),
+                    | _ => None,
+                },
+            );
+        for (binding, name) in &mut own {
+            if self.bindings[*binding].kind == BindingKind::Parameter
+                && let Some(listed) =
+                    identifiers.and_then(|list| list.iter().find(|listed| listed.name == name.name))
+            {
+                name.source_vectors = listed.source_vectors;
+            }
+        }
         self.with_report_order(order, |analyzer| {
             for &(binding, name) in own.iter().chain(&pending) {
                 analyzer.report_unused_as_cl(binding, name);
