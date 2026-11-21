@@ -1958,9 +1958,8 @@ fn Toolbar(state: State) -> impl IntoView {
         view! {
             <button
                 type="button"
-                role="tab"
                 class="mode-tab"
-                aria-selected=move || (state.mode.get() == mode).to_string()
+                aria-pressed=move || (state.mode.get() == mode).to_string()
                 aria-controls="insight"
                 on:click=move |_| state.set_mode(mode)
             >
@@ -1972,7 +1971,11 @@ fn Toolbar(state: State) -> impl IntoView {
     };
     view! {
         <div class="toolbar" node_ref=toolbar>
-            <div class="mode-tabs" role="tablist" aria-label="View">
+            // Three pressed-or-not keys, not a tab list: the arrow keys step
+            // the machine wherever the focus is, even on these keys, which
+            // a chosen lesson focuses so that `→` steps at once; a tab
+            // list's arrows would move between the keys instead.
+            <div class="mode-tabs" role="group" aria-label="View">
                 {tab(Mode::Machine, "Abstract machine", "Machine", "1")}
                 {tab(Mode::Pipeline, "Compiler pipeline", "Compiler", "2")}
                 {tab(Mode::Wasm, "WebAssembly", "Wasm", "3")}
@@ -2089,7 +2092,7 @@ fn show_workbench(focus: bool) {
         }
         if focus
             && let Some(tab) = document
-                .query_selector(".mode-tab[aria-selected=\"true\"]")
+                .query_selector(".mode-tab[aria-pressed=\"true\"]")
                 .ok()
                 .flatten()
                 .and_then(|tab| tab.dyn_into::<web_sys::HtmlElement>().ok())

@@ -722,12 +722,17 @@ impl PlaceKeeper {
 }
 
 /// Switches to the bcc IR stage and moves the focus to its tab, since the
-/// button that asked for it disappears with the empty state.
+/// button that asked for it disappears as the stage changes.
 fn show_ir(stage: RwSignal<Stage>) {
-    stage.set(Stage::Ir);
+    focus_stage(stage, Stage::Ir);
+}
+
+/// Selects `entry` and moves the focus to its key in the stage strip.
+fn focus_stage(stage: RwSignal<Stage>, entry: Stage) {
+    stage.set(entry);
     #[cfg(feature = "hydrate")]
     if let Some(tab) = document()
-        .get_element_by_id(&format!("stage-tab-{}", Stage::Ir.key()))
+        .get_element_by_id(&format!("stage-tab-{}", entry.key()))
         .and_then(|tab| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(tab).ok())
     {
         _ = tab.focus();
@@ -781,6 +786,9 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
                     data-phase=entry.phase()
                     aria-selected=move || (stage.get() == entry).to_string()
                     aria-controls="stage-output"
+                    // One key of the strip takes Tab, the selected one; the
+                    // arrow keys move along the strip (`moved`).
+                    tabindex=move || if stage.get() == entry { "0" } else { "-1" }
                     id=format!("stage-tab-{}", entry.key())
                     on:click=move |_| stage.set(entry)
                 >
@@ -829,8 +837,26 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
             strip.scroll_to_with_scroll_to_options(&options);
         }
     });
+    // The tab list's keys, as WAI-ARIA's tabs pattern has them: `←` and `→`
+    // select the stage before or after (around the ends), Home and End the
+    // first and last, and the focus follows. The pipeline view does not
+    // step the machine, so the arrow keys are free here.
+    let moved = move |event: web_sys::KeyboardEvent| {
+        let current = stage.get_untracked();
+        let index = Stage::ALL.iter().position(|&each| each == current).unwrap_or(0);
+        let last = Stage::ALL.len() - 1;
+        let next = match event.key().as_str() {
+            | "ArrowRight" | "ArrowDown" => if index == last { 0 } else { index + 1 },
+            | "ArrowLeft" | "ArrowUp" => if index == 0 { last } else { index - 1 },
+            | "Home" => 0,
+            | "End" => last,
+            | _ => return,
+        };
+        event.prevent_default();
+        focus_stage(stage, Stage::ALL[next]);
+    };
     view! {
-        <div class="stage-strip" role="tablist" aria-label="Compiler stages" node_ref=strip>
+        <div class="stage-strip" role="tablist" aria-label="Compiler stages" node_ref=strip on:keydown=moved>
             <div class="stage-row" role="presentation">
                 <span class="stage-group-label" data-phase="Front end" aria-hidden="true">"Front end"</span>
                 {row(0..6)}

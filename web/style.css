@@ -423,9 +423,9 @@
   }
   .mode-tab + .mode-tab { border-left: 2px solid var(--key-edge); }
   .mode-tab:hover { background: var(--device-2); }
-  .mode-tab[aria-selected="true"] { background: var(--ink); color: var(--device); }
+  .mode-tab[aria-pressed="true"] { background: var(--ink); color: var(--device); }
   .mode-icon { display: grid; place-items: center; width: 20px; height: 20px; background: var(--ink); color: var(--device); font-size: 11px; }
-  .mode-tab[aria-selected="true"] .mode-icon { background: var(--accent); color: var(--on-accent); }
+  .mode-tab[aria-pressed="true"] .mode-icon { background: var(--accent); color: var(--on-accent); }
   /* Phones show the short label (the responsive layer). */
   .mode-label-short { display: none; }
   .transport { display: flex; align-items: center; gap: 6px; margin-left: auto; }
@@ -1191,7 +1191,7 @@
   .opt-toggle { display: inline-flex; gap: 0; border: 2px solid var(--key-edge); }
   .opt-option { height: 28px; padding: 0 12px; border: 0; background: var(--key); color: var(--key-ink); font-size: 11.5px; font-weight: 700; cursor: pointer; }
   .opt-option + .opt-option { border-left: 2px solid var(--key-edge); }
-  .opt-option[aria-pressed="true"], .opt-option[aria-selected="true"] { background: var(--ink); color: var(--device); }
+  .opt-option[aria-pressed="true"] { background: var(--ink); color: var(--device); }
   .optimizer-note { margin-top: 14px; padding: 4px 0 4px 14px; border-left: 3px solid var(--ink); color: var(--ink-2); font-size: 12.5px; line-height: 1.65; }
   .optimizer-note[data-level="O2"] { border-left-color: var(--accent); }
   .optimizer-note ul { margin: 6px 0 0 18px; list-style: square; }
