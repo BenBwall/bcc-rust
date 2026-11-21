@@ -8648,6 +8648,222 @@ mod tests {
         assert!(text.contains("): error: "), "{text}");
     }
 
+    /// More of `cl`'s warnings and errors take its code, words, level and
+    /// place, each line as `cl` 19.44 wrote it under Wine: unreferenced
+    /// parameters and variables at the end of the function, only while the
+    /// unit has no error; signed/unsigned comparisons; an assignment used
+    /// as a condition, with its note; a shift count out of range; the code
+    /// generator's warnings about a function's end, in its form, after the
+    /// front end; and the errors C2039, C2063, C2084, C2100, C2106, C2124,
+    /// C2197, C2198 and C1075. `#pragma warning(push, n)` and `default`
+    /// read `cl`'s level, and an error a pragma makes stays one under
+    /// `/WX`. clang-cl keeps Clang's rules and words.
+    #[test]
+    fn cl_reports_its_warnings_and_errors_by_number() {
+        let directory = Directory::new();
+        directory.write(
+            "unused.c",
+            "void f(int p, int q)\n{\n    int a;\n    {\n        int b = q;\n    }\n    {\n        \
+             static int s;\n        int c;\n        c = 1;\n    }\n}\n",
+        );
+        directory.write(
+            "checks.c",
+            "int f(int i, unsigned u, short s)\n{\n    int r = i < u;\n    r += i == u;\n    r += \
+             s < u;\n    r += -1 < u;\n    r += i < 3u;\n    if (r = i) r++;\n    if ((r = i)) \
+             r++;\n    return r + (i << 32) + (i >> -1) + (1 << 31);\n}\n",
+        );
+        directory.write(
+            "flow.c",
+            "int g(int a)\n{\n    if (a)\n        return 1;\n}\nint h(int a)\n{\n    a++;\n}\nint \
+             main(void)\n{\n}\n",
+        );
+        directory.write(
+            "pragmas.c",
+            "#pragma warning(disable: 4101)\nvoid f(void) { int a; }\n#pragma warning(default: \
+             4101)\n#pragma warning(push, 4)\nvoid g(int p) { int b; }\n#pragma warning(pop)\nint \
+             h(int i, unsigned u)\n{\n#pragma warning(error: 4018)\n    return i < u;\n}\n",
+        );
+        directory.write(
+            "errors.c",
+            "struct S { int a; };\nint g(int a);\nint f(void) { return 0; }\nint f(void) { return \
+             1; }\nint k(struct S s, int i, int x)\n{\n    int r = s.b + *i;\n    r += g(1, 2) + \
+             g() + x(1);\n    return r;\n}\n",
+        );
+        directory.write("lvalue.c", "void f(int i)\n{\n    i + 1 = 2;\n}\n");
+        directory.write("brace.c", "int f(int x)\n{\n    if (x) {\n        x++;\n");
+        directory.write("divide.c", "int f(int r) { return r + 1 / 0; }\n");
+        directory.write(
+            "divide-after.c",
+            "int e(void) { return missing; }\nint f(int r) { return r + 1 / 0; }\n",
+        );
+        let full = format!("{}", directory.path("").display());
+        let cl = |args: &[&str]| {
+            let output = directory.bcc("--msvc-mode", &[&["/nologo", "/c"], args].concat());
+            // The code generator names the file by its full path.
+            let printed: Vec<String> = stdout(&output)
+                .lines()
+                .skip(1)
+                .map(|line| line.replace(&full, ""))
+                .collect();
+            (output.status.code(), printed)
+        };
+        for (args, status, lines) in [
+            (
+                &["/W4", "unused.c"][..],
+                0,
+                &[
+                    "unused.c(1): warning C4100: 'p': unreferenced parameter",
+                    "unused.c(3): warning C4101: 'a': unreferenced local variable",
+                    "unused.c(5): warning C4189: 'b': local variable is initialized but not \
+                     referenced",
+                ][..],
+            ),
+            (
+                &["/W3", "unused.c"],
+                0,
+                &["unused.c(3): warning C4101: 'a': unreferenced local variable"],
+            ),
+            (
+                &["/W4", "/wd4189", "/we4100", "unused.c"],
+                2,
+                &[
+                    "unused.c(1): error C4100: 'p': unreferenced parameter",
+                    "unused.c(3): warning C4101: 'a': unreferenced local variable",
+                ],
+            ),
+            (
+                &["/W4", "checks.c"],
+                0,
+                &[
+                    "checks.c(3): warning C4018: '<': signed/unsigned mismatch",
+                    "checks.c(4): warning C4389: '==': signed/unsigned mismatch",
+                    "checks.c(5): warning C4018: '<': signed/unsigned mismatch",
+                    "checks.c(8): warning C4706: assignment used as a condition",
+                    "checks.c(8): note: if an assignment is intended you can enclose it in \
+                     parentheses, '(e1 = e2)', to silence this warning",
+                    "checks.c(10): warning C4293: '<<': shift count negative or too big, \
+                     undefined behavior",
+                    "checks.c(10): warning C4293: '>>': shift count negative or too big, \
+                     undefined behavior",
+                ],
+            ),
+            (
+                &["/W3", "/diagnostics:column", "checks.c"],
+                0,
+                &[
+                    "checks.c(3,15): warning C4018: '<': signed/unsigned mismatch",
+                    "checks.c(5,12): warning C4018: '<': signed/unsigned mismatch",
+                    "checks.c(10,19): warning C4293: '<<': shift count negative or too big, \
+                     undefined behavior",
+                    "checks.c(10,31): warning C4293: '>>': shift count negative or too big, \
+                     undefined behavior",
+                ],
+            ),
+            (
+                &["/W1", "checks.c"],
+                0,
+                &[
+                    "checks.c(10): warning C4293: '<<': shift count negative or too big, \
+                     undefined behavior",
+                    "checks.c(10): warning C4293: '>>': shift count negative or too big, \
+                     undefined behavior",
+                ],
+            ),
+            (
+                &["flow.c"],
+                0,
+                &[
+                    "flow.c(5) : warning C4715: 'g': not all control paths return a value",
+                    "flow.c(9) : warning C4716: 'h': must return a value",
+                ],
+            ),
+            (
+                &["/wd4716", "/we4715", "flow.c"],
+                2,
+                &["flow.c(5) : error C4715: 'g': not all control paths return a value"],
+            ),
+            (
+                &["/W1", "pragmas.c"],
+                2,
+                &[
+                    "pragmas.c(5): warning C4100: 'p': unreferenced parameter",
+                    "pragmas.c(5): warning C4101: 'b': unreferenced local variable",
+                    "pragmas.c(10): error C4018: '<': signed/unsigned mismatch",
+                ],
+            ),
+            (
+                &["/W4", "/WX", "pragmas.c"],
+                2,
+                &[
+                    "pragmas.c(5): error C2220: the following warning is treated as an error",
+                    "pragmas.c(5): warning C4100: 'p': unreferenced parameter",
+                    "pragmas.c(5): warning C4101: 'b': unreferenced local variable",
+                    "pragmas.c(10): error C4018: '<': signed/unsigned mismatch",
+                ],
+            ),
+            (
+                &["errors.c"],
+                2,
+                &[
+                    "errors.c(4): error C2084: function 'int f(void)' already has a body",
+                    "errors.c(3): note: see previous definition of 'f'",
+                    "errors.c(7): error C2039: 'b': is not a member of 'S'",
+                    "errors.c(1): note: see declaration of 'S'",
+                    "errors.c(7): error C2100: you cannot dereference an operand of type 'int'",
+                    "errors.c(8): error C2197: 'int g(int)': too many arguments for call",
+                    "errors.c(8): error C2198: 'int g(int)': too few arguments for call",
+                    "errors.c(8): error C2063: 'x': not a function",
+                ],
+            ),
+            (
+                &["/diagnostics:column", "lvalue.c"],
+                2,
+                &["lvalue.c(3,7): error C2106: '=': left operand must be l-value"],
+            ),
+            (
+                &["/diagnostics:column", "brace.c"],
+                2,
+                &["brace.c(3,12): fatal error C1075: '{': no matching token found"],
+            ),
+            (
+                &["divide.c"],
+                2,
+                &["divide.c(1): error C2124: divide or mod by zero"],
+            ),
+            (
+                &["divide-after.c"],
+                2,
+                &["divide-after.c(1): error C2065: 'missing': undeclared identifier"],
+            ),
+        ] {
+            let (code, printed) = cl(args);
+            assert_eq!(code, Some(status), "{args:?}: {printed:?}");
+            assert_eq!(printed, lines, "{args:?}");
+        }
+        // `cl` stops reporting unreferenced names after an error, and its
+        // code generator reports nothing then.
+        directory.write(
+            "after.c",
+            "void k(int p) { int w; }\nint f(void)\n{\n    int unused;\n    return y;\n}\nvoid \
+             k2(int p) { int w; }\nint g(int a) { if (a) return 1; }\n",
+        );
+        assert_eq!(
+            cl(&["/W4", "after.c"]),
+            (
+                Some(2),
+                vec![
+                    "after.c(1): warning C4100: 'p': unreferenced parameter".to_owned(),
+                    "after.c(1): warning C4101: 'w': unreferenced local variable".to_owned(),
+                    "after.c(5): error C2065: 'y': undeclared identifier".to_owned(),
+                ]
+            )
+        );
+        // clang-cl writes Clang's diagnostics, with no `cl` code.
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "/nologo", "/W4", "checks.c"]);
+        let text = stderr(&clang_cl);
+        assert!(!text.contains(" C4"), "{text}");
+    }
+
     /// clang-cl is Clang with `cl`'s locations: Clang's words, snippets,
     /// notes and closing counts, `file(line,col):` before each, as the
     /// pinned clang-cl writes them. `/WX` makes each warning an error
@@ -14841,7 +15057,8 @@ warn.c:34: warning: cast between pointer and integer of different size
 
     /// `cl` words `#error` as its fatal error C1189 and a return mismatch as
     /// warning C4098 or C4033, both level 1, as the real `cl.exe` 19.44
-    /// writes them; `/wd` of either code turns off bcc's group for both.
+    /// writes them, with its code generator's C4715 and C4716 after them;
+    /// `/wd` of either C4098 or C4033 turns off bcc's group for both.
     #[test]
     fn cl_words_error_directives_and_return_mismatches_as_cl_does() {
         let directory = Directory::new();
@@ -14859,12 +15076,25 @@ warn.c:34: warning: cast between pointer and integer of different size
         );
         let output = directory.bcc("--msvc-mode", &["/nologo", "/c", "returns.c"]);
         succeeds(&output);
+        // The code generator's warnings come last, led by the full path.
         assert_eq!(
-            stdout(&output),
+            stdout(&output).replace(&format!("{}", directory.path("").display()), ""),
             "returns.c\nreturns.c(2): warning C4098: 'g': 'void' function returning a \
-             value\nreturns.c(3): warning C4033: 'h' must return a value\n"
+             value\nreturns.c(3): warning C4033: 'h' must return a value\nreturns.c(1) : warning \
+             C4715: 'f': not all control paths return a value\nreturns.c(3) : warning C4716: 'h': \
+             must return a value\n"
         );
-        let output = directory.bcc("--msvc-mode", &["/nologo", "/c", "/wd4098", "returns.c"]);
+        let output = directory.bcc(
+            "--msvc-mode",
+            &[
+                "/nologo",
+                "/c",
+                "/wd4098",
+                "/wd4715",
+                "/wd4716",
+                "returns.c",
+            ],
+        );
         succeeds(&output);
         assert_eq!(stdout(&output), "returns.c\n");
     }

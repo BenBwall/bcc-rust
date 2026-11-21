@@ -1,5 +1,20 @@
 # Diagnostic golden corpus
 
+`cl`'s numbered warnings and errors (2026-11-21):
+`sema-cl-numbered-warnings-msvc` (the `cl` identity at level 4) pins C4100,
+C4101 and C4189 at the end of the function, the parameters and outermost
+block first, with neither a variable only assigned nor a `static` one; C4018
+and C4389 for operands of one width and other signs, a promoted `short`
+included and a constant left alone; C4706 with `cl`'s note, and none for an
+assignment in parentheses; C4293 and no warning for `1 << 31`; and a
+`#pragma warning(push, 3)` region that hides C4100 but not C4101.
+`sema-cl-numbered-errors-msvc` pins C2084 and C2039 with `cl`'s notes,
+C2100, C2197 at the first extra argument, C2198, C2063 at the name and C2106
+at a constant. Both match `cl` 19.44 under Wine (`/W4 /diagnostics:column`,
+`/diagnostics:column`) byte for byte. The code generator's C4715 and C4716,
+which name the file by its full path, are pinned by
+`tests/integration/personality_cli.rs` instead.
+
 C23 directives before C23 (2026-11-15): `pp-c23-directives-gcc` (`-std=gnu17
 -pedantic`) and `pp-c23-directives-strict-gcc` (`-std=c17 -pedantic`) pin GCC
 14's reports of `#warning`, `#elifdef` and `#elifndef` and its invalid `#embed`;
