@@ -1965,6 +1965,27 @@ impl Machine {
         let lvalue = format!(
             "The name `{name}` is an lvalue: it designates the object `{name}`, a place in memory."
         );
+        // What a declaration's initializer does with the object: C99
+        // §6.7.8p14 (a char array from a string literal), §6.7.8p13 (a
+        // structure from one of its type) and §6.7.8p11 (a scalar).
+        let (initializer, initializer_clause) = match self.object_type(id) {
+            | Some(Type::Array(..)) => (
+                "The string literal after `=` comes next, and its characters become the first \
+                 values of the array's elements.",
+                clauses::STRING_INITIALIZER,
+            ),
+            | Some(Type::Struct(_)) => (
+                "The structure after `=` is evaluated next, and its value, every member included, \
+                 becomes the object's first value.",
+                clauses::STRUCTURE_INITIALIZER,
+            ),
+            | _ => (
+                "The initializer after `=` is evaluated next, converted to the object's type as \
+                 an assignment would convert it, and stored as its first value.",
+                clauses::SCALAR_INITIALIZER,
+            ),
+        };
+        let initializer_cited = [initializer_clause];
         let (title, summary, text, cited): (String, String, String, &[Clause]) = match role {
             | Designation::Read => (
                 format!("`{name}` names an object to read"),
@@ -2002,24 +2023,12 @@ impl Machine {
                     "The value after `=` becomes the first value of `{name}`, the object this \
                      declaration names."
                 ),
-                if self.object_type(id).is_some_and(Type::is_array) {
-                    format!(
-                        "Here `{name}` is not an expression to evaluate but the name being \
-                         declared, so nothing is read from it: its object already exists, and \
-                         this step only marks it as the one the initializer fills. The \
-                         initializer after `=` comes next, and its values become the first values \
-                         of the array's elements."
-                    )
-                } else {
-                    format!(
-                        "Here `{name}` is not an expression to evaluate but the name being \
-                         declared, so nothing is read from it: its object already exists, and \
-                         this step only marks it as the one the initializer fills. The \
-                         initializer after `=` is evaluated next, converted to the object's type \
-                         as an assignment would convert it, and stored as its first value."
-                    )
-                },
-                &[clauses::SCALAR_INITIALIZER],
+                format!(
+                    "Here `{name}` is not an expression to evaluate but the name being declared, \
+                     so nothing is read from it: its object already exists, and this step only \
+                     marks it as the one the initializer fills. {initializer}"
+                ),
+                &initializer_cited,
             ),
             | Designation::Address => (
                 format!("`{name}` is the operand of `&`"),
@@ -2549,7 +2558,7 @@ impl Machine {
         &self,
         range: SourceRange,
         (base, index): (Value, Value),
-        written: Option<[String; 2]>,
+        written: Option<&[String; 2]>,
         target: usize,
         offset: i32,
     ) -> Event {
@@ -2559,7 +2568,7 @@ impl Machine {
             | _ => (String::from("by the index"), self.short_value(&index)),
         };
         let pointer = self.value_text(&base);
-        let (summary, defined) = match &written {
+        let (summary, defined) = match written {
             | Some([array, at]) => (
                 format!(
                     "`{array}[{at}]` means `*({array} + {at})`: it moves {steps} and designates \

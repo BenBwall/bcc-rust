@@ -484,7 +484,7 @@ impl Machine {
                     structure: None,
                 })?;
                 let written = self.subscript_texts(program, instruction);
-                self.subscript(range, (base, index), written, target, offset)
+                self.subscript(range, (base, index), written.as_ref(), target, offset)
             },
             | &Op::Unary(operator, ty) => {
                 let value = self.pop_value()?;

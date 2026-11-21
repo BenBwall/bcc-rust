@@ -1027,6 +1027,25 @@ fn names_are_narrated_by_what_their_operator_does() {
         "{}",
         initializer.explanation
     );
+    // C99 §6.7.8p14 and §6.7.8p13: a char array takes a string literal's
+    // characters, a structure the value of one of its type.
+    let cited = |source: &str| {
+        self::states(source)
+            .into_iter()
+            .find(|state| state.event.title.ends_with("receives its initial value"))
+            .map(|state| state.event.clauses[0].id)
+            .expect("a declaration with an initializer")
+    };
+    assert_eq!(
+        cited("int main(void) { char s[] = \"ab\"; return s[0]; }"),
+        "6.7.8p14"
+    );
+    assert_eq!(
+        cited(
+            "struct p { int x; }; int main(void) { struct p a = {1}; struct p b = a; return b.x; }"
+        ),
+        "6.7.8p13"
+    );
     let assigned = states
         .iter()
         .find(|state| state.event.title == "`x` is where the result goes")
@@ -1150,7 +1169,7 @@ fn a_decrement_is_narrated_as_a_subtraction() {
         decrement.explanation
     );
     let cited = |source: &str| {
-        states(source)
+        self::states(source)
             .into_iter()
             .find(|state| state.event.kind == EventKind::Increment)
             .map(|state| state.event.clauses[0].id)
