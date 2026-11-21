@@ -1317,6 +1317,33 @@ mod tests {
         );
     }
 
+    /// The front end's stages but the last offer the skip to the IR, which
+    /// no other stage shows; the card is the selected stage key's tab panel,
+    /// and that key alone takes Tab.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn the_front_end_skips_to_the_ir_and_the_keys_are_tabs() {
+        for stage in Stage::ALL {
+            let html = render_stage(stage, false, false, LiveCompile::Compiling, [None, None, None]);
+            let skip = html
+                .split("class=\"stage-skip\"")
+                .nth(1)
+                .and_then(|rest| rest.split('>').next())
+                .unwrap_or_else(|| panic!("{stage:?} has no skip key"));
+            let offered = stage.phase() == "Front end" && stage != Stage::SemanticTypes;
+            assert_eq!(!skip.contains("hidden"), offered, "{stage:?}: {skip}");
+            assert!(
+                html.contains(&format!("role=\"tabpanel\" aria-labelledby=\"stage-tab-{}\"", stage.key())),
+                "{stage:?}"
+            );
+            assert_eq!(html.matches("tabindex=\"0\"").count(), 1, "{stage:?}");
+            assert!(
+                html.contains(&format!("tabindex=\"0\" id=\"stage-tab-{}\"", stage.key())),
+                "{stage:?}"
+            );
+        }
+    }
+
     /// The pipeline view at `-O2` (when `optimize`), rendered to HTML, given
     /// the source's compilation at that level, the output on screen, and the
     /// source's compilation at the other level.

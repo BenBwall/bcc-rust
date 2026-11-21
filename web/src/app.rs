@@ -1744,7 +1744,12 @@ fn Hero(state: State) -> impl IntoView {
 /// screen reader reads the definition as the link's description.
 #[component]
 fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
-    let term = COMPILER_TERMS.iter().find(|term| term.id == id);
+    // The page is rendered at build time, so a word without an entry fails
+    // the build.
+    let term = COMPILER_TERMS
+        .iter()
+        .find(|term| term.id == id)
+        .expect("each form the landing names is a compiler term");
     let open = RwSignal::new(false);
     let tip = format!("form-tip-{id}");
     view! {
@@ -1771,8 +1776,8 @@ fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
         >
             <a href=format!("#term-{id}") aria-describedby=tip.clone()>{written}</a>
             <span class="form-tip" role="tooltip" id=tip hidden=move || !open.get()>
-                <b class="form-tip-word">{term.map(|term| term.name)}</b>
-                {term.map(|term| term.definition)}
+                <b class="form-tip-word">{term.name}</b>
+                {term.definition}
             </span>
         </span>
     }
