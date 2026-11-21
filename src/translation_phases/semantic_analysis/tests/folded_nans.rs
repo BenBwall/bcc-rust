@@ -692,6 +692,11 @@ fn a_nan_that_meets_a_run_time_operation_stays_at_run_time() {
             p,
         ),
         (
+            "void g(const char *); static void put(double d) { g((const char *)&d + 4); } void \
+             f(void) { put(0.0 / 0.0); }",
+            p,
+        ),
+        (
             "static double add(const double *p, double y) { return *p + y; } double f(double x) { \
              double r = 0.0 / 0.0; return add(&r, x); }",
             n,

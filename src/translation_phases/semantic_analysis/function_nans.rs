@@ -366,7 +366,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Calls `found` with each identifier whose value `e` is (`values`), or
     /// whose address it is, through the operations that pass a value on
-    /// without meeting another.
+    /// without meeting another, and the pointer arithmetic that offsets an
+    /// address.
     fn passed_identifiers(
         scratch: &Bump,
         e: &'tu Expression<'tu>,
@@ -385,6 +386,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     operator: UnaryOperator::AddressOf,
                     operand_expression,
                 } => work.push((operand_expression, true)),
+                | ExpressionType::Binary {
+                    operator: BinaryOperator::Addition | BinaryOperator::Subtraction,
+                    left_expression,
+                    right_expression,
+                } if Self::taken_address(e) => {
+                    work.push((left_expression, value));
+                    work.push((right_expression, value));
+                },
                 | ExpressionType::Parenthesized { expression }
                 | ExpressionType::Cast {
                     operand_expression: expression,
@@ -428,6 +437,28 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 },
                 | _ => {},
             }
+        }
+    }
+
+    /// Whether `e` is an address taken with `&`, through parentheses, casts
+    /// and the pointer arithmetic that offsets it (`(char *)&d + 8`).
+    fn taken_address(e: &'tu Expression<'tu>) -> bool {
+        match e.kind {
+            | ExpressionType::Unary {
+                operator: UnaryOperator::AddressOf,
+                ..
+            } => true,
+            | ExpressionType::Parenthesized { expression }
+            | ExpressionType::Cast {
+                operand_expression: expression,
+                ..
+            } => Self::taken_address(expression),
+            | ExpressionType::Binary {
+                operator: BinaryOperator::Addition | BinaryOperator::Subtraction,
+                left_expression,
+                right_expression,
+            } => Self::taken_address(left_expression) || Self::taken_address(right_expression),
+            | _ => false,
         }
     }
 

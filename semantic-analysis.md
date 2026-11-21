@@ -3042,7 +3042,8 @@ function whose result is not floating (`printf`, `memcpy`), a discarded
 expression statement, or a copy into another object whose own reads are
 final. Parentheses,
 casts, unary `+`, `-` and `~`, `__real__`, `__imag__`, `&`, `*`, member
-access, subscripts, comma operators and conditional arms pass a value on.
+access, subscripts, comma operators, conditional arms, and the pointer
+arithmetic that offsets a taken address (`(char *)&d + 8`) pass a value on.
 Reads in a GNU nested function count for the enclosing function's objects.
 Everything else (an operand of an arithmetic operation or compound
 assignment computed at run time, a constant argument of a builtin or library
