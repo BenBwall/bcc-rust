@@ -197,7 +197,7 @@ fn float_control(operands: &[PragmaWord<'_>]) -> Option<[Option<FloatingPragma>;
 }
 
 /// Microsoft's `#pragma fenv_access(on|off)`. `None` for a form bcc does
-/// not read. MSVC extension: Microsoft Learn, "fenv_access pragma".
+/// not read. MSVC extension: Microsoft Learn, "`fenv_access` pragma".
 fn fenv_access(operands: &[PragmaWord<'_>]) -> Option<[Option<FloatingPragma>; 2]> {
     match operands {
         | [open, switch, close]

@@ -62,26 +62,41 @@ impl Analyzer<'_, '_, '_> {
             state.file_scope(pragma);
             state.next += 1;
         }
-        state.strict_root = state.unread || state.clang.strict(trapping);
-        state.directed_root = state.unread || state.clang.directed_rounding;
-        state.optimized_root = state.gcc_optimize;
-        state.optimized_function = false;
+        let root = &mut state.root;
+        *root = RootFacts::default();
+        root.add_if(
+            RootFacts::STRICT,
+            state.unread || state.clang.strict(trapping),
+        );
+        root.add_if(
+            RootFacts::DIRECTED,
+            state.unread || state.clang.directed_rounding,
+        );
+        root.add_if(RootFacts::OPTIMIZED, state.gcc_optimize);
         while let Some(&(position, pragma)) = pragmas.get(state.next)
             && position < end
         {
-            state.directed_root |= matches!(
-                pragma,
-                FloatingPragma::DirectedRounding(true) | FloatingPragma::Unread
+            let root = &mut state.root;
+            root.add_if(
+                RootFacts::DIRECTED,
+                matches!(
+                    pragma,
+                    FloatingPragma::DirectedRounding(true) | FloatingPragma::Unread
+                ),
             );
             match pragma {
                 | FloatingPragma::Pop => {
-                    state.strict_root |= state.saved.iter().any(|saved| saved.strict(trapping));
-                    state.directed_root |= state.saved.iter().any(|saved| saved.directed_rounding);
+                    let saved = &state.saved;
+                    root.add_if(RootFacts::STRICT, saved.iter().any(|s| s.strict(trapping)));
+                    root.add_if(
+                        RootFacts::DIRECTED,
+                        saved.iter().any(|s| s.directed_rounding),
+                    );
                 },
-                | FloatingPragma::GccOptimize => state.optimized_root = true,
+                | FloatingPragma::GccOptimize => root.add_if(RootFacts::OPTIMIZED, true),
                 | FloatingPragma::GccPopOptions =>
-                    state.optimized_root |= state.gcc_saved.contains(&true),
-                | pragma => state.strict_root |= ClangFloating::makes_strict(pragma),
+                    root.add_if(RootFacts::OPTIMIZED, state.gcc_saved.contains(&true)),
+                | pragma => root.add_if(RootFacts::STRICT, ClangFloating::makes_strict(pragma)),
             }
             state.next += 1;
         }
@@ -91,7 +106,7 @@ impl Analyzer<'_, '_, '_> {
     /// behavior under Clang's rules (and `cl`'s pragmas), so that its
     /// invalid operations are computed at run time.
     pub(super) fn clang_strict_exceptions(&self) -> bool {
-        self.functions.floating.strict_root
+        self.functions.floating.root.contains(RootFacts::STRICT)
     }
 
     /// Whether [`Self::settle_strict_initializer`] may fold an automatic
@@ -101,7 +116,7 @@ impl Analyzer<'_, '_, '_> {
     /// not read, that evaluator refuses other operations (an exact
     /// subnormal result, for one), so every NaN stays at run time.
     pub(super) fn strict_aggregates_settle(&self) -> bool {
-        !self.functions.floating.directed_root
+        !self.functions.floating.root.contains(RootFacts::DIRECTED)
     }
 
     /// Whether the function analyzed now computes its invalid operations at
@@ -109,11 +124,11 @@ impl Analyzer<'_, '_, '_> {
     /// command line: an `optimize` attribute or `#pragma GCC optimize`
     /// reached it, or, for `cl`, one of the pragmas Clang's rules read.
     pub(super) fn gcc_function_runtime(&self) -> bool {
-        let floating = &self.functions.floating;
-        floating.optimized_root
-            || floating.optimized_function
+        let root = self.functions.floating.root;
+        root.contains(RootFacts::OPTIMIZED)
+            || root.contains(RootFacts::OPTIMIZED_FUNCTION)
             || (self.context.configuration.compiler_identity() == CompilerIdentity::Msvc
-                && floating.strict_root)
+                && root.contains(RootFacts::STRICT))
     }
 
     /// Enters the definition of function `binding`, once its own
@@ -126,7 +141,10 @@ impl Analyzer<'_, '_, '_> {
         };
         let entity = self.entity_of(binding);
         let floating = &mut self.functions.floating;
-        floating.optimized_function |= floating.optimized.contains(&entity);
+        let optimized = floating.optimized.contains(&entity);
+        floating
+            .root
+            .add_if(RootFacts::OPTIMIZED_FUNCTION, optimized);
     }
 
     /// Notes that function `binding` is declared with an `optimize`
@@ -134,7 +152,8 @@ impl Analyzer<'_, '_, '_> {
     /// may be in effect, under GCC's rules.
     pub(super) fn note_optimized_function(&mut self, binding: usize, attribute: bool) {
         let rules = self.context.configuration.compiler_identity().rules();
-        if rules != RuleSet::Gcc || !(attribute || self.functions.floating.optimized_root) {
+        let pragma = self.functions.floating.root.contains(RootFacts::OPTIMIZED);
+        if rules != RuleSet::Gcc || !(attribute || pragma) {
             return;
         }
         let entity = self.entity_of(binding);
@@ -145,48 +164,36 @@ impl Analyzer<'_, '_, '_> {
 /// The pragma state as the roots are analyzed.
 pub(super) struct FloatingEnvironment<'s> {
     /// Clang's state at file scope after the pragmas read so far.
-    clang:              ClangFloating,
+    clang:        ClangFloating,
     /// What `float_control(push)` saved at file scope, innermost last.
-    saved:              ArenaVec<'s, ClangFloating>,
+    saved:        ArenaVec<'s, ClangFloating>,
     /// A pragma bcc could not read was seen at file scope, so any later
     /// function may be strict.
-    unread:             bool,
+    unread:       bool,
     /// `#pragma GCC optimize` is in effect at file scope.
-    gcc_optimize:       bool,
+    gcc_optimize: bool,
     /// What `#pragma GCC push_options` saved, innermost last.
-    gcc_saved:          ArenaVec<'s, bool>,
+    gcc_saved:    ArenaVec<'s, bool>,
     /// The first pragma not yet read, in `Context::floating_pragmas`.
-    next:               usize,
-    /// The root being analyzed may have a strict environment under Clang's
-    /// rules.
-    strict_root:        bool,
-    /// A constant directed rounding, or a pragma bcc could not read, may be
-    /// in effect in the root being analyzed.
-    directed_root:      bool,
-    /// `#pragma GCC optimize` may be in effect in the root being analyzed.
-    optimized_root:     bool,
-    /// The function defined in the root being analyzed is in
-    /// [`Self::optimized`].
-    optimized_function: bool,
+    next:         usize,
+    /// What may hold in the root being analyzed.
+    root:         RootFacts,
     /// The functions an `optimize` attribute or `#pragma GCC optimize`
     /// reached on any declaration.
-    optimized:          ArenaSet<'s, EntityId>,
+    optimized:    ArenaSet<'s, EntityId>,
 }
 
 impl<'s> FloatingEnvironment<'s> {
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            clang:              ClangFloating::default(),
-            saved:              ArenaVec::new_in(scratch),
-            unread:             false,
-            gcc_optimize:       false,
-            gcc_saved:          ArenaVec::new_in(scratch),
-            next:               0,
-            strict_root:        false,
-            directed_root:      false,
-            optimized_root:     false,
-            optimized_function: false,
-            optimized:          ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            clang:        ClangFloating::default(),
+            saved:        ArenaVec::new_in(scratch),
+            unread:       false,
+            gcc_optimize: false,
+            gcc_saved:    ArenaVec::new_in(scratch),
+            next:         0,
+            root:         RootFacts::default(),
+            optimized:    ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         }
     }
 
@@ -210,6 +217,34 @@ impl<'s> FloatingEnvironment<'s> {
                     self.gcc_optimize = saved;
                 },
             | P::GccResetOptions => self.gcc_optimize = false,
+        }
+    }
+}
+
+/// What may hold in the root being analyzed, as a set of bits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RootFacts(u8);
+
+impl RootFacts {
+    /// A constant directed rounding, or a pragma bcc could not read, may be
+    /// in effect.
+    const DIRECTED: Self = Self(1 << 1);
+    /// `#pragma GCC optimize` may be in effect.
+    const OPTIMIZED: Self = Self(1 << 2);
+    /// The function defined in the root is in
+    /// [`FloatingEnvironment::optimized`].
+    const OPTIMIZED_FUNCTION: Self = Self(1 << 3);
+    /// The root may have a strict environment under Clang's rules.
+    const STRICT: Self = Self(1);
+
+    const fn contains(self, fact: Self) -> bool {
+        self.0 & fact.0 != 0
+    }
+
+    /// Adds `fact` when `condition` holds.
+    const fn add_if(&mut self, fact: Self, condition: bool) {
+        if condition {
+            self.0 |= fact.0;
         }
     }
 }
