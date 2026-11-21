@@ -1,4 +1,4 @@
-// An unsigned int as a row of on/off flags.
+// One bit for each on/off flag.
 #include <stdio.h>
 
 #define READ 0x4    // bit 2: 100
@@ -7,8 +7,8 @@
 
 int main(void) {
     unsigned int mode = 0;
-    // | sets bits, & with ~ clears one,
-    // ^ flips one, and & tests one.
+    // | sets, & ~ clears, ^ flips,
+    // and & tests a bit.
     mode |= READ;
     mode |= WRITE | RUN;
     mode &= ~WRITE;
