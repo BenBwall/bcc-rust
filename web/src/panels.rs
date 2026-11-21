@@ -33,6 +33,7 @@ pub use output::Output;
 pub use pipeline::{
     LiveCompile,
     PipelineView,
+    focus_stage_key,
 };
 pub use schematic::Schematic;
 pub use tape::{

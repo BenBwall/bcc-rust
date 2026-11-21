@@ -193,7 +193,7 @@ function showCursorOnPage(editor) {
       return;
     }
     const { clear, bottom } = visibleBand();
-    const height = editor.getOption(monaco.editor.EditorOption.lineHeight);
+    const height = lineSpan(editor, position.lineNumber);
     const top = node.getBoundingClientRect().top + editor.getTopForLineNumber(position.lineNumber) - editor.getScrollTop();
     if (top < clear) {
       scrollBy({ top: top - clear });
@@ -201,6 +201,14 @@ function showCursorOnPage(editor) {
       scrollBy({ top: top + height - bottom });
     }
   });
+}
+
+/**
+ * The height of `line` of `editor` in pixels: a line that wraps takes a
+ * row of the line height for each piece.
+ */
+function lineSpan(editor, line) {
+  return editor.getBottomForLineNumber(line) - editor.getTopForLineNumber(line);
 }
 
 /** Switch every editor between the site's `light` and `dark` themes. */
@@ -261,11 +269,15 @@ class Editor {
       guides: { indentation: true },
       bracketPairColorization: { enabled: false },
       tabSize: 4,
-      // The source wraps rather than hiding the ends of long lines (its
-      // comments, mostly) in the narrow columns of small screens; the
-      // listings keep one instruction per line.
-      wordWrap: options.readOnly ? 'off' : 'on',
-      wrappingIndent: 'indent',
+      // Every view wraps rather than hiding the ends of long lines: the
+      // source's comments in the narrow columns of small screens, and the
+      // listings' calls, string constants and LLVM's `; preds` comments
+      // beside the stage's notes. A wrapped piece hangs a level further in
+      // than its line, a listing's two levels, past the instructions'
+      // operands, and only a line's first row has a number, so it reads
+      // as one line; the line links and their marks cover all its rows.
+      wordWrap: 'on',
+      wrappingIndent: options.readOnly ? 'deepIndent' : 'indent',
       stickyScroll: { enabled: false },
       accessibilitySupport: 'auto',
       quickSuggestions: false,
@@ -422,7 +434,8 @@ class Editor {
     const smooth = monaco.editor.ScrollType.Smooth;
     if (performance.now() - this.wheeled > USER_SCROLL_GRACE_MS) {
       const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
-      if ((last - first + 1) * lineHeight <= editor.getLayoutInfo().height - 2 * lineHeight) {
+      const span = editor.getBottomForLineNumber(last) - editor.getTopForLineNumber(first);
+      if (span <= editor.getLayoutInfo().height - 2 * lineHeight) {
         editor.revealLinesInCenterIfOutsideViewport(first, last, smooth);
       } else {
         editor.revealLineInCenterIfOutsideViewport(first, smooth);
@@ -446,10 +459,9 @@ class Editor {
     }
     // The run as it sits in the window, cut to what the editor shows.
     const editor = this.editor;
-    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
     const scrollTop = editor.getScrollTop();
     const top = Math.max(host.top, host.top + editor.getTopForLineNumber(first) - scrollTop);
-    const end = Math.min(host.bottom, host.top + editor.getTopForLineNumber(last) + lineHeight - scrollTop);
+    const end = Math.min(host.bottom, host.top + editor.getBottomForLineNumber(last) - scrollTop);
     if (end <= top) {
       return;
     }
@@ -670,7 +682,7 @@ class Editor {
     }
     const offset = this.revealed ?? this.editor.getTopForLineNumber(this.followed) - this.editor.getScrollTop();
     const top = host.top + offset;
-    return { top, bottom: top + this.editor.getOption(monaco.editor.EditorOption.lineHeight) };
+    return { top, bottom: top + lineSpan(this.editor, this.followed) };
   }
 
   focus() {

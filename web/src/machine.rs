@@ -236,6 +236,7 @@ fn end_of_literal(bytes: &[u8], start: usize) -> usize {
 /// before any evaluation.
 ///
 /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
+/// C99: §6.10 paragraph 2, pp. 146-147; PDF pp. 158-159.
 fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
     let location = range(directive, source);
     Snapshot {
@@ -264,14 +265,27 @@ fn before_the_machine(directive: SourceRange, source: &str) -> Snapshot {
             note:           String::new(),
             flow:           Vec::new(),
             access:         Vec::new(),
-            clauses:        vec![Clause {
-                id:       "5.1.1.2p1".to_owned(),
-                title:    "Translation phases".to_owned(),
-                gloss:    "Phase 4 executes preprocessing directives and expands macro \
-                           invocations."
-                    .to_owned(),
-                citation: "C99 §5.1.1.2p1, p. 10; PDF p. 22".to_owned(),
-            }],
+            clauses:        vec![
+                Clause {
+                    id:       "5.1.1.2p1".to_owned(),
+                    title:    "Translation phases".to_owned(),
+                    gloss:    "Phase 4 executes preprocessing directives and expands macro \
+                               invocations."
+                        .to_owned(),
+                    citation: "C99 §5.1.1.2p1, p. 10; PDF p. 22".to_owned(),
+                },
+                Clause {
+                    // A rule of §6.10, so the note has the button to the
+                    // Preprocessor stage that the directives it runs have
+                    // (`StepEvent::preprocessed`).
+                    id:       "6.10p2".to_owned(),
+                    title:    "Preprocessing directives".to_owned(),
+                    gloss:    "A directive is a line whose first token is #; it ends at the \
+                               line's new-line."
+                        .to_owned(),
+                    citation: "C99 §6.10p2, pp. 146-147; PDF pp. 158-159".to_owned(),
+                },
+            ],
             range:          location,
             encoding:       None,
             conversion:     None,
@@ -848,6 +862,8 @@ mod tests {
         assert!(state.diagnostic.is_none());
         assert!(!state.can_step());
         assert_eq!(state.location.map(|range| range.start.line), Some(2));
+        // Its note has the button to the Preprocessor stage.
+        assert!(state.event.preprocessed());
         assert_eq!(
             machine.step(),
             Err("Load a program before stepping.".into())

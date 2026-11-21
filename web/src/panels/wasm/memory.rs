@@ -45,7 +45,7 @@ pub fn LinearMemory(wasm: WasmState) -> impl IntoView {
                 </span>
             </header>
             <div class="memory-controls">
-                <div class="opt-toggle" role="tablist" aria-label="Memory region">
+                <div class="opt-toggle" role="group" aria-label="Memory region">
                     {move || view.with(|view| {
                         view.as_ref()
                             .map_or_default(|view| view.windows.clone())
@@ -55,9 +55,8 @@ pub fn LinearMemory(wasm: WasmState) -> impl IntoView {
                                 view! {
                                     <button
                                         type="button"
-                                        role="tab"
                                         class="opt-option memory-tab"
-                                        aria-selected=move || (tab() == name).to_string()
+                                        aria-pressed=move || (tab() == name).to_string()
                                         on:click=move |_| wasm.memory_tab.set(name)
                                     >
                                         {window.title}

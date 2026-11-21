@@ -41,7 +41,10 @@ use crate::{
         self,
         Engine,
     },
-    glossary::Glossary,
+    glossary::{
+        COMPILER_TERMS,
+        Glossary,
+    },
     palette,
     panels::{
         Cells,
@@ -57,6 +60,7 @@ use crate::{
         Schematic,
         WasmListing,
         WasmView,
+        focus_stage_key,
         source_marks,
     },
     pipeline::{
@@ -320,7 +324,10 @@ impl State {
         let pending = RwSignal::new(false);
         let theme = RwSignal::new("dark");
         let mode = RwSignal::new(Mode::Machine);
-        let (stage, unfolded) = (RwSignal::new(Stage::Ir), RwSignal::new(Unfolded::default()));
+        // The pipeline opens at its first stage, wherever it is opened from, so
+        // a reader meets the stages in their order; the stage keys and the
+        // front end's "Skip to bcc IR" lead straight to the IR.
+        let (stage, unfolded) = (RwSignal::new(Stage::Lines), RwSignal::new(Unfolded::default()));
         let compare = RwSignal::new(false);
         let wasm_checks = RwSignal::new(wasm::Checks::default());
         let live = LiveViews::new(
@@ -783,6 +790,14 @@ impl State {
         }
         self.mode.set(mode);
         self.compile_now();
+    }
+
+    /// Open the pipeline at `stage` from a button of the machine's note,
+    /// which goes with the machine's view: the focus moves to the stage's
+    /// key once the pipeline is drawn, rather than falling to the page.
+    fn open_stage(self, stage: Stage) {
+        self.open_view(Mode::Pipeline, Some(stage));
+        Timeout::new(0, move || focus_stage_key(stage)).forget();
     }
 
     fn set_mode(self, mode: Mode) {
@@ -1694,11 +1709,16 @@ fn Hero(state: State) -> impl IntoView {
             <div class="hero-text">
                 <p class="eyebrow">"bcc · an interactive introduction to compilers and the C abstract machine"</p>
                 <h1>"What really happens when C runs?"</h1>
+                // The forms the compiler gives the program are words a
+                // newcomer may not know: each links to its glossary entry
+                // and shows its definition on hover or focus.
                 <p class="lede">
-                    "The C standard doesn’t describe your CPU. It describes an "<em>"abstract machine"</em>
-                    ": objects with lifetimes, values that are read and stored, and rules for exactly when each \
-                     effect happens. Step through real programs one evaluation at a time, recorded like a tape, then \
-                     watch bcc, a C compiler written in Rust, translate the same code into IR, assembly and machine code."
+                    "The C standard describes an "<em>"abstract machine"</em>", not your CPU: objects with \
+                     lifetimes, values read and stored, rules for when each effect happens. Step through programs \
+                     on a tape, one evaluation at a time, then watch bcc, a C compiler in Rust, turn them into "
+                    <FormTerm id="token" written="tokens" />", a "<FormTerm id="syntax-tree" written="syntax tree" />", "
+                    <FormTerm id="ir" written="IR" />", "<FormTerm id="assembly" written="assembly" />" and "
+                    <FormTerm id="machine-code" written="machine code" />"."
                 </p>
                 // Each step is a link to where it happens; the second, which
                 // starts the first lesson, is where a first visit begins.
@@ -1723,6 +1743,52 @@ fn Hero(state: State) -> impl IntoView {
             </div>
             <ReadingMap state />
         </section>
+    }
+}
+
+/// A word of the landing for one of the forms the compiler gives a program:
+/// a link to its glossary entry, with the entry's definition beside it while
+/// a mouse is over it or the keyboard focus is on it (Escape hides it). A
+/// touch screen has no hover, so a tap follows the link to the entry; a
+/// screen reader reads the definition as the link's description.
+#[component]
+fn FormTerm(id: &'static str, written: &'static str) -> impl IntoView {
+    // The page is rendered at build time, so a word without an entry fails
+    // the build.
+    let term = COMPILER_TERMS
+        .iter()
+        .find(|term| term.id == id)
+        .expect("each form the landing names is a compiler term");
+    let open = RwSignal::new(false);
+    let tip = format!("form-tip-{id}");
+    view! {
+        <span
+            class="form-term"
+            on:pointerenter=move |event| {
+                if event.pointer_type() == "mouse" {
+                    open.set(true);
+                }
+            }
+            on:pointerleave=move |event| {
+                if event.pointer_type() == "mouse" {
+                    open.set(false);
+                }
+            }
+            on:focusin=move |_| open.set(true)
+            on:focusout=move |_| open.set(false)
+            on:keydown=move |event| {
+                if event.key() == "Escape" && open.get_untracked() {
+                    event.stop_propagation();
+                    open.set(false);
+                }
+            }
+        >
+            <a href=format!("#term-{id}") aria-describedby=tip.clone()>{written}</a>
+            <span class="form-tip" role="tooltip" id=tip hidden=move || !open.get()>
+                <b class="form-tip-word">{term.name}</b>
+                {term.definition}
+            </span>
+        </span>
     }
 }
 
@@ -1955,9 +2021,8 @@ fn Toolbar(state: State) -> impl IntoView {
         view! {
             <button
                 type="button"
-                role="tab"
                 class="mode-tab"
-                aria-selected=move || (state.mode.get() == mode).to_string()
+                aria-pressed=move || (state.mode.get() == mode).to_string()
                 aria-controls="insight"
                 on:click=move |_| state.set_mode(mode)
             >
@@ -1969,7 +2034,11 @@ fn Toolbar(state: State) -> impl IntoView {
     };
     view! {
         <div class="toolbar" node_ref=toolbar>
-            <div class="mode-tabs" role="tablist" aria-label="View">
+            // Three pressed-or-not keys, not a tab list: the arrow keys step
+            // the machine wherever the focus is, even on these keys, which
+            // a chosen lesson focuses so that `→` steps at once; a tab
+            // list's arrows would move between the keys instead.
+            <div class="mode-tabs" role="group" aria-label="View">
                 {tab(Mode::Machine, "Abstract machine", "Machine", "1")}
                 {tab(Mode::Pipeline, "Compiler pipeline", "Compiler", "2")}
                 {tab(Mode::Wasm, "WebAssembly", "Wasm", "3")}
@@ -2086,7 +2155,7 @@ fn show_workbench(focus: bool) {
         }
         if focus
             && let Some(tab) = document
-                .query_selector(".mode-tab[aria-selected=\"true\"]")
+                .query_selector(".mode-tab[aria-pressed=\"true\"]")
                 .ok()
                 .flatten()
                 .and_then(|tab| tab.dyn_into::<web_sys::HtmlElement>().ok())
@@ -2381,7 +2450,7 @@ fn About() -> impl IntoView {
                          expression (store its result first); nested side effects such as a = b++; and the other \
                          library functions. A program that uses one of them stops before its first step, and its note \
                          says so. One that needs more of the preprocessor (another header, a function-like macro, \
-                         #if) stops there too, and its note sends the reader to the compiler's Preprocessor stage, \
+                         #if) stops there too, and its note has a button to the compiler's Preprocessor stage, \
                          which shows what bcc makes of it."
                     </p>
                     <p>
@@ -2459,7 +2528,7 @@ fn MachineView(state: State) -> impl IntoView {
                     recent=state.recent
                     group=state.group
                     on_jump=Callback::new(move |index| state.jump(index))
-                    on_preprocessor=Callback::new(move |()| state.open_view(Mode::Pipeline, Some(Stage::Preprocessor)))
+                    on_preprocessor=Callback::new(move |()| state.open_stage(Stage::Preprocessor))
                     placeholder=state.placeholder
                     running=state.running.into()
                     reel

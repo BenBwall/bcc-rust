@@ -201,10 +201,6 @@ fn Next(
     }
 }
 
-/// After a step of translation phase 4 (a directive the machine ran, or a
-/// use of a macro, which cites the preprocessing clauses of §6.10), a way
-/// to the compiler's Preprocessor stage, which shows what the real
-/// preprocessor does.
 /// How the floating value the step produced is stored: its sign bit,
 /// exponent field and fraction drawn as bits, and what they make. The
 /// engine takes the value apart; the page only lays the fields out.
@@ -282,6 +278,10 @@ fn shortened(text: &str, count: usize) -> String {
     }
 }
 
+/// After a step of translation phase 4 (a directive the machine ran, a use
+/// of a macro, or a stop at a directive it does not run, each of which
+/// cites a preprocessing clause of §6.10), a way to the compiler's
+/// Preprocessor stage, which shows what the real preprocessor does.
 #[component]
 fn StageLink(event: Memo<Option<StepEvent>>, on_preprocessor: Callback<()>) -> impl IntoView {
     view! {
