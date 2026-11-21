@@ -114,6 +114,7 @@ fn warn(
     }
     context.append_pending_errors([TranslationError::Semantic(SemanticError {
         extension_severity: None,
+        gcc_werror: false,
         kind,
         source_vectors: source,
         name: None,

@@ -2560,6 +2560,304 @@ mod tests {
         }
     }
 
+    /// GCC 14's `-Wshift-negative-value` is off by default, and `-Wextra`
+    /// (or `-Werror=extra`) enables it from C99 on in either order, as a
+    /// warning; its own option, `-Werror=`
+    /// and a pragma naming it enable it in any revision, and a pragma naming
+    /// `-Wextra` does not reach it. Clang 23's is on by default. Each row
+    /// was checked against both compilers: the standard, the options, any
+    /// pragma, and the warnings GCC reports (an error under `-Werror`).
+    #[test]
+    fn gcc_warns_of_negative_left_shifts_under_wextra_from_c99() {
+        const CODE: &str = "int f(int x) {\n  return (-1 << 1) + (-2 << x) + (-1 >> 1) + (0 ? -1 \
+                            << 1 : 0) + (int)sizeof(-1 << 1) + (-1u << 1) + ((0, -1) << 1);\n}\n";
+        const GCC: &str =
+            "c.c:3:14: warning: left shift of negative value [-Wshift-negative-value]";
+        const CLANG: &str = "c.c:3:14: warning: shifting a negative signed value is undefined \
+                             [-Wshift-negative-value]";
+        let table: [(&str, &[&str], &str, usize); 16] = [
+            ("gnu11", &[], "", 0),
+            ("gnu11", &["-Wextra"], "", 2),
+            // `-Werror=extra` enables `-Wextra`, but the warning stays one.
+            ("gnu11", &["-Werror=extra"], "", 2),
+            ("gnu11", &["-Werror=extra", "-Wno-extra"], "", 0),
+            ("gnu11", &["-Wno-extra", "-Werror=extra"], "", 2),
+            ("c99", &["-W"], "", 2),
+            ("gnu89", &["-Wextra"], "", 0),
+            ("c89", &["-Wshift-negative-value"], "", 2),
+            ("gnu11", &["-Wno-shift-negative-value", "-Wextra"], "", 0),
+            ("gnu11", &["-Wextra", "-Wno-extra"], "", 0),
+            ("gnu11", &["-Wextra", "-w"], "", 0),
+            ("gnu11", &["-Wextra", "-fwrapv"], "", 0),
+            ("gnu11", &["-Wextra", "-pedantic-errors"], "", 2),
+            (
+                "gnu11",
+                &[],
+                "#pragma GCC diagnostic warning \"-Wextra\"\n",
+                0,
+            ),
+            (
+                "gnu89",
+                &[],
+                "#pragma GCC diagnostic warning \"-Wshift-negative-value\"\n",
+                2,
+            ),
+            (
+                "gnu11",
+                &["-Wextra"],
+                "#pragma GCC diagnostic ignored \"-Wextra\"\n",
+                2,
+            ),
+        ];
+        let directory = Directory::new();
+        for (standard, options, pragma, count) in table {
+            // The pragma takes the first line, so the code keeps its lines.
+            let first = if pragma.is_empty() { "\n" } else { pragma };
+            directory.write("c.c", &format!("{first}{CODE}"));
+            let std = format!("-std={standard}");
+            let mut arguments = vec![std.as_str(), "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc("--gcc-mode", &arguments);
+            let text = stderr(&output);
+            succeeds(&output);
+            assert_eq!(
+                text.matches("left shift of negative value").count(),
+                count,
+                "{standard} {options:?} {pragma}: {text}"
+            );
+            if count != 0 {
+                assert!(text.contains(GCC), "{standard} {options:?}: {text}");
+                assert!(
+                    text.contains("c.c:3:26: warning: left shift of negative value"),
+                    "{standard} {options:?}: {text}"
+                );
+            }
+        }
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-std=gnu11", "-Wextra", "-Werror", "-fsyntax-only", "c.c"],
+        );
+        assert!(!output.status.success());
+        assert!(
+            stderr(&output)
+                .contains("error: left shift of negative value [-Werror=shift-negative-value]"),
+            "{}",
+            stderr(&output)
+        );
+        directory.write("c.c", &format!("\n{CODE}"));
+        let output = directory.bcc("--clang-mode", &["-std=gnu11", "-fsyntax-only", "c.c"]);
+        assert!(stderr(&output).contains(CLANG), "{}", stderr(&output));
+    }
+
+    /// GCC 14 accepts conversions between function and object pointers,
+    /// reporting each under `-pedantic` in its own words; a conditional
+    /// between `void *` and a function pointer is no error there. Clang 23
+    /// reports no cast, and warns of the conditional by default. Each line
+    /// was checked against both compilers.
+    #[test]
+    fn gcc_reports_function_and_object_pointer_conversions() {
+        const CODE: &str = "typedef void (*fp)(void);\nvoid take(void *);\nvoid g(void *vp, fp f, \
+                            int c) {\n  take(f);\n  fp a = (fp)vp;\n  void *b = c ? vp : f;\n  \
+                            (void)a; (void)b;\n}\n";
+        let directory = Directory::new();
+        directory.write("c.c", CODE);
+        let output = directory.bcc("--gcc-mode", &["-std=gnu11", "-fsyntax-only", "c.c"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-std=c99", "-pedantic", "-fsyntax-only", "c.c"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        for line in [
+            "c.c:4:8: warning: ISO C forbids passing argument 1 of 'take' between function \
+             pointer and 'void *' [-Wpedantic]",
+            "c.c:5:10: warning: ISO C forbids conversion of object pointer to function pointer \
+             type [-Wpedantic]",
+            "c.c:6:20: warning: ISO C forbids conditional expr between 'void *' and function \
+             pointer [-Wpedantic]",
+        ] {
+            assert!(text.contains(line), "{line}: {text}");
+        }
+        // `-Werror` names the option that made the warning an error;
+        // `-pedantic-errors` does not.
+        let output = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-std=c99",
+                "-pedantic",
+                "-Werror=pedantic",
+                "-fsyntax-only",
+                "c.c",
+            ],
+        );
+        let text = stderr(&output);
+        assert!(!output.status.success());
+        assert_eq!(text.matches("[-Werror=pedantic]").count(), 3, "{text}");
+        assert!(
+            text.ends_with("cc1: some warnings being treated as errors\n"),
+            "{text}"
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-std=c99", "-pedantic-errors", "-fsyntax-only", "c.c"],
+        );
+        let text = stderr(&output);
+        assert!(!output.status.success());
+        assert_eq!(text.matches("error: ISO C forbids").count(), 3, "{text}");
+        assert!(!text.contains("-Werror"), "{text}");
+        // A system header's macro spells the cast and the conditional, so
+        // GCC withholds both, even under `-pedantic-errors`.
+        directory.write(
+            "sys.h",
+            "#pragma GCC system_header\ntypedef void (*fp)(void);\n#define TO_FP(p) \
+             ((fp)(p))\n#define PICK(c, a, b) ((c) ? (a) : (b))\n",
+        );
+        directory.write(
+            "m.c",
+            "#include \"sys.h\"\nvoid *g(void *vp, fp f, int c) { fp a = TO_FP(vp); (void)a; \
+             return PICK(c, vp, f); }\n",
+        );
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-std=c99", "-pedantic-errors", "-fsyntax-only", "m.c"],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-std=c99", "-pedantic", "-fsyntax-only", "c.c"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(!text.contains("ISO C forbids"), "{text}");
+        assert!(text.contains("[-Wpointer-type-mismatch]"), "{text}");
+    }
+
+    /// GCC 14 names `-Werror=pedantic` after a `-pedantic` report that
+    /// `-Werror`, `-Werror=pedantic` or `#pragma GCC diagnostic error
+    /// "-Wpedantic"` made an error, and `cc1:` says warnings were treated as
+    /// errors; it names `-Wpedantic` after one `-pedantic-errors` made, and
+    /// after a warning `-Wno-error=pedantic` or a pragma kept. Each row was
+    /// checked against GCC: the pragma, the options, the severity, the
+    /// option named, and the `cc1:` line.
+    #[test]
+    fn gcc_names_the_werror_that_made_a_pedantic_report_an_error() {
+        const CODE: &str = "enum E { A = (int)(1.0 + 1) };\nint f(int x) { switch (x) { case \
+                            (int)(1.0 + 1): return 1; } return 0; }\n_Static_assert((int)(1.0 + \
+                            1), \"x\");\nconst char *name(void) { return __FUNCTION__; }\nvoid \
+                            g(void); void *p = (void *)g;\n";
+        const ERROR: &str = "#pragma GCC diagnostic error \"-Wpedantic\"\n";
+        const WARNING: &str = "#pragma GCC diagnostic warning \"-Wpedantic\"\n";
+        const ALL: &str = "cc1: all warnings being treated as errors\n";
+        const SOME: &str = "cc1: some warnings being treated as errors\n";
+        let table: [(&str, &[&str], &str, &str, &str); 13] = [
+            (
+                "",
+                &["-Wpedantic", "-Werror"],
+                "error",
+                "-Werror=pedantic",
+                ALL,
+            ),
+            (
+                "",
+                &["-Wpedantic", "-Werror=pedantic"],
+                "error",
+                "-Werror=pedantic",
+                SOME,
+            ),
+            (
+                "",
+                &["-Wpedantic", "-Wno-error=pedantic"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (
+                "",
+                &["-Werror", "-Wpedantic", "-Wno-error=pedantic"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (
+                "",
+                &["-Wpedantic", "-Wno-error=pedantic", "-Werror"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            ("", &["-pedantic-errors"], "error", "-Wpedantic", ""),
+            (
+                "",
+                &["-pedantic-errors", "-Werror"],
+                "error",
+                "-Wpedantic",
+                "",
+            ),
+            (
+                "",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (ERROR, &[], "error", "-Werror=pedantic", SOME),
+            (ERROR, &["-Werror"], "error", "-Werror=pedantic", ALL),
+            (ERROR, &["-pedantic-errors"], "error", "-Wpedantic", ""),
+            (
+                WARNING,
+                &["-Wpedantic", "-Werror"],
+                "warning",
+                "-Wpedantic",
+                "",
+            ),
+            (WARNING, &["-pedantic-errors"], "warning", "-Wpedantic", ""),
+        ];
+        let directory = Directory::new();
+        for (pragma, options, severity, option, cc1) in table {
+            directory.write("c.c", &format!("{pragma}{CODE}"));
+            let mut arguments = vec!["-std=gnu17", "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc("--gcc-mode", &arguments);
+            let text = stderr(&output);
+            assert_eq!(
+                output.status.success(),
+                severity == "warning",
+                "{pragma}{options:?}: {text}"
+            );
+            let reports = text
+                .lines()
+                .filter(|line| {
+                    line.starts_with("c.c:")
+                        && (line.contains(": warning: ") || line.contains(": error: "))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(reports.len(), 5, "{pragma}{options:?}: {text}");
+            for report in reports {
+                assert!(
+                    report.contains(&format!(": {severity}: "))
+                        && report.ends_with(&format!(" [{option}]")),
+                    "{pragma}{options:?}: {report}"
+                );
+            }
+            if cc1.is_empty() {
+                assert!(!text.contains("cc1:"), "{pragma}{options:?}: {text}");
+            } else {
+                assert!(text.ends_with(cc1), "{pragma}{options:?}: {text}");
+            }
+        }
+        for (pragma, options) in [("", &["-Wpedantic", "-w"][..]), (ERROR, &["-w"][..])] {
+            directory.write("c.c", &format!("{pragma}{CODE}"));
+            let mut arguments = vec!["-std=gnu17", "-fsyntax-only", "c.c"];
+            arguments.extend_from_slice(options);
+            let output = directory.bcc("--gcc-mode", &arguments);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{pragma}{options:?}");
+        }
+    }
+
     /// Wider types and bit-precise ones of any width fold the same way, as
     /// assertions accepted by GCC 14.2 and by Clang 23.1 show.
     #[test]

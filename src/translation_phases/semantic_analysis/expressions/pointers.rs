@@ -195,14 +195,95 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && ((self.void_target(to) && self.function_target(from))
                 || (self.function_target(to) && self.void_target(from)))
         {
-            self.context.report_extension_since(
-                "conversion between function and void pointers",
-                FeatureOrigin::Gnu,
-                diagnostic_site,
-            );
+            // GCC's words name the context (`convert_for_assignment` in
+            // GCC's `c-typeck.cc`), at the initializer rather than the
+            // declarator.
+            let context = match site {
+                | ConversionSite::Initialization => Some("initialization"),
+                | ConversionSite::Assignment => Some("assignment"),
+                | ConversionSite::Return => Some("return"),
+                | ConversionSite::Argument {
+                    position,
+                    callee: Some(callee),
+                } => Some(crate::diagnostics::format_in!(
+                    self.scratch,
+                    "passing argument {position} of '{}'",
+                    self.context.string_cache.at(callee)
+                )),
+                | ConversionSite::Argument { .. } | ConversionSite::Other => None,
+            };
+            match context {
+                | Some(context) if self.gcc_pointer_rules() => {
+                    let text = crate::diagnostics::format_in!(
+                        self.scratch,
+                        "ISO C forbids {context} between function pointer and 'void *'"
+                    );
+                    let at = if site == ConversionSite::Initialization {
+                        source.expression.source_vectors
+                    } else {
+                        diagnostic_site
+                    };
+                    self.gcc_pointer_pedwarn(text, at);
+                },
+                | _ => self.context.report_extension_since(
+                    "conversion between function and void pointers",
+                    FeatureOrigin::Gnu,
+                    diagnostic_site,
+                ),
+            }
             return true;
         }
         false
+    }
+
+    /// Whether GCC's words and rules decide the constraints between function
+    /// pointers and object pointers: the GCC identity's.
+    fn gcc_pointer_rules(&self) -> bool {
+        self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Gcc
+    }
+
+    /// Reports `text` at `at` as GCC's `-pedantic` reports a conversion
+    /// between function and object pointers, unless a system header spells
+    /// `at`, as a system macro's body does, where GCC withholds it even
+    /// under `-pedantic-errors`.
+    fn gcc_pointer_pedwarn(&mut self, text: &str, at: SourceVectors) {
+        if !self.context.spelled_in_system_header(at) {
+            self.report_pedantic_extension(text, at);
+        }
+    }
+
+    /// GCC's `-pedantic` report of the cast `e` of `operand`, of type
+    /// `from`, to `target`, when one is a function pointer and the other an
+    /// object pointer, at the cast's `(`; a null pointer constant may become
+    /// a function pointer silently (`build_c_cast` in GCC's `c-typeck.cc`).
+    /// C99 converts function pointers only to function pointers, and lists
+    /// the casts as a common extension. Clang reports neither.
+    /// C99: §6.3.2.3 paragraphs 1 and 8, pp. 47-48; PDF pp. 59-60; §J.5.7
+    /// paragraphs 1-2, p. 514; PDF p. 526.
+    pub(in crate::translation_phases::semantic_analysis) fn function_object_cast(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        target: TypeId,
+        from: TypeId,
+        operand: ExpressionInfo<'tu>,
+    ) {
+        if !self.gcc_pointer_rules() {
+            return;
+        }
+        let (Some(to), Some(from)) = (self.pointer_target(target), self.pointer_target(from))
+        else {
+            return;
+        };
+        let text = match (self.function_target(to), self.function_target(from)) {
+            | (false, true) =>
+                "ISO C forbids conversion of function pointer to object pointer type",
+            | (true, false) if !self.null_pointer_constant(operand) =>
+                "ISO C forbids conversion of object pointer to function pointer type",
+            | _ => return,
+        };
+        let at = crate::translation_phases::Context::first_token_vector(e.source_vectors);
+        self.gcc_pointer_pedwarn(text, at);
     }
 
     /// Warns about a cast between a pointer and an integer of another width,
@@ -939,11 +1020,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && ((self.void_target(lp) && self.function_target(rp))
                     || (self.function_target(lp) && self.void_target(rp)))
             {
-                self.context.report_extension_since(
-                    "equality comparison between function pointer and void pointer",
-                    FeatureOrigin::Gnu,
-                    source,
-                );
+                // GCC's words (`build_binary_op` in GCC's `c-typeck.cc`).
+                if self.gcc_pointer_rules() {
+                    self.gcc_pointer_pedwarn(
+                        "ISO C forbids comparison of 'void *' with function pointer",
+                        source,
+                    );
+                } else {
+                    self.context.report_extension_since(
+                        "equality comparison between function pointer and void pointer",
+                        FeatureOrigin::Gnu,
+                        source,
+                    );
+                }
             } else if !compatible {
                 let group = DiagnosticGroup::CompareDistinctPointerTypes;
                 let wording = self.pointer_mismatch_wording(false, lt, rt);
@@ -1001,13 +1090,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// composite, and both carry the union of the targets' qualifiers. The
     /// rest violate the constraint, which Clang reports as a warning:
     /// mismatched targets yield an unqualified `void *` and an integer arm
-    /// converts to the pointer arm's type.
+    /// converts to the pointer arm's type. GCC pairs `void *` with a
+    /// function pointer as with an object pointer, reporting it under
+    /// `-pedantic` at `colon`, the `:` its reports point at.
     /// C99: §6.5.15p3,p6, pp. 90-91; PDF pp. 102-103.
     pub(super) fn conditional_pointers(
         &mut self,
         lt: TypeId,
         rt: TypeId,
         source: SourceVectors,
+        colon: SourceVectors,
     ) -> Option<TypeId> {
         let (lp, rp) = match (self.pointer_target(lt), self.pointer_target(rt)) {
             | (Some(lp), Some(rp)) => (lp, rp),
@@ -1029,11 +1121,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             lp
         } else if self.void_target(rp) && !self.function_target(lp) {
             rp
+        } else if self.gcc_pointer_rules() && (self.void_target(lp) || self.void_target(rp)) {
+            // `build_conditional_expr` in GCC's `c-typeck.cc`.
+            self.gcc_pointer_pedwarn(
+                "ISO C forbids conditional expr between 'void *' and function pointer",
+                colon,
+            );
+            if self.void_target(lp) { lp } else { rp }
         } else if self.types.unanalyzed(lp) || self.types.unanalyzed(rp) {
             lp
         } else if let Some(composite) = self.types.composite(lp.unqualified(), rp.unqualified()) {
             composite
-        } else if let Some(merged) = self.gnu_qualified_arrays(lp, rp, source) {
+        } else if let Some(merged) = self.gnu_qualified_arrays(lp, rp, colon) {
             merged
         } else {
             // GCC 14 reports it under `-Wincompatible-pointer-types`, an
@@ -1076,7 +1175,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         lp: TypeId,
         rp: TypeId,
-        source: SourceVectors,
+        colon: SourceVectors,
     ) -> Option<TypeId> {
         if !matches!(
             self.context.configuration.compiler_identity(),
@@ -1095,7 +1194,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.context.configuration.standard() < crate::configuration::CStandard::C23 {
             self.report_pedantic_extension(
                 "invalid use of pointers to arrays with different qualifiers in ISO C before C23",
-                source,
+                colon,
             );
         }
         let qualifiers = self.types.object_qualifiers(lp) | self.types.object_qualifiers(rp);

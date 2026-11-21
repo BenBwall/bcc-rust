@@ -124,6 +124,7 @@ impl CallDiagnostic {
                         crate::translation_phases::semantic_analysis::SemanticErrorKind::CallAttribute
                     },
                     extension_severity: Some(severity),
+                    gcc_werror: false,
                     source_vectors:     self.source,
                     name:               Some(self.message),
                     previous:           Some(self.declaration),

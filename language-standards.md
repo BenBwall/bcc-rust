@@ -934,7 +934,15 @@ The following vocabulary entries retain the established diagnostic contracts:
   operation that traps under `-ftrapping-math` and arithmetic between a real
   and a complex operand there are "initializer element is not constant", and
   an undefined or overflowed value has no `-pedantic` report; Clang's rules
-  accept all of them. GCC also matches no bit-field narrower than its
+  accept all of them. GCC also takes the cast as constant only when the
+  operand it parsed was (`TREE_CONSTANT` in `build_c_cast`). So it refuses a
+  `?:` whose operands are not all integer constant expressions, which GCC
+  folds as it builds them, a comparison of floating or complex operands, and a
+  `&&` or `||` with an operand that is no integer constant, unless a
+  conversion to another type folds the `?:` (`(int)(1 ? 1.0 : 2.0)`). Those
+  three refusals belong to GCC's identity alone: TCC's and MSVC's, which
+  take GCC's rules here, judge only the folded operand. GCC
+  also matches no bit-field narrower than its
   declared type; Clang matches it and stores the operand whole. A cast
   selected by a constant `?:` and a C23 `constexpr` object a cast
   initializes are still refused, though both compilers accept them.
@@ -3025,6 +3033,46 @@ modelled; MSVC keeps the Clang errors for the two pointer groups, where `cl`
 warns (C4047, C4133). The GCC torture survey lost no test
 (see the pull request).
 
+C99 converts function pointers only to other function pointers
+(§6.3.2.3p1, p8), and lists casts between them and object pointers as a
+common extension (§J.5.7). Both compilers accept them. Under GCC's identity,
+`-pedantic` reports them in GCC 14's words (`build_c_cast`,
+`convert_for_assignment`, `build_binary_op` and `build_conditional_expr` in
+`c-typeck.cc`):
+
+- a cast either way, "ISO C forbids conversion of object pointer to function
+  pointer type" and "... of function pointer to object pointer type", at its
+  `(`; a null pointer constant may become a function pointer silently.
+- an assignment, initialization, `return` or argument between `void *` and
+  a function pointer, "ISO C forbids initialization between function pointer
+  and 'void *'" and its `assignment`, `return` and `passing argument 1 of
+  'f'` forms, an initialization at its initializer.
+- equality between them, "ISO C forbids comparison of 'void *' with function
+  pointer".
+- a conditional between them, "ISO C forbids conditional expr between 'void
+  *' and function pointer", at its `:`. GCC takes the `void *` as the result,
+  where bcc refused it as a pointer mismatch before.
+
+An `__extension__` operand or a marked declaration silences each, and a
+system header spelling the place, as a system macro's body does, withholds it
+even under `-pedantic-errors`. A call through anything but a name
+(`s.cb(g)`, `ps->cb(g)`, `tab[1](g)`, `get()(g)`, `(*pf)(g)`) keeps bcc's
+"'conversion between function and void pointers' is a GNU extension", since
+GCC names the callee as it prints the expression, which bcc does not model.
+
+Like the `__FUNCTION__`, enumerator, case-label and
+static-assertion reports, these name the option as GCC's
+`compiler_diagnostic_option_name` does: `[-Werror=pedantic]` on an error that
+`-Werror`, `-Werror=pedantic` or `#pragma GCC diagnostic error "-Wpedantic"`
+made, followed by `cc1:`'s line, and `[-Wpedantic]` on one that
+`-pedantic-errors` made and on a warning `-Wno-error=pedantic` or a pragma
+kept, in any order of the options. The extension machinery decides it
+(`Context::report_gcc_tagged_extension`) as it decides the severity.
+Clang reports no cast, words the rest as its own, and warns of the
+conditional by default (`-Wpointer-type-mismatch`); its identity is
+unchanged. GCC's note naming the parameter after an argument's report is not
+written.
+
 Under TCC, a `__builtin_` name TCC does not know (TCC `mob`'s `tcctok.h`
 and `tccdefs.h`: `expect`, `constant_p`, `frame_address`,
 `return_address`, `unreachable`, `types_compatible_p`, `choose_expr`, the
@@ -4105,9 +4153,24 @@ single evaluation of each full expression (`Sema::CheckForIntOverflow`), so
 that `y ? 2147483647+1 : 0` says nothing and `y + (2147483647+1)` does. The
 groups are `-Woverflow` (GCC), `-Winteger-overflow` (Clang),
 `-Wshift-count-overflow`, `-Wshift-count-negative`, `-Wshift-overflow` (GCC
-prints `-Wshift-overflow=`), Clang's `-Wshift-negative-value`, GCC's
+prints `-Wshift-overflow=`), `-Wshift-negative-value`, GCC's
 `-Wdiv-by-zero` and Clang's `-Wdivision-by-zero`, which also answers to
 `-Wno-div-by-zero`. `-Wno-overflow` does not reach Clang's warning.
+
+`-Wshift-negative-value` differs most. Clang's is on by default and needs a
+constant count. GCC's ("left shift of negative value") is off by default,
+and `-Wextra` enables it from C99 on, before or after the standard option
+(`c_common_post_options` in GCC's `c-opts.cc`). `-Werror=extra` enables
+`-Wextra` and so the warning, which stays a warning, and the last of
+`-Wextra`, `-Wno-extra` and `-Werror=extra` decides. Its own option, `-Werror=` or
+a pragma naming it enables it in C90 too, while a pragma naming `-Wextra`
+does not reach it. GCC warns at the operator whatever the count
+(`-1 << x`), when the left operand is a negative integer constant of a type
+that does not wrap. A comma operand, `-fwrapv`, unevaluated operands and an
+operator a system header spells are silent, and `__extension__` does not
+silence it. GCC also warns of a statement expression such as
+`({ -1; }) << 1`, which bcc does not fold. Only GCC's identity reports it
+this way; TCC's and MSVC's report no negative left shift.
 
 Known differences that remain: `1LL<<(1ULL<<63)`, a 64-bit left operand with
 that count, is no constant under GCC and 1 here; Clang's code shifts
@@ -4117,8 +4180,8 @@ Clang's `-Wgnu-folding-constant` on `_Alignas` under `-pedantic` and on a
 `__builtin_choose_expr` operand it does not select are not reproduced; Clang's
 silence in the body of `while (0)` is not, since bcc's unreachable-code model
 does not cover it; a `case` label's `?:` warns under Clang's overflow check here
-but not there; Clang's refusal of `struct { int b : 4; } t = { 1 << 40 };` and
-GCC's `-Wextra` `-Wshift-negative-value` are not modeled; and
+but not there; Clang's refusal of `struct { int b : 4; } t = { 1 << 40 };` is
+not modeled; and
 `int *p = (int *)(2147483647 + 1);` keeps a false `-Wint-to-pointer-cast`.
 
 ## An address's truth in a constant (2026-11-07)

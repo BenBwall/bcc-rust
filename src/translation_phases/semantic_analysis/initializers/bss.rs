@@ -111,6 +111,7 @@ pub(in crate::translation_phases::semantic_analysis) fn check<'tu>(
         sema.errors += 1;
         context.append_pending_errors([TranslationError::Semantic(SemanticError {
             extension_severity: None,
+            gcc_werror: false,
             kind: if fixups {
                 SemanticErrorKind::BssFixups
             } else {

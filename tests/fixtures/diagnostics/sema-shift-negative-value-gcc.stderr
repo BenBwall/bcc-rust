@@ -1,0 +1,23 @@
+sema-shift-negative-value-gcc.c: In function 'shifts':
+sema-shift-negative-value-gcc.c:4:16: warning: left shift of negative value [-Wshift-negative-value]
+    4 |     int a = -1 << 1;
+      |                ^~
+sema-shift-negative-value-gcc.c:5:16: warning: left shift of negative value [-Wshift-negative-value]
+    5 |     int b = -2 << x;
+      |                ^~
+sema-shift-negative-value-gcc.c:6:19: warning: left shift of negative value [-Wshift-negative-value]
+    6 |     int c = MINUS << 3;
+      |                   ^~
+sema-shift-negative-value-gcc.c:7:22: warning: left shift of negative value [-Wshift-negative-value]
+    7 |     int d = (char)-1 << 1;
+      |                      ^~
+sema-shift-negative-value-gcc.c:8:18: warning: left shift of negative value [-Wshift-negative-value]
+    8 |     long e = -1L << 40;
+      |                  ^~
+sema-shift-negative-value-gcc.c:9:31: warning: left shift of negative value [-Wshift-negative-value]
+    9 |     int f = __extension__ (-1 << 1);
+      |                               ^~
+sema-shift-negative-value-gcc.c:10:16: warning: left shift of negative value [-Wshift-negative-value]
+   10 |     int g = -1 << 40;
+      |                ^~
+sema-shift-negative-value-gcc.c:10:16: warning: left shift count >= width of type [-Wshift-count-overflow]

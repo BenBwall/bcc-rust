@@ -384,6 +384,21 @@ impl<'tu> Context<'tu> {
         source: SourceVectors,
         diagnostic: impl FnOnce(ErrorSeverity) -> TranslationError<'tu>,
     ) {
+        self.report_gcc_tagged_extension(feature, baseline, source, |severity, _| {
+            diagnostic(severity)
+        });
+    }
+
+    /// [`Self::report_extension_diagnostic`] for a diagnostic that writes
+    /// GCC's option tag itself: `diagnostic` also learns whether GCC names
+    /// `-Werror=pedantic` there ([`Self::gcc_names_werror_pedantic`]).
+    pub(crate) fn report_gcc_tagged_extension(
+        &mut self,
+        feature: Feature,
+        baseline: DiagnosticPolicy,
+        source: SourceVectors,
+        diagnostic: impl FnOnce(ErrorSeverity, bool) -> TranslationError<'tu>,
+    ) {
         let baseline = if self.configuration.accepts(feature) {
             baseline
         } else {
@@ -404,8 +419,25 @@ impl<'tu> Context<'tu> {
             } else {
                 severity
             };
-            self.queue_extension(source, diagnostic(own), severity, reach);
+            let werror = self.gcc_names_werror_pedantic(severity, reach);
+            self.queue_extension(source, diagnostic(own, werror), severity, reach);
         }
+    }
+
+    /// Whether GCC's format names `-Werror=pedantic` after a `-pedantic`
+    /// report the options reach as `reach` says, of `severity`: an error
+    /// that `-pedantic-errors` did not make, so one that `-Werror`,
+    /// `-Werror=pedantic` or `#pragma GCC diagnostic error "-Wpedantic"`
+    /// made of the warning (`compiler_diagnostic_option_name` in GCC's
+    /// `opts.cc`, which names the option alone for an error
+    /// `-pedantic-errors` made, as `diagnostic_report_diagnostic` takes it
+    /// for the report's own kind).
+    fn gcc_names_werror_pedantic(&self, severity: ErrorSeverity, reach: ExtensionReach) -> bool {
+        severity == ErrorSeverity::Error
+            && self.configuration.compiler_identity() == CompilerIdentity::Gcc
+            && !self.configuration.pedantic_errors()
+            && reach.option != ExtensionOption::None
+            && reach.gcc != GccFiling::Preprocessor
     }
 
     /// Whether semantic analysis reports a parameter without a name in a

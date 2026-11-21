@@ -1012,11 +1012,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             lt
         } else if self.pointer_target(rt).is_some() && self.null_pointer_constant(left) {
             rt
-        } else if let Some(ty) = self.conditional_pointers(
-            lt,
-            rt,
-            e.operator_source_vectors.unwrap_or(e.source_vectors),
-        ) {
+        } else if let Some(ty) = {
+            let operator = e.operator_source_vectors.unwrap_or(e.source_vectors);
+            let colon = crate::translation_phases::Context::token_before(
+                e.source_vectors,
+                right.expression.source_vectors,
+            )
+            .unwrap_or(operator);
+            self.conditional_pointers(lt, rt, operator, colon)
+        } {
             // TCC converts an integer arm to the pointer as a cast converts
             // it (`gen_cast` in `tccgen.c`), warning about its width too.
             if self.context.configuration.compiler_identity()
@@ -1608,6 +1612,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
         }
         self.pointer_integer_cast_warning(target, from, operand, e.source_vectors);
+        self.function_object_cast(e, target, from, operand);
         self.convert(operand.expression, target, ConversionKind::Assignment);
         let mut info = Self::expression_result(e, target.unqualified());
         self.fold_conversion(&mut info, target, operand);

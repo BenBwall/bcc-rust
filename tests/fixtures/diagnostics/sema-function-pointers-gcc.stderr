@@ -1,0 +1,35 @@
+sema-function-pointers-gcc.c:5:17: warning: ISO C forbids conversion of function pointer to object pointer type [-Wpedantic]
+    5 | void *address = (void *)fn;
+      |                 ^
+sema-function-pointers-gcc.c:6:15: warning: ISO C forbids conversion of object pointer to function pointer type [-Wpedantic]
+    6 | fp function = (fp)&object;
+      |               ^
+sema-function-pointers-gcc.c: In function 'returned':
+sema-function-pointers-gcc.c:8:31: warning: ISO C forbids return between function pointer and 'void *' [-Wpedantic]
+    8 | void *returned(void) { return fn; }
+      |                               ^~
+sema-function-pointers-gcc.c: In function 'conversions':
+sema-function-pointers-gcc.c:10:12: warning: ISO C forbids conversion of object pointer to function pointer type [-Wpedantic]
+   10 |     fp a = (fp)vp;
+      |            ^
+sema-function-pointers-gcc.c:11:14: warning: ISO C forbids conversion of function pointer to object pointer type [-Wpedantic]
+   11 |     int *b = (int *)f;
+      |              ^
+sema-function-pointers-gcc.c:12:12: warning: ISO C forbids conversion of object pointer to function pointer type [-Wpedantic]
+   12 |     fp d = (fp)ip;
+      |            ^
+sema-function-pointers-gcc.c:13:12: warning: ISO C forbids conversion of object pointer to function pointer type [-Wpedantic]
+   13 |     fp e = (fp)(int *)0;
+      |            ^
+sema-function-pointers-gcc.c:14:15: warning: ISO C forbids initialization between function pointer and 'void *' [-Wpedantic]
+   14 |     void *g = f;
+      |               ^
+sema-function-pointers-gcc.c:15:8: warning: ISO C forbids assignment between function pointer and 'void *' [-Wpedantic]
+   15 |     vp = f;
+      |        ^
+sema-function-pointers-gcc.c:16:16: warning: ISO C forbids comparison of 'void *' with function pointer [-Wpedantic]
+   16 |     int h = vp == f;
+      |                ^~
+sema-function-pointers-gcc.c:18:22: warning: ISO C forbids conditional expr between 'void *' and function pointer [-Wpedantic]
+   18 |     void *j = c ? vp : f;
+      |                      ^

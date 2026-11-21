@@ -28,9 +28,9 @@
 //! which [`Analyzer::finish_full_expression`] walks.
 //!
 //! C99: §6.6 paragraph 4, p. 95; PDF p. 107; §6.5 paragraph 5, p. 67; PDF
-//! p. 79; §6.5.7 paragraphs 3-5, p. 85; PDF p. 97; §6.5.5 paragraphs 5-6, p.
-//! 82; PDF p. 94. GNU extension: GCC manual, "Warning Options", `-Woverflow`
-//! and `-Wshift-count-overflow`.
+//! p. 79; §6.5.7 paragraphs 3-5, pp. 84-85; PDF pp. 96-97; §6.5.5
+//! paragraphs 5-6, p. 82; PDF p. 94. GNU extension: GCC manual, "Warning
+//! Options", `-Woverflow` and `-Wshift-count-overflow`.
 //! <https://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html>
 
 use super::{
@@ -193,6 +193,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.inhibited_evaluations != 0 || self.tainted {
             return;
         }
+        // GCC's report of a negative operand is
+        // [`Self::report_gcc_negative_shift`], whatever the count.
         if self.negative_integer(left) {
             if !gcc && self.constant_contexts == 0 && !self.functions.dead {
                 let text = self
@@ -265,7 +267,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// The value and mark of a shift of `left` at the type of `bits` and
     /// `signed`ness whose count, or whose left operand, makes it undefined.
-    /// C99: §6.5.7 paragraphs 3-4, p. 85; PDF p. 97.
+    /// C99: §6.5.7 paragraphs 3-4, pp. 84-85; PDF pp. 96-97.
     fn exceptional_shift(
         &self,
         op: BinaryOperator,
@@ -464,9 +466,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Warns of a shift count or a zero divisor of `op`, at type `ty`, in an
     /// expression whose left operand may be anything; the operands of a
-    /// compound assignment count too.
-    /// C99: §6.5.7 paragraph 3, p. 85; PDF p. 97; §6.5.5 paragraph 5, p. 82;
-    /// PDF p. 94.
+    /// compound assignment count too. GCC first warns of a negative constant
+    /// shifted left, whatever the count.
+    /// C99: §6.5.7 paragraphs 3-4, pp. 84-85; PDF pp. 96-97; §6.5.5
+    /// paragraph 5, p. 82; PDF p. 94.
     pub(super) fn report_exceptional_operands(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -482,10 +485,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return;
         }
+        let gcc = self.exceptional_rules() == RuleSet::Gcc;
+        if op == B::LeftShift
+            && self.context.configuration.compiler_identity()
+                == crate::configuration::CompilerIdentity::Gcc
+        {
+            self.report_gcc_negative_shift(e, left);
+        }
         let Some(count) = right.integer else {
             return;
         };
-        let gcc = self.exceptional_rules() == RuleSet::Gcc;
         // Clang's `DiagRuntimeBehavior`: only code that may run.
         if !gcc && (self.constant_contexts != 0 || self.functions.dead) {
             return;
@@ -544,6 +553,46 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.with_highlights(count, |analyzer| {
             analyzer.exceptional_warning(group, text, operator_source(e));
         });
+    }
+
+    /// GCC's `-Wshift-negative-value` for `left << count`, `e`: the left
+    /// operand is a negative integer constant of a type whose overflow does
+    /// not wrap (`build_binary_op` in GCC's `c-typeck.cc`). A comma
+    /// operand is not GCC's constant even when it folds, and GCC withholds
+    /// the warning when a system header spells the operator, as a system
+    /// macro's body does.
+    /// C99: §6.5.7 paragraph 4, p. 85; PDF p. 97.
+    fn report_gcc_negative_shift(&mut self, e: &'tu Expression<'tu>, left: ExpressionInfo<'tu>) {
+        let Some(value) = left.integer else {
+            return;
+        };
+        let mut operand = left.expression;
+        while let ExpressionType::Parenthesized { expression } = operand.kind {
+            operand = expression;
+        }
+        let comma = matches!(
+            operand.kind,
+            ExpressionType::Binary {
+                operator: BinaryOperator::Comma,
+                ..
+            }
+        );
+        if comma
+            || !self.negative_integer(value)
+            || self.context.configuration.wrapv()
+            || self.context.spelled_in_system_header(operator_source(e))
+        {
+            return;
+        }
+        let text = self
+            .context
+            .string_cache
+            .intern("left shift of negative value");
+        self.exceptional_warning(
+            DiagnosticGroup::ShiftNegativeValue,
+            text,
+            operator_source(e),
+        );
     }
 
     /// Reports `text` under `group`, which selects its option and severity.

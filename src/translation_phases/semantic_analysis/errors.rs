@@ -39,6 +39,10 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SemanticError {
     pub(crate) extension_severity: Option<ErrorSeverity>,
+    /// GCC's format names `-Werror=pedantic` after this `-pedantic` report,
+    /// which `-Werror`, `-Werror=pedantic` or a diagnostic pragma made an
+    /// error ([`Context::report_gcc_tagged_extension`]).
+    pub(crate) gcc_werror:         bool,
     pub(crate) kind:               SemanticErrorKind,
     pub(crate) source_vectors:     SourceVectors,
     pub(crate) name:               Option<StringCacheId>,
@@ -3502,6 +3506,12 @@ impl ToDiagnostic for SemanticError {
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
         let (message, note) = self.kind.explanation();
+        // GCC names the `-Werror` that made a `-pedantic` report an error
+        // (`print_option_information` in `diagnostic.cc`), which marks it
+        // for the `cc1: some warnings being treated as errors` line.
+        let gcc_werror = self.gcc_werror
+            && context.configuration.diagnostic_format()
+                == crate::configuration::DiagnosticFormat::Gcc;
         let message = if let SemanticErrorKind::ImplicitLibraryFunction(ty) = self.kind {
             format_in!(
                 arena,
@@ -3535,7 +3545,12 @@ impl ToDiagnostic for SemanticError {
                 }
             )
         } else if let SemanticErrorKind::PedanticConstant(text) = self.kind {
-            format_in!(arena, "{} [-Wpedantic]", context.string_cache.at(text))
+            let option = if gcc_werror {
+                "-Werror=pedantic"
+            } else {
+                "-Wpedantic"
+            };
+            format_in!(arena, "{} [{option}]", context.string_cache.at(text))
         } else if let SemanticErrorKind::ConstantConversion(text)
         | SemanticErrorKind::CompilerRefusal(text)
         | SemanticErrorKind::ExceptionalConstant(_, text)
@@ -3607,7 +3622,7 @@ impl ToDiagnostic for SemanticError {
         } else {
             message
         };
-        let mut suffixed = false;
+        let mut suffixed = gcc_werror;
         let message = if self.kind == SemanticErrorKind::PredefinedOutsideFunction {
             suffixed = true;
             format_in!(

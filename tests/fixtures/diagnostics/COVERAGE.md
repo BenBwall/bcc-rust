@@ -1189,6 +1189,20 @@ before a function definition and on a same-type cast, all three are silent;
 the declaration after a marked one and the file-scope `sizeof` operand after
 the marked one warn again on the same lines and columns.
 
+`sema-union-cast-static-gcc.c` (`-std=gnu11`) pins which casts to a union
+type GCC 14 refuses in a static initializer ("initializer element is not
+constant"), which takes the cast as constant only when the operand it parsed
+was (`TREE_CONSTANT` in `build_c_cast`). It refuses a `?:` whose operands are
+not all integer constant expressions, a comparison of floating or complex
+operands (converted to `long` too), and a `&&` of a floating operand,
+through a negation and in braces and a block-scope static object. It accepts
+integer operands, `!1.0`, `1.0 + 1.0`, a conversion to another type that folds
+the `?:`, and the same casts in an automatic object. Checked 21 November 2026
+against GCC 14: the refusals stand on GCC's lines and columns, and main
+refused none of them. The words and the underline remain bcc's: "static-storage
+initializer requires a constant expression" across the cast, where GCC writes
+its words at the cast's `(`.
+
 `sema-extension-pedantic-gcc.c` checks GCC's `-pedantic` reports of
 `__FUNCTION__` and `__PRETTY_FUNCTION__` under `__extension__`. Checked
 20 November 2026 against GCC 14: an `__extension__` operand, a marked
@@ -1207,10 +1221,53 @@ against GCC 14 on the same day, show a marked declaration silencing a
 conditional between pointers to arrays whose elements differ in qualifiers and
 a static initializer folded from an undefined shift, while the unmarked copies
 and the initializer whose shift sits in an `__extension__` operand warn on
-GCC's lines; GCC points the conditional at its `:`, column 72, where bcc points
-at its `?`, column 68. The last two rows initialize file-scope unions
+GCC's lines and columns, the conditional at its `:`. The last two rows initialize file-scope unions
 with casts to a union type, which GCC accepts; only the unmarked one warns,
 in bcc's wording for GCC's "ISO C forbids casts to union type".
+
+### GCC's function and object pointer conversions
+
+`sema-function-pointers-gcc.c` (`-std=gnu99 -pedantic`) pins GCC's
+`-pedantic` reports of conversions between function and object pointers:
+"ISO C forbids conversion of object pointer to function pointer type" and
+the reverse at a cast's `(`, at file scope and in a function, silent for a
+null pointer constant; "ISO C forbids initialization between function
+pointer and 'void *'" at the initializer, and its `return` and `assignment`
+forms; "ISO C forbids comparison of 'void *' with function pointer", silent
+against a null pointer; and "ISO C forbids conditional expr between 'void *'
+and function pointer" at the `:`, whose result is the `void *`. An
+`__extension__` operand or a marked declaration silences each. Checked
+21 November 2026 against GCC 14 (`LC_ALL=C`), which it matches byte for byte.
+Argument passing ("ISO C forbids passing argument 1 of 'f' between function
+pointer and 'void *'") is pinned by
+`gcc_reports_function_and_object_pointer_conversions` in
+`tests/integration/personality_cli.rs`, as GCC follows it with a note about
+the parameter that bcc does not write. The option each report names under
+`-Werror`, `-Werror=pedantic`, `-Wno-error=pedantic`, `-pedantic-errors` and
+`#pragma GCC diagnostic error` or `warning "-Wpedantic"`, with the existing
+`__FUNCTION__`, enumerator, case-label and static-assertion reports, is
+pinned by `gcc_names_the_werror_that_made_a_pedantic_report_an_error`,
+checked against GCC 14 on 21 November 2026. A call through an expression
+other than a name keeps bcc's words, as GCC names the callee expression.
+GCC underlines only part of some
+initializers, a point for a conditional or a parenthesized one and the name
+of a called function, where bcc underlines the whole expression, as it does
+for every initializer it reports in GCC's format.
+
+### GCC's negative left shifts
+
+`sema-shift-negative-value-gcc.c` (`-std=gnu99 -Wextra`) pins GCC's
+`-Wshift-negative-value`, "left shift of negative value", at the operator:
+for a negative literal, an enumerator, a cast constant and a `long`, with a
+constant count or a variable one, inside `__extension__`, and before the
+`-Wshift-count-overflow` of the same shift. The second function is silent:
+a comma operand, an operand a constant `?:` skips or `sizeof` holds, an
+unsigned or nonnegative operand, a right shift. Checked 21 November 2026
+against GCC 14 (`LC_ALL=C`), which it matches byte for byte. The options that
+enable it (`-Wextra` or `-Werror=extra` from C99 on, its own option and
+pragma in C90, never a pragma naming `-Wextra`) are pinned by
+`gcc_warns_of_negative_left_shifts_under_wextra_from_c99` in
+`tests/integration/personality_cli.rs`.
 
 ### Predefined function-name identifiers
 

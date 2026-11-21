@@ -51,6 +51,7 @@ fn diagnose_if_warning_preserves_warning_severity_and_lowering_gate() {
                 TranslationError::Semantic(SemanticError {
                     kind: SemanticErrorKind::CallAttribute,
                     extension_severity: Some(crate::translation_phases::ErrorSeverity::Warning),
+                    gcc_werror: false,
                     ..
                 })
             ));
