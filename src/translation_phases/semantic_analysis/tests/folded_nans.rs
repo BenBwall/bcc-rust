@@ -231,8 +231,14 @@ fn every_standard_format_folds_the_positive_nan() {
 fn binary128_folds_the_positive_nan_only_in_a_static_initializer() {
     for (source, negative) in [
         ("__float128 q = 0.0Q / 0.0Q;", false),
-        ("void f(void) { static __float128 q = 0.0Q / 0.0Q; (void)q; }", false),
-        ("void f(void) { __float128 q = 0.0Q / 0.0Q; (void)q; }", true),
+        (
+            "void f(void) { static __float128 q = 0.0Q / 0.0Q; (void)q; }",
+            false,
+        ),
+        (
+            "void f(void) { __float128 q = 0.0Q / 0.0Q; (void)q; }",
+            true,
+        ),
         ("__float128 f(void) { return 0.0Q / 0.0Q; }", true),
     ] {
         for rules in ALL_RULES {

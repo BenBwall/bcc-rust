@@ -81,6 +81,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// `left op right` for operands of types `left_type` and `right_type`,
+    /// whose values are already converted to the real or complex floating
+    /// type `operand_type`, with the NaN of [`Self::nan_source`]: the value
+    /// [`Self::floating_binary`] gives, not yet rounded to the result type.
+    pub(super) fn floating_operation(
+        &self,
+        op: BinaryOperator,
+        [left, right]: [Floating; 2],
+        [left_type, right_type]: [TypeId; 2],
+        operand_type: TypeId,
+    ) -> Option<Floating> {
+        let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
+            unreachable!("floating scalar operation")
+        };
+        let precision = self
+            .floating_precision(scalar)
+            .expect("foldable real precision");
+        let complex =
+            |ty: TypeId| matches!(self.types.nodes[ty.index], TypeKind::Scalar(s) if s.complex());
+        let domains = u8::from(complex(left_type)) | (u8::from(complex(right_type)) << 1);
+        Self::floating_binary(op, left, right, precision, domains, self.nan_source())
+    }
+
     /// IEC 60559 arithmetic: a zero divisor gives an infinity or NaN
     /// (Annex F.3), and an invalid operation the NaN of `source`.
     /// C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96.

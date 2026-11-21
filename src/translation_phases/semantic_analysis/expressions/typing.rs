@@ -824,27 +824,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else if floating
                 && let Some((left_value, right_value)) = operand(left).zip(operand(right))
             {
-                let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
-                    unreachable!("floating scalar operation")
-                };
-                let precision = self
-                    .floating_precision(scalar)
-                    .expect("foldable real precision");
-                let complex_type = |ty: TypeId| {
-                    matches!(
-                        self.types.nodes[ty.index],
-                        TypeKind::Scalar(s) if s.complex()
-                    )
-                };
-                let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
-                let value = Self::floating_binary(
-                    op,
-                    left_value,
-                    right_value,
-                    precision,
-                    domains,
-                    self.nan_source(),
-                );
+                let value =
+                    self.floating_operation(op, [left_value, right_value], [lt, rt], operand_type);
                 let value = if half {
                     value.map(|value| self.half_result(value, &mut info))
                 } else {
